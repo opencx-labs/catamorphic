@@ -122,6 +122,7 @@ export interface AgentSessions {
   icon: string | null;
   id: Generated<string>;
   mirror_message_count: Generated<number>;
+  model: string | null;
   model_effort: string | null;
   parent_session_id: string | null;
   project_id: string;

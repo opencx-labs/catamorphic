@@ -3,6 +3,10 @@ import { promisify } from "node:util";
 import type { AgentConfig } from "../agents-store.js";
 
 const execFileAsync = promisify(execFile);
+export type ModelCatalogAgent = Pick<
+  AgentConfig,
+  "id" | "harness" | "auth" | "apiKey" | "provider"
+>;
 
 export interface HarnessModel {
   id: string;
@@ -10,6 +14,8 @@ export interface HarnessModel {
   description?: string;
   /** Versioned model id an alias resolves to (claude-code aliases only). */
   resolvedId?: string;
+  supportsEffort?: boolean;
+  supportedEffortLevels?: ("low" | "medium" | "high" | "xhigh" | "max")[];
 }
 
 /**
@@ -23,7 +29,7 @@ export interface HarnessModel {
  *    OpenRouter catalog directly (see `catamorphic:openrouter-models`).
  */
 export async function listAgentModels(
-  config: AgentConfig,
+  config: ModelCatalogAgent,
   deps: {
     agentHome: (agentId: string) => string;
     harnessExecutable: (
@@ -57,7 +63,7 @@ const CACHE_TTL_MS = 10 * 60 * 1000;
 const cache = new Map<string, { models: HarnessModel[]; fetchedAt: number }>();
 
 async function fetchModels(
-  config: AgentConfig,
+  config: ModelCatalogAgent,
   deps: {
     agentHome: (agentId: string) => string;
     harnessExecutable: (
@@ -92,7 +98,7 @@ async function fetchModels(
 }
 
 async function codexModels(
-  config: AgentConfig,
+  config: ModelCatalogAgent,
   deps: {
     agentHome: (agentId: string) => string;
     harnessExecutable: (
@@ -126,7 +132,9 @@ async function codexModels(
     }));
 }
 
-async function anthropicModels(config: AgentConfig): Promise<HarnessModel[]> {
+async function anthropicModels(
+  config: ModelCatalogAgent,
+): Promise<HarnessModel[]> {
   if (!config.apiKey) return [];
   const response = await fetch(
     "https://api.anthropic.com/v1/models?limit=100",
@@ -147,7 +155,9 @@ async function anthropicModels(config: AgentConfig): Promise<HarnessModel[]> {
   }));
 }
 
-async function openaiModels(config: AgentConfig): Promise<HarnessModel[]> {
+async function openaiModels(
+  config: ModelCatalogAgent,
+): Promise<HarnessModel[]> {
   if (!config.apiKey) return [];
   const response = await fetch("https://api.openai.com/v1/models", {
     headers: { authorization: `Bearer ${config.apiKey}` },

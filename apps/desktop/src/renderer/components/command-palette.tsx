@@ -55,6 +55,7 @@ import {
   BUILTIN_ACTIONS,
   type KeybindingAction,
 } from "../../shared/actions.js";
+import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
 import { commandScore } from "../lib/command-score.js";
 import {
   type AgentEffort,
@@ -65,6 +66,7 @@ import {
   type OpenRouterCatalog,
   type Profile,
   type ProjectAgentInfo,
+  projectAgentAsInfo,
   type SidebarConfig,
   type SidebarItem,
 } from "../lib/desktop-api.js";
@@ -255,7 +257,7 @@ const EFFORT_LEVELS: Array<{
   {
     id: "max",
     label: "Max effort",
-    description: "Deepest reasoning (Claude; elsewhere runs as extra-high)",
+    description: "Deepest reasoning",
   },
 ];
 
@@ -524,6 +526,7 @@ export function CommandPalette({
   /** The chat the session-scoped commands act on; null = none focused. */
   focusedChat: {
     agentId: string | null;
+    model: string | null;
     effort: AgentEffort | null;
   } | null;
   onPickDefaultAgent: (agentId: string) => void;
@@ -543,7 +546,7 @@ export function CommandPalette({
   defaultAgentOverridden?: boolean;
   /** Clear that override, falling back to the project/global layers. */
   onClearDefaultOverride?: () => void;
-  onPickEffort: (effort: AgentEffort) => void;
+  onPickEffort: (effort: AgentEffort | null) => void;
   /** Change the target agent's model ("" = the automatic default). */
   onPickModel: (agentId: string, model: string) => void;
   /**
@@ -623,7 +626,9 @@ export function CommandPalette({
     if (
       picker !== "default-agent" &&
       picker !== "switch-agent" &&
-      picker !== "configure-agent"
+      picker !== "configure-agent" &&
+      picker !== "model" &&
+      picker !== "effort"
     ) {
       return;
     }
@@ -642,13 +647,17 @@ export function CommandPalette({
   }, [picker, projectId]);
 
   // The model picker's target: the focused chat's agent, else the default.
-  const targetAgent = agents.find(
-    (candidate) =>
-      candidate.id === ((focusedChat?.agentId ?? defaultAgentId) || ""),
+  const targetAgent = useMemo(
+    () =>
+      [...agents, ...projectAgents.map(projectAgentAsInfo)].find(
+        (candidate) =>
+          candidate.id === ((focusedChat?.agentId ?? defaultAgentId) || ""),
+      ),
+    [agents, projectAgents, focusedChat?.agentId, defaultAgentId],
   );
 
   useEffect(() => {
-    if (picker !== "model" || !targetAgent) return;
+    if ((picker !== "model" && picker !== "effort") || !targetAgent) return;
     let cancelled = false;
     if (
       targetAgent.harness === "ai-sdk" &&
@@ -670,6 +679,15 @@ export function CommandPalette({
       cancelled = true;
     };
   }, [picker, catalog, harnessModels, targetAgent]);
+
+  const effortModel =
+    harnessModels?.agentId === targetAgent?.id
+      ? harnessModels?.models.find(
+          (model) =>
+            model.id === (focusedChat?.model || targetAgent?.model) ||
+            model.resolvedId === (focusedChat?.model || targetAgent?.model),
+        )
+      : undefined;
 
   // Cmd+P agent commands open the overlay already inside a picker.
   useEffect(() => {
@@ -1107,7 +1125,9 @@ export function CommandPalette({
         ];
       }
       const agent = targetAgent;
-      const current = agent.model;
+      // A focused session selects only its override. Empty means "inherit the
+      // agent", even when that agent itself pins a concrete model.
+      const current = focusedChat ? (focusedChat.model ?? "") : agent.model;
       const rows: PaletteItem[] = [];
       if (agent.harness === "ai-sdk" && agent.provider === "openrouter") {
         const modelRow = (model: OpenRouterCatalog["models"][number]) =>
@@ -1124,8 +1144,11 @@ export function CommandPalette({
         rows.push({
           id: "pick:model:",
           icon: Cpu,
-          label: "Automatic model",
-          detail: catalog?.bestFreeModelId ?? "resolved from the catalog",
+          label: focusedChat ? "Agent default" : "Automatic model",
+          detail:
+            focusedChat && agent.model
+              ? agent.model
+              : (catalog?.bestFreeModelId ?? "resolved from the catalog"),
           keywords: ["best", "free", "auto", "default"],
           kind: "action",
           ...(current === "" ? { current: true } : {}),
@@ -1177,11 +1200,12 @@ export function CommandPalette({
         return trimmed ? rows : pinCurrentFirst(rows);
       }
       // CLIs run their own default; Anthropic/OpenAI need an explicit id.
-      if (agent.harness !== "ai-sdk") {
+      if (focusedChat || agent.harness !== "ai-sdk") {
         rows.push({
           id: "pick:model:",
           icon: Cpu,
-          label: "Harness default (automatic)",
+          label: focusedChat ? "Agent default" : "Harness default (automatic)",
+          detail: focusedChat && agent.model ? agent.model : undefined,
           keywords: ["default", "auto"],
           kind: "action",
           ...(current === "" ? { current: true } : {}),
@@ -1259,28 +1283,48 @@ export function CommandPalette({
     if (picker) {
       const rows: PaletteItem[] =
         picker === "effort"
-          ? EFFORT_LEVELS.map((level) => {
-              const referenceAgentId =
-                (focusedChat ? focusedChat.agentId : null) ?? defaultAgentId;
-              const agentDefault = agents.find(
-                (agent) => agent.id === referenceAgentId,
-              )?.effort;
-              const current = focusedChat
-                ? (focusedChat.effort ?? agentDefault)
-                : agentDefault;
-              return {
-                id: `pick:effort:${level.id}`,
-                icon: Gauge,
-                label: level.label,
-                detail: level.description,
-                keywords: [level.id, "effort", "reasoning"],
-                kind: "action" as const,
-                // The three levels keep their low→high order; the check
-                // alone marks the active one (no reordering).
-                ...(level.id === current ? { current: true } : {}),
-                run: () => onPickEffort(level.id),
-              };
-            })
+          ? [
+              ...(focusedChat
+                ? [
+                    {
+                      id: "pick:effort:default",
+                      icon: Gauge,
+                      label: "Agent default",
+                      detail:
+                        effectiveEffort(
+                          targetAgent,
+                          targetAgent?.effort,
+                          effortModel,
+                        ) ?? "Unavailable",
+                      keywords: ["default", "inherit", "effort"],
+                      kind: "action" as const,
+                      ...(focusedChat.effort === null ? { current: true } : {}),
+                      run: () => onPickEffort(null),
+                    },
+                  ]
+                : []),
+              ...EFFORT_LEVELS.filter((level) =>
+                supportedEfforts(targetAgent, effortModel).includes(level.id),
+              ).map((level) => {
+                const current = effectiveEffort(
+                  targetAgent,
+                  focusedChat ? focusedChat.effort : targetAgent?.effort,
+                  effortModel,
+                );
+                return {
+                  id: `pick:effort:${level.id}`,
+                  icon: Gauge,
+                  label: level.label,
+                  detail: level.description,
+                  keywords: [level.id, "effort", "reasoning"],
+                  kind: "action" as const,
+                  // Supported levels keep their low-to-high order; the check
+                  // alone marks the active one (no reordering).
+                  ...(level.id === current ? { current: true } : {}),
+                  run: () => onPickEffort(level.id),
+                };
+              }),
+            ]
           : [
               ...agents.map((agent) => {
                 const isCurrent =
@@ -1576,6 +1620,7 @@ export function CommandPalette({
     targetAgent,
     catalog,
     harnessModels,
+    effortModel,
   ]);
 
   // Two-part list animation, both measured in a layout effect so targets

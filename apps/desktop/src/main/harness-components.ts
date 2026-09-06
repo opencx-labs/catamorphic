@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 
 export type DownloadableHarness = "claude-code" | "codex";
+export type DownloadableComponent = DownloadableHarness | "bun";
 
 export interface HarnessExecutable {
   executablePath: string;
@@ -41,7 +42,7 @@ export interface HarnessArtifact {
 
 interface HarnessComponentStoreOptions {
   rootDir: string;
-  artifacts?: Partial<Record<DownloadableHarness, HarnessArtifact>>;
+  artifacts?: Partial<Record<DownloadableComponent, HarnessArtifact>>;
   fetchImpl?: typeof fetch;
   preferInstalled?: boolean;
 }
@@ -50,10 +51,12 @@ interface PlatformRelease {
   rustTarget: string;
   claudeIntegrity: `sha512-${string}`;
   codexIntegrity: `sha512-${string}`;
+  bunIntegrity: `sha512-${string}`;
 }
 
 const CLAUDE_VERSION = "0.3.226";
 const CODEX_VERSION = "0.144.6";
+const BUN_VERSION = "1.3.14";
 const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
 
 const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
@@ -63,6 +66,8 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
       "sha512-ycyuSgN2XaSYdze1eM2wDwNmXS5wPqIh1RxiDs99ywPr9lpe3Y/Xcv0nz9JN5ahNoPIgWHIfI9Ac1EWCOdIF1Q==",
     codexIntegrity:
       "sha512-6zgvh70MzBNSeT17HEhSOrmmGGZGAKzSC7x6JAq+edkJkdPYA9P0I1tG7aJ49GlBkBxuC+MKBH1qm6+2Cghcww==",
+    bunIntegrity:
+      "sha512-Omj20SuiHBOUjUBIyqtkNjSUIjOtEOJwmbix/ZyFH4BaQ6OZTaaRWIR4TjHVz0yadHgli6lLTiAh1uarnvD49A==",
   },
   "darwin-x64": {
     rustTarget: "x86_64-apple-darwin",
@@ -70,6 +75,8 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
       "sha512-sOOCkhtMDGVKs6k3fpTAkCML974qOnt8Bm9zlC6rV0HkM0aP4bdDY1RAlKLF4fHmOP2s5fPTY3myZiHGDFnuUg==",
     codexIntegrity:
       "sha512-THRyPG0zSU6M8NQAge1LHEHsJDnoH4BpKsfJHB/qe3Fm+Wf6zqAmWJFlOKzBm27m0K2Hq3za4Ac2I5p5i4yp/A==",
+    bunIntegrity:
+      "sha512-FFj3QdU/OhlDyZOJ8CWfN5eWLpRlT4qjZg7lMQi7jA6GuoY5ajlO1zWLP/MuHYRSbXQUvV52RejNi8DVnAp13w==",
   },
   "linux-arm64": {
     rustTarget: "aarch64-unknown-linux-musl",
@@ -77,6 +84,8 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
       "sha512-YNwwC37m2vcY47mWZGqRmDh2ZSrO0Z01iTlIDsPmvKv03+7pwyaXVuq01Evtyp7see+KGeIYkMN37HhEt/h+8Q==",
     codexIntegrity:
       "sha512-PGiLXMN+2IQRkf7tOLi64dMInjU1pRLbz0Rwfj/yt2Y97SZQqAjFQoi2wmswmqtqMDnfwCPTC1DRXVQkvU6T6Q==",
+    bunIntegrity:
+      "sha512-X5SsPZHs+iYO8R/efIcRtc7gT2Q2DgPfliCxEkx4cXBumwkw0c/EsHMNwH3EgGpCDaZ7IYVPhpCG/xBOQHEwZw==",
   },
   "linux-x64": {
     rustTarget: "x86_64-unknown-linux-musl",
@@ -84,6 +93,8 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
       "sha512-gPoHNeko9E+bmKVPRiAcCAOyBBrVcIH/WdjmyaGVoTP2bKibTs978A42rMNtAnuPBcAGAiImQimUU7w1TXESFw==",
     codexIntegrity:
       "sha512-4E7EnzCg0OnBxCyYnwJ+qnZwWHYe0YScr5ucKWbngE9u4+0XrpWELqq2Kn9jl5GZK8MDjU7PrJwFIwusHOHjuw==",
+    bunIntegrity:
+      "sha512-7OVTAKvwfPmSbIV1HpdOoVVx5VRc427GuPPne93N6vk4eQBPId9nXmZDh9/zGaKPdbVjVtQSZafWQoUjx38Utw==",
   },
   "win32-arm64": {
     rustTarget: "aarch64-pc-windows-msvc",
@@ -91,6 +102,8 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
       "sha512-qkzWTR3Ns8PimC5rx4+cwfuyHlCRocGIAcdWDUgpnI70qH5GlqX9R0VfM7wGOCs/C+fJ04Hg0GfAkMv4xriZwA==",
     codexIntegrity:
       "sha512-SpMjXJLW43JzMP0K62mVcYfmFcpk0BK4AOgYmWSfyZHs3iRtHMd0UYw7605n/9lwkT2EqbwQLT2omZFeKJFzwA==",
+    bunIntegrity:
+      "sha512-T7s3x/BsVKQObGU6QDkZeI6wKynzqGbBH1yI77jrrj5siElclxr3DQrDIk8CV4G5/SJq2HHq4kpLyYY2DKCSmA==",
   },
   "win32-x64": {
     rustTarget: "x86_64-pc-windows-msvc",
@@ -98,6 +111,8 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
       "sha512-uxVbLwGSX6lvO5Tazv0gZu8WSg1o14DQsqGSY+5pDNUk28KmNbFIQAjky9KeDzk9lnf63/aQPPsaq6UAikWjqA==",
     codexIntegrity:
       "sha512-dN39VnjEthKz5io1RNWwZDtErdSn07nW3pGUgvlA6DMxgm/nuGaIAZO/sG/Hgxq/x5j9HteAENfrFgVkpZ0lFg==",
+    bunIntegrity:
+      "sha512-mUFWL3BoYkNpjd8e9PqROiFF/1Xeotq20mABJsiQH62jM1g5zqWh4khw1RZ6bX8Q8fWvlPaxG1PjofkmjUi3vg==",
   },
 };
 
@@ -109,12 +124,12 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
 export class HarnessComponentStore {
   private readonly rootDir: string;
   private readonly artifacts: Partial<
-    Record<DownloadableHarness, HarnessArtifact>
+    Record<DownloadableComponent, HarnessArtifact>
   >;
   private readonly fetchImpl: typeof fetch;
   private readonly preferInstalled: boolean;
   private readonly pending = new Map<
-    DownloadableHarness,
+    DownloadableComponent,
     Promise<HarnessExecutable>
   >();
 
@@ -125,7 +140,7 @@ export class HarnessComponentStore {
     this.preferInstalled = options.preferInstalled ?? true;
   }
 
-  async ensure(harness: DownloadableHarness): Promise<HarnessExecutable> {
+  async ensure(harness: DownloadableComponent): Promise<HarnessExecutable> {
     const artifact = this.artifacts[harness];
     if (!artifact) {
       throw new Error(
@@ -148,7 +163,7 @@ export class HarnessComponentStore {
   }
 
   private componentDir(
-    harness: DownloadableHarness,
+    harness: DownloadableComponent,
     artifact: HarnessArtifact,
   ): string {
     return path.join(
@@ -160,7 +175,7 @@ export class HarnessComponentStore {
   }
 
   private async resolveDownloaded(
-    harness: DownloadableHarness,
+    harness: DownloadableComponent,
     artifact: HarnessArtifact,
   ): Promise<HarnessExecutable | null> {
     const root = this.componentDir(harness, artifact);
@@ -177,7 +192,7 @@ export class HarnessComponentStore {
   }
 
   private async install(
-    harness: DownloadableHarness,
+    harness: DownloadableComponent,
     artifact: HarnessArtifact,
   ): Promise<HarnessExecutable> {
     assertTrustedArtifact(artifact);
@@ -236,13 +251,17 @@ export class HarnessComponentStore {
 }
 
 function platformArtifacts(): Partial<
-  Record<DownloadableHarness, HarnessArtifact>
+  Record<DownloadableComponent, HarnessArtifact>
 > {
   const target = `${process.platform}-${process.arch}`;
   const release = PLATFORM_RELEASES[target];
   if (!release) return {};
   const executable = process.platform === "win32" ? ".exe" : "";
   const claudePackage = `@anthropic-ai/claude-agent-sdk-${target}`;
+  const bunPlatform =
+    process.platform === "win32" ? "windows" : process.platform;
+  const bunArch = process.arch === "arm64" ? "aarch64" : process.arch;
+  const bunPackage = `@oven/bun-${bunPlatform}-${bunArch}`;
   return {
     "claude-code": {
       displayName: "Claude Code",
@@ -270,6 +289,16 @@ function platformArtifacts(): Partial<
       pathEntryRelativePaths: [
         path.join("vendor", release.rustTarget, "codex-path"),
       ],
+    },
+    bun: {
+      displayName: "Bun",
+      version: BUN_VERSION,
+      packageName: bunPackage,
+      installedPackageName: bunPackage,
+      tarballUrl: `https://registry.npmjs.org/${bunPackage}/-/bun-${bunPlatform}-${bunArch}-${BUN_VERSION}.tgz`,
+      integrity: release.bunIntegrity,
+      executableRelativePath: path.join("bin", `bun${executable}`),
+      pathEntryRelativePaths: ["bin"],
     },
   };
 }
@@ -355,6 +384,7 @@ async function writeVerifiedArchive(
   }
 }
 
-function displayName(harness: DownloadableHarness): string {
-  return harness === "claude-code" ? "Claude Code" : "Codex";
+function displayName(harness: DownloadableComponent): string {
+  if (harness === "claude-code") return "Claude Code";
+  return harness === "codex" ? "Codex" : "Bun";
 }

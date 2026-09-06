@@ -106,6 +106,8 @@ export interface AgentSession {
   allocationId: string | null;
   /** Host-registry key of the agent this session runs on; null = default. */
   agentId: string | null;
+  /** Per-session model override; null = the agent harness's configured default. */
+  model: string | null;
   /** Per-session reasoning-effort override; null = the agent's default. */
   modelEffort: AgentEffort | null;
   title: string | null;
@@ -1161,6 +1163,7 @@ export class AgentSessionsService {
             source: input.source ?? "api",
             provider_session_id: null,
             agent_id: selectedAgentId ?? null,
+            model: null,
             model_effort: input.effort ?? null,
             system_prompt: systemPrompt || null,
             sandbox_id: null,
@@ -1500,6 +1503,7 @@ export class AgentSessionsService {
                   source: input.source ?? "api",
                   provider_session_id: null,
                   agent_id: agentId,
+                  model: null,
                   model_effort: null,
                   system_prompt: null,
                   sandbox_id: null,
@@ -1615,8 +1619,8 @@ export class AgentSessionsService {
 
   /**
    * Re-point a session at another registered agent and/or change its
-   * reasoning-effort override (`effort: null` clears the override back to
-   * the agent's default). Switching agents drops the provider anchor; the
+   * model and reasoning-effort overrides (`null` clears an override back to
+   * the agent's default). Switching agents drops incompatible overrides and the provider anchor; the
    * next turn re-anchors against the new provider (same working state, but
    * the new provider starts from its own fresh context).
    */
@@ -1626,6 +1630,7 @@ export class AgentSessionsService {
     sessionId: string,
     patch: {
       agentId?: string;
+      model?: string | null;
       effort?: AgentEffort | null;
       environment?: string;
     },
@@ -1642,6 +1647,7 @@ export class AgentSessionsService {
       agent_id: string;
       provider: string;
       provider_session_id: null;
+      model: string | null;
       model_effort: string | null;
       allocation_id: string;
       environment_name: string;
@@ -1671,6 +1677,10 @@ export class AgentSessionsService {
       updates.agent_id = patch.agentId;
       updates.provider = agent.provider.name;
       updates.provider_session_id = null;
+      updates.model = null;
+    }
+    if (patch.model !== undefined) {
+      updates.model = patch.model;
     }
     if (patch.effort !== undefined) {
       updates.model_effort = patch.effort;
@@ -1774,6 +1784,12 @@ export class AgentSessionsService {
         marker: { kind: "effort_change", effort: updates.model_effort },
       });
     }
+    if (updates.model !== undefined && updates.agent_id === undefined) {
+      markers.push({
+        content: `Model set to ${updates.model ?? "default"}`,
+        marker: { kind: "model_change", model: updates.model },
+      });
+    }
     for (const entry of markers) {
       await this.db
         .insertInto("agent_messages")
@@ -1873,6 +1889,7 @@ export class AgentSessionsService {
           source: session.source,
           provider_session_id: null,
           agent_id: session.agent_id,
+          model: session.model,
           model_effort: session.model_effort,
           system_prompt: forkSystemPrompt,
           sandbox_id: null,
@@ -2892,6 +2909,7 @@ export class AgentSessionsService {
     );
     const turnOptions: TurnOptions = {
       ...agent.defaults,
+      ...(session.model ? { model: session.model } : {}),
       ...(session.model_effort
         ? { effort: session.model_effort as AgentEffort }
         : {}),
@@ -4804,6 +4822,7 @@ function mapSession(
     environment: row.environment_name,
     allocationId: row.allocation_id,
     agentId: row.agent_id,
+    model: row.model,
     modelEffort: (row.model_effort as AgentEffort | null) ?? null,
     title: row.title,
     icon: row.icon,

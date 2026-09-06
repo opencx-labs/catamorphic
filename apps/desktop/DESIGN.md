@@ -3349,3 +3349,26 @@ paths, deliberately independent:
   `safeStorage` identity; development and isolated test builds use a separate
   application name, and concurrent vault unlocks coalesce into one request.
   We do not weaken the Keychain item or make it accessible to other apps.
+
+### Session runtime controls and an app-owned Bun (2026-09-05)
+
+- The session inspector shows the selected model and effective reasoning effort beside
+  the agent. Both values open the existing harness-backed pickers and changes
+  apply only to that conversation. Switching agents clears a model override
+  that may be invalid for the next harness.
+- The last reported model is labeled separately when it differs from the
+  selection. Supported effort levels follow the shipped adapter; a clamped
+  setting displays its effective value. Editing uses quiet, full-row controls
+  with a small chevron and a visible keyboard focus ring.
+- The inspector enters from and exits toward its trigger on a mirrored,
+  side-aware motion. Its portal remains mounted until the exit completes.
+- Bun is an integrity-pinned optional desktop component, installed on first
+  use beside the native Claude Code and Codex executables. Native harnesses
+  and all agent-owned terminals receive that app-owned Bun on PATH, independent
+  of Finder's restricted launch environment or the user's shell setup.
+- Agents check PATH with bounded commands and never recursively search the
+  home directory or system volume for runtimes. macOS privacy prompts caused
+  by probing protected personal folders are product bugs, not permissions the
+  app should request or explain away with extra entitlements.
+- Bounded discovery is agent guidance, not filesystem isolation. We do not
+  override `find` or claim to prevent all native macOS privacy prompts.

@@ -6017,6 +6017,7 @@ export interface paths {
                                 /** Format: uuid */
                                 allocationId: string | null;
                                 agentId: string | null;
+                                model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
                                 title: string | null;
@@ -6127,6 +6128,7 @@ export interface paths {
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
                             title: string | null;
@@ -6382,6 +6384,7 @@ export interface paths {
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
                             title: string | null;
@@ -6571,6 +6574,7 @@ export interface paths {
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
                             title: string | null;
@@ -6699,6 +6703,7 @@ export interface paths {
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
                             title: string | null;
@@ -6867,6 +6872,7 @@ export interface paths {
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
                             title: string | null;
@@ -6953,6 +6959,7 @@ export interface paths {
                 content: {
                     "application/json": {
                         agentId?: string;
+                        model?: string | null;
                         /** @enum {string|null} */
                         effort?: "low" | "medium" | "high" | "xhigh" | "max" | null;
                         environment?: string;
@@ -6982,6 +6989,7 @@ export interface paths {
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
                             title: string | null;
@@ -7166,6 +7174,7 @@ export interface paths {
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
                             title: string | null;
@@ -7373,6 +7382,7 @@ export interface paths {
                                 /** Format: uuid */
                                 allocationId: string | null;
                                 agentId: string | null;
+                                model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
                                 title: string | null;
@@ -7500,6 +7510,7 @@ export interface paths {
                                 /** Format: uuid */
                                 allocationId: string | null;
                                 agentId: string | null;
+                                model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
                                 title: string | null;
@@ -7670,6 +7681,7 @@ export interface paths {
                                 /** Format: uuid */
                                 allocationId: string | null;
                                 agentId: string | null;
+                                model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
                                 title: string | null;
@@ -7865,6 +7877,7 @@ export interface paths {
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
                             title: string | null;
@@ -8471,6 +8484,7 @@ export interface paths {
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
                             title: string | null;
@@ -8886,6 +8900,7 @@ export interface paths {
                                 /** Format: uuid */
                                 allocationId: string | null;
                                 agentId: string | null;
+                                model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
                                 title: string | null;
@@ -9026,6 +9041,7 @@ export interface paths {
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
                             title: string | null;

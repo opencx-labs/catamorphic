@@ -2849,8 +2849,15 @@ export function App() {
     }));
   };
 
-  /** Change the model on the focused chat's agent (or the default one). */
+  /** Change the focused session's model override, or the default agent config. */
   const pickModel = (agentId: string, model: string) => {
+    const chat = workspaceRef.current.chats.find(
+      (candidate) => candidate.localId === workspaceRef.current.activeChatId,
+    );
+    if (chat?.sessionId) {
+      updateSession.mutate({ sessionId: chat.sessionId, model: model || null });
+      return;
+    }
     void desktopApi.agentsUpdate(agentId, { model });
   };
 
@@ -2881,7 +2888,7 @@ export function App() {
     setConsentRequest({ agent, target });
   };
 
-  const pickEffort = (effort: AgentEffort) => {
+  const pickEffort = (effort: AgentEffort | null) => {
     const chat = workspaceRef.current.chats.find(
       (candidate) => candidate.localId === workspaceRef.current.activeChatId,
     );
@@ -2893,7 +2900,11 @@ export function App() {
     // agent (the one the picker showed as current). A committed project
     // agent's effort lives in its definition file — not editable here.
     const targetId = effectiveDefaultAgentId;
-    if (targetId && agentsData?.agents.some((agent) => agent.id === targetId)) {
+    if (
+      effort &&
+      targetId &&
+      agentsData?.agents.some((agent) => agent.id === targetId)
+    ) {
       void desktopApi.agentsUpdate(targetId, { effort });
     }
   };
@@ -4599,6 +4610,7 @@ export function App() {
         focusedChat: focusedChat
           ? {
               agentId: focusedSession?.agentId ?? focusedChat.agentId ?? null,
+              model: focusedSession?.model ?? null,
               effort: focusedSession?.modelEffort ?? null,
             }
           : null,
@@ -5407,6 +5419,19 @@ export function App() {
                     ? () => openParentChat(entry)
                     : undefined
                 }
+                onEditModel={() => {
+                  revealChat(entry.localId);
+                  openPalettePicker("model");
+                }}
+                runtimeSettingsError={
+                  updateSession.variables?.sessionId === entry.sessionId
+                    ? updateSession.error?.message
+                    : null
+                }
+                onEditEffort={() => {
+                  revealChat(entry.localId);
+                  openPalettePicker("effort");
+                }}
                 pullSelectionNonce={selectionPulls[entry.localId] ?? 0}
                 onFocusRequest={
                   split &&

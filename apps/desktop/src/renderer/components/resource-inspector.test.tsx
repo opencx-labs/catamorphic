@@ -54,7 +54,7 @@ describe("ResourceInspector", () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
     );
     expect(document.querySelector('[role="dialog"]')?.className).toContain(
-      "animate-pop-out",
+      "animate-inspector-out-",
     );
   });
 
@@ -77,7 +77,7 @@ describe("ResourceInspector", () => {
     const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
     expect(dialog?.className).toContain("overflow-y-auto");
     await act(async () => dialog?.dispatchEvent(new Event("scroll")));
-    expect(dialog?.className).toContain("animate-pop-in");
+    expect(dialog?.className).toContain("animate-inspector-in-");
   });
 
   it("pins on click and dismisses on an outside pointer", async () => {
@@ -99,7 +99,7 @@ describe("ResourceInspector", () => {
     const trigger = container.querySelector("button");
     await act(async () => trigger?.click());
     expect(document.querySelector('[role="dialog"]')?.className).toContain(
-      "animate-pop-in",
+      "animate-inspector-in-",
     );
 
     await act(async () =>
@@ -108,7 +108,7 @@ describe("ResourceInspector", () => {
       ),
     );
     expect(document.querySelector('[role="dialog"]')?.className).toContain(
-      "animate-pop-out",
+      "animate-inspector-out-",
     );
   });
 

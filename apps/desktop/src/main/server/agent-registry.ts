@@ -44,6 +44,7 @@ import { bestFreeModelId, fetchOpenRouterModels } from "../openrouter.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
 import { projectDefaultAgentSlug } from "../project-manifest.js";
+import { shellBinShimDir } from "../shell-integration.js";
 import { FriendlyAgentErrors } from "./agent-errors.js";
 import { DesktopConfigAgent } from "./desktop-config-agent.js";
 import { E2eFakeCodingAgent } from "./e2e-fakes.js";
@@ -275,6 +276,41 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     harness: DownloadableHarness,
   ): Promise<HarnessExecutable> {
     return this.harnessComponents.ensure(harness);
+  }
+
+  /** Every agent-owned terminal needs Bun, including controller agents. */
+  async nativeToolchainEnvironment(): Promise<Record<string, string>> {
+    if (this.deps.e2eFake) return {};
+    const bun = await this.harnessComponents.ensure("bun");
+    return {
+      ...harnessPathEnvironment(bun),
+      CATAMORPHIC_BUN: bun.executablePath,
+      ...(bun.pathEntries[0]
+        ? { CATAMORPHIC_TOOLCHAIN_BIN: bun.pathEntries[0] }
+        : {}),
+    };
+  }
+
+  private async ensureNativeComponents(harness: DownloadableHarness): Promise<{
+    component: HarnessExecutable;
+    environment: Record<string, string>;
+  }> {
+    const [component, bun, shimBin] = await Promise.all([
+      this.harnessComponents.ensure(harness),
+      this.harnessComponents.ensure("bun"),
+      shellBinShimDir(),
+    ]);
+    const environment = harnessPathEnvironment({
+      pathEntries: [
+        ...(shimBin ? [shimBin] : []),
+        ...bun.pathEntries,
+        ...component.pathEntries,
+      ],
+    });
+    return {
+      component,
+      environment: { ...environment, CATAMORPHIC_BUN: bun.executablePath },
+    };
   }
 
   async refreshOpenRouterDefault(): Promise<void> {
@@ -1013,7 +1049,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           id: config.id,
           provider,
           topology: "controller",
-          defaults: { effort: config.effort },
+          defaults: { model: modelId, effort: config.effort },
         };
       }
       case "claude-code": {
@@ -1030,7 +1066,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         const provider = new AsyncInitCodingAgent(
           config.harness,
           async () => {
-            const component = await this.ensureHarnessExecutable("claude-code");
+            const { component, environment } =
+              await this.ensureNativeComponents("claude-code");
             const { ClaudeCodeAgent } = await import(
               "@catamorphic/claude-code"
             );
@@ -1042,7 +1079,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                   permissionMode:
                     CLAUDE_PERMISSION_MODES[config.mode ?? "edit"],
                   memory: config.memory === true,
-                  ...(Object.keys(env).length > 0 ? { env } : {}),
+                  env: { ...environment, ...env },
                   pathToClaudeCodeExecutable: component.executablePath,
                   extraTools: this.workspaceTools(config, "native"),
                   disableBash: this.workspaceToolkit !== undefined,
@@ -1080,9 +1117,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         const provider = new AsyncInitCodingAgent(
           config.harness,
           async () => {
-            const component = await this.ensureHarnessExecutable("codex");
+            const { component, environment: componentEnv } =
+              await this.ensureNativeComponents("codex");
             const { CodexAgent } = await import("@catamorphic/codex");
-            const componentEnv = harnessPathEnvironment(component);
             return this.wrapErrors(
               this.withWorkspace(
                 new CodexAgent({

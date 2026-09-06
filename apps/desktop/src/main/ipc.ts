@@ -100,8 +100,12 @@ import {
 import type { EmbeddedServer } from "./server/boot.js";
 import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./server/boot.js";
 import { GITHUB_APP } from "./server/github.js";
-import { listAgentModels } from "./server/harness-models.js";
+import {
+  listAgentModels,
+  type ModelCatalogAgent,
+} from "./server/harness-models.js";
 import type { DataPaths } from "./server/paths.js";
+import { parseProjectAgentId } from "./server/project-agents.js";
 import {
   normalizeTheme,
   type ResolvedTheme,
@@ -891,9 +895,36 @@ export function registerIpcHandlers(
   // Supported models for one agent, resolved live per harness (Claude
   // Code's own catalog, `codex debug models`, provider /v1/models).
   ipcMain.handle("catamorphic:agent-models", async (event, id: string) => {
-    const agent = storesFor(event).agents.get(id);
-    if (!agent) return { models: [] };
     try {
+      let agent: ModelCatalogAgent | undefined =
+        storesFor(event).agents.get(id);
+      const ref = parseProjectAgentId(id);
+      if (!agent && ref && state.current) {
+        const entries =
+          await state.current.catamorphic.core.agentDefinitions.list(
+            { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+            ref.projectId,
+          );
+        const entry = entries.find((candidate) => candidate.slug === ref.slug);
+        if (entry?.definition) {
+          const info = projectAgentInfo(ref.projectId, entry);
+          // Catalog discovery must obey the same personal-credential consent
+          // as execution. Project secrets stay in their Environment broker.
+          if (!info.invalid && info.consent === "ok" && info.kind !== "acp") {
+            const auth = profileConfig
+              .forProject(ref.projectId)
+              .agentBindings.get(ref.projectId, ref.slug)?.auth;
+            agent = {
+              id,
+              harness: kindHarness(info.kind),
+              provider: "anthropic",
+              auth: auth?.mode === "api-key" ? "api-key" : "local",
+              apiKey: auth?.mode === "api-key" ? auth.apiKey : null,
+            };
+          }
+        }
+      }
+      if (!agent) return { models: [] };
       return {
         models: await listAgentModels(agent, {
           agentHome,

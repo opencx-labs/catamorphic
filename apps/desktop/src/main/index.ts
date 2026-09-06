@@ -530,13 +530,13 @@ app.whenReady().then(async () => {
     async (projectId) =>
       (await state.current?.projectRoots.get(projectId)) ?? null,
   );
-  terminalSupport = registerTerminalSupport(
-    state,
-    (projectId) =>
-      // Late-bound: the bridge registers just below, before any terminal
-      // can spawn.
-      agentBridge?.openHookEnv(projectId) ?? {},
-  );
+  terminalSupport = registerTerminalSupport(state, async (projectId) => ({
+    // Late-bound: the bridge registers just below, before any terminal
+    // can spawn.
+    ...((await state.current?.agentRegistry.nativeToolchainEnvironment()) ??
+      {}),
+    ...(agentBridge?.openHookEnv(projectId) ?? {}),
+  }));
   agentBridge = registerAgentBridge(terminalSupport.agentTerminals);
   ipcMain.handle("catamorphic:webview-preload", () =>
     path.join(import.meta.dirname, "../preload/webview.cjs"),
