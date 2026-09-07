@@ -49,6 +49,11 @@ entry for how this rule was recovered.
 | `--font-sans` | Inter, system-ui | UI chrome, body text |
 | `--font-mono` | JetBrains Mono, ui-monospace | code, logs, ids, timestamps |
 
+These are defaults. Each profile can override `fonts.sans` and `fonts.mono`
+in `theme.json` or Settings > Theme using installed CSS font stacks.
+Removing a key restores its default. Font choices survive color preset
+changes and apply live to the shell, editors, terminals, and themed apps.
+
 Type scale (px): 11 (labels/badges), 12 (secondary), 13 (base), 14 (emphasized),
 16 (panel titles), 20 (page titles). Base is 13px set on `body`.
 
@@ -213,7 +218,7 @@ that friction is intentional.
   `light-dark()` values in `styles.css` (the pre-JS first paint), and
   documented here — then used via Tailwind (`bg-bg-raised`, `text-fg-muted`, …).
 - The active theme lives in `<userData>/profiles/<id>/theme.json`
-  (`{ selection, overrides }`) — profile-local, file-watched, agent-editable.
+  (`{ selection, overrides, fonts? }`) — profile-local, file-watched, agent-editable.
   `selection: "system"` resolves to the Catamorphic Light or Dark preset and
   follows operating-system changes live.
   ThemeProvider writes each resolved color as an inline CSS variable on

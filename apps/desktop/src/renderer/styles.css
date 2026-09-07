@@ -7,6 +7,9 @@
  */
 :root {
   color-scheme: light dark;
+  /* Pre-JS defaults, mirrored in shared/theme-fonts.ts. */
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
 
   /* Surfaces */
   --color-bg: light-dark(#f7f7f5, #0a0a0b);
@@ -63,10 +66,8 @@
   --color-danger: var(--color-danger);
   --color-info: var(--color-info);
 
-  /* Mirrored in packages/app/src/theme.ts (APP_BASE_CSS) so mounted apps
-     share the same primitives — change both together. */
-  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
 
   --radius-sm: 4px;
   --radius-md: 6px;

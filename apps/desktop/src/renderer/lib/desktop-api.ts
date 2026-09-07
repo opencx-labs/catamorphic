@@ -1,4 +1,5 @@
 import type { ProjectExperienceWhen } from "../../shared/project-experience.js";
+import type { ThemeFonts } from "../../shared/theme-fonts.js";
 import type { DesktopUpdateState } from "../../shared/update.js";
 import type { UsageSummary } from "../../shared/usage.js";
 
@@ -721,6 +722,7 @@ export interface ThemePreset {
 export interface ThemeConfig {
   selection: string;
   overrides: Partial<ThemeColors>;
+  fonts?: Partial<ThemeFonts>;
 }
 
 /** Per-profile app preferences (profiles/<id>/prefs.json). */
@@ -733,6 +735,7 @@ export interface AppPrefs {
 }
 
 export interface ResolvedTheme extends ThemeConfig {
+  fonts: ThemeFonts;
   preset: string;
   colors: ThemeColors;
   appearance: "dark" | "light";

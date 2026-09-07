@@ -299,6 +299,7 @@ export function EditorScreen({
               lineNumbers: "on",
               minimap: { enabled: false },
               fontSize: 13,
+              fontFamily: theme?.fonts.mono,
               tabSize: 2,
               scrollBeyondLastLine: false,
               automaticLayout: true,

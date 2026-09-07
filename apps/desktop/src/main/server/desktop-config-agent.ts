@@ -36,7 +36,7 @@ const MIRROR_PATHS = [
 
 export const DESKTOP_CONFIG_SKILL = `---
 name: configuring-catamorphic-desktop
-description: Change Catamorphic desktop app settings (keyboard shortcuts, the left sidebar's sections/items, and the color theme) when the user asks to customize the app itself, e.g. "rebind new chat to Cmd+N", "hide the workflows section", "add a Docs section with these links", "switch to the light theme", "make the accent purple".
+description: Change Catamorphic desktop app settings (keyboard shortcuts, the left sidebar's sections/items, theme colors, and fonts) when the user asks to customize the app itself, e.g. "rebind new chat to Cmd+N", "hide the workflows section", "switch to the light theme", "make the accent purple", "change the interface font", "use Menlo for code".
 ---
 
 # Configuring the Catamorphic desktop app
@@ -186,15 +186,16 @@ permissions. Every condition must match. Omitting it shows the action to
 everyone. Invalid targeting fails closed. Keep labels short and prompts
 complete enough to run without another setup step.
 
-## Color theme
+## Theme colors and fonts
 
-The app's colors: \`${DESKTOP_THEME_WORKSPACE_PATH}\` (refreshed every
+The app's colors and fonts: \`${DESKTOP_THEME_WORKSPACE_PATH}\` (refreshed every
 turn). Format:
 
 \`\`\`json
 {
   "selection": "system",
-  "overrides": { "accent": "#7c5cff" }
+  "overrides": { "accent": "#7c5cff" },
+  "fonts": { "sans": "Arial, sans-serif", "mono": "Menlo, monospace" }
 }
 \`\`\`
 
@@ -207,6 +208,19 @@ ${THEME_TOKENS.map((token) => `\`${token}\``).join(", ")}.
 Unknown selections, tokens, or invalid colors are ignored. Keep overrides
 minimal (prefer picking the closest preset); when changing surface colors,
 keep enough contrast with the text tokens.
+
+\`fonts.sans\` sets the interface and body font; \`fonts.mono\` sets code,
+logs, editors, diffs, and terminals. Embedded apps using the host's theme
+tokens inherit these choices live too. Use installed font family names,
+optionally quoted, with comma-separated fallbacks. End with a generic family
+such as \`sans-serif\` or \`monospace\`. Missing fonts fall back to the next
+family; this setting does not download or install fonts. URLs and CSS
+functions or declarations are not accepted.
+
+Omit or remove a font key to restore its default: Inter for \`sans\`,
+JetBrains Mono for \`mono\`, each with system fallbacks. Preserve the other
+font key and existing colors when changing one font; preserve \`fonts\` when
+changing only colors. Fonts are also editable in Settings under Theme.
 
 ## Other app settings
 

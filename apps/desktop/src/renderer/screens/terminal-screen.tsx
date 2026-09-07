@@ -1,6 +1,7 @@
 import { FitAddon, init as initGhostty, Terminal } from "ghostty-web";
 import { useEffect, useRef } from "react";
 import { KEYBINDING_ACTIONS } from "../../shared/actions.js";
+import { DEFAULT_THEME_FONTS } from "../../shared/theme-fonts.js";
 import {
   desktopApi,
   type ResolvedTheme,
@@ -21,10 +22,6 @@ import { useTheme } from "../lib/theme.js";
 // The WASM module is shared by every Terminal instance; load it once.
 let ghosttyReady: Promise<void> | null = null;
 const ensureGhostty = () => (ghosttyReady ??= initGhostty());
-
-// Same face the rest of the app uses (styles.css --font-mono), spelled out
-// because the canvas renderer measures a concrete font, not a CSS var.
-const TERMINAL_FONT = '"JetBrains Mono", ui-monospace, "SF Mono", monospace';
 
 /** App theme tokens → terminal colors. ANSI palette stays Ghostty's. */
 const terminalTheme = (colors: ThemeColors) => ({
@@ -80,6 +77,7 @@ export function TerminalScreen({
 }: TerminalScreenProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
   const theme = useTheme();
   const keybindings = useKeybindings();
   const keybindingsRef = useRef(keybindings);
@@ -114,7 +112,7 @@ export function TerminalScreen({
         const colors = themeRef.current?.colors;
         term = new Terminal({
           fontSize: 13,
-          fontFamily: TERMINAL_FONT,
+          fontFamily: themeRef.current?.fonts.mono ?? DEFAULT_THEME_FONTS.mono,
           cursorBlink: true,
           scrollback: 10_000,
           ...(colors ? { theme: terminalTheme(colors) } : {}),
@@ -168,6 +166,7 @@ export function TerminalScreen({
           return false;
         });
         fit = new FitAddon();
+        fitRef.current = fit;
         term.loadAddon(fit);
         fit.fit();
         fit.observeResize();
@@ -513,6 +512,7 @@ export function TerminalScreen({
         void desktopApi.terminalKill(sessionId);
       }
       fit?.dispose();
+      fitRef.current = null;
       term?.dispose();
       termRef.current = null;
     };
@@ -520,7 +520,13 @@ export function TerminalScreen({
 
   // Live theme edits restyle the running terminal.
   useEffect(() => {
-    if (theme) termRef.current?.renderer?.setTheme(terminalTheme(theme.colors));
+    const term = termRef.current;
+    if (!theme || !term) return;
+    term.renderer?.setTheme(terminalTheme(theme.colors));
+    if (term.options.fontFamily !== theme.fonts.mono) {
+      term.options.fontFamily = theme.fonts.mono;
+      fitRef.current?.fit();
+    }
   }, [theme]);
 
   // Switching back to the tab lands keystrokes in the shell immediately.

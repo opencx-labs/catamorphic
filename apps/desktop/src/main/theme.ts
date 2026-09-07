@@ -1,5 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  DEFAULT_THEME_FONTS,
+  isValidFontStack,
+  type ThemeFonts,
+} from "../shared/theme-fonts.js";
 
 /**
  * Per-profile theme, stored at `<userData>/profiles/<id>/theme.json` so the
@@ -10,6 +15,7 @@ import path from "node:path";
  * `system` follows the operating system with the two Catamorphic presets.
  * The resolved theme is the selected preset's colors with overrides on top,
  * so a fully custom theme is just a selection with every token overridden.
+ * Optional `fonts.sans` and `fonts.mono` override the desktop font stacks.
  */
 export const THEME_TOKENS = [
   "bg",
@@ -43,9 +49,11 @@ export interface ThemePreset {
 export interface ThemeConfig {
   selection: string;
   overrides: Partial<ThemeColors>;
+  fonts?: Partial<ThemeFonts>;
 }
 
 export interface ResolvedTheme extends ThemeConfig {
+  fonts: ThemeFonts;
   /** Concrete preset after resolving the system selection. */
   preset: string;
   colors: ThemeColors;
@@ -171,7 +179,7 @@ export function isValidColor(value: unknown): value is string {
   return typeof value === "string" && COLOR_PATTERN.test(value.trim());
 }
 
-/** Keep a known preset and valid color overrides; drop everything else. */
+/** Keep a known preset and valid color/font overrides; drop everything else. */
 export function normalizeTheme(raw: unknown): ThemeConfig {
   const record =
     typeof raw === "object" && raw !== null
@@ -199,7 +207,18 @@ export function normalizeTheme(raw: unknown): ThemeConfig {
     const value = rawOverrides[token];
     if (isValidColor(value)) overrides[token] = value.trim();
   }
-  return { selection, overrides };
+  const fonts: Partial<ThemeFonts> = {};
+  if (typeof record.fonts === "object" && record.fonts !== null) {
+    for (const token of ["sans", "mono"] as const) {
+      const value = Reflect.get(record.fonts, token);
+      if (isValidFontStack(value)) fonts[token] = value.trim();
+    }
+  }
+  return {
+    selection,
+    overrides,
+    ...(Object.keys(fonts).length > 0 ? { fonts } : {}),
+  };
 }
 
 /** Perceived luminance of a hex color, or null for non-hex values. */
@@ -234,6 +253,7 @@ export function resolveTheme(
     preset: preset.id,
     overrides: config.overrides,
     colors,
+    fonts: { ...DEFAULT_THEME_FONTS, ...config.fonts },
     appearance: luminance !== null && luminance >= 0.5 ? "light" : "dark",
   };
 }

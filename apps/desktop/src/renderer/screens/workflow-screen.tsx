@@ -163,6 +163,7 @@ function WorkflowScreenInner({
                 onChange={onChange}
                 readOnly={readOnly}
                 path={`file:///${filePath}`}
+                fontFamily={theme?.fonts.mono}
                 theme={theme?.appearance === "light" ? "light" : "vs-dark"}
               />
             )}

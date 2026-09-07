@@ -96,6 +96,7 @@ function LocalDiff({
               lineNumbers: "on",
               minimap: { enabled: false },
               fontSize: 13,
+              fontFamily: theme?.fonts.mono,
               scrollBeyondLastLine: false,
               automaticLayout: true,
               padding: { top: 12 },

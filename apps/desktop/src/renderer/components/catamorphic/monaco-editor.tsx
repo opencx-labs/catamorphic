@@ -62,6 +62,8 @@ export interface MonacoCodeEditorProps {
   /** Model path; affects how the TS service treats the file. */
   path?: string;
   theme?: string;
+  /** Host monospace font stack; omitted values use Monaco defaults. */
+  fontFamily?: string;
 }
 
 function applyReveal({
@@ -122,6 +124,7 @@ export function MonacoCodeEditor({
   readOnly = false,
   path = "file:///workflow.ts",
   theme = "vs-dark",
+  fontFamily,
 }: MonacoCodeEditorProps) {
   const { reveal, handleCursorPositionChange } = useCodeEditorLink();
 
@@ -196,6 +199,7 @@ export function MonacoCodeEditor({
         lineNumbers: "on",
         minimap: { enabled: false },
         fontSize: 13,
+        fontFamily,
         tabSize: 2,
         scrollBeyondLastLine: false,
         automaticLayout: true,
