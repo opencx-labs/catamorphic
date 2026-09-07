@@ -441,14 +441,14 @@ describe("chat flows", () => {
     `);
 
     await runWait(
-      `const preview = $('[data-testid="sidebar-preview"]');
+      `const preview = $('[data-resource-inspector]');
        return !!preview && parseFloat(getComputedStyle(preview).opacity) > 0.9;`,
       {
         label: "chat metadata hover preview",
       },
     );
     const previewText = await run<string>(
-      `return $('[data-testid="sidebar-preview"]').textContent;`,
+      `return $('[data-resource-inspector]').textContent;`,
     );
     expect(previewText).toContain("Fake Agent");
     expect(previewText).toContain("Environment");
@@ -662,18 +662,20 @@ describe("chat flows", () => {
       { label: "archived chat removed from the visible workspace" },
     );
 
+    // Cmd+P toggles the overlay. Earlier flows can leave it open; preserve
+    // that state instead of turning the searchable palette off.
     await run(`
-      pressKey('p', { metaKey: true });
+      const input = $$('textarea[aria-label="Search commands, pages, and more"]')
+        .find((el) => !el.closest('[inert]'));
+      if (!input) pressKey('p', { metaKey: true });
       return true;
     `);
     await runWait(
-      `
-      const input = $$('textarea[aria-label="Search commands, pages, and more"]')
+      `const input = $$('textarea[aria-label="Search commands, pages, and more"]')
         .find((el) => !el.closest('[inert]'));
-      if (!input) return false;
-      setReactValue(input, 'Session menu');
-      return true;
-    `,
+       if (!input) return false;
+       setReactValue(input, 'Session menu');
+       return true;`,
       { label: "archive search in the palette" },
     );
     await runWait(

@@ -255,6 +255,14 @@ const api = {
     ipcRenderer.invoke("catamorphic:project-root", projectId),
   revealFolder: (folderPath: string): Promise<void> =>
     ipcRenderer.invoke("catamorphic:reveal-folder", folderPath),
+  editorFileRead: (input: { filePath: string }): Promise<{ content: string }> =>
+    ipcRenderer.invoke("catamorphic:editor-file-read", input),
+  editorFileWrite: (input: {
+    filePath: string;
+    content: string;
+    expectedContent: string;
+  }): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:editor-file-write", input),
   projectOpenFile: (projectId: string, filePath: string): Promise<void> =>
     ipcRenderer.invoke("catamorphic:project-open-file", projectId, filePath),
   githubConnectStart: (): Promise<{
@@ -282,6 +290,8 @@ const api = {
   // Continue on mobile (QR pairing).
   mobilePairingStart: (context?: unknown): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:mobile-pairing-start", context),
+  sessionIsIncognito: (sessionId: string): Promise<boolean> =>
+    ipcRenderer.invoke("catamorphic:session-is-incognito", sessionId),
   sessionSetIncognito: (
     sessionId: string,
     incognito: boolean,

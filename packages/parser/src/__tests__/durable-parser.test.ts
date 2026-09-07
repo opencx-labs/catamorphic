@@ -415,3 +415,21 @@ export const flow = defineWorkflow(({ defineBoundary }) => ({
     expect(() => parseWorkflow(source)).toThrow(message);
   });
 });
+
+it("projects step descriptions and identifies the first boundary input correctly", () => {
+  const graph = parseWorkflow(
+    DURABLE_SOURCE.replace(
+      "/** @displayname Prepare Order @icon shield */",
+      "/** @displayname Prepare Order\n * @description Validate the order before asking for approval\n */",
+    ),
+  );
+  const step = graph.nodes.find((node) => node.functionName === "prepareOrder");
+  expect(step?.description).toBe(
+    "Validate the order before asking for approval",
+  );
+  const input = graph.nodes.find((node) => node.type === "input");
+  expect(step?.arguments?.[0]?.source).toMatchObject({
+    stepNodeId: input?.id,
+    stepLabel: "Starting information",
+  });
+});

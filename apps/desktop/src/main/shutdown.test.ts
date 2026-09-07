@@ -19,11 +19,19 @@ function setup() {
   };
   const shutdown = vi.fn(async () => {});
   const onError = vi.fn();
-  registerDesktopShutdown({ app, shutdown, onError });
-  return { app, events, shutdown, onError, finalQuit };
+  const signals = new EventEmitter();
+  registerDesktopShutdown({ app, shutdown, onError, signals });
+  return { app, events, signals, shutdown, onError, finalQuit };
 }
 
 describe("desktop shutdown", () => {
+  it.each(["SIGTERM", "SIGINT"])("drains services on %s", async (signal) => {
+    const { signals, shutdown, finalQuit } = setup();
+    signals.emit(signal);
+    await vi.waitFor(() => expect(finalQuit).toHaveBeenCalledWith(0));
+    expect(shutdown).toHaveBeenCalledOnce();
+  });
+
   it("does not tear down services when a window cancels quit", async () => {
     const { events, shutdown, finalQuit } = setup();
     events.emit("before-quit", { preventDefault: vi.fn() });
@@ -57,5 +65,38 @@ describe("desktop shutdown", () => {
     app.quit();
     await vi.waitFor(() => expect(finalQuit).toHaveBeenCalledOnce());
     expect(onError).toHaveBeenCalledWith(error);
+    expect(finalQuit).toHaveBeenCalledWith(1);
   });
+});
+
+it("attempts every cleanup and waits for storage after a producer fails", async () => {
+  const { shutdownDesktopServices } = await import("./shutdown.js");
+  const calls: string[] = [];
+  await expect(
+    shutdownDesktopServices({
+      steps: [
+        {
+          name: "first",
+          dispose: () => {
+            calls.push("first");
+            throw new Error("broken");
+          },
+        },
+        {
+          name: "second",
+          dispose: () => {
+            calls.push("second");
+          },
+        },
+        {
+          name: "storage",
+          dispose: async () => {
+            await Promise.resolve();
+            calls.push("storage");
+          },
+        },
+      ],
+    }),
+  ).rejects.toThrow("did not complete cleanly");
+  expect(calls).toEqual(["first", "second", "storage"]);
 });

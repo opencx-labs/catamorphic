@@ -459,6 +459,7 @@ import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import {
   codeAtom,
   graphAtom,
+  graphParseStateAtom,
   executionStateAtom,
   panelVisibilityAtom,
   rightPanelOpenAtom,
@@ -515,13 +516,13 @@ export function WorkflowScreen({
       onParse={onParse}
       triggerParameters={triggerParameters}
       onRun={onRun}
-      showCodeEditor
       showMinimap
       aiEnabled
       onAIPrompt={async (prompt) => callHostAI(prompt, code)}
-      renderCodeEditor={({ code, onChange, readOnly }) => (
-        // from the `monaco-editor` registry item
-        <MonacoCodeEditor code={code} onChange={onChange} readOnly={readOnly} />
+      renderInspector={({ code, onCodeChange, readOnly }) => (
+        // Your host component owns layout, details, actions, and visibility.
+        // It can mount the registry MonacoCodeEditor with onChange={onCodeChange}.
+        <HostWorkflowInspector code={code} onCodeChange={onCodeChange} readOnly={readOnly} />
       )}
     />
   );
@@ -534,7 +535,7 @@ Key props (see `WorkflowEditorProps` in `@catamorphic/ui`):
 
 - `code` / `onCodeChange` — controlled source string (required)
 - `onParse` — `OnParseCallback` that turns the current source into `{ graph, layoutedNodes, layoutedEdges }`. Use `useOnParse` unless you need custom parsing (different endpoint, project-git draft files, etc.) — in that case import `layoutGraph` from `@catamorphic/parser/layout`, **never** from the `@catamorphic/parser` barrel (it pulls `ts-morph` → `node:fs` into the client bundle).
-- `renderCodeEditor` — slot for the Code tab's editor. Install the `monaco-editor` registry item for a ready-made TypeScript Monaco editor with line numbers, TS diagnostics/completion, and bidirectional code ↔ canvas linking, or plug in your own (Monaco, CodeMirror, …) and wire linking through `useCodeEditorLink` from `@catamorphic/react`. Without this prop the Code tab falls back to a plain `<textarea>`.
+- `renderInspector`: the host-owned inspector slot. The host supplies its overview, step details, source editor, actions, and visibility/motion. There is no default sidebar or textarea. Read `rightPanelOpenAtom` and `activePanelTabAtom` when using the shared toolbar. The registry `MonacoCodeEditor` or any editor wired to `useCodeEditorLink` supplies source linking (ADR 0097).
 - `nodeRenderers` — partial map of `WorkflowNodeType` → component, overrides node visuals
 - `executionState` — `Record<nodeId, "running" | "completed" | "failed">` overlay
 - `onRun(triggerData) => Promise<Run>`: wires the Run dialog and active Run state
@@ -560,9 +561,11 @@ function Inspector() {
 </WorkflowEditorScope>
 ```
 
-Lower-level pieces such as `WorkflowCanvas`, `DetailPanel`, `RunsPanel`, `Toolbar`,
+Lower-level pieces such as `WorkflowCanvas`, `RunsPanel`, `Toolbar`,
 `AIBar`, plus `WorkflowEditorChrome` (the inner editor without the scope
 wrapper), are exported too if you want to assemble a custom layout.
+
+The host also owns unsaved-buffer restoration, save/conflict feedback, run setup, and automation actions. `graphParseStateAtom` distinguishes updating, ready, and failed previews; the canvas retains the last valid graph after parse failure. Label stale previews visibly, keep the canvas mounted across inspector changes, and respect reduced motion.
 
 ### 6) Component registry — `@catamorphic/registry` (copy-paste UI)
 
@@ -576,14 +579,14 @@ The registry is **served by the host**, not by catamorphic. The built JSON manif
 
 Items currently shipped:
 
-- `catamorphic-provider` — `<CatamorphicAppProvider baseUrl getTenantId getExternalUserId>` that wires `CatamorphicProvider` + `QueryClientProvider`. Always install this first.
+- `catamorphic-provider` — `<CatamorphicAppProvider baseUrl fetch={authenticatedFetch}>` that wires `CatamorphicProvider` + `QueryClientProvider`. Always install this first.
 - `project-editor` — three-pane scaffold with `renderEditor` (plug in monaco/codemirror), `renderSidebar`, and `renderGitPanel` slots.
 - `file-explorer` — pure file tree.
 - `git-panel` — branch / dirty / commits / deploy panel (`useProjectGit` + `useProjectCommits` + `useDeployProject`).
 - `diff-drawer` — side drawer with a `renderDiff` slot for monaco-diff or codemirror-merge.
 - `runs-panel` — the single Runs surface for all Workflows, including capability-driven controls and item inspection (`useRuns` + `useTriggerRun`).
 - `plugins-settings` — attach/detach plugins + edit secrets.
-- `monaco-editor` — `MonacoCodeEditor` for `WorkflowEditor`'s `renderCodeEditor` slot: TypeScript highlighting/diagnostics/completion, line numbers, and code ↔ canvas linking via `useCodeEditorLink` (ADR 0011). Pulls `@monaco-editor/react` into the host, not into catamorphic packages.
+- `monaco-editor` — `MonacoCodeEditor` for a host-owned inspector: TypeScript highlighting/diagnostics/completion, line numbers, and code ↔ canvas linking via `useCodeEditorLink` (ADR 0011). Pulls `@monaco-editor/react` into the host, not into catamorphic packages.
 - `agent-chat` — bottom-docked coding-agent conversation with optimistic activity and changed-file state.
 - `chat-timeline`: message timeline shared by agent chat surfaces.
 - `sessions-list`: project session navigation with durable attention state.
@@ -631,7 +634,7 @@ Use cases:
 | `@catamorphic/react` | Frontend | `CatamorphicProvider`, project/run/git/agent/workflow-enablement hooks, archive and attention mutations, atoms, `useWorkflowGraph`, `useProjectGitState`, `CatamorphicError` |
 | `@catamorphic/react/types` | Frontend | OpenAPI-derived domain types (`Project`, `Run`, `RepoStatus`, `BranchInfo`, `ConflictEntry`, `PluginInfo`, `Secret`, `AgentSession`, …) |
 | `@catamorphic/react/workflow-helpers` | Frontend (server-safe) | Pure authoring helpers, no React |
-| `@catamorphic/ui` | Frontend | `WorkflowEditor`, `WorkflowEditorChrome`, `WorkflowEditorScope`, `WorkflowCanvas`, `DetailPanel`, `RunsPanel`, `Toolbar`, `AIBar`, `AppMount`, plus `@catamorphic/ui/styles.css` |
+| `@catamorphic/ui` | Frontend | `WorkflowEditor`, `WorkflowEditorChrome`, `WorkflowEditorScope`, `WorkflowCanvas`, `RunsPanel`, `Toolbar`, `AIBar`, `AppMount`, plus `@catamorphic/ui/styles.css` |
 | `@catamorphic/registry` | Frontend (copy-paste) | shadcn-style registry of pre-wired project, run, git, agent-chat, timeline, session-list, and tool-permission components |
 | `@catamorphic/parser` | Either | `parseWorkflow`, `parseProject`, `layoutGraph`, `WorkflowGraph` types |
 

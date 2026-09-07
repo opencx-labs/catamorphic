@@ -311,6 +311,7 @@ export function ProjectModal({
                   : "Importing…"
             }
             disabled={!canSubmit}
+            data-disabled-reason="Complete the project name and location first"
             data-testid="project-submit"
             className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -519,6 +520,7 @@ function GithubPanel({
           type="button"
           onClick={startConnect}
           disabled={authPending}
+          data-disabled-reason="Wait for sign-in to finish"
           data-testid="github-connect"
           className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
         >

@@ -18,6 +18,8 @@ export interface DesktopUpdateState {
   channel: DesktopUpdateChannel;
   /** Manual checks surface quiet results and errors; background checks do not. */
   manual: boolean;
+  /** Identifies the latest explicit check so it can reopen a dismissed status. */
+  manualCheckId?: number;
   version?: string;
   releaseName?: string;
   releaseUrl?: string;

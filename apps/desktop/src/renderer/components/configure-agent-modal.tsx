@@ -215,6 +215,7 @@ function DefaultRows({
       type="button"
       onClick={onToggle ?? undefined}
       disabled={!onToggle}
+      data-disabled-reason="This setting is managed by the agent configuration"
       data-testid={testId}
       className={`flex w-full items-center gap-2 rounded-md border border-border px-2.5 py-1.5 text-left transition-colors duration-150 ${
         onToggle ? "cursor-pointer hover:border-fg-faint" : "cursor-default"
@@ -832,6 +833,7 @@ function ProfileAgentBody({
           type="submit"
           pending={saving}
           pendingLabel="Saving…"
+          data-disabled-reason="Complete the required agent settings before saving"
           disabled={
             effectiveAuth === "api-key" && !hasSavedKey && !apiKey.trim()
           }

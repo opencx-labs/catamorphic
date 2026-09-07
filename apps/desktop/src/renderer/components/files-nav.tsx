@@ -3,6 +3,8 @@ import { ChevronRight, File, Folder } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { desktopApi } from "../lib/desktop-api.js";
 
+import { Collapsible } from "./collapsible.js";
+
 interface FileTreeNode {
   name: string;
   path: string;
@@ -87,7 +89,7 @@ function FileNode({
           <Folder className="size-3.5 shrink-0 text-fg-faint" />
           <span className="truncate">{node.name}</span>
         </button>
-        {open ? (
+        <Collapsible open={open}>
           <ul className="ml-3 border-l border-border pl-1">
             {node.children.map((child) => (
               <FileNode
@@ -98,7 +100,7 @@ function FileNode({
               />
             ))}
           </ul>
-        ) : null}
+        </Collapsible>
       </li>
     );
   }

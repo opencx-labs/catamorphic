@@ -116,11 +116,23 @@ describe("markdown editor", () => {
     await run(
       `setReactValue($('input[placeholder*="Open a file"]'), 'plain'); return true;`,
     );
-    await runWait(
-      `const row = byText('li button', 'plain.md');
+    try {
+      await runWait(
+        `const row = byText('li button', 'plain.md');
        if (!row) return false; row.click(); return true;`,
-      { timeoutMs: 30_000, label: "plain.md row" },
-    );
+        { timeoutMs: 30_000, label: "plain.md row" },
+      );
+    } catch (error) {
+      const diagnostics = await app.eval(`(async () => {
+        const picker = document.querySelector('[data-testid="editor-file-picker"]');
+        const context = window.__mdE2e;
+        const response = await fetch(context.apiUrl + '/api/projects/' + context.projectId + '/files');
+        return { picker: picker?.outerHTML, visibility: document.visibilityState, activeElement: document.activeElement?.outerHTML, filesStatus: response.status, files: await response.text() };
+      })()`);
+      console.error("Markdown file picker diagnostics", diagnostics);
+      throw error;
+    }
+
     await runWait(
       `return !!$('.cat-mdedit .ProseMirror') && !$('.monaco-editor')
         && $('.cat-mdedit h1')?.textContent === 'Plain notes';`,

@@ -183,6 +183,12 @@ export function SidebarItemRow<
   useEffect(() => {
     if (!previewOpen) return;
     const dismiss = (event: Event) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest("[data-resource-inspector]") &&
+        !(event instanceof KeyboardEvent)
+      )
+        return;
       if (event instanceof KeyboardEvent && event.key !== "Escape") return;
       if (event instanceof KeyboardEvent) event.preventDefault();
       clearTimeout(previewTimerRef.current);
@@ -302,7 +308,12 @@ export function SidebarItemRow<
                 active ? "text-fg" : "text-fg-muted"
               }`}
               aria-current={active || undefined}
-              aria-describedby={previewEnabled ? previewId : undefined}
+              aria-describedby={
+                previewEnabled && !previewContent ? previewId : undefined
+              }
+              aria-details={
+                previewContent && previewOpen ? previewId : undefined
+              }
             >
               {IconComponent ? (
                 <IconComponent className="size-3.5 shrink-0 text-fg-faint" />

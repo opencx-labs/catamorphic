@@ -771,6 +771,7 @@ export interface CatamorphicDesktopApi {
     remote?: { url: string; host: string };
   }>;
   /** Mark a just-created session incognito (desktop-local, ADR 0062). */
+  sessionIsIncognito: (sessionId: string) => Promise<boolean>;
   sessionSetIncognito: (sessionId: string, incognito: boolean) => Promise<void>;
   /** Project policy (ADR 0062): may members open incognito chats here? */
   projectAllowIncognito: (projectId: string) => Promise<boolean>;
@@ -899,7 +900,9 @@ export interface CatamorphicDesktopApi {
     projectId: string,
     slug: string | null,
   ) => Promise<void>;
-  agentModels: (id: string) => Promise<{ models: HarnessModelInfo[] }>;
+  agentModels: (
+    id: string,
+  ) => Promise<{ models: HarnessModelInfo[]; error?: string }>;
   projectAgentsList: (projectId: string) => Promise<ProjectAgentsData>;
   projectAgentApprove: (
     projectId: string,
@@ -1026,6 +1029,12 @@ export interface CatamorphicDesktopApi {
   }) => Promise<void>;
   projectRoot: (projectId: string) => Promise<string | null>;
   revealFolder: (folderPath: string) => Promise<void>;
+  editorFileRead: (input: { filePath: string }) => Promise<{ content: string }>;
+  editorFileWrite: (input: {
+    filePath: string;
+    content: string;
+    expectedContent: string;
+  }) => Promise<void>;
   projectOpenFile: (projectId: string, filePath: string) => Promise<void>;
 
   terminalCreate: (input: {

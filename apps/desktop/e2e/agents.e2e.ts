@@ -1334,4 +1334,68 @@ describe("agents and profiles", () => {
       { label: "PDF chip explicitly removed" },
     );
   });
+  it("opens reply links in the rich editor, code editor, graph, app and PDF browser", async () => {
+    await openFreshChat("artifact link chat");
+    await run(
+      `const ta = visibleDock().querySelector('[data-composer-input]'); setReactValue(ta, 'artifact links'); ta.closest('form').requestSubmit(); return true;`,
+    );
+    await runWait(`return !!byText('a', 'Read linked notes');`, {
+      label: "artifact reply links",
+    });
+    await run(`byText('a', 'Read linked notes').click(); return true;`);
+    await runWait(
+      `return !!$$('.cat-mdedit h1').find((node) => node.textContent === 'Linked notes');`,
+      { label: "linked Markdown in Tiptap" },
+    );
+    await run(
+      `byText('a', 'Inspect linked source').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true, shiftKey: true })); return true;`,
+    );
+    await runWait(
+      `return !!$('.monaco-editor') && !!$('[data-point-key^="editor:"]') && !!$('[data-split-divider]');`,
+      { label: "linked source editor" },
+    );
+    await run(
+      `byText('a', 'Open linked graph').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true })); return true;`,
+    );
+    await runWait(
+      `return !!$('[data-point-key="workflow:linkedWorkflow"]') && !!$('.react-flow__node');`,
+      { label: "linked workflow graph" },
+    );
+
+    await run(
+      `byText('a', 'Open linked app').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true })); return true;`,
+    );
+    await runWait(`return !!$('[data-point-key="app:linked-app"]');`, {
+      label: "linked app tab",
+    });
+    await run(
+      `byText('a', 'Read linked PDF').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true })); return true;`,
+    );
+    await runWait(
+      `return $$('webview').some((view) => (view.getAttribute('src') ?? '').startsWith('file:') && (view.getAttribute('src') ?? '').includes('artifact.pdf'));`,
+      { label: "linked PDF browser" },
+    );
+  });
+  it("shows the shared session inspector and explains unavailable server moves", async () => {
+    await run(
+      `const row = byText('[data-session-id] button', 'artifact links'); if (!row) throw new Error('Session row missing'); row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); return true;`,
+    );
+    await runWait(
+      `return !!$('[data-resource-inspector]') && !!byText('[data-resource-inspector] button', 'Move to server');`,
+      { label: "sidebar session inspector" },
+    );
+    await runWait(
+      `return byText('[data-resource-inspector] button', 'Move to server')?.getAttribute('aria-disabled') === 'true';`,
+      { label: "move eligibility" },
+    );
+    await run(
+      `byText('[data-resource-inspector] button', 'Move to server').dispatchEvent(new PointerEvent('pointerover', { bubbles: true })); return true;`,
+    );
+    await runWait(
+      `return $$('[role="tooltip"]').some(node => node.textContent === 'Link this project to a server first');`,
+      { label: "disabled move explanation" },
+    );
+
+    await run(`pressKey('Escape'); return true;`);
+  });
 });

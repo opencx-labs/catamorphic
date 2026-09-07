@@ -882,6 +882,7 @@ function ImportSection() {
             pending={importing}
             pendingLabel="Importing…"
             disabled={!anySelected}
+            data-disabled-reason="Select bookmarks to import"
             onClick={() => void run()}
             className="h-8 w-fit cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
           >

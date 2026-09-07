@@ -106,6 +106,7 @@ export function AgentChat({
                 className="grid size-8 place-items-center rounded-lg text-fg-muted hover:bg-bg-overlay hover:text-fg disabled:opacity-40"
                 onClick={chat.startNewSession}
                 disabled={chat.isSending}
+                data-disabled-reason="Wait for the current reply to finish"
                 aria-label="Start new agent session"
                 title="New session"
               >
@@ -167,6 +168,7 @@ export function AgentChat({
           type="submit"
           className="grid size-8 place-items-center rounded-lg bg-accent text-accent-fg disabled:opacity-35"
           disabled={!draft.trim()}
+          data-disabled-reason="Write a message first"
           aria-label="Send message"
         >
           <ArrowUp className="size-4" />

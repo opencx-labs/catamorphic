@@ -34,7 +34,10 @@ import { ProfileConfigManager } from "./profile-config.js";
 import { ProfilesStore } from "./profiles.js";
 import { type EmbeddedServer, startEmbeddedServer } from "./server/boot.js";
 import { resolveDataPaths } from "./server/paths.js";
-import { registerDesktopShutdown } from "./shutdown.js";
+import {
+  registerDesktopShutdown,
+  shutdownDesktopServices,
+} from "./shutdown.js";
 import { registerTerminalSupport } from "./terminal.js";
 import { windowBackgroundColor } from "./theme.js";
 import {
@@ -435,6 +438,16 @@ app.whenReady().then(async () => {
   }
   desktopUpdater = registerDesktopUpdater({
     broadcast: state.broadcast,
+    canInstall: async () => {
+      if (!server || terminalSupport?.hasActiveWork()) return false;
+      const activeTurn = await server.catamorphic.core.db
+        .selectFrom("agent_turns")
+        .select("id")
+        .where("status", "=", "running")
+        .limit(1)
+        .executeTakeFirst();
+      return !activeTurn;
+    },
   });
   applyMenuForFocusedWindow();
   // Live-reload: agents and users edit the per-profile config files
@@ -627,12 +640,22 @@ let desktopUpdater: DesktopUpdaterService | null = null;
 registerDesktopShutdown({
   app,
   shutdown: async () => {
-    profileConfig.dispose();
-    browserSupport?.dispose();
-    terminalSupport?.dispose();
-    agentBridge?.dispose();
-    desktopUpdater?.dispose();
-    await server?.shutdown();
+    await shutdownDesktopServices({
+      steps: [
+        { name: "profile settings", dispose: () => profileConfig.dispose() },
+        { name: "browser", dispose: () => browserSupport?.dispose() },
+        { name: "terminals", dispose: () => terminalSupport?.dispose() },
+        { name: "agent bridge", dispose: () => agentBridge?.dispose() },
+        { name: "updater", dispose: () => desktopUpdater?.dispose() },
+        {
+          name: "server and database",
+          dispose: async () => {
+            await server?.shutdown();
+            server = null;
+          },
+        },
+      ],
+    });
     server = null;
   },
   onError: (error) => console.error("[desktop] shutdown failed:", error),

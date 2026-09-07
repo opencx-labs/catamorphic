@@ -8,12 +8,18 @@ import type { ReactNode } from "react";
 
 export interface ToolbarProps {
   onRun?: () => void;
+  showInspectorToggle?: boolean;
   isRunning?: boolean;
   /** Optional content rendered in the center of the toolbar (e.g. version label). */
   centerSlot?: ReactNode;
 }
 
-export function Toolbar({ onRun, isRunning, centerSlot }: ToolbarProps) {
+export function Toolbar({
+  onRun,
+  isRunning,
+  centerSlot,
+  showInspectorToggle = true,
+}: ToolbarProps) {
   const [panelVisibility, setPanelVisibility] = useAtom(panelVisibilityAtom);
   const [rightPanelOpen, setRightPanelOpen] = useAtom(rightPanelOpenAtom);
   const [, setActiveTab] = useAtom(activePanelTabAtom);
@@ -21,20 +27,22 @@ export function Toolbar({ onRun, isRunning, centerSlot }: ToolbarProps) {
   return (
     <div className="catamorphic-toolbar">
       <div className="catamorphic-toolbar-left">
-        <button
-          type="button"
-          className={`catamorphic-toolbar-btn ${rightPanelOpen ? "catamorphic-toolbar-btn-active" : ""}`}
-          onClick={() => {
-            if (rightPanelOpen) {
-              setRightPanelOpen(false);
-            } else {
-              setRightPanelOpen(true);
-              setActiveTab("code");
-            }
-          }}
-        >
-          {rightPanelOpen ? "⌨ Hide Panel" : "⌨ Show Panel"}
-        </button>
+        {showInspectorToggle && (
+          <button
+            type="button"
+            className={`catamorphic-toolbar-btn ${rightPanelOpen ? "catamorphic-toolbar-btn-active" : ""}`}
+            onClick={() => {
+              if (rightPanelOpen) {
+                setRightPanelOpen(false);
+              } else {
+                setRightPanelOpen(true);
+                setActiveTab("code");
+              }
+            }}
+          >
+            {rightPanelOpen ? "⌨ Hide Panel" : "⌨ Show Panel"}
+          </button>
+        )}
         <button
           type="button"
           className="catamorphic-toolbar-btn"

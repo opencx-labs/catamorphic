@@ -46,6 +46,8 @@ export interface DesktopUpdaterControllerOptions {
   updater: UpdaterAdapter | null;
   broadcast: (state: DesktopUpdateState) => void;
   logger?: Pick<Console, "error" | "info" | "warn">;
+  prepareInstall?: () => Promise<void>;
+  canInstall?: () => Promise<boolean>;
 }
 
 function releaseUrl(version: string): string {
@@ -59,6 +61,8 @@ function messageFor(error: unknown): string {
 
 export class DesktopUpdaterController {
   private state: DesktopUpdateState;
+  private preparing = false;
+  private manualCheckId = 0;
   private checking: Promise<void> | null = null;
   private downloading: Promise<void> | null = null;
   private readonly logger: Pick<Console, "error" | "info" | "warn">;
@@ -108,7 +112,10 @@ export class DesktopUpdaterController {
     updater.on("update-downloaded", (info) => {
       this.setReleaseState("downloaded", info);
     });
-    updater.on("error", (error) => this.handleError(error));
+    updater.on("error", (error) => {
+      if (this.preparing) return;
+      this.handleError(error);
+    });
   }
 
   current(): DesktopUpdateState {
@@ -136,6 +143,7 @@ export class DesktopUpdaterController {
   }
 
   async check(manual: boolean): Promise<void> {
+    if (manual) this.manualCheckId += 1;
     if (!this.options.supported || !this.options.updater) {
       this.setState({
         phase: "unsupported",
@@ -156,7 +164,7 @@ export class DesktopUpdaterController {
       return;
     }
     if (this.checking) {
-      if (manual && !this.state.manual) {
+      if (manual) {
         this.setState({ ...this.state, manual: true });
       }
       return this.checking;
@@ -198,14 +206,39 @@ export class DesktopUpdaterController {
 
   async install(): Promise<void> {
     if (!this.options.updater || this.state.phase !== "downloaded") return;
-    this.setState({ ...this.state, phase: "installing", manual: true });
+    const downloaded = this.state;
+    this.setState({
+      ...downloaded,
+      phase: "installing",
+      manual: true,
+      message: undefined,
+    });
     try {
-      // On macOS this may first ask Squirrel to prepare the downloaded ZIP.
-      // That can fail or take time without quitting. Only the app's final
-      // will-quit handler may dispose services or close the database.
+      if (this.options.canInstall && !(await this.options.canInstall()))
+        throw new Error(
+          "Finish active agents and terminals before restarting.",
+        );
+      // Never call MacUpdater.quitAndInstall until native preparation has
+      // completed. Its preparation path registers an uncancellable late quit.
+      this.preparing = true;
+      try {
+        await this.options.prepareInstall?.();
+      } finally {
+        this.preparing = false;
+      }
+      if (this.current().phase !== "installing") return;
+      if (this.options.canInstall && !(await this.options.canInstall()))
+        throw new Error(
+          "Work started while the update was preparing. Finish it, then restart.",
+        );
       this.options.updater.quitAndInstall(false, true);
     } catch (error) {
-      this.handleError(error);
+      this.logger.error("[desktop] update preparation failed:", error);
+      this.setState({
+        ...downloaded,
+        manual: true,
+        message: messageFor(error),
+      });
     }
   }
 
@@ -245,8 +278,11 @@ export class DesktopUpdaterController {
   }
 
   private setState(state: DesktopUpdateState): void {
-    this.state = state;
-    this.options.broadcast(state);
+    this.state = {
+      ...state,
+      ...(this.manualCheckId ? { manualCheckId: this.manualCheckId } : {}),
+    };
+    this.options.broadcast(this.state);
   }
 
   private configureChannel(channel: DesktopUpdateChannel): void {

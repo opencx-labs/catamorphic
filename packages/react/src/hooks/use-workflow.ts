@@ -12,6 +12,8 @@ import { workflowKeys } from "../workflow-keys.js";
 
 export interface UseWorkflowOptions {
   ref?: string;
+  /** Hosts may refresh a visible live preview while external tools edit files. */
+  refetchInterval?: number | false;
 }
 
 export function useWorkflow(
@@ -42,5 +44,6 @@ export function useWorkflow(
         );
       }),
     enabled: Boolean(projectId && name),
+    refetchInterval: options.refetchInterval,
   });
 }

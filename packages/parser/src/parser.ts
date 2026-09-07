@@ -161,7 +161,11 @@ type DurableCallback = ArrowFunction | FunctionExpression | MethodDeclaration;
 function lookupStepMetadata(
   ctx: ParseContext,
   fnName: string,
-): { displayName?: string; metadata: Record<string, string> } {
+): {
+  displayName?: string;
+  description?: string;
+  metadata: Record<string, string>;
+} {
   if (fnName === "skipBatchItem") {
     return {
       displayName: "Skip item",
@@ -173,6 +177,7 @@ function lookupStepMetadata(
   const jsdoc = extractJsDocMetadata(fn.metadataSource ?? fn.fn);
   return {
     displayName: jsdoc.displayName,
+    description: jsdoc.description,
     metadata: { ...jsdoc.tags, ...fn.batchMetadata },
   };
 }
@@ -557,6 +562,7 @@ function parseStatements(
           label: stepMeta.displayName ?? fnName,
           sourceRange: getSourceRange(returnedExpression),
           metadata: stepMeta.metadata,
+          description: stepMeta.description,
           functionName: fnName,
           parameters: lookupStepParams(ctx, fnName),
           arguments: extractCallArguments(returnedExpression, ctx, fnName),
@@ -622,6 +628,7 @@ function parseStatements(
         label: stepMeta.displayName ?? fnName,
         sourceRange: getSourceRange(stmt),
         metadata: stepMeta.metadata,
+        description: stepMeta.description,
         functionName: fnName,
         parameters: lookupStepParams(ctx, fnName),
         arguments: stepArgs,
@@ -1128,6 +1135,7 @@ function parsePromiseAll(
         label: stepMeta.displayName ?? fnName,
         sourceRange: getSourceRange(element),
         metadata: stepMeta.metadata,
+        description: stepMeta.description,
         functionName: fnName,
         arguments: stepArgs,
         parentId: blockId,
@@ -2029,7 +2037,14 @@ function registerDurableInputVariable(opts: {
     if (element.getName() === "input") {
       opts.ctx.variables.set("input", {
         sourceNodeId: opts.sourceNodeId,
-        sourceStepLabel: "Previous boundary",
+        sourceStepLabel: (() => {
+          const source = opts.ctx.nodes.find(
+            (node) => node.id === opts.sourceNodeId,
+          );
+          return source?.type === "input"
+            ? "Starting information"
+            : source?.label || "Previous group";
+        })(),
       });
     }
   }
@@ -2083,7 +2098,7 @@ function parseWorkflowSteps(opts: {
     registerDurableInputVariable({
       ctx: opts.ctx,
       callback: boundary.run,
-      sourceNodeId: boundaryId,
+      sourceNodeId: previousIds.at(-1) ?? boundaryId,
     });
 
     const body = boundary.run.getBody();
@@ -2109,6 +2124,7 @@ function parseWorkflowSteps(opts: {
           label: stepMeta.displayName ?? fnName,
           sourceRange: getSourceRange(expression),
           metadata: stepMeta.metadata,
+          description: stepMeta.description,
           functionName: fnName,
           parameters: lookupStepParams(opts.ctx, fnName),
           arguments: extractCallArguments(expression, opts.ctx, fnName),
@@ -2305,6 +2321,7 @@ function parseBatchProcessExpression(opts: {
       label: stepMeta.displayName ?? fnName,
       sourceRange: getSourceRange(expression),
       metadata: stepMeta.metadata,
+      description: stepMeta.description,
       functionName: fnName,
       parameters: lookupStepParams(opts.ctx, fnName),
       arguments: extractCallArguments(expression, opts.ctx, fnName),

@@ -36,6 +36,7 @@ import {
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
 import { RemoteSessionMirror } from "../remote-mirror.js";
+import { shutdownDesktopServices } from "../shutdown.js";
 import { userSkillFiles, userSkillInfos } from "../user-skills.js";
 import { syncProfileMcpWorkflowConnections } from "../workflow-mcp-connections.js";
 import { DesktopAgentRegistry } from "./agent-registry.js";
@@ -932,6 +933,9 @@ export async function startEmbeddedServer(
   const app: FastifyInstance = Fastify({
     logger: { level: "warn" },
     bodyLimit: 96 * 1024 * 1024,
+    // Windows are already closed at shutdown. Remaining Chromium requests
+    // must not keep HTTP close (and therefore the database flush) waiting.
+    forceCloseConnections: true,
   });
   registerWorkspaceMcpRoute(
     app,
@@ -1137,14 +1141,21 @@ export async function startEmbeddedServer(
       clearInterval(sessionMailboxTimer);
       clearInterval(sessionMirrorTimer);
       clearInterval(scheduleTimer);
-      projectEventWorker.stop();
-      watcherDispatcher?.stop();
-      await suspendExecution();
-      await app.close().catch(() => {});
-      await catamorphic.close().catch(() => {});
-      // catamorphic.close() leaves the host-owned Kysely alone; destroying it
-      // closes the PGlite instance (flushes WAL to the data dir).
-      await db.destroy().catch(() => {});
+      await shutdownDesktopServices({
+        steps: [
+          { name: "project events", dispose: () => projectEventWorker.stop() },
+          {
+            name: "watcher dispatch",
+            dispose: () => watcherDispatcher?.stop(),
+          },
+          { name: "workflow execution", dispose: suspendExecution },
+          { name: "HTTP server", dispose: () => app.close() },
+          { name: "framework services", dispose: () => catamorphic.close() },
+          // The host owns Kysely. Always attempt its WAL flush last and report
+          // a failure instead of silently treating an unsafe shutdown as clean.
+          { name: "database", dispose: () => db.destroy() },
+        ],
+      });
     })();
     return shutdownDone;
   };

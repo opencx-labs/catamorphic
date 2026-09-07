@@ -2,6 +2,7 @@
 
 import { useCodeEditorLink } from "@catamorphic/react";
 import Editor, { type OnMount } from "@monaco-editor/react";
+import * as typescript from "monaco-editor/languages/features/typescript/register";
 import { useEffect, useRef } from "react";
 
 type EditorInstance = Parameters<OnMount>[0];
@@ -21,7 +22,7 @@ declare module "@catamorphic/workflow" {
     <Value>(options: { timeout: string }): WorkflowTransition<PauseResult<Value>>;
     <Value, State>(options: { timeout?: string; state: State }): WorkflowTransition<PauseResult<Value, State>>;
   }
-  export interface WorkflowDefinition<Input, Output> { readonly steps: readonly (BoundaryDefinition<unknown, unknown> | BatchDefinition<unknown, unknown>)[]; }
+  export interface WorkflowDefinition<Input, Output> { readonly steps: readonly unknown[]; }
   export type CallWorkflow = <Input, Output>(workflow: WorkflowDefinition<Input, Output>, options: { input: Input }) => WorkflowTransition<Output>;
   export interface BoundaryContext<Input> { readonly input: Input; readonly pause: Pause; readonly callWorkflow: CallWorkflow; }
   export interface BoundaryDefinition<Input, Output> { readonly run: (context: BoundaryContext<Input>) => unknown | Promise<unknown>; readonly retry?: RetryPolicy; }
@@ -42,8 +43,8 @@ declare module "@catamorphic/workflow" {
     }) => BoundaryDefinition<Input, Awaited<Returned> extends WorkflowTransition<infer Output> ? Output : Awaited<Returned>>;
     readonly defineBatch: DefineBatch;
   }
-  export function defineWorkflow<Steps extends readonly [BoundaryDefinition<unknown, unknown> | BatchDefinition<unknown, unknown>, ...(BoundaryDefinition<unknown, unknown> | BatchDefinition<unknown, unknown>)[]]>(
-    build: (context: WorkflowBuilderContext) => { readonly steps: Steps; readonly controls?: { readonly cancel?: true } },
+  export function defineWorkflow<const Steps extends readonly [unknown, ...unknown[]]>(
+    build: (context: WorkflowBuilderContext) => { readonly steps: Steps; readonly controls?: { readonly cancel?: true }; readonly triggers?: readonly unknown[]; readonly connections?: readonly (string | { name: string; description?: string })[] },
   ): WorkflowDefinition<unknown, unknown>;
   export interface BatchStepPolicy { maxItems: number; maxWaitMs: number; maxBytes?: number; }
   export interface BatchStepDefinition<Item, Result> { (input: Item): Promise<Result>; readonly batch: BatchStepPolicy; }
@@ -112,8 +113,8 @@ function applyReveal({
  *
  * ```tsx
  * <WorkflowEditor
- *   renderCodeEditor={({ code, onChange, readOnly }) => (
- *     <MonacoCodeEditor code={code} onChange={onChange} readOnly={readOnly} />
+ *   renderInspector={({ code, onCodeChange, readOnly }) => (
+ *     <MonacoCodeEditor code={code} onChange={onCodeChange} readOnly={readOnly} />
  *   )}
  * />
  * ```
@@ -148,19 +149,19 @@ export function MonacoCodeEditor({
     editorRef.current = editor;
     monacoRef.current = monaco;
 
-    monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
-      target: monaco.languages.typescript.ScriptTarget.ESNext,
-      module: monaco.languages.typescript.ModuleKind.ESNext,
-      moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
+    typescript.typescriptDefaults.setCompilerOptions({
+      target: typescript.ScriptTarget.ESNext,
+      module: typescript.ModuleKind.ESNext,
+      moduleResolution: typescript.ModuleResolutionKind.NodeJs,
       allowNonTsExtensions: true,
       strict: true,
     });
-    monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+    typescript.typescriptDefaults.setDiagnosticsOptions({
       // 2307 "Cannot find module": only the active workflow file is loaded
       // into the editor, so cross-file and npm imports can't resolve here.
       diagnosticCodesToIgnore: [2307],
     });
-    monaco.languages.typescript.typescriptDefaults.addExtraLib(
+    typescript.typescriptDefaults.addExtraLib(
       WORKFLOW_AUTHORING_TYPES,
       "file:///node_modules/@catamorphic/workflow/index.d.ts",
     );

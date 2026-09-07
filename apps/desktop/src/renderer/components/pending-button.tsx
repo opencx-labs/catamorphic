@@ -21,6 +21,7 @@ export function PendingButton({
   children,
   className,
   disabled,
+  "data-disabled-reason": disabledReason,
   ...rest
 }: {
   pending: boolean;
@@ -28,10 +29,18 @@ export function PendingButton({
   done?: boolean;
   doneLabel?: ReactNode;
   children: ReactNode;
+  "data-disabled-reason"?: string;
 } & ButtonHTMLAttributes<HTMLButtonElement>) {
   const showIdle = !pending && !done;
   return (
     <button
+      data-disabled-reason={
+        pending
+          ? "Wait for this action to finish"
+          : done
+            ? "This action is already complete"
+            : disabledReason
+      }
       {...rest}
       disabled={disabled || pending || done}
       aria-busy={pending || undefined}

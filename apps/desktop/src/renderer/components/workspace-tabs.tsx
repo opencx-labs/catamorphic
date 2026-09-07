@@ -57,7 +57,9 @@ function tabStatusLine(tab: WorkspaceTab): string | null {
   if (tab.attention) return "Ready for you";
   if (tab.unread) return "New reply";
   if (tab.draft) {
-    return tab.kind === "editor" ? "Unsaved changes" : "Unsent draft";
+    return tab.kind === "editor" || tab.kind === "workflow"
+      ? "Unsaved changes"
+      : "Unsent draft";
   }
   return null;
 }
@@ -134,8 +136,19 @@ export type DiffSource =
       status: string;
     };
 
+export interface WorkflowDraft {
+  filePath: string;
+  code: string;
+  baseline: string;
+}
+
 export type WorkspaceTab = (
-  | { kind: "workflow"; name: string; label?: string }
+  | {
+      kind: "workflow";
+      name: string;
+      label?: string;
+      workflowDraft?: WorkflowDraft;
+    }
   | { kind: "app"; name: string; label?: string }
   | {
       kind: "chat";
@@ -177,7 +190,7 @@ export type WorkspaceTab = (
       toolResult?: unknown;
     }
 ) &
-  TabIndicators;
+  TabIndicators & { chatLocalId?: string };
 
 export const tabKey = (tab: WorkspaceTab) => `${tab.kind}:${tab.name}`;
 

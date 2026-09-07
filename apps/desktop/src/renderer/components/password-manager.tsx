@@ -433,6 +433,7 @@ export function PasswordManager({ profileId }: { profileId: string }) {
               <PendingButton
                 pending={saving}
                 pendingLabel="Saving…"
+                data-disabled-reason="Complete the required credential fields"
                 disabled={
                   !draft.origin.trim() ||
                   (!draft.id && !draft.password) ||

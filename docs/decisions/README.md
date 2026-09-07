@@ -108,3 +108,5 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0093](0093-session-model-overrides-and-desktop-toolchain.md) | Session model overrides and the desktop toolchain | Accepted |
 | [0094](0094-durable-agent-reconnects.md) | Durable agent reconnects and unexpected-stop visibility | Accepted |
 | [0095](0095-authoritative-agent-execution.md) | Authoritative agent execution and independent connections | Accepted |
+| [0096](0096-desktop-resource-link-routing.md) | Desktop resource links use workspace targets | Accepted |
+| [0097](0097-host-owned-workflow-inspectors.md) | Host-owned workflow inspectors | Accepted |

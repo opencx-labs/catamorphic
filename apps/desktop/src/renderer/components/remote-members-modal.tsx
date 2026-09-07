@@ -172,6 +172,7 @@ export function RemoteMembersModal({
                 pending={busy === "invite"}
                 onClick={() => void invite()}
                 disabled={!inviteRole}
+                data-disabled-reason="Choose a role for the invitation"
                 className="flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-xs font-semibold text-accent-fg disabled:opacity-50"
               >
                 <MailPlus className="size-3.5" />
@@ -223,6 +224,7 @@ export function RemoteMembersModal({
                   <button
                     type="button"
                     disabled={busy === request.id}
+                    data-disabled-reason="Updating this request"
                     onClick={() => void decideRequest(request.id, "denied")}
                     className="grid size-8 place-items-center rounded-lg text-fg-faint hover:bg-danger/10 hover:text-danger disabled:opacity-40"
                     aria-label={`Deny ${request.email}`}

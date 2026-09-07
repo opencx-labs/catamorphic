@@ -122,3 +122,42 @@ describe("UpdateBanner", () => {
     expect(restart?.disabled).toBe(true);
   });
 });
+
+it("keeps a dismissed download quiet through progress events and reveals readiness", async () => {
+  vi.useFakeTimers();
+  const state: DesktopUpdateState = {
+    phase: "downloading",
+    currentVersion: "1",
+    channel: "preview",
+    manual: true,
+    version: "2",
+    percent: 10,
+  };
+  try {
+    const container = await mount(state);
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Dismiss update message"]',
+        )
+        ?.click(),
+    );
+    expect(container.querySelector('[data-state="closing"]')).not.toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    const receive = vi
+      .mocked(desktopApi.onUpdateStateChanged)
+      .mock.calls.at(-1)?.[0];
+    act(() => receive?.({ ...state, percent: 40 }));
+    expect(
+      container.querySelector('[data-testid="desktop-update-banner"]'),
+    ).toBeNull();
+    act(() => receive?.({ ...state, percent: 40, manualCheckId: 1 }));
+    expect(container.textContent).toContain("Downloading Catamorphic 2");
+    act(() => receive?.({ ...state, phase: "downloaded" }));
+    expect(container.textContent).toContain("Update ready");
+  } finally {
+    vi.useRealTimers();
+  }
+});

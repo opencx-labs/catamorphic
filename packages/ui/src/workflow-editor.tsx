@@ -7,7 +7,6 @@ import {
   lastTriggerDataAtom,
   type OnParseCallback,
   panelVisibilityAtom,
-  rightPanelOpenAtom,
   showRunDialogAtom,
   useEditorKeyboard,
   useWorkflowGraph,
@@ -19,7 +18,6 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { AIBar } from "./ai-bar.js";
 import { WorkflowCanvas } from "./canvas.js";
-import { type CodeEditorRenderProps, DetailPanel } from "./detail-panel.js";
 import { RunTriggerDialog } from "./run-trigger-dialog.js";
 import { Toolbar } from "./toolbar.js";
 import { WorkflowEditorScope } from "./workflow-editor-scope.js";
@@ -39,18 +37,21 @@ export interface WorkflowEditorProps {
    * need to replace the server-side parser entirely.
    */
   onParse?: OnParseCallback;
-  renderCodeEditor?: (props: CodeEditorRenderProps) => ReactNode;
+  /** Host-owned inspector, including any source editor and detail actions. */
+  renderInspector?: (props: {
+    code: string;
+    onCodeChange: (code: string) => void;
+    readOnly: boolean;
+  }) => ReactNode;
   nodeRenderers?: Partial<Record<WorkflowNodeType, NodeTypes[string]>>;
   theme?: Record<string, string>;
   aiEnabled?: boolean;
   onAIPrompt?: (prompt: string) => Promise<string>;
   executionState?: Record<string, string>;
-  showCodeEditor?: boolean;
   showMinimap?: boolean;
   /** Starts a Run. Available for every Workflow. */
   onRun?: (input: Record<string, unknown>) => Promise<Run>;
   triggerParameters?: ParameterInfo[];
-  onExpandEditor?: () => void;
   renderRunsPanel?: (props: { activeRun?: Run }) => ReactNode;
   renderBanner?: () => ReactNode;
   renderToolbarCenter?: () => ReactNode;
@@ -71,16 +72,14 @@ export function WorkflowEditorChrome({
   code,
   onCodeChange,
   onParse,
-  renderCodeEditor,
+  renderInspector,
   nodeRenderers,
   executionState,
-  showCodeEditor = true,
   showMinimap = true,
   onRun,
   triggerParameters,
   aiEnabled = false,
   onAIPrompt,
-  onExpandEditor,
   renderRunsPanel,
   renderBanner,
   renderToolbarCenter,
@@ -89,7 +88,6 @@ export function WorkflowEditorChrome({
   const [currentCode, setCode] = useAtom(codeAtom);
   const setExecutionState = useSetAtom(executionStateAtom);
   const setPanelVisibility = useSetAtom(panelVisibilityAtom);
-  const setRightPanelOpen = useSetAtom(rightPanelOpenAtom);
   const graph = useAtomValue(graphAtom);
   const [showDialog, setShowDialog] = useAtom(showRunDialogAtom);
   const lastTriggerData = useAtomValue(lastTriggerDataAtom);
@@ -119,13 +117,6 @@ export function WorkflowEditorChrome({
       minimap: showMinimap,
     }));
   }, [showMinimap, setPanelVisibility]);
-
-  // `showCodeEditor` is bidirectional: flipping it to `false` closes the
-  // panel, not just opens on `true`. Prevents a stale-open panel when the
-  // host toggles code editing off.
-  useEffect(() => {
-    setRightPanelOpen(showCodeEditor);
-  }, [showCodeEditor, setRightPanelOpen]);
 
   useWorkflowGraph({ onParse });
   useEditorKeyboard();
@@ -168,6 +159,7 @@ export function WorkflowEditorChrome({
   return (
     <div className="catamorphic-editor">
       <Toolbar
+        showInspectorToggle={Boolean(renderInspector)}
         onRun={onRun ? handleRunClick : undefined}
         isRunning={isRunning}
         centerSlot={renderToolbarCenter?.()}
@@ -177,12 +169,11 @@ export function WorkflowEditorChrome({
         <div className="catamorphic-editor-canvas">
           <WorkflowCanvas nodeRenderers={nodeRenderers} />
         </div>
-        <DetailPanel
-          renderCodeEditor={renderCodeEditor}
-          code={currentCode}
-          onCodeChange={handleCodeChange}
-          onExpandEditor={onExpandEditor}
-        />
+        {renderInspector?.({
+          code: currentCode,
+          onCodeChange: handleCodeChange,
+          readOnly,
+        })}
         <RunsPanelSlot
           activeRun={activeRun}
           renderRunsPanel={renderRunsPanel}

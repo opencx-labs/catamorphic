@@ -208,7 +208,7 @@ that friction is intentional.
   buttons themselves are not).
 - **Prefer small composable pieces over all-in-one shells.** The workflow
   surface is composed from `WorkflowCanvas` (graph + minimap + controls),
-  `DetailPanel`, and `WorkflowEditorScope` (shared atoms) — not the monolithic
+  a desktop-owned workflow inspector, and `WorkflowEditorScope` (shared atoms) — not the monolithic
   `WorkflowEditor`. Hosts own the toolbar, save button, and chat placement.
 
 ## Theming rules
@@ -232,6 +232,49 @@ that friction is intentional.
 
 ## Design log
 
+### 2026-09-07: Native terminal shutdown must complete before exit
+
+Quit, SIGTERM, and SIGINT enter the same service shutdown. Terminal tabs can
+vanish before their native processes exit, so cleanup tracks native lifetimes
+separately and awaits their callbacks, escalating a stubborn shell within a
+bounded deadline. Electron must not free its Node environment while node-pty
+still has pending exit callbacks. Tests assert process exit status as well as
+UI behavior; a teardown crash is a failed test, never a successful run with a
+suppressed macOS alert. The embedded HTTP server closes remaining connections
+after the windows close, so unfinished renderer requests cannot block the
+subsequent database flush.
+
+### 2026-09-07: Workflow authoring belongs to the host
+
+The desktop owns the workflow inspector, including its Details, Code, Runs,
+and automation views. It does not ship as an embeddable sidebar. Reusable
+mechanics remain the canvas, scoped selection, source linking, parse status,
+and graph reconciliation (ADR 0097). Workflow overviews lead with purpose,
+starting information, triggers, and steps. Step details describe behavior and
+input provenance; raw expressions are under Technical details. Both views
+provide a deliberate path to source and to describing a change to an agent.
+
+The graph keeps its viewport while inspectors open and code changes. Layout,
+container size, and entry/exit opacity move together for 220ms on the standard
+easing; connected edges track the moving nodes. Reduced motion settles the
+layout immediately. Failed or superseded parses cannot silently replace the
+current preview. A last-valid preview is identified as such.
+
+Saving changes the draft. Runs use the published project version. Publishing
+explains its project-wide scope; unattended execution still requires the
+separate automation review. Unsaved workflow buffers survive tab switches,
+closing a dirty workflow asks whether to discard it, and external changes
+never silently replace a user's draft. Buffers and their disk baselines live
+in the existing per-project workspace snapshot, surviving project switches
+and app relaunch. Saving clears the draft snapshot; discarding also clears
+it from closed-tab history. Background reconciliation waits for restoration
+and cannot replace a saved workspace with an empty one.
+
+Canvas fills use host background tokens with subtle node-kind tints, keeping
+text readable in light and dark themes. Monaco registers TypeScript through
+its current language-feature entry point; authoring hints accept typed,
+heterogeneous steps without false errors.
+
 ### 2026-09-06: Connection loss is not agent activity
 
 Keep the transcript visible when the host cannot be reached, but replace the
@@ -252,7 +295,7 @@ memory of *why* the app is the way it is.
   `bg-accent text-accent-fg`.
 - Registry components ship **no buttons or action chrome**; hosts own
   toolbars/save/chat placement. Prefer small composable pieces
-  (WorkflowCanvas + DetailPanel + WorkflowEditorScope) over all-in-one shells.
+  (WorkflowCanvas + host inspector + WorkflowEditorScope) over all-in-one shells.
 - Animations stay simple and purposeful: 120–250ms, `--ease-standard`, no
   decorative motion.
 
@@ -3387,3 +3430,32 @@ paths, deliberately independent:
   app should request or explain away with extra entitlements.
 - Bounded discovery is agent guidance, not filesystem isolation. We do not
   override `find` or claim to prevent all native macOS privacy prompts.
+
+### Resource links and inspectable controls (2026-09-07)
+
+- Agent replies use ordinary Markdown links with the workspace's existing
+  `file:`, `workflow:`, and `app:` targets. The destination chooses the viewer:
+  code in Monaco, Markdown in Tiptap, and PDFs, HTML, images, and media in browser
+  tabs. Workflow source links open code; `workflow:<exportName>` opens the graph.
+  Absolute paths preserve the actual native checkout or external artifact.
+- Reply links, file chips, sidebar files, and `open_surface` share routing.
+  Click opens, Command-click opens a tab, and Command-Shift-click opens to the
+  right. Agent opens continue to respect whether the user is watching that chat.
+- Sidebar session previews use the same inspector portal, dimensions, motion,
+  runtime settings, and actions as the top-right chat control. Hover cards keep
+  keyboard focus and pointer interest while the user moves into their actions.
+- Every disabled control explains the actual disabling condition on hover.
+  Put `data-disabled-reason` beside the condition; `DisabledControlHints` handles
+  native disabled controls that do not reliably emit React mouse events.
+  PendingButton supplies its in-progress/completed reason. Hints clear all
+  workspace inspectors and modal layers. Icon-only controls still use ShortcutHint.
+- Every sidebar nesting level uses the shared 200ms Collapsible. Closed content
+  stays mounted for reverse motion but is inert and hidden from assistive tools.
+  File folders and nested chats follow the same rule as sections and bookmarks.
+- Session activity crossfades within a fixed icon footprint. Update cards have
+  paired entry/exit, smoothly changing progress, explicit restart blockers, and
+  stay dismissed through download progress events until the phase changes.
+- Update preparation is bounded and does not arm a future quit. A late native
+  preparation callback only records readiness. A failed preparation requires a
+  fresh restart click, and main checks active work both before and after it.
+  Final shutdown attempts every service cleanup and reports storage failures.

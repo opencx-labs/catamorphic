@@ -732,6 +732,7 @@ export function ConnectorsModal({
                         <PendingButton
                           type="button"
                           pending={busy === row.entry.name}
+                          data-disabled-reason="Complete the required connection inputs"
                           disabled={(row.entry.suggested.inputs ?? []).some(
                             (input) =>
                               input.required &&

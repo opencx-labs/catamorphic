@@ -158,3 +158,9 @@ export type SessionDeliveryReceipt =
 
 export type Watcher =
   paths["/api/projects/{projectId}/agent/sessions/{sessionId}/watchers"]["get"]["responses"][200]["content"]["application/json"]["items"][number];
+
+export type {
+  ParameterInfo,
+  StepArgument,
+  WorkflowNode,
+} from "@catamorphic/parser";

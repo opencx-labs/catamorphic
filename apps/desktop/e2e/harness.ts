@@ -64,6 +64,8 @@ export interface AppHandle {
    * `modifiers` is CDP's bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8.
    */
   press: (key: KeyName, modifiers?: number) => Promise<void>;
+  /** Insert text through Chromium's real editing path (including Monaco). */
+  insertText: (text: string) => Promise<void>;
   /**
    * Attach a second CDP session to an out-of-process iframe — e.g. a
    * sandboxed app guest, whose opaque origin makes it unreachable from the
@@ -75,6 +77,8 @@ export interface AppHandle {
   ) => Promise<FrameHandle>;
   /** Captured app stdout/stderr so far (diagnosing server-side behavior). */
   getOutput: () => string;
+  /** Uncaught renderer exceptions, including failures from lazy screens. */
+  getRendererErrors: () => string[];
   userDataDir: string;
   stop: () => Promise<void>;
   /**
@@ -143,6 +147,7 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
     },
   );
   let output = "";
+  let killedForRecovery = false;
   child.stdout?.on("data", (chunk: Buffer) => {
     const text = chunk.toString();
     output += text;
@@ -218,21 +223,31 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
       userDataDir,
       stop: async () => {
         ws.close();
-        await terminate(child);
+        try {
+          if (!killedForRecovery) await terminate(child);
+        } catch (error) {
+          throw new Error(
+            `${String(error)}\n--- app output ---\n${output.slice(-4000)}`,
+          );
+        }
         removeE2eDirectory(userDataDir);
       },
       kill: async () => {
         ws.close();
-        if (child.exitCode === null) {
-          child.kill("SIGKILL");
-          await new Promise<void>((resolve) => {
+        killedForRecovery = true;
+        if (child.exitCode === null && child.signalCode === null) {
+          const exited = new Promise<void>((resolve) => {
             child.once("exit", () => resolve());
           });
+          child.kill("SIGKILL");
+          await exited;
         }
       },
     };
   } catch (error) {
-    await terminate(child);
+    await terminate(child).catch((failure: unknown) => {
+      output += `\n${String(failure)}`;
+    });
     throw new Error(
       `Failed to launch the app for e2e: ${String(error)}\n--- app output ---\n${output.slice(-4000)}`,
     );
@@ -246,8 +261,10 @@ async function connectCdp(
   const deadline = Date.now() + 60_000;
   let lastError: unknown;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(`Electron exited early with code ${child.exitCode}`);
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(
+        `Electron exited early: ${child.signalCode ?? child.exitCode}`,
+      );
     }
     try {
       const targets = (await fetch(`http://127.0.0.1:${port}/json`).then(
@@ -275,6 +292,7 @@ async function connectCdp(
 
 async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
   let nextId = 1;
+  const rendererErrors: string[] = [];
   const pending = new Map<
     number,
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
@@ -282,9 +300,22 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
   ws.addEventListener("message", (event) => {
     const message = JSON.parse(String(event.data)) as {
       id?: number;
+      method?: string;
+      params?: {
+        exceptionDetails?: {
+          text?: string;
+          exception?: { description?: string };
+        };
+      };
       result?: unknown;
       error?: { message: string };
     };
+    if (message.method === "Runtime.exceptionThrown")
+      rendererErrors.push(
+        message.params?.exceptionDetails?.exception?.description ??
+          message.params?.exceptionDetails?.text ??
+          "Uncaught renderer exception",
+      );
     if (message.id === undefined) return;
     const waiter = pending.get(message.id);
     if (!waiter) return;
@@ -295,11 +326,35 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
 
   const send = (method: string, params?: unknown): Promise<unknown> => {
     const id = nextId++;
-    ws.send(JSON.stringify({ id, method, params }));
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      const timeout = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`CDP ${method} did not respond within 60 seconds`));
+      }, 60_000);
+      pending.set(id, {
+        resolve: (value) => {
+          clearTimeout(timeout);
+          resolve(value);
+        },
+        reject: (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        },
+      });
+      try {
+        ws.send(JSON.stringify({ id, method, params }));
+      } catch (error) {
+        pending.delete(id);
+        clearTimeout(timeout);
+        reject(error);
+      }
     });
   };
+  ws.addEventListener("close", () => {
+    for (const waiter of pending.values())
+      waiter.reject(new Error("CDP connection closed before the response"));
+    pending.clear();
+  });
 
   await send("Runtime.enable");
   // Frame targets only need Runtime; Page powers the window screenshot.
@@ -357,12 +412,24 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
     await send("Network.enable");
     await send("Network.setBlockedURLs", { urls: patterns });
   };
-  return { eval: evaluate, waitFor, screenshot, press, blockRequests };
+  const insertText = async (text: string): Promise<void> => {
+    await send("Input.insertText", { text });
+  };
+  return {
+    eval: evaluate,
+    waitFor,
+    screenshot,
+    press,
+    insertText,
+    blockRequests,
+    getRendererErrors: () => [...rendererErrors],
+  };
 }
 
 export type KeyName = keyof typeof KEY_CODES;
 
 const KEY_CODES = {
+  a: { windowsVirtualKeyCode: 65, code: "KeyA" },
   Enter: { windowsVirtualKeyCode: 13, code: "Enter", text: "\r" },
   Backspace: { windowsVirtualKeyCode: 8, code: "Backspace" },
   Delete: { windowsVirtualKeyCode: 46, code: "Delete" },
@@ -398,17 +465,28 @@ export const setReactValueJs = `const setReactValue = (el, value) => {
     ));
   };`;
 
-async function terminate(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null) return;
-  child.kill("SIGTERM");
-  const exited = new Promise<void>((resolve) => {
-    child.once("exit", () => resolve());
-  });
-  const timeout = sleep(5000).then(() => {
-    if (child.exitCode === null) child.kill("SIGKILL");
-  });
-  await Promise.race([exited, timeout]);
-  await exited;
+export async function terminate(child: ChildProcess): Promise<void> {
+  if (child.exitCode === null && child.signalCode === null) {
+    const exited = new Promise<void>((resolve) => {
+      child.once("exit", () => resolve());
+    });
+    // Main handles SIGTERM through the ordinary asynchronous Quit lifecycle.
+    // SIGKILL is a bounded last resort and must fail a normal teardown.
+    const timeout = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null)
+        child.kill("SIGKILL");
+    }, 15_000);
+    try {
+      child.kill("SIGTERM");
+      await exited;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  if (child.exitCode !== 0 || child.signalCode !== null)
+    throw new Error(
+      `Electron did not exit cleanly: ${child.signalCode ?? `code ${child.exitCode}`}`,
+    );
 }
 
 const sleep = (ms: number) =>

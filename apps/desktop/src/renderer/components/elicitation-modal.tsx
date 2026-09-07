@@ -189,6 +189,7 @@ function FormElicitation({
           pending={false}
           pendingLabel="Submitting…"
           disabled={missingRequired}
+          data-disabled-reason="Complete the required fields first"
           className="h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
         >
           Submit

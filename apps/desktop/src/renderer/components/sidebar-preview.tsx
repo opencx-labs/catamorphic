@@ -1,7 +1,10 @@
 import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { SidebarPreview } from "../lib/desktop-api.js";
-import { computeInspectorPosition } from "./resource-inspector";
+import {
+  computeInspectorPosition,
+  InspectorPortal,
+} from "./resource-inspector";
 
 export const SIDEBAR_PREVIEW_DELAY_MS = 500;
 
@@ -60,6 +63,21 @@ export function SidebarPreviewPopover({
     });
     setPosition({ left: next.left, top: next.top });
   }, [anchor]);
+
+  if (content !== undefined)
+    return (
+      <InspectorPortal
+        id={id}
+        label={fallbackTitle}
+        anchor={anchor}
+        open={open}
+        onEnter={onMouseEnter}
+        onLeave={onMouseLeave}
+        onExited={onExited}
+      >
+        {content}
+      </InspectorPortal>
+    );
 
   return createPortal(
     <div

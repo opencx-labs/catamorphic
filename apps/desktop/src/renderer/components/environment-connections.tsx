@@ -123,6 +123,7 @@ function EnvironmentConnectionRow({
           <button
             type="button"
             disabled={authorize.isPending}
+            data-disabled-reason="Connecting this account"
             onClick={() => void start()}
             className="flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-2 py-1 font-medium hover:bg-bg-overlay disabled:cursor-wait disabled:opacity-60"
           >
