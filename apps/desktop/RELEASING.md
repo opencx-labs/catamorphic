@@ -21,9 +21,11 @@ use to discover updates.
 3. Create the public `opencx-labs/homebrew-tap` repository with `main` as its
    default branch. The workflow maintains its `Casks` and `updates`
    directories.
-4. Create a `desktop-release` GitHub environment in this repository. Require a
-   reviewer and restrict deployments to the `main` branch and `desktop-v*`
-   tags.
+4. Create a `desktop-release` GitHub environment in this repository. Configure
+   its required reviewers as `m-tabaza`, `AliBakerSartawi`, and `OsamaHaikal`.
+   Any one of these reviewers can approve a release. Keep self-review allowed
+   so a listed reviewer can approve a release they triggered. Restrict
+   deployments to the `main` branch and `desktop-v*` tags.
 5. Configure these environment secrets:
 
 | Secret | Value |
@@ -42,6 +44,23 @@ base64 -i AuthKey_EXAMPLE.p8 | tr -d '\n'
 ```
 
 Never commit certificates, keys, passwords, or encoded credentials.
+
+## Release approval settings
+
+The reviewer list lives in the repository's [desktop-release environment
+settings](https://github.com/opencx-labs/catamorphic/settings/environments/20832452629/edit).
+The workflow's `environment: desktop-release` selects that environment; the
+workflow YAML does not define its reviewers.
+
+After merging a change to the reviewer list above, a repository admin must
+apply the same list under **Deployment protection rules > Required reviewers**
+in those settings. Merging a documentation or workflow PR alone does not
+update the environment. Preserve its secrets and branch/tag restrictions.
+
+GitHub requires [approval from one listed
+reviewer](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments#required-reviewers),
+not all three. This approval applies to both manual dry runs and tag-triggered
+publication runs.
 
 ## Dry run
 

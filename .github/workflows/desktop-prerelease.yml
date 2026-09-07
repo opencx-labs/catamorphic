@@ -18,6 +18,8 @@ jobs:
     name: Build, sign, and notarize macOS
     runs-on: macos-15
     timeout-minutes: 90
+    # Required reviewers are configured in GitHub environment settings.
+    # See apps/desktop/RELEASING.md for the reviewer list and setup steps.
     environment: desktop-release
     outputs:
       version: ${{ steps.release.outputs.version }}
