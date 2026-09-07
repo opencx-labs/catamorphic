@@ -100,9 +100,11 @@ export function ResourceInspector({
   const [anchor, setAnchor] = useState<InspectorAnchor | null>(null);
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const onOpenRef = useRef(onOpen);
+  onOpenRef.current = onOpen;
   useEffect(() => {
-    if (open) onOpen?.();
-  }, [open, onOpen]);
+    if (open) onOpenRef.current?.();
+  }, [open]);
 
   const show = useCallback(() => {
     const rect = triggerRef.current?.getBoundingClientRect();
@@ -258,7 +260,7 @@ export function ResourceInspector({
   );
 }
 
-function InspectorPortal({
+export function InspectorPortal({
   id,
   label,
   anchor,

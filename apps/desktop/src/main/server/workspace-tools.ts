@@ -543,11 +543,13 @@ export function buildWorkspaceToolkit(
     {
       name: "open_surface",
       description:
-        "Open (or focus) something tab-shaped in the user's workspace. Targets: an existing tab key from workspace_overview, 'app:<name>' (a published project app), 'file:<path>' (opens the file in an editor tab), or an http(s) URL (browser tab). Use it to show the user something: an app you built, a file you changed, a page. If the user is watching your chat, the tab opens behind it (your chat steps down to its floating dock); if they're busy on another surface, their view is NOT moved — the tab opens in the background and its chip on your chat is highlighted instead. The result's `opened` field says which happened ('focused' vs 'background'); after a background open, tell the user it's ready and where — never assume they saw it.",
+        "Open (or focus) something tab-shaped in the user's workspace. Targets: an existing tab key from workspace_overview, 'app:<name>' (a published project app), 'workflow:<exportName>' (workflow graph), 'file:<path>' (code editor or rich Markdown editor; PDFs, HTML, images and media use the browser), or an http(s) URL (browser tab). Use it to show the user something: an app you built, a file you changed, a page. If the user is watching your chat, the tab opens behind it (your chat steps down to its floating dock); if they're busy on another surface, their view is NOT moved — the tab opens in the background and its chip on your chat is highlighted instead. The result's `opened` field says which happened ('focused' vs 'background'); after a background open, tell the user it's ready and where — never assume they saw it.",
       parameters: {
         target: z
           .string()
-          .describe("Tab key, 'app:<name>', 'file:<path>', or an http(s) URL"),
+          .describe(
+            "Tab key, 'app:<name>', 'workflow:<exportName>', 'file:<path>', or an http(s) URL",
+          ),
       },
       execute: (input, ctx) =>
         bridge.openTarget(

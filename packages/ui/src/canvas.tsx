@@ -1,5 +1,6 @@
 import {
   activePanelTabAtom,
+  graphAtom,
   panelVisibilityAtom,
   reactFlowEdgesAtom,
   reactFlowNodesAtom,
@@ -16,12 +17,12 @@ import {
   type NodeMouseHandler,
   type NodeTypes,
   type OnNodesChange,
-  type OnSelectionChangeFunc,
   ReactFlow,
 } from "@xyflow/react";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useCallback, useEffect, useMemo } from "react";
 import { nodeTypes as builtInNodeTypes } from "./nodes/index.js";
+import { useGraphTransition } from "./use-graph-transition.js";
 
 const FIT_VIEW_OPTIONS: FitViewOptions = {
   padding: 0.08,
@@ -98,6 +99,12 @@ export function WorkflowCanvas({
 } = {}) {
   const [nodes, setNodes] = useAtom(reactFlowNodesAtom);
   const edges = useAtomValue(reactFlowEdgesAtom);
+  const graph = useAtomValue(graphAtom);
+  const animated = useGraphTransition({
+    nodes,
+    edges,
+    graphNodes: graph?.nodes ?? [],
+  });
   const selectedNodeId = useAtomValue(selectedNodeIdAtom);
   const setSelectedNodeId = useSetAtom(selectedNodeIdAtom);
   const panelVisibility = useAtomValue(panelVisibilityAtom);
@@ -121,7 +128,10 @@ export function WorkflowCanvas({
 
   const onNodesChange: OnNodesChange = useCallback(
     (changes) => {
-      const filtered = changes.filter((c) => c.type !== "position");
+      const filtered = changes.filter(
+        (c) =>
+          c.type !== "position" && !("id" in c && c.id.startsWith("leaving:")),
+      );
       if (filtered.length > 0) {
         setNodes((prev) => applyNodeChanges(filtered, prev));
       }
@@ -137,14 +147,6 @@ export function WorkflowCanvas({
     }
     return merged;
   }, [nodeRenderers]);
-
-  const onSelectionChange: OnSelectionChangeFunc = useCallback(
-    ({ nodes: selectedNodes }) => {
-      const first = selectedNodes[0];
-      setSelectedNodeId(first?.id ?? null);
-    },
-    [setSelectedNodeId],
-  );
 
   const onNodeClick: NodeMouseHandler = useCallback(
     (_event, node) => {
@@ -162,14 +164,16 @@ export function WorkflowCanvas({
   }, [setSelectedNodeId]);
 
   return (
-    <div style={{ position: "absolute", inset: 0 }}>
+    <div
+      className="catamorphic-workflow-canvas"
+      data-graph-transitioning={animated.transitioning}
+      style={{ position: "absolute", inset: 0 }}
+    >
       <ReactFlow
-        key={isOpen ? "panel-open" : "panel-closed"}
-        nodes={nodes}
-        edges={edges}
+        nodes={animated.nodes}
+        edges={animated.edges}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
-        onSelectionChange={onSelectionChange}
         onNodeClick={onNodeClick}
         onPaneClick={onPaneClick}
         translateExtent={translateExtent}
@@ -179,7 +183,7 @@ export function WorkflowCanvas({
         fitViewOptions={FIT_VIEW_OPTIONS}
         nodesDraggable={false}
         nodesConnectable={false}
-        nodesFocusable={false}
+        nodesFocusable={true}
         edgesFocusable={false}
         elementsSelectable={true}
         deleteKeyCode={null}

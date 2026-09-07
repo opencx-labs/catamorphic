@@ -139,6 +139,7 @@ export function ProjectAgentConsentDialog({
               data-testid="project-agent-approve"
               onClick={() => void approve()}
               disabled={busy}
+              data-disabled-reason="Wait for the current action to finish"
               className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg hover:opacity-90 disabled:opacity-50"
             >
               {busy ? "Approving…" : "Approve and use"}

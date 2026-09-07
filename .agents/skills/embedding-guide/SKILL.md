@@ -29,13 +29,15 @@ function MyApp({ projectId, workflowName, files }) {
       code={code}
       onCodeChange={setCode}
       onParse={onParse}
-      showCodeEditor
       showMinimap
       aiEnabled
       onAIPrompt={async (prompt) => {
         const result = await myAIService(prompt, code);
         return result.updatedCode;
       }}
+      renderInspector={({ code, onCodeChange, readOnly }) => (
+        <HostWorkflowInspector code={code} onCodeChange={onCodeChange} readOnly={readOnly} />
+      )}
       onRun={(input) => triggerRun.mutateAsync({ input })}
     />
   );
@@ -46,7 +48,7 @@ function MyApp({ projectId, workflowName, files }) {
 
 - `code` / `onCodeChange` — controlled code state
 - `onParse` — required code-to-graph callback; normally use `useOnParse`
-- `showCodeEditor` — toggle the Monaco editor panel
+- `renderInspector` receives code, onCodeChange, and readOnly for a host-owned inspector
 - `showMinimap` — toggle the React Flow minimap
 - `aiEnabled` / `onAIPrompt` — enable AI bar with custom handler
 - `executionState` — overlay execution status on nodes
@@ -115,3 +117,13 @@ reenable, and deployment-update flows. Connecting an account may complete a
 pending enablement but must never enable every compatible workflow by itself.
 
 See [`INTEGRATION.md`](../../../INTEGRATION.md) for the end-to-end wiring example.
+
+## Inspector ownership
+
+The framework does not provide a Details/Code sidebar (ADR 0097). Hosts own
+its layout, wording, actions, and editor placement. Compose `WorkflowCanvas`
+and your inspector inside `WorkflowEditorScope`, or use `renderInspector`
+with `WorkflowEditor`. Consume `selectedNodeAtom`, `graphAtom`, and
+`graphParseStateAtom` for details and preview status. Use `useCodeEditorLink`
+for source navigation. The canvas preserves its viewport and animates layout
+changes, with reduced-motion support. Do not remount it to resize a panel.

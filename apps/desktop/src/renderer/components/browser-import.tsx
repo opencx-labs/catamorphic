@@ -161,6 +161,7 @@ export function BrowserImport() {
                     pending={importing === key}
                     pendingLabel="Importing…"
                     disabled={profile.bookmarkCount === 0 || importing !== null}
+                    data-disabled-reason="No bookmarks to import, or another import is in progress"
                     onClick={() => void run(browser, profile)}
                     className="h-8 rounded-md border border-border px-2.5 text-xs text-fg transition-colors duration-150 hover:border-border-strong hover:bg-bg-overlay disabled:opacity-50"
                   >

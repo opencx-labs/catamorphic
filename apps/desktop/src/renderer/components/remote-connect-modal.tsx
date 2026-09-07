@@ -293,6 +293,7 @@ export function RemoteConnectModal({
             pending={pending}
             pendingLabel="Connecting…"
             disabled={pending}
+            data-disabled-reason="Wait for the connection to finish"
             data-testid="remote-connect-submit"
             className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >

@@ -128,6 +128,7 @@ export function RemoteNav({
             type="button"
             pending={busy === "sync"}
             disabled={busy !== null}
+            data-disabled-reason="Wait for the current server action to finish"
             onClick={() => void run("sync")}
             data-testid="remote-sync"
             className="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-border text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
@@ -139,6 +140,7 @@ export function RemoteNav({
             type="button"
             pending={busy === "ship"}
             disabled={busy !== null || localCount === 0}
+            data-disabled-reason="No local changes to send, or a server action is in progress"
             onClick={() => void run("ship")}
             data-testid="remote-ship"
             className="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md bg-accent text-xs font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
@@ -255,6 +257,7 @@ function ChangeRow({
         type="button"
         onClick={onOpen}
         disabled={!onOpen}
+        data-disabled-reason="This file has no view available"
         title={path}
         className="min-w-0 flex-1 cursor-pointer truncate text-left text-fg-muted transition-colors duration-150 hover:text-fg disabled:cursor-default"
       >

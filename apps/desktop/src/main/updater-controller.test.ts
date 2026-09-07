@@ -283,3 +283,39 @@ describe("DesktopUpdaterController", () => {
     expect(controller.setChannel("stable")).toBe(true);
   });
 });
+
+it("checks active work again after preparation and requires another restart click", async () => {
+  const updater = new FakeUpdater();
+  let activeWork = false;
+  const controller = new DesktopUpdaterController({
+    currentVersion: "1",
+    channel: "preview",
+    supported: true,
+    updater,
+    broadcast: () => {},
+    logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+    canInstall: async () => !activeWork,
+    prepareInstall: async () => {
+      activeWork = true;
+    },
+  });
+  updater.downloaded("2");
+  await controller.install();
+  expect(updater.quitAndInstall).not.toHaveBeenCalled();
+  expect(controller.current()).toMatchObject({
+    phase: "downloaded",
+    message: expect.stringContaining("Work started"),
+  });
+});
+
+it("distinguishes an explicit status request from background progress", async () => {
+  const { controller, updater } = setup();
+  updater.available("2");
+  await controller.download();
+  await controller.check(true);
+  const first = controller.current().manualCheckId;
+  updater.progress(40);
+  expect(controller.current().manualCheckId).toBe(first);
+  await controller.check(true);
+  expect(controller.current().manualCheckId).toBe((first ?? 0) + 1);
+});

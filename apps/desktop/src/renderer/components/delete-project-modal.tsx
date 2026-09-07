@@ -118,6 +118,7 @@ export function DeleteProjectModal({
           onClick={confirm}
           pending={pending}
           disabled={remoteMember === null}
+          data-disabled-reason="Checking project membership"
           pendingLabel={remoteMember ? "Removing…" : "Deleting…"}
           data-testid="delete-confirm"
           className="h-8 cursor-pointer rounded-md border border-danger/40 bg-danger/10 px-3 text-[13px] font-medium text-danger transition-colors duration-150 hover:bg-danger/20 disabled:cursor-not-allowed disabled:opacity-50"

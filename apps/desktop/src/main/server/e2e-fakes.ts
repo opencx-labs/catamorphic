@@ -477,6 +477,35 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       return;
     }
 
+    if (prompt.includes("artifact links")) {
+      const files = {
+        "artifact.pdf":
+          "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n5 0 obj\n<< /Length 51 >>\nstream\nBT /F1 18 Tf 30 100 Td (Linked PDF artifact) Tj ET\nendstream\nendobj\nxref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000241 00000 n \n0000000311 00000 n \ntrailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n411\n%%EOF\n",
+        "linked-notes.md":
+          "# Linked notes\n\nAn artifact opened from an agent reply.\n",
+        "linked-source.ts":
+          "// Linked source\nexport const first = 1;\nexport const second = 2;\n",
+        "linked-workflow.ts":
+          'import { defineWorkflow } from "@catamorphic/workflow";\n/** @displayname Make greeting\n * @param name - @displayname Name\n */\nasync function greet({ name }: { name: string }) { "use step"; return { greeting: "Hello " + name }; }\n/** @displayname Linked workflow */\nexport const linkedWorkflow = defineWorkflow(({ defineBoundary }) => ({ steps: [defineBoundary({ run: async () => greet({ name: "World" }) })] }));\n',
+        "apps/linked-app/package.json":
+          '{"name":"linked-app","catamorphic":{"displayName":"Linked app"}}',
+      };
+      await this.sandboxProvider.uploadFiles(
+        state.sandboxId,
+        files,
+        state.workingDirectory,
+      );
+      for (const filePath of Object.keys(files))
+        yield { type: "file_edit" as const, content: "write", filePath };
+      yield {
+        type: "text",
+        content:
+          "[Read linked notes](file:linked-notes.md) [Inspect linked source](file:linked-source.ts:3) [Open linked graph](workflow:linkedWorkflow) [Open linked app](app:linked-app) [Read linked PDF](file:artifact.pdf)",
+      };
+      yield { type: "done" };
+      return;
+    }
+
     if (prompt.includes("preamble")) {
       yield { type: "title", content: "Preamble exercise" };
       yield { type: "text", content: "First, I will look at the project." };

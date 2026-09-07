@@ -142,7 +142,7 @@ describe("useOnParse", () => {
     await expect(result.current("")).resolves.toBeNull();
   });
 
-  it("swallows transient parse errors and returns null", async () => {
+  it("surfaces parse errors so the host can explain a stale preview", async () => {
     server.use(
       http.post(apiUrl("/api/playground/parse"), () =>
         HttpResponse.json({ error: "boom" }, { status: 500 }),
@@ -156,7 +156,7 @@ describe("useOnParse", () => {
       }),
     );
 
-    await expect(result.current("not real code")).resolves.toBeNull();
+    await expect(result.current("not real code")).rejects.toThrow();
   });
 
   it("returns a stable callback across renders when inputs are unchanged", async () => {

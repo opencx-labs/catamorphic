@@ -84,6 +84,7 @@ export function RemoteHistoryModal({
                   type="button"
                   onClick={() => setSelected(version.version)}
                   disabled={version.deleted}
+                  data-disabled-reason="This version records a deleted file"
                   className={`flex w-full cursor-pointer flex-col rounded-md px-2 py-1.5 text-left transition-colors duration-150 hover:bg-bg-overlay disabled:cursor-default disabled:opacity-60 ${
                     selected === version.version ? "bg-bg-overlay" : ""
                   }`}

@@ -61,28 +61,22 @@ export function useOnParse({
         ? { ...filesRef.current, [preferredFilePath]: source }
         : filesRef.current;
 
-      try {
-        const parsed = await mutateAsync({
-          files: mergedFiles,
-          workflowName,
-          preferredFilePath,
-        });
-        if (!parsed) return null;
-        const graph = adaptWorkflowGraph(parsed);
-        const layouted = layoutGraph({
-          nodes: graph.nodes,
-          edges: graph.edges,
-        });
-        return {
-          graph,
-          layoutedNodes: layouted.nodes,
-          layoutedEdges: layouted.edges,
-        };
-      } catch {
-        // Parse errors are expected mid-edit; `useWorkflowGraph` treats a
-        // null return as "keep the last good graph", which is what we want.
-        return null;
-      }
+      const parsed = await mutateAsync({
+        files: mergedFiles,
+        workflowName,
+        preferredFilePath,
+      });
+      if (!parsed) return null;
+      const graph = adaptWorkflowGraph(parsed);
+      const layouted = layoutGraph({
+        nodes: graph.nodes,
+        edges: graph.edges,
+      });
+      return {
+        graph,
+        layoutedNodes: layouted.nodes,
+        layoutedEdges: layouted.edges,
+      };
     },
     [mutateAsync, workflowName, preferredFilePath],
   );

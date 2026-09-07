@@ -74,6 +74,7 @@ import {
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
 import { useProjectSkills } from "../lib/skills.js";
+import { NEW_WORKFLOW_PROMPT } from "../lib/workflow-authoring.js";
 import { useApps } from "../screens/app-screen.js";
 import { resolveInput } from "../screens/browser-screen.js";
 import { PILL_SURFACE } from "./context-pill.js";
@@ -468,6 +469,7 @@ export function CommandPalette({
   onSwitchProfile,
   onSendToAgent,
   startingActions,
+  canCreateWorkflows = false,
   onRunSkill,
   actionHandlers,
   actionAvailability,
@@ -513,6 +515,7 @@ export function CommandPalette({
   ) => void;
   /** Project-authored, caller-resolved zero-state actions. Empty means no UI. */
   startingActions: Array<{ label: string; prompt: string; agentId?: string }>;
+  canCreateWorkflows?: boolean;
   /**
    * A skill row was committed: send its invocation message to an agent —
    * into the focused chat when one exists, else a new chat in `mode`.
@@ -600,6 +603,7 @@ export function CommandPalette({
   const [harnessModels, setHarnessModels] = useState<{
     agentId: string;
     models: HarnessModelInfo[];
+    error?: string;
   } | null>(null);
 
   const enterPicker = useCallback((next: PaletteInPicker) => {
@@ -672,11 +676,25 @@ export function CommandPalette({
         });
       }
     } else if (harnessModels?.agentId !== targetAgent.id) {
-      void desktopApi.agentModels(targetAgent.id).then((data) => {
-        if (!cancelled) {
-          setHarnessModels({ agentId: targetAgent.id, models: data.models });
-        }
-      });
+      void desktopApi
+        .agentModels(targetAgent.id)
+        .then((data) => {
+          if (!cancelled) {
+            setHarnessModels({
+              agentId: targetAgent.id,
+              models: data.models,
+              error: data.error,
+            });
+          }
+        })
+        .catch(() => {
+          if (!cancelled)
+            setHarnessModels({
+              agentId: targetAgent.id,
+              models: [],
+              error: "Could not load models. Try again.",
+            });
+        });
     }
     return () => {
       cancelled = true;
@@ -949,6 +967,17 @@ export function CommandPalette({
 
   const sidebarItems = useMemo<PaletteItem[]>(() => {
     const items: PaletteItem[] = [];
+    if (canCreateWorkflows)
+      items.push({
+        id: "create-workflow",
+        icon: WorkflowIcon,
+        label: "Create workflow",
+        detail: "Describe it to your agent",
+        keywords: ["new", "workflow", "automation", "build"],
+        kind: "action",
+        run: (mode) =>
+          onSendToAgent(NEW_WORKFLOW_PROMPT, mode === "tab" ? "tab" : "float"),
+      });
     for (const workflow of workflows) {
       const label = workflow.displayName ?? workflow.name;
       items.push({
@@ -1071,6 +1100,8 @@ export function CommandPalette({
     });
     return items;
   }, [
+    canCreateWorkflows,
+    onSendToAgent,
     workflows,
     apps,
     sessions,
@@ -1216,9 +1247,31 @@ export function CommandPalette({
         });
       }
       // Supported values straight from the harness (Claude Code's own
-      // catalog, `codex debug models`, or the provider's /v1/models).
+      // catalog, Codex app-server `model/list`, or the provider's /v1/models).
       const supported =
         harnessModels?.agentId === agent.id ? harnessModels.models : [];
+      if (
+        harnessModels?.agentId !== agent.id ||
+        harnessModels.error ||
+        supported.length === 0
+      ) {
+        rows.push({
+          id: "pick:model:catalog-status",
+          icon: Cpu,
+          label:
+            harnessModels?.agentId !== agent.id
+              ? "Loading models…"
+              : harnessModels.error
+                ? "Could not load models"
+                : "No models returned",
+          detail: harnessModels?.error ?? "Refresh the model list",
+          keywords: [],
+          kind: "action",
+          run: () => {
+            setHarnessModels(null);
+          },
+        });
+      }
       const supportedRow = (model: HarnessModelInfo) =>
         ({
           id: `pick:model:${model.id}`,
@@ -1693,6 +1746,10 @@ export function CommandPalette({
   const commit = (item: PaletteItem, withCmd: boolean, withShift = false) => {
     // Disabled rows (invalid project agents) are informational only.
     if (item.disabled) return;
+    if (item.id === "pick:model:catalog-status") {
+      item.run("replace");
+      return;
+    }
     // Entering a chip mode swaps palette state — the palette stays open.
     if (item.id.startsWith("mode-row:")) {
       item.run("replace");
@@ -1896,6 +1953,7 @@ export function CommandPalette({
                   role="option"
                   aria-selected={isSelected}
                   aria-disabled={item.disabled || undefined}
+                  data-disabled-reason={item.disabled ? item.detail : undefined}
                   // mousedown so the textarea's focus never flickers away.
                   onMouseDown={(event) => {
                     event.preventDefault();

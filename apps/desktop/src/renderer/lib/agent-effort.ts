@@ -14,7 +14,8 @@ export function supportedEfforts(
   if (!agent) return [];
   if (model?.supportsEffort === false) return [];
   if (model?.supportedEffortLevels) return model.supportedEffortLevels;
-  if (agent.harness === "codex") return ["low", "medium", "high", "xhigh"];
+  if (agent.harness === "codex")
+    return ["low", "medium", "high", "xhigh", "max"];
   if (agent.harness === "ai-sdk" && agent.provider === "openrouter") return [];
   if (agent.harness === "ai-sdk" && agent.provider === "openai")
     return ["low", "medium", "high"];

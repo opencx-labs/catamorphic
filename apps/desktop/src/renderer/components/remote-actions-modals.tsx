@@ -312,6 +312,7 @@ export function RemoteProposeModal({
               pending={pending}
               pendingLabel="Proposing…"
               disabled={!title.trim() || files.length === 0}
+              data-disabled-reason="Enter a title and make a file change first"
               data-testid="propose-submit"
               className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             >

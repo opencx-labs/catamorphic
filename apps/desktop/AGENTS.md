@@ -97,7 +97,7 @@ repository-pinned Node runtime.
 The default command keeps the real Electron window hidden so local runs do
 not steal focus. The visible command runs the compositor, focus, and
 native-window suites (`motion`, `skills`, `tool-permissions`, and
-`window-state`) with a displayed window;
+`window-state`, and `workflows`) with a displayed window;
 run both before every commit. Both commands build the app and drive the real
 Electron binary over CDP against an
 isolated temp `userData` dir with a deterministic fake agent
@@ -121,6 +121,15 @@ streamed preamble messages, and the ask_user question panel.
 - If a motion test fails after a UI change, the animation is presumed wrong,
   not the test — read the "Motion contract" section of `DESIGN.md` before
   touching the test constants.
+- Normal teardown must finish through the app's Quit lifecycle and exit with
+  code 0. A signal or nonzero exit fails the suite, even if UI assertions pass.
+  SIGKILL belongs only to explicit crash-recovery scenarios. Do not suppress
+  macOS crash alerts or disable CrashReporter to make tests quiet. Terminal
+  shutdown tracks native exits independently of tabs and waits for callbacks
+  before Electron frees its Node environment. `e2e/shutdown.e2e.ts` covers
+  repeated teardown with live and just-closed terminals and an unfinished HTTP
+  request. The desktop Fastify host uses `forceCloseConnections: true` so its
+  HTTP close cannot strand the database flush.
 - Tests within the file run in order and share one app instance — later
   groups assume the project created in "first launch" exists.
 - The fake agent (`src/main/server/e2e-fakes.ts`) is prompt-keyed: "ask
@@ -149,9 +158,14 @@ CDP driver at `scripts/drive.mjs`):
 ```bash
 bun run dev:desktop
 # Read the `CDP:` URL printed by the development orchestrator, then:
-CDP_PORT="<printed CDP port>" node apps/desktop/scripts/drive.mjs window maximize
-CDP_PORT="<printed CDP port>" node apps/desktop/scripts/drive.mjs shot /tmp/app.png
+CDP_PORT="<printed CDP port>" bun apps/desktop/scripts/drive.mjs window maximize
+CDP_PORT="<printed CDP port>" bun apps/desktop/scripts/drive.mjs shot /tmp/app.png
 ```
+
+For deterministic visual checks without provider calls, start with
+`CATAMORPHIC_E2E_FAKE_AGENT=1 bun run dev:desktop`. It uses the worktree
+data paths and fake agents. Run the CDP driver with Bun, which supplies
+the WebSocket API even when the system Node version is older.
 
 The shared development runner unsets `ELECTRON_RUN_AS_NODE`. Main-process
 changes need a full relaunch; renderer changes hot-reload. Maximize the window
@@ -163,3 +177,26 @@ resolves them via `dist/`.
 When you and the user settle a significant desktop design or philosophy
 choice, record it as a dated entry in `DESIGN.md` → "Design log" in the
 same change (the desktop counterpart of the ADR rule).
+
+## Resource links and unavailable actions
+
+Use the shared `surface-link.ts` resolver for agent-visible destinations. Keep
+workflow/app targets aligned with `open_surface` and the workspace tab keys.
+Changes to chat Markdown link handling belong in the registry source and both
+installed consumers. Preserve the sanitizer for image URLs and protocols the
+host does not handle. Test clicked links in the real Electron renderer.
+
+Use Collapsible for sidebar nesting, the shared InspectorPortal for rich hover
+cards, and `data-disabled-reason` beside each disabled condition. Do not rely on
+native title tooltips. When editing a failure-prone picker, preserve an actionable
+error/retry state and diagnostics that distinguish request failure from no matches.
+
+## Workflow authoring
+
+The desktop owns workflow details, source editing, draft protection, and run or
+automation actions in `screens/workflow-screen.tsx`. Compose the scoped canvas
+and headless hooks; do not move the inspector back into `@catamorphic/ui`
+(ADR 0097). Keep the canvas mounted through inspector changes and preserve the
+last valid preview while code is incomplete. The visible
+`e2e/workflows.e2e.ts` suite covers live source polling, graph transitions,
+source access, draft restoration and conflicts, and contextual agent editing.

@@ -13,7 +13,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import Markdown from "react-markdown";
+import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
@@ -274,6 +274,15 @@ function Message({
         <div className="cat-markdown min-w-0 break-words leading-6">
           <Markdown
             remarkPlugins={REMARK_PLUGINS}
+            urlTransform={(url, key) =>
+              onLinkClick &&
+              key === "href" &&
+              /^(?:file|workflow|app|chat|browser|terminal|editor|diff|mcpapp):/i.test(
+                url,
+              )
+                ? url
+                : defaultUrlTransform(url)
+            }
             components={
               onLinkClick
                 ? {
@@ -284,7 +293,7 @@ function Message({
                           event.preventDefault();
                           if (href) {
                             onLinkClick(href, {
-                              metaKey: event.metaKey,
+                              metaKey: event.metaKey || event.ctrlKey,
                               shiftKey: event.shiftKey,
                             });
                           }

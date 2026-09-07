@@ -386,6 +386,7 @@ export function AgentWizard({
                   <button
                     type="button"
                     disabled={busy}
+                    data-disabled-reason="Wait for the current action to finish"
                     onClick={() => {
                       if (option.id === "free") void startBrowserSignIn("free");
                       else goto(option.id);
@@ -469,6 +470,7 @@ export function AgentWizard({
                       pending={busy && busyFlow === "claude-code"}
                       pendingLabel="Adding…"
                       disabled={busy}
+                      data-disabled-reason="Wait for the current action to finish"
                       onClick={() => void addExistingSetup("claude-code")}
                       className="h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                     >
@@ -479,6 +481,7 @@ export function AgentWizard({
                       pending={busy && busyFlow === "claude-code-account"}
                       pendingLabel="Starting…"
                       disabled={busy}
+                      data-disabled-reason="Wait for the current action to finish"
                       onClick={() =>
                         void startTerminalSignIn("claude-code-account")
                       }
@@ -552,6 +555,7 @@ export function AgentWizard({
                     pending={busy && busyFlow === "codex"}
                     pendingLabel="Adding…"
                     disabled={busy}
+                    data-disabled-reason="Wait for the current action to finish"
                     onClick={() => void addExistingSetup("codex")}
                     className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[12px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                   >
@@ -562,6 +566,7 @@ export function AgentWizard({
                     pending={busy && busyFlow === "codex-account"}
                     pendingLabel="Opening…"
                     disabled={busy}
+                    data-disabled-reason="Wait for the current action to finish"
                     onClick={() => void startBrowserSignIn("codex-account")}
                     className="h-8 cursor-pointer rounded-md px-3 text-[12px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
                   >
@@ -657,6 +662,7 @@ export function AgentWizard({
                 pending={busy}
                 pendingLabel="Adding…"
                 disabled={!apiKey.trim()}
+                data-disabled-reason="Enter an API key first"
                 data-testid="agent-wizard-key-submit"
                 className="h-8 w-fit cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
               >
