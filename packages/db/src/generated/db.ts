@@ -891,6 +891,7 @@ export interface Watchers {
   owner_external_user_id: string;
   owner_identity: Json;
   project_id: string;
+  ref_deleted_at: Timestamp | null;
   remote_branch: string;
   session_id: string;
   source_path: string;

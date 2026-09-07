@@ -346,6 +346,9 @@ export function registerBrowserSupport(
   // is the only place to attach main-process behavior to them.
   app.on("web-contents-created", (_event, contents: WebContents) => {
     if (contents.getType() !== "webview") return;
+    contents.on("preload-error", (_event, preloadPath, error) => {
+      console.error("[browser] Guest preload failed", preloadPath, error);
+    });
 
     // target=_blank / window.open → new workspace browser tab.
     contents.setWindowOpenHandler(({ url }) => {

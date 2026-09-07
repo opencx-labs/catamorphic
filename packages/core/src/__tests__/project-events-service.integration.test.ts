@@ -78,6 +78,50 @@ describe("project events", () => {
       pollIntervalSeconds: 30,
     });
 
+    expect(
+      await monitors.claim({ workerId: "desktop", placement: "local" }),
+    ).toBeNull();
+    const sessionId = crypto.randomUUID();
+    const artifactId = crypto.randomUUID();
+    await db
+      .insertInto("agent_sessions")
+      .values({
+        id: sessionId,
+        project_id: projectId,
+        external_user_id: "builder",
+        provider: "test",
+      })
+      .execute();
+    await db
+      .insertInto("deployment_artifacts")
+      .values({
+        id: artifactId,
+        project_id: projectId,
+        commit_sha: "a".repeat(40),
+        artifact_digest: "test",
+        plugin_digest: "none",
+        runtime_version: "test",
+        transform_version: "test",
+      })
+      .execute();
+    const watcher = await db
+      .insertInto("watchers")
+      .values({
+        project_id: projectId,
+        session_id: sessionId,
+        monitor_id: monitor.id,
+        owner_external_user_id: "builder",
+        owner_identity: { tenantId, externalUserId: identity.externalUserId },
+        workflow_name: "watch",
+        source_path: "watch.ts",
+        remote_branch: "watch",
+        commit_sha: "a".repeat(40),
+        deployment_artifact_id: artifactId,
+        expires_at: new Date(Date.now() + 60_000),
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+
     const claim = await monitors.claim({
       workerId: "desktop",
       placement: "local",
@@ -93,6 +137,27 @@ describe("project events", () => {
       leaseToken: claim.leaseToken,
       cursor: { externalId: "101" },
     });
+    expect(
+      await monitors.claim({ workerId: "desktop", placement: "local" }),
+    ).toBeNull();
+    await db
+      .updateTable("project_event_monitors")
+      .set({ next_poll_at: new Date(0) })
+      .where("id", "=", monitor.id)
+      .execute();
+    await db
+      .updateTable("watchers")
+      .set({ status: "stopped" })
+      .where("id", "=", watcher.id)
+      .execute();
+    expect(
+      await monitors.claim({ workerId: "desktop", placement: "local" }),
+    ).toBeNull();
+    await db
+      .updateTable("watchers")
+      .set({ status: "active", expires_at: new Date(0) })
+      .where("id", "=", watcher.id)
+      .execute();
     expect(
       await monitors.claim({ workerId: "desktop", placement: "local" }),
     ).toBeNull();

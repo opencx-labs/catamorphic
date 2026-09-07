@@ -20,6 +20,7 @@ export const watcherKeys = {
 export function useWatchers(
   projectId: string | undefined,
   sessionId: string | undefined,
+  options: { refetchInterval?: number | false } = {},
 ) {
   const { apiClient } = useCatamorphic();
   const queryClient = useQueryClient();
@@ -27,7 +28,7 @@ export function useWatchers(
   const query = useQuery({
     queryKey: key,
     enabled: Boolean(projectId && sessionId),
-    refetchInterval: 5_000,
+    refetchInterval: options.refetchInterval ?? 5_000,
     queryFn: () =>
       runWithCatamorphicError(async () => {
         const result = await apiClient.GET(

@@ -284,3 +284,22 @@ remote development, subprocesses only for trusted single-tenant work. Confirm
 actual VM CPU/memory, concurrent admission races, cleanup failures, session
 archive/restore, and worker fencing. Preserve per-allocation files and credentials
 when reviewing warm-runtime reuse.
+
+## Harness and monitor lifecycle
+
+For harness capability changes, follow [ADR 0101](../../../docs/decisions/0101-harness-capabilities-and-session-monitors.md).
+Retain native file/shell/media capabilities within the selected permission mode;
+replace private todos, delegation, and monitors only when the host provides the
+corresponding session tools. Audit both provider adapters and AgentRuntime paths.
+Verify the pinned executable with a loopback model/MCP fixture when changing CLI
+flags, tool names, skill discovery, cwd, or resume behavior. SDK type comments are
+not sufficient evidence of the CLI's error/retry behavior. Never use real model
+credentials for a deterministic protocol test.
+
+Use ordinary scheduled workflow IO for a temporary periodic check. Use a Monitor
+provider when a shared external source should emit normalized Project Events.
+Watcher source must be authored in `ProjectManager.openEphemeral`, never a fake
+user's `openDev`: a host path resolver can map all users to the same real folder.
+Dispose temporary checkouts and media on failure as well as success. Stop future
+activations at session close/archive or expiry, retain refs needed by live runs,
+and abort and join polling before closing the database.

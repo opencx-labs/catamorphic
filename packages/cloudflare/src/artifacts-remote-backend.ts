@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { CloneSource, OriginRepo, RemoteBackend } from "@catamorphic/git";
 import { FsOriginRepo } from "@catamorphic/git";
-import git from "isomorphic-git";
+import git, { type PushResult } from "isomorphic-git";
 import http from "isomorphic-git/http/node";
 import {
   ArtifactsApiError,
@@ -55,6 +55,7 @@ export class ArtifactsRemoteBackend implements RemoteBackend {
   private readonly repoPrefix: string;
   private readonly remoteUrls = new Map<string, string>();
   private readonly tokens = new Map<string, CachedToken>();
+  private readonly originOperations = new Map<string, Promise<unknown>>();
 
   constructor(opts: ArtifactsRemoteBackendOpts) {
     this.client = opts.client;
@@ -123,16 +124,30 @@ export class ArtifactsRemoteBackend implements RemoteBackend {
     fn: (origin: OriginRepo) => Promise<T>,
   ): Promise<T> {
     const name = this.repoName(tenantId, projectId);
-    const url = await this.remoteUrl(name);
-    const gitdir = this.mirrorPath(tenantId, projectId);
-
-    await this.ensureMirror(gitdir);
-    const remoteRefs = await this.syncMirrorFromRemote({ gitdir, url, name });
-
-    const result = await fn(new FsOriginRepo(gitdir));
-
-    await this.pushChangedRefs({ gitdir, url, name, remoteRefs });
-    return result;
+    // A shared mirror must not mix one callback's ref changes with another's.
+    const previous = this.originOperations.get(name) ?? Promise.resolve();
+    const operation = previous
+      .catch(() => {})
+      .then(async () => {
+        const url = await this.remoteUrl(name);
+        const gitdir = this.mirrorPath(tenantId, projectId);
+        await this.ensureMirror(gitdir);
+        const remoteRefs = await this.syncMirrorFromRemote({
+          gitdir,
+          url,
+          name,
+        });
+        const result = await fn(new FsOriginRepo(gitdir));
+        await this.pushChangedRefs({ gitdir, url, name, remoteRefs });
+        return result;
+      });
+    this.originOperations.set(name, operation);
+    try {
+      return await operation;
+    } finally {
+      if (this.originOperations.get(name) === operation)
+        this.originOperations.delete(name);
+    }
   }
 
   private mirrorPath(tenantId: string, projectId: string): string {
@@ -203,10 +218,20 @@ export class ArtifactsRemoteBackend implements RemoteBackend {
         force: true,
       });
     }
+    // Deleted remote refs must leave the cache too. Otherwise a later read
+    // would push them back as locally created branches, undoing retirement.
+    for (const branch of await git.listBranches({
+      fs: nodeFs,
+      gitdir: opts.gitdir,
+    })) {
+      const ref = `refs/heads/${branch}`;
+      if (!snapshot.has(ref))
+        await git.deleteRef({ fs: nodeFs, gitdir: opts.gitdir, ref });
+    }
     return snapshot;
   }
 
-  /** Push every `refs/heads/*` ref the callback created or moved. */
+  /** Push every `refs/heads/*` ref the callback created, moved, or deleted. */
   private async pushChangedRefs(opts: {
     gitdir: string;
     url: string;
@@ -226,11 +251,30 @@ export class ArtifactsRemoteBackend implements RemoteBackend {
         changed.push(branch);
       }
     }
-    if (changed.length === 0) return;
+    const currentRefs = new Set(
+      branches.map((branch) => `refs/heads/${branch}`),
+    );
+    const deleted = [...opts.remoteRefs.keys()].filter(
+      (ref) => ref.startsWith("refs/heads/") && !currentRefs.has(ref),
+    );
+    if (changed.length === 0 && deleted.length === 0) return;
 
     const onAuth = await this.onAuth(opts.name, "write");
+    for (const ref of deleted) {
+      const result = await git.push({
+        fs: nodeFs,
+        http,
+        gitdir: opts.gitdir,
+        url: opts.url,
+        ref,
+        remoteRef: ref,
+        delete: true,
+        onAuth,
+      });
+      assertPushSucceeded(result);
+    }
     for (const branch of changed) {
-      await git.push({
+      const result = await git.push({
         fs: nodeFs,
         http,
         gitdir: opts.gitdir,
@@ -242,6 +286,7 @@ export class ArtifactsRemoteBackend implements RemoteBackend {
         force: true,
         onAuth,
       });
+      assertPushSucceeded(result);
     }
   }
 
@@ -290,6 +335,20 @@ export class ArtifactsRemoteBackend implements RemoteBackend {
     const token = await this.client.createToken({ repo: name, scope });
     return this.cacheToken(name, scope, token.plaintext);
   }
+}
+
+function assertPushSucceeded(result: PushResult): void {
+  const rejected = Object.entries(result.refs).filter(
+    ([, status]) => !status.ok,
+  );
+  if (!result.ok || rejected.length > 0)
+    throw new Error(
+      result.error ??
+        (rejected
+          .map(([ref, status]) => `${ref}: ${status.error}`)
+          .join("; ") ||
+          "Artifacts rejected the git push"),
+    );
 }
 
 async function resolveRefSafe(

@@ -48,6 +48,10 @@ export interface FrameHandle {
 }
 
 export interface AppHandle {
+  /** Main process id for bounded CPU and resource profiling. */
+  processId?: number;
+  /** Low-level DevTools instrumentation for performance and lifecycle checks. */
+  cdp: (method: string, params?: unknown) => Promise<unknown>;
   /** Evaluate JS in the app window; resolves the JSON-serialized result. */
   eval: <T = unknown>(expression: string) => Promise<T>;
   /** Wait until `expression` evaluates truthy (500ms poll, throws on timeout). */
@@ -90,6 +94,8 @@ export interface AppHandle {
 }
 
 export interface LaunchOpts {
+  /** Installed/packaged binary for release performance checks with isolated data. */
+  executablePath?: string;
   /** Reuse an existing userData dir (relaunch scenarios). */
   userDataDir?: string;
   /** Extra environment variables for the app process (e2e seams). */
@@ -114,7 +120,7 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
   // Electron releases install their binary lazily when path.txt is absent,
   // which is common in a brand-new worktree. The .bin CLI is not suitable:
   // it spawns Electron as its own child, so killing it would orphan the app.
-  const electronBinary = requireFromHarness("electron");
+  const electronBinary = opts.executablePath ?? requireFromHarness("electron");
   if (typeof electronBinary !== "string") {
     throw new Error("Electron did not resolve to an executable path");
   }
@@ -218,6 +224,7 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
 
     return {
       ...client,
+      processId: child.pid,
       connectToFrame,
       getOutput: () => output,
       userDataDir,
@@ -358,7 +365,15 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
 
   await send("Runtime.enable");
   // Frame targets only need Runtime; Page powers the window screenshot.
-  if (opts.page !== false) await send("Page.enable");
+  if (opts.page !== false) {
+    await send("Page.enable");
+    if (process.env.CATAMORPHIC_E2E_WINDOW_MODE === "visible") {
+      // Exercise foreground page behavior without activating the native window.
+      // This also survives reloads and keeps query retries and Monaco input
+      // independent of whichever application the developer is using.
+      await send("Emulation.setFocusEmulationEnabled", { enabled: true });
+    }
+  }
 
   const evaluate = async <T>(expression: string): Promise<T> => {
     const result = (await send("Runtime.evaluate", {
@@ -416,6 +431,7 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
     await send("Input.insertText", { text });
   };
   return {
+    cdp: send,
     eval: evaluate,
     waitFor,
     screenshot,

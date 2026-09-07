@@ -627,7 +627,7 @@ function AgentControlOverlay({
         />
       )}
       <div
-        className={`${exiting ? "" : "pointer-events-auto"} z-10 flex ${anim} items-center gap-2.5 rounded-full border border-border bg-bg-raised/95 py-1.5 pl-3 pr-1.5 text-xs text-fg shadow-2xl backdrop-blur-xl`}
+        className={`${exiting ? "" : "pointer-events-auto"} z-10 flex ${anim} items-center gap-2.5 rounded-full border border-border bg-bg-raised py-1.5 pl-3 pr-1.5 text-xs text-fg shadow-2xl`}
       >
         <span className="relative flex size-2">
           <span className="absolute inline-flex h-full w-full animate-pulse rounded-full bg-accent opacity-75" />
@@ -669,7 +669,7 @@ function PaneUnsplitButton({ onClick }: { onClick: () => void }) {
         <button
           type="button"
           onClick={onClick}
-          className="grid size-7 cursor-pointer place-items-center rounded-lg border border-border bg-bg-raised/95 text-fg-muted backdrop-blur-sm transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+          className="grid size-7 cursor-pointer place-items-center rounded-lg border border-border bg-bg-raised text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
           aria-label="Full width"
         >
           <Columns2 className="size-3.5" />
@@ -5285,7 +5285,12 @@ export function App() {
                     initialUrl={browser.url || browser.initialUrl}
                     active={browser.localId === activeBrowserTabId}
                     visible={Boolean(viewSlots[browserTabKey(browser.localId)])}
-                    keepAwake={Boolean(browser.agentControlled)}
+                    keepAwake={Boolean(
+                      browser.agentControlled &&
+                        Object.values(signalsByChat).some(
+                          (signal) => signal.working,
+                        ),
+                    )}
                     onStateChange={(state) =>
                       onBrowserState(browser.localId, state)
                     }

@@ -114,53 +114,6 @@ if (process.platform === "darwin") {
   );
 }
 
-/**
- * Background-tab visibility, Chrome-style: hidden tabs stay mounted (so
- * they keep loading and never reload on switch), but the PAGE must know
- * it's hidden or it keeps burning CPU — videos play on, feeds poll at
- * full rate. Chromium won't tell an offscreen webview guest it's hidden
- * (`document.visibilityState` stays "visible"), so the host reports tab
- * visibility and we shim the visibility API in the page's main world.
- * Agent-driven tabs are exempted host-side (they must keep working).
- */
-function applyHostVisibility(hidden: boolean): void {
-  if (typeof contextBridge.executeInMainWorld !== "function") return;
-  contextBridge.executeInMainWorld({
-    func: (nowHidden: boolean) => {
-      const state = window as Window & { __catHidden?: boolean };
-      if (state.__catHidden === undefined) {
-        // First call: install prototype getters (instance properties
-        // would be shadowed by the real ones).
-        Object.defineProperty(Document.prototype, "visibilityState", {
-          get: () =>
-            (window as Window & { __catHidden?: boolean }).__catHidden
-              ? "hidden"
-              : "visible",
-          configurable: true,
-        });
-        Object.defineProperty(Document.prototype, "hidden", {
-          get: () =>
-            Boolean((window as Window & { __catHidden?: boolean }).__catHidden),
-          configurable: true,
-        });
-        state.__catHidden = false;
-      }
-      if (state.__catHidden !== nowHidden) {
-        state.__catHidden = nowHidden;
-        document.dispatchEvent(new Event("visibilitychange"));
-      }
-    },
-    args: [hidden],
-  });
-}
-
-ipcRenderer.on(
-  "catamorphic:host-visibility",
-  (_event, payload: { hidden: boolean }) => {
-    applyHostVisibility(payload.hidden);
-  },
-);
-
 interface LoginForm {
   id: string;
   form: HTMLFormElement | null;
@@ -216,8 +169,12 @@ function findLoginForms(includeNewPassword = false): LoginForm[] {
   });
 }
 
+let announcedForms = "";
 function announceForms(): void {
   const forms = findLoginForms();
+  const key = JSON.stringify([location.origin, forms.map((form) => form.id)]);
+  if (key === announcedForms) return;
+  announcedForms = key;
   if (forms.length > 0) {
     ipcRenderer.send("catamorphic:browser-login-forms", {
       origin: location.origin,
@@ -226,18 +183,49 @@ function announceForms(): void {
   }
 }
 
-// Detect forms on load and as SPAs render them.
-const observer = new MutationObserver(() => {
-  clearTimeout(observeDebounce);
-  observeDebounce = setTimeout(announceForms, 400);
+// Ignore unrelated SPA churn. A ticking clock, chat stream, or video UI
+// should not keep scanning the whole document and sending duplicate IPC.
+const observer = new MutationObserver((mutations) => {
+  const touchesForm = mutations.some(
+    (mutation) =>
+      mutation.type === "attributes" ||
+      [...mutation.addedNodes, ...mutation.removedNodes].some(
+        (node) =>
+          node instanceof Element &&
+          (node.matches("input, form") || node.querySelector("input, form")),
+      ),
+  );
+  if (!touchesForm || observeDebounce !== undefined) return;
+  observeDebounce = setTimeout(() => {
+    observeDebounce = undefined;
+    announceForms();
+  }, 400);
 });
-let observeDebounce: ReturnType<typeof setTimeout>;
+let observeDebounce: ReturnType<typeof setTimeout> | undefined;
 
 window.addEventListener("DOMContentLoaded", () => {
   announceForms();
   observer.observe(document.documentElement, {
     childList: true,
     subtree: true,
+    attributes: true,
+    attributeFilter: ["type", "autocomplete"],
+  });
+});
+window.addEventListener("pagehide", () => {
+  observer.disconnect();
+  clearTimeout(observeDebounce);
+  observeDebounce = undefined;
+});
+window.addEventListener("pageshow", (event) => {
+  if (!event.persisted) return;
+  announcedForms = "";
+  announceForms();
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["type", "autocomplete"],
   });
 });
 

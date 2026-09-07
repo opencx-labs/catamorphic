@@ -130,7 +130,7 @@ export function TodoProgress({
           className={`flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2 text-[11px] font-medium transition-colors duration-150 ${
             open
               ? "border-border-strong bg-bg-overlay text-fg"
-              : "border-border bg-bg-raised/95 text-fg-muted hover:bg-bg-overlay hover:text-fg"
+              : "border-border bg-bg-raised text-fg-muted hover:bg-bg-overlay hover:text-fg"
           }`}
           aria-label={`${renderedCompleted} of ${renderedTodos.length} todo items completed`}
           aria-haspopup="dialog"
@@ -186,7 +186,7 @@ export function TodoProgress({
               setPanelMounted(false);
             }
           }}
-          className={`absolute right-0 top-full z-30 mt-1.5 w-80 origin-top-right rounded-lg border border-border bg-bg-raised/95 p-1.5 shadow-2xl backdrop-blur-xl transition-[opacity,translate,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:translate-none motion-reduce:scale-100 motion-reduce:duration-100 ${
+          className={`absolute right-0 top-full z-30 mt-1.5 w-80 origin-top-right rounded-lg border border-border bg-bg-raised p-1.5 shadow-2xl transition-[opacity,translate,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:translate-none motion-reduce:scale-100 motion-reduce:duration-100 ${
             panelVisible
               ? "translate-y-0 scale-100 opacity-100"
               : "pointer-events-none -translate-y-1 scale-[0.98] opacity-0"

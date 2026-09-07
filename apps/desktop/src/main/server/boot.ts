@@ -1099,11 +1099,10 @@ export async function startEmbeddedServer(
         ? { tenantId, externalUserId }
         : null,
   });
-  let deliveringNotifications = false;
+  let notificationTick: Promise<unknown> | undefined;
   const notificationTimer = setInterval(() => {
-    if (deliveringNotifications) return;
-    deliveringNotifications = true;
-    void catamorphic.core.notifications
+    if (shutdownDone || notificationTick) return;
+    notificationTick = catamorphic.core.notifications
       .publishFailedAgentTurns({ authorityHostId: hostId })
       .then(() =>
         catamorphic.core.notifications.drain(`desktop-notifications:${hostId}`),
@@ -1112,7 +1111,7 @@ export async function startEmbeddedServer(
         console.warn("[catamorphic] Notification delivery failed", error),
       )
       .finally(() => {
-        deliveringNotifications = false;
+        notificationTick = undefined;
       });
   }, 5_000);
   notificationTimer.unref();
@@ -1160,11 +1159,13 @@ export async function startEmbeddedServer(
     () => void syncAllRemotes().catch(() => {}),
     10 * 60 * 1000,
   );
-  const tickSchedules = async () => {
+  let scheduleTick: Promise<void> | undefined;
+  const runScheduleTick = async () => {
     const { items } = await catamorphic.core.projects.list(identity, {
       limit: 1_000,
     });
     for (const project of items) {
+      if (shutdownDone) return;
       const remoteProjects = profileConfig.forProfile(
         profiles.profileForProject(project.id).id,
       ).remoteProjects;
@@ -1176,6 +1177,13 @@ export async function startEmbeddedServer(
         projectId: project.id,
       });
     }
+  };
+  const tickSchedules = (): Promise<void> => {
+    if (shutdownDone) return Promise.resolve();
+    scheduleTick ??= runScheduleTick().finally(() => {
+      scheduleTick = undefined;
+    });
+    return scheduleTick;
   };
   void tickSchedules().catch(() => {});
   const scheduleTimer = setInterval(
@@ -1203,6 +1211,13 @@ export async function startEmbeddedServer(
       clearInterval(scheduleTimer);
       await shutdownDesktopServices({
         steps: [
+          { name: "schedules", dispose: () => scheduleTick?.catch(() => {}) },
+          {
+            name: "notifications",
+            dispose: async () => {
+              await notificationTick;
+            },
+          },
           { name: "project events", dispose: () => projectEventWorker.stop() },
           {
             name: "watcher dispatch",

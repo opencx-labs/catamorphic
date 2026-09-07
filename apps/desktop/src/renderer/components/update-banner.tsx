@@ -87,7 +87,7 @@ export function UpdateBanner({
       inert={!open}
       data-state={open ? "open" : "closing"}
       style={{ height }}
-      className={`fixed right-4 top-12 z-[250] w-[min(360px,calc(100vw-2rem))] origin-top-right overflow-hidden rounded-xl transition-[height] duration-200 motion-reduce:transition-none border border-border-strong bg-bg-overlay/95 p-3 text-sm text-fg shadow-2xl backdrop-blur-xl ${open ? "animate-pop-in" : "pointer-events-none animate-pop-out"}`}
+      className={`fixed right-4 top-12 z-[250] w-[min(360px,calc(100vw-2rem))] origin-top-right overflow-hidden rounded-xl transition-[height] duration-200 motion-reduce:transition-none border border-border-strong bg-bg-overlay p-3 text-sm text-fg shadow-2xl ${open ? "animate-pop-in" : "pointer-events-none animate-pop-out"}`}
     >
       <div ref={contentRef} className="flex items-start gap-3">
         <div className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-accent/15 text-accent">

@@ -405,8 +405,8 @@ export function ConnectorsModal({
           {/* Remote search: a quiet spinner says "still looking" while the
               previous results stay put — no blank flash between sets. */}
           <Loader2
-            className={`pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 animate-spin text-fg-faint transition-opacity duration-150 ${
-              searching ? "opacity-100" : "opacity-0"
+            className={`pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-fg-faint transition-opacity duration-150 ${
+              searching ? "animate-spin opacity-100" : "opacity-0"
             }`}
             aria-hidden={!searching}
             data-testid="connectors-searching"

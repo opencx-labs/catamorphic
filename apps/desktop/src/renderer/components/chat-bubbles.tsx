@@ -330,7 +330,7 @@ export function ChatBubbles({
       {/* The pill slides between centered (expanded) and right-docked
           (collapsed) via left+transform, both animatable. */}
       <div
-        className={`pointer-events-auto absolute bottom-3 flex items-center rounded-full border border-border bg-bg-raised/95 shadow-2xl backdrop-blur-xl transition-[left,translate,padding] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+        className={`pointer-events-auto absolute bottom-3 flex items-center rounded-full border border-border bg-bg-raised shadow-2xl transition-[left,translate,padding] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
           collapsed
             ? "left-full -translate-x-[calc(100%+12px)] p-1"
             : "left-1/2 -translate-x-1/2 gap-1.5 p-1.5"

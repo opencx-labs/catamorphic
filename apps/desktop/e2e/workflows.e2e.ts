@@ -60,7 +60,7 @@ describe("workflow authoring", { retry: 0 }, () => {
       "create project",
     );
     await wait(
-      `return !!$('textarea[placeholder*="Search or ask"]') && !!$('[data-testid="project-submit"]')?.closest('[inert]');`,
+      `const submit=$('[data-testid="project-submit"]'); return !!$('textarea[placeholder*="Search or ask"]') && (!submit || !!submit.closest('[inert]'));`,
       "project workspace",
     );
     projectId = await run<string>(

@@ -1,4 +1,8 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
+  AgentAttachment,
   AgentEffort,
   AgentEvent,
   AgentMcpServerConfig,
@@ -27,6 +31,7 @@ import {
   type ThreadEvent,
   type ThreadItem,
   type ThreadOptions,
+  type UserInput,
 } from "@openai/codex-sdk";
 
 type CodexConfigObject = NonNullable<CodexOptions["config"]>;
@@ -57,6 +62,8 @@ export interface CodexAgentOpts {
   networkAccessEnabled?: boolean;
   /** Use the host's first-class subsessions instead of Codex's private agents. */
   disableNativeSubagents?: boolean;
+  /** Use the host's session todo list instead of Codex's private goals. */
+  disableNativeGoals?: boolean;
   /**
    * External MCP servers for this agent. Codex has no programmatic MCP
    * option, but its CLI accepts arbitrary `--config` overrides — the SDK
@@ -180,9 +187,12 @@ export class CodexAgent implements CodingAgentProvider {
       mergePolicyLayers(own, this.callerPolicies.get(session.sessionId)),
       annotations,
     );
-    const config = this.opts.disableNativeSubagents
-      ? { ...mcpConfig, features: { multi_agent: false } }
-      : mcpConfig;
+    const features = {
+      ...(this.opts.disableNativeSubagents ? { multi_agent: false } : {}),
+      ...(this.opts.disableNativeGoals ? { goals: false } : {}),
+    };
+    const config =
+      Object.keys(features).length > 0 ? { ...mcpConfig, features } : mcpConfig;
     return this.buildClient(config);
   }
 
@@ -236,14 +246,8 @@ export class CodexAgent implements CodingAgentProvider {
     const thread = session.providerSessionId
       ? client.resumeThread(session.providerSessionId, threadOptions)
       : client.startThread(threadOptions);
-    // Codex takes no media, but text pills (pastes, selections, links,
-    // tabs) are universal context — rendered the same as every harness.
-    // omitMedia turns each media reference into a non-delivery note so the
-    // model never hunts for bytes it was not given.
-    const prose = renderUserMessage(message, opts?.attachments, {
-      omitMedia: true,
-    });
-    const input = session.providerSessionId
+    const prose = renderUserMessage(message, opts?.attachments);
+    const text = session.providerSessionId
       ? prose
       : this.withInstructions(session.sessionId, prose);
     const abortController = new AbortController();
@@ -253,12 +257,17 @@ export class CodexAgent implements CodingAgentProvider {
     }
 
     let stream: AsyncIterable<ThreadEvent>;
+    let staged: Awaited<ReturnType<typeof stageTurnInput>> | undefined;
     try {
+      staged = await stageTurnInput(text, opts?.attachments);
       stream = (
-        await thread.runStreamed(input, { signal: abortController.signal })
+        await thread.runStreamed(staged.input, {
+          signal: abortController.signal,
+        })
       ).events;
     } catch (error) {
       this.clearAbortController(abortController);
+      await staged?.cleanup();
       yield { type: "error", content: describeError(error) };
       yield { type: "done" };
       return;
@@ -269,8 +278,22 @@ export class CodexAgent implements CodingAgentProvider {
     // (trailing "&", nohup, docker -d, …) and commands still running when
     // the turn ends both surface as "background" events.
     const runningCommands = new Map<string, string>();
+    let terminal = false;
+    let streamError: string | undefined;
     try {
       for await (const event of stream) {
+        // The pinned CLI also uses top-level errors for retries. Report the
+        // progress now, but fail only if the turn actually fails or ends
+        // without a terminal event. A recovered connection must not poison
+        // the host's durable turn status.
+        if (event.type === "error") {
+          streamError = event.message;
+          yield { type: "diagnostic", content: event.message };
+          continue;
+        }
+        if (event.type === "turn.completed" || event.type === "turn.failed") {
+          terminal = true;
+        }
         if (event.type === "thread.started" && !session.providerSessionId) {
           this.pendingInstructions.delete(session.sessionId);
           this.turnAbortControllers.set(event.thread_id, abortController);
@@ -301,11 +324,19 @@ export class CodexAgent implements CodingAgentProvider {
         }
         yield* mapEvent(event, opts?.model ?? this.opts.model);
       }
+      if (!terminal) {
+        yield {
+          type: "error",
+          content: streamError ?? "Codex ended before completing the turn.",
+        };
+        yield { type: "done" };
+      }
     } catch (error) {
       yield { type: "error", content: describeError(error) };
       yield { type: "done" };
     } finally {
       this.clearAbortController(abortController);
+      await staged.cleanup();
     }
   }
 
@@ -542,9 +573,12 @@ function mapEvent(event: ThreadEvent, model?: string): AgentEvent[] {
         : [{ type: "done" }];
     }
     case "turn.failed":
-      return [{ type: "error", content: event.error.message }];
+      return [
+        { type: "error", content: event.error.message },
+        { type: "done" },
+      ];
     case "error":
-      return [{ type: "error", content: event.message }];
+      return [{ type: "diagnostic", content: event.message }];
     default:
       return [];
   }
@@ -615,10 +649,47 @@ function mapItemEvent(item: ThreadItem): AgentEvent[] {
         },
       ];
     case "error":
-      // The SDK defines an error item as a non-fatal diagnostic. Only the
-      // stream's top-level error and turn.failed events fail the turn.
+      // Error items are diagnostics; an unsuccessful turn or incomplete
+      // stream fails the turn.
       return [{ type: "diagnostic", content: item.message }];
     default:
       return [];
+  }
+}
+
+/** Keep attachment bytes alive for the CLI turn, including resumed threads. */
+async function stageTurnInput(text: string, attachments?: AgentAttachment[]) {
+  const media = (attachments ?? []).filter((item) => item.kind !== "text");
+  if (media.length === 0) return { input: text, cleanup: async () => {} };
+  const directory = await mkdtemp(join(tmpdir(), "catamorphic-codex-input-"));
+  const cleanup = () => rm(directory, { recursive: true, force: true });
+  try {
+    const input: UserInput[] = [{ type: "text", text }];
+    for (const [index, item] of media.entries()) {
+      const extensions: Record<string, string> = {
+        "image/png": "png",
+        "image/jpeg": "jpg",
+        "image/webp": "webp",
+        "image/gif": "gif",
+        "application/pdf": "pdf",
+      };
+      const file = join(
+        directory,
+        `${index}.${extensions[item.mediaType] ?? "bin"}`,
+      );
+      await writeFile(file, Buffer.from(item.dataBase64, "base64"));
+      if (item.kind === "image") {
+        input.push({ type: "local_image", path: file });
+      } else {
+        input.push({
+          type: "text",
+          text: `Attached document ${JSON.stringify(item.name)} (${item.mediaType}) is available at ${JSON.stringify(file)} for this turn. Read it with your file or shell tools.`,
+        });
+      }
+    }
+    return { input, cleanup };
+  } catch (error) {
+    await cleanup();
+    throw error;
   }
 }

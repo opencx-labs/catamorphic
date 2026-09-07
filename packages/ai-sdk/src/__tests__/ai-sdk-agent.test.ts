@@ -643,3 +643,29 @@ describe("pruneEmptyOptionalArgs", () => {
     });
   });
 });
+
+it("aborts an active model request when the session is disposed", async () => {
+  let signal: AbortSignal | undefined;
+  const model = new MockLanguageModelV4({
+    doStream: async (options) => {
+      signal = options.abortSignal;
+      await new Promise<void>((_resolve, reject) =>
+        signal?.addEventListener("abort", () => reject(signal?.reason), {
+          once: true,
+        }),
+      );
+      return textStream("unreachable");
+    },
+  });
+  const agent = new AiSdkCodingAgent({
+    model,
+    sandboxProvider: createProvider(),
+  });
+  const session = await start(agent);
+  const turn = collect(agent, session, "Keep working");
+  await vi.waitFor(() => expect(signal).toBeDefined());
+  await agent.dispose(session);
+  await turn;
+  expect(signal?.aborted).toBe(true);
+  expect(agent.hasSession(session.providerSessionId ?? "")).toBe(false);
+});

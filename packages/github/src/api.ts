@@ -13,6 +13,7 @@ const API_BASE = "https://api.github.com";
 export interface GithubApiOptions {
   fetch?: FetchLike;
   baseUrl?: string;
+  signal?: AbortSignal;
 }
 
 interface RawRepo {
@@ -76,6 +77,7 @@ interface RawCheckSuite {
 export class GithubApi {
   private readonly fetch: FetchLike;
   private readonly baseUrl: string;
+  private readonly signal?: AbortSignal;
 
   constructor(
     private readonly accessToken: string,
@@ -83,6 +85,7 @@ export class GithubApi {
   ) {
     this.fetch = opts?.fetch ?? fetch;
     this.baseUrl = opts?.baseUrl ?? API_BASE;
+    this.signal = opts?.signal;
   }
 
   private async request<T>(
@@ -90,6 +93,7 @@ export class GithubApi {
     init?: { method?: string; body?: unknown },
   ): Promise<T> {
     const response = await this.fetch(`${this.baseUrl}${path}`, {
+      ...(this.signal ? { signal: this.signal } : {}),
       method: init?.method ?? "GET",
       headers: {
         Accept: "application/vnd.github+json",

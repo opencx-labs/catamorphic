@@ -75,7 +75,7 @@ export interface ClaudeCodeAgentOpts {
   extraTools?: ExtraTool[];
   /**
    * Swap the built-in shell-execution tools (Bash, and its siblings
-   * PowerShell and Monitor) for the host's terminal tools. Claude Code's
+   * PowerShell) for the host's terminal tools. Claude Code's
    * own shell runs inside the CLI process where the host can't see or
    * manage it; hosts that provide terminal tools via {@link extraTools}
    * disable the built-ins so every command runs through terminals the
@@ -89,6 +89,8 @@ export interface ClaudeCodeAgentOpts {
    * with Bash disabled they still manage background subagents.
    */
   disableBash?: boolean;
+  /** Use host session watchers instead of private native Monitor tasks. */
+  disableNativeMonitors?: boolean;
   /**
    * External MCP servers for this agent (the host's resolved connection
    * set). Passed to the CLI as native `mcpServers` config and allowlisted
@@ -159,10 +161,7 @@ export interface ClaudeCodeAgentOpts {
  */
 const ALLOWED_TOOLS = [
   "Bash",
-  // Bash's shell-execution siblings: PowerShell (native on Windows,
-  // opt-in elsewhere) and Monitor (watch a command/WebSocket and feed
-  // lines back as events). They ride the same interception switch as
-  // Bash — see SHELL_EXECUTION_TOOLS.
+  // Native shell and background monitoring have separate host controls.
   "PowerShell",
   "Monitor",
   "Read",
@@ -201,7 +200,7 @@ const ALLOWED_TOOLS = [
  * model reaches for the workspace terminals instead of a tool it can see
  * but never use.
  */
-const SHELL_EXECUTION_TOOLS = new Set(["Bash", "PowerShell", "Monitor"]);
+const SHELL_EXECUTION_TOOLS = new Set(["Bash", "PowerShell"]);
 
 /** The shared host list replaces Claude Code's private plan when mounted. */
 const NATIVE_TODO_TOOL = "TodoWrite";
@@ -714,8 +713,11 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     const hostOwnsSubagents =
       workspaceServer !== undefined &&
       extraTools.some((tool) => tool.name === "spawn_subsession");
+    const readOnly = this.opts.permissionMode === "plan";
     const disallowedTools = [
-      ...(shellToolsDisabled ? SHELL_EXECUTION_TOOLS : []),
+      ...(shellToolsDisabled || readOnly ? SHELL_EXECUTION_TOOLS : []),
+      ...(readOnly ? FILE_EDIT_TOOLS : []),
+      ...(this.opts.disableNativeMonitors || readOnly ? ["Monitor"] : []),
       ...(hostOwnsTodos ? [NATIVE_TODO_TOOL] : []),
       ...(hostOwnsSubagents ? SUBAGENT_TOOLS : []),
     ];
@@ -775,12 +777,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
           }
         : {}),
       allowedTools: [
-        ...ALLOWED_TOOLS.filter(
-          (name) =>
-            !(shellToolsDisabled && SHELL_EXECUTION_TOOLS.has(name)) &&
-            !(hostOwnsTodos && name === NATIVE_TODO_TOOL) &&
-            !(hostOwnsSubagents && SUBAGENT_TOOLS.has(name)),
-        ),
+        ...ALLOWED_TOOLS.filter((name) => !disallowedTools.includes(name)),
         ...(workspaceServer
           ? extraTools.map((def) => `mcp__workspace__${def.name}`)
           : []),

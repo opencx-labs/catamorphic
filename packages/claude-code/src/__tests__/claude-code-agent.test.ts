@@ -297,7 +297,7 @@ describe("ClaudeCodeAgent", () => {
     expect(options.allowedTools).toContain("mcp__workspace__run_terminal");
     expect(options.allowedTools).not.toContain("Bash");
     expect(options.disallowedTools).toEqual(
-      expect.arrayContaining(["Bash", "PowerShell", "Monitor"]),
+      expect.arrayContaining(["Bash", "PowerShell"]),
     );
 
     // A session resurrected after a host restart reconstructs its workspace
@@ -308,8 +308,27 @@ describe("ClaudeCodeAgent", () => {
     expect(options.allowedTools).toContain("mcp__workspace__run_terminal");
     expect(options.allowedTools).not.toContain("Bash");
     expect(options.disallowedTools).toEqual(
-      expect.arrayContaining(["Bash", "PowerShell", "Monitor"]),
+      expect.arrayContaining(["Bash", "PowerShell"]),
     );
+  });
+
+  it("keeps plan mode read-only despite native tool auto-approval", async () => {
+    const agent = new ClaudeCodeAgent({ permissionMode: "plan" });
+    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
+    await collect(agent, "Inspect the project");
+    const options = lastQueryOptions();
+    expect(options.allowedTools).toContain("Read");
+    for (const tool of [
+      "Bash",
+      "PowerShell",
+      "Monitor",
+      "Write",
+      "Edit",
+      "NotebookEdit",
+    ]) {
+      expect(options.disallowedTools).toContain(tool);
+      expect(options.allowedTools).not.toContain(tool);
+    }
   });
 
   it("replaces Claude Code's private todo tool with the shared host list", async () => {

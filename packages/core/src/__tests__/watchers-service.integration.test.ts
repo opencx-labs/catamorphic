@@ -14,6 +14,7 @@ import type { AgentSessionsService } from "../services/agent-sessions-service.js
 import type { ProjectEventMonitorsService } from "../services/project-event-monitors-service.js";
 import { ProjectEventsService } from "../services/project-events-service.js";
 import type { RunsService } from "../services/runs-service.js";
+import { SchedulesService } from "../services/schedules-service.js";
 import type { TriggerKindRuntime } from "../services/trigger-kinds.js";
 import { TriggersService } from "../services/triggers-service.js";
 import { WatchersService } from "../services/watchers-service.js";
@@ -34,6 +35,15 @@ describe("temporary watchers", () => {
   let tmpDir: string;
   let watchers: WatchersService;
   let events: ProjectEventsService;
+  let triggers: TriggersService;
+  let projectManager: ProjectManager;
+  const disableEnablement = vi.fn(async (input: { enablementId: string }) => {
+    await db
+      .updateTable("workflow_enablements")
+      .set({ status: "disabled" })
+      .where("id", "=", input.enablementId)
+      .execute();
+  });
   const triggered: Array<Record<string, unknown>> = [];
   const attemptedEventIds: string[] = [];
   let failingEventId: string | null = null;
@@ -80,7 +90,7 @@ describe("temporary watchers", () => {
       .execute();
 
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "catamorphic-watchers-"));
-    const projectManager = new ProjectManager(
+    projectManager = new ProjectManager(
       new FsBackend(path.join(tmpDir, "dev")),
       new FsRemoteBackend(path.join(tmpDir, "origin")),
     );
@@ -152,8 +162,17 @@ describe("temporary watchers", () => {
         return { id };
       }),
     } as unknown as RunsService;
-    const triggers = new TriggersService(db, {
-      kinds: triggerKinds,
+    triggers = new TriggersService(db, {
+      kinds: [
+        ...triggerKinds,
+        {
+          name: "schedule",
+          configJsonSchema: { type: "object" },
+          payloadJsonSchema: { type: "object" },
+          validateConfig: () => ({ ok: true }),
+          validatePayload: () => ({ ok: true }),
+        },
+      ],
       projectManager,
       runs,
     });
@@ -216,9 +235,9 @@ describe("temporary watchers", () => {
                 .where("workflow_name", "=", String(input.workflowName)),
             )
             .execute();
-          return { id };
+          return { id, environment: String(input.environment ?? "local") };
         }),
-        disable: vi.fn(async () => undefined),
+        disable: disableEnablement,
       } as unknown as WorkflowEnablementsService,
     });
   }, 30_000);
@@ -405,4 +424,153 @@ describe("temporary watchers", () => {
       )?.identity,
     ).toEqual(scopedIdentity);
   });
+  it("does no workflow lookup while idle and advances past unrelated events", async () => {
+    await watchers.dispatchPending();
+    const lookup = vi.spyOn(triggers, "listAtCommit");
+    await watchers.dispatchPending();
+    expect(lookup).not.toHaveBeenCalled();
+    await events.append({
+      projectId,
+      source: "test",
+      kind: "unrelated",
+      externalId: "unrelated-idle",
+      occurredAt: new Date().toISOString(),
+      payload: {},
+    });
+    expect(await watchers.dispatchPending()).toBe(0);
+    expect(lookup).toHaveBeenCalled();
+    lookup.mockClear();
+    expect(await watchers.dispatchPending()).toBe(0);
+    expect(lookup).not.toHaveBeenCalled();
+    lookup.mockRestore();
+  });
+
+  it("does not disable a watcher belonging to another session", async () => {
+    const watcher = await db
+      .selectFrom("watchers")
+      .selectAll()
+      .executeTakeFirstOrThrow();
+    disableEnablement.mockClear();
+    expect(
+      await watchers.stop({
+        identity,
+        projectId,
+        sessionId: crypto.randomUUID(),
+        watcherId: watcher.id,
+      }),
+    ).toBe(false);
+    expect(disableEnablement).not.toHaveBeenCalled();
+  });
+
+  it("runs a session-owned periodic workflow through normal scheduling and stops it", async () => {
+    const watcher = await watchers.create({
+      identity,
+      projectId,
+      sessionId,
+      workflowName: "periodicCheck",
+      source: `
+        import { defineWorkflow, trigger } from "@catamorphic/workflow";
+        export const periodicCheck = defineWorkflow(({ defineBoundary }) => ({
+          triggers: [trigger("schedule", { cron: "* * * * *", timezone: "UTC" })],
+          steps: [defineBoundary({ run: async ({ input }) => input })],
+        }));`,
+    });
+    const schedules = new SchedulesService(db, triggers);
+    const now = new Date();
+    await schedules.tick({ identity, projectId, now });
+    const next = new Date(now.getTime() + 61_000);
+    expect(await schedules.tick({ identity, projectId, now: next })).toEqual({
+      enrolled: 1,
+    });
+    expect(triggered.at(-1)).toMatchObject({
+      workflowName: "periodicCheck",
+      environment: "local",
+    });
+    await watchers.stop({
+      identity,
+      projectId,
+      sessionId,
+      watcherId: watcher.id,
+    });
+    expect(
+      await schedules.tick({
+        identity,
+        projectId,
+        now: new Date(next.getTime() + 61_000),
+      }),
+    ).toEqual({ enrolled: 0 });
+  });
+
+  it("rejects new watchers after the owning session closes", async () => {
+    await db
+      .updateTable("agent_sessions")
+      .set({ status: "closed" })
+      .where("id", "=", sessionId)
+      .execute();
+    try {
+      await expect(
+        watchers.create({
+          identity,
+          projectId,
+          sessionId,
+          workflowName: "neverCreated",
+          source: "",
+        }),
+      ).rejects.toThrow("closed session");
+    } finally {
+      await db
+        .updateTable("agent_sessions")
+        .set({ status: "active" })
+        .where("id", "=", sessionId)
+        .execute();
+    }
+  });
+
+  it.each(["active", "paused"] as const)(
+    "retires the temporary enablement when a %s watcher expires",
+    async (status) => {
+      const watcher = await db
+        .selectFrom("watchers")
+        .selectAll()
+        .where("status", "=", "active")
+        .executeTakeFirstOrThrow();
+      await db
+        .updateTable("watchers")
+        .set({ expires_at: new Date(0), status })
+        .where("id", "=", watcher.id)
+        .execute();
+      disableEnablement.mockClear();
+      await watchers.dispatchPending();
+      expect(disableEnablement).toHaveBeenCalledWith({
+        identity,
+        enablementId: watcher.workflow_enablement_id,
+      });
+      expect(
+        await db
+          .selectFrom("watchers")
+          .select("status")
+          .where("id", "=", watcher.id)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ status: "expired" });
+      // Already-enrolled runs keep their immutable source until they settle.
+      await db
+        .updateTable("workflow_runs")
+        .set({ status: "completed", completed_at: new Date() })
+        .where("project_id", "=", projectId)
+        .execute();
+      await watchers.dispatchPending();
+      expect(
+        await projectManager.remoteBackend?.withOrigin(
+          tenantId,
+          projectId,
+          (origin) => origin.resolveRef(`refs/heads/${watcher.remote_branch}`),
+        ),
+      ).toBeNull();
+      expect(
+        (await watchers.list({ identity, projectId, sessionId })).find(
+          (item) => item.id === watcher.id,
+        )?.triggerKinds.length,
+      ).toBeGreaterThan(0);
+    },
+  );
 });

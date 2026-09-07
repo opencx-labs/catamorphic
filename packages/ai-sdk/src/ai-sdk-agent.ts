@@ -581,6 +581,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     const state = this.sessions.get(session.providerSessionId);
     this.sessions.delete(session.providerSessionId);
     if (state) {
+      state.abort?.abort();
       await Promise.all(
         state.scopedMcp.map((server) => server.close().catch(() => {})),
       );

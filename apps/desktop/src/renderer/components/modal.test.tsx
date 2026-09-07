@@ -102,3 +102,31 @@ describe("Modal focus containment", () => {
     expect(document.activeElement).toBe(newerControl);
   });
 });
+
+it("does not mount closed contents and removes them after the exit animation", () => {
+  const container = document.createElement("div");
+  containers.push(container);
+  const root = createRoot(container);
+  roots.push(root);
+  const render = (open: boolean) =>
+    act(() =>
+      root.render(
+        <Modal open={open} onClose={() => {}}>
+          <span className="animate-spin">Loading</span>
+        </Modal>,
+      ),
+    );
+  render(false);
+  expect(container.childElementCount).toBe(0);
+  render(true);
+  expect(container.querySelector(".animate-spin")).not.toBeNull();
+  render(false);
+  const exit = container.querySelector(".animate-fade-out");
+  expect(exit).not.toBeNull();
+  act(() => {
+    const event = new Event("webkitAnimationEnd", { bubbles: true });
+    Object.defineProperty(event, "animationName", { value: "fade-out" });
+    exit?.dispatchEvent(event);
+  });
+  expect(container.childElementCount).toBe(0);
+});

@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { FsBackend } from "./fs-backend.js";
 import { push } from "./git-sync.js";
 import { cloneFromRemote } from "./network.js";
 import { ProjectRepoImpl } from "./project-repo.js";
@@ -103,6 +105,29 @@ export class ProjectManager {
     }
 
     return repo;
+  }
+
+  /** An isolated origin snapshot, removed on disposal even with host-mapped projects. */
+  async openEphemeral(args: {
+    tenantId: string;
+    projectId: string;
+  }): Promise<ProjectRepo> {
+    if (!this.remote)
+      throw new Error("An ephemeral checkout requires durable project storage");
+    const directory = await fs.mkdtemp(
+      path.join(tmpdir(), "catamorphic-checkout-"),
+    );
+    const cleanup = () => fs.rm(directory, { recursive: true, force: true });
+    try {
+      const storage = new FsBackend(directory);
+      const repoPath = await storage.initProject(args.tenantId, args.projectId);
+      const repo = new ProjectRepoImpl(args.projectId, repoPath, cleanup);
+      await seedFromOrigin({ remote: this.remote, ...args, dev: repo });
+      return repo;
+    } catch (error) {
+      await cleanup();
+      throw error;
+    }
   }
 
   /** A recoverable session checkout; its branch never publishes project policy. */

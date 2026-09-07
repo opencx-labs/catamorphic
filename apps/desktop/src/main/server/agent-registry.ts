@@ -1082,7 +1082,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                   env: { ...environment, ...env },
                   pathToClaudeCodeExecutable: component.executablePath,
                   extraTools: this.workspaceTools(config, "native"),
-                  disableBash: this.workspaceToolkit !== undefined,
+                  disableNativeMonitors: true,
                   mcpServers: () => this.liveServers(config, profileId),
                   mcpServersForSession: (context) =>
                     this.sessionMcpServers(context),
@@ -1126,6 +1126,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                   model: config.model || undefined,
                   effort: config.effort,
                   disableNativeSubagents: true,
+                  disableNativeGoals: true,
                   sandboxMode: CODEX_SANDBOX_MODES[config.mode ?? "edit"],
                   ...(config.auth === "api-key" && config.apiKey
                     ? { apiKey: config.apiKey }
@@ -1167,7 +1168,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
               config,
             );
           },
-          {},
+          { interrupt: true },
         );
         return {
           id: config.id,

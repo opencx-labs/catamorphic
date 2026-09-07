@@ -55,6 +55,42 @@ describe("ProjectManager", () => {
     await repo.dispose();
   });
 
+  it("discards temporary work without touching a host-mapped project folder", async () => {
+    const rootPath = path.join(tmpDir, "user-project");
+    const remote = new ObjectRemoteBackend({
+      store: new InMemoryObjectStore(),
+    });
+    manager = new ProjectManager(new FsBackend(tmpDir), remote);
+    const project = await manager.create(TENANT, PROJECT, {
+      name: "P",
+      rootPath,
+    });
+    const head = await project.resolveRef();
+    await project.writeFile("draft.txt", "User's uncommitted work");
+    const isolated = await manager.openEphemeral({
+      tenantId: TENANT,
+      projectId: PROJECT,
+    });
+    const isolatedPath = isolated.repoPath;
+    try {
+      expect(isolatedPath).not.toBe(rootPath);
+      await isolated.writeFile("watcher.ts", "Temporary source");
+      await isolated.commit("Watcher", {
+        name: "Test",
+        email: "test@example.com",
+      });
+      expect(await project.resolveRef()).toBe(head);
+      expect(await project.readFile("draft.txt")).toBe(
+        "User's uncommitted work",
+      );
+      expect(await project.listFiles()).not.toContain("watcher.ts");
+    } finally {
+      await isolated.dispose();
+      await project.dispose();
+    }
+    await expect(fs.access(isolatedPath)).rejects.toThrow();
+  });
+
   it("importExisting adopts files and adds a manifest without overwriting", async () => {
     const rootPath = path.join(tmpDir, "existing");
     await fs.mkdir(rootPath, { recursive: true });

@@ -43,6 +43,10 @@ export class InMemoryObjectStore implements ObjectStore {
     return [...this.objects.keys()].filter((key) => key.startsWith(prefix));
   }
 
+  async delete(key: string): Promise<void> {
+    this.objects.delete(key);
+  }
+
   async deletePrefix(prefix: string): Promise<void> {
     for (const key of await this.list(prefix)) {
       this.objects.delete(key);
