@@ -74,7 +74,7 @@ export function AgentChat({
   return (
     <section
       className={`relative flex w-full flex-col text-fg ${
-        isFull ? "h-full min-h-0" : "max-w-3xl drop-shadow-2xl"
+        isFull ? "h-full min-h-0" : "max-w-3xl shadow-2xl"
       } ${className}`}
       aria-label={title}
     >
@@ -82,7 +82,7 @@ export function AgentChat({
         {activity ?? messages.at(-1)?.content}
       </span>
       <div
-        className={`origin-bottom overflow-hidden rounded-t-2xl border-border bg-bg-raised/95 backdrop-blur-xl transition-[height,opacity,translate,scale,margin,border-width] duration-200 ease-out ${
+        className={`origin-bottom overflow-hidden rounded-t-2xl border-border bg-bg-raised transition-[height,opacity,translate,scale,margin,border-width] duration-200 ease-out ${
           isFull
             ? "mb-[-1px] min-h-0 flex-1 border"
             : expanded
@@ -134,7 +134,7 @@ export function AgentChat({
         />
       </div>
       <form
-        className={`flex min-h-16 items-center gap-2 border border-border bg-bg-raised/95 p-2 backdrop-blur-xl ${expanded ? "rounded-b-2xl" : "rounded-2xl"}`}
+        className={`flex min-h-16 items-center gap-2 border border-border bg-bg-raised p-2 ${expanded ? "rounded-b-2xl" : "rounded-2xl"}`}
         onSubmit={submit}
       >
         <textarea

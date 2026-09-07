@@ -700,6 +700,15 @@ workflow already has the exact session id.
 
 ## Temporary watchers
 
+For a periodic check, use \`create_watcher\` with an ordinary
+\`trigger("schedule", { cron, timezone })\` binding. Fetch or inspect the
+system inside a workflow boundary and notify only when the condition is met
+or changes. Do not invent a monitor DSL or keep an agent turn spinning.
+Choose an allowed Environment and an expiry. This enablement belongs to the
+current session; stop, expiry, and session close/archive end future invocations.
+A local monitor needs the app running; remote execution needs its server.
+Closing the chat tab alone does not stop the session's watcher.
+
 When the project MCP surface offers \`create_github_watcher\`, use it for
 session-scoped monitoring instead of adding permanent trigger configuration.
 The tool accepts ordinary TypeScript source exporting one \`defineWorkflow\`.

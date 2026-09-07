@@ -553,7 +553,7 @@ export function surfaceTools(
           definition: {
             name: "create_watcher",
             description:
-              'Temporarily enable an ordinary TypeScript workflow for future normalized Project Events already supplied by this host. The source must export the named defineWorkflow and declare one or more inline triggers, for example triggers: [trigger("issue.changed")]. The normalized Project Event envelope is the workflow input. To notify or wake a session, return context.host["catamorphic.sessions"].deliver({ sessionId, content, mode, idempotencyKey }) from a boundary. The workflow is committed to an isolated catamorphic/watchers/<id> ref, pinned, and never merged into project main.',
+              'Temporarily enable an ordinary TypeScript workflow owned by this session. For periodic monitoring, declare a normal schedule trigger and do the check with workflow IO. For event-driven work, use normalized Project Events already supplied by this host. Stop, expiry, or session close/archive disables future invocations. The source must export the named defineWorkflow and declare one or more inline triggers, for example triggers: [trigger("issue.changed")]. Event triggers receive the normalized Project Event envelope; schedule triggers receive their normal scheduled payload. To notify or wake a session, return context.host["catamorphic.sessions"].deliver({ sessionId, content, mode, idempotencyKey }) from a boundary. The workflow is committed to an isolated catamorphic/watchers/<id> ref, pinned, and never merged into project main.',
             inputSchema: {
               type: "object",
               properties: {

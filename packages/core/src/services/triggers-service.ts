@@ -355,7 +355,6 @@ export class TriggersService {
     projectId: string;
     kind: string;
   }): Promise<StoredTriggerActivation[]> {
-    await this.ensureScan(args);
     const rows = await this.db
       .selectFrom("workflow_enablement_triggers as activation")
       .innerJoin(
@@ -368,6 +367,7 @@ export class TriggersService {
         "definition.id",
         "activation.trigger_definition_id",
       )
+      .innerJoin("projects", "projects.id", "enablement.project_id")
       .select([
         "activation.id as activation_id",
         "activation.enablement_id",
@@ -382,10 +382,17 @@ export class TriggersService {
         "definition.output_schema",
         "enablement.environment_name",
       ])
+      .where("projects.tenant_id", "=", args.identity.tenantId)
       .where("definition.project_id", "=", args.projectId)
       .where("definition.trigger_kind", "=", args.kind)
       .where("activation.status", "=", "active")
       .where("enablement.status", "=", "active")
+      .where(({ or, eb }) =>
+        or([
+          eb("enablement.expires_at", "is", null),
+          eb("enablement.expires_at", ">", new Date()),
+        ]),
+      )
       .execute();
     return rows.map((row) => ({
       activationId: row.activation_id,

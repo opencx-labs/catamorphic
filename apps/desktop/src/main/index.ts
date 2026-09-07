@@ -104,7 +104,7 @@ app.on("second-instance", (_event, argv) => {
   const window = BrowserWindow.getAllWindows()[0];
   if (window) {
     if (window.isMinimized()) window.restore();
-    window.focus();
+    if (!e2eDataDir) window.focus();
   }
   // Windows/Linux deliver a protocol URL as an argv of the second launch.
   const link = argv.find((arg) => arg.startsWith("catamorphic://"));
@@ -132,7 +132,7 @@ function deliverConnectLink(url: string): void {
   if (!window) return;
   window.webContents.send("catamorphic:connect-link", url);
   if (window.isMinimized()) window.restore();
-  window.focus();
+  if (!e2eDataDir) window.focus();
 }
 
 /** The renderer's side of the hand-off (registered here: no ipc.ts cycle). */
@@ -204,7 +204,7 @@ const windows: WindowProfileRegistry = {
   },
   openWindow(profileId) {
     const window = createWindow(profileId);
-    window.focus();
+    if (!e2eDataDir) window.focus();
   },
 };
 
@@ -241,6 +241,8 @@ function createWindow(profileId?: string): BrowserWindow {
     // Pre-paint background from the profile's theme so open doesn't flash;
     // stay hidden until the renderer has actually painted a frame.
     show: false,
+    // E2E input goes through CDP, never the user's keyboard or mouse.
+    focusable: e2eDataDir === undefined,
     backgroundColor: windowBackgroundColor(stores.theme.resolved()),
     webPreferences: {
       preload: path.join(import.meta.dirname, "../preload/index.cjs"),
@@ -257,6 +259,7 @@ function createWindow(profileId?: string): BrowserWindow {
       backgroundThrottling: e2eDataDir === undefined,
     },
   });
+  if (e2eDataDir) window.setIgnoreMouseEvents(true);
   // Renderer links must stay inside the workspace. Feature-specific flows can
   // open tabs through IPC, while this boundary catches plain window.open calls
   // from current and future renderer components.
@@ -281,7 +284,8 @@ function createWindow(profileId?: string): BrowserWindow {
       window.hide();
       return;
     }
-    window.show();
+    if (e2eDataDir) window.showInactive();
+    else window.show();
     // Fullscreen after show: entering it on a hidden window leaves macOS
     // with a blank space until the next repaint.
     if (saved.fullscreen) window.setFullScreen(true);
@@ -425,6 +429,7 @@ function applyMenuForFocusedWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  if (e2eDataDir && process.platform === "darwin") app.dock?.hide();
   // GitHub's Linux runner has no Secret Service. Electron's in-memory key
   // keeps safeStorage-backed flows realistic inside isolated throwaway E2E
   // profiles without weakening normal desktop profiles.

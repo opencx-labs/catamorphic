@@ -57,8 +57,8 @@ export function SignalGlyph({
         {children}
       </span>
       <LoaderCircle
-        className={`col-start-1 row-start-1 size-full animate-spin text-accent transition-[opacity] duration-200 ${
-          working ? "opacity-100" : "opacity-0"
+        className={`col-start-1 row-start-1 size-full text-accent transition-[opacity] duration-200 ${
+          working ? "animate-spin opacity-100" : "opacity-0"
         }`}
       />
     </span>
@@ -106,13 +106,13 @@ export function SignalBadge({
           (sanctioned loop: the turn is suspended, indeterminate until the
           user answers). */}
       <span
-        className={`${transition} ${visibility("question")} ${spec.badge} grid animate-pulse place-items-center rounded-full bg-accent font-bold leading-none text-accent-fg`}
+        className={`${transition} ${visibility("question")} ${spec.badge} ${active === "question" ? "animate-pulse" : ""} grid place-items-center rounded-full bg-accent font-bold leading-none text-accent-fg`}
         aria-hidden={active !== "question"}
       >
         ?
       </span>
       <span
-        className={`${transition} ${visibility("attention")} ${spec.dot} animate-pulse rounded-full bg-accent`}
+        className={`${transition} ${visibility("attention")} ${spec.dot} ${active === "attention" ? "animate-pulse" : ""} rounded-full bg-accent`}
         aria-hidden={active !== "attention"}
       />
       <span

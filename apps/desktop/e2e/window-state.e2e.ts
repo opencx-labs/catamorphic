@@ -18,6 +18,8 @@ const geometry = () =>
     width: number;
     height: number;
     maximized: boolean;
+    focused: boolean;
+    focusable: boolean;
   }>(`window.catamorphicDesktop.devWindow('get')`);
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 700));
@@ -30,6 +32,11 @@ describe("window state", () => {
     );
     await settle();
     expect((await geometry()).maximized).toBe(true);
+    expect(await geometry()).toMatchObject({
+      focused: false,
+      focusable: false,
+    });
+    expect(await app.eval("document.hasFocus()")).toBe(true);
     const { userDataDir } = app;
     await app.kill();
 

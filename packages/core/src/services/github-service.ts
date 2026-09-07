@@ -237,7 +237,7 @@ export class GithubService {
   async pollProjectEvents(
     identity: Identity,
     projectId: string,
-    input: { afterExternalId?: string } = {},
+    input: { afterExternalId?: string; signal?: AbortSignal } = {},
   ): Promise<{ nextCursor: string | null; appended: number }> {
     if (!this.projectEvents) {
       throw new Error("Project events are not configured");
@@ -253,8 +253,9 @@ export class GithubService {
     }
     const fullName = repoFullNameFromUrl(project.remote_url);
     if (!fullName) throw new ProjectNotLinkedToGithubError(projectId);
-    const api = new GithubApi(await this.freshToken(identity), {
+    const api = new GithubApi(await this.freshToken(identity, input.signal), {
       fetch: this.fetch,
+      signal: input.signal,
     });
     const observed = await api.listRepositoryWatchEvents(fullName);
     const cursorIndex = input.afterExternalId
@@ -403,7 +404,10 @@ export class GithubService {
   }
 
   /** Access token from the store, refreshed and re-persisted when stale. */
-  private async freshToken(identity: Identity): Promise<string> {
+  private async freshToken(
+    identity: Identity,
+    signal?: AbortSignal,
+  ): Promise<string> {
     const connection = await this.store.get(
       identity.tenantId,
       identity.externalUserId,
@@ -420,9 +424,10 @@ export class GithubService {
       tokens = await refreshAccessToken(
         this.config.app,
         connection.tokens.refreshToken,
-        { fetch: this.fetch },
+        { fetch: this.fetch, signal },
       );
     } catch {
+      signal?.throwIfAborted();
       throw new GithubTokenExpiredError();
     }
 

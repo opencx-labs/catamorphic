@@ -1271,9 +1271,13 @@ function ErrorCard({
 function AutoRetryCountdown({ nextAtMs }: { nextAtMs: number }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 500);
-    return () => window.clearInterval(timer);
-  }, []);
+    if (now >= nextAtMs) return;
+    const timer = window.setTimeout(
+      () => setNow(Date.now()),
+      Math.min(1_000, nextAtMs - now),
+    );
+    return () => window.clearTimeout(timer);
+  }, [nextAtMs, now]);
   const seconds = Math.max(0, Math.ceil((nextAtMs - now) / 1000));
   return (
     <span

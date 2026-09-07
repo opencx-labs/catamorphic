@@ -13,12 +13,13 @@ export class GithubProjectEventSource implements ProjectEventSourceProvider {
   async poll(input: {
     monitor: ProjectEventMonitor;
     identity: { tenantId: string; externalUserId: string };
+    signal: AbortSignal;
   }): Promise<{ cursor: Json | null }> {
     const afterExternalId = githubCursor(input.monitor.cursor);
     const result = await this.github.pollProjectEvents(
       input.identity,
       input.monitor.projectId,
-      afterExternalId ? { afterExternalId } : {},
+      { ...(afterExternalId ? { afterExternalId } : {}), signal: input.signal },
     );
     return {
       cursor: result.nextCursor

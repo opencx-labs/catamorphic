@@ -198,6 +198,10 @@ export class ObjectOriginRepo implements OriginRepo {
     }
   }
 
+  async deleteRef(input: { ref: string }): Promise<void> {
+    await this.store.delete(this.refKey(input.ref));
+  }
+
   async hasObject(sha: string): Promise<boolean> {
     return this.store.has(this.objectKey(sha));
   }

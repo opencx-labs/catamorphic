@@ -82,6 +82,14 @@ bun run --cwd apps/desktop test:e2e
 bun run --cwd apps/desktop test:e2e:visible
 ```
 
+Automated Electron windows must not interrupt the user. Isolated E2E windows
+are non-focusable, ignore physical mouse input, and use `showInactive()` when
+visible. The visible-suite harness emulates page focus through CDP so editors
+and foreground query behavior work without native activation. Drive keyboard
+and pointer interactions through CDP. Do not restore
+native focus stealing to make a test pass; test OS-focus behavior separately
+only when that behavior is explicitly under test.
+
 Before completing engineering work, run `bun run check` from the repository
 root. It is the merge gate, including deterministic Postgres-complete
 workspace tests and both desktop E2E modes. Docker must be running so the

@@ -29,6 +29,7 @@ export interface ProjectEventSourceProvider {
   poll(input: {
     monitor: ProjectEventMonitor;
     identity: Identity;
+    signal: AbortSignal;
   }): Promise<{ cursor: Json | null }>;
 }
 
@@ -97,6 +98,20 @@ export class ProjectEventMonitorsService {
         .selectAll("monitor")
         .select("projects.tenant_id")
         .where("monitor.status", "=", "active")
+        .where(({ exists, selectFrom }) =>
+          exists(
+            selectFrom("watchers as watcher")
+              .select("watcher.id")
+              .whereRef("watcher.monitor_id", "=", "monitor.id")
+              .where("watcher.status", "=", "active")
+              .where(({ or, eb }) =>
+                or([
+                  eb("watcher.expires_at", "is", null),
+                  eb("watcher.expires_at", ">", new Date()),
+                ]),
+              ),
+          ),
+        )
         .where("monitor.next_poll_at", "<=", new Date())
         .where((expression) =>
           expression.or([
@@ -175,69 +190,84 @@ export class ProjectEventMonitorsService {
 }
 
 export function startProjectEventMonitorWorker(input: {
-  monitors: ProjectEventMonitorsService;
+  monitors: Pick<ProjectEventMonitorsService, "claim" | "complete" | "fail">;
   providers: readonly ProjectEventSourceProvider[];
   placement: Exclude<EventSourcePlacement, "any">;
   pollEveryMs?: number;
-}): { stop: () => void } {
+}): { stop: () => Promise<void> } {
   const providers = new Map(
     input.providers.map((provider) => [provider.kind, provider]),
   );
   const workerId = `project-events:${input.placement}:${randomUUID()}`;
   let stopped = false;
+  const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const tick = async () => {
     if (stopped) return;
-    const monitor = await input.monitors.claim({
-      workerId,
-      placement: input.placement,
-    });
-    if (monitor?.leaseToken && monitor.tenantId) {
-      const provider = providers.get(monitor.sourceKind);
-      const tenantId = monitor.tenantId;
-      try {
-        if (!provider)
-          throw new Error(`No event source '${monitor.sourceKind}'`);
-        const result = await withSpan(
-          {
-            tracer,
-            name: "project.event.monitor.poll",
-            attributes: {
-              "catamorphic.project.id": monitor.projectId,
-              "catamorphic.monitor.id": monitor.id,
-              "catamorphic.event.source": monitor.sourceKind,
-            },
-          },
-          () =>
-            provider.poll({
-              monitor,
-              identity: {
-                tenantId,
-                externalUserId: monitor.ownerExternalUserId,
+    try {
+      const monitor = await input.monitors.claim({
+        workerId,
+        placement: input.placement,
+      });
+      if (monitor?.leaseToken && monitor.tenantId) {
+        const provider = providers.get(monitor.sourceKind);
+        const tenantId = monitor.tenantId;
+        try {
+          if (!provider)
+            throw new Error(`No event source '${monitor.sourceKind}'`);
+          const result = await withSpan(
+            {
+              tracer,
+              name: "project.event.monitor.poll",
+              attributes: {
+                "catamorphic.project.id": monitor.projectId,
+                "catamorphic.monitor.id": monitor.id,
+                "catamorphic.event.source": monitor.sourceKind,
               },
-            }),
-        );
-        await input.monitors.complete({
-          monitorId: monitor.id,
-          leaseToken: monitor.leaseToken,
-          cursor: result.cursor,
-        });
-      } catch (error) {
-        await input.monitors.fail({
-          monitorId: monitor.id,
-          leaseToken: monitor.leaseToken,
-          error: error instanceof Error ? error.message : String(error),
-        });
+            },
+            () =>
+              provider.poll({
+                monitor,
+                signal: AbortSignal.any([
+                  controller.signal,
+                  AbortSignal.timeout(45_000),
+                ]),
+                identity: {
+                  tenantId,
+                  externalUserId: monitor.ownerExternalUserId,
+                },
+              }),
+          );
+          await input.monitors.complete({
+            monitorId: monitor.id,
+            leaseToken: monitor.leaseToken,
+            cursor: result.cursor,
+          });
+        } catch (error) {
+          await input.monitors.fail({
+            monitorId: monitor.id,
+            leaseToken: monitor.leaseToken,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
+    } catch (error) {
+      if (!stopped)
+        console.warn("[catamorphic] Event monitor poll failed", error);
     }
-    timer = setTimeout(() => void tick(), input.pollEveryMs ?? 1_000);
+    if (stopped) return;
+    timer = setTimeout(() => {
+      pending = tick();
+    }, input.pollEveryMs ?? 1_000);
     timer.unref?.();
   };
-  void tick();
+  let pending = tick();
   return {
-    stop: () => {
+    stop: async () => {
       stopped = true;
+      controller.abort();
       if (timer) clearTimeout(timer);
+      await pending;
     },
   };
 }

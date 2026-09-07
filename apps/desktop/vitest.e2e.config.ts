@@ -3,6 +3,7 @@ import { defineConfig } from "vitest/config";
 const visibleMode = process.env.CATAMORPHIC_E2E_WINDOW_MODE === "visible";
 const visibleSuites = [
   "e2e/motion.e2e.ts",
+  "e2e/runtime-idle.e2e.ts",
   // Live preview polling and animation require a visible renderer.
   "e2e/workflows.e2e.ts",
   "e2e/skills.e2e.ts",

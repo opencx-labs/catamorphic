@@ -71,6 +71,8 @@ export interface ClaudeCodeAgentRuntimeOpts {
   pathToClaudeCodeExecutable?: string;
   extraTools?: readonly ExtraTool[];
   disableBash?: boolean;
+  /** Host session watchers replace private native Monitor tasks. */
+  disableNativeMonitors?: boolean;
   mcpServers?: McpServersSource;
   mcpServersForSession?: (
     context: ExtraToolContext,
@@ -692,8 +694,14 @@ export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
       (tool) => tool.name === "spawn_subsession",
     );
     const disallowedTools = [
+      ...(this.opts.permissionMode === "plan"
+        ? ["Bash", "PowerShell", "Edit", "Write", "MultiEdit", "NotebookEdit"]
+        : []),
       ...(this.opts.disableBash && workspaceServer
-        ? ["Bash", "PowerShell", "Monitor"]
+        ? ["Bash", "PowerShell"]
+        : []),
+      ...(this.opts.disableNativeMonitors || this.opts.permissionMode === "plan"
+        ? ["Monitor"]
         : []),
       ...(hostOwnsTodos ? ["TodoWrite"] : []),
       ...(hostOwnsSubagents ? ["Task", "Agent"] : []),

@@ -3478,3 +3478,18 @@ paths, deliberately independent:
 - Incognito is available only in local projects. Remote conversations retain
   server-owned history even when sandbox commands run on **This machine**.
   Older incognito tabs are blocked from opening against the remote authority.
+
+### 2026-09-07: Cold motion and idle rendering
+
+Floating panels use opaque theme surfaces and box shadows. Background blur on
+the installed app's first chat opening caused 146-615 ms frame gaps; removing
+that filter in the same installed binary reduced the measured cold gap to about
+15 ms. Avoid backdrop filters on animated docks, palettes, and popovers.
+
+Inactive status icons have no looping animation class. Closed modals unmount
+contents after their exit animation, so hidden loading indicators and child
+effects cannot continue indefinitely. Browser agent ownership keeps a hidden
+tab awake only while agents in its project are working. Inactive guests use
+`display: none` while remaining mounted, allowing Chromium to throttle work.
+Do not overwrite Electron's bridged document visibility properties. Guest
+recovery makes at most two automatic attempts before showing a Reload action.

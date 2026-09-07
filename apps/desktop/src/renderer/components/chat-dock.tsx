@@ -591,7 +591,7 @@ function SlashMenu({
   return (
     <PopPanel
       open={open && matches.length > 0}
-      className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-full overflow-y-auto rounded-lg border border-border bg-bg-raised/95 p-1.5 shadow-2xl backdrop-blur-xl"
+      className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-full overflow-y-auto rounded-lg border border-border bg-bg-raised p-1.5 shadow-2xl"
       testId="slash-menu"
     >
       <div ref={sizerRef} role="listbox" aria-label="Commands">
@@ -701,8 +701,8 @@ function SurfaceChip({
             />
           )}
           <LoaderCircle
-            className={`col-start-1 row-start-1 size-3 animate-spin text-accent transition-opacity duration-200 ${
-              surface.active ? "opacity-100" : "opacity-0"
+            className={`col-start-1 row-start-1 size-3 text-accent transition-opacity duration-200 ${
+              surface.active ? "animate-spin opacity-100" : "opacity-0"
             }`}
           />
           {/* Background-opened surface waiting for the user: the unread
@@ -780,7 +780,7 @@ function GroupChip({
           className={`col-start-1 row-start-1 size-3 transition-opacity duration-200 ${anyActive ? "opacity-0" : "opacity-100"}`}
         />
         <LoaderCircle
-          className={`col-start-1 row-start-1 size-3 animate-spin text-accent transition-opacity duration-200 ${anyActive ? "opacity-100" : "opacity-0"}`}
+          className={`col-start-1 row-start-1 size-3 text-accent transition-opacity duration-200 ${anyActive ? "animate-spin opacity-100" : "opacity-0"}`}
         />
         {/* Attention aggregates onto the group chip, like the spinner. */}
         {group.some((surface) => surface.attention) && (
@@ -996,7 +996,7 @@ function SurfacesRail({
           watchers): the chip's activity feed, expanded upward. */}
       <PopPanel
         open={Boolean(infoSurface)}
-        className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-80 overflow-y-auto rounded-lg border border-border bg-bg-raised/95 p-2 shadow-2xl backdrop-blur-xl"
+        className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-80 overflow-y-auto rounded-lg border border-border bg-bg-raised p-2 shadow-2xl"
         testId="surface-info-popover"
       >
         {infoSurface && (
@@ -1028,7 +1028,7 @@ function SurfacesRail({
       </PopPanel>
       <PopPanel
         open={Boolean(groupSurfaces)}
-        className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-72 overflow-y-auto rounded-lg border border-border bg-bg-raised/95 p-1 shadow-2xl backdrop-blur-xl"
+        className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-72 overflow-y-auto rounded-lg border border-border bg-bg-raised p-1 shadow-2xl"
       >
         {groupSurfaces?.map((surface) => (
           <div
@@ -1397,6 +1397,7 @@ function ChatDockContent({
   const watcherQuery = useWatchers(
     projectId,
     chat.sessionId ?? entry.sessionId ?? undefined,
+    { refetchInterval: refreshWhileIdle || chat.isSending ? 5_000 : false },
   );
   const visibleWatchers = watcherQuery.data?.items ?? [];
   const activeEnvironment = chat.session?.environment ?? selectedEnvironment;
@@ -2665,12 +2666,12 @@ function ChatDockContent({
           if (closing) finishCloseRef.current();
           else if (minimizing) finishMinimizeRef.current();
         }}
-        className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden backdrop-blur-xl transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+        className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
           presentsAsTab
             ? "h-full max-w-full rounded-none border-0 border-transparent bg-bg"
             : `${
                 lurking ? "h-44" : "h-[min(560px,100%)]"
-              } max-w-3xl rounded-2xl border bg-bg-raised/95 drop-shadow-2xl ${
+              } max-w-3xl rounded-2xl border bg-bg-raised shadow-2xl ${
                 paletteTargeted && !isTab ? "border-accent" : "border-border"
               }`
         } ${
@@ -2690,7 +2691,7 @@ function ChatDockContent({
         {/* Drop cue: an accent dashed veil while files hover the chat. */}
         {dropActive && (
           <div className="pointer-events-none absolute inset-2 z-20 grid animate-fade-in place-items-center rounded-xl border-2 border-dashed border-accent/60 bg-accent/5">
-            <span className="rounded-full border border-border bg-bg-raised/95 px-3 py-1.5 text-xs text-fg">
+            <span className="rounded-full border border-border bg-bg-raised px-3 py-1.5 text-xs text-fg">
               Drop to attach
             </span>
           </div>
@@ -2771,7 +2772,7 @@ function ChatDockContent({
             both stay above timeline content scrolled beneath them. */}
         <div className="absolute right-2 top-2 z-10 flex items-start gap-1">
           <TodoProgress todos={chat.session?.todos ?? []} />
-          <span className="flex items-center gap-0.5 rounded-lg border border-border bg-bg-raised/95 p-0.5 backdrop-blur-sm">
+          <span className="flex items-center gap-0.5 rounded-lg border border-border bg-bg-raised p-0.5">
             <SessionInspector
               session={chat.session}
               fallbackTitle={title}
@@ -2920,7 +2921,24 @@ function ChatDockContent({
                   <span className="max-w-48 truncate">
                     {watcher.workflowName}
                   </span>
-                  <span className="text-fg-faint">{watcher.status}</span>
+                  <span
+                    className="text-fg-faint"
+                    title={
+                      watcher.expiresAt
+                        ? `Expires ${new Date(watcher.expiresAt).toLocaleString()}`
+                        : undefined
+                    }
+                  >
+                    {watcher.status}
+                  </span>
+                  {watcher.lastError && (
+                    <span
+                      className="max-w-64 truncate text-danger"
+                      title={watcher.lastError}
+                    >
+                      {watcher.lastError}
+                    </span>
+                  )}
                   {(watcher.status === "active" ||
                     watcher.status === "paused") && (
                     <button
@@ -2937,6 +2955,11 @@ function ChatDockContent({
                 </span>
               ))}
             </div>
+          )}
+          {watcherQuery.stop.error && (
+            <p role="alert" className="px-3 py-2 text-xs text-danger">
+              {watcherQuery.stop.error.message}
+            </p>
           )}
           <ChatTimeline
             className="min-h-0 flex-1"
@@ -3179,7 +3202,7 @@ function ChatDockContent({
               />
             )}
             <form
-              className="field relative m-3 mt-1 flex shrink-0 flex-col rounded-xl bg-bg-raised/95 p-1.5"
+              className="field relative m-3 mt-1 flex shrink-0 flex-col rounded-xl bg-bg-raised p-1.5"
               onSubmit={submit}
             >
               {/* "/" command menu: skills (ADR 0052) merged with the

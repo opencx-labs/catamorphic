@@ -1,3 +1,4 @@
+import { access, readFile } from "node:fs/promises";
 import type { ProviderSession } from "@catamorphic/sandbox";
 import type { ThreadEvent } from "@openai/codex-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -108,6 +109,107 @@ describe("CodexAgent", () => {
     });
     expect(events.some((event) => event.type === "error")).toBe(false);
     expect(events.at(-1)).toEqual({ type: "done" });
+  });
+
+  it("settles a failed turn with an error and terminal event", async () => {
+    resumeThread.mockReturnValueOnce(
+      scriptedThread([
+        { type: "turn.failed", error: { message: "Permission denied" } },
+      ]),
+    );
+    expect(await collect(new CodexAgent(), "write the file")).toEqual([
+      { type: "error", content: "Permission denied" },
+      { type: "done" },
+    ]);
+  });
+
+  it("keeps recovered stream retries out of the durable failure state", async () => {
+    resumeThread.mockReturnValueOnce(
+      scriptedThread([
+        { type: "error", message: "Reconnecting... 2/5" },
+        { type: "turn.completed", usage: dummyUsage() },
+      ]),
+    );
+    const events = await collect(new CodexAgent(), "continue");
+    expect(events).toContainEqual({
+      type: "diagnostic",
+      content: "Reconnecting... 2/5",
+    });
+    expect(events.some((event) => event.type === "error")).toBe(false);
+  });
+
+  it("fails an incomplete stream even if the process exits without throwing", async () => {
+    resumeThread.mockReturnValueOnce(
+      scriptedThread([{ type: "error", message: "Connection closed" }]),
+    );
+    const events = await collect(new CodexAgent(), "continue");
+    expect(events).toContainEqual({
+      type: "error",
+      content: "Connection closed",
+    });
+    expect(events.at(-1)).toEqual({ type: "done" });
+  });
+
+  it("delivers image bytes to resumed turns and removes staged files afterwards", async () => {
+    let imagePath: string | undefined;
+    resumeThread.mockReturnValueOnce({
+      runStreamed: async (
+        input: Array<{ type: string; path?: string; text?: string }>,
+      ) => {
+        imagePath = input.find((item) => item.type === "local_image")?.path;
+        expect(imagePath).toBeDefined();
+        expect(await readFile(imagePath ?? "", "utf8")).toBe("image bytes");
+        expect(input[0]?.text).not.toContain("not delivered");
+        return scriptedThread([
+          { type: "turn.completed", usage: dummyUsage() },
+        ]).runStreamed();
+      },
+    });
+    for await (const _event of new CodexAgent().sendMessage(
+      session,
+      "Inspect this",
+      {
+        attachments: [
+          {
+            kind: "image",
+            name: "../../unsafe.png",
+            mediaType: "image/png",
+            dataBase64: Buffer.from("image bytes").toString("base64"),
+          },
+        ],
+      },
+    )) {
+      /* consume the turn */
+    }
+    await expect(access(imagePath ?? "")).rejects.toThrow();
+  });
+
+  it("removes staged attachments when startup fails", async () => {
+    let imagePath: string | undefined;
+    resumeThread.mockReturnValueOnce({
+      runStreamed: async (input: Array<{ type: string; path?: string }>) => {
+        imagePath = input.find((item) => item.type === "local_image")?.path;
+        throw new Error("Spawn failed");
+      },
+    });
+    for await (const _event of new CodexAgent().sendMessage(
+      session,
+      "Inspect",
+      {
+        attachments: [
+          {
+            kind: "image",
+            name: "x.png",
+            mediaType: "image/png",
+            dataBase64: "eA==",
+          },
+        ],
+      },
+    )) {
+      /* consume the turn */
+    }
+    expect(imagePath).toBeDefined();
+    await expect(access(imagePath ?? "")).rejects.toThrow();
   });
 
   it("flags daemonizing commands as detected background processes", async () => {
@@ -250,13 +352,16 @@ describe("CodexAgent", () => {
   it("can replace private multi-agent tools with host subsessions", async () => {
     resumeThread.mockReturnValueOnce(turnDone());
     await collect(
-      new CodexAgent({ disableNativeSubagents: true }),
+      new CodexAgent({
+        disableNativeSubagents: true,
+        disableNativeGoals: true,
+      }),
       "Delegate this review",
     );
 
     expect(codexCtor).toHaveBeenCalledWith(
       expect.objectContaining({
-        config: { features: { multi_agent: false } },
+        config: { features: { multi_agent: false, goals: false } },
       }),
     );
   });

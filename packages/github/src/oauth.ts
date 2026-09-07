@@ -22,8 +22,10 @@ async function postForm(
   fetchImpl: FetchLike,
   url: string,
   params: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<OAuthTokenResponse> {
   const response = await fetchImpl(url, {
+    ...(signal ? { signal } : {}),
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -171,7 +173,12 @@ export async function exchangeCode(
 export async function refreshAccessToken(
   app: GithubAppConfig,
   refreshToken: string,
-  opts?: { fetch?: FetchLike; baseUrl?: string; now?: number },
+  opts?: {
+    fetch?: FetchLike;
+    baseUrl?: string;
+    now?: number;
+    signal?: AbortSignal;
+  },
 ): Promise<GithubTokenSet> {
   const data = await postForm(
     opts?.fetch ?? fetch,
@@ -182,6 +189,7 @@ export async function refreshAccessToken(
       grant_type: "refresh_token",
       refresh_token: refreshToken,
     },
+    opts?.signal,
   );
   return toTokenSet(data, opts?.now ?? Date.now());
 }

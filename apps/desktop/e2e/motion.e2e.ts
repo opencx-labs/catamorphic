@@ -356,8 +356,8 @@ describe("animate-before-unmount", () => {
         if (overlay) {
           enter.push(parseFloat(getComputedStyle(overlay).opacity));
           enterTransition ||= overlay.getAnimations().some(
-            (animation) => animation instanceof CSSTransition &&
-              animation.transitionProperty === 'opacity');
+            (animation) => animation instanceof CSSAnimation &&
+              animation.animationName === 'fade-in');
           const modal = $('[data-testid="mobile-pairing-modal"]');
           const stage = $('[data-testid="mobile-pairing-qr-stage"]');
           if (modal?.dataset.state === 'loading' && stage) {
@@ -385,7 +385,8 @@ describe("animate-before-unmount", () => {
       while (!$('[data-testid="mobile-pairing-qr"]')) {
         await new Promise(requestAnimationFrame);
       }
-      const readyStage = $('[data-testid="mobile-pairing-qr-stage"]');
+      const readyStageElement = $('[data-testid="mobile-pairing-qr-stage"]');
+      const readyStage = { width: readyStageElement.offsetWidth, height: readyStageElement.offsetHeight };
       const readyHeight = panel.offsetHeight;
       const qrAnimation = getComputedStyle(
         $('[data-testid="mobile-pairing-qr"]'),
@@ -393,8 +394,8 @@ describe("animate-before-unmount", () => {
       pressKey('Escape');
       await new Promise(requestAnimationFrame);
       const exitTransition = overlay.getAnimations().some(
-        (animation) => animation instanceof CSSTransition &&
-          animation.transitionProperty === 'opacity');
+        (animation) => animation instanceof CSSAnimation &&
+          animation.animationName === 'fade-out');
       const exit = await sampleUntilGone(overlay, null, 400);
       return {
         enter,
@@ -404,10 +405,7 @@ describe("animate-before-unmount", () => {
         loadingHeight: loadingLayout.height,
         readyHeight,
         loadingStage: loadingLayout.stage,
-        readyStage: {
-          width: readyStage.offsetWidth,
-          height: readyStage.offsetHeight,
-        },
+        readyStage,
         qrAnimation,
       };
       })();

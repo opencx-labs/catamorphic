@@ -218,6 +218,8 @@ export interface OriginRepo {
     sha: string;
     expected?: string | null;
   }): Promise<void>;
+  /** Remove one ref without deleting its immutable objects. Missing is a no-op. */
+  deleteRef(input: { ref: string }): Promise<void>;
   /** Whether the object is present locally. */
   hasObject(sha: string): Promise<boolean>;
   /** Read the raw git object (returns { type, data }). */

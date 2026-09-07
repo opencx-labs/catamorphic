@@ -21,6 +21,8 @@ export interface ObjectStore {
   ): Promise<void>;
   /** List full keys under a prefix. */
   list(prefix: string): Promise<string[]>;
+  /** Delete exactly one key; a missing key is a no-op. */
+  delete(key: string): Promise<void>;
   /** Delete every object under a prefix. */
   deletePrefix(prefix: string): Promise<void>;
 }

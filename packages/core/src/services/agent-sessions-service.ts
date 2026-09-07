@@ -4034,6 +4034,12 @@ export class AgentSessionsService {
     const session = await this.requireSession(identity, projectId, sessionId);
     await this.cancelAutoRetry(sessionId);
 
+    await this.archiveResources?.stop({
+      identity,
+      projectId,
+      sessionIds: [sessionId],
+    });
+
     if (session.provider_session_id) {
       const agent = await this.resolveAgent(session.agent_id, projectId).catch(
         () => undefined,

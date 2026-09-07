@@ -425,7 +425,7 @@ export function registerIpcHandlers(
   // renderer can then focus the right chat.
   ipcMain.handle("catamorphic:window-focus", (event) => {
     const window = BrowserWindow.fromWebContents(event.sender);
-    if (!window) return;
+    if (!window || process.env.CATAMORPHIC_E2E_DATA_DIR) return;
     if (window.isMinimized()) window.restore();
     window.show();
     window.focus();
@@ -1415,7 +1415,12 @@ export function registerIpcHandlers(
           window[action]();
         }
         const bounds = window.getBounds();
-        return { ...bounds, maximized: window.isMaximized() };
+        return {
+          ...bounds,
+          maximized: window.isMaximized(),
+          focused: window.isFocused(),
+          focusable: window.isFocusable(),
+        };
       },
     );
   }

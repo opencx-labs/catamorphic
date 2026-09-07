@@ -169,130 +169,158 @@ export class WatchersService {
     cursorSequence: number;
     requiredTriggerPrefix?: string;
   }): Promise<Watcher> {
+    const session = await this.db
+      .selectFrom("agent_sessions")
+      .select("status")
+      .where("id", "=", input.sessionId)
+      .where("project_id", "=", input.projectId)
+      .executeTakeFirstOrThrow();
+    if (session.status !== "active")
+      throw new Error("Cannot create a watcher for a closed session");
     const watcherId = randomUUID();
     const sourcePath = `workflows/src/watchers/${watcherId}.ts`;
     const remoteBranch = `catamorphic/watchers/${watcherId}`;
-    const repo = await this.deps.projectManager.openDev(
-      input.identity.tenantId,
-      input.projectId,
-      `watcher-${watcherId}`,
-    );
-    let commitSha: string;
+    let enablementId: string | undefined;
     try {
-      await repo.writeFile(sourcePath, input.source);
-      const parsed = parseProject(await repo.readAllFiles());
-      const parseErrors = parsed.errors.map((error) =>
-        error.file ? `${error.file}: ${error.message}` : error.message,
-      );
-      if (
-        !parsed.workflows.some(
-          (workflow) => workflow.functionName === input.workflowName,
-        )
-      ) {
-        parseErrors.push(`Workflow '${input.workflowName}' is not exported`);
-      }
-      if (parseErrors.length > 0) {
-        throw new Error(`Invalid watcher workflow:\n${parseErrors.join("\n")}`);
-      }
-      commitSha = await repo.commit(
-        `Create watcher ${watcherId}`,
-        WATCHER_AUTHOR,
-        {
-          paths: [sourcePath],
-        },
-      );
-      const remote = this.deps.projectManager.remoteBackend;
-      if (!remote) throw new Error("Watchers require durable project storage");
-      await push({
-        dev: repo,
-        remote,
+      const repo = await this.deps.projectManager.openEphemeral({
         tenantId: input.identity.tenantId,
         projectId: input.projectId,
-        remoteBranch,
-        localSha: commitSha,
       });
-    } finally {
-      await repo.dispose();
-    }
+      let commitSha: string;
+      try {
+        await repo.writeFile(sourcePath, input.source);
+        const parsed = parseProject(await repo.readAllFiles());
+        const parseErrors = parsed.errors.map((error) =>
+          error.file ? `${error.file}: ${error.message}` : error.message,
+        );
+        if (
+          !parsed.workflows.some(
+            (workflow) => workflow.functionName === input.workflowName,
+          )
+        ) {
+          parseErrors.push(`Workflow '${input.workflowName}' is not exported`);
+        }
+        if (parseErrors.length > 0) {
+          throw new Error(
+            `Invalid watcher workflow:\n${parseErrors.join("\n")}`,
+          );
+        }
+        commitSha = await repo.commit(
+          `Create watcher ${watcherId}`,
+          WATCHER_AUTHOR,
+          {
+            paths: [sourcePath],
+          },
+        );
+        const remote = this.deps.projectManager.remoteBackend;
+        if (!remote)
+          throw new Error("Watchers require durable project storage");
+        await push({
+          dev: repo,
+          remote,
+          tenantId: input.identity.tenantId,
+          projectId: input.projectId,
+          remoteBranch,
+          localSha: commitSha,
+        });
+      } finally {
+        await repo.dispose();
+      }
 
-    const bindings = await this.deps.triggers.listAtCommit({
-      identity: input.identity,
-      projectId: input.projectId,
-      workflowName: input.workflowName,
-      commitSha,
-      remoteBranch,
-      environment: input.environment,
-    });
-    if (bindings.length === 0) {
-      throw new Error(
-        `Watcher workflow '${input.workflowName}' must declare at least one trigger`,
+      const bindings = await this.deps.triggers.listAtCommit({
+        identity: input.identity,
+        projectId: input.projectId,
+        workflowName: input.workflowName,
+        commitSha,
+        remoteBranch,
+        environment: input.environment,
+      });
+      if (bindings.length === 0) {
+        throw new Error(
+          `Watcher workflow '${input.workflowName}' must declare at least one trigger`,
+        );
+      }
+      const requiredTriggerPrefix = input.requiredTriggerPrefix;
+      if (
+        requiredTriggerPrefix &&
+        !bindings.some((binding) =>
+          binding.kind.startsWith(requiredTriggerPrefix),
+        )
+      ) {
+        throw new Error(
+          `Watcher workflow '${input.workflowName}' must declare at least one ${requiredTriggerPrefix} trigger`,
+        );
+      }
+      const triggerKinds = [
+        ...new Set(bindings.map((binding) => binding.kind)),
+      ];
+      const artifact = await this.deps.runs.resolveArtifactAtCommit({
+        identity: input.identity,
+        projectId: input.projectId,
+        workflowName: input.workflowName,
+        commitSha,
+        remoteBranch,
+      });
+      const expiresInSeconds = Math.min(
+        Math.max(input.expiresInSeconds ?? 86_400, 60),
+        30 * 86_400,
       );
-    }
-    const requiredTriggerPrefix = input.requiredTriggerPrefix;
-    if (
-      requiredTriggerPrefix &&
-      !bindings.some((binding) =>
-        binding.kind.startsWith(requiredTriggerPrefix),
-      )
-    ) {
-      throw new Error(
-        `Watcher workflow '${input.workflowName}' must declare at least one ${requiredTriggerPrefix} trigger`,
+      const expiresAt = new Date(Date.now() + expiresInSeconds * 1_000);
+      const preview = await this.deps.workflowEnablements.preview({
+        identity: input.identity,
+        projectId: input.projectId,
+        workflowName: input.workflowName,
+        commitSha,
+        remoteBranch,
+        environment: input.environment,
+      });
+      const enablement = await this.deps.workflowEnablements.create({
+        identity: input.identity,
+        projectId: input.projectId,
+        workflowName: input.workflowName,
+        commitSha,
+        remoteBranch,
+        environment: input.environment,
+        consentDigest: preview.consentDigest,
+        temporary: true,
+        expiresAt,
+      });
+      enablementId = enablement.id;
+      const row = await this.db
+        .insertInto("watchers")
+        .values({
+          id: watcherId,
+          project_id: input.projectId,
+          session_id: input.sessionId,
+          monitor_id: input.monitorId,
+          owner_external_user_id: input.identity.externalUserId,
+          owner_identity: JSON.parse(JSON.stringify(input.identity)),
+          workflow_name: input.workflowName,
+          source_path: sourcePath,
+          remote_branch: remoteBranch,
+          commit_sha: commitSha,
+          deployment_artifact_id: artifact.id,
+          workflow_enablement_id: enablement.id,
+          environment_name: enablement.environment,
+          cursor_sequence: String(input.cursorSequence),
+          expires_at: expiresAt,
+        })
+        .returningAll()
+        .executeTakeFirstOrThrow();
+      return mapWatcher(row, triggerKinds);
+    } catch (error) {
+      if (enablementId)
+        await this.deps.workflowEnablements.disable({
+          identity: input.identity,
+          enablementId,
+        });
+      await this.removeRef(
+        input.identity.tenantId,
+        input.projectId,
+        remoteBranch,
       );
+      throw error;
     }
-    const triggerKinds = [...new Set(bindings.map((binding) => binding.kind))];
-    const artifact = await this.deps.runs.resolveArtifactAtCommit({
-      identity: input.identity,
-      projectId: input.projectId,
-      workflowName: input.workflowName,
-      commitSha,
-      remoteBranch,
-    });
-    const expiresInSeconds = Math.min(
-      Math.max(input.expiresInSeconds ?? 86_400, 60),
-      30 * 86_400,
-    );
-    const expiresAt = new Date(Date.now() + expiresInSeconds * 1_000);
-    const preview = await this.deps.workflowEnablements.preview({
-      identity: input.identity,
-      projectId: input.projectId,
-      workflowName: input.workflowName,
-      commitSha,
-      remoteBranch,
-      environment: input.environment,
-    });
-    const enablement = await this.deps.workflowEnablements.create({
-      identity: input.identity,
-      projectId: input.projectId,
-      workflowName: input.workflowName,
-      commitSha,
-      remoteBranch,
-      environment: input.environment,
-      consentDigest: preview.consentDigest,
-      temporary: true,
-      expiresAt,
-    });
-    const row = await this.db
-      .insertInto("watchers")
-      .values({
-        id: watcherId,
-        project_id: input.projectId,
-        session_id: input.sessionId,
-        monitor_id: input.monitorId,
-        owner_external_user_id: input.identity.externalUserId,
-        owner_identity: JSON.parse(JSON.stringify(input.identity)),
-        workflow_name: input.workflowName,
-        source_path: sourcePath,
-        remote_branch: remoteBranch,
-        commit_sha: commitSha,
-        deployment_artifact_id: artifact.id,
-        workflow_enablement_id: enablement.id,
-        environment_name: input.environment ?? null,
-        cursor_sequence: String(input.cursorSequence),
-        expires_at: expiresAt,
-      })
-      .returningAll()
-      .executeTakeFirstOrThrow();
-    return mapWatcher(row, triggerKinds);
   }
 
   async list(input: {
@@ -314,15 +342,15 @@ export class WatchersService {
       .execute();
     return Promise.all(
       rows.map(async (row) => {
-        const bindings = await this.deps.triggers.listAtCommit({
-          identity: input.identity,
-          projectId: input.projectId,
-          workflowName: row.workflow_name,
-          commitSha: row.commit_sha,
-          remoteBranch: row.remote_branch,
-        });
+        const bindings = await this.db
+          .selectFrom("trigger_definitions")
+          .select("trigger_kind")
+          .where("project_id", "=", row.project_id)
+          .where("commit_sha", "=", row.commit_sha)
+          .where("workflow_name", "=", row.workflow_name)
+          .execute();
         return mapWatcher(row, [
-          ...new Set(bindings.map((binding) => binding.kind)),
+          ...new Set(bindings.map((binding) => binding.trigger_kind)),
         ]);
       }),
     );
@@ -339,6 +367,20 @@ export class WatchersService {
       input.projectId,
       input.sessionId,
     );
+    const watcher = await this.db
+      .selectFrom("watchers")
+      .selectAll()
+      .where("id", "=", input.watcherId)
+      .where("project_id", "=", input.projectId)
+      .where("session_id", "=", input.sessionId)
+      .executeTakeFirst();
+    if (!watcher) return false;
+    if (watcher.workflow_enablement_id) {
+      await this.deps.workflowEnablements.disable({
+        identity: input.identity,
+        enablementId: watcher.workflow_enablement_id,
+      });
+    }
     const result = await this.db
       .updateTable("watchers")
       .set({ status: "stopped", updated_at: new Date() })
@@ -347,18 +389,82 @@ export class WatchersService {
       .where("session_id", "=", input.sessionId)
       .where("status", "in", ["active", "paused"])
       .executeTakeFirst();
-    const watcher = await this.db
-      .selectFrom("watchers")
-      .select("workflow_enablement_id")
-      .where("id", "=", input.watcherId)
-      .executeTakeFirst();
-    if (watcher?.workflow_enablement_id) {
-      await this.deps.workflowEnablements.disable({
-        identity: input.identity,
-        enablementId: watcher.workflow_enablement_id,
-      });
-    }
+    await this.cleanupRetired();
     return result.numUpdatedRows === 1n;
+  }
+
+  private async removeRef(
+    tenantId: string,
+    projectId: string,
+    remoteBranch: string,
+  ): Promise<void> {
+    const remote = this.deps.projectManager.remoteBackend;
+    if (!remote) throw new Error("Watcher storage is unavailable");
+    await remote.withOrigin(tenantId, projectId, (origin) =>
+      origin.deleteRef({ ref: `refs/heads/${remoteBranch}` }),
+    );
+  }
+
+  /** A queued or running immutable run still needs the published ref. */
+  private async cleanupRetired(): Promise<void> {
+    const rows = await this.db
+      .selectFrom("watchers")
+      .innerJoin("projects", "projects.id", "watchers.project_id")
+      .select([
+        "watchers.id",
+        "watchers.project_id",
+        "watchers.remote_branch",
+        "projects.tenant_id",
+      ])
+      .where("watchers.status", "in", ["stopped", "expired"])
+      .where("watchers.ref_deleted_at", "is", null)
+      .where(({ not, exists, selectFrom }) =>
+        not(
+          exists(
+            selectFrom("workflow_runs as run")
+              .select("run.id")
+              .whereRef("run.project_id", "=", "watchers.project_id")
+              .where("run.status", "not in", [
+                "completed",
+                "failed",
+                "canceled",
+              ])
+              .where(({ or, eb, exists, selectFrom }) =>
+                or([
+                  eb(
+                    "run.workflow_enablement_id",
+                    "=",
+                    eb.ref("watchers.workflow_enablement_id"),
+                  ),
+                  exists(
+                    selectFrom("watcher_runs as invocation")
+                      .select("invocation.run_id")
+                      .whereRef("invocation.watcher_id", "=", "watchers.id")
+                      .whereRef("invocation.run_id", "=", "run.id"),
+                  ),
+                ]),
+              ),
+          ),
+        ),
+      )
+      .orderBy("watchers.updated_at")
+      .limit(50)
+      .execute();
+    for (const row of rows) {
+      try {
+        await this.removeRef(row.tenant_id, row.project_id, row.remote_branch);
+        await this.db
+          .updateTable("watchers")
+          .set({ ref_deleted_at: new Date(), updated_at: new Date() })
+          .where("id", "=", row.id)
+          .execute();
+      } catch (error) {
+        await this.recordFailure(
+          row.id,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
   }
 
   /** Stop every Watcher owned by a session tree before it is archived. */
@@ -394,90 +500,123 @@ export class WatchersService {
   private async dispatchPendingInner(
     input: { limit?: number } = {},
   ): Promise<number> {
+    await this.cleanupRetired();
     const rows = await this.db
       .selectFrom("watchers")
       .innerJoin("projects", "projects.id", "watchers.project_id")
       .selectAll("watchers")
       .select("projects.tenant_id")
-      .where("watchers.status", "=", "active")
-      .orderBy("watchers.created_at")
+      .where("watchers.status", "in", ["active", "paused"])
+      .where(({ or, and, eb, exists, selectFrom }) =>
+        or([
+          eb("watchers.expires_at", "<=", new Date()),
+          and([
+            eb("watchers.status", "=", "active"),
+            exists(
+              selectFrom("project_events as event")
+                .select("event.id")
+                .whereRef("event.project_id", "=", "watchers.project_id")
+                .whereRef("event.sequence", ">", "watchers.cursor_sequence"),
+            ),
+          ]),
+        ]),
+      )
+      .orderBy("watchers.updated_at")
       .limit(input.limit ?? 50)
       .execute();
     let dispatched = 0;
     for (const row of rows) {
-      if (row.expires_at && row.expires_at <= new Date()) {
-        await this.db
-          .updateTable("watchers")
-          .set({ status: "expired", updated_at: new Date() })
-          .where("id", "=", row.id)
-          .execute();
-        continue;
-      }
-      const identity = persistedIdentity(
-        row.owner_identity,
-        row.tenant_id,
-        row.owner_external_user_id,
-      );
-      const bindings = await this.deps.triggers.listAtCommit({
-        identity,
-        projectId: row.project_id,
-        workflowName: row.workflow_name,
-        commitSha: row.commit_sha,
-        remoteBranch: row.remote_branch,
-      });
-      const kinds = [...new Set(bindings.map((binding) => binding.kind))];
-      const events = await this.deps.events.list({
-        projectId: row.project_id,
-        afterSequence: Number(row.cursor_sequence),
-        kinds,
-        limit: 100,
-      });
-      for (const event of events) {
-        try {
-          const result = await this.deps.triggers.fireAtCommit({
-            identity,
-            projectId: row.project_id,
-            commitSha: row.commit_sha,
-            remoteBranch: row.remote_branch,
-            environment: row.environment_name ?? undefined,
-            kind: event.kind,
-            payload: JSON.parse(JSON.stringify(event)),
-            workflows: [row.workflow_name],
-            enablementIds: row.workflow_enablement_id
-              ? [row.workflow_enablement_id]
-              : [],
-            mode: "async",
-            correlationKey: `watcher:${row.id}:event:${event.id}`,
-            onConflict: "ignore",
-          });
-          if (result.runs.length > 1) {
-            throw new Error(
-              "A Watcher event matched more than one workflow run",
-            );
+      try {
+        const identity = persistedIdentity(
+          row.owner_identity,
+          row.tenant_id,
+          row.owner_external_user_id,
+        );
+        if (row.expires_at && row.expires_at <= new Date()) {
+          if (row.workflow_enablement_id) {
+            await this.deps.workflowEnablements.disable({
+              identity,
+              enablementId: row.workflow_enablement_id,
+            });
           }
-          const run = result.runs[0];
-          if (run) {
-            await this.db
-              .insertInto("watcher_runs")
-              .values({
-                watcher_id: row.id,
-                event_id: event.id,
-                run_id: run.runId,
-              })
-              .onConflict((conflict) =>
-                conflict.columns(["watcher_id", "event_id"]).doNothing(),
-              )
-              .execute();
-          }
-          await this.advance(row.id, event.sequence, null);
-          dispatched += result.runs.length;
-        } catch (error) {
-          await this.recordFailure(
-            row.id,
-            error instanceof Error ? error.message : String(error),
-          );
-          break;
+          await this.db
+            .updateTable("watchers")
+            .set({ status: "expired", updated_at: new Date() })
+            .where("id", "=", row.id)
+            .execute();
+          continue;
         }
+        const bindings = await this.deps.triggers.listAtCommit({
+          identity,
+          projectId: row.project_id,
+          workflowName: row.workflow_name,
+          commitSha: row.commit_sha,
+          remoteBranch: row.remote_branch,
+        });
+        const kinds = [...new Set(bindings.map((binding) => binding.kind))];
+        const events = await this.deps.events.list({
+          projectId: row.project_id,
+          afterSequence: Number(row.cursor_sequence),
+          limit: 100,
+        });
+        for (const event of events) {
+          try {
+            // Advance past irrelevant events too, so idle watchers never rescan
+            // the same history and cannot starve later watchers in the page.
+            if (!kinds.includes(event.kind)) {
+              await this.advance(row.id, event.sequence, null);
+              continue;
+            }
+            const result = await this.deps.triggers.fireAtCommit({
+              identity,
+              projectId: row.project_id,
+              commitSha: row.commit_sha,
+              remoteBranch: row.remote_branch,
+              environment: row.environment_name ?? undefined,
+              kind: event.kind,
+              payload: JSON.parse(JSON.stringify(event)),
+              workflows: [row.workflow_name],
+              enablementIds: row.workflow_enablement_id
+                ? [row.workflow_enablement_id]
+                : [],
+              mode: "async",
+              correlationKey: `watcher:${row.id}:event:${event.id}`,
+              onConflict: "ignore",
+            });
+            if (result.runs.length > 1) {
+              throw new Error(
+                "A Watcher event matched more than one workflow run",
+              );
+            }
+            const run = result.runs[0];
+            if (run) {
+              await this.db
+                .insertInto("watcher_runs")
+                .values({
+                  watcher_id: row.id,
+                  event_id: event.id,
+                  run_id: run.runId,
+                })
+                .onConflict((conflict) =>
+                  conflict.columns(["watcher_id", "event_id"]).doNothing(),
+                )
+                .execute();
+            }
+            await this.advance(row.id, event.sequence, null);
+            dispatched += result.runs.length;
+          } catch (error) {
+            await this.recordFailure(
+              row.id,
+              error instanceof Error ? error.message : String(error),
+            );
+            break;
+          }
+        }
+      } catch (error) {
+        await this.recordFailure(
+          row.id,
+          error instanceof Error ? error.message : String(error),
+        );
       }
     }
     return dispatched;
@@ -521,20 +660,25 @@ export class WatchersService {
 export function startWatcherDispatcher(input: {
   watchers: WatchersService;
   pollEveryMs?: number;
-}): { stop: () => void } {
+}): { stop: () => Promise<void> } {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const tick = async () => {
+    await input.watchers.dispatchPending().catch((error) => {
+      console.warn("[catamorphic] Watcher dispatch failed", error);
+    });
     if (stopped) return;
-    await input.watchers.dispatchPending().catch(() => {});
-    timer = setTimeout(() => void tick(), input.pollEveryMs ?? 1_000);
+    timer = setTimeout(() => {
+      pending = tick();
+    }, input.pollEveryMs ?? 1_000);
     timer.unref?.();
   };
-  void tick();
+  let pending = tick();
   return {
-    stop: () => {
+    stop: async () => {
       stopped = true;
       if (timer) clearTimeout(timer);
+      await pending;
     },
   };
 }

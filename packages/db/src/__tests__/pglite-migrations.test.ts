@@ -51,6 +51,7 @@ describe("PGlite migrations", () => {
       "011_client_runners.sql",
       "012_client_runner_workspace.sql",
       "013_workspace_capacity.sql",
+      "014_watcher_retirement.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

@@ -134,6 +134,21 @@ describe("ObjectOriginRepo ref CAS", () => {
     await backend.withOrigin(TENANT, PROJECT, async (repo) => {
       await repo.updateRef({ ref: "refs/heads/main", sha: SHA_1 });
       await repo.updateRef({ ref: "refs/heads/main", sha: SHA_2 });
+      await repo.updateRef({
+        ref: "refs/heads/watchers/temporary",
+        sha: SHA_1,
+      });
+      await repo.updateRef({
+        ref: "refs/heads/watchers/temporary-other",
+        sha: SHA_2,
+      });
+      await repo.deleteRef({ ref: "refs/heads/watchers/temporary" });
+      await repo.deleteRef({ ref: "refs/heads/watchers/temporary" });
+      expect(await repo.resolveRef("refs/heads/watchers/temporary")).toBeNull();
+      expect(await repo.resolveRef("refs/heads/watchers/temporary-other")).toBe(
+        SHA_2,
+      );
+
       expect(await repo.resolveRef("refs/heads/main")).toBe(SHA_2);
     });
   });

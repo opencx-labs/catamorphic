@@ -341,7 +341,11 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
   let nextId = 0;
   const pending = new Map<
     number,
-    { resolve: (value: unknown) => void; remaining: number }
+    {
+      resolve: (value: unknown) => void;
+      remaining: number;
+      timer: ReturnType<typeof setTimeout>;
+    }
   >();
 
   ipcMain.on(
@@ -351,12 +355,14 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
       if (!entry) return;
       if (payload.result !== null && payload.result !== undefined) {
         pending.delete(payload.id);
+        clearTimeout(entry.timer);
         entry.resolve(payload.result);
         return;
       }
       entry.remaining -= 1;
       if (entry.remaining <= 0) {
         pending.delete(payload.id);
+        clearTimeout(entry.timer);
         entry.resolve(null);
       }
     },
@@ -374,7 +380,11 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
     if (windows.length === 0) return Promise.resolve(null);
     const id = ++nextId;
     return new Promise<T | null>((resolve) => {
+      const timer = setTimeout(() => {
+        if (pending.delete(id)) resolve(null);
+      }, timeoutMs);
       pending.set(id, {
+        timer,
         resolve: resolve as (value: unknown) => void,
         remaining: windows.length,
       });
@@ -385,9 +395,6 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
           params,
         });
       }
-      setTimeout(() => {
-        if (pending.delete(id)) resolve(null);
-      }, timeoutMs);
     });
   };
 
@@ -408,7 +415,11 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
     if (!target || target.isDestroyed()) return Promise.resolve(null);
     const id = ++nextId;
     return new Promise<T | null>((resolve) => {
+      const timer = setTimeout(() => {
+        if (pending.delete(id)) resolve(null);
+      }, timeoutMs);
       pending.set(id, {
+        timer,
         resolve: resolve as (value: unknown) => void,
         remaining: 1,
       });
@@ -417,9 +428,6 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
         method,
         params,
       });
-      setTimeout(() => {
-        if (pending.delete(id)) resolve(null);
-      }, timeoutMs);
     });
   };
 
@@ -807,36 +815,30 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
       if (signal?.aborted) return null;
       const id = ++nextId;
       const result = await new Promise<unknown>((resolve) => {
-        pending.set(id, {
-          resolve: resolve as (value: unknown) => void,
-          remaining: 1,
-        });
-        // askId rides along so a later cancel can name this exact card.
+        const finish = (value: unknown) => {
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", abort);
+          resolve(value);
+        };
+        const abort = () => {
+          if (!pending.delete(id)) return;
+          if (!target.isDestroyed()) {
+            target.webContents.send("catamorphic:bridge-request", {
+              id: ++nextId,
+              method: "toolPermissionCancel",
+              params: { askId: id },
+            });
+          }
+          finish(null);
+        };
+        const timer = setTimeout(abort, ELICIT_TIMEOUT_MS);
+        pending.set(id, { resolve: finish, remaining: 1, timer });
+        signal?.addEventListener("abort", abort, { once: true });
         target.webContents.send("catamorphic:bridge-request", {
           id,
           method: "toolPermission",
           params: { label, request, askId: id },
         });
-        const timer = setTimeout(() => {
-          if (pending.delete(id)) resolve(null);
-        }, ELICIT_TIMEOUT_MS);
-        signal?.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            if (!pending.delete(id)) return;
-            // Another surface answered first: withdraw the queued card.
-            if (!target.isDestroyed()) {
-              target.webContents.send("catamorphic:bridge-request", {
-                id: ++nextId,
-                method: "toolPermissionCancel",
-                params: { askId: id },
-              });
-            }
-            resolve(null);
-          },
-          { once: true },
-        );
       });
       if (result === null || result === undefined) return null;
       // Anything but a well-formed "allow" is a deny — a renderer error
@@ -941,6 +943,10 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
     },
     dispose() {
       hookServer.close();
+      for (const entry of pending.values()) {
+        clearTimeout(entry.timer);
+        entry.resolve(null);
+      }
       pending.clear();
       takenOver.clear();
       terminalKeys.clear();

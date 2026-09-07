@@ -123,6 +123,10 @@ export class FsOriginRepo implements OriginRepo {
     });
   }
 
+  async deleteRef(input: { ref: string }): Promise<void> {
+    await git.deleteRef({ fs: nodeFs, gitdir: this.gitdir, ref: input.ref });
+  }
+
   async hasObject(sha: string): Promise<boolean> {
     try {
       await git.readObject({ fs: nodeFs, gitdir: this.gitdir, oid: sha });

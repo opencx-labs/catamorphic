@@ -980,8 +980,29 @@ describe("ClaudeCodeAgentRuntime conformance", () => {
 });
 
 describe("ClaudeCodeAgentRuntime", () => {
+  it("excludes native execution and file mutation in plan mode", async () => {
+    const runtime = new ClaudeCodeAgentRuntime({ permissionMode: "plan" });
+    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
+    const session = await startSession(runtime);
+    await runtime.startTurn({
+      sessionId: session.sessionId,
+      message: { role: "user", content: "Inspect the project." },
+    });
+    expect(optionsFromLastQuery().disallowedTools).toEqual(
+      expect.arrayContaining([
+        "Bash",
+        "PowerShell",
+        "Monitor",
+        "Write",
+        "Edit",
+        "NotebookEdit",
+      ]),
+    );
+  });
+
   it("replaces Claude Code's private todo tool with the shared host list", async () => {
     const runtime = new ClaudeCodeAgentRuntime({
+      disableNativeMonitors: true,
       extraTools: [
         {
           name: "update_todo_list",
@@ -1000,6 +1021,8 @@ describe("ClaudeCodeAgentRuntime", () => {
     });
 
     expect(optionsFromLastQuery().disallowedTools).toContain("TodoWrite");
+    expect(optionsFromLastQuery().disallowedTools).toContain("Monitor");
+    expect(optionsFromLastQuery().disallowedTools).not.toContain("Bash");
   });
 
   it("continues durable event sequencing from the resume cursor", async () => {

@@ -165,19 +165,7 @@ export function BrowserScreen({
   // pointing at a page that was never asked to load.
   const pendingUrlRef = useRef<string | null>(null);
   const guestReadyRef = useRef(false);
-  // What the guest should believe about its visibility right now.
   const hiddenForGuest = !visible && !keepAwake;
-  const hiddenForGuestRef = useRef(hiddenForGuest);
-  hiddenForGuestRef.current = hiddenForGuest;
-  useEffect(() => {
-    const view = webviewRef.current;
-    if (!view || !guestReadyRef.current) return;
-    try {
-      view.send("catamorphic:host-visibility", { hidden: hiddenForGuest });
-    } catch {
-      // Guest not ready; dom-ready sends the current state.
-    }
-  }, [hiddenForGuest]);
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -257,7 +245,17 @@ export function BrowserScreen({
    * known URL. The only cure for a guest that never attached (silent
    * white tab) or whose renderer died.
    */
+  const recoveriesRef = useRef(0);
   const remountWebview = useCallback(() => {
+    if (++recoveriesRef.current > 2) {
+      setLoading(false);
+      setLoadError({
+        url: pageUrlRef.current,
+        description:
+          "This page repeatedly stopped responding. Reload to try again.",
+      });
+      return;
+    }
     guestReadyRef.current = false;
     const target = pendingUrlRef.current ?? pageUrlRef.current ?? null;
     pendingUrlRef.current = null;
@@ -269,8 +267,11 @@ export function BrowserScreen({
   }, []);
   const attachWatchdogRef = useRef<number | undefined>(undefined);
 
+  const guestListenersRef = useRef<AbortController | null>(null);
   const attachWebview = useCallback(
     (node: HTMLElement | null) => {
+      guestListenersRef.current?.abort();
+      guestListenersRef.current = null;
       const view = node as WebviewElement | null;
       webviewRef.current = view;
       if (!view) {
@@ -279,6 +280,10 @@ export function BrowserScreen({
         registerGuestRef.current?.(null);
         return;
       }
+      const listeners = new AbortController();
+      guestListenersRef.current = listeners;
+      const listen = (name: string, listener: EventListener) =>
+        view.addEventListener(name, listener, { signal: listeners.signal });
       // Watchdog: a webview that shows no sign of life (no attach, no
       // load start) within a beat never will — remount it. This is the
       // "type a URL, get a white tab, retry until it works" bug: the
@@ -288,15 +293,15 @@ export function BrowserScreen({
         alive = true;
         window.clearTimeout(attachWatchdogRef.current);
       };
-      view.addEventListener("did-attach", markAlive);
-      view.addEventListener("did-start-loading", markAlive);
+      listen("did-attach", markAlive);
+      listen("did-start-loading", markAlive);
       window.clearTimeout(attachWatchdogRef.current);
       attachWatchdogRef.current = window.setTimeout(() => {
         if (!alive) remountWebview();
       }, 1500);
       // A dead guest renderer leaves a frozen ghost — replace it.
-      view.addEventListener("render-process-gone", () => remountWebview());
-      view.addEventListener("did-fail-load", ((event: CustomEvent) => {
+      listen("render-process-gone", () => remountWebview());
+      listen("did-fail-load", ((event: CustomEvent) => {
         const { errorCode, errorDescription, validatedURL, isMainFrame } =
           event as unknown as {
             errorCode: number;
@@ -312,22 +317,13 @@ export function BrowserScreen({
           description: errorDescription || `Error ${errorCode}`,
         });
       }) as EventListener);
-      view.addEventListener("dom-ready", () => {
+      listen("dom-ready", () => {
+        markAlive();
         guestReadyRef.current = true;
         try {
           registerGuestRef.current?.(view.getWebContentsId());
         } catch {
           // Guest detached between events; the next dom-ready re-reports.
-        }
-        // Hidden-tab power hygiene: the page learns its real visibility
-        // (see preload/webview.ts) — parked tabs stop playing video and
-        // polling at full rate, like Chrome background tabs.
-        try {
-          view.send("catamorphic:host-visibility", {
-            hidden: hiddenForGuestRef.current,
-          });
-        } catch {
-          // Guest gone mid-call; the next dom-ready re-sends.
         }
         // Navigations that arrived while the guest couldn't take them.
         const pending = pendingUrlRef.current;
@@ -338,7 +334,7 @@ export function BrowserScreen({
           });
         }
       });
-      view.addEventListener("ipc-message", ((event: CustomEvent) => {
+      listen("ipc-message", ((event: CustomEvent) => {
         const message = event as unknown as {
           channel: string;
           args: Array<{ direction?: "back" | "forward" }>;
@@ -362,12 +358,12 @@ export function BrowserScreen({
         });
       };
 
-      view.addEventListener("did-start-loading", () => {
+      listen("did-start-loading", () => {
         setLoading(true);
         setLoadError(null);
       });
-      view.addEventListener("did-stop-loading", () => setLoading(false));
-      view.addEventListener("did-navigate", ((event: CustomEvent) => {
+      listen("did-stop-loading", () => setLoading(false));
+      listen("did-navigate", ((event: CustomEvent) => {
         const { url } = event as unknown as { url: string };
         setPageUrl(url);
         setInputValue(url);
@@ -386,7 +382,7 @@ export function BrowserScreen({
           title: view.getTitle() || url,
         });
       }) as EventListener);
-      view.addEventListener("did-navigate-in-page", ((event: CustomEvent) => {
+      listen("did-navigate-in-page", ((event: CustomEvent) => {
         const { url, isMainFrame } = event as unknown as {
           url: string;
           isMainFrame: boolean;
@@ -402,7 +398,7 @@ export function BrowserScreen({
           title: view.getTitle() || url,
         });
       }) as EventListener);
-      view.addEventListener("page-title-updated", ((event: CustomEvent) => {
+      listen("page-title-updated", ((event: CustomEvent) => {
         const { title } = event as unknown as { title: string };
         pageTitleRef.current = title;
         report({ title });
@@ -412,7 +408,7 @@ export function BrowserScreen({
           title,
         });
       }) as EventListener);
-      view.addEventListener("page-favicon-updated", ((event: CustomEvent) => {
+      listen("page-favicon-updated", ((event: CustomEvent) => {
         const { favicons } = event as unknown as { favicons: string[] };
         const nextFavicon = favicons[0] ?? null;
         setFaviconUrl(nextFavicon);
@@ -450,6 +446,7 @@ export function BrowserScreen({
     (raw: string) => {
       if (!raw.trim()) return;
       const url = resolveInput(raw);
+      recoveriesRef.current = 0;
       setEditing(false);
       setSuggestions([]);
       setPageUrl(url);
@@ -495,6 +492,7 @@ export function BrowserScreen({
 
   // Chrome reloads: Cmd+R, Cmd+Shift+R (hard, cache-ignoring).
   const reload = useCallback((hard: boolean) => {
+    recoveriesRef.current = 0;
     const view = webviewRef.current;
     if (!view) return;
     if (hard) view.reloadIgnoringCache();
@@ -977,7 +975,11 @@ export function BrowserScreen({
             className="absolute inset-0"
             // Required: webview is display:inline-block by default and
             // collapses to 0×0 inside flex/absolute layouts without this.
-            style={{ width: "100%", height: "100%" }}
+            style={{
+              width: "100%",
+              height: "100%",
+              display: hiddenForGuest ? "none" : "flex",
+            }}
           />
         ) : firstUrl ? (
           <div className="h-full bg-bg" />
@@ -996,7 +998,10 @@ export function BrowserScreen({
               </p>
               <button
                 type="button"
-                onClick={() => navigate(loadError.url)}
+                onClick={() => {
+                  recoveriesRef.current = 0;
+                  remountWebview();
+                }}
                 className="mt-4 inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md bg-accent px-3 text-[12px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90"
               >
                 <RotateCw className="size-3" />
