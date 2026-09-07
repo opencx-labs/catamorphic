@@ -235,7 +235,9 @@ separately and awaits their callbacks, escalating a stubborn shell within a
 bounded deadline. Electron must not free its Node environment while node-pty
 still has pending exit callbacks. Tests assert process exit status as well as
 UI behavior; a teardown crash is a failed test, never a successful run with a
-suppressed macOS alert.
+suppressed macOS alert. The embedded HTTP server closes remaining connections
+after the windows close, so unfinished renderer requests cannot block the
+subsequent database flush.
 
 ### 2026-09-07: Workflow authoring belongs to the host
 

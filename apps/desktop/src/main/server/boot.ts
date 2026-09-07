@@ -933,6 +933,9 @@ export async function startEmbeddedServer(
   const app: FastifyInstance = Fastify({
     logger: { level: "warn" },
     bodyLimit: 96 * 1024 * 1024,
+    // Windows are already closed at shutdown. Remaining Chromium requests
+    // must not keep HTTP close (and therefore the database flush) waiting.
+    forceCloseConnections: true,
   });
   registerWorkspaceMcpRoute(
     app,

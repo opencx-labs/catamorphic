@@ -127,7 +127,9 @@ streamed preamble messages, and the ask_user question panel.
   macOS crash alerts or disable CrashReporter to make tests quiet. Terminal
   shutdown tracks native exits independently of tabs and waits for callbacks
   before Electron frees its Node environment. `e2e/shutdown.e2e.ts` covers
-  repeated teardown with live and just-closed terminals.
+  repeated teardown with live and just-closed terminals and an unfinished HTTP
+  request. The desktop Fastify host uses `forceCloseConnections: true` so its
+  HTTP close cannot strand the database flush.
 - Tests within the file run in order and share one app instance — later
   groups assume the project created in "first launch" exists.
 - The fake agent (`src/main/server/e2e-fakes.ts`) is prompt-keyed: "ask
