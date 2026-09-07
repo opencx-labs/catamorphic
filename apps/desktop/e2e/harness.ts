@@ -326,11 +326,35 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
 
   const send = (method: string, params?: unknown): Promise<unknown> => {
     const id = nextId++;
-    ws.send(JSON.stringify({ id, method, params }));
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      const timeout = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`CDP ${method} did not respond within 60 seconds`));
+      }, 60_000);
+      pending.set(id, {
+        resolve: (value) => {
+          clearTimeout(timeout);
+          resolve(value);
+        },
+        reject: (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        },
+      });
+      try {
+        ws.send(JSON.stringify({ id, method, params }));
+      } catch (error) {
+        pending.delete(id);
+        clearTimeout(timeout);
+        reject(error);
+      }
     });
   };
+  ws.addEventListener("close", () => {
+    for (const waiter of pending.values())
+      waiter.reject(new Error("CDP connection closed before the response"));
+    pending.clear();
+  });
 
   await send("Runtime.enable");
   // Frame targets only need Runtime; Page powers the window screenshot.

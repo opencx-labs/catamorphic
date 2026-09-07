@@ -1361,7 +1361,6 @@ describe("agents and profiles", () => {
       `return !!$('[data-point-key="workflow:linkedWorkflow"]') && !!$('.react-flow__node');`,
       { label: "linked workflow graph" },
     );
-    await app.screenshot("/tmp/catamorphic-polish-graph.png");
 
     await run(
       `byText('a', 'Open linked app').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true })); return true;`,
@@ -1376,7 +1375,6 @@ describe("agents and profiles", () => {
       `return $$('webview').some((view) => (view.getAttribute('src') ?? '').startsWith('file:') && (view.getAttribute('src') ?? '').includes('artifact.pdf'));`,
       { label: "linked PDF browser" },
     );
-    await app.screenshot("/tmp/catamorphic-polish-links.png");
   });
   it("shows the shared session inspector and explains unavailable server moves", async () => {
     await run(
@@ -1398,7 +1396,6 @@ describe("agents and profiles", () => {
       { label: "disabled move explanation" },
     );
 
-    await app.screenshot("/tmp/catamorphic-polish-inspector.png");
     await run(`pressKey('Escape'); return true;`);
   });
 });
