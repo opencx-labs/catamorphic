@@ -262,6 +262,7 @@ export function EditorScreen({
         {draft !== undefined && (
           <button
             type="button"
+            data-testid="editor-save"
             onClick={() => saveRef.current()}
             disabled={writeFile.isPending}
             data-disabled-reason="Saving this file"
