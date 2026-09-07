@@ -11,6 +11,13 @@ describe("terminal shutdown", () => {
     "exits cleanly with live and just-closed terminals (%i)",
     async () => {
       app = await launchApp();
+      await app.eval(`window.catamorphicDesktop.createProject({
+        name: 'shutdown-recovery',
+        rootPath: ${JSON.stringify(`${app.userDataDir}/shutdown-recovery`)}
+      })`);
+      const { userDataDir } = app;
+      await app.kill();
+      app = await launchApp({ userDataDir });
       await app.eval(`(async () => {
       const desktop = window.catamorphicDesktop;
       const terminals = await Promise.all(Array.from({length: 3}, () => desktop.terminalCreate({})));
