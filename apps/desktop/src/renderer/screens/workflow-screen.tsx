@@ -481,6 +481,7 @@ function WorkflowWorkbench({
                         setBuffer((current) => ({ ...current, code }));
                       }}
                       path={`file:///${projectId}/${filePath}`}
+                      fontFamily={theme?.fonts.mono}
                       theme={
                         theme?.appearance === "light" ? "light" : "vs-dark"
                       }

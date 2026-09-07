@@ -262,6 +262,7 @@ export function EditorScreen({
         {draft !== undefined && (
           <button
             type="button"
+            data-testid="editor-save"
             onClick={() => saveRef.current()}
             disabled={writeFile.isPending}
             data-disabled-reason="Saving this file"
@@ -344,6 +345,7 @@ export function EditorScreen({
               lineNumbers: "on",
               minimap: { enabled: false },
               fontSize: 13,
+              fontFamily: theme?.fonts.mono,
               tabSize: 2,
               scrollBeyondLastLine: false,
               automaticLayout: true,

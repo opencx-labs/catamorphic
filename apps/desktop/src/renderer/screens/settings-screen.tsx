@@ -12,6 +12,10 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ACTION_LABELS, KEYBINDING_ACTIONS } from "../../shared/actions.js";
+import {
+  DEFAULT_THEME_FONTS,
+  isValidFontStack,
+} from "../../shared/theme-fonts.js";
 import { PendingButton } from "../components/pending-button.js";
 import {
   type AgentHarness,
@@ -497,6 +501,7 @@ function ThemeSection() {
             type="button"
             onClick={() =>
               void desktopApi.setTheme({
+                fonts: theme.fonts,
                 selection: theme.selection,
                 overrides: {},
               })
@@ -512,7 +517,11 @@ function ThemeSection() {
       <button
         type="button"
         onClick={() =>
-          void desktopApi.setTheme({ selection: "system", overrides: {} })
+          void desktopApi.setTheme({
+            selection: "system",
+            overrides: {},
+            fonts: theme.fonts,
+          })
         }
         aria-pressed={systemSelected}
         className={`mb-2 flex w-full cursor-pointer items-center gap-2.5 rounded-lg border p-2.5 text-left transition-colors duration-150 ${
@@ -551,6 +560,7 @@ function ThemeSection() {
               type="button"
               onClick={() =>
                 void desktopApi.setTheme({
+                  fonts: theme.fonts,
                   selection: preset.id,
                   overrides: {},
                 })
@@ -618,6 +628,7 @@ function ThemeSection() {
                   value={toHex6(theme.colors[token])}
                   onChange={(event) =>
                     void desktopApi.setTheme({
+                      fonts: theme.fonts,
                       selection: theme.selection,
                       overrides: {
                         ...theme.overrides,
@@ -633,6 +644,70 @@ function ThemeSection() {
           ))}
         </div>
       )}
+
+      <div className="mt-4 flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xs font-medium">Fonts</h3>
+          {(theme.fonts.sans !== DEFAULT_THEME_FONTS.sans ||
+            theme.fonts.mono !== DEFAULT_THEME_FONTS.mono) && (
+            <button
+              type="button"
+              className="cursor-pointer text-xs text-fg-muted hover:text-fg"
+              onClick={() =>
+                void desktopApi.setTheme({
+                  selection: theme.selection,
+                  overrides: theme.overrides,
+                })
+              }
+            >
+              Reset fonts
+            </button>
+          )}
+        </div>
+        {(["sans", "mono"] as const).map((token) => (
+          <label
+            key={token}
+            className="flex flex-col gap-1 text-xs text-fg-muted"
+          >
+            {token === "sans" ? "Interface font" : "Monospace font"}
+            <input
+              key={theme.fonts[token]}
+              type="text"
+              defaultValue={theme.fonts[token]}
+              placeholder={DEFAULT_THEME_FONTS[token]}
+              spellCheck={false}
+              maxLength={200}
+              className="field h-8 w-full px-2 text-xs text-fg"
+              onChange={(event) => event.currentTarget.setCustomValidity("")}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") event.currentTarget.blur();
+              }}
+              onBlur={(event) => {
+                const value = event.currentTarget.value.trim();
+                if (value && !isValidFontStack(value)) {
+                  event.currentTarget.setCustomValidity(
+                    "Enter font names separated by commas, such as Arial, sans-serif.",
+                  );
+                  event.currentTarget.reportValidity();
+                  return;
+                }
+                const font = value || DEFAULT_THEME_FONTS[token];
+                event.currentTarget.value = font;
+                if (font === theme.fonts[token]) return;
+                void desktopApi.setTheme({
+                  selection: theme.selection,
+                  overrides: theme.overrides,
+                  fonts: { ...theme.fonts, [token]: font },
+                });
+              }}
+            />
+          </label>
+        ))}
+        <p className="text-xs text-fg-faint">
+          Use installed font names with comma-separated fallbacks. Press Enter
+          or leave the field to apply. Clear a field to restore its default.
+        </p>
+      </div>
 
       <p className="mt-2 text-xs text-fg-faint">
         Changes apply immediately. Also editable as JSON at{" "}

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { DEFAULT_THEME_FONTS } from "../shared/theme-fonts.js";
 import { ProfileConfigManager } from "./profile-config.js";
 import { ProfilesStore } from "./profiles.js";
 import type { DataPaths } from "./server/paths.js";
@@ -23,6 +24,56 @@ afterEach(() => {
 });
 
 describe("desktop theme", () => {
+  it("persists font choices and restores omitted fonts to their defaults", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cat-theme-"));
+    temporaryDirectories.push(directory);
+    const store = new ThemeStore(path.join(directory, "theme.json"));
+    store.save({
+      selection: "paper",
+      overrides: { accent: "#123456" },
+      fonts: { sans: "  Arial, sans-serif  ", mono: "Menlo, monospace" },
+    });
+    expect(store.resolved()).toMatchObject({
+      colors: { accent: "#123456" },
+      fonts: { sans: "Arial, sans-serif", mono: "Menlo, monospace" },
+    });
+    store.save({ ...store.load(), fonts: { mono: "Menlo, monospace" } });
+    expect(store.resolved().fonts).toEqual({
+      sans: DEFAULT_THEME_FONTS.sans,
+      mono: "Menlo, monospace",
+    });
+    store.save({ selection: "system", overrides: {} });
+    expect(store.resolved().fonts).toEqual(DEFAULT_THEME_FONTS);
+  });
+
+  it.each([
+    "",
+    "  ",
+    42,
+    null,
+    "Arial; color:red",
+    "</style>",
+    "url(font.woff2)",
+    "var(--font)",
+    "Arial,",
+    "x".repeat(201),
+  ])(
+    "drops invalid font values without losing valid colors or the other font: %s",
+    (sans) => {
+      expect(
+        normalizeTheme({
+          selection: "light",
+          overrides: { accent: "#123456" },
+          fonts: { sans, mono: '"SF Mono", monospace', unknown: "Arial" },
+        }),
+      ).toEqual({
+        selection: "light",
+        overrides: { accent: "#123456" },
+        fonts: { mono: '"SF Mono", monospace' },
+      });
+    },
+  );
+
   it("uses the system selection when no profile preference exists", () => {
     expect(DEFAULT_THEME).toEqual({ selection: "system", overrides: {} });
 
