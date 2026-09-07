@@ -1,4 +1,4 @@
-import type { AgentEvent } from "../types.js";
+import type { AgentEvent, SandboxProvider } from "../types.js";
 import type { McpToolPolicyLayers } from "./tool-policy.js";
 
 /**
@@ -33,6 +33,8 @@ export interface AttachedPluginForAgent {
 }
 
 export interface StartSessionOpts {
+  /** Host-only runtime selected by the Allocation. Never serialized on the wire. */
+  sandboxProvider?: SandboxProvider;
   projectId: string;
   userId: string;
   sandboxId: string;

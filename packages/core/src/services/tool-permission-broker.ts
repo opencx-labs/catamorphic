@@ -4,6 +4,7 @@ import type {
   ToolPermissionHandler,
   ToolPermissionRequest,
 } from "@catamorphic/sandbox";
+import type { Identity } from "../identity.js";
 
 /**
  * The host-side answer to a tool-permission "ask" (ADR 0054) for hosts
@@ -30,6 +31,25 @@ export interface PendingToolPermission {
 }
 
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;
+
+/** Hosts can use memory or durable request storage behind the same UI routes. */
+export interface ToolPermissionChannel {
+  handlerFor(agentLabel?: string): ToolPermissionHandler;
+  list(
+    sessionId?: string,
+  ): PendingToolPermission[] | Promise<PendingToolPermission[]>;
+  get(
+    id: string,
+  ):
+    | PendingToolPermission
+    | undefined
+    | Promise<PendingToolPermission | undefined>;
+  answer(
+    id: string,
+    decision: ToolPermissionDecision,
+    identity?: Identity,
+  ): boolean | Promise<boolean>;
+}
 
 export class ToolPermissionBroker {
   private readonly pending = new Map<

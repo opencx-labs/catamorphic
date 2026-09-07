@@ -136,6 +136,12 @@ export class AgentRuntimeRequestsService {
             .where("session_id", "=", args.sessionId)
             .where("request_id", "=", args.requestId)
             .where("status", "=", "pending")
+            .where((eb) =>
+              eb.or([
+                eb("expires_at", "is", null),
+                eb("expires_at", ">", sql<Date>`now()`),
+              ]),
+            )
             .returning("request_id")
             .executeTakeFirst();
           if (!resolved) {

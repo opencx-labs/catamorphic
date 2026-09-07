@@ -15,11 +15,11 @@ lifecycle, and deployment.
 ## Basic Usage
 
 ```typescript
+import { useState } from "react";
 import { WorkflowEditor } from "@catamorphic/ui";
 import { useOnParse, useTriggerRun } from "@catamorphic/react";
-import "@catamorphic/ui/styles.css";
 
-function MyApp({ projectId, workflowName, files }) {
+function MyApp({ projectId, workflowName, files, initialCode }) {
   const [code, setCode] = useState(initialCode);
   const onParse = useOnParse({ files, workflowName });
   const triggerRun = useTriggerRun({ projectId, workflowName });
@@ -54,6 +54,20 @@ function MyApp({ projectId, workflowName, files }) {
 - `executionState` — overlay execution status on nodes
 - `onRun` — callback for the Run button
 - `nodeRenderers` — custom React components for node types
+
+## Styles
+
+For Tailwind hosts, import the UI stylesheet from the **same CSS entry** as
+Tailwind so its packaged component classes are included:
+
+```css
+@import "tailwindcss";
+@import "@catamorphic/ui/styles.css";
+```
+
+A separate JavaScript stylesheet import does not register these class sources
+with the host's Tailwind compilation. Shared controls use the host's theme tokens;
+headless hooks remain independent of Tailwind.
 
 ## Customization
 
@@ -113,8 +127,16 @@ Role access is not unattended-run consent. Use
 agent, Environment, and connection requirements; create the enablement with
 the returned consent digest only after confirmation. Use
 `useWorkflowEnablements` and `useUpdateWorkflowEnablement` for disable,
-reenable, and deployment-update flows. Connecting an account may complete a
-pending enablement but must never enable every compatible workflow by itself.
+reenable, and deployment-update flows. Connecting an account returns the user to the pending review. Require an
+explicit confirmation of the reviewed deployment and connections before enabling
+it; never enable other compatible workflows implicitly.
+
+Compose `ProjectWorkflows` or `WorkflowReview` for members. These use scoped
+deployed graphs without fetching builder source. The shared
+`WorkflowEnablementPanel` is consent UI; the authoring inspector stays host-owned.
+Use `useAgentCatalog` and `useEnvironments` for permitted committed agents,
+defaults, and execution choices. Pass a custom `authorizationRedirectUri` on
+`CatamorphicProvider` when mounting the API under a different prefix.
 
 See [`INTEGRATION.md`](../../../INTEGRATION.md) for the end-to-end wiring example.
 

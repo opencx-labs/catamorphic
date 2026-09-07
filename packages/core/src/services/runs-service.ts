@@ -25,6 +25,7 @@ import {
 } from "@catamorphic/sandbox";
 import type { Kysely, Selectable } from "kysely";
 import type { Identity } from "../identity.js";
+import { allocationSandboxProvider } from "./allocation-sandbox-provider.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 import {
   AccessDeniedError,
@@ -1537,27 +1538,42 @@ export class RunsService {
     if (allocation?.status !== "active") {
       throw new Error("Workflow Allocation is unavailable");
     }
-    const existing = this.environmentRuntimes.get(allocation.bindingId);
-    if (existing) return existing;
+    const existing = this.environmentRuntimes.get(allocation.id);
     const binding = await this.deps.executionEnvironments.getRuntimeBinding({
       identity: args.identity,
       bindingId: allocation.bindingId,
     });
-    const provider = binding?.sandboxProvider;
+    const baseProvider = binding?.sandboxProvider;
+    const provider =
+      baseProvider && allocation.workerNodeId
+        ? allocationSandboxProvider({
+            db: this.db,
+            allocation,
+            provider: baseProvider,
+            workerLeaseToken: binding?.workerLeaseToken,
+          })
+        : baseProvider;
     if (!provider?.deploymentRuntime) {
       throw new SandboxProviderNotConfiguredError();
     }
+    if (existing) return existing;
     const runtime = new EnvironmentDeploymentRuntimeService(
-      new KyselyDeploymentRuntimeStore(this.db, allocation.bindingId),
+      new KyselyDeploymentRuntimeStore(this.db, allocation.id),
       {
         provider,
+        resources: {
+          cpuMillis: allocation.policy.requirements.resources?.cpuMillis,
+          memoryMb: allocation.policy.requirements.resources?.memoryMb,
+          storageMb: allocation.policy.requirements.resources?.storageMb,
+          gpu: allocation.policy.requirements.resources?.gpu,
+        },
         artifacts: this.deps.deploymentArtifacts,
         maxConcurrency: this.deps.deploymentRuntimeOptions?.maxConcurrency,
         autoStopMinutes: this.deps.deploymentRuntimeOptions?.autoStopMinutes,
       },
     );
     const selected = { provider, runtime };
-    this.environmentRuntimes.set(allocation.bindingId, selected);
+    this.environmentRuntimes.set(allocation.id, selected);
     return selected;
   }
 
@@ -1721,6 +1737,7 @@ export class RunsService {
             environmentName: admission.environmentName,
             workloadKind: "workflow",
             rootWorkloadId: runId,
+            workerNodeId: admission.runtime.workerNodeId,
             policy: {
               binding: admission.binding,
               requirements: admission.effectiveRequirements,

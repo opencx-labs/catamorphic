@@ -178,13 +178,10 @@ export class StockAdmissionService {
     if (!invitation) {
       throw new Error("This invitation is no longer available");
     }
-    const recoveringClaim =
-      invitation.redeemed_at !== null &&
-      invitation.redeemed_by_external_user_id === input.user.id;
-    if (invitation.redeemed_at && !recoveringClaim) {
+    if (invitation.redeemed_at) {
       throw new Error("This invitation is no longer available");
     }
-    if (!recoveringClaim && invitation.expires_at.getTime() <= Date.now()) {
+    if (invitation.expires_at.getTime() <= Date.now()) {
       throw new Error("This invitation has expired");
     }
     if (
@@ -200,42 +197,49 @@ export class StockAdmissionService {
       projectId: input.projectId,
       roles,
     });
-    const claimedAt = recoveringClaim ? invitation.redeemed_at : new Date();
-    if (!recoveringClaim) {
-      const claimed = await this.services.db
+    // Claim and membership must commit together. A consumed invitation with
+    // no membership means access was revoked, never an interrupted signup.
+    // Keep an independently assigned membership when admission races a manager.
+    return this.services.db.transaction().execute(async (transaction) => {
+      const claimed = await transaction
         .updateTable("stock_project_invitations")
         .set({
           redeemed_by_external_user_id: input.user.id,
-          redeemed_at: claimedAt,
+          redeemed_at: new Date(),
         })
         .where("id", "=", input.invitationId)
         .where("redeemed_at", "is", null)
+        .where("expires_at", ">", new Date())
         .returning("id")
         .executeTakeFirst();
       if (!claimed) throw new Error("This invitation is no longer available");
-    }
-    try {
-      return await this.grant({
-        projectId: input.projectId,
-        userId: input.user.id,
-        roles,
-        grants: grantsObject(invitation.grants),
-      });
-    } catch (error) {
-      if (!recoveringClaim) {
-        await this.services.db
-          .updateTable("stock_project_invitations")
-          .set({
-            redeemed_by_external_user_id: null,
-            redeemed_at: null,
-          })
-          .where("id", "=", input.invitationId)
-          .where("redeemed_by_external_user_id", "=", input.user.id)
-          .where("redeemed_at", "=", claimedAt)
-          .execute();
-      }
-      throw error;
-    }
+      await transaction
+        .insertInto("memberships")
+        .values({
+          project_id: input.projectId,
+          external_user_id: input.user.id,
+          roles: JSON.stringify(roles),
+          grants: JSON.stringify(grantsObject(invitation.grants)),
+        })
+        .onConflict((conflict) =>
+          conflict.columns(["project_id", "external_user_id"]).doNothing(),
+        )
+        .execute();
+      const row = await transaction
+        .selectFrom("memberships")
+        .where("project_id", "=", input.projectId)
+        .where("external_user_id", "=", input.user.id)
+        .selectAll()
+        .executeTakeFirstOrThrow();
+      return {
+        projectId: row.project_id,
+        externalUserId: row.external_user_id,
+        roles: stringArray(row.roles),
+        grants: grantsObject(row.grants),
+        createdAt: row.created_at.toISOString(),
+        updatedAt: row.updated_at.toISOString(),
+      };
+    });
   }
 
   async join(input: {

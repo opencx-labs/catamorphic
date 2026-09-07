@@ -15,6 +15,15 @@ Catamorphic always lives in its own `catamorphic` schema (hosts mount it inside 
 
 ## Connection
 
+[ADR 0099](../../../docs/decisions/0099-shared-postgres-server-environments.md)
+requires network Postgres for managed multi-instance deployments. PGlite remains
+standalone, never concurrently opened as a shared cluster database. Durable
+coordination belongs in the same schema-scoped Postgres using claims, leases,
+and fencing. Distinguish shared authority from individual instance identity.
+Database configuration alone does not coordinate files, vaults, or live runtimes;
+see the [cluster setup reference](../../../skills/setup-catamorphic-server/references/cluster-deployment.md)
+for current gaps. Verify migration coordination before concurrent replica boot.
+
 Two supported shapes (see `docs/decisions/0003`):
 
 ```typescript
@@ -111,3 +120,10 @@ const runs = await db
   .execute();
 // row type: Selectable<DB["workflow_runs"]>
 ```
+
+Managed workspace budgets live on `worker_nodes`; durable reservations and
+sandbox ownership live on `execution_allocations` (ADR 0100). Lock the node row
+before checking aggregate reservations and inserting an allocation in the same
+transaction. `status = released` retires work, while `capacity_released_at` means
+physical teardown was confirmed. Do not collapse those two states or reclaim
+capacity from expired leases alone.

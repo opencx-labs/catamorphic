@@ -78,6 +78,10 @@ roles decide what each member and agent may do.
 
 The zero-service setup keeps PGlite, git origins, credentials, and project data
 under one data directory. A deployment can opt into real Postgres as it grows.
+The accepted multi-machine architecture uses server instances sharing one
+Postgres and one authority, with machines exposed as permitted Environments.
+Postgres mode shares origins, artifacts, credentials, auth, and leased execution. See
+[the machine setup and recovery model](skills/setup-catamorphic-server/references/cluster-deployment.md).
 The stock host is single-tenant because its local-process execution can access
 the host machine. Run one trusted organization or household per deployment.
 See [the server guide](apps/server/README.md) or give an agent

@@ -1037,7 +1037,7 @@ export function App() {
 
   // Project policy (ADR 0062): the committed manifest may disable
   // incognito sessions for this project's members.
-  const [incognitoAllowed, setIncognitoAllowed] = useState(true);
+  const [incognitoAllowed, setIncognitoAllowed] = useState(false);
   const [startingActions, setStartingActions] = useState<
     Array<{ label: string; prompt: string; agentId?: string }>
   >([]);
@@ -1047,7 +1047,7 @@ export function App() {
       return;
     }
     setStartingActions([]);
-    setIncognitoAllowed(true);
+    setIncognitoAllowed(false);
     let cancelled = false;
     void Promise.allSettled([
       desktopApi.projectAllowIncognito(projectId),
@@ -1055,7 +1055,7 @@ export function App() {
     ]).then(([allowed, actions]) => {
       if (cancelled) return;
       setIncognitoAllowed(
-        allowed.status === "fulfilled" ? allowed.value : true,
+        allowed.status === "fulfilled" ? allowed.value : false,
       );
       setStartingActions(actions.status === "fulfilled" ? actions.value : []);
     });

@@ -105,6 +105,73 @@ export class ProjectManager {
     return repo;
   }
 
+  /** A recoverable session checkout; its branch never publishes project policy. */
+  async openSession(args: {
+    tenantId: string;
+    projectId: string;
+    sessionId: string;
+    refresh?: boolean;
+  }): Promise<ProjectRepo> {
+    const userId = `session-${args.sessionId}`;
+    const existed = await this.storage.exists(
+      args.tenantId,
+      args.projectId,
+      userId,
+    );
+    const repo = await this.openDev(args.tenantId, args.projectId, userId);
+    try {
+      if (this.remote && (!existed || args.refresh)) {
+        const { fetchRemote } = await import("./git-sync.js");
+        const fetched = await fetchRemote({
+          dev: repo,
+          remote: this.remote,
+          tenantId: args.tenantId,
+          projectId: args.projectId,
+          remoteBranch: `sessions/${args.sessionId}`,
+        });
+        if (fetched.sha && fetched.sha !== (await repo.resolveRef("HEAD"))) {
+          if ((await repo.status()).dirty)
+            throw new Error(
+              "Session has uncheckpointed work on this machine. Recover it before moving the session.",
+            );
+          await repo.moveBranch("main", fetched.sha);
+          await repo.checkout("main");
+        }
+      }
+      return repo;
+    } catch (error) {
+      await repo.dispose();
+      throw error;
+    }
+  }
+
+  async checkpointSession(args: {
+    tenantId: string;
+    projectId: string;
+    sessionId: string;
+    message: string;
+    author: { name: string; email: string };
+  }): Promise<string> {
+    const repo = await this.openSession(args);
+    try {
+      const sha = (await repo.status()).dirty
+        ? await repo.commit(args.message, args.author)
+        : await repo.resolveRef("HEAD");
+      if (this.remote)
+        await push({
+          dev: repo,
+          remote: this.remote,
+          tenantId: args.tenantId,
+          projectId: args.projectId,
+          remoteBranch: `sessions/${args.sessionId}`,
+          localSha: sha,
+        });
+      return sha;
+    } finally {
+      await repo.dispose();
+    }
+  }
+
   async create(
     tenantId: string,
     projectId: string,

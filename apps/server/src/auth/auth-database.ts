@@ -60,7 +60,20 @@ async function openPostgresAuthDatabase(
   }
   const bootstrap = new Pool({ connectionString });
   try {
-    await bootstrap.query(`CREATE SCHEMA IF NOT EXISTS "${authSchema}"`);
+    const client = await bootstrap.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+        `catamorphic-auth:${authSchema}`,
+      ]);
+      await client.query(`CREATE SCHEMA IF NOT EXISTS "${authSchema}"`);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   } finally {
     await bootstrap.end();
   }
@@ -76,7 +89,20 @@ async function openPostgresAuthDatabase(
 
   return {
     database,
-    migrate: migrateBetterAuth,
+    migrate: async (args) => {
+      const client = await pool.connect();
+      try {
+        await client.query("SELECT pg_advisory_lock(hashtext($1))", [
+          `catamorphic-auth:${authSchema}`,
+        ]);
+        await migrateBetterAuth(args);
+      } finally {
+        await client.query("SELECT pg_advisory_unlock(hashtext($1))", [
+          `catamorphic-auth:${authSchema}`,
+        ]);
+        client.release();
+      }
+    },
     close: () => pool.end(),
   };
 }

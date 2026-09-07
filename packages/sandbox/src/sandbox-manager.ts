@@ -3,6 +3,7 @@ import type {
   SandboxHandle,
   SandboxManager,
   SandboxProvider,
+  SandboxResources,
   SandboxType,
 } from "./types.js";
 
@@ -41,17 +42,20 @@ interface SandboxManagerOpts {
   provider: SandboxProvider;
   store: SandboxStore;
   defaultSnapshotName?: string;
+  resources?: SandboxResources;
 }
 
 export class SandboxManagerImpl implements SandboxManager {
   private readonly provider: SandboxProvider;
   private readonly store: SandboxStore;
+  private readonly resources: SandboxResources | undefined;
   private readonly defaultSnapshotName: string | undefined;
 
   constructor(opts: SandboxManagerOpts) {
     this.provider = opts.provider;
     this.store = opts.store;
     this.defaultSnapshotName = opts.defaultSnapshotName;
+    this.resources = opts.resources;
   }
 
   async ensureExecSandbox(opts: {
@@ -146,6 +150,7 @@ export class SandboxManagerImpl implements SandboxManager {
   }): Promise<SandboxHandle> {
     const handle = await this.provider.createSandbox({
       snapshotName: this.defaultSnapshotName,
+      resources: this.resources,
       language: "typescript",
       autoStopInterval: opts.sandboxType === "dev" ? 30 : 15,
       labels: opts.labels,

@@ -192,15 +192,35 @@ export class WorkflowEnablementsService {
       remoteBranch: preview.remoteBranch,
       environment: preview.environment,
     });
-    const count = await this.db
+    const triggers = await this.db
       .selectFrom("trigger_definitions")
-      .select(({ fn }) => fn.countAll<string>().as("count"))
+      .select(["trigger_kind as kind", "config"])
       .where("project_id", "=", input.projectId)
       .where("commit_sha", "=", preview.commitSha)
       .where("workflow_name", "=", input.workflowName)
-      .executeTakeFirstOrThrow();
+      .execute();
+    const labels = connections.length
+      ? await this.db
+          .selectFrom("connections")
+          .select(["id", "label"])
+          .where("tenant_id", "=", input.identity.tenantId)
+          .where(
+            "id",
+            "in",
+            connections.map((connection) => connection.connectionId),
+          )
+          .execute()
+      : [];
     const consentDigest = workflowEnablementConsentDigest(preview);
-    return { ...preview, consentDigest, triggerCount: Number(count.count) };
+    return {
+      ...preview,
+      consentDigest,
+      triggerCount: triggers.length,
+      triggers,
+      connectionLabels: Object.fromEntries(
+        labels.map((connection) => [connection.id, connection.label]),
+      ),
+    };
   }
 
   async create(

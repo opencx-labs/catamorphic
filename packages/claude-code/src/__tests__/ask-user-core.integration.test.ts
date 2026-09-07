@@ -17,8 +17,6 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import {
   AgentSessionsService,
   type CodingAgentRegistry,
-  DbSandboxStore,
-  DevSandboxService,
   ExecutionAllocationsService,
   ExecutionEnvironmentsService,
   ProjectEnvironmentsService,
@@ -26,7 +24,6 @@ import {
 } from "@catamorphic/core";
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
-import type { SandboxProvider } from "@catamorphic/sandbox";
 import { sql } from "kysely";
 import { ClaudeCodeAgent } from "../claude-code-agent.js";
 
@@ -61,18 +58,6 @@ const identity = {
   tenantId: crypto.randomUUID(),
   externalUserId: "ask-user-tester",
 };
-
-/** Host-execution agents never touch the sandbox; fail loudly if one does. */
-const unusedSandboxProvider = new Proxy({} as SandboxProvider, {
-  get(_target, prop) {
-    if (prop === "workspaceRoot") return "/unused";
-    return () => {
-      throw new Error(
-        `SandboxProvider.${String(prop)} must not be called for host agents`,
-      );
-    };
-  },
-});
 
 const ASK_INPUT = {
   questions: [
@@ -149,15 +134,9 @@ describeIf("ask_user across ClaudeCodeAgent + AgentSessionsService", () => {
     sessions = new AgentSessionsService(db, {
       hostId: "ask-user-test-host",
       projectManager,
-      sandboxProvider: unusedSandboxProvider,
       codingAgents: registry,
       executionEnvironments,
       executionAllocations: new ExecutionAllocationsService(db),
-      devSandboxes: new DevSandboxService({
-        projectManager,
-        provider: unusedSandboxProvider,
-        store: new DbSandboxStore(db),
-      }),
       nativeAgentCheckout: { resolve: () => rootPath },
     });
   });

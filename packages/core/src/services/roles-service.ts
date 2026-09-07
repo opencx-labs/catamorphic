@@ -365,7 +365,11 @@ export class RolesService {
     for (const key of this.cache.keys()) {
       if (key.endsWith(`:${projectId}`)) {
         this.cache.delete(key);
-        forgetProgramFetch(key.slice(0, -projectId.length - 1), projectId);
+        forgetProgramFetch(
+          this.projectManager,
+          key.slice(0, -projectId.length - 1),
+          projectId,
+        );
       }
     }
   }

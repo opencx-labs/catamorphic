@@ -3,7 +3,7 @@ import type { DB } from "@catamorphic/db";
 import { DEFAULT_SCHEMA, migrateToLatest } from "@catamorphic/db";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
-import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
+import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SERVER_TENANT_ID } from "../server.js";
 import { StockAdmissionService } from "./admission-service.js";
@@ -121,16 +121,16 @@ describe("StockAdmissionService", () => {
     });
 
     expect(membership.externalUserId).toBe("ada-user");
-    expect(grant).toHaveBeenCalledWith({
-      identity: operatorIdentity,
-      projectId: PROJECT_ID,
-      externalUserId: "ada-user",
-      roles: ["member"],
-      grants: {},
-    });
+    expect(grant).not.toHaveBeenCalled();
+    const persisted = await db
+      .selectFrom("memberships")
+      .selectAll()
+      .where("external_user_id", "=", "ada-user")
+      .executeTakeFirstOrThrow();
+    expect(persisted.roles).toEqual(["member"]);
   });
 
-  it("finishes granting an invitation claimed by the same user before a process exit", async () => {
+  it("does not restore revoked membership through a redeemed invitation", async () => {
     const { admission, grant } = service();
     await admission.setPolicy({
       identity: operatorIdentity,
@@ -152,20 +152,140 @@ describe("StockAdmissionService", () => {
       .where("id", "=", invitation.id)
       .execute();
 
+    await expect(
+      admission.redeemInvitation({
+        projectId: PROJECT_ID,
+        invitationId: invitation.id,
+        user: {
+          id: "recovering-user",
+          email: "person@example.com",
+          emailVerified: true,
+        },
+      }),
+    ).rejects.toThrow("no longer available");
+    expect(grant).not.toHaveBeenCalled();
+  });
+
+  it("rolls back the invitation claim if storing membership fails, then allows retry", async () => {
+    const { admission } = service();
+    await admission.setPolicy({
+      identity: operatorIdentity,
+      projectId: PROJECT_ID,
+      mode: "invitation_only",
+      defaultRole: "member",
+      approvedDomains: [],
+    });
+    const invitation = await admission.createInvitation({
+      identity: operatorIdentity,
+      projectId: PROJECT_ID,
+    });
+    const input = {
+      projectId: PROJECT_ID,
+      invitationId: invitation.id,
+      user: { id: "ada", email: "ada@example.com", emailVerified: true },
+    };
+    await sql`ALTER TABLE ${sql.table(`${DEFAULT_SCHEMA}.memberships`)} ADD CONSTRAINT reject_test_member CHECK (external_user_id <> 'ada')`.execute(
+      db,
+    );
+    await expect(admission.redeemInvitation(input)).rejects.toThrow();
+    const unclaimed = await db
+      .selectFrom("stock_project_invitations")
+      .where("id", "=", invitation.id)
+      .selectAll()
+      .executeTakeFirstOrThrow();
+    expect(unclaimed.redeemed_at).toBeNull();
+    expect(unclaimed.redeemed_by_external_user_id).toBeNull();
+    await sql`ALTER TABLE ${sql.table(`${DEFAULT_SCHEMA}.memberships`)} DROP CONSTRAINT reject_test_member`.execute(
+      db,
+    );
+    const membership = await admission.redeemInvitation(input);
+    expect(membership.externalUserId).toBe("ada");
+    await db
+      .deleteFrom("memberships")
+      .where("external_user_id", "=", "ada")
+      .execute();
+    await expect(admission.redeemInvitation(input)).rejects.toThrow(
+      "no longer available",
+    );
+  });
+
+  it("admits exactly one of two concurrent recipients", async () => {
+    const { admission } = service();
+    await admission.setPolicy({
+      identity: operatorIdentity,
+      projectId: PROJECT_ID,
+      mode: "invitation_only",
+      defaultRole: "member",
+      approvedDomains: [],
+    });
+    const invitation = await admission.createInvitation({
+      identity: operatorIdentity,
+      projectId: PROJECT_ID,
+    });
+    const results = await Promise.allSettled(
+      ["ada", "grace"].map((id) =>
+        admission.redeemInvitation({
+          projectId: PROJECT_ID,
+          invitationId: invitation.id,
+          user: { id, email: `${id}@example.com`, emailVerified: true },
+        }),
+      ),
+    );
+    expect(
+      results.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    const members = await db.selectFrom("memberships").selectAll().execute();
+    expect(members).toHaveLength(1);
+    const claimed = await db
+      .selectFrom("stock_project_invitations")
+      .where("id", "=", invitation.id)
+      .selectAll()
+      .executeTakeFirstOrThrow();
+    expect(claimed.redeemed_by_external_user_id).toBe(
+      members[0]?.external_user_id,
+    );
+  });
+
+  it("preserves membership assigned after the initial admission lookup", async () => {
+    const { admission, get } = service();
+    await admission.setPolicy({
+      identity: operatorIdentity,
+      projectId: PROJECT_ID,
+      mode: "invitation_only",
+      defaultRole: "member",
+      approvedDomains: [],
+    });
+    const invitation = await admission.createInvitation({
+      identity: operatorIdentity,
+      projectId: PROJECT_ID,
+    });
+    get.mockImplementationOnce(async () => {
+      await db
+        .insertInto("memberships")
+        .values({
+          project_id: PROJECT_ID,
+          external_user_id: "ada",
+          roles: JSON.stringify(["reviewer"]),
+          grants: JSON.stringify({ customer: ["acme"] }),
+        })
+        .execute();
+      return null;
+    });
     const membership = await admission.redeemInvitation({
       projectId: PROJECT_ID,
       invitationId: invitation.id,
-      user: {
-        id: "recovering-user",
-        email: "person@example.com",
-        emailVerified: true,
-      },
+      user: { id: "ada", email: "ada@example.com", emailVerified: true },
     });
-
-    expect(membership.externalUserId).toBe("recovering-user");
-    expect(grant).toHaveBeenCalledWith(
-      expect.objectContaining({ externalUserId: "recovering-user" }),
-    );
+    expect(membership.roles).toEqual(["reviewer"]);
+    expect(membership.grants).toEqual({ customer: ["acme"] });
+    get.mockResolvedValue(membership);
+    await expect(
+      admission.redeemInvitation({
+        projectId: PROJECT_ID,
+        invitationId: invitation.id,
+        user: { id: "ada", email: "ada@example.com", emailVerified: true },
+      }),
+    ).resolves.toEqual(membership);
   });
 
   it("admits a verified approved-domain user and rejects an unverified one", async () => {

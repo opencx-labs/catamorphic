@@ -1,3 +1,5 @@
+import type { ToolPermissionRequest } from "./tool-policy.js";
+
 /** Where a provider's agent loop runs. */
 export type AgentLoopPlacement = "control_plane" | "environment";
 
@@ -143,6 +145,7 @@ export interface AgentRuntimeRequestOrigin {
 
 export interface AgentApprovalRequest extends AgentRuntimeRequestBase {
   kind: "approval";
+  toolRequest?: ToolPermissionRequest;
   approval: {
     action: string;
     details?: string;
@@ -174,7 +177,7 @@ export interface AgentElicitationRequest extends AgentRuntimeRequestBase {
 }
 
 export type AgentRuntimeRequestResponse =
-  | { kind: "approval"; decision: "approved" | "denied" }
+  | { kind: "approval"; decision: "approved" | "denied"; remember?: "always" }
   | { kind: "question"; answers: readonly string[] }
   | {
       kind: "elicitation";

@@ -326,6 +326,33 @@ export interface BatchStepMembers {
   workflow_step_attempt_id: string;
 }
 
+export interface ClientRunnerJobs {
+  created_at: Generated<Timestamp>;
+  error: string | null;
+  expires_at: Timestamp;
+  id: Generated<string>;
+  lease_token: string;
+  operation: Json;
+  response: Json | null;
+  runner_id: string;
+  status: Generated<string>;
+}
+
+export interface ClientRunners {
+  environment_name: string;
+  external_user_id: string;
+  id: string;
+  isolation: Generated<string>;
+  label: string;
+  lease_expires_at: Timestamp;
+  lease_token: string;
+  project_id: string;
+  resource_limits: Generated<Json>;
+  tenant_id: string;
+  updated_at: Generated<Timestamp>;
+  workspace_root: Generated<string>;
+}
+
 export interface ConnectionActionRequirements {
   alias: string;
   allocation_id: string;
@@ -454,13 +481,18 @@ export interface EnvironmentConnectionBindings {
 
 export interface ExecutionAllocations {
   binding_id: string;
+  capacity_released_at: Timestamp | null;
   created_at: Generated<Timestamp>;
   environment_name: string;
   id: Generated<string>;
   policy_snapshot: Json;
   project_id: string;
   released_at: Timestamp | null;
+  reserved_cpu_millis: Generated<number>;
+  reserved_memory_mb: Generated<number>;
   root_workload_id: string;
+  sandbox_creation_started: Generated<boolean>;
+  sandbox_provider_id: string | null;
   status: Generated<string>;
   tenant_id: string;
   worker_node_id: string | null;
@@ -580,6 +612,7 @@ export interface Projects {
 }
 
 export interface ProjectSandboxes {
+  allocation_id: string | null;
   commit_sha: string | null;
   created_at: Generated<Timestamp>;
   external_user_id: string | null;
@@ -736,6 +769,13 @@ export interface StockProjectInvitations {
   roles: Json;
 }
 
+export interface StoredObjects {
+  data: Buffer;
+  etag: Generated<string>;
+  key: string;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface StoreDocuments {
   blob_key: string | null;
   bytes: Buffer | null;
@@ -858,6 +898,19 @@ export interface Watchers {
   updated_at: Generated<Timestamp>;
   workflow_enablement_id: string | null;
   workflow_name: string;
+}
+
+export interface WorkerNodes {
+  authority_id: string;
+  capacity: Json | null;
+  default_resources: Generated<Json>;
+  descriptor: Json;
+  enabled: Generated<boolean>;
+  id: string;
+  lease_expires_at: Timestamp;
+  lease_token: string;
+  tenant_id: string;
+  updated_at: Generated<Timestamp>;
 }
 
 export interface WorkflowEnablementConnections {
@@ -1042,6 +1095,8 @@ export interface DB {
   batch_sink_chunks: BatchSinkChunks;
   batch_step_invocations: BatchStepInvocations;
   batch_step_members: BatchStepMembers;
+  client_runner_jobs: ClientRunnerJobs;
+  client_runners: ClientRunners;
   connection_action_requirements: ConnectionActionRequirements;
   connection_audit_events: ConnectionAuditEvents;
   connection_authorization_attempts: ConnectionAuthorizationAttempts;
@@ -1073,6 +1128,7 @@ export interface DB {
   stock_project_invitations: StockProjectInvitations;
   store_document_versions: StoreDocumentVersions;
   store_documents: StoreDocuments;
+  stored_objects: StoredObjects;
   tenant_app_policies: TenantAppPolicies;
   tenant_execution_policies: TenantExecutionPolicies;
   tenants: Tenants;
@@ -1081,6 +1137,7 @@ export interface DB {
   user_notification_events: UserNotificationEvents;
   watcher_runs: WatcherRuns;
   watchers: Watchers;
+  worker_nodes: WorkerNodes;
   workflow_enablement_connections: WorkflowEnablementConnections;
   workflow_enablement_events: WorkflowEnablementEvents;
   workflow_enablement_triggers: WorkflowEnablementTriggers;

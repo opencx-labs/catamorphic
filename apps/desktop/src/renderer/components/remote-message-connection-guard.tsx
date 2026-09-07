@@ -50,13 +50,12 @@ export function RemoteMessageConnectionGuard({
         <CloudOff className="size-3.5 shrink-0 text-warning" />
       )}
       <span className="min-w-0 flex-1">
-        {status.connection.message} Your message is local until this project
-        reconnects.
+        {status.connection.message} Reconnect to continue on the project server.
       </span>
       <PendingButton
         type="button"
         pending={busy}
-        onClick={() => void action()}
+        onClick={() => void action().catch(() => {})}
         className="shrink-0 cursor-pointer rounded-md bg-warning/20 px-2 py-1 font-medium transition-colors duration-150 hover:bg-warning/30"
       >
         {reconnect ? "Sign in again" : "Retry"}

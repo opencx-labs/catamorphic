@@ -16,6 +16,7 @@ import {
 } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import type { ProjectEnvironmentsService } from "./project-environments-service.js";
+import { EnvironmentCapacityError } from "./worker-capacity.js";
 
 export interface EnvironmentAdmission {
   environmentName: string;
@@ -29,6 +30,7 @@ export interface EnvironmentDiscoveryItem {
   label: string;
   description?: string;
   available: boolean;
+  clientRequired?: boolean;
   compatible: boolean;
   preferred: boolean;
   allowed: boolean;
@@ -106,6 +108,7 @@ export class ExecutionEnvironmentsService {
     return this.provider.get({
       tenantId: args.identity.tenantId,
       bindingId: args.bindingId,
+      allocationBindingId: args.bindingId,
     });
   }
 
@@ -134,7 +137,16 @@ export class ExecutionEnvironmentsService {
       if (!allowed && !includeDenied) continue;
       const definition = policy.environments[name];
       if (!definition) continue;
-      const evaluated = await this.evaluate({ ...args, name });
+      const evaluated = await this.evaluate({ ...args, name }).catch(
+        (error) => {
+          if (error instanceof EnvironmentCapacityError)
+            return {
+              bindingUnavailable: false as const,
+              reasons: [error.message],
+            };
+          throw error;
+        },
+      );
       const admission =
         "admission" in evaluated ? evaluated.admission : undefined;
       const compatibilityReasons =
@@ -153,7 +165,12 @@ export class ExecutionEnvironmentsService {
           ];
       items.push({
         name,
-        label: name,
+        label:
+          definition.binding === "this-machine" ||
+          admission?.binding.trust === "local"
+            ? "This machine"
+            : name,
+        clientRequired: definition.binding === "this-machine",
         ...(definition.description
           ? { description: definition.description }
           : {}),
@@ -174,12 +191,20 @@ export class ExecutionEnvironmentsService {
           : {}),
       });
     }
-    return {
-      items,
-      ...(policy.defaultEnvironment
-        ? { defaultEnvironment: policy.defaultEnvironment }
-        : {}),
-    };
+    const defaultEnvironment = [
+      ...(args.preferred ?? []),
+      policy.defaultEnvironment,
+      ...items.map((item) => item.name),
+    ].find((name) =>
+      items.some(
+        (item) =>
+          item.name === name &&
+          item.allowed &&
+          item.compatible &&
+          item.available,
+      ),
+    );
+    return { items, ...(defaultEnvironment ? { defaultEnvironment } : {}) };
   }
 
   async listCompatible(args: {
@@ -206,6 +231,8 @@ export class ExecutionEnvironmentsService {
     identity: Identity;
     projectId: string;
     environment?: string;
+    workerNodeId?: string;
+    allocationBindingId?: string;
     allowed?: readonly string[];
     preferred?: readonly string[];
     requirements: EnvironmentRequirements;
@@ -260,7 +287,16 @@ export class ExecutionEnvironmentsService {
         reasons[name] = ["Identity is not granted this Environment"];
         continue;
       }
-      const evaluated = await this.evaluate({ ...args, name });
+      const evaluated = await this.evaluate({ ...args, name }).catch(
+        (error) => {
+          if (error instanceof EnvironmentCapacityError)
+            return {
+              bindingUnavailable: false as const,
+              reasons: [error.message],
+            };
+          throw error;
+        },
+      );
       if ("admission" in evaluated) return evaluated.admission;
       reasons[name] = evaluated.bindingUnavailable
         ? ["Host binding is unavailable"]
@@ -273,6 +309,8 @@ export class ExecutionEnvironmentsService {
     identity: Identity;
     projectId: string;
     name: string;
+    workerNodeId?: string;
+    allocationBindingId?: string;
     requirements: EnvironmentRequirements;
   }): Promise<
     | { admission: EnvironmentAdmission }
@@ -288,15 +326,21 @@ export class ExecutionEnvironmentsService {
         reasons: [`Workload '${args.requirements.workload}' is not declared`],
       };
     }
-    const runtime = await this.provider.get({
-      tenantId: args.identity.tenantId,
-      bindingId: definition.binding,
-    });
-    if (!runtime) return { bindingUnavailable: true, reasons: [] };
     const effectiveRequirements = mergeRequirements(
       args.requirements,
       definition.requirements,
     );
+    const runtime = await this.provider.get({
+      tenantId: args.identity.tenantId,
+      bindingId: definition.binding,
+      requirements: effectiveRequirements,
+      projectId: args.projectId,
+      externalUserId: args.identity.externalUserId,
+      clientRunnerId: args.identity.clientRunnerId,
+      allocationBindingId: args.allocationBindingId,
+      workerNodeId: args.workerNodeId,
+    });
+    if (!runtime) return { bindingUnavailable: true, reasons: [] };
     const compatibility = environmentSatisfies(
       runtime.descriptor,
       effectiveRequirements,

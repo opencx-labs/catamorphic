@@ -1,23 +1,32 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
   type ConnectionProvider,
+  DurableToolPermissionBroker,
   type Identity,
-  ToolPermissionBroker,
 } from "@catamorphic/core";
-import { type DB, DEFAULT_SCHEMA } from "@catamorphic/db";
+import {
+  createDatabase,
+  type DB,
+  DEFAULT_SCHEMA,
+  migrateToLatest,
+} from "@catamorphic/db";
 import {
   createApp,
   identityFromBearer,
   serveSpaDist,
 } from "@catamorphic/fastify-plugin";
-import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
 import {
   type Catamorphic,
+  connectionAuthorizationPage,
   createCatamorphic,
-  defineStaticEnvironments,
+  EncryptedCredentialVault,
+  FsBackend,
   FsBundleStore,
+  ObjectRemoteBackend,
+  PostgresObjectStore,
+  ProjectManager,
   schedule,
 } from "@catamorphic/server-sdk";
 import { createPushTransport } from "@catamorphic/server-sdk/web-push";
@@ -36,7 +45,16 @@ import {
   loadStockAuthSecret,
   type StockAuth,
 } from "./auth/stock-auth.js";
+import {
+  registerStockMachine,
+  stockAuthorityId,
+  stockPushKeys,
+  stockVaultKey,
+} from "./cluster.js";
+import { loadStockConnectionProviders } from "./connection-config.js";
 import { EncryptedFileCredentialVault } from "./credential-vault.js";
+import { stockExecution } from "./execution-config.js";
+import { registerMachineSetup } from "./setup/machines.js";
 import {
   loadStockOperatorSecret,
   verifyStockOperatorSecret,
@@ -87,13 +105,61 @@ export interface StockServer {
 export async function buildStockServer(
   options: StockServerOptions,
 ): Promise<StockServer> {
+  const disposers: Array<() => Promise<unknown>> = [];
+  let closing: Promise<void> | undefined;
+  const close = () =>
+    (closing ??= (async () => {
+      const errors: unknown[] = [];
+      for (const dispose of disposers.reverse()) {
+        try {
+          await dispose();
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (errors.length)
+        throw new AggregateError(errors, "Server cleanup failed");
+    })());
+  try {
+    return await buildStockServerInner(options, disposers, close);
+  } catch (error) {
+    await close().catch(() => {});
+    throw error;
+  }
+}
+
+async function buildStockServerInner(
+  options: StockServerOptions,
+  disposers: Array<() => Promise<unknown>>,
+  close: () => Promise<void>,
+): Promise<StockServer> {
   const env = options.env ?? process.env;
   const log = options.log ?? (() => {});
   const data = options.dataDir;
+  const publicBase = options.publicBases?.[0] ?? "http://127.0.0.1:4700";
+  if (
+    env.DATABASE_URL &&
+    (!options.publicBases?.[0] || !env.BETTER_AUTH_SECRET)
+  ) {
+    throw new Error(
+      "Postgres deployments require a shared public origin and BETTER_AUTH_SECRET on every instance",
+    );
+  }
+
   for (const dir of ["db", "projects", "remotes", "app-bundles", "sandboxes"]) {
     fs.mkdirSync(path.join(data, dir), { recursive: true });
   }
-  const hostId = loadOrCreateHostId(path.join(data, "host-id"));
+  const machineIdentity = loadOrCreateHostId(path.join(data, "host-id"));
+  const nodeId = `node.${createHash("sha256").update(machineIdentity).digest("hex").slice(0, 24)}`;
+  const hostId = env.DATABASE_URL
+    ? stockAuthorityId(publicBase)
+    : machineIdentity;
+  const authSecret = loadStockAuthSecret({
+    dataDir: data,
+    ...(env.BETTER_AUTH_SECRET
+      ? { configuredSecret: env.BETTER_AUTH_SECRET }
+      : {}),
+  });
 
   // --- database: PGlite on disk, or DATABASE_URL for teams ------------
   // PGlite is the zero-dependency default (one serialized connection);
@@ -103,7 +169,9 @@ export async function buildStockServer(
   let workerConcurrency = 1;
   let databaseConfig: { db: Kysely<DB> } | { connectionString: string };
   if (env.DATABASE_URL) {
-    databaseConfig = { connectionString: env.DATABASE_URL };
+    ownDb = createDatabase({ connectionString: env.DATABASE_URL });
+    disposers.push(() => ownDb!.destroy());
+    databaseConfig = { db: ownDb };
     workerConcurrency = 4;
   } else {
     const pglite = new PGlite(path.join(data, "db"), {
@@ -113,6 +181,7 @@ export async function buildStockServer(
       dialect: new PGliteDialect({ pglite }),
       plugins: [new WithSchemaPlugin(DEFAULT_SCHEMA)],
     });
+    disposers.push(() => ownDb!.destroy());
     // WithSchemaPlugin only rewrites built queries; core's raw-SQL paths
     // (the worker's claim CTE) resolve tables via search_path. PGlite is
     // one session for the process's lifetime, so set it once here.
@@ -123,60 +192,117 @@ export async function buildStockServer(
   }
 
   // --- execution: the container is the sandbox (ADR 0047) -------------
-  const sandboxProvider = new LocalProcessSandboxProvider({
-    root: path.join(data, "sandboxes"),
-    env: {
-      PATH: env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
-      LANG: "C.UTF-8",
-    },
+  const execution = stockExecution({ env, data });
+  const sandboxProvider = execution.provider;
+  if (!ownDb) throw new Error("Database was not initialized");
+  await migrateToLatest({ db: ownDb });
+  const objectStore = env.DATABASE_URL
+    ? new PostgresObjectStore(ownDb)
+    : undefined;
+  const stockAuthConfig = loadStockAuthConfig({
+    dataDir: data,
+    ...(env.CATAMORPHIC_AUTH_CONFIG
+      ? { configuredPath: env.CATAMORPHIC_AUTH_CONFIG }
+      : {}),
   });
-  const environmentProvider = defineStaticEnvironments([
-    {
-      descriptor: {
-        id: "local",
-        label: "Managed single node",
-        description: "Run on this server",
-        trust: "managed",
-        isolation: "process",
-        workloads: ["agent", "workflow"],
-        agentTopologies: ["controller"],
-        capabilities: ["network.egress"],
-        resources: {},
-      },
-      sandboxProvider,
-    },
-  ]);
-
-  // Tool-permission asks park here; clients answer over HTTP (ADR 0054).
-  const toolPermissions = new ToolPermissionBroker();
+  if (objectStore) {
+    const key = "stock/deployment-fingerprint";
+    const fingerprint = createHash("sha256")
+      .update(publicBase)
+      .update("\0")
+      .update(authSecret)
+      .update(
+        JSON.stringify({
+          local: stockAuthConfig.local,
+          providers: stockAuthConfig.providers,
+        }),
+      )
+      .digest("hex");
+    await objectStore
+      .put(key, Buffer.from(fingerprint), { ifNoneMatch: "*" })
+      .catch(async (error) => {
+        const current = await objectStore.get(key);
+        if (!current || Buffer.from(current.data).toString() !== fingerprint) {
+          throw new Error(
+            "Server origin, signing secret, or authentication configuration does not match this Postgres deployment",
+            { cause: error },
+          );
+        }
+      });
+  }
+  const machine = await registerStockMachine({
+    db: ownDb,
+    tenantId: SERVER_TENANT_ID,
+    authorityId: hostId,
+    nodeId,
+    label: env.CATAMORPHIC_MACHINE_NAME ?? "Catamorphic server",
+    capacity: execution.capacity,
+    defaults: execution.defaults,
+    isolation: execution.isolation,
+    sandboxProvider,
+  });
+  disposers.push(() => machine.stop());
+  const environmentProvider = machine.environmentProvider;
+  const toolPermissions = new DurableToolPermissionBroker(ownDb);
   const agents = buildAgentRegistry({ sandboxProvider, toolPermissions, env });
 
   const catamorphic = createCatamorphic({
     hostId,
+    workerNode: machine.lease,
+    clientExecution: true,
     database: databaseConfig,
-    storage: {
-      projectsPath: path.join(data, "projects"),
-      remotesPath: path.join(data, "remotes"),
-    },
+    storage: objectStore
+      ? {
+          projectManager: new ProjectManager(
+            new FsBackend(path.join(data, "projects")),
+            new ObjectRemoteBackend({
+              store: objectStore,
+              keyPrefix: "origins/",
+            }),
+          ),
+        }
+      : {
+          projectsPath: path.join(data, "projects"),
+          remotesPath: path.join(data, "remotes"),
+        },
     sandboxProvider,
     environmentProvider,
-    credentialVault: new EncryptedFileCredentialVault(
-      path.join(data, "credentials"),
-    ),
-    connectionProviders: options.connectionProviders,
+    credentialVault: objectStore
+      ? new EncryptedCredentialVault({
+          store: objectStore,
+          key: stockVaultKey(authSecret),
+        })
+      : new EncryptedFileCredentialVault(path.join(data, "credentials")),
+    connectionProviders:
+      options.connectionProviders ??
+      loadStockConnectionProviders({
+        path: env.CATAMORPHIC_CONNECTION_PROVIDERS_CONFIG,
+      }),
     connectionMcpUrl: () => {
       const base = options.publicBases?.[0];
       return base ? `${base}/api/connection-mcp` : undefined;
     },
     ...(agents.registry ? { codingAgent: agents.registry } : {}),
-    appBundleStore: new FsBundleStore(path.join(data, "app-bundles")),
+    appBundleStore:
+      objectStore ?? new FsBundleStore(path.join(data, "app-bundles")),
     toolPermissions,
     triggerKinds: [schedule],
+    projectSeeds: (defaults) => ({
+      ...defaults,
+      "agents/assistant.json": JSON.stringify({
+        version: 1,
+        name: "Assistant",
+        kind: "builtin",
+        description: "Work with your project",
+      }),
+    }),
     pushNotifications: createPushTransport({
       dataDir: data,
+      keys: stockPushKeys(authSecret),
       subject: env.CATAMORPHIC_WEB_PUSH_SUBJECT,
     }),
   });
+  disposers.push(() => catamorphic.close());
   await catamorphic.migrate();
 
   // Better Auth is a stock-host concern. Its PGlite database is separate
@@ -186,21 +312,11 @@ export async function buildStockServer(
     dataDir: data,
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
   });
-  const stockAuthConfig = loadStockAuthConfig({
-    dataDir: data,
-    ...(env.CATAMORPHIC_AUTH_CONFIG
-      ? { configuredPath: env.CATAMORPHIC_AUTH_CONFIG }
-      : {}),
-  });
+  disposers.push(() => stockAuthDatabase.close());
   const stockAuth = createStockAuth({
     database: stockAuthDatabase,
     baseURL: options.publicBases?.[0] ?? "http://127.0.0.1:4700",
-    secret: loadStockAuthSecret({
-      dataDir: data,
-      ...(env.BETTER_AUTH_SECRET
-        ? { configuredSecret: env.BETTER_AUTH_SECRET }
-        : {}),
-    }),
+    secret: authSecret,
     config: stockAuthConfig,
   });
   await stockAuth.migrate();
@@ -211,15 +327,18 @@ export async function buildStockServer(
     name: "stock-server",
     concurrency: workerConcurrency,
   });
+  disposers.push(() => worker.stop());
   const core = catamorphic.core;
   catamorphic.startAgentWorker();
   const rootIdentity: Identity = {
     tenantId: SERVER_TENANT_ID,
     externalUserId: SETUP_AGENT_USER,
   };
-  const notificationWorkerId = `stock-notifications:${hostId}`;
+  const notificationWorkerId = `stock-notifications:${nodeId}`;
+  let notificationWork: Promise<void> | undefined;
   const notificationTimer = setInterval(() => {
-    void core.notifications
+    if (notificationWork) return;
+    notificationWork = core.notifications
       .publishFailedAgentTurns({ authorityHostId: hostId })
       .then(() =>
         core.notifications.publishPausedSessions({ authorityHostId: hostId }),
@@ -231,11 +350,21 @@ export async function buildStockServer(
             error instanceof Error ? error.message : String(error)
           }`,
         );
+      })
+      .then(() => {})
+      .finally(() => {
+        notificationWork = undefined;
       });
   }, 15_000);
   notificationTimer.unref();
+  disposers.push(async () => {
+    clearInterval(notificationTimer);
+    await notificationWork;
+  });
+  let scheduleWork: Promise<void> | undefined;
   const scheduleTimer = setInterval(() => {
-    void core.projects
+    if (scheduleWork) return;
+    scheduleWork = core.projects
       .list(rootIdentity, { limit: 1_000 })
       .then(async ({ items }) => {
         for (const project of items) {
@@ -251,9 +380,16 @@ export async function buildStockServer(
             error instanceof Error ? error.message : String(error)
           }`,
         ),
-      );
+      )
+      .finally(() => {
+        scheduleWork = undefined;
+      });
   }, 15_000);
   scheduleTimer.unref();
+  disposers.push(async () => {
+    clearInterval(scheduleTimer);
+    await scheduleWork;
+  });
 
   const operatorSecret = loadStockOperatorSecret({
     dataDir: data,
@@ -262,7 +398,6 @@ export async function buildStockServer(
       : {}),
   });
   // --- HTTP: the standard API app + the server's own routes -----------
-  const publicBase = options.publicBases?.[0] ?? "http://127.0.0.1:4700";
   const app = createApp({
     core,
     identity: identityFromBearer(async (token) => {
@@ -276,6 +411,26 @@ export async function buildStockServer(
       });
     }),
     features: { publications: "members" },
+  });
+  disposers.push(() => app.close());
+  app.addHook("onSend", (request, reply, payload, done) => {
+    if (
+      request.method === "GET" &&
+      request.url.startsWith("/api/connection-authorizations/callback?") &&
+      request.headers.accept?.includes("text/html")
+    ) {
+      reply
+        .type("text/html; charset=utf-8")
+        .header("cache-control", "no-store")
+        .header(
+          "content-security-policy",
+          "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+        );
+      done(
+        null,
+        connectionAuthorizationPage({ success: reply.statusCode < 400 }),
+      );
+    } else done(null, payload);
   });
   app.addHook("onSend", (request, reply, payload, done) => {
     if (reply.statusCode !== 401 || !request.url.startsWith("/api/")) {
@@ -320,7 +475,14 @@ export async function buildStockServer(
   });
 
   app.get("/healthz", async () => ({
-    ok: true,
+    ok: machine.healthy(),
+    machine: {
+      id: nodeId,
+      label: env.CATAMORPHIC_MACHINE_NAME ?? "Catamorphic server",
+      capacity: execution.capacity,
+      defaults: execution.defaults,
+      isolation: execution.isolation,
+    },
     agentSessions: Boolean(core.agentSessions),
   }));
 
@@ -331,6 +493,14 @@ export async function buildStockServer(
   // the owner-only credential from the mounted data directory and invokes it
   // from the same machine or container.
   const operatorApp = Fastify();
+  disposers.push(() => operatorApp.close());
+  registerMachineSetup({
+    app: operatorApp,
+    nodes: machine.nodes,
+    tenantId: SERVER_TENANT_ID,
+    authorityId: hostId,
+    operatorSecret,
+  });
   operatorApp.post(
     "/_catamorphic/operator/projects",
     async (request, reply) => {
@@ -421,17 +591,7 @@ export async function buildStockServer(
     catamorphic,
     stockAuth,
     agentsDescription: agents.description,
-    shutdown: async () => {
-      clearInterval(notificationTimer);
-      clearInterval(scheduleTimer);
-      await worker.stop();
-      await Promise.all([app.close(), operatorApp.close()]);
-      await stockAuth.close();
-      // For DATABASE_URL, close() also destroys the pool it created; the
-      // host-owned PGlite Kysely is ours to flush.
-      await catamorphic.close();
-      await ownDb?.destroy();
-    },
+    shutdown: close,
   };
 }
 

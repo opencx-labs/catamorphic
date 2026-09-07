@@ -5,6 +5,11 @@ Use this path only when the repository or deployment actually uses
 `apps/server/README.md`, Docker configuration, and mounted data directory
 before proposing commands.
 
+For added machines or multiple instances, first read
+[Managed machines and clusters](cluster-deployment.md). Determine whether this
+version implements enrollment and coordinated execution before treating a new
+server as an Environment of an existing brain.
+
 ## Resolve choices from the deployment
 
 1. Identify image/source version, public HTTPS URL, data mount, database mode,

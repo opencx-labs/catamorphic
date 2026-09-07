@@ -45,6 +45,12 @@ describe("PGlite migrations", () => {
       "005_agent_subsessions.sql",
       "006_agent_session_model.sql",
       "007_agent_execution_progress.sql",
+      "008_allocation_workspaces.sql",
+      "009_worker_nodes.sql",
+      "010_object_storage.sql",
+      "011_client_runners.sql",
+      "012_client_runner_workspace.sql",
+      "013_workspace_capacity.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });
@@ -70,7 +76,7 @@ describe("PGlite migrations", () => {
       WHERE table_schema = ${DEFAULT_SCHEMA}
         AND table_type = 'BASE TABLE'
     `.execute(db);
-    expect(tables.rows[0]?.count).toBe(67);
+    expect(tables.rows[0]?.count).toBe(71);
   });
 
   it("supports the runtime primitives core relies on", {

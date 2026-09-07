@@ -88,6 +88,11 @@ describe("stock Fastify OAuth bridge", () => {
     expect(loginPage.body).toContain('action="/login/local?');
     expect(loginPage.body).toContain('<html lang="en">');
     expect(loginPage.body).toContain("--accent: #f95225");
+    // no-referrer makes Chromium send Origin: null on a native form POST,
+    // which correctly fails Better Auth's CSRF check in desktop webviews.
+    expect(loginPage.headers["referrer-policy"]).toBe(
+      "strict-origin-when-cross-origin",
+    );
     expect(loginPage.body).toContain('autocomplete="username"');
     expect(loginPage.body).toContain('autocomplete="current-password"');
     expect(loginPage.body).toContain('id="toggle-password"');

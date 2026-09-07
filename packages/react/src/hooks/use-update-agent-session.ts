@@ -15,6 +15,8 @@ import type { AgentSession } from "../types.js";
 
 export interface UpdateAgentSessionInput {
   sessionId: string;
+  /** Explicitly move a settled session to a new permitted Allocation. */
+  environment?: string;
   /** Switch the session to another registered agent. */
   agentId?: string;
   /** Model override; `null` clears back to the agent harness's default. */

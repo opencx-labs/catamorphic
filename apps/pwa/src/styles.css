@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "@catamorphic/ui/styles.css";
 
 /*
  * Catamorphic Pwa design tokens — the same vocabulary as the desktop

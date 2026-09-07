@@ -1,6 +1,6 @@
 ---
 name: setup-catamorphic-server
-description: Use when installing the stock Catamorphic server, embedding Catamorphic in an existing application, connecting host authentication and identity, configuring Postgres or PGlite, or provisioning initial users and project access.
+description: Use when installing the stock Catamorphic server, adding machines or execution Environments, setting up a shared-Postgres cluster or multiple server instances, embedding Catamorphic in an existing application, connecting host authentication and identity, configuring Postgres or PGlite, or provisioning initial users and project access.
 ---
 
 # Setting Up Catamorphic
@@ -32,6 +32,7 @@ offering local username/password.
 | Observed need | Read |
 | --- | --- |
 | Stock image or `apps/server` | [Stock server](references/stock-server.md) |
+| New execution machine, Environment enrollment, multiple instances | [Managed machines and clusters](references/cluster-deployment.md) |
 | Existing or custom application | [Custom host](references/custom-host.md) |
 | Sessions, OAuth/OIDC, users, invitations, roles | [Auth and identity](references/auth-and-identity.md) |
 | PGlite, Postgres, migrations, backup | [Database and migrations](references/database-and-migrations.md) |
@@ -65,6 +66,15 @@ current source when documentation and the installed version differ.
 - A deployment operator is not a server-owner or super-admin user.
 - A project has at most one Catamorphic remote. Execution targets beneath it
   are Environments.
+- Managed machines are server instances of one authority sharing network
+  Postgres and accessible authoritative storage. A member's **This machine**
+  execution uses their authenticated project connection, not database access.
+  Distinguish the accepted architecture from installed capabilities: setting
+  `DATABASE_URL` alone does not establish a working cluster.
+- For remote development, configure microsandbox and explicit machine resource
+  budgets. Agent Environment requirements become sandbox limits. Read the cluster
+  reference for capacity inventory, workspace retirement, and uncertain cleanup
+  recovery; do not treat a live heartbeat as spare capacity.
 - Initial machine provisioning is an operator operation. Ongoing role, agent,
   sidebar, and starting-action configuration belongs in normal reviewed
   project files; do not create a parallel stock-server bootstrap config.

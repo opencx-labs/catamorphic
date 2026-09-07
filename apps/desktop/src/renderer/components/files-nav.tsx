@@ -1,7 +1,7 @@
-import { useProjectFiles } from "@catamorphic/react";
 import { ChevronRight, File, Folder } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { desktopApi } from "../lib/desktop-api.js";
+import { useLocalProjectFiles } from "../lib/local-project-files.js";
 
 import { Collapsible } from "./collapsible.js";
 
@@ -25,7 +25,7 @@ export function FilesNav({
   onOpen: (path: string) => void;
   onEmptyChange?: (empty: boolean) => void;
 }) {
-  const query = useProjectFiles(projectId);
+  const query = useLocalProjectFiles(projectId);
   const refetch = query.refetch;
   useEffect(
     () =>

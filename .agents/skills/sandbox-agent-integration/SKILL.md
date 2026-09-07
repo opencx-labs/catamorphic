@@ -1,6 +1,6 @@
 ---
 name: sandbox-agent-integration
-description: Use when changing Catamorphic sandbox providers, workflow execution sandboxes, coding-agent providers, dev sandbox lifecycle, sandbox instrumentation, or agent file staging.
+description: Use when changing Catamorphic sandbox providers, workflow execution sandboxes, coding-agent providers, Environment placement, server instance enrollment, dev sandbox lifecycle, sandbox instrumentation, or agent file staging.
 ---
 
 # Sandbox & Agent Integration
@@ -48,6 +48,19 @@ Execution has two distinct purposes, but not every agent uses a sandbox:
 Logical project Environments and immutable Allocations select the execution
 provider, resources, and connection grants. Project builder scope does not
 imply Environment or connection authority.
+
+For local/remote placement, read
+[ADR 0098](../../../docs/decisions/0098-project-authorized-local-and-remote-agents.md).
+Managed machines are instances of one shared-Postgres authority under
+[ADR 0099](../../../docs/decisions/0099-shared-postgres-server-environments.md).
+Instance ownership is distinct from authority identity. An Allocation must select
+the actual process, workspace, tools, and recovery owner; recording an Environment
+without routing execution does not implement placement. Keep member-device
+execution authenticated to the authority without distributing Postgres credentials.
+Stock nodes register renewable leases; their session branches persist before turn
+completion. The SDK client runner executes sandbox operations on a member device
+while the model and credential broker remain server-side. Never advertise native
+CLI support through this controller transport. Follow the [setup reference](../../../skills/setup-catamorphic-server/references/cluster-deployment.md).
 
 ## Package Structure
 
@@ -234,7 +247,7 @@ interface CodingAgentProvider {
 - `FsBackend` / `FsRemoteBackend` (`@catamorphic/git`) — Local dev, CI, tests, simple hosts (default)
 - `ArtifactsRemoteBackend` (`@catamorphic/cloudflare`) — Cloudflare Artifacts remotes; implements `getCloneSource()` so sandboxes `git clone` with a short-lived token instead of receiving uploads
 - `DaytonaBackend` (`@catamorphic/daytona`) — Uses Daytona sandboxes as Git repo storage (experimental)
-- `S3RemoteBackend` (`@catamorphic/s3`) — Default git origin for R2, S3,
+- `ObjectRemoteBackend` (`@catamorphic/git`) with `S3ObjectStore` (`@catamorphic/s3`) — Default git origin for R2, S3,
   MinIO, and compatible stores until Artifacts is generally available
 
 The host chooses by constructing the backend it wants and passing it via `createCatamorphic({ storage })` — there is no env-var switch.
@@ -249,3 +262,25 @@ model-list method. Do not invoke the unsupported `codex debug models` command
 or maintain a hardcoded model catalog. Discovery must bound process lifetime,
 follow pagination, filter hidden models, clean up listeners/processes, and
 report errors in the picker without starting a turn.
+
+## Resource admission and lifecycle
+
+Follow [ADR 0100](../../../docs/decisions/0100-workspace-resource-admission.md).
+Managed allocations reserve workspace slots and CPU/memory atomically under a
+node row lock. They own one sandbox each. Never return capacity until physical
+cleanup succeeds, and never treat heartbeat expiry as proof that a VM stopped.
+Keep cleanup independent of heartbeat renewal. Preserve the operator recovery
+path for ambiguous creation/destruction outcomes.
+
+`CreateSandboxOpts.resources` contains hard limits. Providers advertise
+`resourceLimits` and reject unsupported limits; passing admission without passing
+limits to creation is a bug. Resource requirements also travel through client
+runner RPC. Report the real provider isolation, including on member devices.
+Controller model loops run outside their sandbox and require host headroom.
+Native CLI paths do not acquire sandbox limits by declaring them in JSON.
+
+Check the public cluster reference when provisioning: microsandbox for isolated
+remote development, subprocesses only for trusted single-tenant work. Confirm
+actual VM CPU/memory, concurrent admission races, cleanup failures, session
+archive/restore, and worker fencing. Preserve per-allocation files and credentials
+when reviewing warm-runtime reuse.

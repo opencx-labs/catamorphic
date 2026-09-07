@@ -11,9 +11,11 @@ interface PersistedVapidKeys {
 export function createPushTransport(args: {
   dataDir: string;
   subject?: string;
+  /** Shared host-provisioned keys for interchangeable API instances. */
+  keys?: PersistedVapidKeys;
 }): PushNotificationTransport {
   const file = path.join(args.dataDir, "web-push-vapid.json");
-  const keys = loadOrCreateKeys(file);
+  const keys = args.keys ?? loadOrCreateKeys(file);
   const subject = args.subject ?? "mailto:notifications@catamorphic.local";
   return {
     publicKey: keys.publicKey,

@@ -22,7 +22,12 @@ export {
 } from "./atoms.js";
 export { useAcknowledgeAgentSessionAttention } from "./hooks/use-acknowledge-agent-session-attention.js";
 export {
+  type AgentCatalog,
+  useAgentCatalog,
+} from "./hooks/use-agent-catalog.js";
+export {
   type AgentAuthenticationRequired,
+  authenticationRequiredFrom,
   type OptimisticAgentMessage,
   type PendingAgentTurn,
   type UseAgentChatOptions,
@@ -61,6 +66,7 @@ export {
   useCommitChanges,
 } from "./hooks/use-commit-changes.js";
 export { useCompleteConnectionAuthorization } from "./hooks/use-complete-connection-authorization.js";
+export { useConnectionAuthorizationStatus } from "./hooks/use-connection-authorization-status.js";
 export {
   type CreateAgentSessionInput,
   useCreateAgentSession,

@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "@catamorphic/ui/styles.css";
 
 /*
  * Catamorphic Desktop design tokens. See DESIGN.md for the rules.

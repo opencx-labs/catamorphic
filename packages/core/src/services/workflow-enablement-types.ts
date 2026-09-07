@@ -63,6 +63,8 @@ export interface WorkflowEnablementPreview {
   capabilities: string[];
   consentDigest: string;
   triggerCount: number;
+  triggers: Array<{ kind: string; config: unknown }>;
+  connectionLabels: Record<string, string>;
 }
 
 export type WorkflowEnablementSuspensionReason =

@@ -30,6 +30,7 @@ import {
   type CapabilityProviderRuntime,
   CapabilityRegistry,
 } from "./services/capability-providers.js";
+import { ClientRunnersService } from "./services/client-runners-service.js";
 import {
   type CodingAgentRegistry,
   isCodingAgentRegistry,
@@ -93,7 +94,7 @@ import type { SessionMailboxesService } from "./services/session-mailboxes-servi
 import { SessionSyncService } from "./services/session-sync-service.js";
 import { SkillsService } from "./services/skills-service.js";
 import { TenantPoliciesService } from "./services/tenant-policies-service.js";
-import type { ToolPermissionBroker } from "./services/tool-permission-broker.js";
+import type { ToolPermissionChannel } from "./services/tool-permission-broker.js";
 import type {
   McpToolKindSpec,
   TriggerKindRuntime,
@@ -110,6 +111,8 @@ import { WorkflowsService } from "./services/workflows-service.js";
 export interface CatamorphicCoreConfig {
   /** Stable host identity. Required when `codingAgent` enables sessions. */
   hostId?: string;
+  /** Distinct leased execution instance beneath the logical host authority. */
+  workerNode?: { id: string; token: string };
   /**
    * How long a project's parsed `roles/*.json` set is trusted before it is
    * re-read from the shared origin (ADR 0055). Role *definitions* may lag
@@ -142,6 +145,8 @@ export interface CatamorphicCoreConfig {
   sandboxProvider?: SandboxProvider;
   /** Host-owned realizations of project logical Environments. */
   environmentProvider: EnvironmentProvider;
+  /** Permit authenticated clients to supply explicitly granted local execution. */
+  clientExecution?: boolean;
   /** Opaque host-owned storage for external provider credentials. */
   credentialVault?: CredentialVault;
   /** Host-side external-system drivers. Requires `credentialVault`. */
@@ -174,7 +179,7 @@ export interface CatamorphicCoreConfig {
    * `onToolPermission`, and the plugin serves the pending list + answer
    * routes. Hosts with their own consent UI (the desktop bridge) omit it.
    */
-  toolPermissions?: ToolPermissionBroker;
+  toolPermissions?: ToolPermissionChannel;
   /**
    * Resolve a project's directory on the host filesystem, required for
    * registry agents with `topology: "native"` (Claude Code, Codex).
@@ -319,6 +324,7 @@ export class CatamorphicCore {
   readonly deploymentRuntime?: DeploymentRuntimeService;
   readonly skills: SkillsService;
   readonly agentDefinitions: AgentDefinitionsService;
+  readonly clientRunners?: ClientRunnersService;
   readonly projectEnvironments: ProjectEnvironmentsService;
   readonly executionEnvironments: ExecutionEnvironmentsService;
   readonly executionAllocations: ExecutionAllocationsService;
@@ -354,7 +360,7 @@ export class CatamorphicCore {
   readonly agentRuntimeEvents: AgentRuntimeEventsService;
   /** Durable approval, question, and elicitation requests. */
   readonly agentRuntimeRequests: AgentRuntimeRequestsService;
-  readonly toolPermissions?: ToolPermissionBroker;
+  readonly toolPermissions?: ToolPermissionChannel;
   readonly apps?: AppsService;
   readonly appPolicies: AppPoliciesService;
   readonly github?: GithubService;
@@ -538,9 +544,20 @@ export class CatamorphicCore {
       this.projectManager,
     );
     this.executionAllocations = new ExecutionAllocationsService(this.db);
+    this.clientRunners = config.clientExecution
+      ? new ClientRunnersService(this.db, this.projectEnvironments)
+      : undefined;
     this.executionEnvironments = new ExecutionEnvironmentsService(
       this.projectEnvironments,
-      config.environmentProvider,
+      {
+        get: (args) =>
+          args.bindingId === "this-machine" && this.clientRunners
+            ? this.clientRunners.binding({
+                ...args,
+                workerNodeId: args.workerNodeId ?? config.workerNode?.id,
+              })
+            : config.environmentProvider.get(args),
+      },
     );
     const connectionProviders = config.connectionProviders ?? [];
     const credentialVault = config.credentialVault;
@@ -598,7 +615,7 @@ export class CatamorphicCore {
           },
         )
       : undefined;
-    const executionJobs = new ExecutionJobsService(this.db);
+    const executionJobs = new ExecutionJobsService(this.db, config.workerNode);
     this.retention = new RetentionService(this.db, config.retention);
     const executionWorker = new ExecutionWorkerService(
       executionJobs,
@@ -800,7 +817,7 @@ export class CatamorphicCore {
       config.proposalBot,
     );
 
-    if (config.codingAgent && this.sandboxProvider && this.devSandboxes) {
+    if (config.codingAgent) {
       if (!config.hostId) {
         throw new Error("hostId is required when codingAgent is configured");
       }
@@ -809,8 +826,8 @@ export class CatamorphicCore {
         : singleAgentRegistry(config.codingAgent);
       this.agentSessions = new AgentSessionsService(this.db, {
         hostId: config.hostId,
+        workerNode: config.workerNode,
         projectManager: this.projectManager,
-        sandboxProvider: this.sandboxProvider,
         codingAgents,
         nativeAgentCheckout: config.nativeAgentCheckout,
         executionEnvironments: this.executionEnvironments,
@@ -818,7 +835,6 @@ export class CatamorphicCore {
         connectionAdmission: this.connectionAdmission,
         connectionGrants: this.connectionGrants,
         connectionMcpUrl: config.connectionMcpUrl,
-        devSandboxes: this.devSandboxes,
         plugins: this.plugins,
         pluginResolver: this.pluginResolver,
         onTurnSettled: async (event) => {

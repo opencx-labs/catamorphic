@@ -7,7 +7,11 @@ import {
   prepareRemoteInstall,
 } from "./lib/install.js";
 import { navigate, type Route, routeDepth, useRoute } from "./lib/nav.js";
-import { beginRemoteAuthorization } from "./lib/oauth.js";
+import {
+  beginRemoteAuthorization,
+  clearRemoteAuthorizationRetryTarget,
+  remoteAuthorizationRetryTarget,
+} from "./lib/oauth.js";
 import { completeRemoteConnection } from "./lib/oauth-callback.js";
 import {
   applyPairing,
@@ -19,6 +23,7 @@ import {
   activeProfile,
   connectionById,
   getState,
+  type PwaConnection,
   usePwaState,
 } from "./lib/store.js";
 import {
@@ -41,6 +46,22 @@ const queryClient = new QueryClient({
     queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: true },
   },
 });
+
+const connectionQueries = new Map<
+  string,
+  { epoch?: string; client: QueryClient }
+>();
+function queryClientFor(connection: PwaConnection): QueryClient {
+  const previous = connectionQueries.get(connection.id);
+  if (previous && previous.epoch === connection.authEpoch)
+    return previous.client;
+  previous?.client.clear();
+  const client = new QueryClient({
+    defaultOptions: queryClient.getDefaultOptions(),
+  });
+  connectionQueries.set(connection.id, { epoch: connection.authEpoch, client });
+  return client;
+}
 
 export function App() {
   const state = usePwaState();
@@ -65,8 +86,13 @@ export function App() {
         callbackUrl,
         profileId: activeProfile(getState()).id,
       })
-        .then((landing) => navigate(landing, { replace: true }))
+        .then((landing) => {
+          clearRemoteAuthorizationRetryTarget();
+          navigate(landing, { replace: true });
+        })
         .catch((error: unknown) => {
+          const target = remoteAuthorizationRetryTarget();
+          if (target?.kind === "project") stashPendingLink(target.link);
           stashConnectError(
             error instanceof Error
               ? error.message
@@ -276,7 +302,7 @@ function ScreenFor({
             connection={connection}
             projectId={route.projectId}
             sessionId={route.sessionId}
-            queryClient={queryClient}
+            queryClient={queryClientFor(connection)}
             animation={animation}
           />
         );
@@ -290,7 +316,7 @@ function ScreenFor({
               ? (connection.projectName ?? "Project")
               : "Project"
           }
-          queryClient={queryClient}
+          queryClient={queryClientFor(connection)}
           animation={animation}
         />
       );

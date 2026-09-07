@@ -91,6 +91,8 @@ export type StorageConfig =
 export interface CreateCatamorphicConfig {
   /** Stable host identity. Required when `codingAgent` enables sessions. */
   hostId?: string;
+  /** Optional leased execution instance. The host owns registration/heartbeat. */
+  workerNode?: CatamorphicCoreConfig["workerNode"];
   database: DatabaseConfig;
   storage: StorageConfig;
   /**
@@ -100,6 +102,8 @@ export interface CreateCatamorphicConfig {
   sandboxProvider?: SandboxProvider;
   /** Host-owned realizations of project logical Environments. */
   environmentProvider: EnvironmentProvider;
+  /** Permit authenticated clients to supply explicitly granted local execution. */
+  clientExecution?: boolean;
   credentialVault?: CredentialVault;
   connectionProviders?: readonly ConnectionProvider[];
   /** Re-resolve current member authority before unattended dispatch. */
@@ -313,10 +317,12 @@ export class Catamorphic {
     });
     this.core = createCatamorphicCore({
       hostId: config.hostId,
+      workerNode: config.workerNode,
       db,
       projectManager: resolveStorage(config.storage),
       sandboxProvider: config.sandboxProvider,
       environmentProvider: config.environmentProvider,
+      clientExecution: config.clientExecution,
       credentialVault: config.credentialVault,
       connectionProviders: contributions.connectionProviders,
       resolveMemberIdentity: config.resolveMemberIdentity,

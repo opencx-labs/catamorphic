@@ -2,10 +2,12 @@ import {
   type AgentChatAttachment,
   type AgentChatTextAttachment,
   messageWithAttachmentNames,
+  useAgentCatalog,
   useAgentChat,
   useEnvironments,
   useWatchers,
 } from "@catamorphic/react";
+import { AgentEnvironmentControl } from "@catamorphic/ui";
 import { useQuery } from "@tanstack/react-query";
 import {
   AppWindow,
@@ -80,6 +82,11 @@ import {
 import { ContextMeter, latestReportedModel } from "./context-meter.js";
 import { EnvironmentConnections } from "./environment-connections.js";
 import { Modal } from "./modal.js";
+import { PendingButton } from "./pending-button.js";
+import {
+  ProjectAuthorityProvider,
+  useRemoteAuthority,
+} from "./project-authority-provider.js";
 import { RemoteMessageConnectionGuard } from "./remote-message-connection-guard.js";
 import { SessionInspector } from "./session-inspector.js";
 import { ShortcutHint } from "./shortcut-hint";
@@ -1284,7 +1291,18 @@ export interface ChatDockProps {
  * so queued sends and drafts survive; the panel morphs between a floating
  * partial dock and a full workspace tab (the bubble hides while tabbed).
  */
-export function ChatDock({
+export function ChatDock(props: ChatDockProps) {
+  return (
+    <ProjectAuthorityProvider
+      projectId={props.projectId}
+      localOnly={props.entry.incognito}
+    >
+      <ChatDockContent {...props} />
+    </ProjectAuthorityProvider>
+  );
+}
+
+function ChatDockContent({
   projectId,
   entry,
   title,
@@ -1325,16 +1343,24 @@ export function ChatDock({
   onSessionCreated,
   onSignalsChange,
 }: ChatDockProps) {
+  const authority = useRemoteAuthority();
+  const catalog = useAgentCatalog(authority ? projectId : undefined);
+  const [localRunnerError, setLocalRunnerError] = useState<string>();
+  const [connectingRunner, setConnectingRunner] = useState(false);
+  const [remoteAgentId, setRemoteAgentId] = useState<string>();
+  const selectedAgentId = authority
+    ? (remoteAgentId ?? catalog.data?.defaultAgentId)
+    : (entry.agentId ?? defaultAgentId);
   const emptyPrompt = emptyChatPromptFor(entry.localId);
   const composerPlaceholder = placeholder ?? emptyPrompt.composer;
   const environmentQuery = useEnvironments(projectId, {
     workload: "agent",
-    ...((entry.agentId ?? defaultAgentId)
-      ? { agentId: entry.agentId ?? defaultAgentId }
-      : {}),
+    ...(selectedAgentId ? { agentId: selectedAgentId } : {}),
   });
   const compatibleEnvironments =
-    environmentQuery.data?.items.filter((item) => item.compatible) ?? [];
+    environmentQuery.data?.items.filter(
+      (item) => item.compatible && item.available && item.allowed,
+    ) ?? [];
   const [selectedEnvironment, setSelectedEnvironment] = useState<string>();
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   useEffect(() => {
@@ -1354,7 +1380,7 @@ export function ChatDock({
   }, [compatibleEnvironments, environmentQuery.data, selectedEnvironment]);
   const chat = useAgentChat(projectId, {
     sessionId: entry.sessionId,
-    agentId: entry.agentId ?? defaultAgentId,
+    agentId: selectedAgentId,
     environment: selectedEnvironment,
     source: "desktop",
     idleRefetchIntervalMs: refreshWhileIdle ? 3_000 : false,
@@ -1398,6 +1424,14 @@ export function ChatDock({
   const [moveCheckNonce, setMoveCheckNonce] = useState(0);
   // biome-ignore lint/correctness/useExhaustiveDependencies: inspector opening refreshes remote eligibility
   useEffect(() => {
+    if (authority) {
+      setMoveState({
+        canMove: false,
+        reason: "Use the Environment control to move this remote session",
+        moving: false,
+      });
+      return;
+    }
     if (chat.isSending) {
       setMoveState({
         canMove: false,
@@ -1432,10 +1466,10 @@ export function ChatDock({
     return () => {
       cancelled = true;
     };
-  }, [activeSessionId, chat.isSending, projectId, moveCheckNonce]);
+  }, [activeSessionId, authority, chat.isSending, projectId, moveCheckNonce]);
   useEffect(() => {
     const load = () => {
-      if (!entry.sessionId) {
+      if (authority || !entry.sessionId) {
         setCheckout(null);
         return;
       }
@@ -1451,7 +1485,7 @@ export function ChatDock({
     return desktopApi.onGitChanged((event) => {
       if (event.projectId === projectId) load();
     });
-  }, [entry.sessionId, projectId]);
+  }, [authority, entry.sessionId, projectId]);
   // The composer's DOM is the source of truth (see ComposerInput); these
   // mirror what it says so the rest of the dock can react — the prose
   // (slash menu, recall gate, emptiness) and how many pills are live.
@@ -1752,14 +1786,16 @@ export function ChatDock({
       cancelled = true;
     };
   }, [sessionAgentId, projectId, rosterNonce]);
-  const activeAgent = roster.agents.find(
-    (agent) =>
-      agent.id ===
-      (chat.session?.agentId ??
-        entry.agentId ??
-        defaultAgentId ??
-        roster.defaultAgentId),
-  );
+  const activeAgent = authority
+    ? undefined
+    : roster.agents.find(
+        (agent) =>
+          agent.id ===
+          (chat.session?.agentId ??
+            entry.agentId ??
+            defaultAgentId ??
+            roster.defaultAgentId),
+      );
   // Unknown roster (fetch pending/failed): stay permissive; the server
   // answers with a friendly error if the harness really can't take it.
   const accepts = activeAgent?.accepts ?? ["image", "document"];
@@ -2684,16 +2720,25 @@ export function ChatDock({
                 <Globe className="size-3" />
                 {chat.session.environment}
               </span>
-            ) : compatibleEnvironments.length > 1 ? (
+            ) : authority || compatibleEnvironments.length > 1 ? (
               <select
-                aria-label="Environment"
+                aria-label={authority ? "Run on" : "Environment"}
                 data-testid="chat-environment-select"
                 value={selectedEnvironment ?? ""}
                 onChange={(event) => setSelectedEnvironment(event.target.value)}
                 className="max-w-36 rounded-md border border-border bg-bg-inset px-1.5 py-0.5 text-[10px] font-medium text-fg-muted outline-none"
               >
-                {compatibleEnvironments.map((environment) => (
-                  <option key={environment.name} value={environment.name}>
+                {(authority
+                  ? (environmentQuery.data?.items.filter(
+                      (item) => item.allowed,
+                    ) ?? [])
+                  : compatibleEnvironments
+                ).map((environment) => (
+                  <option
+                    key={environment.name}
+                    value={environment.name}
+                    disabled={!environment.available || !environment.compatible}
+                  >
                     {environment.label}
                   </option>
                 ))}
@@ -2730,7 +2775,14 @@ export function ChatDock({
             <SessionInspector
               session={chat.session}
               fallbackTitle={title}
-              agentName={activeAgent?.name ?? "Default agent"}
+              agentName={
+                authority
+                  ? (catalog.data?.items.find(
+                      (agent) =>
+                        agent.id === (chat.session?.agentId ?? selectedAgentId),
+                    )?.name ?? "Project agent")
+                  : (activeAgent?.name ?? "Default agent")
+              }
               model={chat.session?.model || activeAgent?.model || "Automatic"}
               reportedModel={reportedModel}
               onInspect={() => {
@@ -2961,6 +3013,113 @@ export function ChatDock({
                   onOpenMcpApp={onOpenMcpApp}
                 />
               </div>
+            )}
+            {authority && chat.sessionId && (
+              <div className="mx-3 mb-2">
+                <AgentEnvironmentControl
+                  projectId={projectId}
+                  sessionId={chat.sessionId}
+                  agentId={chat.session?.agentId ?? undefined}
+                  currentEnvironment={chat.session?.environment ?? undefined}
+                  busy={chat.isWorking}
+                />
+              </div>
+            )}
+            {authority &&
+              !chat.sessionId &&
+              catalog.data?.startingActions.map((action) => (
+                <button
+                  type="button"
+                  key={`${action.label}:${action.prompt}`}
+                  className="mx-3 mb-2 rounded border border-border px-3 py-2 text-left text-xs hover:bg-bg-overlay"
+                  onClick={() => {
+                    setRemoteAgentId(action.agentId);
+                    setDraft(action.prompt);
+                  }}
+                >
+                  {action.label}
+                </button>
+              ))}
+            {authority && !chat.sessionId && (
+              <label className="mx-3 mb-2 block text-xs text-fg-muted">
+                Project agent
+                <select
+                  aria-label="Project agent"
+                  value={selectedAgentId ?? ""}
+                  onChange={(event) => {
+                    setRemoteAgentId(event.target.value);
+                    setSelectedEnvironment(undefined);
+                  }}
+                  className="ml-2 rounded border border-border bg-bg px-2 py-1 text-fg"
+                >
+                  <option value="" disabled>
+                    Choose an agent
+                  </option>
+                  {catalog.data?.items.map((agent) => (
+                    <option
+                      key={agent.id}
+                      value={agent.id}
+                      disabled={!agent.available}
+                    >
+                      {agent.name}
+                      {agent.available ? "" : " (unavailable)"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {authority &&
+              environmentQuery.data?.items
+                .filter(
+                  (item) =>
+                    item.clientRequired && item.allowed && !item.available,
+                )
+                .map((item) => (
+                  <div
+                    key={item.name}
+                    className="mx-3 mb-2 text-xs text-fg-muted"
+                  >
+                    <PendingButton
+                      type="button"
+                      pending={connectingRunner}
+                      onClick={() => {
+                        setConnectingRunner(true);
+                        setLocalRunnerError(undefined);
+                        void desktopApi
+                          .remoteEnableLocalExecution({
+                            projectId,
+                            environment: item.name,
+                          })
+                          .then(async () => {
+                            await Promise.all([
+                              catalog.refetch(),
+                              environmentQuery.refetch(),
+                            ]);
+                            setSelectedEnvironment(item.name);
+                          })
+                          .catch((error) =>
+                            setLocalRunnerError(
+                              error instanceof Error
+                                ? error.message
+                                : "Could not connect local execution",
+                            ),
+                          )
+                          .finally(() => setConnectingRunner(false));
+                      }}
+                      className="rounded border border-border px-2 py-1"
+                    >
+                      Connect This machine
+                    </PendingButton>
+                    <p className="mt-1">
+                      Use this desktop's sandbox. Project permissions and
+                      conversation history stay on the server.
+                    </p>
+                  </div>
+                ))}
+            {localRunnerError && (
+              <p role="alert" className="mx-3 text-xs text-danger">
+                {localRunnerError}
+              </p>
             )}
             <RemoteMessageConnectionGuard
               projectId={projectId}

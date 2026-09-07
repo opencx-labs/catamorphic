@@ -28,6 +28,7 @@
     "@catamorphic/db": "workspace:*",
     "@catamorphic/git": "workspace:*",
     "@catamorphic/github": "workspace:*",
+    "@catamorphic/otel": "workspace:*",
     "@catamorphic/plugins": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
     "croner": "^10.0.1",

@@ -25,7 +25,34 @@ export interface SandboxHandle {
   status: SandboxStatus;
 }
 
+/** Hard sandbox limits. A provider must reject limits it cannot enforce. */
+export interface SandboxResources {
+  cpuMillis?: number;
+  memoryMb?: number;
+  storageMb?: number;
+  gpu?: boolean;
+}
+
+export function assertSandboxResources(
+  resources: SandboxResources | undefined,
+  supported: readonly (keyof SandboxResources)[],
+): void {
+  for (const [key, value] of Object.entries(resources ?? {})) {
+    if (value === undefined || value === false) continue;
+    if (!supported.some((item) => item === key)) {
+      throw new Error(`Sandbox provider cannot enforce '${key}'`);
+    }
+    if (
+      typeof value === "number" &&
+      (!Number.isSafeInteger(value) || value <= 0)
+    ) {
+      throw new Error(`Sandbox limit '${key}' must be a positive integer`);
+    }
+  }
+}
+
 export interface CreateSandboxOpts {
+  resources?: SandboxResources;
   snapshotName?: string;
   language?: string;
   envVars?: Record<string, string>;
@@ -58,6 +85,8 @@ export interface SandboxProvider {
    * image convention wins (Daytona: `/home/daytona`, Cloudflare: `/workspace`).
    */
   readonly workspaceRoot: string;
+  readonly isolation?: "none" | "process" | "sandbox";
+  readonly resourceLimits?: readonly (keyof SandboxResources)[];
 
   createSandbox(opts: CreateSandboxOpts): Promise<SandboxHandle>;
   startSandbox(sandboxId: string): Promise<void>;

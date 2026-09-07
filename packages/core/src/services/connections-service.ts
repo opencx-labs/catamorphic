@@ -203,6 +203,31 @@ export class ConnectionsService {
     return { authorizationId: state, challenge: started.challenge };
   }
 
+  async authorizationStatus(args: {
+    identity: Identity;
+    state: string;
+  }): Promise<{ status: string }> {
+    const attempt = await this.db
+      .selectFrom("connection_authorization_attempts")
+      .select(["status", "expires_at"])
+      .where("tenant_id", "=", args.identity.tenantId)
+      .where("external_user_id", "=", args.identity.externalUserId)
+      .where("state_hash", "=", hashBearer(args.state))
+      .executeTakeFirst();
+    if (!attempt)
+      throw new ConnectionUnavailableError(
+        "authorization",
+        "Authorization not found",
+      );
+    return {
+      status:
+        attempt.status !== "completed" &&
+        attempt.expires_at.getTime() <= Date.now()
+          ? "expired"
+          : attempt.status,
+    };
+  }
+
   async completeAuthorization(args: {
     identity: Identity;
     state: string;

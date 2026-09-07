@@ -17,6 +17,30 @@ describe("LocalProcessSandboxProvider", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it("rejects resource promises it cannot enforce", async () => {
+    await expect(
+      provider.createSandbox({ resources: { memoryMb: 512 } }),
+    ).rejects.toThrow("cannot enforce");
+  });
+
+  it("stops process groups and requires restart before more commands", async () => {
+    const sandbox = await provider.createSandbox({});
+    const running = provider.executeCommand(sandbox.id, "sleep 30 & wait", {
+      timeout: 60,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await provider.stopSandbox(sandbox.id);
+    expect((await running).exitCode).not.toBe(0);
+    await expect(
+      provider.executeCommand(sandbox.id, "echo unsafe"),
+    ).rejects.toThrow("stopped");
+    await provider.startSandbox(sandbox.id);
+    expect(
+      (await provider.executeCommand(sandbox.id, "echo resumed")).result,
+    ).toContain("resumed");
+    await provider.destroySandbox(sandbox.id);
+  });
+
   it("round-trips files through virtual /workspace paths", async () => {
     const sandbox = await provider.createSandbox({});
     await provider.uploadFiles(

@@ -42,10 +42,14 @@ function normalize(
     workloads: Object.freeze([...runtime.descriptor.workloads]),
     agentTopologies: Object.freeze([...runtime.descriptor.agentTopologies]),
     capabilities: Object.freeze([...runtime.descriptor.capabilities]),
+    resourceLimits:
+      runtime.descriptor.resourceLimits ??
+      runtime.sandboxProvider?.resourceLimits,
     resources: Object.freeze({ ...runtime.descriptor.resources }),
   });
   return Object.freeze({
     descriptor,
+    ...(runtime.workerNodeId ? { workerNodeId: runtime.workerNodeId } : {}),
     ...(runtime.sandboxProvider
       ? { sandboxProvider: runtime.sandboxProvider }
       : {}),

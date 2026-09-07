@@ -4,7 +4,9 @@ import type { ConnectLink } from "./connect-link.js";
 import {
   beginRemoteAuthorization,
   beginServerAuthorization,
+  clearRemoteAuthorizationRetryTarget,
   completeRemoteAuthorization,
+  remoteAuthorizationRetryTarget,
 } from "./oauth.js";
 
 const link: ConnectLink = {
@@ -190,6 +192,13 @@ describe("PWA remote OAuth", () => {
     const tokenBody = new URLSearchParams(await tokenRequest?.text());
     expect(tokenBody.get("code")).toBe("code-1");
     expect(tokenBody.get("code_verifier")).toBeTruthy();
+    expect(remoteAuthorizationRetryTarget()).toEqual({ kind: "project", link });
+    expect(
+      [...Array(sessionStorage.length)]
+        .map((_, index) => sessionStorage.getItem(sessionStorage.key(index)!))
+        .join(""),
+    ).not.toContain("codeVerifier");
+    clearRemoteAuthorizationRetryTarget();
     expect(sessionStorage.length).toBe(0);
   });
 

@@ -437,6 +437,21 @@ Rules of thumb when authoring roles:
 - Keep roles few and readable; membership (who has which role and grants)
   is the host's, not a file here.
 
+## Choose where agents run
+
+The project manifest declares logical Environments; roles grant them and an
+agent's \`environment.allowed\` / \`environment.preferred\` policy narrows and
+recommends the choices. A machine is usable only when the host has supplied a
+compatible, available binding. Do not invent a server id or treat adding a JSON
+entry as provisioning a machine.
+
+A remote project keeps one authority for membership, connections, and history.
+\`binding: "this-machine"\` offers an authenticated member device when the host
+supports client execution. It never requires the member to receive database
+credentials. A managed server is enrolled by the host operator. Moving a session
+is explicit and resumes its saved checkpoint; never retry an uncertain action
+just because a connection returned.
+
 ## Shape the project experience from capabilities
 
 In the Catamorphic desktop reference host, a project may ship a shared

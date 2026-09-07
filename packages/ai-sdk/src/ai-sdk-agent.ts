@@ -244,9 +244,10 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
   }
 
   async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
+    const sandboxProvider = opts.sandboxProvider ?? this.opts.sandboxProvider;
     const pluginFiles = stagedPluginFiles(opts.attachedPlugins);
     if (Object.keys(pluginFiles).length > 0) {
-      await this.opts.sandboxProvider.uploadFiles(
+      await sandboxProvider.uploadFiles(
         opts.sandboxId,
         pluginFiles,
         opts.workingDirectory,
@@ -309,7 +310,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       instructions,
       tools: createTools(
         {
-          provider: this.opts.sandboxProvider,
+          provider: sandboxProvider,
           sandboxId: opts.sandboxId,
           workingDirectory: opts.workingDirectory,
         },

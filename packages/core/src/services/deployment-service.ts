@@ -269,7 +269,7 @@ export class DeploymentService {
         // memo (a pre-deploy existence check, a burst of reads) must not
         // serve the pre-push tree to a role/tool resolution that follows
         // the deploy immediately.
-        forgetProgramFetch(tenantId, projectId);
+        forgetProgramFetch(this.projectManager, tenantId, projectId);
         return {
           status: "deployed" as const,
           commitSha: result.sha,

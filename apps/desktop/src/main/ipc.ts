@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -270,7 +271,8 @@ export function registerIpcHandlers(
   // Project policy (ADR 0062): may members open incognito sessions here?
   ipcMain.handle(
     "catamorphic:project-allow-incognito",
-    async (_event, projectId: string) => {
+    async (event, projectId: string) => {
+      if (storesFor(event).remoteProjects.inspect(projectId)) return false;
       const root = await state.current?.projectRoots.get(projectId);
       return root ? projectAllowsIncognito(root) : true;
     },
@@ -1768,6 +1770,30 @@ export function registerIpcHandlers(
   );
 
   ipcMain.handle(
+    "catamorphic:remote-enable-local-execution",
+    async (_event, input: { projectId: string; environment: string }) => {
+      if (!state.current) throw new Error("Server is not running");
+      return state.current.clientRunners.connect(input);
+    },
+  );
+
+  ipcMain.handle("catamorphic:remote-authority", (event, projectId: string) => {
+    const inspected = storesFor(event).remoteProjects.inspect(projectId);
+    return inspected
+      ? {
+          serverUrl: inspected.link.serverUrl,
+          remoteProjectId: inspected.link.remoteProjectId,
+          connectionId: inspected.link.connectionId,
+          credentialEpoch: inspected.credentials
+            ? createHash("sha256")
+                .update(inspected.credentials.accessToken)
+                .digest("hex")
+            : "signed-out",
+        }
+      : null;
+  });
+
+  ipcMain.handle(
     "catamorphic:remote-status",
     async (event, projectId: string) => {
       const rootPath = await requireRoot(projectId);
@@ -2107,6 +2133,19 @@ export function registerIpcHandlers(
   ipcMain.handle(
     "catamorphic:editor-file-read",
     (_event, input: { filePath: string }) => readEditorFile(input),
+  );
+  ipcMain.handle(
+    "catamorphic:project-local-files",
+    async (_event, projectId: string) => {
+      if (!state.current) throw new Error("The local server is starting");
+      // The desktop owns this synced working copy. Remote program access
+      // and execution still go through the member's remote authority.
+      const files = await state.current.catamorphic.core.projects.listFiles(
+        { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+        projectId,
+      );
+      return files.map((file) => ({ path: file.path }));
+    },
   );
   ipcMain.handle(
     "catamorphic:editor-file-write",

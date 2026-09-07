@@ -29,11 +29,15 @@ export interface EnvironmentBinding {
   agentTopologies: readonly AgentExecutionTopology[];
   capabilities: readonly string[];
   resources: EnvironmentResourcePolicy;
+  resourceLimits?: readonly ("cpuMillis" | "memoryMb" | "storageMb" | "gpu")[];
 }
 
 /** Internal realization. Provider objects never cross an API boundary. */
 export interface EnvironmentRuntimeBinding {
   descriptor: EnvironmentBinding;
+  /** Physical placement selected by the host, never a user-supplied endpoint. */
+  workerNodeId?: string;
+  workerLeaseToken?: string;
   sandboxProvider?: SandboxProvider;
 }
 
@@ -49,7 +53,14 @@ export interface EnvironmentRequirements {
 export interface EnvironmentProvider {
   get(args: {
     tenantId: string;
+    externalUserId?: string;
+    projectId?: string;
+    clientRunnerId?: string;
+    allocationBindingId?: string;
     bindingId: string;
+    requirements?: EnvironmentRequirements;
+    /** Preserve an existing Allocation's physical owner when resolving a pool. */
+    workerNodeId?: string;
   }):
     | Promise<EnvironmentRuntimeBinding | undefined>
     | EnvironmentRuntimeBinding
@@ -76,6 +87,26 @@ export function environmentSatisfies(
   requirements: EnvironmentRequirements,
 ): EnvironmentCompatibility {
   const reasons: string[] = [];
+  if (
+    requirements.topology === "native" &&
+    ["cpuMillis", "memoryMb", "storageMb", "gpu"].some((key) =>
+      Object.entries(requirements.resources ?? {}).some(
+        ([name, value]) => name === key && Boolean(value),
+      ),
+    )
+  ) {
+    reasons.push(
+      "Native agent execution does not enforce sandbox resource limits; choose a controller agent",
+    );
+  }
+  for (const key of ["cpuMillis", "memoryMb", "storageMb", "gpu"] as const) {
+    if (
+      requirements.resources?.[key] &&
+      !binding.resourceLimits?.includes(key)
+    ) {
+      reasons.push(`Binding cannot enforce '${key}'`);
+    }
+  }
   if (!binding.workloads.includes(requirements.workload)) {
     reasons.push(`Workload '${requirements.workload}' is not supported`);
   }

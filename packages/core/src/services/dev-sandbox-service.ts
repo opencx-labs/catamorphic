@@ -4,7 +4,7 @@ import type {
   ProjectRepo,
 } from "@catamorphic/git";
 import { WORKFLOW_SOURCE_ROOT } from "@catamorphic/parser";
-import type { SandboxProvider } from "@catamorphic/sandbox";
+import type { SandboxProvider, SandboxResources } from "@catamorphic/sandbox";
 import {
   resolveWorkflowPackageFallback,
   SandboxManagerImpl,
@@ -29,11 +29,19 @@ export class DevSandboxService {
       projectManager: ProjectManager;
       provider: SandboxProvider;
       store: DbSandboxStore;
+      sessionId?: string;
+      resources?: SandboxResources;
     },
   ) {
     this.manager = new SandboxManagerImpl({
       provider: deps.provider,
       store: deps.store,
+      resources: {
+        cpuMillis: deps.resources?.cpuMillis,
+        memoryMb: deps.resources?.memoryMb,
+        storageMb: deps.resources?.storageMb,
+        gpu: deps.resources?.gpu,
+      },
     });
   }
 
@@ -42,11 +50,18 @@ export class DevSandboxService {
     projectId: string;
     refresh: boolean;
   }): Promise<PreparedDevSandbox> {
-    const repo = await this.deps.projectManager.openDev(
-      opts.identity.tenantId,
-      opts.projectId,
-      opts.identity.externalUserId,
-    );
+    const repo = this.deps.sessionId
+      ? await this.deps.projectManager.openSession({
+          tenantId: opts.identity.tenantId,
+          projectId: opts.projectId,
+          sessionId: this.deps.sessionId,
+          refresh: opts.refresh,
+        })
+      : await this.deps.projectManager.openDev(
+          opts.identity.tenantId,
+          opts.projectId,
+          opts.identity.externalUserId,
+        );
     try {
       const baseCommitSha = await repo.resolveRef("HEAD").catch(() => null);
       const existing = await this.deps.store.findSandbox({

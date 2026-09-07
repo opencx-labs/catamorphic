@@ -14,6 +14,7 @@ export interface EnvironmentList {
     label: string;
     description?: string;
     available: boolean;
+    clientRequired?: boolean;
     compatible: boolean;
     preferred: boolean;
     allowed: boolean;

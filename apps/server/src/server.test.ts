@@ -168,6 +168,7 @@ const operatorInject = (url: string, token?: string, body?: unknown) =>
 let projectId: string;
 let memberToken: string;
 let memberUserId: string;
+let memberInvitationId: string;
 let managerToken: string;
 
 const MEMBER_ROLE = {
@@ -213,7 +214,14 @@ describe("stock server", () => {
   });
   it("reports health and chat availability", async () => {
     const response = await inject("GET", "/healthz");
-    expect(response.json()).toEqual({ ok: true, agentSessions: true });
+    expect(response.json()).toMatchObject({
+      ok: true,
+      agentSessions: true,
+      machine: {
+        id: expect.stringMatching(/^node\./),
+        label: "Catamorphic server",
+      },
+    });
   });
 
   it("serves the PWA at its root, SPA-falling back on unknown paths", async () => {
@@ -352,6 +360,7 @@ describe("stock server", () => {
     );
     expect(response.statusCode).toBe(201);
     const invite = response.json();
+    memberInvitationId = invite.id;
     expect(invite.connectLinks[0]).toContain(
       "catamorphic://connect?server=http%3A%2F%2Fcatamorphic.local%3A4700%2Fapi",
     );
@@ -395,7 +404,7 @@ describe("stock server", () => {
     expect(me.features.agentSessions).toBe(true);
   });
 
-  it("the member sees the project in the list but not its builder record", async () => {
+  it("the member sees project metadata without builder files", async () => {
     const list = await inject("GET", "/api/projects", memberToken);
     expect(list.statusCode).toBe(200);
     expect(list.json().items.map((p: { id: string }) => p.id)).toEqual([
@@ -406,17 +415,23 @@ describe("stock server", () => {
       `/api/projects/${projectId}`,
       memberToken,
     );
-    expect(record.statusCode).toBe(403);
+    expect(record.statusCode).toBe(200);
+    expect(record.json().files).toEqual([]);
+    expect(
+      (await inject("GET", `/api/projects/${projectId}/files`, memberToken))
+        .statusCode,
+    ).toBe(403);
   });
 
-  it("a scoped member must address the project assistant explicitly", async () => {
+  it("a scoped member starts with the permitted project default", async () => {
     const bare = await inject(
       "POST",
       `/api/projects/${projectId}/agent/sessions`,
       memberToken,
       {},
     );
-    expect(bare.statusCode).toBe(403);
+    expect(bare.statusCode).toBe(201);
+    expect(bare.json().agentId).toBe(projectAssistantId(projectId));
   });
 
   it("the member chats with the assistant end to end", async () => {
@@ -593,5 +608,15 @@ describe("stock server", () => {
     const me = await inject("GET", "/api/me", memberToken);
     expect(me.statusCode).toBe(200);
     expect(me.json().projects).toEqual([]);
+    const replay = await inject(
+      "POST",
+      `/api/projects/${projectId}/admission/invitations/${memberInvitationId}/redeem`,
+      memberToken,
+    );
+    expect(replay.statusCode).toBe(404);
+    expect(replay.json().error).toBe("This invitation is no longer available");
+    expect(
+      (await inject("GET", "/api/me", memberToken)).json().projects,
+    ).toEqual([]);
   });
 });

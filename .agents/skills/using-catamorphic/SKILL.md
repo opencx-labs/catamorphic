@@ -31,6 +31,11 @@ Choose **one** backend integration; the React/UI layer is the same in both.
 
 Frontend is always `@catamorphic/react` (+ optionally `@catamorphic/ui`) talking through `@catamorphic/api-client` to whichever backend surface is live.
 
+For operator provisioning, machine enrollment, or multi-instance deployment,
+use the [setup skill](../../../skills/setup-catamorphic-server/SKILL.md).
+The construction examples below are in-process integrations, not proof of
+cluster support. Read its cluster reference before adding replicas.
+
 ## Identity Model (Read This First)
 
 Every scoped call needs two ids:
@@ -115,8 +120,8 @@ export const catamorphic = createCatamorphic({
     projectsPath: process.env.CATAMORPHIC_PROJECTS_PATH!,
     remotesPath: process.env.CATAMORPHIC_REMOTES_PATH!,
   },
-  // Optional — only needed for run execution. Backends are vendor plugin
-  // packages: @catamorphic/cloudflare (default) or @catamorphic/daytona.
+  // Used for agent workspace execution too. The host constructs its provider;
+  // the framework does not automatically select one.
   sandboxProvider,
   // Required. This binding matches the default project environment.
   // Multi-pool hosts can inject a dynamic EnvironmentProvider instead.
@@ -490,10 +495,21 @@ import {
 
 ### 5) Drop-in editor — `@catamorphic/ui`
 
+For Tailwind hosts, import the UI stylesheet from the **same CSS entry** as
+Tailwind so its packaged component classes are included:
+
+```css
+@import "tailwindcss";
+@import "@catamorphic/ui/styles.css";
+```
+
+A separate JavaScript stylesheet import does not register these class sources
+with the host's Tailwind compilation. Shared controls use the host's theme tokens;
+headless hooks remain independent of Tailwind.
+
 ```tsx
 import { useOnParse } from "@catamorphic/react";
 import { WorkflowEditor } from "@catamorphic/ui";
-import "@catamorphic/ui/styles.css";
 
 export function WorkflowScreen({
   projectFiles,
@@ -638,27 +654,46 @@ Use cases:
 | `@catamorphic/registry` | Frontend (copy-paste) | shadcn-style registry of pre-wired project, run, git, agent-chat, timeline, session-list, and tool-permission components |
 | `@catamorphic/parser` | Either | `parseWorkflow`, `parseProject`, `layoutGraph`, `WorkflowGraph` types |
 
-## Environment Variables
+## Host configuration inputs
 
-Backend (SDK):
+`createCatamorphic` receives explicit options. It does not read deployment
+environment variables to select storage, execution, or plugins. The example
+host above reads these inputs and passes their values to the SDK:
 
-- `DATABASE_URL` — Postgres connection string
-- `CATAMORPHIC_DB_SCHEMA` — schema name (default `catamorphic`)
-- `CATAMORPHIC_PROJECTS_PATH` — fs path for per-user git working trees
-- `CATAMORPHIC_REMOTES_PATH` — fs path for bare git remotes
-- `CLOUDFLARE_SANDBOX_API_URL` + `CLOUDFLARE_SANDBOX_API_KEY` — default sandbox provider (Bridge Worker; see `CLOUDFLARE.md`)
-- `DAYTONA_API_KEY` — credential for hosts that explicitly construct the alternate Daytona provider
-- `CATAMORPHIC_LOCAL_PLUGINS_DIR` — optional, enables local plugin resolution
+- `CATAMORPHIC_PROJECTS_PATH` and `CATAMORPHIC_REMOTES_PATH`: filesystem paths.
+- `CLOUDFLARE_SANDBOX_API_URL` and `CLOUDFLARE_SANDBOX_API_KEY`: inputs for
+  the explicitly constructed Cloudflare provider, not an automatic default.
+- `CATAMORPHIC_LOCAL_PLUGINS_DIR`: input for a `LocalPluginResolver`.
 
-Frontend (HTTP path):
+The database CLI reads `DATABASE_URL` and `CATAMORPHIC_DB_SCHEMA`; a custom SDK
+host supplies its own `database` options. The stock host has its own supported
+configuration. Inspect that host's boot code before prescribing variables.
 
-- `NEXT_PUBLIC_CATAMORPHIC_URL` (or equivalent) — base URL where the host mounts `@catamorphic/fastify-plugin`
+The frontend example reads `NEXT_PUBLIC_CATAMORPHIC_URL` to construct its API
+client. Use the host's existing public configuration convention.
+
+## Remote members and execution clients
+
+Use the authority's `agent-catalog` and Environment discovery contracts instead
+of reading local agent files or guessing from `/me` role refs. The shared
+`ProjectWorkflows`, `WorkflowReview`, `WorkflowEnablementPanel`, and
+`AgentEnvironmentControl` components are optional UI compositions over headless
+hooks. Authoring inspectors remain host-owned. Never fetch builder source files
+to render a member's deployed graph.
+
+Bind query caches to the authenticated authority/account. Pass the right
+`baseUrl` or explicit `authorizationRedirectUri` to `CatamorphicProvider` when
+account authorization returns to a separate host. A remote member's local runner
+uses `clientExecution` and the SDK `startClientRunner` transport; it does not use
+the desktop's root identity or receive a database connection. See
+[cluster setup](../../../skills/setup-catamorphic-server/references/cluster-deployment.md)
+for the stock host's deployment choices; custom hosts keep their own policy.
 
 ## Common Pitfalls
 
 - **401 on every route.** The plugin's `identity` resolver returned `null` — it did not find your session on the request. Check the cookie/JWT reaches the plugin's origin (`credentials: "include"`, same origin or CORS with credentials). A 400 means `identityFromHeaders()` got a missing/malformed header.
 - **`Content-Type: application/json` stripped by `fetch` wrapper.** openapi-fetch passes a built `Request` as `input`; always seed `new Headers(input instanceof Request ? input.headers : init?.headers)` before overriding.
-- **Using `@catamorphic/ui` without the stylesheet.** Import `@catamorphic/ui/styles.css` once at the root — class names use the `.catamorphic-*` prefix so host CSS doesn't clash.
+- **Using `@catamorphic/ui` without the stylesheet.** Import `@catamorphic/ui/styles.css` from the host's Tailwind CSS entry. Canvas styles use `.catamorphic-*`; shared control utilities use the host theme tokens.
 - **Double `QueryClientProvider`.** `CatamorphicProvider` mounts its own if you don't pass `queryClient`. In hosts that already have one, pass it explicitly so queries share a cache.
 - **Migrations.** `catamorphic.migrate()` / `catamorphic-db migrate` are idempotent and schema-scoped; prefer running them in CI/deploy.
 - **No execution worker.** Production triggers enqueue Runs; a host process must explicitly start `catamorphic.startExecutionWorker(...)` and stop its handle during shutdown.
