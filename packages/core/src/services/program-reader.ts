@@ -25,11 +25,18 @@ export const PROGRAM_READER = "catamorphic-reader";
  * fetch per burst is plenty, and roles/tools already tolerate this lag.
  */
 const FETCH_TTL_MS = 5_000;
-const recentFetches = new Map<string, { at: number; sha: string | null }>();
+const managerFetches = new WeakMap<
+  ProjectManager,
+  Map<string, { at: number; sha: string | null }>
+>();
 
 /** Drop the memoized origin fetch (a push just landed; read fresh). */
-export function forgetProgramFetch(tenantId: string, projectId: string): void {
-  recentFetches.delete(`${tenantId}:${projectId}`);
+export function forgetProgramFetch(
+  projectManager: ProjectManager,
+  tenantId: string,
+  projectId: string,
+): void {
+  managerFetches.get(projectManager)?.delete(`${tenantId}:${projectId}`);
 }
 
 export async function withProgram<T>(
@@ -44,6 +51,11 @@ export async function withProgram<T>(
     : await projectManager.open(tenantId, projectId);
   try {
     if (!remote) return await fn(repo, null);
+    let recentFetches = managerFetches.get(projectManager);
+    if (!recentFetches) {
+      recentFetches = new Map();
+      managerFetches.set(projectManager, recentFetches);
+    }
     const key = `${tenantId}:${projectId}`;
     const recent = recentFetches.get(key);
     if (recent && Date.now() - recent.at < FETCH_TTL_MS) {

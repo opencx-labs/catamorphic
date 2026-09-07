@@ -1,4 +1,3 @@
-import type { CommitInfo, OriginRepo, RemoteBackend } from "@catamorphic/git";
 import {
   type GitObjectType,
   parseCommit,
@@ -6,6 +5,7 @@ import {
   wrapObject,
 } from "./git-object-codec.js";
 import { type ObjectStore, PreconditionFailedError } from "./object-store.js";
+import type { CommitInfo, OriginRepo, RemoteBackend } from "./types.js";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -25,7 +25,7 @@ function assertRefName(ref: string): void {
   }
 }
 
-export interface S3RemoteBackendOpts {
+export interface ObjectRemoteBackendOpts {
   store: ObjectStore;
   /**
    * Key prefix so multiple catamorphic environments can share a bucket.
@@ -36,8 +36,8 @@ export interface S3RemoteBackendOpts {
 
 /**
  * `RemoteBackend` storing each project's canonical bare repository directly
- * in an S3-compatible bucket (Cloudflare R2, AWS S3, MinIO) — no local
- * mirror, no git repo on disk.
+ * in a host-injected object store. S3 and Postgres backends share the same
+ * immutable objects and conditional ref updates, without a local origin mirror.
  *
  * Git objects are immutable and content-addressed, so they map cleanly onto
  * object storage; ref updates use conditional PUTs (`If-Match` /
@@ -46,11 +46,11 @@ export interface S3RemoteBackendOpts {
  * implemented and sandboxes receive file uploads (same as `FsRemoteBackend`).
  * See docs/decisions/0012.
  */
-export class S3RemoteBackend implements RemoteBackend {
+export class ObjectRemoteBackend implements RemoteBackend {
   private readonly store: ObjectStore;
   private readonly keyPrefix: string;
 
-  constructor(opts: S3RemoteBackendOpts) {
+  constructor(opts: ObjectRemoteBackendOpts) {
     this.store = opts.store;
     this.keyPrefix = opts.keyPrefix ?? "";
   }
@@ -93,7 +93,7 @@ export class S3RemoteBackend implements RemoteBackend {
     fn: (origin: OriginRepo) => Promise<T>,
   ): Promise<T> {
     return fn(
-      new S3OriginRepo({
+      new ObjectOriginRepo({
         store: this.store,
         basePath: this.basePath(tenantId, projectId),
       }),
@@ -107,7 +107,7 @@ export class S3RemoteBackend implements RemoteBackend {
  *   `sha1(body) == key` and every object is self-verifying.
  * - `refs/heads/<branch>` — the 40-char commit SHA as the body.
  */
-export class S3OriginRepo implements OriginRepo {
+export class ObjectOriginRepo implements OriginRepo {
   private readonly store: ObjectStore;
   private readonly basePath: string;
   /** Synthetic identifier — this origin has no on-disk git directory. */

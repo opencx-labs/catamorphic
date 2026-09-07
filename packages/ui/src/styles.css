@@ -1,4 +1,6 @@
 @import "@xyflow/react/dist/style.css";
+/* Tailwind hosts must discover classes in this package's shipped components. */
+@source "./";
 
 /* Agent chat dock */
 .catamorphic-agent-dock {

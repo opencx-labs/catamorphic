@@ -104,7 +104,7 @@ export const WorkflowCapabilitiesSchema = z.object({
   cancellation: z.boolean(),
 });
 
-const JsonValueSchema = z.json().meta({ id: "JsonValue" });
+export const JsonValueSchema = z.json().meta({ id: "JsonValue" });
 // Response-side JSON is untyped, like `Run.input`: the tagged JsonValue
 // component is io-differentiated (input-only) and recursive z.json() emits
 // $refs the spec bundler cannot resolve in responses.
@@ -215,6 +215,8 @@ export const WorkflowEnablementPreviewSchema =
   WorkflowEnablementTargetSchema.extend({
     deploymentArtifactDigest: z.string(),
     triggerCount: z.number().int().nonnegative(),
+    triggers: z.array(z.object({ kind: z.string(), config: JsonOutSchema })),
+    connectionLabels: z.record(z.string(), z.string()),
   });
 
 export const WorkflowEnablementSchema = WorkflowEnablementTargetSchema.extend({
@@ -560,6 +562,7 @@ export const EnvironmentListSchema = z.object({
       label: z.string(),
       description: z.string().optional(),
       available: z.boolean(),
+      clientRequired: z.boolean().optional(),
       compatible: z.boolean(),
       preferred: z.boolean(),
       allowed: z.boolean(),
@@ -1763,3 +1766,24 @@ export const ListSchema = <T extends z.ZodTypeAny>(item: T) =>
     items: z.array(item),
     total: z.number(),
   });
+
+export const AgentCatalogSchema = z.object({
+  items: z.array(
+    z.object({
+      id: z.string(),
+      name: z.string(),
+      description: z.string().optional(),
+      available: z.boolean(),
+      reason: z.string().nullable(),
+      environments: EnvironmentListSchema,
+    }),
+  ),
+  defaultAgentId: z.string().optional(),
+  startingActions: z.array(
+    z.object({
+      label: z.string(),
+      prompt: z.string(),
+      agentId: z.string().optional(),
+    }),
+  ),
+});

@@ -6,9 +6,15 @@ import type {
 } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely, Selectable, Transaction } from "kysely";
-import { authorFor, type Identity, SYSTEM_AUTHOR } from "../identity.js";
+import {
+  authorFor,
+  type Identity,
+  mayUseProject,
+  SYSTEM_AUTHOR,
+} from "../identity.js";
 import { SEED_SKILLS } from "../seeds.js";
 import {
+  AccessDeniedError,
   assertBuilder,
   assertMayManageRolePolicy,
   assertRootIdentity,
@@ -317,6 +323,23 @@ export class ProjectsService {
 
   async get(identity: Identity, projectId: string): Promise<Project> {
     const row = await this.getRow(identity, projectId);
+    return mapProject(row);
+  }
+
+  /** Project metadata for an admitted member; grants no source-file access. */
+  async getOverview(args: {
+    identity: Identity;
+    projectId: string;
+  }): Promise<Project> {
+    if (!mayUseProject(args.identity, args.projectId))
+      throw new AccessDeniedError();
+    const row = await this.db
+      .selectFrom("projects")
+      .selectAll()
+      .where("id", "=", args.projectId)
+      .where("tenant_id", "=", args.identity.tenantId)
+      .executeTakeFirst();
+    if (!row) throw new ProjectNotFoundError(args.projectId);
     return mapProject(row);
   }
 

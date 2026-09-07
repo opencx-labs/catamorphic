@@ -6,6 +6,7 @@ export {
   pull,
   push,
 } from "./git-sync.js";
+export { InMemoryObjectStore } from "./in-memory-object-store.js";
 export { migrateWorkflowToProject } from "./migrate-workflow.js";
 export {
   type CloneFromRemoteOptions,
@@ -18,6 +19,13 @@ export {
   type NetworkSyncStatus,
   syncWithNetworkRemote,
 } from "./network-sync.js";
+export {
+  ObjectOriginRepo,
+  ObjectRemoteBackend,
+  type ObjectRemoteBackendOpts,
+} from "./object-remote-backend.js";
+export type { ObjectStore } from "./object-store.js";
+export { PreconditionFailedError } from "./object-store.js";
 export {
   generateWorkBranchName,
   PROJECT_MANIFEST_PATH,

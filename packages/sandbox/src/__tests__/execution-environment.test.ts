@@ -12,6 +12,7 @@ const binding: EnvironmentBinding = {
   workloads: ["agent", "workflow"],
   agentTopologies: ["controller", "contained"],
   capabilities: ["network.egress", "browser"],
+  resourceLimits: ["cpuMillis", "memoryMb", "storageMb", "gpu"],
   resources: {
     cpuMillis: 4000,
     memoryMb: 8192,
@@ -47,6 +48,7 @@ describe("environmentSatisfies", () => {
     ).toEqual({
       compatible: false,
       reasons: [
+        "Native agent execution does not enforce sandbox resource limits; choose a controller agent",
         "Agent topology 'native' is not supported",
         "Capability 'private-network' is not available",
         "Memory requirement 16384 MB exceeds the 8192 MB ceiling",

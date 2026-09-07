@@ -8,6 +8,7 @@ import type {
   SandboxProvider,
   SandboxStatus,
 } from "@catamorphic/sandbox";
+import { assertSandboxResources } from "@catamorphic/sandbox";
 import { Sandbox } from "microsandbox";
 import { msbStdioRuntimeProvider } from "./stdio-runtime-provider.js";
 
@@ -51,7 +52,9 @@ const DEFAULT_SETUP_COMMAND =
   "(apt-get update -qq && apt-get install -y -qq git)";
 
 export class MicrosandboxSandboxProvider implements SandboxProvider {
+  readonly isolation = "sandbox";
   readonly workspaceRoot = "/workspace";
+  readonly resourceLimits = ["cpuMillis", "memoryMb"] as const;
   readonly deploymentRuntime: DeploymentRuntimeProvider;
   private readonly config: Required<MicrosandboxProviderConfig>;
   private readonly connections = new Map<string, Sandbox>();
@@ -73,12 +76,22 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
   }
 
   async createSandbox(opts: CreateSandboxOpts): Promise<SandboxHandle> {
+    assertSandboxResources(opts.resources, this.resourceLimits);
+    const cpuMillis = opts.resources?.cpuMillis ?? this.config.cpus * 1000;
+    if (cpuMillis % 1000 !== 0)
+      throw new Error(
+        "Microsandbox CPU limits must be whole cores (multiples of 1000 millicores)",
+      );
     const name = `${this.config.namePrefix}-${crypto.randomUUID().slice(0, 12)}`;
     let builder = Sandbox.builder(name)
       .image(opts.snapshotName ?? this.config.image)
-      .memory(this.config.memoryMib)
-      .cpus(this.config.cpus)
-      .idleTimeout(opts.autoStopInterval ?? this.config.idleTimeoutSeconds)
+      .memory(opts.resources?.memoryMb ?? this.config.memoryMib)
+      .cpus(cpuMillis / 1000)
+      .idleTimeout(
+        opts.autoStopInterval !== undefined
+          ? opts.autoStopInterval * 60
+          : this.config.idleTimeoutSeconds,
+      )
       // The workdir must exist before boot; images like oven/bun don't ship it.
       .patch((patch) => patch.mkdir(this.workspaceRoot, { mode: 0o755 }))
       .workdir(this.workspaceRoot)
@@ -119,7 +132,16 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
 
   async destroySandbox(sandboxId: string): Promise<void> {
     this.connections.delete(sandboxId);
-    const handle = await Sandbox.get(sandboxId);
+    const handle = await Sandbox.get(sandboxId).catch((error: unknown) => {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "sandboxNotFound"
+      )
+        return undefined;
+      throw error;
+    });
+    if (!handle) return;
     if (handle.status === "running") await handle.killWithTimeout(0);
     await handle.remove();
   }

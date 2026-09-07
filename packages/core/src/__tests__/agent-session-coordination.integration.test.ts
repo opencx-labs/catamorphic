@@ -18,8 +18,6 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
 import { AgentSessionsService } from "../services/agent-sessions-service.js";
 import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
-import { DbSandboxStore } from "../services/db-sandbox-store.js";
-import { DevSandboxService } from "../services/dev-sandbox-service.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
@@ -242,7 +240,6 @@ describe("agent session coordination", () => {
     sessions = new AgentSessionsService(db, {
       hostId: "coordination-test-host",
       projectManager,
-      sandboxProvider: unusedSandbox,
       executionEnvironments,
       executionAllocations: new ExecutionAllocationsService(db),
       codingAgents: {
@@ -250,11 +247,6 @@ describe("agent session coordination", () => {
         get: (id) => agents.get(id),
         list: () => [...agents.values()],
       },
-      devSandboxes: new DevSandboxService({
-        projectManager,
-        provider: unusedSandbox,
-        store: new DbSandboxStore(db),
-      }),
       nativeAgentCheckout: {
         resolve: ({ projectId, sessionId }) =>
           checkoutBySession.get(sessionId) ?? path.join(tmpDir, projectId),

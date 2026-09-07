@@ -2,6 +2,10 @@
 
 Status: Accepted (2026-08-21; auth, invites, and administration superseded by 0071 and 0072)
 
+Single-node storage assumption superseded by
+[0099](0099-shared-postgres-server-environments.md) for managed multi-machine
+deployments. The standalone PGlite mode remains supported.
+
 ## Context
 
 ADR 0055 settled identity and TODO.md promised a "default self-hostable

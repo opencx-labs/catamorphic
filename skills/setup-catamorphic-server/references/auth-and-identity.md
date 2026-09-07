@@ -45,6 +45,12 @@ Machine/database authority is outside this model. There is no server-owner or
 super-admin user. A setup agent with deployment access may provision the first
 ordinary user and membership through maintained host operations.
 
+An invitation admits a user once; it is not a recovery credential after
+membership revocation. Test sign-in, redemption, revocation, and attempted replay
+through the normal API. Email-targeted and approved-domain admission require
+verified email from the configured auth path. Do not assume the local password
+fallback verifies email or weaken verification to make admission work.
+
 Never write password hashes or auth rows directly. Never put access tokens in
 connect links. Browser and desktop authorization should use authorization code
 with PKCE; MCP should use its standards-based authorization discovery.

@@ -1,5 +1,20 @@
 # Catamorphic stock server
 
+## Machines and execution Environments
+
+The accepted managed deployment model uses multiple Catamorphic server instances
+sharing one authority and network Postgres. Operators enroll machines; project
+roles and agent policy determine which Environments members may use. The
+desktop's **This machine** option uses the member's project connection and does
+not require direct database access. PGlite remains available for standalone use.
+
+Postgres mode shares origin objects, bundles, encrypted vault records, auth,
+approvals, and worker leases. Each machine owns its runtime and local caches.
+Configure a common public origin and deployment secret before enrollment. See
+[ADR 0099](../../docs/decisions/0099-shared-postgres-server-environments.md) and
+the [setup reference](../../skills/setup-catamorphic-server/references/cluster-deployment.md)
+for enrollment, session recovery, and required verification.
+
 ## Authentication setup
 
 Use [`../../skills/setup-catamorphic-server/SKILL.md`](../../skills/setup-catamorphic-server/SKILL.md)
@@ -36,10 +51,11 @@ enables every compatible workflow automatically.
 
 ## Credential vault and provider setup
 
-The stock server creates an AES-256-GCM credential vault under
-`CATAMORPHIC_DATA_DIR/credentials`. The key and encrypted records use
-owner-only permissions. Back up the key with the data volume. Losing it makes
-provider connections unrecoverable.
+Standalone PGlite installs create an AES-256-GCM credential vault under
+`CATAMORPHIC_DATA_DIR/credentials`, with owner-only key and record permissions.
+Postgres installs store encrypted records in shared object storage and derive the
+vault key from `BETTER_AUTH_SECRET`. Back up the database and protect the key
+separately. Losing the key makes provider connections unrecoverable.
 
 Rotate a service credential with the authenticated
 `PUT /connections/:connectionId/credential` endpoint. Rotation writes a new
@@ -52,4 +68,13 @@ The stock image does not ship a shared Slack or Google OAuth identity. Register
 your own provider applications, configure their HTTPS callback URLs, and inject
 their connection providers when embedding `buildStockServer`. Service accounts
 are explicit project or tenant service connections and are never inferred from
-a member login. Unattended workflows accept service connections only.
+a member login. Unattended workflows use the connections authorized by their
+explicit enablement, including member connections for member-owned enablements.
+
+## Remote development resources
+
+Choose `CATAMORPHIC_SANDBOX=microsandbox` for per-agent CPU/memory isolation and
+configure each server's workspace budget. Full servers reject new allocations;
+idle development workspaces retain their reservation until archived or closed.
+See the [capacity and recovery setup](../../skills/setup-catamorphic-server/references/cluster-deployment.md#capacity-and-isolated-development)
+for configuration, agent requirements, machine inventory, and cleanup recovery.

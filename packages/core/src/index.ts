@@ -122,6 +122,7 @@ export {
   type SessionDeliveryReceipt,
   type SessionMessageAuthor,
 } from "./services/agent-turns-service.js";
+export { cleanupWorkerAllocations } from "./services/allocation-sandbox-provider.js";
 export type { AppBundleStore } from "./services/app-bundle-store.js";
 export { appBundleKey, appVersionPrefix } from "./services/app-bundle-store.js";
 export {
@@ -171,6 +172,12 @@ export {
   ReservedCapabilityEnvError,
   UnfulfilledCapabilityError,
 } from "./services/capability-providers.js";
+export {
+  type ClientRunnerOperation,
+  ClientRunnerOperationSchema,
+  ClientRunnerResultSchema,
+  ClientRunnersService,
+} from "./services/client-runners-service.js";
 export type {
   CodeHost,
   PullRequestFile,
@@ -260,6 +267,8 @@ export {
   normalizeDocumentPath,
   STORE_ROOT,
 } from "./services/documents-service.js";
+export { DurableToolPermissionBroker } from "./services/durable-tool-permission-broker.js";
+export { EncryptedCredentialVault } from "./services/encrypted-credential-vault.js";
 export {
   type EnvironmentAllocationPolicy,
   type ExecutionAllocation,
@@ -502,6 +511,7 @@ export {
 export {
   type PendingToolPermission,
   ToolPermissionBroker,
+  type ToolPermissionChannel,
 } from "./services/tool-permission-broker.js";
 export {
   renderTriggerTypesModule,
@@ -543,6 +553,16 @@ export {
   type Watcher,
   WatchersService,
 } from "./services/watchers-service.js";
+export type { WorkerCapacity } from "./services/worker-capacity.js";
+export {
+  capacityFits,
+  EnvironmentCapacityError,
+} from "./services/worker-capacity.js";
+export {
+  type WorkerNode,
+  type WorkerNodeLease,
+  WorkerNodesService,
+} from "./services/worker-nodes-service.js";
 export { workflowEnablementConsentDigest } from "./services/workflow-enablement-consent.js";
 export type {
   RevalidatedWorkflowEnablement,

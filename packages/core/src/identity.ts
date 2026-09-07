@@ -16,6 +16,8 @@
 export interface Identity {
   tenantId: string;
   externalUserId: string;
+  /** Untrusted placement hint. Client execution verifies owner and lease. */
+  clientRunnerId?: string;
   /**
    * The artifacts this identity may touch. Absent = the ROOT identity: every
    * project of the tenant, every surface, the whole store — the desktop's

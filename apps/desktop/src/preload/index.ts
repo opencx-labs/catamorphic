@@ -257,6 +257,8 @@ const api = {
     ipcRenderer.invoke("catamorphic:reveal-folder", folderPath),
   editorFileRead: (input: { filePath: string }): Promise<{ content: string }> =>
     ipcRenderer.invoke("catamorphic:editor-file-read", input),
+  projectLocalFiles: (projectId: string): Promise<Array<{ path: string }>> =>
+    ipcRenderer.invoke("catamorphic:project-local-files", projectId),
   editorFileWrite: (input: {
     filePath: string;
     content: string;
@@ -332,6 +334,12 @@ const api = {
     ipcRenderer.invoke("catamorphic:remote-parse-link", link),
   remoteConnect: (input: unknown): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:remote-connect", input),
+  remoteEnableLocalExecution: (input: {
+    projectId: string;
+    environment: string;
+  }) => ipcRenderer.invoke("catamorphic:remote-enable-local-execution", input),
+  remoteAuthority: (projectId: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:remote-authority", projectId),
   remoteStatus: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:remote-status", projectId),
   remoteSync: (projectId: string): Promise<unknown> =>

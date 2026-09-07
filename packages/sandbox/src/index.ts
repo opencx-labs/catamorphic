@@ -156,12 +156,14 @@ export type {
   SandboxHandle,
   SandboxManager,
   SandboxProvider,
+  SandboxResources,
   SandboxStatus,
   SandboxType,
   SessionInfo,
   StepEntry,
 } from "./types.js";
 export {
+  assertSandboxResources,
   positiveTokenCount,
   RuntimeEventReportingError,
   RuntimeInfrastructureError,

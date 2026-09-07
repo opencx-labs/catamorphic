@@ -3459,3 +3459,22 @@ paths, deliberately independent:
   preparation callback only records readiness. A failed preparation requires a
   fresh restart click, and main checks active work both before and after it.
   Final shutdown attempts every service cleanup and reports storage failures.
+### Project-authorized execution choices (2026-09-07)
+
+- A connected project's **Run on** selector lists its permitted execution
+  Environments, including **This machine** when the member's role allows it and
+  the device can run the chosen agent. Project policy declares the choices;
+  host policy supplies and limits the runtime bindings.
+- The connected brain remains the authority for membership, shared configuration,
+  and canonical history. Running locally must retain the member's project
+  permissions and must not substitute the desktop's local root identity.
+- The selected target governs the actual process, workspace, tools, and recovery.
+  Unavailable targets explain the blocker and never silently fall back elsewhere.
+  Moving existing work remains an explicit operation with fenced ownership.
+- Independent server authorities are not another picker layer. See ADR 0098.
+- Managed targets are enrolled server instances of one shared-Postgres authority
+  (ADR 0099). The member's desktop remains an authenticated execution client;
+  it does not need direct database credentials.
+- Incognito is available only in local projects. Remote conversations retain
+  server-owned history even when sandbox commands run on **This machine**.
+  Older incognito tabs are blocked from opening against the remote authority.

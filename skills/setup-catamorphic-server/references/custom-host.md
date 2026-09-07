@@ -25,6 +25,12 @@ storage, and cloud sandboxes. A trusted single-tenant internal app may use
 PGlite, filesystem storage, and local processes. Do not infer the entire stack
 from one axis.
 
+For multiple instances, also read
+[Managed machines and clusters](cluster-deployment.md). Keep the existing host
+identity, but verify shared storage and execution coordination in addition to
+the database connection. A stock deployment recipe is not a replacement for
+the host's own lifecycle.
+
 Read `INTEGRATION.md` for current construction and mounting examples,
 `packages/server-sdk/README.md` for the SDK surface, and
 `packages/fastify-plugin/README.md` for request identity. The desktop boot at

@@ -31,6 +31,41 @@ describe("FsBackend", () => {
     expect(stat.isDirectory()).toBe(true);
   });
 
+  it("keeps explicit roots addressable before the host persists its mapping", async () => {
+    const explicitRoot = path.join(tmpDir, "chosen-folder");
+    let registeredRoot: string | null = null;
+    const rooted = new FsBackend(
+      path.join(tmpDir, "internal"),
+      async () => registeredRoot,
+    );
+    await rooted.initProject(TENANT, PROJECT, { rootPath: explicitRoot });
+    expect(await rooted.exists(TENANT, PROJECT, "member")).toBe(true);
+    const beforeRegistration = await rooted.acquireProject(
+      TENANT,
+      PROJECT,
+      "member",
+    );
+    await fs.writeFile(
+      path.join(beforeRegistration.repoPath, "plain.md"),
+      "# Preserve this write",
+    );
+    await beforeRegistration.release();
+    registeredRoot = explicitRoot;
+    const afterRegistration = await rooted.acquireProject(
+      TENANT,
+      PROJECT,
+      "member",
+    );
+    expect(afterRegistration.repoPath).toBe(beforeRegistration.repoPath);
+    expect(
+      await fs.readFile(
+        path.join(afterRegistration.repoPath, "plain.md"),
+        "utf8",
+      ),
+    ).toBe("# Preserve this write");
+    await afterRegistration.release();
+  });
+
   it("exists returns false for non-existent project", async () => {
     expect(await backend.exists(TENANT, PROJECT)).toBe(false);
   });

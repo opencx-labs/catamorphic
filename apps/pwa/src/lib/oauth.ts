@@ -2,6 +2,7 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { type ConnectLink, isSecureRemoteUrl } from "./connect-link.js";
 import type { RemoteOAuthCredentials } from "./store.js";
 
+const RETRY_TARGET_KEY = "catamorphic-pwa.oauth.retry-target";
 const PENDING_KEY = "catamorphic-pwa.oauth.pending";
 const OAUTH_SCOPE = "openid profile email offline_access";
 
@@ -148,6 +149,7 @@ async function beginAuthorization(options: {
     tokenEndpoint: metadata.token_endpoint,
   };
   storage.setItem(PENDING_KEY, JSON.stringify(pending));
+  storage.setItem(RETRY_TARGET_KEY, JSON.stringify(options.target));
 
   const authorization = new URL(metadata.authorization_endpoint);
   authorization.searchParams.set("client_id", registered.client_id);
@@ -347,4 +349,29 @@ function base64Url(bytes: Uint8Array): string {
     .replaceAll("+", "-")
     .replaceAll("/", "_")
     .replace(/=+$/, "");
+}
+
+/** Only the credential-free target survives a failed OAuth round trip. */
+export function remoteAuthorizationRetryTarget(
+  storage: Storage = sessionStorage,
+): RemoteAuthorizationTarget | undefined {
+  try {
+    const target = JSON.parse(storage.getItem(RETRY_TARGET_KEY) ?? "null");
+    if (
+      target?.kind === "project" &&
+      typeof target.link?.serverUrl === "string" &&
+      typeof target.link?.remoteProjectId === "string"
+    )
+      return target;
+    if (target?.kind === "server" && typeof target.serverUrl === "string")
+      return target;
+  } catch {
+    /* A corrupt locator is ignored. */
+  }
+  return undefined;
+}
+export function clearRemoteAuthorizationRetryTarget(
+  storage: Storage = sessionStorage,
+): void {
+  storage.removeItem(RETRY_TARGET_KEY);
 }

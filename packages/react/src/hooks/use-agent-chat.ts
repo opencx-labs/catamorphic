@@ -570,10 +570,14 @@ export function useAgentChat(
   };
 }
 
-function authenticationRequiredFrom(
-  error: CatamorphicError | null,
+export function authenticationRequiredFrom(
+  error: unknown,
 ): AgentAuthenticationRequired | null {
-  if (error?.code !== "authentication_required") return null;
+  if (
+    !(error instanceof CatamorphicError) ||
+    error.code !== "authentication_required"
+  )
+    return null;
   const details = error.details;
   if (details === null || typeof details !== "object") return null;
   const record = details as Record<string, unknown>;

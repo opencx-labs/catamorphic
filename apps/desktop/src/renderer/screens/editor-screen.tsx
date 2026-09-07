@@ -1,8 +1,3 @@
-import {
-  useProjectFile,
-  useProjectFiles,
-  useWriteProjectFile,
-} from "@catamorphic/react";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import "../lib/monaco-setup.js";
@@ -15,6 +10,10 @@ import {
   registerSelectionReader,
   stampSelectionOnClipboard,
 } from "../lib/editor-selection.js";
+import {
+  localEditorPath,
+  useLocalProjectFiles,
+} from "../lib/local-project-files.js";
 import { useTheme } from "../lib/theme.js";
 
 type EditorInstance = Parameters<OnMount>[0];
@@ -71,30 +70,26 @@ export function EditorScreen({
   const officeFile = filePath ? isOfficePath(filePath) : false;
   const pdfFile = filePath ? isPdfPath(filePath) : false;
   const localFile = Boolean(filePath?.startsWith("/"));
-  const projectFileQuery = useProjectFile(
-    projectId,
-    filePath && !localFile && !officeFile && !pdfFile ? filePath : undefined,
-  );
-  const localFileQuery = useQuery({
-    queryKey: ["desktop-editor-file", filePath],
-    enabled: localFile && !officeFile && !pdfFile,
-    queryFn: () => desktopApi.editorFileRead({ filePath: filePath ?? "" }),
+  const fileQuery = useQuery({
+    queryKey: ["desktop-editor-file", projectId, filePath],
+    enabled: Boolean(filePath) && !officeFile && !pdfFile,
+    queryFn: async () =>
+      desktopApi.editorFileRead({
+        filePath: await localEditorPath(projectId, filePath ?? ""),
+      }),
     retry: false,
   });
-  const fileQuery = localFile ? localFileQuery : projectFileQuery;
-  const projectWriteFile = useWriteProjectFile(projectId);
-  const localWriteFile = useMutation({
-    mutationFn: ({ path, content }: { path: string; content: string }) =>
+  const writeFile = useMutation({
+    mutationFn: async ({ path, content }: { path: string; content: string }) =>
       desktopApi.editorFileWrite({
-        filePath: path,
+        filePath: await localEditorPath(projectId, path),
         content,
-        expectedContent: localFileQuery.data?.content ?? "",
+        expectedContent: fileQuery.data?.content ?? "",
       }),
     onSuccess: () => {
-      void localFileQuery.refetch();
+      void fileQuery.refetch();
     },
   });
-  const writeFile = localFile ? localWriteFile : projectWriteFile;
   const editorRef = useRef<EditorInstance | null>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: repeated navigation to the same line must reveal it again
   useEffect(() => {
@@ -371,7 +366,7 @@ function FilePicker({
   projectId: string;
   onPick: (path: string) => void;
 }) {
-  const filesQuery = useProjectFiles(projectId);
+  const filesQuery = useLocalProjectFiles(projectId);
   const refetchFiles = filesQuery.refetch;
   useEffect(
     () =>

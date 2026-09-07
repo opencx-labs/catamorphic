@@ -79,8 +79,14 @@ const server = await buildStockServer({
   log: (line) => console.log(line),
 });
 
-await server.operatorApp.listen({ port: operatorPort, host: "127.0.0.1" });
-await server.app.listen({ port, host: "0.0.0.0" });
+try {
+  await server.operatorApp.listen({ port: operatorPort, host: "127.0.0.1" });
+  await server.app.listen({ port, host: "0.0.0.0" });
+} catch (error) {
+  mdns?.close();
+  await server.shutdown();
+  throw error;
+}
 const primary = connectionBases[0] ?? loopbackBase;
 
 console.log(`

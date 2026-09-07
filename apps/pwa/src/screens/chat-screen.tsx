@@ -1,9 +1,14 @@
 import {
   CatamorphicProvider,
   useAcknowledgeAgentSessionAttention,
+  useAgentCatalog,
   useAgentChat,
   useToolPermissions,
 } from "@catamorphic/react";
+import {
+  AgentEnvironmentControl,
+  AuthenticationRequiredCard,
+} from "@catamorphic/ui";
 import type { QueryClient } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUp, Bot, GitFork, ListPlus, Square, X, Zap } from "lucide-react";
@@ -20,7 +25,7 @@ import { ToolPermissionCard } from "../components/catamorphic/tool-permission-ca
 import { ChatGlyph } from "../components/chat-glyph.js";
 import { ConnectionTrouble } from "../components/connection-trouble.js";
 import { Screen } from "../components/screen.js";
-import { clientFor, fetchMe } from "../lib/api.js";
+import { clientFor } from "../lib/api.js";
 import { mirrorForkNotice } from "../lib/fork.js";
 import { navigate } from "../lib/nav.js";
 import { findConnection, getState, type PwaConnection } from "../lib/store.js";
@@ -41,6 +46,8 @@ export function ChatScreen({
   return (
     <CatamorphicProvider
       apiClient={clientFor(connection)}
+      baseUrl={new URL(connection.serverUrl).origin}
+      authorizationRedirectUri={`${connection.serverUrl.replace(/\/+$/, "")}/connection-authorizations/callback`}
       queryClient={queryClient}
     >
       <Chat
@@ -64,22 +71,19 @@ function Chat({
   sessionId: string | null;
   animation?: string;
 }) {
-  // A scoped member must address the project agent explicitly
-  // (`project:<id>:<slug>`, ADR 0055) — a bare create is builder-only.
-  // Root tokens (the desktop's embedded server) use the host default.
-  const me = useQuery({
-    queryKey: ["pwa", "me", connection.id],
-    queryFn: () => fetchMe(connection),
-    staleTime: 60_000,
-  });
-  const scopedAgent = me.data?.identity.root
-    ? undefined
-    : me.data?.projects.find((p) => p.projectId === projectId)?.agents[0];
+  const catalog = useAgentCatalog(projectId);
+  const [chosenAgent, setChosenAgent] = useState<string>();
+  const [chosenEnvironment, setChosenEnvironment] = useState<string>();
+  const agentId = chosenAgent ?? catalog.data?.defaultAgentId;
+  const agent = catalog.data?.items.find((item) => item.id === agentId);
+  const environment =
+    chosenEnvironment ?? agent?.environments.defaultEnvironment;
   const chat = useAgentChat(projectId, {
     source: "mobile",
     sessionId: sessionId ?? undefined,
     idleRefetchIntervalMs: 3_000,
-    ...(scopedAgent ? { agentId: `project:${projectId}:${scopedAgent}` } : {}),
+    agentId,
+    environment,
     onSessionCreated: (created) =>
       // Adopt the lazily created session into the URL without growing the
       // back stack — Back should return to the sessions list, not to the
@@ -150,7 +154,9 @@ function Chat({
   const [draft, setDraft] = useState("");
   // Until /me answers we don't know whether a fresh chat must carry the
   // project agent id; hold the first send rather than 403 a scoped user.
-  const sendReady = sessionId !== null || me.isFetched;
+  const sendReady = Boolean(
+    chat.sessionId || (agent?.available && environment),
+  );
   const { messages, activity, questions } = toTimeline(
     chat.messages,
     chat.optimisticMessages,
@@ -168,14 +174,14 @@ function Chat({
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     const message = draft.trim();
-    if (!message) return;
+    if (!message || !sendReady) return;
     setDraft("");
     void chat.send(message);
   };
 
   const submitNow = () => {
     const message = draft.trim();
-    if (!message) return;
+    if (!message || !sendReady) return;
     setDraft("");
     void chat.sendNow(message);
   };
@@ -300,6 +306,108 @@ function Chat({
         ) : (
           <div className="shrink-0 border-t border-border bg-bg-raised/95 backdrop-blur-xl">
             <div className="flex flex-col gap-2 px-3 pt-2">
+              {!chat.sessionId && (
+                <div className="flex flex-col gap-2">
+                  <label className="text-sm text-fg-muted">
+                    Agent
+                    <select
+                      aria-label="Agent"
+                      value={agentId ?? ""}
+                      onChange={(event) => {
+                        setChosenAgent(event.target.value);
+                        setChosenEnvironment(undefined);
+                      }}
+                      className="mt-1 h-11 w-full rounded border border-border bg-bg px-2 text-base text-fg"
+                    >
+                      <option value="" disabled>
+                        Choose an agent
+                      </option>
+                      {catalog.data?.items.map((item) => (
+                        <option
+                          key={item.id}
+                          value={item.id}
+                          disabled={!item.available}
+                        >
+                          {item.name}
+                          {item.available ? "" : " (unavailable)"}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-sm text-fg-muted">
+                    Run in
+                    <select
+                      aria-label="Environment"
+                      value={environment ?? ""}
+                      onChange={(event) =>
+                        setChosenEnvironment(event.target.value)
+                      }
+                      className="mt-1 h-11 w-full rounded border border-border bg-bg px-2 text-base text-fg"
+                    >
+                      <option value="" disabled>
+                        Choose an environment
+                      </option>
+                      {agent?.environments.items
+                        .filter((item) => item.allowed)
+                        .map((item) => (
+                          <option
+                            key={item.name}
+                            value={item.name}
+                            disabled={!item.compatible || !item.available}
+                          >
+                            {item.label}
+                            {item.reasons.length
+                              ? ` (${item.reasons.join("; ")})`
+                              : ""}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                  {catalog.data?.startingActions.map((action) => (
+                    <button
+                      key={`${action.label}:${action.prompt}`}
+                      type="button"
+                      className="rounded-md border border-border px-3 py-2 text-left text-sm hover:bg-bg-overlay"
+                      onClick={() => {
+                        setChosenAgent(action.agentId);
+                        setDraft(action.prompt);
+                      }}
+                    >
+                      {action.label}
+                    </button>
+                  ))}
+                  {catalog.error && (
+                    <p role="alert" className="text-sm text-danger">
+                      {catalog.error.message}
+                    </p>
+                  )}
+                  {catalog.isSuccess &&
+                    !catalog.data.items.some((item) => item.available) && (
+                      <p className="text-sm text-fg-muted">
+                        No permitted agent is ready. Ask a project manager to
+                        configure an agent and environment.
+                      </p>
+                    )}
+                </div>
+              )}
+              {chat.sessionId && (
+                <AgentEnvironmentControl
+                  projectId={projectId}
+                  sessionId={chat.sessionId}
+                  agentId={chat.session?.agentId ?? undefined}
+                  currentEnvironment={chat.session?.environment ?? undefined}
+                  busy={chat.isWorking}
+                />
+              )}
+              {chat.authenticationRequired?.requirements.map((requirement) => (
+                <AuthenticationRequiredCard
+                  key={requirement.alias}
+                  projectId={projectId}
+                  environment={chat.authenticationRequired?.environment ?? ""}
+                  requirement={requirement}
+                  onAuthorized={chat.resumeAfterAuthentication}
+                />
+              ))}
               {permissions.permissions.map((permission) => (
                 <ToolPermissionCard
                   key={permission.id}
@@ -346,7 +454,7 @@ function Chat({
                   </button>
                 </div>
               )}
-              {chat.error && (
+              {chat.error && !chat.authenticationRequired && (
                 <ConnectionTrouble
                   connection={connection}
                   projectId={projectId}

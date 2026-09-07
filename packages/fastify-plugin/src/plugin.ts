@@ -13,6 +13,7 @@ import {
 import { registerAgentRoutes } from "./routes/agent.js";
 import { registerAppRoutes } from "./routes/apps.js";
 import { registerAppsMcpRoutes } from "./routes/apps-mcp.js";
+import { registerClientRunnerRoutes } from "./routes/client-runners.js";
 import { registerConnectionMcpRoutes } from "./routes/connection-mcp.js";
 import { registerConnectionRoutes } from "./routes/connections.js";
 import { registerDocumentRoutes } from "./routes/documents.js";
@@ -150,7 +151,13 @@ export const catamorphicPlugin: FastifyPluginAsync<
       if (isPublic) return;
       return reply.status(401).send({ error: "Unauthorized" });
     }
-    attachIdentity(request, identity);
+    const runnerId = request.headers["x-catamorphic-runner"];
+    attachIdentity(
+      request,
+      typeof runnerId === "string" && /^[0-9a-f-]{36}$/i.test(runnerId)
+        ? { ...identity, clientRunnerId: runnerId }
+        : identity,
+    );
   });
 
   const ctx: RouteContext = {
@@ -175,6 +182,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerTriggerRoutes(app, ctx);
   registerRunRoutes(app, ctx);
   registerAgentRoutes(app, ctx);
+  registerClientRunnerRoutes(app, ctx);
   registerSessionMailboxRoutes(app, ctx);
   registerNotificationRoutes(app, ctx);
   registerWatcherRoutes(app, ctx);

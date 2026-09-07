@@ -130,6 +130,32 @@ function startFakeServer(): Promise<void> {
     if (revoked || req.headers.authorization !== `Bearer ${TOKEN}`) {
       return send(401, { error: "Unauthorized" });
     }
+    // Connected project reads now go to the remote member authority too.
+    if (req.method === "GET" && url.pathname === "/api/projects/remote-1") {
+      return send(200, {
+        id: "remote-1",
+        name: "Acme brain",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        workflows: [],
+        files: [],
+      });
+    }
+    if (
+      req.method === "GET" &&
+      [
+        "/api/projects/remote-1/workflows",
+        "/api/projects/remote-1/apps",
+        "/api/projects/remote-1/skills",
+        "/api/projects/remote-1/workflow-enablements",
+      ].includes(url.pathname)
+    )
+      return send(200, []);
+    if (
+      req.method === "GET" &&
+      url.pathname === "/api/projects/remote-1/agent/sessions"
+    )
+      return send(200, { items: [], total: 0 });
     if (req.method === "GET" && url.pathname === "/api/me") {
       if (introspectionUnavailable) {
         return send(503, { error: "Capability introspection unavailable" });

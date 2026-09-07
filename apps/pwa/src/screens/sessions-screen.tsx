@@ -4,6 +4,7 @@ import {
   useAgentSessions,
   useProject,
 } from "@catamorphic/react";
+import { ProjectWorkflows } from "@catamorphic/ui";
 import type { QueryClient } from "@tanstack/react-query";
 import { CirclePause, MessageSquarePlus } from "lucide-react";
 import { useState } from "react";
@@ -30,6 +31,8 @@ export function SessionsScreen({
   return (
     <CatamorphicProvider
       apiClient={clientFor(connection)}
+      baseUrl={new URL(connection.serverUrl).origin}
+      authorizationRedirectUri={`${connection.serverUrl.replace(/\/+$/, "")}/connection-authorizations/callback`}
       queryClient={queryClient}
     >
       <SessionsList
@@ -53,6 +56,7 @@ function SessionsList({
   projectName: string;
   animation?: string;
 }) {
+  const [section, setSection] = useState<"chats" | "workflows">("chats");
   const sessions = useAgentSessions(projectId, { limit: 100 });
   const acknowledgeAttention = useAcknowledgeAgentSessionAttention(projectId);
   const project = useProject(projectId);
@@ -128,98 +132,136 @@ function SessionsList({
       back
       animation={animation}
     >
-      <div className="relative h-full">
-        <div className="h-full overflow-y-auto overscroll-contain">
-          {sessions.isLoading && (
-            <p className="p-4 text-sm text-fg-faint">Loading sessions…</p>
-          )}
-          {sessions.isError && (
-            <div className="p-4">
-              <ConnectionTrouble
-                connection={connection}
-                projectId={projectId}
-                message={sessions.error.message}
-              />
-            </div>
-          )}
-          {items.length === 0 && sessions.isSuccess && (
-            <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
-              <p className="text-sm leading-6 text-fg-muted">
-                No conversations yet. Start one below.
-              </p>
-            </div>
-          )}
-          <ul className="flex flex-col py-1 pb-24">
-            {items.map((session) => (
-              <li key={session.id}>
-                <button
-                  type="button"
-                  onClick={() => void openOrResume(session)}
-                  aria-busy={resumingId === session.id}
-                  className="row-press flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left"
-                  data-testid="session-row"
-                >
-                  <span className="relative grid size-10 shrink-0 place-items-center rounded-full border border-border bg-bg-raised">
-                    <ChatGlyph
-                      icon={session.icon}
-                      fork={session.parentSessionId !== null}
-                      className="size-4.5"
-                    />
-                    {session.attentionRequired && (
-                      <span
-                        className="absolute right-0 top-0 size-2 animate-pulse rounded-full bg-accent"
-                        aria-hidden="true"
-                        data-testid="session-attention"
-                      />
-                    )}
-                  </span>
-                  {session.attentionRequired && (
-                    <span className="sr-only">Ready for you</span>
-                  )}
-                  <span className="min-w-0 flex-1">
-                    <span
-                      className={`block truncate text-[15px] leading-6 ${session.status === "closed" ? "text-fg-muted" : "font-medium"}`}
-                    >
-                      {session.title ?? fallbackTitle(session.createdAt)}
-                    </span>
-                    <span className="flex items-center gap-1 truncate text-xs leading-4 text-fg-faint">
-                      {session.resumable ? (
-                        <span className="inline-flex items-center gap-1 font-medium text-accent">
-                          <CirclePause className="size-3" aria-hidden="true" />
-                          {resumingId === session.id
-                            ? "Resuming…"
-                            : "Paused · Tap to resume"}
-                        </span>
-                      ) : (
-                        <>
-                          {relativeTime(session.updatedAt)}
-                          {session.status === "closed" ? " · closed" : ""}
-                        </>
-                      )}
-                    </span>
-                    {resumeError?.sessionId === session.id && (
-                      <span
-                        className="mt-1 block text-xs leading-4 text-danger"
-                        role="alert"
-                      >
-                        {resumeError.message}
-                      </span>
-                    )}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-        <button
-          type="button"
-          onClick={() => openChat(null)}
-          className="pb-safe absolute bottom-4 right-4 box-content grid size-14 cursor-pointer place-items-center rounded-full bg-accent text-accent-fg shadow-xl transition-transform duration-150 active:scale-95"
-          aria-label="New chat"
-          data-testid="new-chat"
+      <div className="flex h-full min-h-0 flex-col">
+        <nav
+          aria-label="Project sections"
+          className="flex shrink-0 gap-4 border-b border-border px-4 py-3 text-sm"
         >
-          <MessageSquarePlus className="size-6" />
-        </button>
+          <button
+            type="button"
+            aria-current={section === "chats" ? "page" : undefined}
+            onClick={() => setSection("chats")}
+            className={
+              section === "chats" ? "font-medium text-accent" : "text-fg-muted"
+            }
+          >
+            Conversations
+          </button>
+          <button
+            type="button"
+            aria-current={section === "workflows" ? "page" : undefined}
+            onClick={() => setSection("workflows")}
+            className={
+              section === "workflows"
+                ? "font-medium text-accent"
+                : "text-fg-muted"
+            }
+          >
+            Workflows
+          </button>
+        </nav>
+        {section === "workflows" ? (
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <ProjectWorkflows projectId={projectId} />
+          </div>
+        ) : (
+          <div className="relative min-h-0 flex-1">
+            <div className="h-full overflow-y-auto overscroll-contain">
+              {sessions.isLoading && (
+                <p className="p-4 text-sm text-fg-faint">Loading sessions…</p>
+              )}
+              {sessions.isError && (
+                <div className="p-4">
+                  <ConnectionTrouble
+                    connection={connection}
+                    projectId={projectId}
+                    message={sessions.error.message}
+                  />
+                </div>
+              )}
+              {items.length === 0 && sessions.isSuccess && (
+                <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
+                  <p className="text-sm leading-6 text-fg-muted">
+                    No conversations yet. Start one below.
+                  </p>
+                </div>
+              )}
+              <ul className="flex flex-col py-1 pb-24">
+                {items.map((session) => (
+                  <li key={session.id}>
+                    <button
+                      type="button"
+                      onClick={() => void openOrResume(session)}
+                      aria-busy={resumingId === session.id}
+                      className="row-press flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left"
+                      data-testid="session-row"
+                    >
+                      <span className="relative grid size-10 shrink-0 place-items-center rounded-full border border-border bg-bg-raised">
+                        <ChatGlyph
+                          icon={session.icon}
+                          fork={session.parentSessionId !== null}
+                          className="size-4.5"
+                        />
+                        {session.attentionRequired && (
+                          <span
+                            className="absolute right-0 top-0 size-2 animate-pulse rounded-full bg-accent"
+                            aria-hidden="true"
+                            data-testid="session-attention"
+                          />
+                        )}
+                      </span>
+                      {session.attentionRequired && (
+                        <span className="sr-only">Ready for you</span>
+                      )}
+                      <span className="min-w-0 flex-1">
+                        <span
+                          className={`block truncate text-[15px] leading-6 ${session.status === "closed" ? "text-fg-muted" : "font-medium"}`}
+                        >
+                          {session.title ?? fallbackTitle(session.createdAt)}
+                        </span>
+                        <span className="flex items-center gap-1 truncate text-xs leading-4 text-fg-faint">
+                          {session.resumable ? (
+                            <span className="inline-flex items-center gap-1 font-medium text-accent">
+                              <CirclePause
+                                className="size-3"
+                                aria-hidden="true"
+                              />
+                              {resumingId === session.id
+                                ? "Resuming…"
+                                : "Paused · Tap to resume"}
+                            </span>
+                          ) : (
+                            <>
+                              {relativeTime(session.updatedAt)}
+                              {session.status === "closed" ? " · closed" : ""}
+                            </>
+                          )}
+                        </span>
+                        {resumeError?.sessionId === session.id && (
+                          <span
+                            className="mt-1 block text-xs leading-4 text-danger"
+                            role="alert"
+                          >
+                            {resumeError.message}
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <button
+              type="button"
+              onClick={() => openChat(null)}
+              className="pb-safe absolute bottom-4 right-4 box-content grid size-14 cursor-pointer place-items-center rounded-full bg-accent text-accent-fg shadow-xl transition-transform duration-150 active:scale-95"
+              aria-label="New chat"
+              data-testid="new-chat"
+            >
+              <MessageSquarePlus className="size-6" />
+            </button>
+          </div>
+        )}
       </div>
     </Screen>
   );

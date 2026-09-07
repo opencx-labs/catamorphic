@@ -6,7 +6,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
-import { type ObjectStore, PreconditionFailedError } from "./object-store.js";
+import { type ObjectStore, PreconditionFailedError } from "@catamorphic/git";
 
 export interface S3ObjectStoreOpts {
   bucket: string;

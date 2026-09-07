@@ -71,7 +71,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0056](0056-agent-configuration.md) | Agent configuration: one surface, layered defaults, enforced capabilities | Accepted |
 | [0057](0057-agent-usage-and-cost.md) | Agent usage and cost: transcript-scanned page, per-turn usage in metadata | Accepted |
 | [0058](0058-mobile-pwa.md) | The mobile PWA: chats on the go, wrapper-ready; tool asks answerable over HTTP | Accepted |
-| [0059](0059-stock-server.md) | The stock server: zero-dependency, disk-backed, invite-first; mDNS LAN discovery | Accepted (auth, invites, and administration superseded by 0071 and 0072) |
+| [0059](0059-stock-server.md) | The stock server: zero-dependency, disk-backed, invite-first; mDNS LAN discovery | Accepted (auth, invites, and administration superseded by 0071 and 0072; multi-machine storage superseded by 0099) |
 | [0060](0060-continue-on-mobile.md) | Continue on mobile: QR pairing, bearer-gated LAN proxy, remote-link handoff | Accepted |
 | [0061](0061-session-mirroring.md) | Session mirroring: local-first chats pushed to the linked remote; fork-on-continuation | Accepted |
 | [0062](0062-session-privacy-and-fork-ux.md) | Session privacy & fork UX: incognito sessions, project policy, fork markers, admin usage | Accepted (admin-token usage route superseded by 0072) |
@@ -110,3 +110,6 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0095](0095-authoritative-agent-execution.md) | Authoritative agent execution and independent connections | Accepted |
 | [0096](0096-desktop-resource-link-routing.md) | Desktop resource links use workspace targets | Accepted |
 | [0097](0097-host-owned-workflow-inspectors.md) | Host-owned workflow inspectors | Accepted |
+| [0098](0098-project-authorized-local-and-remote-agents.md) | Project-authorized local and remote agent execution | Accepted |
+| [0099](0099-shared-postgres-server-environments.md) | Shared-Postgres server instances as managed Environments | Accepted |
+| [0100](0100-workspace-resource-admission.md) | Workspace reservations and provider-enforced resource limits | Accepted |

@@ -9,6 +9,11 @@ const authorize = vi.fn();
 const complete = vi.fn();
 
 vi.mock("@catamorphic/react", () => ({
+  useConnectionAuthorizationStatus: () => ({
+    data: undefined,
+    error: null,
+    refetch: vi.fn(),
+  }),
   useAuthorizeConnection: () => ({
     mutateAsync: authorize,
     isPending: false,

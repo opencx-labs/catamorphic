@@ -1,3 +1,4 @@
+import { CatamorphicError } from "@catamorphic/react";
 // @vitest-environment jsdom
 
 import { act } from "react";
@@ -9,7 +10,32 @@ const preview = vi.fn();
 const create = vi.fn();
 const update = vi.fn();
 
-vi.mock("@catamorphic/react", () => ({
+vi.mock("@catamorphic/react", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@catamorphic/react")>()),
+  useConnectionAuthorizationStatus: () => ({ data: undefined, error: null }),
+  useAuthorizeConnection: () => ({
+    mutateAsync: async () => ({
+      authorizationId: "authorization",
+      challenge: {
+        kind: "form",
+        fields: [
+          {
+            name: "key",
+            label: "Account key",
+            type: "password",
+            required: true,
+          },
+        ],
+      },
+    }),
+    isPending: false,
+    error: null,
+  }),
+  useCompleteConnectionAuthorization: () => ({
+    mutateAsync: async () => ({}),
+    isPending: false,
+    error: null,
+  }),
   useEnvironments: () => ({
     data: {
       defaultEnvironment: "local",
@@ -19,6 +45,8 @@ vi.mock("@catamorphic/react", () => ({
           label: "This Mac",
           allowed: true,
           compatible: true,
+          available: true,
+          reasons: [],
         },
       ],
     },
@@ -100,6 +128,8 @@ describe("WorkflowEnablementPanel", () => {
       capabilities: ["messages.search"],
       consentDigest: "d".repeat(64),
       triggerCount: 1,
+      triggers: [{ kind: "schedule", config: { cron: "0 9 * * *" } }],
+      connectionLabels: {},
     });
     await act(async () => {
       root.render(
@@ -132,5 +162,73 @@ describe("WorkflowEnablementPanel", () => {
       action: "update-deployment",
       consentDigest: "d".repeat(64),
     });
+  });
+});
+
+it("returns to exact consent review after account authorization without enabling automatically", async () => {
+  preview.mockRejectedValueOnce(
+    new CatamorphicError({
+      code: "authentication_required",
+      details: {
+        environment: "local",
+        requirements: [
+          {
+            alias: "directory",
+            providerKind: "company",
+            principalKinds: ["member"],
+          },
+        ],
+      },
+    }),
+  );
+  preview.mockResolvedValueOnce({
+    projectId: "project-1",
+    workflowName: "watchInbox",
+    commitSha: "e".repeat(40),
+    environment: "local",
+    owner: { type: "member", externalUserId: "alice" },
+    connections: [
+      {
+        alias: "directory",
+        connectionId: "account",
+        providerKind: "company",
+        principalKind: "member",
+      },
+    ],
+    connectionLabels: { account: "Alice at Company" },
+    capabilities: ["messages.search"],
+    triggers: [{ kind: "schedule", config: { cron: "0 9 * * *" } }],
+    consentDigest: "reviewed-digest",
+  });
+  await act(async () =>
+    root.render(
+      <WorkflowEnablementPanel
+        projectId="project-1"
+        workflowName="watchInbox"
+        onClose={() => {}}
+      />,
+    ),
+  );
+  const button = (text: string) =>
+    [...container.querySelectorAll("button")].find((item) =>
+      item.textContent?.includes(text),
+    );
+  await act(async () => button("Review update")?.click());
+  expect(container.textContent).toContain("review and confirm");
+  await act(async () => button("Authenticate")?.click());
+  await act(async () =>
+    container
+      .querySelector("form")
+      ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
+  );
+  expect(container.textContent).toContain("Alice at Company");
+  expect(container.textContent).toContain("eeeeeeeeeeee");
+  expect(create).not.toHaveBeenCalled();
+  expect(update).not.toHaveBeenCalled();
+  await act(async () => button("Confirm update")?.click());
+  expect(update).toHaveBeenCalledWith({
+    enablementId: "enablement-1",
+    action: "update-deployment",
+    consentDigest: "reviewed-digest",
   });
 });

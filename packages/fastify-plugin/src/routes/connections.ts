@@ -354,6 +354,34 @@ export function registerConnectionRoutes(
   });
 
   typed.route({
+    method: "POST",
+    url: "/connection-authorizations/status",
+    schema: {
+      body: z.object({ state: z.string().min(1) }),
+      response: {
+        200: z.object({ status: z.string() }),
+        409: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const connections = service();
+      if (!connections)
+        return reply.status(503).send({ error: "Connections not configured" });
+      try {
+        return reply.send(
+          await connections.authorizationStatus({
+            identity: resolveIdentity(request),
+            state: request.body.state,
+          }),
+        );
+      } catch (error) {
+        return handleConnectionError(error, reply);
+      }
+    },
+  });
+
+  typed.route({
     method: "GET",
     url: "/connection-authorizations/callback",
     config: { public: true },

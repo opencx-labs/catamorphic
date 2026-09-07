@@ -1,5 +1,6 @@
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
 import { sql } from "kysely";
+import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ExecutionJobsService } from "../services/execution-jobs-service.js";
 import { TenantPoliciesService } from "../services/tenant-policies-service.js";
@@ -9,7 +10,10 @@ const describeIf = connectionString ? describe : describe.skip;
 const schema = `catamorphic_queue_fairness_${crypto
   .randomUUID()
   .replaceAll("-", "")}`;
-const db = createDatabase({ connectionString, schema, poolSize: 1 });
+const db = createDatabase({
+  pool: new pg.Pool({ connectionString, max: 1 }),
+  schema,
+});
 const jobs = new ExecutionJobsService(db);
 const policies = new TenantPoliciesService(db);
 
@@ -202,7 +206,7 @@ describeIf("execution queue fairness", () => {
     const claimLimit = 20;
     const tenantCount = 3;
     await sql`
-      INSERT INTO execution_jobs
+      INSERT INTO ${sql.id(schema, "execution_jobs")}
         (tenant_id, workflow_run_id, kind, payload, status, available_at)
       SELECT ${busyTenant}::uuid, ${runId}::uuid, 'durable_boundary', '{}'::jsonb,
              'pending', clock_timestamp()
@@ -212,7 +216,7 @@ describeIf("execution queue fairness", () => {
     await enqueue({ tenantId: cappedTenant, count: 1 });
     // Earlier cases delete their fixture rows; remove those dead index entries
     // so this assertion measures only the claim against the seeded backlog.
-    await sql`VACUUM ANALYZE execution_jobs`.execute(db);
+    await sql`VACUUM ANALYZE ${sql.id(schema, "execution_jobs")}`.execute(db);
 
     async function queueRelationReads(): Promise<number> {
       await sql`SELECT pg_stat_force_next_flush()`.execute(db);

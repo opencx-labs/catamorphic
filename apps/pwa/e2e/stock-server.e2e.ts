@@ -54,6 +54,9 @@ describe.skipIf(!chromeBinary())("pwa against the stock server", () => {
         args: ["src/index.ts"],
         cwd: SERVER_DIR,
         env: {
+          // This journey intentionally exercises the standalone PGlite host.
+          // Shared-Postgres concurrency is covered by the cluster integration.
+          DATABASE_URL: "",
           PORT: String(apiPort),
           CATAMORPHIC_OPERATOR_PORT: String(operatorPort),
           CATAMORPHIC_DATA_DIR: dataDir,

@@ -10,8 +10,10 @@ import {
   AuthenticationRequiredError,
   EnvironmentAccessDeniedError,
   EnvironmentBindingUnavailableError,
+  EnvironmentCapacityError,
   EnvironmentIncompatibleError,
   EnvironmentNotFoundError,
+  NoCompatibleEnvironmentError,
   ProjectNotFoundError,
   SessionMirrorDivergedError,
   UnsupportedAgentTopologyError,
@@ -22,6 +24,7 @@ import { z } from "zod";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
 import {
+  AgentCatalogSchema,
   AgentSessionArchiveConfirmationSchema,
   AgentSessionArchiveResultSchema,
   AgentSessionDetailSchema,
@@ -126,14 +129,24 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           });
         }
         if (
+          err instanceof EnvironmentCapacityError ||
           err instanceof EnvironmentBindingUnavailableError ||
           err instanceof EnvironmentNotFoundError
         ) {
           return reply.status(409).send({
             error: err.message,
-            code: "environment_unavailable",
+            code:
+              err instanceof EnvironmentCapacityError
+                ? "environment_full"
+                : "environment_unavailable",
           });
         }
+        if (err instanceof NoCompatibleEnvironmentError)
+          return reply.status(422).send({
+            error: err.message,
+            code: "environment_unavailable",
+            reasons: Object.values(err.reasons).flatMap((items) => [...items]),
+          });
         if (err instanceof EnvironmentIncompatibleError) {
           return reply.status(422).send({
             error: err.message,
@@ -234,14 +247,24 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           });
         }
         if (
+          err instanceof EnvironmentCapacityError ||
           err instanceof EnvironmentBindingUnavailableError ||
           err instanceof EnvironmentNotFoundError
         ) {
           return reply.status(409).send({
             error: err.message,
-            code: "environment_unavailable",
+            code:
+              err instanceof EnvironmentCapacityError
+                ? "environment_full"
+                : "environment_unavailable",
           });
         }
+        if (err instanceof NoCompatibleEnvironmentError)
+          return reply.status(422).send({
+            error: err.message,
+            code: "environment_unavailable",
+            reasons: Object.values(err.reasons).flatMap((items) => [...items]),
+          });
         if (err instanceof EnvironmentIncompatibleError) {
           return reply.status(422).send({
             error: err.message,
@@ -368,6 +391,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           });
         }
         if (
+          err instanceof EnvironmentCapacityError ||
           err instanceof EnvironmentBindingUnavailableError ||
           err instanceof EnvironmentNotFoundError
         ) {
@@ -375,6 +399,12 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
             error: err.message,
           });
         }
+        if (err instanceof NoCompatibleEnvironmentError)
+          return reply.status(422).send({
+            error: err.message,
+            code: "environment_unavailable",
+            reasons: Object.values(err.reasons).flatMap((items) => [...items]),
+          });
         if (err instanceof EnvironmentIncompatibleError) {
           return reply.status(422).send({
             error: err.message,
@@ -857,7 +887,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         throw err;
       }
       return reply.send({
-        permissions: broker.list(request.params.sessionId),
+        permissions: await broker.list(request.params.sessionId),
       });
     },
   });
@@ -893,13 +923,23 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         }
         throw err;
       }
-      const pending = broker.get(request.params.permissionId);
+      const pending = await broker.get(request.params.permissionId);
       // An ask belongs to the session it was raised in — answering it from
       // another session's URL is a 404, not a hijack.
       if (!pending || pending.sessionId !== request.params.sessionId) {
         return reply.status(404).send({ error: "Permission not found" });
       }
-      broker.answer(request.params.permissionId, request.body);
+      if (
+        !(await broker.answer(
+          request.params.permissionId,
+          request.body,
+          resolveIdentity(request),
+        ))
+      ) {
+        return reply
+          .status(404)
+          .send({ error: "Permission is no longer pending" });
+      }
       return reply.send({ ok: true });
     },
   });
@@ -1230,6 +1270,10 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
       response: {
         200: AgentSessionSchema.array(),
         404: ErrorSchema,
+        403: ErrorSchema,
+        409: ErrorSchema,
+        422: ErrorSchema,
+        428: AuthenticationRequiredSchema,
         503: ErrorSchema,
       },
     },
@@ -1247,6 +1291,25 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           ),
         );
       } catch (error) {
+        if (
+          error instanceof EnvironmentCapacityError ||
+          error instanceof EnvironmentBindingUnavailableError
+        )
+          return reply.status(409).send({ error: error.message });
+        if (error instanceof EnvironmentAccessDeniedError)
+          return reply.status(403).send({ error: error.message });
+        if (
+          error instanceof EnvironmentIncompatibleError ||
+          error instanceof NoCompatibleEnvironmentError
+        )
+          return reply.status(422).send({ error: error.message });
+        if (error instanceof AuthenticationRequiredError)
+          return reply.status(428).send({
+            error: error.message,
+            code: "authentication_required",
+            environment: error.environment,
+            requirements: [...error.requirements],
+          });
         if (
           error instanceof ProjectNotFoundError ||
           error instanceof AgentSessionNotFoundError
@@ -1285,6 +1348,27 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         }
         throw err;
       }
+    },
+  });
+
+  typed.route({
+    method: "GET",
+    url: "/projects/:projectId/agent-catalog",
+    schema: {
+      params: ProjectIdParamsSchema,
+      response: { 200: AgentCatalogSchema, 404: ErrorSchema, 503: ErrorSchema },
+    },
+    handler: async (request, reply) => {
+      if (!ctx.core?.agentSessions)
+        return reply.status(503).send({ error: "Agents are not configured" });
+      return reply.send(
+        AgentCatalogSchema.parse(
+          await ctx.core.agentSessions.catalog({
+            identity: resolveIdentity(request),
+            projectId: request.params.projectId,
+          }),
+        ),
+      );
     },
   });
 

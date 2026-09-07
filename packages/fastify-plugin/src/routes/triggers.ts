@@ -2,6 +2,7 @@ import {
   AuthenticationRequiredError,
   EnvironmentAccessDeniedError,
   EnvironmentBindingUnavailableError,
+  EnvironmentCapacityError,
   EnvironmentIncompatibleError,
   EnvironmentNotFoundError,
   NoCompatibleEnvironmentError,
@@ -215,7 +216,10 @@ function handleTriggerError(
   if (err instanceof EnvironmentNotFoundError) {
     return reply.status(404).send({ error: err.message });
   }
-  if (err instanceof EnvironmentBindingUnavailableError) {
+  if (
+    err instanceof EnvironmentCapacityError ||
+    err instanceof EnvironmentBindingUnavailableError
+  ) {
     return reply.status(409).send({ error: err.message });
   }
   if (

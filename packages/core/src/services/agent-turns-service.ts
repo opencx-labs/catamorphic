@@ -518,6 +518,7 @@ export class AgentTurnsService {
   async claimNextForSession(input: {
     workerId: string;
     sessionId: string;
+    workerNode?: { id: string; token: string };
     leaseSeconds?: number;
   }): Promise<AgentTurn | null> {
     return this.claim(input);
@@ -526,6 +527,7 @@ export class AgentTurnsService {
   private async claim(input: {
     workerId: string;
     sessionId?: string;
+    workerNode?: { id: string; token: string };
     leaseSeconds?: number;
   }): Promise<AgentTurn | null> {
     const leaseToken = randomUUID();
@@ -536,6 +538,30 @@ export class AgentTurnsService {
         .selectAll("turn")
         .where("turn.status", "=", "queued")
         .where("turn.available_at", "<=", sql<Date>`now()`)
+        .$if(input.workerNode !== undefined, (query) =>
+          query.where(({ exists, selectFrom }) =>
+            exists(
+              selectFrom("agent_sessions as session")
+                .innerJoin(
+                  "execution_allocations as allocation",
+                  "allocation.id",
+                  "session.allocation_id",
+                )
+                .innerJoin(
+                  "worker_nodes as node",
+                  "node.id",
+                  "allocation.worker_node_id",
+                )
+                .select("session.id")
+                .whereRef("session.id", "=", "turn.session_id")
+                .where("allocation.status", "=", "active")
+                .where("node.id", "=", input.workerNode?.id ?? "")
+                .where("node.lease_token", "=", input.workerNode?.token ?? "")
+                .where("node.enabled", "=", true)
+                .where("node.lease_expires_at", ">", sql<Date>`now()`),
+            ),
+          ),
+        )
         .$if(input.sessionId !== undefined, (query) =>
           query.where("turn.session_id", "=", input.sessionId ?? ""),
         )

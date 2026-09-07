@@ -272,6 +272,51 @@ const server = http.createServer(async (req, res) => {
   const auth = req.headers.authorization ?? "";
   if (!auth.startsWith("Bearer ")) return json(res, 401, { error: "No token" });
 
+  const environments = {
+    defaultEnvironment: "company",
+    items: [
+      {
+        name: "company",
+        label: "Company server",
+        allowed: true,
+        available: true,
+        compatible: true,
+        preferred: true,
+        reasons: [],
+        workloads: ["agent", "workflow"],
+      },
+    ],
+  };
+  if (
+    path === `/api/projects/${PROJECT.id}/agent-catalog` &&
+    req.method === "GET"
+  )
+    return json(res, 200, {
+      items: [
+        {
+          id: `project:${PROJECT.id}:helper`,
+          name: "Helper",
+          available: true,
+          reason: null,
+          environments,
+        },
+      ],
+      defaultAgentId: `project:${PROJECT.id}:helper`,
+      startingActions: [],
+    });
+  if (
+    path === `/api/projects/${PROJECT.id}/environments` &&
+    req.method === "GET"
+  )
+    return json(res, 200, environments);
+  if (path === `/api/projects/${PROJECT.id}/workflows` && req.method === "GET")
+    return json(res, 200, []);
+  if (
+    path === `/api/projects/${PROJECT.id}/workflow-enablements` &&
+    req.method === "GET"
+  )
+    return json(res, 200, []);
+
   // GET /api/me
   if (path === "/api/me" && req.method === "GET") {
     return json(res, 200, {

@@ -456,7 +456,19 @@ supplies two things:
 
 ## Ready-made components: `@catamorphic/ui`
 
-`@catamorphic/ui` ships the workflow canvas (`WorkflowEditor`, `WorkflowCanvas`), detail panel, Runs panel, toolbar, AI bar, and `AppMount` as composable React components built on `@catamorphic/react`. Everything is opt-in: use `WorkflowEditor` for the full experience, or compose `WorkflowCanvas` + your own chrome. Code editors are plugged in via render props (bring your own Monaco/CodeMirror). Import `@catamorphic/ui/styles.css` once.
+`@catamorphic/ui` ships the workflow canvas (`WorkflowEditor`, `WorkflowCanvas`), member workflow review and consent, Runs panel, toolbar, AI bar, and `AppMount` as composable React components built on `@catamorphic/react`. Everything is opt-in: use `WorkflowEditor` for the full experience, or compose `WorkflowCanvas` + your own chrome. Code editors are plugged in via render props (bring your own Monaco/CodeMirror). Import `@catamorphic/ui/styles.css` once.
+
+For Tailwind hosts, import the UI stylesheet from the **same CSS entry** as
+Tailwind so its packaged component classes are included:
+
+```css
+@import "tailwindcss";
+@import "@catamorphic/ui/styles.css";
+```
+
+A separate JavaScript stylesheet import does not register these class sources
+with the host's Tailwind compilation. Shared controls use the host's theme tokens;
+headless hooks remain independent of Tailwind.
 
 ## Component registry: `@catamorphic/registry`
 
@@ -706,9 +718,26 @@ Allocation is the immutable decision for one root session or workflow run.
 WorkerNode selection is a later placement concern and is never a project
 choice.
 
+The managed multi-machine target is multiple Catamorphic server instances of
+one logical authority, sharing network Postgres and accessible authoritative
+storage ([ADR 0099](docs/decisions/0099-shared-postgres-server-environments.md)).
+Project-facing Environments can bind to a named machine or a compatible pool;
+hosts own the physical registration. Instance identity and execution ownership
+must remain distinct from authority identity. Member-device execution appears
+as **This machine** and does not require database credentials (ADR 0098).
+The stock Postgres host implements shared objects, machine leases, auth, and
+durable approvals. Custom hosts register `WorkerNodesService` leases, inject
+`workerNode: { id, token }`, and renew/release them with their host lifecycle.
+Enable `clientExecution: true` to accept authenticated member sandbox runners;
+`startClientRunner` supplies the transport-independent client loop. See the
+[cluster setup reference](skills/setup-catamorphic-server/references/cluster-deployment.md)
+for the current limitations and required evidence. Custom hosts continue to
+inject their own infrastructure and auth.
+
 Pass `credentialVault` and `connectionProviders` to `createCatamorphic` when
-external systems are enabled. The vault stores opaque bytes outside the
-Catamorphic database. Provider code runs in the control plane. Workflows call
+external systems are enabled. The host vault stores opaque encrypted material using an injected store and key.
+`EncryptedCredentialVault` can use `PostgresObjectStore` or a host store; the
+wrapping key remains outside the database. Provider code runs in the control plane. Workflows call
 `context.connections.<alias>.<action>(args)` and agents use allocation-bound
 Catamorphic MCP grants. Neither receives upstream credentials.
 Connection aliases use letters, numbers, underscores, and hyphens only. Core
@@ -752,3 +781,24 @@ requires a Slack app with approved scopes. Google Workspace still requires a
 Google Cloud OAuth client or a service account with administrator-approved
 domain-wide delegation. Remote deployments need stable HTTPS callback URLs,
 correct proxy headers, a backed-up vault key, and a documented rotation plan.
+
+
+### Managed workspace resources
+
+Hosts that enroll multiple workers can import `WorkerNodesService`,
+`WorkerCapacity`, and `cleanupWorkerAllocations` from `@catamorphic/server-sdk`.
+Supply a workspace budget and CPU/memory defaults when registering a node, and
+pass its lease to `createCatamorphic({ workerNode, ... })`. Return its physical
+id and local lease token with the injected Environment runtime binding. Keep
+heartbeats and cleanup independent; call cleanup only on the sandbox's physical
+owner. Stock provisioning is an example, not a library dependency.
+
+Managed Allocations reserve resources atomically in the host's schema-scoped
+Postgres. A session holds its workspace between turns. Retiring it does not free
+capacity until sandbox destruction succeeds. Every Allocation owns at most one
+sandbox, keeping workflow runtime reuse within that workspace and resource limit.
+Providers advertise `resourceLimits` and enforce `CreateSandboxOpts.resources`;
+unsupported limits fail rather than falling back to unbounded execution. Native
+host CLI execution does not inherit controller-sandbox resource guarantees.
+See [ADR 0100](docs/decisions/0100-workspace-resource-admission.md) and the
+[stock setup example](skills/setup-catamorphic-server/references/cluster-deployment.md#capacity-and-isolated-development).

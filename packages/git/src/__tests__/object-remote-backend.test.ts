@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import git from "isomorphic-git";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { parseCommit, wrapObject } from "../git-object-codec.js";
+import { InMemoryObjectStore } from "../in-memory-object-store.js";
 import {
   FsBackend,
   fetchRemote,
@@ -9,12 +13,8 @@ import {
   PushNotFastForwardError,
   pull,
   push,
-} from "@catamorphic/git";
-import git from "isomorphic-git";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseCommit, wrapObject } from "../git-object-codec.js";
-import { InMemoryObjectStore } from "../in-memory-object-store.js";
-import { S3RemoteBackend } from "../s3-remote-backend.js";
+} from "../index.js";
+import { ObjectRemoteBackend } from "../object-remote-backend.js";
 
 const TENANT = "11111111-1111-1111-1111-111111111111";
 const PROJECT = "22222222-2222-2222-2222-222222222222";
@@ -55,9 +55,11 @@ describe("git object codec", () => {
   });
 });
 
-describe("S3RemoteBackend lifecycle", () => {
+describe("ObjectRemoteBackend lifecycle", () => {
   it("initRemote is idempotent and exists/deleteRemote work", async () => {
-    const backend = new S3RemoteBackend({ store: new InMemoryObjectStore() });
+    const backend = new ObjectRemoteBackend({
+      store: new InMemoryObjectStore(),
+    });
     expect(await backend.exists(TENANT, PROJECT)).toBe(false);
     await backend.initRemote(TENANT, PROJECT);
     await backend.initRemote(TENANT, PROJECT);
@@ -67,19 +69,23 @@ describe("S3RemoteBackend lifecycle", () => {
   });
 
   it("rejects non-uuid tenant/project ids", async () => {
-    const backend = new S3RemoteBackend({ store: new InMemoryObjectStore() });
+    const backend = new ObjectRemoteBackend({
+      store: new InMemoryObjectStore(),
+    });
     await expect(backend.initRemote("../evil", PROJECT)).rejects.toThrow(
       /Invalid UUID/,
     );
   });
 });
 
-describe("S3OriginRepo ref CAS", () => {
+describe("ObjectOriginRepo ref CAS", () => {
   const SHA_1 = "a".repeat(40);
   const SHA_2 = "b".repeat(40);
 
   async function origin() {
-    const backend = new S3RemoteBackend({ store: new InMemoryObjectStore() });
+    const backend = new ObjectRemoteBackend({
+      store: new InMemoryObjectStore(),
+    });
     await backend.initRemote(TENANT, PROJECT);
     return { backend };
   }
@@ -133,15 +139,15 @@ describe("S3OriginRepo ref CAS", () => {
   });
 });
 
-describe("git-sync over S3RemoteBackend", () => {
+describe("git-sync over ObjectRemoteBackend", () => {
   let tmpDir: string;
   let manager: ProjectManager;
-  let remote: S3RemoteBackend;
+  let remote: ObjectRemoteBackend;
   let repoA: ProjectRepo;
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "catamorphic-s3-"));
-    remote = new S3RemoteBackend({
+    remote = new ObjectRemoteBackend({
       store: new InMemoryObjectStore(),
       keyPrefix: "test/",
     });

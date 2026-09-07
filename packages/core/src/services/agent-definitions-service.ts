@@ -4,11 +4,13 @@ import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
 import type { EnvironmentRequirements } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
 import { z } from "zod";
-import type { Identity } from "../identity.js";
+import { type Identity, isBuilder } from "../identity.js";
+import { AccessDeniedError } from "./artifact-scope.js";
 import {
   CONNECTION_ALIAS_PATTERN,
   type ConnectionRequirement,
 } from "./connection-types.js";
+import { readProgramFiles, withProgram } from "./program-reader.js";
 import { requireTenantProject } from "./projects-service.js";
 
 /**
@@ -527,7 +529,54 @@ export class AgentDefinitionsService {
     });
   }
 
+  /** The authority's committed roster. Does not expose draft definitions. */
+  async listCommitted(args: {
+    tenantId: string;
+    projectId: string;
+  }): Promise<ProjectAgentEntry[]> {
+    await requireTenantProject(this.db, args.tenantId, args.projectId);
+    return withProgram(
+      this.projectManager,
+      args.tenantId,
+      args.projectId,
+      async (repo, ref) => {
+        const files = await readProgramFiles(
+          repo,
+          ref,
+          `${AGENT_DEFINITIONS_DIR}/`,
+        );
+        return Object.entries(files)
+          .filter(([path]) => /^agents\/[^/]+\.json$/.test(path))
+          .map(([path, content]) => {
+            const slug = path.slice(7, -5);
+            if (!SLUG_PATTERN.test(slug))
+              return { slug, invalid: { error: "Invalid agent file name" } };
+            try {
+              const result = validateAgentDefinition(
+                JSON.parse(content),
+                this.opts,
+              );
+              return "error" in result
+                ? { slug, invalid: result }
+                : {
+                    slug,
+                    definition: result.definition,
+                    promptFile: files[`agents/${slug}.md`],
+                  };
+            } catch {
+              return {
+                slug,
+                invalid: { error: "Agent definition is not valid JSON" },
+              };
+            }
+          })
+          .sort((a, b) => a.slug.localeCompare(b.slug));
+      },
+    );
+  }
+
   private requireProject(identity: Identity, projectId: string) {
+    if (!isBuilder(identity, projectId)) throw new AccessDeniedError();
     return requireTenantProject(this.db, identity.tenantId, projectId);
   }
 

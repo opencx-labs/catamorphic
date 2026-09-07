@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FsBackend } from "../fs-backend.js";
+import { InMemoryObjectStore } from "../in-memory-object-store.js";
+import { ObjectRemoteBackend } from "../object-remote-backend.js";
 import { ProjectManager } from "../project-manager.js";
 
 const TENANT = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
@@ -109,4 +111,40 @@ describe("ProjectManager", () => {
     await manager.delete(TENANT, PROJECT);
     expect(await manager.exists(TENANT, PROJECT)).toBe(false);
   });
+});
+
+it("moves session checkpoints between machine caches without publishing or mixing sessions", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cat-session-work-"));
+  const remote = new ObjectRemoteBackend({ store: new InMemoryObjectStore() });
+  const a = new ProjectManager(new FsBackend(path.join(dir, "a")), remote);
+  const b = new ProjectManager(new FsBackend(path.join(dir, "b")), remote);
+  const args = {
+    tenantId: TENANT,
+    projectId: PROJECT,
+    sessionId: "session-one",
+  };
+  const author = { name: "Agent", email: "agent@example.test" };
+  try {
+    const main = await a.create(TENANT, PROJECT, {
+      initialFiles: { "notes.md": "original" },
+    });
+    await main.dispose();
+    const first = await a.openSession(args);
+    await first.writeFile("notes.md", "first turn");
+    await first.dispose();
+    await a.checkpointSession({ ...args, message: "First turn", author });
+    const next = await b.openSession(args);
+    expect(await next.readFile("notes.md")).toBe("first turn");
+    await next.writeFile("notes.md", "second turn");
+    await next.dispose();
+    await b.checkpointSession({ ...args, message: "Second turn", author });
+    const returned = await a.openSession({ ...args, refresh: true });
+    expect(await returned.readFile("notes.md")).toBe("second turn");
+    await returned.dispose();
+    const other = await b.openSession({ ...args, sessionId: "session-two" });
+    expect(await other.readFile("notes.md")).toBe("original");
+    await other.dispose();
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });

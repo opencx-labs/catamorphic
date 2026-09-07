@@ -5,6 +5,7 @@
 - **Refines:** 0033, 0038, 0047
 - **Agent placement model superseded by:** 0067
 - **Missing project policy refined by:** 0070
+- **Managed machine enrollment and instance model refined by:** 0099
 
 ## Context
 

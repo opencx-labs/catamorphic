@@ -7,6 +7,19 @@ ONLY, per ADR 0047), and mDNS so the LAN reaches the server. The new stock
 Better Auth, OAuth, admission, and agent-driven setup path are the only remote
 identity model. Do not reintroduce token files or privileged product users.
 
+The paragraph above describes the current standalone implementation. The accepted
+managed deployment model is multiple server instances sharing network Postgres
+and one authority, with enrolled machines exposed through Environment bindings
+([ADR 0099](../../docs/decisions/0099-shared-postgres-server-environments.md)).
+Postgres mode shares authoritative objects, encrypted credentials, auth, approvals,
+and leased execution. Every machine has its own node identity and local working
+state. Follow the [cluster setup reference](../../skills/setup-catamorphic-server/references/cluster-deployment.md)
+and keep its enrollment and recovery instructions accurate. Preserve the local-process single-tenant boundary. For isolated remote development,
+configure `CATAMORPHIC_SANDBOX=microsandbox` and the machine workspace/CPU/memory
+budgets. Follow ADR 0100: an Allocation reserves a workspace until physical
+teardown, including idle development sessions. Operator inventory reports usage;
+expired leases alone never free capacity.
+
 ## Run
 
 - From the repository root, `bun run dev` starts the combined desktop and

@@ -222,8 +222,9 @@ export function useWorkflowGraph({ onParse }: { onParse?: OnParseCallback }) {
   }, [graph, applyGraph]);
 
   useEffect(() => {
+    if (!onParse) return;
     ++requestRef.current;
-    if (onParse) setParseState({ status: "updating" });
+    setParseState({ status: "updating" });
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       buildGraph(code);

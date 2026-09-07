@@ -335,7 +335,7 @@ function sendAuthPage(
       "content-security-policy",
       `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; form-action 'self' http: https:; base-uri 'none'; frame-ancestors 'none'`,
     )
-    .header("referrer-policy", "no-referrer")
+    .header("referrer-policy", "strict-origin-when-cross-origin")
     .header("x-content-type-options", "nosniff")
     .type("text/html; charset=utf-8")
     .send(render(nonce));

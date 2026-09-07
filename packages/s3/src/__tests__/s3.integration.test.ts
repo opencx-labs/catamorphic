@@ -15,11 +15,15 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { FsBackend, ProjectManager, push } from "@catamorphic/git";
+import {
+  FsBackend,
+  ObjectRemoteBackend,
+  PreconditionFailedError,
+  ProjectManager,
+  push,
+} from "@catamorphic/git";
 import { afterAll, describe, expect, it } from "vitest";
-import { PreconditionFailedError } from "../object-store.js";
 import { S3ObjectStore } from "../s3-object-store.js";
-import { S3RemoteBackend } from "../s3-remote-backend.js";
 
 const BUCKET = process.env.S3_BUCKET ?? "";
 const ACCESS_KEY_ID = process.env.S3_ACCESS_KEY_ID ?? "";
@@ -70,7 +74,7 @@ const PROJECT = crypto.randomUUID();
 const KEY_PREFIX = `catamorphic-test/${crypto.randomUUID()}/`;
 const AUTHOR = { name: "Alice", email: "alice@test.dev" };
 
-describeIf("S3RemoteBackend (integration)", () => {
+describeIf("ObjectRemoteBackend (integration)", () => {
   const store = new S3ObjectStore({
     bucket: BUCKET,
     endpoint: ENDPOINT,
@@ -81,7 +85,7 @@ describeIf("S3RemoteBackend (integration)", () => {
       secretAccessKey: SECRET_ACCESS_KEY,
     },
   });
-  const backend = new S3RemoteBackend({ store, keyPrefix: KEY_PREFIX });
+  const backend = new ObjectRemoteBackend({ store, keyPrefix: KEY_PREFIX });
 
   const tmpDirs: string[] = [];
   async function tmp(prefix: string): Promise<string> {

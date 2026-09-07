@@ -1,7 +1,8 @@
 import type { DB } from "@catamorphic/db";
 import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
 import type { Kysely } from "kysely";
-import type { Identity } from "../identity.js";
+import { type Identity, isBuilder, mayUseProject } from "../identity.js";
+import { AccessDeniedError } from "./artifact-scope.js";
 import { readProgramFiles, withProgram } from "./program-reader.js";
 import { requireTenantProject } from "./projects-service.js";
 
@@ -68,6 +69,8 @@ export class SkillsService {
   ) {}
 
   async list(identity: Identity, projectId: string): Promise<ProjectSkill[]> {
+    if (!isBuilder(identity, projectId))
+      return this.listShared(identity, projectId);
     await this.requireProject(identity, projectId);
     const projectSkills = await this.withDev(identity, projectId, (repo) =>
       this.listProjectSkills(repo),
@@ -97,6 +100,8 @@ export class SkillsService {
     projectId: string,
     name: string,
   ): Promise<{ skill: ProjectSkill; content: string } | null> {
+    if (!isBuilder(identity, projectId))
+      return this.readShared(identity, projectId, name);
     await this.requireProject(identity, projectId);
     const fromProject = await this.withDev(
       identity,
@@ -201,6 +206,7 @@ export class SkillsService {
   }
 
   private requireProject(identity: Identity, projectId: string) {
+    if (!mayUseProject(identity, projectId)) throw new AccessDeniedError();
     return requireTenantProject(this.db, identity.tenantId, projectId);
   }
 

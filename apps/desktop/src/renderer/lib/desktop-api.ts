@@ -806,6 +806,16 @@ export interface CatamorphicDesktopApi {
     name: string;
     rootPath: string;
   }) => Promise<{ id: string; name: string; report: RemoteSyncReport }>;
+  remoteEnableLocalExecution: (input: {
+    projectId: string;
+    environment: string;
+  }) => Promise<{ id: string }>;
+  remoteAuthority: (projectId: string) => Promise<{
+    serverUrl: string;
+    remoteProjectId: string;
+    connectionId: string;
+    credentialEpoch: string;
+  } | null>;
   remoteStatus: (projectId: string) => Promise<RemoteProjectStatus | null>;
   remoteMembers: (projectId: string) => Promise<{
     roles: RemoteProjectRole[];
@@ -1030,6 +1040,7 @@ export interface CatamorphicDesktopApi {
   projectRoot: (projectId: string) => Promise<string | null>;
   revealFolder: (folderPath: string) => Promise<void>;
   editorFileRead: (input: { filePath: string }) => Promise<{ content: string }>;
+  projectLocalFiles: (projectId: string) => Promise<Array<{ path: string }>>;
   editorFileWrite: (input: {
     filePath: string;
     content: string;

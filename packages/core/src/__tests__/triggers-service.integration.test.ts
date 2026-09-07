@@ -274,6 +274,42 @@ describeIf("TriggersService end to end", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
+  it("members browse only their deployed workflows without receiving draft or unrelated files", async () => {
+    const member: Identity = {
+      ...identity,
+      externalUserId: "workflow-member",
+      scope: [{ kind: "workflow", projectId, name: "escalateTicket" }],
+    };
+    await core.projects.writeFile(identity, projectId, "private-notes.md", {
+      content: "private draft",
+    });
+    const workflows = await core.workflows.list({
+      identity: member,
+      projectId,
+    });
+    expect(workflows.map((workflow) => workflow.name)).toEqual([
+      "escalateTicket",
+    ]);
+    const detail = await core.workflows.get({
+      identity: member,
+      projectId,
+      workflowName: "escalateTicket",
+    });
+    expect(detail.nodes.length).toBeGreaterThan(0);
+    expect(detail.allFiles).toEqual({});
+    expect(detail.projectFiles).toEqual([]);
+    await expect(
+      core.workflows.get({
+        identity: member,
+        projectId,
+        workflowName: "flakyTicket",
+      }),
+    ).rejects.toThrow(AccessDeniedError);
+    await expect(
+      core.workflows.list({ identity: member, projectId, ref: "HEAD" }),
+    ).rejects.toThrow(AccessDeniedError);
+  });
+
   it("lists bindings frozen from the production commit", async () => {
     const bindings = await core.triggers.list({ identity, projectId });
     expect(bindings).toHaveLength(3);

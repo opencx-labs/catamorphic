@@ -1,4 +1,5 @@
 import {
+  assertSandboxResources,
   CommandDeploymentRuntimeProvider,
   type CreateSandboxOpts,
   type DeploymentRuntimeProvider,
@@ -50,6 +51,7 @@ export class CloudflareSandboxError extends Error {
 }
 
 export class CloudflareSandboxProvider implements SandboxProvider {
+  readonly isolation = "sandbox";
   readonly workspaceRoot = "/workspace";
   readonly deploymentRuntime: DeploymentRuntimeProvider;
 
@@ -66,7 +68,8 @@ export class CloudflareSandboxProvider implements SandboxProvider {
     });
   }
 
-  async createSandbox(_opts: CreateSandboxOpts): Promise<SandboxHandle> {
+  async createSandbox(opts: CreateSandboxOpts): Promise<SandboxHandle> {
+    assertSandboxResources(opts.resources, []);
     const response = await this.request("POST", "/v1/sandbox");
     const body = (await response.json()) as { id: string };
     return {

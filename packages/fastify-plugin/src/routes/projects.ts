@@ -1,5 +1,7 @@
 import {
   assertMayManageRolePolicy,
+  type Identity,
+  isBuilder,
   type Project,
   ProjectFileNotFoundError,
   ProjectNotFoundError,
@@ -108,7 +110,10 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
       const { projectId } = request.params;
 
       try {
-        const project = await ctx.core.projects.get(identity, projectId);
+        const project = await ctx.core.projects.getOverview({
+          identity,
+          projectId,
+        });
         const summary = await safeListWorkflows(ctx.core, identity, projectId);
         return reply.send({
           ...toDto(project),
@@ -737,7 +742,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
 
 async function safeListWorkflows(
   core: NonNullable<RouteContext["core"]>,
-  identity: { tenantId: string; externalUserId: string },
+  identity: Identity,
   projectId: string,
 ): Promise<{
   workflows: WorkflowSummary[];
@@ -745,6 +750,7 @@ async function safeListWorkflows(
 }> {
   try {
     const workflows = await core.workflows.list({ identity, projectId });
+    if (!isBuilder(identity, projectId)) return { workflows, files: [] };
     const allFiles = await core.projects.readAllFiles(identity, projectId);
     return { workflows, files: Object.keys(allFiles) };
   } catch {

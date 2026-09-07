@@ -20,6 +20,7 @@ import {
   type TurnOptions,
 } from "@catamorphic/sandbox";
 import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
+import { z } from "zod";
 import {
   type AgentRef,
   type Identity,
@@ -32,6 +33,7 @@ import {
   SEED_SKILLS,
 } from "../seeds.js";
 import {
+  AgentDefinitionsService,
   type AgentDelegationPolicy,
   formatProjectAgentId,
   parseProjectAgentId,
@@ -46,6 +48,7 @@ import {
   type SessionDeliveryReceipt,
   type SessionMessageAuthor,
 } from "./agent-turns-service.js";
+import { allocationSandboxProvider } from "./allocation-sandbox-provider.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 import { AccessDeniedError, resolveScope } from "./artifact-scope.js";
 import type {
@@ -55,12 +58,17 @@ import type {
 import type { ConnectionAdmissionService } from "./connection-admission.js";
 import type { ConnectionCapabilityGrantsService } from "./connection-capability-grants.js";
 import { connectionMcpServerName } from "./connection-types.js";
-import type { DevSandboxService } from "./dev-sandbox-service.js";
+import { DbSandboxStore } from "./db-sandbox-store.js";
+import { DevSandboxService } from "./dev-sandbox-service.js";
 import type { DocumentsService } from "./documents-service.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
 import type { ExecutionEnvironmentsService } from "./execution-environments-service.js";
 import type { PluginsService } from "./plugins-service.js";
-import { PROGRAM_READER } from "./program-reader.js";
+import {
+  PROGRAM_READER,
+  readProgramFile,
+  withProgram,
+} from "./program-reader.js";
 import { requireTenantProject } from "./projects-service.js";
 import { type SyncedFileChange, syncSandboxChanges } from "./sandbox-sync.js";
 import {
@@ -72,6 +80,13 @@ import {
   shipRemoteProject,
   syncRemoteProject,
 } from "./store-sync.js";
+
+interface AgentExecutionRuntime {
+  bindingId: string;
+  environmentName: string;
+  provider?: SandboxProvider;
+  devSandboxes?: DevSandboxService;
+}
 
 type SessionRow = Selectable<DB["agent_sessions"]>;
 type MessageRow = Selectable<DB["agent_messages"]>;
@@ -497,6 +512,8 @@ export interface AgentTurnSettledEvent {
 
 export interface NativeAgentCheckout {
   resolve(input: {
+    bindingId?: string;
+    environmentName?: string;
     projectId: string;
     sessionId: string;
   }): Promise<string | undefined> | string | undefined;
@@ -511,12 +528,11 @@ export interface NativeAgentCheckout {
 interface AgentSessionsDeps {
   /** Stable, host-owned identity used to fence cross-host session delivery. */
   hostId: string;
+  workerNode?: { id: string; token: string };
   /** Source-host presence window before a mirrored session is shown paused. */
   authorityLeaseMs?: number;
   projectManager: ProjectManager;
-  sandboxProvider: SandboxProvider;
   codingAgents: CodingAgentRegistry;
-  devSandboxes: DevSandboxService;
   /**
    * Resolve a project's directory on the WorkerNode filesystem, for `native`
    * topology agents (Claude Code, Codex, runtimes that operate on
@@ -602,9 +618,9 @@ export class AgentSessionsService {
   readonly turns: AgentTurnsService;
   readonly mailboxes: SessionMailboxesService;
   readonly hostId: string;
+  private readonly workerNode?: { id: string; token: string };
   readonly authorityLeaseMs: number;
   private readonly projectManager: ProjectManager;
-  private readonly sandboxProvider: SandboxProvider;
   private readonly codingAgents: CodingAgentRegistry;
   private readonly nativeAgentCheckout?: NativeAgentCheckout;
   private readonly executionEnvironments: ExecutionEnvironmentsService;
@@ -614,7 +630,6 @@ export class AgentSessionsService {
   private readonly connectionMcpUrl?: AgentSessionsDeps["connectionMcpUrl"];
   private readonly plugins?: PluginsService;
   private readonly pluginResolver?: PluginResolver;
-  private readonly devSandboxes: DevSandboxService;
   private readonly onTurnSettled?: AgentSessionsDeps["onTurnSettled"];
   private readonly seedFiles?: Record<string, string>;
   private readonly standingAgentPrompt?: string | false;
@@ -656,6 +671,16 @@ export class AgentSessionsService {
           "projects.tenant_id",
         ])
         .where("agent_sessions.authority_host_id", "=", this.hostId)
+        .$if(this.workerNode !== undefined, (query) =>
+          query.where(({ exists, selectFrom }) =>
+            exists(
+              selectFrom("execution_allocations")
+                .select("id")
+                .whereRef("id", "=", "agent_sessions.allocation_id")
+                .where("worker_node_id", "=", this.workerNode?.id ?? ""),
+            ),
+          ),
+        )
         .where("agent_sessions.status", "=", "active")
         .where(({ exists, selectFrom }) =>
           exists(
@@ -747,10 +772,10 @@ export class AgentSessionsService {
   ) {
     this.turns = new AgentTurnsService(db);
     this.hostId = deps.hostId;
+    this.workerNode = deps.workerNode;
     this.authorityLeaseMs = deps.authorityLeaseMs ?? 90_000;
     this.mailboxes = new SessionMailboxesService(db, deps.hostId);
     this.projectManager = deps.projectManager;
-    this.sandboxProvider = deps.sandboxProvider;
     this.codingAgents = deps.codingAgents;
     this.nativeAgentCheckout = deps.nativeAgentCheckout;
     this.executionEnvironments = deps.executionEnvironments;
@@ -758,7 +783,6 @@ export class AgentSessionsService {
     this.connectionAdmission = deps.connectionAdmission;
     this.connectionGrants = deps.connectionGrants;
     this.connectionMcpUrl = deps.connectionMcpUrl;
-    this.devSandboxes = deps.devSandboxes;
     this.plugins = deps.plugins;
     this.pluginResolver = deps.pluginResolver;
     this.onTurnSettled = deps.onTurnSettled;
@@ -1342,7 +1366,12 @@ export class AgentSessionsService {
     let inheritedAgentId: string | undefined;
     if (parent) {
       const parentAgentId = parent.agent_id;
-      if (parentAgentId && this.codingAgents.get(parentAgentId)) {
+      if (
+        parentAgentId &&
+        (await this.resolveAgent(parentAgentId, projectId).catch(
+          () => undefined,
+        ))
+      ) {
         try {
           this.assertAgentAccess(identity, projectId, parentAgentId);
           inheritedAgentId = parentAgentId;
@@ -1353,10 +1382,13 @@ export class AgentSessionsService {
       }
       inheritedAgentId ??= this.codingAgents.defaultAgentId(projectId);
     }
-    const selectedAgentId = input.agentId ?? inheritedAgentId;
+    const selectedAgentId =
+      input.agentId ??
+      inheritedAgentId ??
+      (await this.catalog({ identity, projectId })).defaultAgentId;
     this.assertAgentAccess(identity, projectId, selectedAgentId ?? null);
     // Validate up front so a bad agent id fails at create, not first send.
-    const agent = this.resolveAgent(selectedAgentId ?? null, projectId);
+    const agent = await this.resolveAgent(selectedAgentId ?? null, projectId);
     const sessionId = randomUUID();
     const relationshipPrompt = input.parentSessionId
       ? [
@@ -1413,6 +1445,7 @@ export class AgentSessionsService {
           environmentName: admitted.environmentName,
           workloadKind: "agent",
           rootWorkloadId: sessionId,
+          workerNodeId: admitted.runtime.workerNodeId,
           policy: {
             binding: admitted.binding,
             requirements: admitted.effectiveRequirements,
@@ -1660,7 +1693,7 @@ export class AgentSessionsService {
         }
         const mirrorAgent = existing
           ? undefined
-          : this.resolveAgent(agentId, projectId);
+          : await this.resolveAgent(agentId, projectId);
         const mirrorAdmission = mirrorAgent
           ? await this.executionEnvironments.admit({
               identity,
@@ -1736,6 +1769,7 @@ export class AgentSessionsService {
                   environmentName: mirrorAdmission.environmentName,
                   workloadKind: "agent",
                   rootWorkloadId: sessionId,
+                  workerNodeId: mirrorAdmission.runtime.workerNodeId,
                   policy: {
                     binding: mirrorAdmission.binding,
                     requirements: mirrorAdmission.effectiveRequirements,
@@ -1924,13 +1958,14 @@ export class AgentSessionsService {
 
     if (patch.agentId !== undefined && patch.agentId !== session.agent_id) {
       this.assertAgentAccess(identity, projectId, patch.agentId);
-      const agent = this.codingAgents.get(patch.agentId);
+      const agent = await this.resolveAgent(patch.agentId, projectId);
       if (!agent) throw new AgentNotConfiguredError(patch.agentId);
       // Let the outgoing provider release its in-memory state.
       if (session.provider_session_id) {
-        const previous = this.codingAgents.get(
-          session.agent_id ?? this.codingAgents.defaultAgentId(projectId) ?? "",
-        );
+        const previous = await this.resolveAgent(
+          session.agent_id,
+          projectId,
+        ).catch(() => undefined);
         await previous?.provider
           .dispose({
             providerSessionId: session.provider_session_id,
@@ -1957,7 +1992,7 @@ export class AgentSessionsService {
       if (!previousAllocationId) {
         throw new Error("Agent session has no Environment Allocation");
       }
-      const nextAgent = this.resolveAgent(
+      const nextAgent = await this.resolveAgent(
         patch.agentId ?? session.agent_id,
         projectId,
       );
@@ -2000,6 +2035,7 @@ export class AgentSessionsService {
             environmentName: admission.environmentName,
             workloadKind: "agent",
             rootWorkloadId: sessionId,
+            workerNodeId: admission.runtime.workerNodeId,
             policy: {
               binding: admission.binding,
               requirements: admission.effectiveRequirements,
@@ -2243,7 +2279,10 @@ export class AgentSessionsService {
     }
     const sourceAgentId =
       source.agent_id ?? this.codingAgents.defaultAgentId(projectId);
-    const sourceAgent = this.resolveAgent(sourceAgentId ?? null, projectId);
+    const sourceAgent = await this.resolveAgent(
+      sourceAgentId ?? null,
+      projectId,
+    );
     const policy = delegationPolicy(sourceAgent.delegation);
     if (!policy.enabled) {
       throw new AgentDelegationDeniedError(
@@ -2266,7 +2305,7 @@ export class AgentSessionsService {
       projectId,
     });
     this.assertAgentAccess(identity, projectId, targetAgentId);
-    const targetAgent = this.resolveAgent(targetAgentId, projectId);
+    const targetAgent = await this.resolveAgent(targetAgentId, projectId);
     if (
       route.target === "*" &&
       privilegeRank(targetAgent.privilege) >
@@ -2967,9 +3006,17 @@ export class AgentSessionsService {
         await this.presentations(identity, [sessionId])
       ).get(sessionId);
       if (presentation?.visibility === "archived") return;
+      const allocation = session.allocation_id
+        ? await this.executionAllocations.get({
+            identity,
+            allocationId: session.allocation_id,
+          })
+        : undefined;
+      if (allocation?.workerNodeId !== (this.workerNode?.id ?? null)) return;
       const turn = await this.turns.claimNextForSession({
         workerId: this.turnWorkerId,
         sessionId,
+        workerNode: this.workerNode,
       });
       if (!turn) return;
       if (!turn.leaseToken) throw new Error("Claimed turn has no lease token");
@@ -2984,9 +3031,18 @@ export class AgentSessionsService {
         if (leaseLost) return;
         leaseLost = true;
         try {
-          this.resolveAgent(session.agent_id, projectId).provider.interrupt?.(
-            session.provider_session_id ?? sessionId,
-          );
+          void this.resolveAgent(session.agent_id, projectId)
+            .then((agent) =>
+              agent.provider.interrupt?.(
+                session.provider_session_id ?? sessionId,
+              ),
+            )
+            .catch((error) =>
+              console.warn(
+                "Could not interrupt the lost execution lease",
+                error,
+              ),
+            );
         } catch (error) {
           console.warn(
             "[catamorphic] Could not interrupt the lost execution lease",
@@ -2996,6 +3052,17 @@ export class AgentSessionsService {
       };
       const heartbeat = startAgentLeaseHeartbeat({
         renew: async () => {
+          if (this.workerNode) {
+            const owned = await this.db
+              .selectFrom("worker_nodes")
+              .select("id")
+              .where("id", "=", this.workerNode.id)
+              .where("lease_token", "=", this.workerNode.token)
+              .where("enabled", "=", true)
+              .where("lease_expires_at", ">", sql<Date>`now()`)
+              .executeTakeFirst();
+            if (!owned) return false;
+          }
           const owned = await this.turns.renew({ turnId: turn.id, leaseToken });
           if (owned) await this.honorCancellation({ session, turnId: turn.id });
           return owned;
@@ -3176,7 +3243,7 @@ export class AgentSessionsService {
     if (active && this.runningTurns.has(sessionId)) {
       this.interruptedTurns.add(sessionId);
       try {
-        const agent = this.resolveAgent(session.agent_id, projectId);
+        const agent = await this.resolveAgent(session.agent_id, projectId);
         // Some harnesses only learn their native id after the stream starts.
         // The stable Catamorphic id lets them cancel that first turn too.
         agent.provider.interrupt?.(session.provider_session_id ?? session.id);
@@ -3233,9 +3300,8 @@ export class AgentSessionsService {
     )
       return;
     this.interruptedTurns.add(input.session.id);
-    this.resolveAgent(
-      input.session.agent_id,
-      input.session.project_id,
+    (
+      await this.resolveAgent(input.session.agent_id, input.session.project_id)
     ).provider.interrupt?.(
       input.session.provider_session_id ?? input.session.id,
     );
@@ -3434,7 +3500,13 @@ export class AgentSessionsService {
       event.type === "background";
 
     try {
-      const agent = this.resolveAgent(session.agent_id, projectId);
+      const agent = await this.resolveAgent(session.agent_id, projectId);
+      const runtime = await this.resolveExecutionRuntime(
+        identity,
+        projectId,
+        session,
+        agent,
+      );
       const callerLayers = await this.callerToolPolicies(
         identity,
         projectId,
@@ -3454,10 +3526,16 @@ export class AgentSessionsService {
         projectId,
         session,
         agent,
+        runtime,
       );
       // The caller's view of the store, in the folder the agent works in
       // (ADR 0055): pulled before the turn, shipped after it.
-      const storeDir = await this.storeSyncDir(identity, projectId, anchor);
+      const storeDir = await this.storeSyncDir(
+        identity,
+        projectId,
+        anchor,
+        sessionId,
+      );
       if (storeDir) {
         await syncRemoteProject(
           storeDir,
@@ -3473,16 +3551,16 @@ export class AgentSessionsService {
         });
       }
 
-      if (anchor.sandboxProviderId) {
-        const workingDirectory = this.projectDir();
+      if (anchor.sandboxProviderId && runtime.provider) {
+        const workingDirectory = this.projectDir(runtime.provider);
         const batchSkillStaged = await ensureBatchWorkflowSkill({
-          sandboxProvider: this.sandboxProvider,
+          sandboxProvider: runtime.provider,
           sandboxProviderId: anchor.sandboxProviderId,
           projectDir: workingDirectory,
           seedFiles: this.seedFiles,
         });
         const durableSkillStaged = await ensureDurableWorkflowSkill({
-          sandboxProvider: this.sandboxProvider,
+          sandboxProvider: runtime.provider,
           sandboxProviderId: anchor.sandboxProviderId,
           projectDir: workingDirectory,
           seedFiles: this.seedFiles,
@@ -3493,6 +3571,7 @@ export class AgentSessionsService {
         ];
         if (stagedSkillPaths.length > 0) {
           await this.commitWorkflowSkillBaseline(
+            runtime.provider,
             anchor.sandboxProviderId,
             stagedSkillPaths,
           );
@@ -3630,17 +3709,22 @@ export class AgentSessionsService {
           ? ((await this.nativeAgentCheckout.resolve({
               projectId,
               sessionId,
+              bindingId: runtime.bindingId,
+              environmentName: runtime.environmentName,
             })) ?? anchor.providerSession.workingDirectory)
           : anchor.providerSession.workingDirectory;
       anchor.providerSession.workingDirectory = settledWorkingDirectory;
 
-      const changedFiles = anchor.sandboxProviderId
-        ? await this.syncBackChanges(
-            identity,
-            projectId,
-            anchor.sandboxProviderId,
-          )
-        : hostChangedFiles(events, settledWorkingDirectory);
+      const changedFiles =
+        anchor.sandboxProviderId && runtime.provider
+          ? await this.syncBackChanges(
+              runtime.provider,
+              identity,
+              projectId,
+              anchor.sandboxProviderId,
+              this.workerNode ? sessionId : undefined,
+            )
+          : hostChangedFiles(events, settledWorkingDirectory);
 
       // Ship the turn's `store/` writes as the caller (ADR 0055) before the
       // checkpoint: store paths are gitignored, so they never enter git.
@@ -3951,8 +4035,8 @@ export class AgentSessionsService {
     await this.cancelAutoRetry(sessionId);
 
     if (session.provider_session_id) {
-      const agent = this.codingAgents.get(
-        session.agent_id ?? this.codingAgents.defaultAgentId(projectId) ?? "",
+      const agent = await this.resolveAgent(session.agent_id, projectId).catch(
+        () => undefined,
       );
       await agent?.provider
         .dispose({
@@ -4108,6 +4192,19 @@ export class AgentSessionsService {
           .execute();
         const now = new Date();
         for (const row of archived) {
+          if (row.allocation_id) {
+            const allocation = await transaction
+              .selectFrom("execution_allocations")
+              .select("worker_node_id")
+              .where("id", "=", row.allocation_id)
+              .executeTakeFirst();
+            if (allocation?.worker_node_id)
+              await this.executionAllocations.release({
+                identity,
+                allocationId: row.allocation_id,
+                transaction,
+              });
+          }
           await transaction
             .insertInto("agent_session_views")
             .values({
@@ -4135,8 +4232,8 @@ export class AgentSessionsService {
 
     for (const row of resourceRows) {
       if (row.provider_session_id) {
-        const agent = this.codingAgents.get(
-          row.agent_id ?? this.codingAgents.defaultAgentId(projectId) ?? "",
+        const agent = await this.resolveAgent(row.agent_id, projectId).catch(
+          () => undefined,
         );
         await agent?.provider
           .dispose({
@@ -4204,6 +4301,23 @@ export class AgentSessionsService {
   ): Promise<AgentSession[]> {
     await this.requireSession(identity, projectId, sessionId);
     const sessionIds = await this.descendantSessionIds(projectId, sessionId);
+    const retired = await this.db
+      .selectFrom("agent_sessions as session")
+      .innerJoin(
+        "execution_allocations as allocation",
+        "allocation.id",
+        "session.allocation_id",
+      )
+      .select(["session.id", "session.environment_name"])
+      .where("session.id", "in", sessionIds)
+      .where("allocation.status", "=", "released")
+      .where("session.status", "=", "active")
+      .execute();
+    for (const row of retired) {
+      await this.update(identity, projectId, row.id, {
+        environment: row.environment_name ?? undefined,
+      });
+    }
     await this.db
       .updateTable("agent_session_views")
       .set(({ ref }) => ({
@@ -4263,12 +4377,212 @@ export class AgentSessionsService {
 
   // --- Agent resolution & anchoring ---
 
-  private resolveAgent(
+  /** Member-facing roster. Definitions and defaults come from the authority. */
+  async catalog(args: { identity: Identity; projectId: string }) {
+    await this.requireProject(args.identity, args.projectId);
+    const entries = await new AgentDefinitionsService(
+      this.db,
+      this.projectManager,
+    ).listCommitted({
+      tenantId: args.identity.tenantId,
+      projectId: args.projectId,
+    });
+    const candidates = new Map(
+      this.codingAgents.list().map((agent) => [
+        agent.id,
+        {
+          id: agent.id,
+          name: agent.id,
+          description: undefined as string | undefined,
+        },
+      ]),
+    );
+    for (const entry of entries)
+      candidates.set(formatProjectAgentId(args.projectId, entry.slug), {
+        id: formatProjectAgentId(args.projectId, entry.slug),
+        name: entry.definition?.name ?? entry.slug,
+        description: entry.definition?.description,
+      });
+    const items: Array<{
+      id: string;
+      name: string;
+      description?: string;
+      available: boolean;
+      reason: string | null;
+      environments: import("./execution-environments-service.js").EnvironmentDiscovery;
+    }> = [];
+    for (const candidate of candidates.values()) {
+      try {
+        this.assertAgentAccess(args.identity, args.projectId, candidate.id);
+      } catch {
+        continue;
+      }
+      try {
+        const agent = await this.resolveAgent(candidate.id, args.projectId);
+        const environments = await this.executionEnvironments.discover({
+          ...args,
+          requirements: {
+            ...agent.environment?.requirements,
+            workload: "agent",
+            topology: agent.topology,
+          },
+          allowed: agent.environment?.allowed,
+          preferred: agent.environment?.preferred,
+        });
+        items.push({
+          ...candidate,
+          available: environments.items.some(
+            (item) => item.allowed && item.available && item.compatible,
+          ),
+          environments,
+          reason: null,
+        });
+      } catch (error) {
+        items.push({
+          ...candidate,
+          available: false,
+          environments: { items: [] },
+          reason:
+            error instanceof Error ? error.message : "Agent is unavailable",
+        });
+      }
+    }
+    const manifest = await withProgram(
+      this.projectManager,
+      args.identity.tenantId,
+      args.projectId,
+      async (repo, ref) => {
+        const text = await readProgramFile(
+          repo,
+          ref,
+          ".catamorphic/project.json",
+        );
+        try {
+          return text ? JSON.parse(text) : {};
+        } catch {
+          return {};
+        }
+      },
+    );
+    const config = z
+      .object({
+        defaultAgent: z.string().optional(),
+        startingActions: z.array(z.unknown()).optional(),
+      })
+      .safeParse(manifest);
+    const startingActions = (
+      config.success ? (config.data.startingActions ?? []) : []
+    )
+      .flatMap((raw) => {
+        const action = z
+          .object({
+            label: z.string().min(1).max(80),
+            prompt: z.string().min(1).max(20000),
+            agent: z.string().optional(),
+            when: z
+              .object({
+                builder: z.boolean().optional(),
+                permissions: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .safeParse(raw);
+        if (!action.success) return [];
+        const { when, ...value } = action.data;
+        if (
+          when?.builder !== undefined &&
+          when.builder !== isBuilder(args.identity, args.projectId)
+        )
+          return [];
+        if (
+          when?.permissions?.some(
+            (permission) =>
+              args.identity.scope !== undefined &&
+              !args.identity.projectPermissions?.some(
+                (grant) =>
+                  grant.projectId === args.projectId &&
+                  grant.permission === permission,
+              ),
+          )
+        )
+          return [];
+        const agentId = value.agent
+          ? formatProjectAgentId(args.projectId, value.agent)
+          : undefined;
+        if (
+          agentId &&
+          !items.some((item) => item.id === agentId && item.available)
+        )
+          return [];
+        return [
+          {
+            label: value.label,
+            prompt: value.prompt,
+            ...(agentId ? { agentId } : {}),
+          },
+        ];
+      })
+      .slice(0, 6);
+    const configured =
+      config.success && config.data.defaultAgent
+        ? formatProjectAgentId(args.projectId, config.data.defaultAgent)
+        : undefined;
+    const preferred = [
+      configured,
+      startingActions[0]?.agentId,
+      this.codingAgents.defaultAgentId(args.projectId),
+    ];
+    const defaultAgentId =
+      preferred.find((id) =>
+        items.some((item) => item.id === id && item.available),
+      ) ?? items.find((item) => item.available)?.id;
+    return { items, startingActions, defaultAgentId };
+  }
+
+  async getAgent(args: {
+    identity: Identity;
+    projectId: string;
+    agentId: string;
+  }): Promise<RegisteredCodingAgent> {
+    await this.requireProject(args.identity, args.projectId);
+    const id =
+      this.codingAgents.get(args.agentId) || parseProjectAgentId(args.agentId)
+        ? args.agentId
+        : formatProjectAgentId(args.projectId, args.agentId);
+    this.assertAgentAccess(args.identity, args.projectId, id);
+    return this.resolveAgent(id, args.projectId);
+  }
+
+  private async resolveAgent(
     agentId: string | null,
     projectId?: string,
-  ): RegisteredCodingAgent {
+  ): Promise<RegisteredCodingAgent> {
     const id = agentId ?? this.codingAgents.defaultAgentId(projectId);
     if (!id) throw new AgentNotConfiguredError(undefined);
+    const projectAgent = parseProjectAgentId(id);
+    if (projectAgent && this.codingAgents.projectAgent) {
+      if (projectAgent.projectId !== projectId) throw new AccessDeniedError();
+      const project = await this.db
+        .selectFrom("projects")
+        .select("tenant_id")
+        .where("id", "=", projectAgent.projectId)
+        .executeTakeFirstOrThrow();
+      const definitions = new AgentDefinitionsService(
+        this.db,
+        this.projectManager,
+      );
+      const entry = (
+        await definitions.listCommitted({
+          tenantId: project.tenant_id,
+          projectId: projectAgent.projectId,
+        })
+      ).find((entry) => entry.slug === projectAgent.slug);
+      if (!entry?.definition) throw new AgentNotConfiguredError(id);
+      const resolved = await this.codingAgents.projectAgent({ id, entry });
+      if (!resolved) throw new AgentNotConfiguredError(id);
+      return resolved;
+    }
     const agent = this.codingAgents.get(id);
     if (!agent) throw new AgentNotConfiguredError(id);
     return agent;
@@ -4329,11 +4643,88 @@ export class AgentSessionsService {
    * session is new, was switched to another agent, or the registry now maps
    * its agent to a different harness.
    */
+  private async resolveExecutionRuntime(
+    identity: Identity,
+    projectId: string,
+    session: SessionRow,
+    agent: RegisteredCodingAgent,
+  ): Promise<AgentExecutionRuntime> {
+    if (!session.allocation_id)
+      throw new Error("Session has no execution Allocation");
+    const allocation = await this.executionAllocations.get({
+      identity,
+      allocationId: session.allocation_id,
+    });
+    if (allocation?.status !== "active") {
+      throw new Error("The session's execution Allocation is no longer active");
+    }
+    const admitted = await this.executionEnvironments.admit({
+      identity,
+      projectId,
+      environment: allocation.environmentName,
+      workerNodeId: allocation.workerNodeId ?? undefined,
+      allocationBindingId: allocation.bindingId,
+      allowed: agent.environment?.allowed,
+      requirements: {
+        ...agent.environment?.requirements,
+        workload: "agent",
+        topology: agent.topology,
+      },
+    });
+    for (const key of ["cpuMillis", "memoryMb", "storageMb", "gpu"] as const) {
+      const required = admitted.effectiveRequirements.resources?.[key];
+      const reserved = allocation.policy.requirements.resources?.[key];
+      if (required !== undefined && required !== reserved) {
+        throw new Error(
+          "This agent's resource policy changed. Move the session to apply its new workspace limits.",
+        );
+      }
+    }
+    if (admitted.binding.id !== allocation.bindingId) {
+      throw new Error(
+        "This Environment's binding changed. Move the session explicitly before continuing.",
+      );
+    }
+    if (agent.topology === "native") {
+      return {
+        bindingId: allocation.bindingId,
+        environmentName: allocation.environmentName,
+      };
+    }
+    const selectedProvider = admitted.runtime.sandboxProvider;
+    const provider =
+      selectedProvider &&
+      allocation.workerNodeId &&
+      allocation.policy.binding.trust === "managed"
+        ? allocationSandboxProvider({
+            db: this.db,
+            allocation,
+            provider: selectedProvider,
+            workerLeaseToken: admitted.runtime.workerLeaseToken,
+          })
+        : selectedProvider;
+    if (!provider)
+      throw new Error("The selected Environment has no execution provider");
+    return {
+      provider,
+      bindingId: allocation.bindingId,
+      environmentName: allocation.environmentName,
+      devSandboxes: new DevSandboxService({
+        projectManager: this.projectManager,
+        provider,
+        store: new DbSandboxStore(this.db, allocation.id),
+        resources: allocation.policy.requirements.resources,
+        ...(this.workerNode ? { sessionId: session.id } : {}),
+      }),
+    };
+  }
+
   private async ensureAnchor(
     identity: Identity,
     projectId: string,
     session: SessionRow,
     agent: RegisteredCodingAgent,
+    runtime: AgentExecutionRuntime,
   ): Promise<{
     providerSession: ProviderSession;
     sandboxProviderId?: string;
@@ -4362,6 +4753,7 @@ export class AgentSessionsService {
       const workingDirectory = await this.resolveNativePath(
         projectId,
         session.id,
+        runtime,
       );
       if (anchored && session.provider_session_id) {
         return {
@@ -4382,7 +4774,10 @@ export class AgentSessionsService {
         workingDirectory,
         sessionId: session.id,
         systemPrompt: buildAgentSystemPrompt({
-          systemPrompt: session.system_prompt ?? undefined,
+          systemPrompt:
+            [agent.systemPrompt, session.system_prompt]
+              .filter(Boolean)
+              .join("\n\n") || undefined,
           standingPrompt: this.standingAgentPrompt,
         }),
         attachedPlugins: await this.loadAttachedPlugins(projectId),
@@ -4401,15 +4796,24 @@ export class AgentSessionsService {
       return { providerSession, reanchored: true };
     }
 
+    if (!runtime.provider || !runtime.devSandboxes) {
+      throw new Error(
+        "The selected Environment has no agent workspace provider",
+      );
+    }
+
     if (anchored && session.provider_session_id && session.sandbox_id) {
-      const sandboxProviderId = await this.resolveSandboxProviderId(session);
+      const sandboxProviderId = await this.resolveSandboxProviderId(
+        session,
+        runtime.provider,
+      );
       return {
         providerSession: {
           providerSessionId: session.provider_session_id,
           sessionId: session.id,
           projectId,
           sandboxId: sandboxProviderId,
-          workingDirectory: this.projectDir(),
+          workingDirectory: this.projectDir(runtime.provider),
         },
         sandboxProviderId,
         reanchored: false,
@@ -4417,17 +4821,22 @@ export class AgentSessionsService {
     }
 
     const { handle, baseCommitSha } = await this.prepareDevSandbox(
+      { provider: runtime.provider, devSandboxes: runtime.devSandboxes },
       identity,
       projectId,
     );
     const providerSession = await agent.provider.startSession({
+      sandboxProvider: runtime.provider,
       projectId,
       userId: identity.externalUserId,
       sandboxId: handle.providerId,
-      workingDirectory: this.projectDir(),
+      workingDirectory: this.projectDir(runtime.provider),
       sessionId: session.id,
       systemPrompt: buildAgentSystemPrompt({
-        systemPrompt: session.system_prompt ?? undefined,
+        systemPrompt:
+          [agent.systemPrompt, session.system_prompt]
+            .filter(Boolean)
+            .join("\n\n") || undefined,
         standingPrompt: this.standingAgentPrompt,
       }),
       attachedPlugins: await this.loadAttachedPlugins(projectId),
@@ -4551,10 +4960,13 @@ export class AgentSessionsService {
   private async resolveNativePath(
     projectId: string,
     sessionId: string,
+    runtime: AgentExecutionRuntime,
   ): Promise<string> {
     const path = await this.nativeAgentCheckout?.resolve({
       projectId,
       sessionId,
+      bindingId: runtime.bindingId,
+      environmentName: runtime.environmentName,
     });
     if (!path) {
       throw new Error(
@@ -4566,8 +4978,8 @@ export class AgentSessionsService {
 
   // --- Dev sandbox lifecycle ---
 
-  private projectDir(): string {
-    return `${this.sandboxProvider.workspaceRoot}/project`;
+  private projectDir(provider: SandboxProvider): string {
+    return `${provider.workspaceRoot}/project`;
   }
 
   /**
@@ -4578,30 +4990,31 @@ export class AgentSessionsService {
    * are refreshed by upload so the agent always sees the user's drafts.
    */
   private async prepareDevSandbox(
+    runtime: { provider: SandboxProvider; devSandboxes: DevSandboxService },
     identity: Identity,
     projectId: string,
   ): Promise<{
     handle: { id: string; providerId: string };
     baseCommitSha: string | null;
   }> {
-    const prepared = await this.devSandboxes.ensure({
+    const prepared = await runtime.devSandboxes.ensure({
       identity,
       projectId,
       refresh: true,
     });
     await ensureBatchWorkflowSkill({
-      sandboxProvider: this.sandboxProvider,
+      sandboxProvider: runtime.provider,
       sandboxProviderId: prepared.providerId,
-      projectDir: this.projectDir(),
+      projectDir: this.projectDir(runtime.provider),
       seedFiles: this.seedFiles,
     });
     await ensureDurableWorkflowSkill({
-      sandboxProvider: this.sandboxProvider,
+      sandboxProvider: runtime.provider,
       sandboxProviderId: prepared.providerId,
-      projectDir: this.projectDir(),
+      projectDir: this.projectDir(runtime.provider),
       seedFiles: this.seedFiles,
     });
-    await this.ensureGitBaseline(prepared.providerId);
+    await this.ensureGitBaseline(runtime.provider, prepared.providerId);
     return {
       handle: { id: prepared.id, providerId: prepared.providerId },
       baseCommitSha: prepared.baseCommitSha,
@@ -4609,6 +5022,7 @@ export class AgentSessionsService {
   }
 
   private async commitWorkflowSkillBaseline(
+    provider: SandboxProvider,
     sandboxProviderId: string,
     skillPaths: readonly string[],
   ): Promise<void> {
@@ -4619,11 +5033,9 @@ export class AgentSessionsService {
     ].join(" && ");
     // cwd via ExecOpts: see syncSandboxChanges — a `cd /workspace/...`
     // embedded in the command breaks providers without a mounted root.
-    const result = await this.sandboxProvider.executeCommand(
-      sandboxProviderId,
-      command,
-      { cwd: this.projectDir() },
-    );
+    const result = await provider.executeCommand(sandboxProviderId, command, {
+      cwd: this.projectDir(provider),
+    });
     if (result.exitCode !== 0) {
       throw new Error(`Failed to baseline workflow skills: ${result.result}`);
     }
@@ -4634,18 +5046,19 @@ export class AgentSessionsService {
    * baseline, so post-turn change detection (`git status --porcelain`) sees
    * exactly what the agent modified.
    */
-  private async ensureGitBaseline(sandboxProviderId: string): Promise<void> {
-    const dir = this.projectDir();
+  private async ensureGitBaseline(
+    provider: SandboxProvider,
+    sandboxProviderId: string,
+  ): Promise<void> {
+    const dir = this.projectDir(provider);
     const command = [
       "(git rev-parse --git-dir >/dev/null 2>&1 || git init -b main >/dev/null)",
       "git add -A",
       `(git -c user.name=catamorphic -c user.email=agent@catamorphic.dev commit -m baseline --quiet || true)`,
     ].join(" && ");
-    const result = await this.sandboxProvider.executeCommand(
-      sandboxProviderId,
-      command,
-      { cwd: dir },
-    );
+    const result = await provider.executeCommand(sandboxProviderId, command, {
+      cwd: dir,
+    });
     if (result.exitCode !== 0) {
       throw new Error(
         `Failed to prepare sandbox git baseline: ${result.result}`,
@@ -4653,7 +5066,10 @@ export class AgentSessionsService {
     }
   }
 
-  private async resolveSandboxProviderId(session: SessionRow): Promise<string> {
+  private async resolveSandboxProviderId(
+    session: SessionRow,
+    provider: SandboxProvider,
+  ): Promise<string> {
     if (!session.sandbox_id) {
       throw new AgentSessionNotFoundError(session.id);
     }
@@ -4664,9 +5080,9 @@ export class AgentSessionsService {
       .executeTakeFirst();
     if (!row) throw new AgentSessionNotFoundError(session.id);
 
-    const status = await this.sandboxProvider.getSandboxStatus(row.provider_id);
+    const status = await provider.getSandboxStatus(row.provider_id);
     if (status === "stopped" || status === "archived") {
-      await this.sandboxProvider.startSandbox(row.provider_id);
+      await provider.startSandbox(row.provider_id);
     }
     return row.provider_id;
   }
@@ -4679,17 +5095,20 @@ export class AgentSessionsService {
    * sandbox baseline is then advanced so the next turn diffs incrementally.
    */
   private async syncBackChanges(
+    provider: SandboxProvider,
     identity: Identity,
     projectId: string,
     sandboxProviderId: string,
+    sessionId?: string,
   ): Promise<SyncedFileChange[]> {
     return syncSandboxChanges({
-      provider: this.sandboxProvider,
+      provider: provider,
       projectManager: this.projectManager,
       identity,
       projectId,
       sandboxProviderId,
-      projectDir: this.projectDir(),
+      projectDir: this.projectDir(provider),
+      sessionId,
     });
   }
 
@@ -4711,14 +5130,21 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     anchor: { providerSession: ProviderSession; sandboxProviderId?: string },
+    sessionId: string,
   ): Promise<string | null> {
     if (!this.storeSync) return null;
     if (!anchor.sandboxProviderId) return null;
-    const repo = await this.projectManager.openDev(
-      identity.tenantId,
-      projectId,
-      identity.externalUserId,
-    );
+    const repo = this.workerNode
+      ? await this.projectManager.openSession({
+          tenantId: identity.tenantId,
+          projectId,
+          sessionId,
+        })
+      : await this.projectManager.openDev(
+          identity.tenantId,
+          projectId,
+          identity.externalUserId,
+        );
     try {
       return repo.repoPath;
     } finally {
@@ -4745,6 +5171,14 @@ export class AgentSessionsService {
           message: checkpointMessage(userMessage),
         });
       }
+      if (this.workerNode)
+        return await this.projectManager.checkpointSession({
+          tenantId: identity.tenantId,
+          projectId,
+          sessionId: execution.sessionId,
+          message: checkpointMessage(userMessage),
+          author: CHECKPOINT_AUTHOR,
+        });
       const repo = await this.projectManager.openDev(
         identity.tenantId,
         projectId,
@@ -4766,6 +5200,11 @@ export class AgentSessionsService {
           error instanceof Error ? error.message : String(error)
         }`,
       );
+      if (this.workerNode)
+        throw new Error(
+          "Session checkpoint could not be saved. Recover the workspace before retrying.",
+          { cause: error },
+        );
       return null;
     }
   }

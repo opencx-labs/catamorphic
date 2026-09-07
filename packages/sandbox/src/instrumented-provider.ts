@@ -47,6 +47,8 @@ export function instrumentSandboxProvider(
   const instrumented: SandboxProvider &
     Partial<Pick<HydratableProvider, "hydrateWorkspace">> = {
     workspaceRoot: provider.workspaceRoot,
+    resourceLimits: provider.resourceLimits,
+    isolation: provider.isolation,
     deploymentRuntime: provider.deploymentRuntime
       ? instrumentDeploymentRuntimeProvider({
           provider: provider.deploymentRuntime,

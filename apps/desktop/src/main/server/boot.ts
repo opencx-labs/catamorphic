@@ -13,6 +13,7 @@ import { catamorphicPlugin } from "@catamorphic/fastify-plugin";
 import { MicrosandboxSandboxProvider } from "@catamorphic/microsandbox";
 import {
   type Catamorphic,
+  connectionAuthorizationPage,
   createCatamorphic,
   defineStaticEnvironments,
   FsBundleStore,
@@ -35,6 +36,8 @@ import {
 } from "../mcp-apps.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
+import { forwardRemoteApi } from "../remote-api.js";
+import { RemoteClientRunners } from "../remote-client-runner.js";
 import { RemoteSessionMirror } from "../remote-mirror.js";
 import { shutdownDesktopServices } from "../shutdown.js";
 import { userSkillFiles, userSkillInfos } from "../user-skills.js";
@@ -72,6 +75,7 @@ export const DESKTOP_USER_ID = "desktop-user";
 
 export interface EmbeddedServer {
   url: string;
+  clientRunners: RemoteClientRunners;
   catamorphic: Catamorphic;
   projectRoots: ProjectRootsStore;
   /** Desktop-local checkout assignment and Git worktree lifecycle. */
@@ -137,6 +141,7 @@ export async function startEmbeddedServer(
   const sandboxProvider = e2eFakeAgent
     ? new E2eLocalSandboxProvider()
     : new MicrosandboxSandboxProvider();
+  const clientRunners = new RemoteClientRunners(profileConfig, sandboxProvider);
   const environmentProvider = defineStaticEnvironments([
     {
       descriptor: {
@@ -937,6 +942,59 @@ export async function startEmbeddedServer(
     // must not keep HTTP close (and therefore the database flush) waiting.
     forceCloseConnections: true,
   });
+  // A linked project is a remote authority. Never execute its API operations
+  // under the desktop's loopback root identity.
+  app.addHook("preHandler", async (request, reply) => {
+    const match = request.url.match(/^\/api\/projects\/([^/?]+)(?:[/?]|$)/);
+    if (!match?.[1]) return;
+    await forwardRemoteApi({
+      request,
+      reply,
+      profiles: profileConfig,
+      projectId: decodeURIComponent(match[1]),
+      apiPath: request.url.slice(4),
+    });
+  });
+  app.route<{ Params: { projectId: string; "*": string } }>({
+    method: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    url: "/desktop/projects/:projectId/remote-api/*",
+    handler: async (request, reply) => {
+      const params = request.params;
+      const query = request.url.includes("?")
+        ? request.url.slice(request.url.indexOf("?"))
+        : "";
+      const forwarded = await forwardRemoteApi({
+        request,
+        reply,
+        profiles: profileConfig,
+        projectId: params.projectId,
+        apiPath: `/${params["*"].replace(/^api\//, "")}${query}`,
+      });
+      if (!forwarded)
+        return reply
+          .status(404)
+          .send({ error: "Project has no remote authority" });
+    },
+  });
+  app.addHook("onSend", (request, reply, payload, done) => {
+    if (
+      request.method === "GET" &&
+      request.url.startsWith("/api/connection-authorizations/callback?") &&
+      request.headers.accept?.includes("text/html")
+    ) {
+      reply
+        .type("text/html; charset=utf-8")
+        .header("cache-control", "no-store")
+        .header(
+          "content-security-policy",
+          "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+        );
+      done(
+        null,
+        connectionAuthorizationPage({ success: reply.statusCode < 400 }),
+      );
+    } else done(null, payload);
+  });
   registerWorkspaceMcpRoute(
     app,
     async ({ projectId, sessionId, agentId, authorization }) => {
@@ -1067,6 +1125,7 @@ export async function startEmbeddedServer(
     ? startWatcherDispatcher({ watchers: catamorphic.core.watchers })
     : null;
   const suspendExecution = async () => {
+    await clientRunners.stop();
     const current = worker;
     worker = null;
     await current?.stop().catch(() => {});
@@ -1136,6 +1195,7 @@ export async function startEmbeddedServer(
 
   const shutdown = () => {
     shutdownDone ??= (async () => {
+      await clientRunners.stop();
       clearInterval(remoteSyncTimer);
       clearInterval(notificationTimer);
       clearInterval(sessionMailboxTimer);
@@ -1162,6 +1222,7 @@ export async function startEmbeddedServer(
 
   return {
     url,
+    clientRunners,
     catamorphic,
     projectRoots,
     sessionCheckouts,

@@ -13,7 +13,10 @@ import type {
   SandboxStatus,
   SupervisorProcessHandle,
 } from "@catamorphic/sandbox";
-import { StdioDeploymentRuntimeProvider } from "@catamorphic/sandbox";
+import {
+  assertSandboxResources,
+  StdioDeploymentRuntimeProvider,
+} from "@catamorphic/sandbox";
 
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 
@@ -52,9 +55,12 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
    * provider-agnostic callers build paths exactly as they do for container
    * providers.
    */
+  readonly isolation = "process";
   readonly workspaceRoot = "/workspace";
   readonly deploymentRuntime: DeploymentRuntimeProvider;
   private readonly root: string;
+  private readonly processes = new Map<string, Set<ChildProcess>>();
+  private readonly stopped = new Set<string>();
   private readonly baseEnv: Record<string, string>;
   private readonly sandboxes = new Map<
     string,
@@ -83,6 +89,7 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
   }
 
   async createSandbox(opts: CreateSandboxOpts): Promise<SandboxHandle> {
+    assertSandboxResources(opts.resources, []);
     const id = `local-${crypto.randomUUID().slice(0, 12)}`;
     for (const dir of ["workspace", "home", "tmp"]) {
       fs.mkdirSync(path.join(this.root, id, dir), { recursive: true });
@@ -93,11 +100,31 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
 
   async startSandbox(sandboxId: string): Promise<void> {
     this.requireSandboxDir(sandboxId);
+    this.stopped.delete(sandboxId);
   }
 
-  async stopSandbox(_sandboxId: string): Promise<void> {}
+  async stopSandbox(sandboxId: string): Promise<void> {
+    this.requireSandboxDir(sandboxId);
+    this.stopped.add(sandboxId);
+    const children = [...(this.processes.get(sandboxId) ?? [])];
+    await Promise.all(
+      children.map(
+        (child) =>
+          new Promise<void>((resolve) => {
+            if (child.exitCode !== null || child.signalCode !== null) {
+              resolve();
+              return;
+            }
+            child.once("close", () => resolve());
+            this.killProcessTree(child);
+          }),
+      ),
+    );
+  }
 
   async destroySandbox(sandboxId: string): Promise<void> {
+    if (fs.existsSync(path.join(this.root, sandboxId)))
+      await this.stopSandbox(sandboxId);
     const state = this.sandboxes.get(sandboxId);
     if (state) state.destroyed = true;
     fs.rmSync(path.join(this.root, sandboxId), {
@@ -107,7 +134,8 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
   }
 
   async getSandboxStatus(sandboxId: string): Promise<SandboxStatus> {
-    return fs.existsSync(path.join(this.root, sandboxId))
+    return !this.stopped.has(sandboxId) &&
+      fs.existsSync(path.join(this.root, sandboxId))
       ? "started"
       : "stopped";
   }
@@ -117,12 +145,15 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     command: string,
     opts?: ExecOpts,
   ): Promise<ExecResult> {
+    this.requireRunning(sandboxId);
     const cwd = this.resolvePath(sandboxId, opts?.cwd ?? this.workspaceRoot);
     fs.mkdirSync(cwd, { recursive: true });
     const child = spawn("/bin/bash", ["-c", command], {
+      detached: process.platform !== "win32",
       cwd,
       env: this.envFor(sandboxId, opts?.env),
     });
+    this.track(sandboxId, child);
     return this.collect(child, (opts?.timeout ?? 120) * 1_000);
   }
 
@@ -219,6 +250,38 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     };
   }
 
+  private requireRunning(sandboxId: string): void {
+    this.requireSandboxDir(sandboxId);
+    if (this.stopped.has(sandboxId))
+      throw new Error(`Sandbox '${sandboxId}' is stopped`);
+  }
+
+  private track(sandboxId: string, child: ChildProcess): void {
+    const children = this.processes.get(sandboxId) ?? new Set<ChildProcess>();
+    this.processes.set(sandboxId, children);
+    children.add(child);
+    // Commands own their process group. Detached grandchildren must not outlive
+    // completion and consume untracked resources in this trusted backend.
+    child.once("exit", () => this.killProcessTree(child));
+    child.once("close", () => {
+      children.delete(child);
+      if (children.size === 0) this.processes.delete(sandboxId);
+    });
+  }
+
+  private killProcessTree(child: ChildProcess): void {
+    if (child.pid && process.platform !== "win32") {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch (error) {
+        if (
+          !(error instanceof Error && "code" in error && error.code === "ESRCH")
+        )
+          throw error;
+      }
+    } else child.kill("SIGKILL");
+  }
+
   private requireSandboxDir(sandboxId: string): void {
     if (!fs.existsSync(path.join(this.root, sandboxId))) {
       throw new Error(`Sandbox '${sandboxId}' not found under ${this.root}`);
@@ -230,10 +293,13 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     args: string[],
     timeoutMs: number,
   ): Promise<ExecResult> {
+    this.requireRunning(sandboxId);
     const child = spawn("git", args, {
+      detached: process.platform !== "win32",
       cwd: path.join(this.root, sandboxId),
       env: this.envFor(sandboxId),
     });
+    this.track(sandboxId, child);
     return this.collect(child, timeoutMs);
   }
 
@@ -245,7 +311,7 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
       let timedOut = false;
       const timer = setTimeout(() => {
         timedOut = true;
-        child.kill("SIGKILL");
+        this.killProcessTree(child);
       }, timeoutMs);
       const append = (target: "out" | "err", chunk: Buffer) => {
         bytes += chunk.length;
@@ -282,6 +348,7 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     runtimeDirectory: string,
     env: Record<string, string>,
   ): SupervisorProcessHandle {
+    this.requireRunning(sandboxId);
     const cwd = this.resolvePath(sandboxId, runtimeDirectory);
     // The supervisor env crosses resolvePath too: its CATAMORPHIC_RUNTIME_*
     // roots are virtual /workspace paths that must land on real dirs.
@@ -295,10 +362,12 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
       ]),
     );
     const child = spawn("bun", ["run", "entry.mjs"], {
+      detached: process.platform !== "win32",
       cwd,
       env: this.envFor(sandboxId, mappedEnv),
       stdio: ["pipe", "pipe", "inherit"],
     });
+    this.track(sandboxId, child);
     return {
       write: (data) =>
         new Promise<void>((resolve, reject) => {
@@ -307,7 +376,7 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
           );
         }),
       kill: async () => {
-        child.kill("SIGKILL");
+        this.killProcessTree(child);
       },
       stdout: child.stdout,
     };

@@ -81,6 +81,12 @@ one orchestration path.
 the default project environment; hosts with schedulers or multiple execution
 pools can provide a dynamic `EnvironmentProvider` instead.
 
+The static binding is not machine enrollment. Managed multi-instance deployments
+must implement shared authority, storage access, and fenced execution placement
+under [ADR 0099](../../docs/decisions/0099-shared-postgres-server-environments.md).
+The stock host has not completed that cutover; sharing a Postgres connection
+does not by itself make its replicas interchangeable.
+
 ### Per request - bind identity, then call resources
 
 ```ts

@@ -17,6 +17,7 @@ import {
   friendlyParamName,
   WorkflowCanvas,
   WorkflowEditorScope,
+  WorkflowReview,
 } from "@catamorphic/ui";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import {
@@ -32,6 +33,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { MonacoCodeEditor } from "../components/catamorphic/monaco-editor.js";
 import { Collapsible } from "../components/collapsible.js";
 import { PendingButton } from "../components/pending-button.js";
+import {
+  ProjectAuthorityProvider,
+  useRemoteAuthority,
+} from "../components/project-authority-provider.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
 import { WorkflowDetails } from "../components/workflow-details.js";
 import { WorkflowEnablementPanel } from "../components/workflow-enablement-panel.js";
@@ -54,6 +59,26 @@ interface WorkflowScreenProps {
 }
 
 export function WorkflowScreen(props: WorkflowScreenProps) {
+  return (
+    <ProjectAuthorityProvider projectId={props.projectId}>
+      <WorkflowScreenContent {...props} />
+    </ProjectAuthorityProvider>
+  );
+}
+
+function WorkflowScreenContent(props: WorkflowScreenProps) {
+  const authority = useRemoteAuthority();
+  if (!(authority ? authority.builder : props.canEdit))
+    return (
+      <WorkflowReview
+        projectId={props.projectId}
+        workflowName={props.workflowName}
+      />
+    );
+  return <WorkflowAuthoringScreen {...props} />;
+}
+
+function WorkflowAuthoringScreen(props: WorkflowScreenProps) {
   const { projectId, workflowName } = props;
   const workflows = useWorkflows(projectId);
   const summary = workflows.data?.find(

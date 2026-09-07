@@ -11,6 +11,10 @@ user to name it again.
   schema search path.
 - With `DATABASE_URL`, Catamorphic uses its dedicated schema and stock Better
   Auth uses `catamorphic_auth` in the same Postgres.
+- Managed multi-machine deployments require network Postgres. Database access
+  alone is insufficient: follow [Managed machines and clusters](cluster-deployment.md)
+  for the accepted architecture, current support limits, and readiness evidence.
+  Never share a PGlite data directory between server processes.
 - The data volume also holds signing, operational, and encrypted credential
   material with owner-only permissions. Back up the complete volume, not only
   one database directory.

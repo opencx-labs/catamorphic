@@ -42,6 +42,7 @@ describe("WorkflowsService", () => {
     } as unknown as ProjectManager;
     const projects = {
       get: vi.fn(async () => ({ id: "project-1" })),
+      getOverview: vi.fn(async () => ({ id: "project-1" })),
     } as unknown as ProjectsService;
     const service = new WorkflowsService(projectManager, projects);
 
@@ -82,6 +83,7 @@ describe("WorkflowsService.listDeclaredSecrets", () => {
     } as unknown as ProjectManager;
     const projects = {
       get: vi.fn(async () => ({ id: "project-1" })),
+      getOverview: vi.fn(async () => ({ id: "project-1" })),
     } as unknown as ProjectsService;
     return {
       service: new WorkflowsService(projectManager, projects),

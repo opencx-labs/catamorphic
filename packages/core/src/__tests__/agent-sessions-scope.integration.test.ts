@@ -19,8 +19,6 @@ import { AgentSessionsService } from "../services/agent-sessions-service.js";
 import { AgentTurnsService } from "../services/agent-turns-service.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
 import type { CodingAgentRegistry } from "../services/coding-agent-registry.js";
-import { DbSandboxStore } from "../services/db-sandbox-store.js";
-import { DevSandboxService } from "../services/dev-sandbox-service.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
@@ -147,15 +145,9 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     sessions = new AgentSessionsService(db, {
       hostId: "scope-test-host",
       projectManager,
-      sandboxProvider: unusedSandboxProvider,
       codingAgents: registry,
       executionEnvironments,
       executionAllocations: new ExecutionAllocationsService(db),
-      devSandboxes: new DevSandboxService({
-        projectManager,
-        provider: unusedSandboxProvider,
-        store: new DbSandboxStore(db),
-      }),
       nativeAgentCheckout: { resolve: () => rootPath },
       // The project's tool roster: two tools, one renamed via its trigger.
       mcpToolNames: async () =>
@@ -263,10 +255,8 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     await expect(
       sessions.create(viewer, projectId, { agentId: salesAgentId }),
     ).rejects.toThrow(AccessDeniedError);
-    // The host's default/personal agent is not a project artifact.
-    await expect(sessions.create(viewer, projectId)).rejects.toThrow(
-      AccessDeniedError,
-    );
+    // A bare create resolves a permitted catalog default, never a personal agent.
+    expect((await sessions.create(viewer, projectId)).agentId).toBe(csmAgentId);
     await expect(
       sessions.create(viewer, projectId, { agentId: "personal" }),
     ).rejects.toThrow(AccessDeniedError);

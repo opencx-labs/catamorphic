@@ -22,9 +22,12 @@ Zod Schemas → Fastify Routes → OpenAPI 3.1 Spec → openapi-typescript → o
 3. Regenerate the OpenAPI spec and client types:
 
 ```bash
-cd packages/fastify-plugin && bun run generate-spec
-cd packages/api-client && bun run generate
+(cd packages/fastify-plugin && bun run generate-spec)
+(cd packages/api-client && bun run generate)
 ```
+
+Run both commands from the worktree root. Each subshell restores the working
+directory before generating the next package.
 
 4. The client automatically gets full type inference (generated paths include the `/api` prefix):
 

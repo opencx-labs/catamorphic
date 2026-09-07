@@ -51,7 +51,7 @@ describe("RemoteMessageConnectionGuard", () => {
     });
 
     expect(container.textContent).toContain(
-      "Your message is local until this project reconnects.",
+      "Reconnect to continue on the project server.",
     );
     expect(container.textContent).toContain("Sign in again");
   });

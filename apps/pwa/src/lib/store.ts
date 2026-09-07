@@ -17,6 +17,8 @@ export interface RemoteOAuthCredentials {
 }
 
 interface PwaConnectionBase {
+  /** Changes on sign-in/pairing, not token refresh. Isolates cached authority. */
+  authEpoch?: string;
   id: string;
   /** API base from the connect link (usually ending in `/api`). */
   serverUrl: string;
@@ -213,6 +215,7 @@ export function addRemoteConnection(input: {
   const connection: RemotePwaConnection = {
     id: existing?.id ?? randomId(),
     kind: "remote",
+    authEpoch: input.credentials ? randomId() : existing?.authEpoch,
     serverUrl: input.link.serverUrl,
     projectId: input.link.remoteProjectId,
     ...(input.projectName || input.link.remoteProjectName
@@ -249,6 +252,7 @@ export function addDeviceConnection(input: {
   const connection: DevicePwaConnection = {
     id: existing?.id ?? randomId(),
     kind: "device",
+    authEpoch: randomId(),
     serverUrl,
     projectId: "",
     projectName: input.name,
