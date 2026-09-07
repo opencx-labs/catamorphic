@@ -71,7 +71,7 @@ jobs:
       - name: Complete deterministic check
         run: >-
           xvfb-run -a --server-args="-screen 0 1440x900x24"
-          bash -c 'openbox >/dev/null 2>&1 & exec bun run check'
+          bash -c 'openbox >/dev/null 2>&1 & CATAMORPHIC_E2E_VIRTUAL_DISPLAY=1 exec bun run check'
       - name: Publish packages to the local eval registry
         if: github.event_name != 'pull_request' && env.MODEL_EVAL_AVAILABLE == '1'
         run: ./infra/local-registry/publish.sh

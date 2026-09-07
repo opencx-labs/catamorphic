@@ -241,8 +241,13 @@ function createWindow(profileId?: string): BrowserWindow {
     // Pre-paint background from the profile's theme so open doesn't flash;
     // stay hidden until the renderer has actually painted a frame.
     show: false,
-    // E2E input goes through CDP, never the user's keyboard or mouse.
-    focusable: e2eDataDir === undefined,
+    // Linux focusable:false bypasses the window manager and cannot maximize.
+    // A private Xvfb display supplies input isolation there while retaining
+    // native window management. Real desktop E2E windows remain non-focusable.
+    focusable:
+      e2eDataDir === undefined ||
+      (process.platform === "linux" &&
+        process.env.CATAMORPHIC_E2E_VIRTUAL_DISPLAY === "1"),
     backgroundColor: windowBackgroundColor(stores.theme.resolved()),
     webPreferences: {
       preload: path.join(import.meta.dirname, "../preload/index.cjs"),

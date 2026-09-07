@@ -90,6 +90,17 @@ and pointer interactions through CDP. Do not restore
 native focus stealing to make a test pass; test OS-focus behavior separately
 only when that behavior is explicitly under test.
 
+On Linux, Electron's `focusable: false` bypasses the window manager, preventing
+native maximize/restore. Run the gate on a private display with a window manager:
+
+```bash
+xvfb-run -a --server-args="-screen 0 1440x900x24" bash -c 'openbox >/dev/null 2>&1 & CATAMORPHIC_E2E_VIRTUAL_DISPLAY=1 exec bun run check'
+```
+
+The explicit virtual-display flag allows managed Linux test windows; the private
+display isolates them from the user's input. Never set this flag on a user's real
+display. macOS and Windows keep non-focusable test windows.
+
 Before completing engineering work, run `bun run check` from the repository
 root. It is the merge gate, including deterministic Postgres-complete
 workspace tests and both desktop E2E modes. Docker must be running so the

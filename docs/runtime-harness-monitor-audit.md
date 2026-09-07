@@ -132,6 +132,11 @@ and 144 hidden-window tests passed with this policy. Normal installed-app
 windows keep normal focus. Workflow test readiness also accepts fully unmounted
 closed modals instead of depending on the brief exit-animation interval.
 
+Linux CI uses a private Xvfb display with Openbox and explicitly marks it with
+`CATAMORPHIC_E2E_VIRTUAL_DISPLAY=1`. Electron's non-focusable Linux windows bypass
+the window manager, so this isolated display keeps windows managed for native
+maximize/restore coverage. The user's actual desktop retains input isolation.
+
 ## Verification limits
 
 An earlier local gate attempt hit a native Node 24.13.0 V8/Wasm worker crash
