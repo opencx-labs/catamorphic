@@ -7,6 +7,12 @@ export const codeAtom = atom<string>("");
 
 export const graphAtom = atom<WorkflowGraph | null>(null);
 
+/** The preview may retain its last valid graph while source is incomplete. */
+export const graphParseStateAtom = atom<{
+  status: "idle" | "updating" | "ready" | "error";
+  error?: string;
+}>({ status: "idle" });
+
 export const selectedNodeIdAtom = atom<string | null>(null);
 
 export const selectedNodeAtom = atom<WorkflowNode | null>((get) => {

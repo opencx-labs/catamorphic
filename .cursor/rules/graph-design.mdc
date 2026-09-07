@@ -55,7 +55,9 @@ When adjusting spacing, change these constants — don't hardcode numbers elsewh
 
 - The graph is **read-only**: `nodesDraggable={false}`, `nodesConnectable={false}`, `deleteKeyCode={null}`. Also set `draggable: false`, `connectable: false`, `deletable: false` on each node object, and filter `position` changes from `onNodesChange`.
 - **Translate extent**: An invisible boundary keeps at least one node always in view — prevents panning into empty space. Computed dynamically from node bounding box with generous padding.
-- **Fit view** is enabled on load.
+- **Fit view** is enabled on load only. Never remount the canvas or reset its viewport when an inspector opens or source changes.
+- **Graph changes** reconcile positions, dimensions, and visibility for 220ms with `cubic-bezier(0.2, 0, 0, 1)`. Edges follow interpolated nodes. Removed nodes exit before removal; reduced motion settles immediately. Presentation matching never changes parser ids.
+- **Parse status** is exposed through `graphParseStateAtom`. Retain the last valid graph on failure and tell the user that it is stale. Superseded parse responses are ignored.
 
 ## Container Nodes (Group Nodes)
 

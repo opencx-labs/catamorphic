@@ -20,10 +20,12 @@ export function WorkflowEnablementPanel({
   projectId,
   workflowName,
   onClose,
+  inline = false,
 }: {
   projectId: string;
   workflowName: string;
   onClose: () => void;
+  inline?: boolean;
 }) {
   const environments = useEnvironments(projectId, { workload: "workflow" });
   const enablements = useWorkflowEnablements(projectId, workflowName);
@@ -127,7 +129,11 @@ export function WorkflowEnablementPanel({
   return (
     <aside
       aria-label="Workflow enablement"
-      className="absolute inset-y-0 right-0 z-30 flex w-[380px] flex-col border-l border-border bg-bg shadow-xl"
+      className={
+        inline
+          ? "flex min-h-0 flex-1 flex-col"
+          : "absolute inset-y-0 right-0 z-30 flex w-[380px] flex-col border-l border-border bg-bg shadow-xl"
+      }
       data-testid="workflow-enablement-panel"
     >
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border px-3">

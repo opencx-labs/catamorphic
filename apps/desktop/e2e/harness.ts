@@ -64,6 +64,8 @@ export interface AppHandle {
    * `modifiers` is CDP's bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8.
    */
   press: (key: KeyName, modifiers?: number) => Promise<void>;
+  /** Insert text through Chromium's real editing path (including Monaco). */
+  insertText: (text: string) => Promise<void>;
   /**
    * Attach a second CDP session to an out-of-process iframe — e.g. a
    * sandboxed app guest, whose opaque origin makes it unreachable from the
@@ -75,6 +77,8 @@ export interface AppHandle {
   ) => Promise<FrameHandle>;
   /** Captured app stdout/stderr so far (diagnosing server-side behavior). */
   getOutput: () => string;
+  /** Uncaught renderer exceptions, including failures from lazy screens. */
+  getRendererErrors: () => string[];
   userDataDir: string;
   stop: () => Promise<void>;
   /**
@@ -275,6 +279,7 @@ async function connectCdp(
 
 async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
   let nextId = 1;
+  const rendererErrors: string[] = [];
   const pending = new Map<
     number,
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
@@ -282,9 +287,22 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
   ws.addEventListener("message", (event) => {
     const message = JSON.parse(String(event.data)) as {
       id?: number;
+      method?: string;
+      params?: {
+        exceptionDetails?: {
+          text?: string;
+          exception?: { description?: string };
+        };
+      };
       result?: unknown;
       error?: { message: string };
     };
+    if (message.method === "Runtime.exceptionThrown")
+      rendererErrors.push(
+        message.params?.exceptionDetails?.exception?.description ??
+          message.params?.exceptionDetails?.text ??
+          "Uncaught renderer exception",
+      );
     if (message.id === undefined) return;
     const waiter = pending.get(message.id);
     if (!waiter) return;
@@ -357,12 +375,24 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
     await send("Network.enable");
     await send("Network.setBlockedURLs", { urls: patterns });
   };
-  return { eval: evaluate, waitFor, screenshot, press, blockRequests };
+  const insertText = async (text: string): Promise<void> => {
+    await send("Input.insertText", { text });
+  };
+  return {
+    eval: evaluate,
+    waitFor,
+    screenshot,
+    press,
+    insertText,
+    blockRequests,
+    getRendererErrors: () => [...rendererErrors],
+  };
 }
 
 export type KeyName = keyof typeof KEY_CODES;
 
 const KEY_CODES = {
+  a: { windowsVirtualKeyCode: 65, code: "KeyA" },
   Enter: { windowsVirtualKeyCode: 13, code: "Enter", text: "\r" },
   Backspace: { windowsVirtualKeyCode: 8, code: "Backspace" },
   Delete: { windowsVirtualKeyCode: 46, code: "Delete" },

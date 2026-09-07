@@ -97,7 +97,7 @@ repository-pinned Node runtime.
 The default command keeps the real Electron window hidden so local runs do
 not steal focus. The visible command runs the compositor, focus, and
 native-window suites (`motion`, `skills`, `tool-permissions`, and
-`window-state`) with a displayed window;
+`window-state`, and `workflows`) with a displayed window;
 run both before every commit. Both commands build the app and drive the real
 Electron binary over CDP against an
 isolated temp `userData` dir with a deterministic fake agent
@@ -181,3 +181,13 @@ Use Collapsible for sidebar nesting, the shared InspectorPortal for rich hover
 cards, and `data-disabled-reason` beside each disabled condition. Do not rely on
 native title tooltips. When editing a failure-prone picker, preserve an actionable
 error/retry state and diagnostics that distinguish request failure from no matches.
+
+## Workflow authoring
+
+The desktop owns workflow details, source editing, draft protection, and run or
+automation actions in `screens/workflow-screen.tsx`. Compose the scoped canvas
+and headless hooks; do not move the inspector back into `@catamorphic/ui`
+(ADR 0097). Keep the canvas mounted through inspector changes and preserve the
+last valid preview while code is incomplete. The visible
+`e2e/workflows.e2e.ts` suite covers live source polling, graph transitions,
+source access, draft restoration and conflicts, and contextual agent editing.

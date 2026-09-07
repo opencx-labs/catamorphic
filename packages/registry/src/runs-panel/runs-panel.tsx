@@ -133,7 +133,7 @@ function RunItems({ run, scope }: { run: Run; scope: BatchProgress }) {
   );
 }
 
-function RunDetail({ runId }: { runId: string }) {
+export function RunDetail({ runId }: { runId: string }) {
   const runQuery = useRun({ runId });
   const run = runQuery.data;
   const cancel = useCancelRun({ runId });

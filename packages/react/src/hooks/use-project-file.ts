@@ -23,6 +23,7 @@ export interface ProjectFileContent {
 export function useProjectFile(
   projectId: string | undefined,
   filePath: string | undefined,
+  options: { refetchInterval?: number | false } = {},
 ): UseQueryResult<ProjectFileContent, CatamorphicError> {
   const { apiClient } = useCatamorphic();
   return useQuery<ProjectFileContent, CatamorphicError>({
@@ -48,5 +49,6 @@ export function useProjectFile(
         return (await res.json()) as ProjectFileContent;
       }),
     enabled: Boolean(projectId && filePath),
+    refetchInterval: options.refetchInterval,
   });
 }

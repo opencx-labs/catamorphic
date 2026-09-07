@@ -203,7 +203,7 @@ that friction is intentional.
   buttons themselves are not).
 - **Prefer small composable pieces over all-in-one shells.** The workflow
   surface is composed from `WorkflowCanvas` (graph + minimap + controls),
-  `DetailPanel`, and `WorkflowEditorScope` (shared atoms) — not the monolithic
+  a desktop-owned workflow inspector, and `WorkflowEditorScope` (shared atoms) — not the monolithic
   `WorkflowEditor`. Hosts own the toolbar, save button, and chat placement.
 
 ## Theming rules
@@ -227,6 +227,37 @@ that friction is intentional.
 
 ## Design log
 
+### 2026-09-07: Workflow authoring belongs to the host
+
+The desktop owns the workflow inspector, including its Details, Code, Runs,
+and automation views. It does not ship as an embeddable sidebar. Reusable
+mechanics remain the canvas, scoped selection, source linking, parse status,
+and graph reconciliation (ADR 0097). Workflow overviews lead with purpose,
+starting information, triggers, and steps. Step details describe behavior and
+input provenance; raw expressions are under Technical details. Both views
+provide a deliberate path to source and to describing a change to an agent.
+
+The graph keeps its viewport while inspectors open and code changes. Layout,
+container size, and entry/exit opacity move together for 220ms on the standard
+easing; connected edges track the moving nodes. Reduced motion settles the
+layout immediately. Failed or superseded parses cannot silently replace the
+current preview. A last-valid preview is identified as such.
+
+Saving changes the draft. Runs use the published project version. Publishing
+explains its project-wide scope; unattended execution still requires the
+separate automation review. Unsaved workflow buffers survive tab switches,
+closing a dirty workflow asks whether to discard it, and external changes
+never silently replace a user's draft. Buffers and their disk baselines live
+in the existing per-project workspace snapshot, surviving project switches
+and app relaunch. Saving clears the draft snapshot; discarding also clears
+it from closed-tab history. Background reconciliation waits for restoration
+and cannot replace a saved workspace with an empty one.
+
+Canvas fills use host background tokens with subtle node-kind tints, keeping
+text readable in light and dark themes. Monaco registers TypeScript through
+its current language-feature entry point; authoring hints accept typed,
+heterogeneous steps without false errors.
+
 ### 2026-09-06: Connection loss is not agent activity
 
 Keep the transcript visible when the host cannot be reached, but replace the
@@ -247,7 +278,7 @@ memory of *why* the app is the way it is.
   `bg-accent text-accent-fg`.
 - Registry components ship **no buttons or action chrome**; hosts own
   toolbars/save/chat placement. Prefer small composable pieces
-  (WorkflowCanvas + DetailPanel + WorkflowEditorScope) over all-in-one shells.
+  (WorkflowCanvas + host inspector + WorkflowEditorScope) over all-in-one shells.
 - Animations stay simple and purposeful: 120–250ms, `--ease-standard`, no
   decorative motion.
 

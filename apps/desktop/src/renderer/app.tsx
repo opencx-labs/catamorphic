@@ -76,6 +76,7 @@ import {
 import { FilesNav } from "./components/files-nav.js";
 import { GitNav } from "./components/git-nav.js";
 import { MobilePairingModal } from "./components/mobile-pairing-modal.js";
+import { Modal } from "./components/modal.js";
 import { PendingButton } from "./components/pending-button.js";
 import { ProfileBar } from "./components/profile-bar.js";
 import { ProjectAgentConsentDialog } from "./components/project-agent-consent.js";
@@ -149,6 +150,7 @@ import {
   parseSurfaceLink,
   resolveProjectFileLocation,
 } from "./lib/surface-link.js";
+import { NEW_WORKFLOW_PROMPT } from "./lib/workflow-authoring.js";
 import { AppScreen, useApps } from "./screens/app-screen.js";
 import {
   type BrowserPageState,
@@ -381,7 +383,8 @@ const fileNameFromPath = (filePath: string) =>
  * app), sessionless chats (nothing to reopen), unsent composer state,
  * agent-setup tabs (they re-open themselves), and mcpapp tabs (their tool
  * results are runtime data). Editor tabs lose unsaved buffers; browser
- * tabs reopen on their last URL.
+ * tabs reopen on their last URL. Workflow tabs retain their draft source and
+ * baseline so returning to a project can detect external conflicts.
  */
 const serializeWorkspace = (ws: Workspace): Workspace => {
   const chats = ws.chats
@@ -782,6 +785,7 @@ export function App() {
   );
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [closingWorkflow, setClosingWorkflow] = useState<string | null>(null);
   // Live per-chat signals reported by each ChatDock (working / draft /
   // awaiting-input); unread is host-derived (needs surface visibility).
   const [signalsByChat, setSignalsByChat] = useState<
@@ -1409,15 +1413,19 @@ export function App() {
   const updateWorkspace = useCallback(
     (updater: (workspace: Workspace) => Workspace) => {
       if (!workspaceKey) return;
-      setWorkspaces((current) => ({
-        ...current,
-        [workspaceKey]: updater(
+      setWorkspaces((current) => {
+        const previous =
           current[workspaceKey] ??
-            (projectId
-              ? defaultWorkspaceFor(projectId)
-              : emptyUtilityWorkspace()),
-        ),
-      }));
+          (projectId
+            ? defaultWorkspaceFor(projectId)
+            : emptyUtilityWorkspace());
+        const next = updater(previous);
+        // Background reconciliation must not materialize a default workspace
+        // before the persisted snapshot has had a chance to restore.
+        return next === previous
+          ? current
+          : { ...current, [workspaceKey]: next };
+      });
     },
     [projectId, workspaceKey, defaultWorkspaceFor],
   );
@@ -1982,7 +1990,19 @@ export function App() {
     openBrowserTab(url, mode === "side" ? { side: true } : undefined);
   };
 
-  const closeTab = (key: string, opts?: { force?: boolean }) =>
+  const closeTab = (
+    key: string,
+    opts?: { force?: boolean; discardDraft?: boolean },
+  ) => {
+    if (
+      !opts?.discardDraft &&
+      workspace.tabs.some(
+        (tab) => tab.kind === "workflow" && tabKey(tab) === key && tab.draft,
+      )
+    ) {
+      setClosingWorkflow(key);
+      return;
+    }
     updateWorkspace((ws) => {
       // Snapshot enough to bring the tab back with Cmd+Shift+T — plus its
       // split context so a reopened pane re-tiles with its partner.
@@ -2181,7 +2201,14 @@ export function App() {
           closingTab &&
             closingTab.kind !== "palette" &&
             closingTab.kind !== "agent-setup"
-            ? { kind: "screen", tab: closingTab, ...splitContext }
+            ? {
+                kind: "screen",
+                tab:
+                  closingTab.kind === "workflow" && opts?.discardDraft
+                    ? { ...closingTab, draft: false, workflowDraft: undefined }
+                    : closingTab,
+                ...splitContext,
+              }
             : null,
         ),
         activeTabKey:
@@ -2190,6 +2217,7 @@ export function App() {
             : ws.activeTabKey,
       };
     });
+  };
 
   /** Cmd+Shift+T: restore the most recently closed tab (re-tiled when
       its old split partner is still open). */
@@ -2477,7 +2505,8 @@ export function App() {
   // Agent-less profiles greet the user with the setup wizard as a real,
   // closable tab: close it to skip; it returns as a modal on chat attempts.
   useEffect(() => {
-    if (!projectId || agentsData === null || hasAgents) return;
+    if (!projectId || !workspaceReady || agentsData === null || hasAgents)
+      return;
     if (!activeProfileId || setupDismissedRef.current.has(activeProfileId)) {
       return;
     }
@@ -2491,7 +2520,14 @@ export function App() {
       };
       return { ...ws, tabs: [...ws.tabs, tab], activeTabKey: key };
     });
-  }, [projectId, agentsData, hasAgents, activeProfileId, updateWorkspace]);
+  }, [
+    projectId,
+    workspaceReady,
+    agentsData,
+    hasAgents,
+    activeProfileId,
+    updateWorkspace,
+  ]);
 
   // Agent discovery is asynchronous at launch. If a persisted setup tab is
   // restored, or the first empty response races the real agents payload,
@@ -4689,6 +4725,7 @@ export function App() {
     onSwitchProfile: switchProfile,
     onSendToAgent: sendToAgent,
     startingActions,
+    canCreateWorkflows: Boolean(projectId) && !memberShell,
     onRunSkill: runSkill,
     actionHandlers,
     actionAvailability: projectId
@@ -4906,6 +4943,9 @@ export function App() {
                     projectAgentNames={projectAgentNames}
                     unreadSessionIds={unreadSessionIds}
                     onOpenTab={openTab}
+                    onNewWorkflow={() =>
+                      sendToAgent(NEW_WORKFLOW_PROMPT, "float")
+                    }
                     onNewChat={() => addChat()}
                     onSessionCommand={(session, command) => {
                       const entry = workspace.chats.find(
@@ -5119,7 +5159,9 @@ export function App() {
               {/* Screen-style tabs render whenever they occupy a view
                     slot — in a split that can be two at once. */}
               {workspace.tabs
-                .filter((tab) => viewSlots[tabKey(tab)])
+                .filter(
+                  (tab) => tab.kind === "workflow" || viewSlots[tabKey(tab)],
+                )
                 .map((tab) => (
                   <div
                     key={tabKey(tab)}
@@ -5137,6 +5179,38 @@ export function App() {
                         <WorkflowScreen
                           projectId={projectId}
                           workflowName={tab.name}
+                          canEdit={!memberShell}
+                          active={Boolean(viewSlots[tabKey(tab)])}
+                          onAskAgent={(message) =>
+                            sendToAgent(message, "float")
+                          }
+                          onOpenSource={(path, line, column) => {
+                            void openLinkedSurface(
+                              `file:${path}${line ? `:${line}${column ? `:${column}` : ""}` : ""}`,
+                              { side: true, newTab: true },
+                            ).catch((cause: unknown) =>
+                              setLinkError(
+                                cause instanceof Error
+                                  ? cause.message
+                                  : "Could not open source",
+                              ),
+                            );
+                          }}
+                          initialDraft={tab.workflowDraft}
+                          onDraftChange={(workflowDraft) =>
+                            updateWorkspace((ws) => ({
+                              ...ws,
+                              tabs: ws.tabs.map((item) =>
+                                tabKey(item) === tabKey(tab)
+                                  ? {
+                                      ...item,
+                                      draft: Boolean(workflowDraft),
+                                      workflowDraft,
+                                    }
+                                  : item,
+                              ),
+                            }))
+                          }
                         />
                       </Suspense>
                     ) : tab.kind === "app" ? (
@@ -5753,6 +5827,41 @@ export function App() {
         />
       )}
 
+      <Modal
+        open={closingWorkflow !== null}
+        onClose={() => setClosingWorkflow(null)}
+        labelledBy="workflow-close-title"
+      >
+        <div className="p-5">
+          <h2 id="workflow-close-title" className="text-base font-semibold">
+            Discard workflow edits?
+          </h2>
+          <p className="mt-2 text-sm text-fg-muted">
+            This workflow has unsaved changes. Keep editing to save them, or
+            discard the draft and close the tab.
+          </p>
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              className="rounded-md border border-border px-3 py-1.5 text-xs"
+              onClick={() => setClosingWorkflow(null)}
+            >
+              Keep editing
+            </button>
+            <button
+              type="button"
+              className="rounded-md bg-danger px-3 py-1.5 text-xs text-white"
+              onClick={() => {
+                if (closingWorkflow)
+                  closeTab(closingWorkflow, { discardDraft: true });
+                setClosingWorkflow(null);
+              }}
+            >
+              Discard and close
+            </button>
+          </div>
+        </div>
+      </Modal>
       <ProjectModal
         open={projectModalOpen}
         onClose={() => setProjectModalOpen(false)}
@@ -5821,6 +5930,7 @@ function ConfiguredSection({
   unreadSessionIds,
   onOpenTab,
   onNewChat,
+  onNewWorkflow,
   onOpenSession,
   onSessionCommand,
   onSessionAction,
@@ -5845,6 +5955,7 @@ function ConfiguredSection({
   unreadSessionIds: ReadonlySet<string>;
   onOpenTab: (tab: WorkspaceTab) => void;
   onNewChat: () => void;
+  onNewWorkflow: () => void;
   onOpenSession: (session: AgentSession) => void;
   onSessionCommand: (session: AgentSession, command: SessionCommand) => void;
   onSessionAction: (sessionId: string, action: ChatSessionAction) => void;
@@ -5873,6 +5984,20 @@ function ConfiguredSection({
           <SidebarSection
             title={section.title ?? "Workflows"}
             defaultOpen={defaultOpen}
+            action={
+              !memberShell ? (
+                <ShortcutHint label="Create workflow">
+                  <button
+                    type="button"
+                    aria-label="Create workflow"
+                    onClick={onNewWorkflow}
+                    className="grid size-6 cursor-pointer place-items-center rounded text-fg-faint hover:bg-bg-overlay hover:text-fg"
+                  >
+                    <Plus className="size-3.5" />
+                  </button>
+                </ShortcutHint>
+              ) : undefined
+            }
           >
             <WorkflowsNav
               projectId={projectId}

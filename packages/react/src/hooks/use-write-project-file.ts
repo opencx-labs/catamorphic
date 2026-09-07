@@ -68,6 +68,10 @@ export function useWriteProjectFile(
         return (await res.json()) as WrittenProjectFile;
       }),
     onSuccess: (data) => {
+      queryClient.setQueryData(
+        ["cat", "project", projectId, "file", data.path],
+        data,
+      );
       queryClient.invalidateQueries({
         queryKey: ["cat", "project", projectId, "files"],
       });

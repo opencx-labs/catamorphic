@@ -1,5 +1,6 @@
 import { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
+import "monaco-editor/languages/definitions/register.all";
 import editorWorker from "monaco-editor/editor/editor.worker?worker";
 import tsWorker from "monaco-editor/language/typescript/ts.worker?worker";
 

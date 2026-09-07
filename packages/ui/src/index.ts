@@ -8,11 +8,11 @@ export { AIBar } from "./ai-bar.js";
 export type { AppMountProps } from "./app-mount.js";
 export { AppMount } from "./app-mount.js";
 export { WorkflowCanvas } from "./canvas.js";
-export type {
-  CodeEditorRenderProps,
-  DetailPanelProps,
-} from "./detail-panel.js";
-export { DetailPanel } from "./detail-panel.js";
+export {
+  formatDefaultValue,
+  friendlyParamName,
+  friendlyType,
+} from "./display-utils.js";
 export type { RunsPanelProps } from "./runs-panel.js";
 export { RunsPanel } from "./runs-panel.js";
 export { Toolbar } from "./toolbar.js";

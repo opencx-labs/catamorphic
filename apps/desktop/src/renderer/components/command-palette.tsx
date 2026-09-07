@@ -74,6 +74,7 @@ import {
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
 import { useProjectSkills } from "../lib/skills.js";
+import { NEW_WORKFLOW_PROMPT } from "../lib/workflow-authoring.js";
 import { useApps } from "../screens/app-screen.js";
 import { resolveInput } from "../screens/browser-screen.js";
 import { PILL_SURFACE } from "./context-pill.js";
@@ -468,6 +469,7 @@ export function CommandPalette({
   onSwitchProfile,
   onSendToAgent,
   startingActions,
+  canCreateWorkflows = false,
   onRunSkill,
   actionHandlers,
   actionAvailability,
@@ -513,6 +515,7 @@ export function CommandPalette({
   ) => void;
   /** Project-authored, caller-resolved zero-state actions. Empty means no UI. */
   startingActions: Array<{ label: string; prompt: string; agentId?: string }>;
+  canCreateWorkflows?: boolean;
   /**
    * A skill row was committed: send its invocation message to an agent —
    * into the focused chat when one exists, else a new chat in `mode`.
@@ -964,6 +967,17 @@ export function CommandPalette({
 
   const sidebarItems = useMemo<PaletteItem[]>(() => {
     const items: PaletteItem[] = [];
+    if (canCreateWorkflows)
+      items.push({
+        id: "create-workflow",
+        icon: WorkflowIcon,
+        label: "Create workflow",
+        detail: "Describe it to your agent",
+        keywords: ["new", "workflow", "automation", "build"],
+        kind: "action",
+        run: (mode) =>
+          onSendToAgent(NEW_WORKFLOW_PROMPT, mode === "tab" ? "tab" : "float"),
+      });
     for (const workflow of workflows) {
       const label = workflow.displayName ?? workflow.name;
       items.push({
@@ -1086,6 +1100,8 @@ export function CommandPalette({
     });
     return items;
   }, [
+    canCreateWorkflows,
+    onSendToAgent,
     workflows,
     apps,
     sessions,

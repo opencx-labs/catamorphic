@@ -1,6 +1,6 @@
 # 0011 — Code editor ships as a registry item; linking state lives in React hooks
 
-- **Status:** Accepted
+- **Status:** Accepted; built-in inspector and editor-slot placement superseded by [0097](0097-host-owned-workflow-inspectors.md)
 - **Date:** 2026-07-03
 
 ## Context

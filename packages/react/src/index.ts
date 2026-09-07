@@ -10,6 +10,7 @@ export {
   collapsedNodeIdsAtom,
   executionStateAtom,
   graphAtom,
+  graphParseStateAtom,
   lastTriggerDataAtom,
   panelVisibilityAtom,
   reactFlowEdgesAtom,
@@ -252,6 +253,10 @@ export { findNodeAtPosition } from "./lib/find-node-at-position.js";
 // Lib helpers (workflow code authoring)
 export type { WorkflowDefinition } from "./lib/find-workflow-definitions.js";
 export { findWorkflowDefinitions } from "./lib/find-workflow-definitions.js";
+export {
+  matchWorkflowNodes,
+  workflowNodeKeys,
+} from "./lib/match-workflow-nodes.js";
 export {
   buildUntitledWorkflowName,
   displayNameFromWorkflowName,
