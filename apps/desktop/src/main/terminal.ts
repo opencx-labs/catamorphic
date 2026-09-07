@@ -6,6 +6,7 @@ import { type IPty, spawn as spawnPty } from "@lydell/node-pty";
 import { BrowserWindow, ipcMain, type WebContents } from "electron";
 import type { ServerState } from "./ipc.js";
 import { shellBinShimDir, shellIntegrationEnv } from "./shell-integration.js";
+import { TerminalLifecycle } from "./terminal-lifecycle.js";
 import { scanOsc133 } from "./terminal-text.js";
 
 /**
@@ -137,11 +138,12 @@ export function registerTerminalSupport(
     projectId: string,
   ) => Record<string, string> | Promise<Record<string, string>>,
 ): {
-  dispose(): void;
+  dispose(): Promise<void>;
   hasActiveWork(): boolean;
   agentTerminals: AgentTerminals;
 } {
   const sessions = new Map<string, TerminalSession>();
+  const lifecycle = new TerminalLifecycle();
 
   const appendBuffer = (session: TerminalSession, data: string) => {
     session.chunks.push(data);
@@ -247,6 +249,8 @@ export function registerTerminalSupport(
     const agentExtraEnv = input.agent
       ? ((await agentEnv?.(input.agent.projectId)) ?? {})
       : {};
+    if (lifecycle.disposed)
+      throw new Error("Terminal support is shutting down");
     const pty = spawnPty(
       shell,
       // A login shell, like Terminal.app — the user's PATH and prompt
@@ -267,6 +271,7 @@ export function registerTerminalSupport(
         },
       },
     );
+    lifecycle.track(pty);
     const sessionId = crypto.randomUUID();
     const session: TerminalSession = {
       pty,
@@ -530,10 +535,8 @@ export function registerTerminalSupport(
       ),
     dispose() {
       clearInterval(busyPoll);
-      for (const session of sessions.values()) {
-        if (session.running) session.pty.kill();
-      }
       sessions.clear();
+      return lifecycle.dispose();
     },
     agentTerminals,
   };

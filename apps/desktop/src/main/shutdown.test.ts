@@ -19,11 +19,19 @@ function setup() {
   };
   const shutdown = vi.fn(async () => {});
   const onError = vi.fn();
-  registerDesktopShutdown({ app, shutdown, onError });
-  return { app, events, shutdown, onError, finalQuit };
+  const signals = new EventEmitter();
+  registerDesktopShutdown({ app, shutdown, onError, signals });
+  return { app, events, signals, shutdown, onError, finalQuit };
 }
 
 describe("desktop shutdown", () => {
+  it.each(["SIGTERM", "SIGINT"])("drains services on %s", async (signal) => {
+    const { signals, shutdown, finalQuit } = setup();
+    signals.emit(signal);
+    await vi.waitFor(() => expect(finalQuit).toHaveBeenCalledWith(0));
+    expect(shutdown).toHaveBeenCalledOnce();
+  });
+
   it("does not tear down services when a window cancels quit", async () => {
     const { events, shutdown, finalQuit } = setup();
     events.emit("before-quit", { preventDefault: vi.fn() });

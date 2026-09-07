@@ -227,6 +227,16 @@ that friction is intentional.
 
 ## Design log
 
+### 2026-09-07: Native terminal shutdown must complete before exit
+
+Quit, SIGTERM, and SIGINT enter the same service shutdown. Terminal tabs can
+vanish before their native processes exit, so cleanup tracks native lifetimes
+separately and awaits their callbacks, escalating a stubborn shell within a
+bounded deadline. Electron must not free its Node environment while node-pty
+still has pending exit callbacks. Tests assert process exit status as well as
+UI behavior; a teardown crash is a failed test, never a successful run with a
+suppressed macOS alert.
+
 ### 2026-09-07: Workflow authoring belongs to the host
 
 The desktop owns the workflow inspector, including its Details, Code, Runs,

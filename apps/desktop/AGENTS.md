@@ -121,6 +121,13 @@ streamed preamble messages, and the ask_user question panel.
 - If a motion test fails after a UI change, the animation is presumed wrong,
   not the test — read the "Motion contract" section of `DESIGN.md` before
   touching the test constants.
+- Normal teardown must finish through the app's Quit lifecycle and exit with
+  code 0. A signal or nonzero exit fails the suite, even if UI assertions pass.
+  SIGKILL belongs only to explicit crash-recovery scenarios. Do not suppress
+  macOS crash alerts or disable CrashReporter to make tests quiet. Terminal
+  shutdown tracks native exits independently of tabs and waits for callbacks
+  before Electron frees its Node environment. `e2e/shutdown.e2e.ts` covers
+  repeated teardown with live and just-closed terminals.
 - Tests within the file run in order and share one app instance — later
   groups assume the project created in "first launch" exists.
 - The fake agent (`src/main/server/e2e-fakes.ts`) is prompt-keyed: "ask
