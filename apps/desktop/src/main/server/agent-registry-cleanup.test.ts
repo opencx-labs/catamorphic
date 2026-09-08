@@ -37,6 +37,7 @@ it("does not initialize a lazy agent after its profile has been released", async
   expect(registered).toBeDefined();
   registry.releaseProfile("profile");
   const session = await registered?.provider.startSession({
+    userId: "user",
     sessionId: "session",
     projectId: "project",
     sandboxId: "sandbox",
