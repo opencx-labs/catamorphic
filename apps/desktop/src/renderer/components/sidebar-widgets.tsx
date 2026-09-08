@@ -146,6 +146,10 @@ export function SidebarNote({
   });
   const refetch = note.refetch;
   const refetchFiles = files.refetch;
+  useEffect(() => {
+    // Hidden tabs skip git events. Catch up when their note picker is shown.
+    if (visible) void refetchFiles();
+  }, [visible, refetchFiles]);
   useEffect(
     () =>
       desktopApi.onGitChanged((event) => {
@@ -158,24 +162,39 @@ export function SidebarNote({
   return (
     <div className="px-2 text-xs">
       {!path && (
-        <select
-          aria-label="Pin a project note"
-          className="mb-2 w-full rounded border border-border bg-bg-raised px-1 py-1 text-fg-muted"
-          value={pinned}
-          onChange={(event) => {
-            setPinned(event.target.value);
-            localStorage.setItem(key, event.target.value);
-          }}
-        >
-          <option value="">Pin a note</option>
-          {(files.data ?? [])
-            .filter((entry) => /\.(md|txt)$/i.test(entry.path))
-            .map((entry) => (
-              <option key={entry.path} value={entry.path}>
-                {entry.path}
-              </option>
-            ))}
-        </select>
+        <>
+          <select
+            aria-label="Pin a project note"
+            className="mb-2 w-full rounded border border-border bg-bg-raised px-1 py-1 text-fg-muted"
+            value={pinned}
+            onChange={(event) => {
+              setPinned(event.target.value);
+              localStorage.setItem(key, event.target.value);
+            }}
+          >
+            <option value="">Pin a note</option>
+            {(files.data ?? [])
+              .filter((entry) => /\.(md|txt)$/i.test(entry.path))
+              .map((entry) => (
+                <option key={entry.path} value={entry.path}>
+                  {entry.path}
+                </option>
+              ))}
+          </select>
+          {files.isError && (
+            <p role="alert" className="mb-2 text-warning">
+              Could not load project notes.{" "}
+              <button
+                type="button"
+                className="underline underline-offset-2"
+                aria-label="Retry loading project notes"
+                onClick={() => void refetchFiles()}
+              >
+                Retry
+              </button>
+            </p>
+          )}
+        </>
       )}
       {file && (
         <>
@@ -187,8 +206,16 @@ export function SidebarNote({
             Open {file}
           </button>
           {note.isError ? (
-            <p className="text-warning">
-              This note could not be read. Choose another file.
+            <p role="alert" className="text-warning">
+              This note could not be read.{" "}
+              <button
+                type="button"
+                className="underline underline-offset-2"
+                aria-label="Retry reading note"
+                onClick={() => void refetch()}
+              >
+                Retry
+              </button>
             </p>
           ) : note.isLoading ? (
             <p className="text-fg-faint">Loading note…</p>

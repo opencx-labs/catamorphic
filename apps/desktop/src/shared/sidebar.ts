@@ -77,8 +77,7 @@ export interface SidebarSectionConfig {
   collapsed?: boolean;
   /**
    * Hide the whole section (header included) while it has nothing to
-   * list. Defaults to true for `workflows` and `apps` — a new project
-   * isn't about either until an agent makes it so — and false elsewhere.
+   * list. Defaults to true for workflows, apps, remote, and git sections.
    */
   hideEmpty?: boolean;
   /** For type "custom": the entries to render. */

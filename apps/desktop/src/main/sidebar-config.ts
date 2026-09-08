@@ -450,9 +450,9 @@ export function sidebarLayerFiles(opts: {
  * this user's per-project override, then the project's shared
  * `.catamorphic/sidebar.js`, then the profile-global `sidebar.js`, then the
  * built-in default. A file that exists but fails to evaluate does NOT slide
- * to the next layer (that would silently reroute a typo); it falls back to
- * the defaults like a broken profile file always has. `layer` names the
- * file that won even in that case.
+ * to the next layer (that would silently reroute a typo); it retains that
+ * file's last valid layout, or defaults if none has loaded. `layer` names
+ * the file that won even in that case.
  */
 export function resolveSidebarConfig(opts: {
   profileDir: string;

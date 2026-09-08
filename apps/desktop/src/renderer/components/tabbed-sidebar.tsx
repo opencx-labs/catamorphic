@@ -66,6 +66,12 @@ export function TabbedSidebar({
   const selected =
     tabs.find((tab) => tab.id === layout.selected)?.id ?? tabs[0]?.id;
   useEffect(() => {
+    // Persist the initial tab before the first click. Keep an existing choice
+    // while tabs are temporarily filtered during project/permission loading.
+    if (selected && !layout.selected)
+      setLayout((current) => ({ ...current, selected }));
+  }, [selected, layout.selected]);
+  useEffect(() => {
     if (open && selected)
       setVisited((current) =>
         current.has(selected) ? current : new Set([...current, selected]),

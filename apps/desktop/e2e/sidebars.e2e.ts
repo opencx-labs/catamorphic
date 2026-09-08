@@ -28,6 +28,24 @@ const writeConfig = (config: unknown) =>
   fs.writeFileSync(configFile, `module.exports = ${JSON.stringify(config)};\n`);
 
 describe("tabbed sidebars", () => {
+  it("keeps the initial selection when config tabs are reordered before any click", async () => {
+    const config = structuredClone(DEFAULT_SIDEBAR_CONFIG);
+    config.right.reverse();
+    writeConfig(config);
+    await app.waitFor(
+      `document.querySelector('[data-sidebar="right"] [role="tab"]')?.getAttribute('aria-label') === 'Pull requests'`,
+    );
+    expect(
+      await app.eval(
+        `document.querySelector('[data-sidebar="right"] [role="tab"][aria-selected="true"]')?.getAttribute('aria-label')`,
+      ),
+    ).toBe("Activity and notes");
+    writeConfig(DEFAULT_SIDEBAR_CONFIG);
+    await app.waitFor(
+      `document.querySelector('[data-sidebar="right"] [role="tab"]')?.getAttribute('aria-label') === 'Activity and notes'`,
+    );
+  });
+
   it("uses bare accent icons and keyboard navigation with persistent panels", async () => {
     expect(
       await app.eval(`(() => {
