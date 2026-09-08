@@ -3300,14 +3300,7 @@ function ChatDockContent({
                 projectId={projectId}
                 environment={chat.authenticationRequired?.environment ?? ""}
                 requirement={requirement}
-                onOpenLink={(url) =>
-                  onLinkClick?.(url, {
-                    metaKey: true,
-                    ctrlKey: false,
-                    altKey: false,
-                    shiftKey: false,
-                  })
-                }
+                onOpenLink={(url) => onLinkClick?.(url, "tab")}
                 onAuthorized={chat.resumeAfterAuthentication}
               />
             ))}
@@ -3464,14 +3457,7 @@ function ChatDockContent({
           <EnvironmentConnections
             projectId={projectId}
             environment={activeEnvironment}
-            onOpenLink={(url) =>
-              onLinkClick?.(url, {
-                metaKey: true,
-                ctrlKey: false,
-                altKey: false,
-                shiftKey: false,
-              })
-            }
+            onOpenLink={(url) => onLinkClick?.(url, "tab")}
           />
         )}
       </Modal>

@@ -7,6 +7,13 @@ import { desktopApi } from "./desktop-api.js";
 import { useSidebarReveal } from "./use-sidebar-reveal.js";
 
 Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+vi.stubGlobal(
+  "ResizeObserver",
+  class {
+    observe() {}
+    disconnect() {}
+  },
+);
 const listeners = vi.hoisted(
   () => new Set<(zone: "edge" | "inside" | "outside") => void>(),
 );

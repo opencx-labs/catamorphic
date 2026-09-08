@@ -418,8 +418,11 @@ const api = {
     ipcRenderer.invoke("catamorphic:window-focus"),
   windowSetControlsVisible: (visible: boolean): Promise<void> =>
     ipcRenderer.invoke("catamorphic:window-controls-visible", visible),
-  windowSetSidebarEdgeEnabled: (enabled: boolean): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:sidebar-edge-enabled", enabled),
+  windowSetSidebarEdgeEnabled: (
+    enabled: boolean,
+    width?: number,
+  ): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:sidebar-edge-enabled", enabled, width),
   onSidebarPointerZone: (
     listener: (zone: "edge" | "inside" | "outside") => void,
   ): (() => void) => {

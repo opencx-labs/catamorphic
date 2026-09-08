@@ -246,7 +246,10 @@ export function EditorScreen({
       className="flex min-h-0 flex-1 flex-col"
       onCopy={stampSelectionOnClipboard}
     >
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-bg-inset px-3">
+      <div
+        data-editor-toolbar
+        className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-bg-inset px-3"
+      >
         <ShortcutHint label="Open another file">
           <button
             type="button"

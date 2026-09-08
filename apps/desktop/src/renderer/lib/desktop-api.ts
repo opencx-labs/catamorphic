@@ -977,7 +977,10 @@ export interface CatamorphicDesktopApi {
   onPrefsChanged: (listener: (prefs: AppPrefs) => void) => () => void;
   windowFocus: () => Promise<void>;
   windowSetControlsVisible: (visible: boolean) => Promise<void>;
-  windowSetSidebarEdgeEnabled: (enabled: boolean) => Promise<void>;
+  windowSetSidebarEdgeEnabled: (
+    enabled: boolean,
+    width?: number,
+  ) => Promise<void>;
   onSidebarPointerZone: (
     listener: (zone: "edge" | "inside" | "outside") => void,
   ) => () => void;

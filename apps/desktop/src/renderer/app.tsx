@@ -1934,7 +1934,10 @@ export function App() {
       target.kind === "tab" &&
       !orderedTabKeys(workspaceRef.current, {
         includeCollapsed: true,
-      }).includes(key)
+      }).includes(key) &&
+      !workspaceRef.current.chats.some(
+        (chat) => chatTabKey(chat.localId) === key,
+      )
     )
       throw new Error("This tab is no longer open");
     updateWorkspace((ws) => ({
@@ -1999,24 +2002,11 @@ export function App() {
                     ],
               }
             : {}),
-      activeTabKey:
-        opts.background || intent === "floating"
-          ? ws.activeTabKey === key
-            ? nextActiveTabKey(ws, key, ws.chats)
-            : ws.activeTabKey
-          : key,
-      floatingKey:
-        intent === "floating"
-          ? key
-          : opts.background
-            ? ws.floatingKey
-            : undefined,
-      split: opts.background
-        ? ws.split
-        : intent === "side" && ws.activeTabKey && ws.activeTabKey !== key
-          ? { leftKey: ws.activeTabKey, rightKey: key, ratio: 0.5 }
-          : null,
     }));
+    // Materialize first, then use the same placement rules as sidebar rows and
+    // surface chips. Reusing the focused editor keeps its floating/split frame.
+    if (!opts.background && !(intent === "replace" && key === focusedKey))
+      openSurface(key, intent);
     return key;
   };
   const openLinkedSurfaceRef = useRef(openLinkedSurface);

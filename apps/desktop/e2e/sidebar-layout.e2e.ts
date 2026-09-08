@@ -232,7 +232,7 @@ describe("configurable browser workspace", () => {
     await run("button('Settings').click()");
     await app.waitFor("!!document.querySelector('select[name=tabPlacement]')");
     await run(
-      "window.dispatchEvent(new KeyboardEvent('keydown', {key:'t', metaKey:true, altKey:true, bubbles:true, cancelable:true}))",
+      "window.dispatchEvent(new KeyboardEvent('keydown', {key:'t', metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform), altKey:true, bubbles:true, cancelable:true}))",
     );
     await app.waitFor(
       "!!document.querySelector('.workspace-chrome input[aria-label=\"Address and search bar\"]')",
@@ -388,7 +388,7 @@ describe("configurable browser workspace", () => {
       "document.querySelector('aside').getAttribute('aria-hidden') === 'true'",
     );
     await run(
-      "window.dispatchEvent(new KeyboardEvent('keydown', {key:'l',metaKey:true,bubbles:true,cancelable:true}))",
+      "window.dispatchEvent(new KeyboardEvent('keydown', {key:'l',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true,cancelable:true}))",
     );
     await app.waitFor(
       "document.querySelector('aside').getAttribute('aria-hidden') === 'false' && document.activeElement?.getAttribute('aria-label') === 'Address and search bar'",

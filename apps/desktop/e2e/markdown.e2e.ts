@@ -33,7 +33,7 @@ const helpers = `
   ${setReactValueJs}
   const pressKey = (key, mods = {}) =>
     window.dispatchEvent(new KeyboardEvent('keydown', {
-      key, bubbles: true, cancelable: true, ...mods }));
+      key, bubbles: true, cancelable: true, ...(mods.metaKey && !/Mac/.test(navigator.platform) ? { ...mods, metaKey: false, ctrlKey: true } : mods) }));
   const mdHandle = () => window.__catMarkdownEditor;
   // The control remains mounted (and says "Saving…") until the write
   // succeeds and clears the draft. Its label alone cannot signal completion.

@@ -29,4 +29,22 @@ describe("native sidebar edge detection", () => {
     expect(zone(-1192 + 260, 400)).toBe("outside");
     expect(zone(-200, 400)).toBe("outside");
   });
+  it("uses the resized overlay width instead of the default width", () => {
+    expect(
+      sidebarPointerZone({
+        cursor: { x: contentBounds.x + 400, y: 400 },
+        windowBounds,
+        contentBounds,
+        sidebarWidth: 480,
+      }),
+    ).toBe("inside");
+    expect(
+      sidebarPointerZone({
+        cursor: { x: contentBounds.x + 480, y: 400 },
+        windowBounds,
+        contentBounds,
+        sidebarWidth: 480,
+      }),
+    ).toBe("outside");
+  });
 });

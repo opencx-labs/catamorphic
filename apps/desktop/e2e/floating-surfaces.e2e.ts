@@ -18,7 +18,7 @@ const run = <T>(body: string) =>
   );
 const key = (value: string, mods: Record<string, boolean> = {}) =>
   app.eval(
-    `window.dispatchEvent(new KeyboardEvent('keydown',{key:${JSON.stringify(value)},bubbles:true,...${JSON.stringify(mods)}}))`,
+    `window.dispatchEvent(new KeyboardEvent('keydown',{key:${JSON.stringify(value)},bubbles:true,...${JSON.stringify(mods.metaKey && process.platform !== "darwin" ? { ...mods, metaKey: false, ctrlKey: true } : mods)}}))`,
   );
 const click = (label: string) =>
   run(`$('button[aria-label=${JSON.stringify(label)}]').click()`);
@@ -494,7 +494,7 @@ describe("floating surfaces", () => {
       "return document.querySelectorAll('webview').length",
     );
     await guest.eval(
-      "document.querySelector('#preview').dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,metaKey:true}))",
+      "document.querySelector('#preview').dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform)}))",
     );
     await app.waitFor(
       `document.querySelectorAll('webview').length===${count + 1}`,
@@ -506,10 +506,74 @@ describe("floating surfaces", () => {
       "[...document.querySelectorAll('aside [data-point-key^=\"browser:\"]')].find(e=>e.textContent.includes('Anchor page')).querySelector('button').click()",
     );
     await guest.eval(
-      "document.querySelector('#preview').dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,metaKey:true,shiftKey:true}))",
+      "document.querySelector('#preview').dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),shiftKey:true}))",
     );
     await app.waitFor("!!document.querySelector('[data-split-divider]')");
     expect(await guest.eval("location.href")).toBe(`${origin}/anchor`);
     guest.close();
+  });
+  it("reuses a clean floating editor in place when opening another sidebar file", async () => {
+    const root = await app.eval<string>(
+      `(async()=>{const api=window.catamorphicDesktop;const {url}=await api.getServerState();const {items}=await fetch(url+'/api/projects').then(r=>r.json());return api.projectRoot(items.find(p=>p.name==='Floating workspace').id)})()`,
+    );
+    fs.writeFileSync(
+      path.join(root, "placement-one.ts"),
+      "export const one = 1;\n",
+    );
+    fs.writeFileSync(
+      path.join(root, "placement-two.ts"),
+      "export const two = 2;\n",
+    );
+    // The fixture writes outside the app; reload to refresh its file inventory.
+    await app.cdp("Page.reload");
+    await app.waitFor(
+      "!!document.querySelector('[data-sidebar-widget=files]')",
+    );
+    await run(
+      "const section=$('[data-sidebar-widget=files]');const toggle=section.querySelector('button[aria-expanded=false]');toggle?.click()",
+    );
+    await app.waitFor(
+      "!!document.querySelector('[data-testid=files-nav] button[title=\"placement-one.ts\"]')",
+    );
+    await run(
+      "$('[data-testid=files-nav] button[title=\"placement-one.ts\"]').dispatchEvent(new MouseEvent('click',{bubbles:true,altKey:true}))",
+    );
+    await app.waitFor(`!!${floating}?.querySelector('.monaco-editor')`);
+    await app.waitFor(
+      `!!${floating}?.querySelector('.view-lines')?.textContent.replace(/\\s/g,'').includes('exportconstone')`,
+    );
+    const identity = await app.eval<string>(
+      `${floating}.getAttribute('data-floating-surface')`,
+    );
+    await run(
+      "$('[data-testid=files-nav] button[title=\"placement-two.ts\"]').click()",
+    );
+    await app.waitFor(
+      `!!${floating}?.querySelector('.view-lines')?.textContent.replace(/\\s/g,'').includes('exportconsttwo')`,
+    );
+    expect(
+      await app.eval(`${floating}.getAttribute('data-floating-surface')`),
+    ).toBe(identity);
+    await run(
+      "return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>{ $('[data-floating-surface] .monaco-editor [role=textbox]').focus(); resolve(true) })))",
+    );
+    await app.insertText("// floating edit\n");
+    await app.waitFor(
+      "!!document.querySelector('[data-floating-surface] [data-testid=editor-save]')",
+    );
+    expect(
+      await run(
+        "const save=$('[data-floating-surface] [data-testid=editor-save]');const rect=save.getBoundingClientRect();return save.contains(document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2))",
+      ),
+    ).toBe(true);
+    await run("$('[data-floating-surface] [data-testid=editor-save]').click()");
+    await app.waitFor(
+      "!document.querySelector('[data-floating-surface] [data-testid=editor-save]')",
+    );
+    expect(
+      fs.readFileSync(path.join(root, "placement-two.ts"), "utf8"),
+    ).toContain("// floating edit");
+    await click("Hide floating panel");
+    await app.waitFor(`!${floating}`);
   });
 });

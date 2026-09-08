@@ -1173,7 +1173,9 @@ kbd {
   display: none;
 }
 
-[data-floating-surface] [data-browser-toolbar] {
+[data-floating-surface] [data-browser-toolbar],
+[data-floating-surface] [data-editor-toolbar],
+[data-floating-surface] .workflow-header {
   padding-right: 148px;
 }
 [data-floating-surface] [data-terminal-appearance] {

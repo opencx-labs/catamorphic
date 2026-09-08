@@ -442,15 +442,19 @@ export function registerIpcHandlers(
   const sidebarEdgeWatchers = new Map<number, () => void>();
   ipcMain.handle(
     "catamorphic:sidebar-edge-enabled",
-    (event, enabled: unknown) => {
+    (event, enabled: unknown, width: unknown) => {
       const window = BrowserWindow.fromWebContents(event.sender);
       if (!window || typeof enabled !== "boolean") return;
       if (!enabled) {
         sidebarEdgeWatchers.get(window.id)?.();
         return;
       }
-      if (sidebarEdgeWatchers.has(window.id)) return;
-      const stopWatching = watchSidebarEdge(window);
+      sidebarEdgeWatchers.get(window.id)?.();
+      const sidebarWidth =
+        typeof width === "number" && Number.isFinite(width)
+          ? Math.max(220, Math.min(520, width))
+          : 260;
+      const stopWatching = watchSidebarEdge(window, sidebarWidth);
       const stop = () => {
         stopWatching();
         sidebarEdgeWatchers.delete(window.id);

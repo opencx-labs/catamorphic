@@ -34,7 +34,7 @@ const helpers = `
   ${setReactValueJs}
   const pressKey = (key, mods = {}) =>
     window.dispatchEvent(new KeyboardEvent('keydown',
-      { key, bubbles: true, cancelable: true, ...mods }));
+      { key, bubbles: true, cancelable: true, ...(mods.metaKey && !/Mac/.test(navigator.platform) ? { ...mods, metaKey: false, ctrlKey: true } : mods) }));
   const timelineMessages = () =>
     $$('[role="log"] article').map((el) => ({
       // No name tags in the timeline — side placement is the role: user
@@ -1215,6 +1215,39 @@ describe("navigation shortcuts", () => {
 });
 
 describe("tiling and chat surfaces", () => {
+  it("opens an existing chat link floating and back as the same tab", async () => {
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return !!floatingDock();`, { label: "chat open" });
+    const localId = await run<string>(
+      `return floatingDock().dataset.chatLocalId;`,
+    );
+    await run(`pressKey('m', { metaKey: true, shiftKey: true }); return true;`);
+    await runWait(`return !floatingDock();`, { label: "chat is a tab" });
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, ${JSON.stringify(`[This chat](chat:${localId})`)});
+      ta.closest('form').requestSubmit();
+    `);
+    const link = `.cat-markdown a[href="chat:${localId}"]`;
+    await runWait(
+      `return !!visibleDock()?.querySelector(${JSON.stringify(link)});`,
+    );
+    await run(
+      `visibleDock().querySelector(${JSON.stringify(link)}).dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, altKey:true}));`,
+    );
+    await runWait(
+      `return floatingDock()?.dataset.chatLocalId === ${JSON.stringify(localId)};`,
+    );
+    expect(await run(`return !!$('[data-floating-surface]');`)).toBe(false);
+    await run(`floatingDock().querySelector(${JSON.stringify(link)}).click();`);
+    await runWait(
+      `return !floatingDock() && visibleDock()?.dataset.chatLocalId === ${JSON.stringify(localId)};`,
+    );
+    expect(
+      await run(`return $$('[data-chat-local-id="${localId}"]').length;`),
+    ).toBe(1);
+  });
+
   it("attaches agent-linked pages and rail terminals to the chat", async () => {
     await run(`pressKey('n', { metaKey: true }); return true;`);
     await runWait(`return !!floatingDock();`, { label: "chat open" });

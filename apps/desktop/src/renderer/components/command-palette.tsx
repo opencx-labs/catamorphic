@@ -1859,7 +1859,11 @@ export function CommandPalette({
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       moveSelection(-1);
-    } else if (event.key === "Enter" && (!event.shiftKey || event.metaKey)) {
+    } else if (
+      event.key === "Enter" &&
+      (!event.shiftKey ||
+        (/Mac/.test(navigator.platform) ? event.metaKey : event.ctrlKey))
+    ) {
       // Shift+Enter alone stays a newline; ⌘⇧↵ is the side commit.
       event.preventDefault();
       const item = results[selected];

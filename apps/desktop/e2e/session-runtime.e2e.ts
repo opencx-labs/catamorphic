@@ -54,7 +54,7 @@ describe("session runtime controls", () => {
       `return $$('[role="tab"], button').some(el => el.textContent.includes('New Tab'));`,
     );
     await run(
-      `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', metaKey: true, bubbles: true }));`,
+      `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform), bubbles: true }));`,
     );
     await wait(`return !!dock()?.querySelector('[data-composer-input]');`);
     await run(
@@ -205,7 +205,7 @@ it("uses themed harness marks in new-chat status", async () => {
     await run(`const agent = await window.catamorphicDesktop.agentsCreate({ name: '${brand} agent', harness: '${harness}', provider: '${provider}' });
       await window.catamorphicDesktop.agentsSetDefault(agent.id);`);
     await run(
-      `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', metaKey: true, bubbles: true }));`,
+      `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform), bubbles: true }));`,
     );
     await wait(
       `return !!dock()?.querySelector('[data-harness-icon="${brand}"]');`,

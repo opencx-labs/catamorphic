@@ -142,8 +142,10 @@ Your own section:
 }
 \`\`\`
 
-- \`open\`: \`"tab"\` (new browser tab) or \`"replace"\` (reuse the focused
-  browser tab, falling back to a new tab). Set per section or per item.
+- \`open\`: \`"replace"\` (open here), \`"tab"\`, \`"side"\`, or \`"floating"\`.
+  Set per section or per item. Explicit gestures override this default:
+  Cmd+click/Enter opens a tab, Cmd+Shift opens beside it, Option/Alt opens floating.
+  Ctrl substitutes for Cmd outside macOS. Do not add a shortcut to float the current surface.
 - \`icon\`: any lucide-react icon name, e.g. \`"Globe"\`, \`"FileText"\`.
 - \`preview\`: a compact hover card with optional \`title\`, \`description\`,
   and up to four \`metadata: [{ label, value }]\` rows. Set
@@ -168,8 +170,9 @@ menu: [
 ]
 \`\`\`
 
-Actions: \`open\`, \`open-tab\`, \`open-here\`, \`copy-url\`, \`pin\`,
-\`unpin\`, \`rename\`, \`edit\` (bookmark address and folder), \`remove\`. \`menu: []\` removes the ⋯ button.
+Actions: \`open\`, \`open-tab\`, \`open-here\`, \`open-side\`, \`open-floating\`, \`copy-url\`, \`pin\`,
+\`unpin\`, \`rename\`, \`edit\` (bookmark address and folder), \`remove\`.
+Resource menus always include the four opening choices; \`menu: []\` removes only extra actions.
 \`pin\`/\`unpin\`/\`rename\`/\`remove\` only do anything on bookmarks.
 
 Rules: keep it valid JavaScript with a \`module.exports = { left: [...], right: [...] }\`.

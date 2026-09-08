@@ -13,10 +13,12 @@ export function sidebarPointerZone({
   cursor,
   windowBounds,
   contentBounds,
+  sidebarWidth = 260,
 }: {
   cursor: { x: number; y: number };
   windowBounds: Bounds;
   contentBounds: Bounds;
+  sidebarWidth?: number;
 }): SidebarPointerZone {
   if (
     cursor.x < windowBounds.x ||
@@ -29,13 +31,16 @@ export function sidebarPointerZone({
   const x = cursor.x - contentBounds.x;
   // Include the native resize border: it does not deliver DOM hover events.
   if (x < 12) return "edge";
-  return x < 260 ? "inside" : "outside";
+  return x < sidebarWidth ? "inside" : "outside";
 }
 
 /** Webview guests and native resize borders do not reliably forward hover
  * to the shell. Watch only while this window uses collapsed sidebar chrome;
  * no focus changes or input synthesis are involved. Coordinates are in DIP. */
-export function watchSidebarEdge(window: BrowserWindow): () => void {
+export function watchSidebarEdge(
+  window: BrowserWindow,
+  sidebarWidth = 260,
+): () => void {
   const timer = setInterval(() => {
     if (window.isDestroyed() || !window.isVisible() || window.isMinimized()) {
       return;
@@ -46,6 +51,7 @@ export function watchSidebarEdge(window: BrowserWindow): () => void {
         cursor: screen.getCursorScreenPoint(),
         windowBounds: window.getBounds(),
         contentBounds: window.getContentBounds(),
+        sidebarWidth,
       }),
     );
   }, 100);

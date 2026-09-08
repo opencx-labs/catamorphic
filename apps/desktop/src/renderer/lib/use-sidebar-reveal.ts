@@ -76,11 +76,22 @@ export function useSidebarReveal(enabled: boolean) {
       else if (zone === "outside") dismiss();
     });
     void desktopApi.windowSetSidebarEdgeEnabled(true);
+    const body = sidebarRef.current?.firstElementChild;
+    const observer = body
+      ? new ResizeObserver(() => {
+          void desktopApi.windowSetSidebarEdgeEnabled(
+            true,
+            body.getBoundingClientRect().width,
+          );
+        })
+      : undefined;
+    if (body) observer?.observe(body);
     document.addEventListener("pointerover", trackPointer, true);
     document.addEventListener("focusin", dismiss);
     window.addEventListener("blur", hide);
     return () => {
       unsubscribePointer();
+      observer?.disconnect();
       void desktopApi.windowSetSidebarEdgeEnabled(false);
       document.removeEventListener("pointerover", trackPointer, true);
       document.removeEventListener("focusin", dismiss);
