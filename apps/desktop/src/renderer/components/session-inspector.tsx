@@ -1,17 +1,19 @@
 import type { AgentSession } from "@catamorphic/react/types";
 import {
   Archive,
-  Bot,
   ChevronDown,
   CircleDot,
   Ghost,
   GitBranch,
   GitFork,
+  KeyRound,
   LoaderCircle,
   Server,
 } from "lucide-react";
+import type { ReactNode } from "react";
 import type { SessionCheckoutInfo } from "../lib/desktop-api.js";
 import { ChatGlyph } from "./chat-icon.js";
+import { HarnessIcon } from "./harness-icon.js";
 import { ResourceInspector } from "./resource-inspector.js";
 
 const SOURCE_LABELS: Record<AgentSession["source"], string> = {
@@ -27,6 +29,10 @@ export function SessionInspector({
   session,
   fallbackTitle,
   agentName,
+  harness,
+  provider,
+  environmentControl,
+  onManageConnections,
   checkout,
   incognito,
   openRequest,
@@ -48,6 +54,10 @@ export function SessionInspector({
   session: AgentSession | null | undefined;
   fallbackTitle: string;
   agentName: string;
+  harness?: string;
+  provider?: string;
+  environmentControl?: ReactNode;
+  onManageConnections?: () => void;
   checkout: SessionCheckoutInfo | null;
   incognito: boolean;
   openRequest?: number;
@@ -90,11 +100,20 @@ export function SessionInspector({
       pinOnClick
       openRequest={openRequest}
       onOpen={onInspect}
-      content={
+      content={(dismiss) => (
         <SessionInspectorContent
           session={session}
           fallbackTitle={fallbackTitle}
           agentName={agentName}
+          environmentControl={environmentControl}
+          onManageConnections={
+            onManageConnections
+              ? () => {
+                  dismiss();
+                  onManageConnections();
+                }
+              : undefined
+          }
           checkout={checkout}
           incognito={incognito}
           moving={moving}
@@ -111,7 +130,7 @@ export function SessionInspector({
           archived={archived}
           onOpenParent={onOpenParent}
         />
-      }
+      )}
     >
       {(triggerProps) => (
         <button
@@ -138,7 +157,11 @@ export function SessionInspector({
               )}
             </span>
           </span>
-          <Bot className="size-3" />
+          <HarnessIcon
+            harness={harness ?? session?.provider}
+            provider={provider}
+            className="size-3.5"
+          />
           <span className="truncate">{agentName}</span>
           <span className="shrink-0 rounded bg-bg-inset px-1.5 py-0.5 text-[9px] font-medium text-fg-faint">
             {source}
@@ -153,6 +176,8 @@ export function SessionInspectorContent({
   session,
   fallbackTitle,
   agentName,
+  environmentControl,
+  onManageConnections,
   checkout,
   incognito,
   moving = false,
@@ -172,6 +197,8 @@ export function SessionInspectorContent({
   session: AgentSession | null | undefined;
   fallbackTitle: string;
   agentName: string;
+  environmentControl?: ReactNode;
+  onManageConnections?: () => void;
   checkout: SessionCheckoutInfo | null;
   incognito: boolean;
   moving?: boolean;
@@ -249,10 +276,26 @@ export function SessionInspectorContent({
         />
         <InspectorRow label="Source" value={source} />
         <InspectorRow label="Status" value={state} />
-        <InspectorRow
-          label="Environment"
-          value={session?.environment ?? "Default"}
-        />
+        <dt className="text-fg-faint">Environment</dt>
+        <dd className="min-w-0 text-fg">
+          {environmentControl ?? session?.environment ?? "Default"}
+        </dd>
+        {onManageConnections && (
+          <>
+            <dt className="text-fg-faint">Connections</dt>
+            <dd className="min-w-0">
+              <button
+                type="button"
+                onClick={onManageConnections}
+                aria-label="Manage environment connections"
+                className="-mx-1.5 flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-fg transition-colors hover:bg-bg-raised"
+              >
+                <KeyRound aria-hidden="true" className="size-3" />
+                Manage connections
+              </button>
+            </dd>
+          </>
+        )}
         {checkoutLabel ? (
           <InspectorRow label="Checkout" value={checkoutLabel} />
         ) : null}

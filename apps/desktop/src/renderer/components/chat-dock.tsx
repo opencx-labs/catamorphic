@@ -20,7 +20,6 @@ import {
   GitBranch,
   GitFork,
   Globe,
-  KeyRound,
   LayoutGrid,
   LoaderCircle,
   Maximize2,
@@ -1401,6 +1400,11 @@ function ChatDockContent({
   );
   const visibleWatchers = watcherQuery.data?.items ?? [];
   const activeEnvironment = chat.session?.environment ?? selectedEnvironment;
+  const activeEnvironmentLabel =
+    environmentQuery.data?.items.find((item) => item.name === activeEnvironment)
+      ?.label ??
+    activeEnvironment ??
+    "Default";
   const isIncognito = Boolean(entry.incognito);
   const [remoteCheckNonce, setRemoteCheckNonce] = useState(0);
   const wasSendingRef = useRef(chat.isSending);
@@ -2698,198 +2702,216 @@ function ChatDockContent({
         )}
         {/* The tab already names the chat — in tab mode the header collapses
             and its controls float over the timeline's top-right corner. */}
-        <header
-          className={`flex shrink-0 items-center justify-between overflow-hidden border-b px-3 text-xs font-semibold transition-[height,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
-            presentsAsTab ? "h-0 border-transparent" : "h-11 border-border"
-          }`}
-          aria-hidden={presentsAsTab}
+        <div
+          data-testid="chat-status-chrome"
+          className={`flex shrink-0 items-center gap-2 border-b px-3 transition-[height,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${presentsAsTab ? "h-0 border-transparent" : "h-12 border-border"}`}
         >
-          <span className="flex min-w-0 items-center gap-2">
-            <span className="grid size-6 shrink-0 place-items-center rounded-full border border-border-strong bg-bg-overlay">
-              {chat.session?.icon ? (
-                <ChatGlyph icon={chat.session.icon} className="size-3.5" />
-              ) : (
-                <Bot className="size-3.5" />
+          <header
+            className={`min-w-0 flex-1 overflow-hidden text-xs font-semibold ${presentsAsTab ? "invisible" : ""}`}
+            aria-hidden={presentsAsTab}
+          >
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="grid size-6 shrink-0 place-items-center rounded-full border border-border-strong bg-bg-overlay">
+                {chat.session?.icon ? (
+                  <ChatGlyph icon={chat.session.icon} className="size-3.5" />
+                ) : (
+                  <Bot className="size-3.5" />
+                )}
+              </span>
+              <span className="truncate">{title}</span>
+              {isIncognito && (
+                <span
+                  className="flex shrink-0 items-center gap-1 rounded-full border border-border-strong bg-bg-inset px-1.5 py-0.5 text-[10px] font-medium text-fg-muted"
+                  title="Incognito: stays on this machine, never synced to a linked server"
+                  data-testid="chat-incognito-badge"
+                >
+                  <Ghost className="size-3" />
+                  Incognito
+                </span>
               )}
             </span>
-            <span className="truncate">{title}</span>
-            {chat.session?.environment ? (
-              <span
-                className="flex shrink-0 items-center gap-1 rounded-full border border-border-strong bg-bg-inset px-1.5 py-0.5 text-[10px] font-medium text-fg-muted"
-                data-testid="chat-environment-badge"
-              >
-                <Globe className="size-3" />
-                {chat.session.environment}
-              </span>
-            ) : authority || compatibleEnvironments.length > 1 ? (
-              <select
-                aria-label={authority ? "Run on" : "Environment"}
-                data-testid="chat-environment-select"
-                value={selectedEnvironment ?? ""}
-                onChange={(event) => setSelectedEnvironment(event.target.value)}
-                className="max-w-36 rounded-md border border-border bg-bg-inset px-1.5 py-0.5 text-[10px] font-medium text-fg-muted outline-none"
-              >
-                {(authority
-                  ? (environmentQuery.data?.items.filter(
-                      (item) => item.allowed,
-                    ) ?? [])
-                  : compatibleEnvironments
-                ).map((environment) => (
-                  <option
-                    key={environment.name}
-                    value={environment.name}
-                    disabled={!environment.available || !environment.compatible}
-                  >
-                    {environment.label}
-                  </option>
-                ))}
-              </select>
-            ) : null}
-            {activeEnvironment && (
-              <button
-                type="button"
-                aria-label="Manage Environment connections"
-                title="Manage Environment connections"
-                onClick={() => setConnectionsOpen(true)}
-                className="grid size-5 shrink-0 cursor-pointer place-items-center rounded text-fg-muted hover:bg-bg-overlay hover:text-fg"
-              >
-                <KeyRound className="size-3" />
-              </button>
-            )}
-            {isIncognito && (
-              <span
-                className="flex shrink-0 items-center gap-1 rounded-full border border-border-strong bg-bg-inset px-1.5 py-0.5 text-[10px] font-medium text-fg-muted"
-                title="Incognito: stays on this machine, never synced to a linked server"
-                data-testid="chat-incognito-badge"
-              >
-                <Ghost className="size-3" />
-                Incognito
-              </span>
-            )}
-          </span>
-        </header>
-        {/* Agent progress sits immediately left of the chat control bar;
+          </header>
+          {/* Agent progress sits immediately left of the chat control bar;
             both stay above timeline content scrolled beneath them. */}
-        <div className="absolute right-2 top-2 z-10 flex items-start gap-1">
-          <TodoProgress todos={chat.session?.todos ?? []} />
-          <span className="flex items-center gap-0.5 rounded-lg border border-border bg-bg-raised p-0.5">
-            <SessionInspector
-              session={chat.session}
-              fallbackTitle={title}
-              agentName={
-                authority
-                  ? (catalog.data?.items.find(
-                      (agent) =>
-                        agent.id === (chat.session?.agentId ?? selectedAgentId),
-                    )?.name ?? "Project agent")
-                  : (activeAgent?.name ?? "Default agent")
-              }
-              model={chat.session?.model || activeAgent?.model || "Automatic"}
-              reportedModel={reportedModel}
-              onInspect={() => {
-                setInspected(true);
-                setMoveCheckNonce((value) => value + 1);
-              }}
-              effort={
-                effectiveEffort(
-                  activeAgent,
-                  chat.session?.modelEffort ?? activeAgent?.effort,
-                  effortModel,
-                ) ?? "Unavailable"
-              }
-              onEditModel={
-                !chat.session || chat.session.running || !activeAgent
-                  ? undefined
-                  : onEditModel
-              }
-              onEditEffort={
-                !chat.session ||
-                chat.session.running ||
-                supportedEfforts(activeAgent, effortModel).length === 0
-                  ? undefined
-                  : onEditEffort
-              }
-              checkout={checkout}
-              incognito={isIncognito}
-              openRequest={(inspectRequestNonce ?? 0) + localInspectorNonce}
-              moving={moveState.moving}
-              moveError={moveState.canMove ? moveState.reason : undefined}
-              moveDisabledReason={
-                moveState.canMove
-                  ? null
-                  : (moveState.reason ?? "Session cannot move to a server")
-              }
-              onMove={
-                activeSessionId
-                  ? () => {
-                      if (!moveState.canMove || moveState.moving) return;
-                      setMoveState((current) => ({ ...current, moving: true }));
-                      void desktopApi
-                        .sessionMoveToServer(projectId, activeSessionId)
-                        .then(() =>
-                          setMoveState({
-                            canMove: false,
-                            reason: "This session now runs on the server",
-                            moving: false,
-                          }),
-                        )
-                        .catch((error) =>
-                          setMoveState({
-                            canMove: true,
-                            reason:
-                              error instanceof Error
-                                ? error.message
-                                : "The session could not be moved",
-                            moving: false,
-                          }),
-                        );
-                    }
-                  : undefined
-              }
-              onFork={activeSessionId ? onForkCurrent : undefined}
-              onArchive={activeSessionId ? onArchive : undefined}
-              archived={archived}
-              onOpenParent={onOpenParent}
-            />
-            {isTab && onUnsplit && (
-              <ShortcutHint label="Full width">
+          <div
+            data-testid="chat-status-controls"
+            className={`z-10 flex shrink-0 items-center gap-1 ${presentsAsTab ? "absolute right-2 top-2" : "relative"}`}
+          >
+            <TodoProgress todos={chat.session?.todos ?? []} />
+            <span className="flex items-center gap-0.5 rounded-lg border border-border bg-bg-raised p-0.5">
+              <SessionInspector
+                session={chat.session}
+                fallbackTitle={title}
+                harness={activeAgent?.harness ?? chat.session?.provider}
+                provider={activeAgent?.provider}
+                environmentControl={
+                  chat.session?.environment ? (
+                    <span
+                      className="flex min-w-0 items-center gap-1.5 text-fg"
+                      data-testid="chat-environment-badge"
+                    >
+                      <Globe className="size-3" />
+                      <span className="truncate">{activeEnvironmentLabel}</span>
+                    </span>
+                  ) : authority || compatibleEnvironments.length > 1 ? (
+                    <select
+                      aria-label={authority ? "Run on" : "Environment"}
+                      data-testid="chat-environment-select"
+                      value={selectedEnvironment ?? ""}
+                      onChange={(event) =>
+                        setSelectedEnvironment(event.target.value)
+                      }
+                      className="max-w-36 rounded-md border border-border bg-bg-inset px-1.5 py-0.5 text-[10px] font-medium text-fg-muted outline-none"
+                    >
+                      {(authority
+                        ? (environmentQuery.data?.items.filter(
+                            (item) => item.allowed,
+                          ) ?? [])
+                        : compatibleEnvironments
+                      ).map((environment) => (
+                        <option
+                          key={environment.name}
+                          value={environment.name}
+                          disabled={
+                            !environment.available || !environment.compatible
+                          }
+                        >
+                          {environment.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    activeEnvironmentLabel
+                  )
+                }
+                onManageConnections={
+                  activeEnvironment ? () => setConnectionsOpen(true) : undefined
+                }
+                agentName={
+                  authority
+                    ? (catalog.data?.items.find(
+                        (agent) =>
+                          agent.id ===
+                          (chat.session?.agentId ?? selectedAgentId),
+                      )?.name ?? "Project agent")
+                    : (activeAgent?.name ?? "Default agent")
+                }
+                model={chat.session?.model || activeAgent?.model || "Automatic"}
+                reportedModel={reportedModel}
+                onInspect={() => {
+                  setInspected(true);
+                  setMoveCheckNonce((value) => value + 1);
+                }}
+                effort={
+                  effectiveEffort(
+                    activeAgent,
+                    chat.session?.modelEffort ?? activeAgent?.effort,
+                    effortModel,
+                  ) ?? "Unavailable"
+                }
+                onEditModel={
+                  !chat.session || chat.session.running || !activeAgent
+                    ? undefined
+                    : onEditModel
+                }
+                onEditEffort={
+                  !chat.session ||
+                  chat.session.running ||
+                  supportedEfforts(activeAgent, effortModel).length === 0
+                    ? undefined
+                    : onEditEffort
+                }
+                checkout={checkout}
+                incognito={isIncognito}
+                openRequest={(inspectRequestNonce ?? 0) + localInspectorNonce}
+                moving={moveState.moving}
+                moveError={moveState.canMove ? moveState.reason : undefined}
+                moveDisabledReason={
+                  moveState.canMove
+                    ? null
+                    : (moveState.reason ?? "Session cannot move to a server")
+                }
+                onMove={
+                  activeSessionId
+                    ? () => {
+                        if (!moveState.canMove || moveState.moving) return;
+                        setMoveState((current) => ({
+                          ...current,
+                          moving: true,
+                        }));
+                        void desktopApi
+                          .sessionMoveToServer(projectId, activeSessionId)
+                          .then(() =>
+                            setMoveState({
+                              canMove: false,
+                              reason: "This session now runs on the server",
+                              moving: false,
+                            }),
+                          )
+                          .catch((error) =>
+                            setMoveState({
+                              canMove: true,
+                              reason:
+                                error instanceof Error
+                                  ? error.message
+                                  : "The session could not be moved",
+                              moving: false,
+                            }),
+                          );
+                      }
+                    : undefined
+                }
+                onFork={activeSessionId ? onForkCurrent : undefined}
+                onArchive={activeSessionId ? onArchive : undefined}
+                archived={archived}
+                onOpenParent={onOpenParent}
+              />
+              {isTab && onUnsplit && (
+                <ShortcutHint label="Full width">
+                  <button
+                    type="button"
+                    className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                    onClick={onUnsplit}
+                    aria-label="Full width"
+                  >
+                    <Columns2 className="size-3.5" />
+                  </button>
+                </ShortcutHint>
+              )}
+              <ShortcutHint
+                label={isTab ? "Pop out to floating chat" : "Open as tab"}
+              >
                 <button
                   type="button"
                   className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-                  onClick={onUnsplit}
-                  aria-label="Full width"
+                  onClick={() => setMode(isTab ? "partial" : "tab")}
+                  aria-label={
+                    isTab ? "Pop out to floating chat" : "Open as tab"
+                  }
                 >
-                  <Columns2 className="size-3.5" />
+                  {isTab ? (
+                    <PictureInPicture2 className="size-3.5" />
+                  ) : (
+                    <Maximize2 className="size-3.5" />
+                  )}
                 </button>
               </ShortcutHint>
-            )}
-            <ShortcutHint
-              label={isTab ? "Pop out to floating chat" : "Open as tab"}
-            >
-              <button
-                type="button"
-                className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-                onClick={() => setMode(isTab ? "partial" : "tab")}
-                aria-label={isTab ? "Pop out to floating chat" : "Open as tab"}
+              <ShortcutHint
+                label={isEmpty ? "Close chat" : "Minimize to bubble"}
               >
-                {isTab ? (
-                  <PictureInPicture2 className="size-3.5" />
-                ) : (
-                  <Maximize2 className="size-3.5" />
-                )}
-              </button>
-            </ShortcutHint>
-            <ShortcutHint label={isEmpty ? "Close chat" : "Minimize to bubble"}>
-              <button
-                type="button"
-                className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-                onClick={dismiss}
-                aria-label={isEmpty ? "Close chat" : "Minimize chat to bubble"}
-              >
-                <Minus className="size-3.5" />
-              </button>
-            </ShortcutHint>
-          </span>
+                <button
+                  type="button"
+                  className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                  onClick={dismiss}
+                  aria-label={
+                    isEmpty ? "Close chat" : "Minimize chat to bubble"
+                  }
+                >
+                  <Minus className="size-3.5" />
+                </button>
+              </ShortcutHint>
+            </span>
+          </div>
         </div>
         {/* In tab mode the scroller spans the full tab (scrollbar at the
             edge) while the content column stays centered and readable. */}
@@ -2963,7 +2985,7 @@ function ChatDockContent({
           )}
           <ChatTimeline
             className="min-h-0 flex-1"
-            contentClassName={isTab ? "mx-auto w-full max-w-4xl" : ""}
+            contentClassName={isTab ? "mx-auto w-full max-w-4xl pt-12" : ""}
             messages={messages}
             activity={chat.connectionLost ? undefined : activity}
             queue={chat.queue}
@@ -3327,7 +3349,9 @@ function ChatDockContent({
             >
               Environment connections
             </h2>
-            <p className="mt-0.5 text-xs text-fg-muted">{activeEnvironment}</p>
+            <p className="mt-0.5 text-xs text-fg-muted">
+              {activeEnvironmentLabel}
+            </p>
           </div>
           <button
             type="button"

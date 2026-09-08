@@ -77,7 +77,7 @@ export function ResourceInspector({
 }: {
   label: string;
   children: (props: ResourceInspectorTriggerProps) => ReactNode;
-  content: ReactNode;
+  content: ReactNode | ((dismiss: () => void) => ReactNode);
   delayMs?: number;
   /** Keep the inspector open after clicking its trigger. */
   pinOnClick?: boolean;
@@ -142,6 +142,7 @@ export function ResourceInspector({
     const dismiss = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
+      event.stopPropagation();
       pinned.current = false;
       triggerInterested.current = false;
       panelInterested.current = false;
@@ -174,11 +175,11 @@ export function ResourceInspector({
       panelInterested.current = false;
       setOpen(false);
     };
-    window.addEventListener("keydown", dismiss);
+    window.addEventListener("keydown", dismiss, true);
     window.addEventListener("scroll", dismissForScroll, true);
     window.addEventListener("pointerdown", dismissForPointer);
     return () => {
-      window.removeEventListener("keydown", dismiss);
+      window.removeEventListener("keydown", dismiss, true);
       window.removeEventListener("scroll", dismissForScroll, true);
       window.removeEventListener("pointerdown", dismissForPointer);
     };
@@ -253,7 +254,16 @@ export function ResourceInspector({
           }}
           onExited={() => setMounted(false)}
         >
-          {content}
+          {typeof content === "function"
+            ? content(() => {
+                clearTimeout(openTimer.current);
+                clearTimeout(closeTimer.current);
+                pinned.current = false;
+                triggerInterested.current = false;
+                panelInterested.current = false;
+                setOpen(false);
+              })
+            : content}
         </InspectorPortal>
       )}
     </>

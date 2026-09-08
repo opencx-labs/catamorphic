@@ -79,7 +79,9 @@ export function Modal({
   return (
     <div
       className={`fixed inset-0 z-[100] grid place-items-center transition-opacity duration-150 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:duration-0 ${
-        open ? "animate-fade-in" : "pointer-events-none animate-fade-out"
+        open
+          ? "pointer-events-auto animate-fade-in"
+          : "pointer-events-none animate-fade-out"
       }`}
       onAnimationEnd={(event) => {
         if (
