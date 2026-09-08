@@ -49,19 +49,6 @@ const runWait = <T>(
   opts?: { timeoutMs?: number; label?: string },
 ) => app.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
 
-async function waitForHost(
-  condition: () => boolean,
-  label: string,
-  timeoutMs = 30_000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (condition()) return;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`Timed out waiting for ${label}`);
-}
-
 function startFakeServer(): Promise<void> {
   server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -375,8 +362,8 @@ describe("remote projects (ADR 0055)", () => {
       { timeoutMs: 30_000, label: "remote sign-in in workspace browser tab" },
     );
 
-    // Member projects materialize into the Files tab. Opening that tab
-    // initializes its file tree; builder sync controls remain absent.
+    // Member documents are available through Files; explicit sharing stays
+    // in the Project tab without exposing builder-only Git controls.
     await runWait(
       `$('[data-sidebar="left"] [role="tab"][aria-label="Files"]')?.click();
        return $('[data-testid="files-nav"]')?.textContent.includes('store');`,
@@ -385,7 +372,12 @@ describe("remote projects (ADR 0055)", () => {
         label: "member files",
       },
     );
-    expect(await run(`return !!$('[data-testid="remote-sync"]');`)).toBe(false);
+    await run(
+      `$('[data-sidebar="left"] [role="tab"][aria-label="Project"]').click(); return true;`,
+    );
+    await runWait(`return !!$('[data-testid="remote-sync"]');`, {
+      label: "member download control",
+    });
     projectDir = path.join(app.userDataDir, "Catamorphic", "acme-brain");
     expect(
       fs.readFileSync(path.join(projectDir, "docs/handbook.md"), "utf8"),
@@ -414,14 +406,37 @@ describe("remote projects (ADR 0055)", () => {
       path.join(projectDir, "store/customers/acme/brief.md"),
       "# Brief\n",
     );
-    // Returning to Catamorphic is the save boundary for files changed by a
-    // native app. Members never need to discover or press a Ship button.
-    const deadline = Date.now() + 30_000;
-    while (writes.length < 2 && Date.now() < deadline) {
-      await run(`window.dispatchEvent(new Event('focus')); return true;`);
-      await new Promise((resolve) => setTimeout(resolve, 400));
-    }
-    await waitForHost(() => writes.length >= 2, "automatic store upload", 500);
+    fs.writeFileSync(
+      path.join(projectDir, "store/private.txt"),
+      "Private local draft",
+    );
+    await run(`window.dispatchEvent(new Event('focus')); return true;`);
+    await runWait(
+      `return !!$('input[aria-label="Upload notes.md"]') && !!$('input[aria-label="Upload brief.md"]');`,
+      { timeoutMs: 30_000, label: "local files available for selection" },
+    );
+    expect(writes).toHaveLength(0);
+    expect(await run(`return $('[data-testid="remote-ship"]').disabled;`)).toBe(
+      true,
+    );
+    await run(
+      `$('input[aria-label="Upload notes.md"]').click(); $('input[aria-label="Upload brief.md"]').click(); return true;`,
+    );
+    await runWait(
+      `const btn = $('[data-testid="remote-ship"]'); return !!btn && !btn.disabled;`,
+      {
+        timeoutMs: 30_000,
+        label: "ship enabled",
+      },
+    );
+    await run(`$('[data-testid="remote-ship"]').click(); return true;`);
+    await runWait(
+      `const m = $('[data-testid="remote-message"]'); return !!m && m.textContent.includes('uploaded');`,
+      {
+        timeoutMs: 30_000,
+        label: "ship message",
+      },
+    );
     expect(writes.map((w) => `${w.path}@${w.ifVersion}`).sort()).toEqual([
       "store/customers/acme/brief.md@0",
       "store/customers/acme/notes.md@2",
@@ -433,6 +448,9 @@ describe("remote projects (ADR 0055)", () => {
   });
 
   it("Publish ships a dirty store file first, then hands back the link", async () => {
+    await run(
+      `$('[data-sidebar="left"] [role="tab"][aria-label="Files"]').click(); return true;`,
+    );
     await run(
       `byText('[data-testid="files-nav"] button', 'customers').click(); return true;`,
     );
@@ -488,7 +506,7 @@ describe("remote projects (ADR 0055)", () => {
     await run(`pressKey('Escape'); return true;`);
   });
 
-  it("keeps repository implementation and manual controls out of the member shell", async () => {
+  it("keeps Git controls scoped while making document downloads available", async () => {
     expect(
       await run(
         `return {
@@ -497,7 +515,7 @@ describe("remote projects (ADR 0055)", () => {
           propose: !!$('[data-testid="remote-propose"]'),
         };`,
       ),
-    ).toEqual({ handbook: false, sync: false, propose: false });
+    ).toEqual({ handbook: false, sync: true, propose: false });
     expect(proposals).toHaveLength(0);
   });
 

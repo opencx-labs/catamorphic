@@ -85,6 +85,25 @@ export function surfaceTools(
     tools.push(
       {
         definition: {
+          name: "documents_storage",
+          description:
+            "Describe where this project's documents are saved, the file-size limit, and whether uploading is a separate action. Device means the computer serving this connection, not necessarily your own computer. A remote MCP connection saves remotely under that server's access rules.",
+          inputSchema: { type: "object", properties: {} },
+          annotations: READ_ONLY,
+        },
+        call: guarded(async () => {
+          const storage = await documents.storage({ identity, projectId });
+          return {
+            ...storage,
+            maxDocumentBytes: Math.min(
+              storage.maxDocumentBytes,
+              features.storeUploadMaxBytes ?? storage.maxDocumentBytes,
+            ),
+          };
+        }),
+      },
+      {
+        definition: {
           name: "documents_list",
           description:
             "List the project's documents you may read — the program (docs, handbook, code, at the shared main) and the project store (store/…, per-customer notes, contracts, generated files; versioned, with author). Narrow with a prefix.",
@@ -116,18 +135,35 @@ export function surfaceTools(
         definition: {
           name: "documents_read",
           description:
-            "Read one document (text content when text-like; metadata always). Store documents accept a version to read history.",
+            "Read one document (text content when text-like; metadata always). Store documents accept a version to read history. For a binary file, request encoding=base64 to receive its bytes. Saving through a remote MCP connection saves on that server, not on your device.",
           inputSchema: {
             type: "object",
             properties: {
               path: { type: "string" },
               version: { type: "integer" },
+              encoding: { type: "string", enum: ["text", "base64"] },
             },
             required: ["path"],
           },
           annotations: READ_ONLY,
         },
         call: guarded(async (args) => {
+          if (args.encoding === "base64") {
+            const doc = await documents.readBytes({
+              identity,
+              projectId,
+              path: str(args.path) ?? "",
+              ...(int(args.version) !== undefined
+                ? { version: int(args.version) }
+                : {}),
+            });
+            if (doc.bytes.byteLength > 1024 * 1024)
+              throw new Error(
+                "This file is too large for an MCP text response. Download it from the authenticated documents/raw endpoint.",
+              );
+            const { bytes, ...entry } = doc;
+            return { ...entry, base64: Buffer.from(bytes).toString("base64") };
+          }
           const doc = await documents.read({
             identity,
             projectId,
@@ -193,6 +229,17 @@ export function surfaceTools(
           },
         },
         call: guarded(async (args) => {
+          const text = str(args.text);
+          const base64 = str(args.base64);
+          if ((text === undefined) === (base64 === undefined))
+            throw new Error("Provide exactly one of text or base64");
+          if (
+            base64 !== undefined &&
+            !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+              base64,
+            )
+          )
+            throw new Error("Invalid base64 file content");
           const content =
             str(args.text) !== undefined
               ? (str(args.text) as string)

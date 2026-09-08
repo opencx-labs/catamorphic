@@ -298,6 +298,8 @@ async function buildStockServerInner(
     ...(agents.registry ? { codingAgent: agents.registry } : {}),
     appBundleStore:
       objectStore ?? new FsBundleStore(path.join(data, "app-bundles")),
+    documentBlobStore:
+      objectStore ?? new FsBundleStore(path.join(data, "document-blobs")),
     toolPermissions,
     triggerKinds: [schedule],
     projectSeeds: (defaults) => ({

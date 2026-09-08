@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { discoverCheckout } from "@catamorphic/git";
 import type { PGlite } from "@electric-sql/pglite";
 
 /**
@@ -14,6 +17,8 @@ export class ProjectRootsStore {
    * needs the project's folder to read `agents/<slug>.json`.
    */
   private readonly cache = new Map<string, string>();
+  private readonly automaticCheckpoints = new Set<string>();
+  private registration = Promise.resolve();
 
   constructor(private readonly pglite: PGlite) {}
 
@@ -25,11 +30,93 @@ export class ProjectRootsStore {
         root_path  text NOT NULL
       );
     `);
+    await this.pglite.exec(
+      `ALTER TABLE desktop.project_roots ADD COLUMN IF NOT EXISTS automatic_checkpoints boolean NOT NULL DEFAULT false`,
+    );
     const rows = await this.pglite.query<{
       project_id: string;
       root_path: string;
-    }>("SELECT project_id, root_path FROM desktop.project_roots");
-    for (const row of rows.rows) this.cache.set(row.project_id, row.root_path);
+      automatic_checkpoints: boolean;
+    }>(
+      "SELECT project_id, root_path, automatic_checkpoints FROM desktop.project_roots",
+    );
+    for (const row of rows.rows) {
+      this.cache.set(row.project_id, row.root_path);
+      if (row.automatic_checkpoints)
+        this.automaticCheckpoints.add(row.project_id);
+    }
+  }
+
+  checkpointsEnabled(projectId: string): boolean {
+    return this.automaticCheckpoints.has(projectId);
+  }
+
+  /** Register before provisioning so every core consumer resolves the same checkout. */
+  async register<T>(input: {
+    rootPath: string;
+    existing: boolean;
+    automaticCheckpoints?: boolean;
+    create(id: string, rootPath: string): Promise<T>;
+    reopen(id: string): Promise<T>;
+  }): Promise<T> {
+    const previous = this.registration;
+    let release = () => {};
+    this.registration = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      const checkout = input.existing
+        ? await discoverCheckout({ path: input.rootPath })
+        : null;
+      const root = checkout?.path ?? path.resolve(input.rootPath);
+      const canonical = await fs.realpath(root).catch(() => root);
+      for (const [id, registered] of this.cache) {
+        if (
+          (await fs.realpath(registered).catch(() => registered)) === canonical
+        )
+          return input.reopen(id);
+        if (checkout) {
+          const other = await discoverCheckout({ path: registered }).catch(
+            () => null,
+          );
+          if (other?.commonDirectory === checkout.commonDirectory)
+            return input.reopen(id);
+        }
+      }
+      if (!input.existing) {
+        const entries = await fs.readdir(root).catch((error: unknown) => {
+          if (
+            error instanceof Error &&
+            "code" in error &&
+            error.code === "ENOENT"
+          )
+            return [];
+          throw error;
+        });
+        if (entries.length > 0)
+          throw new Error(
+            "This folder already contains files. Open the existing folder or choose an empty location.",
+          );
+      }
+      const id = crypto.randomUUID();
+      await this.set(id, canonical);
+      if (!input.existing && input.automaticCheckpoints !== false) {
+        await this.pglite.query(
+          "UPDATE desktop.project_roots SET automatic_checkpoints = true WHERE project_id = $1",
+          [id],
+        );
+        this.automaticCheckpoints.add(id);
+      }
+      try {
+        return await input.create(id, canonical);
+      } catch (error) {
+        await this.delete(id);
+        throw error;
+      }
+    } finally {
+      release();
+    }
   }
 
   async get(projectId: string): Promise<string | null> {
@@ -61,5 +148,6 @@ export class ProjectRootsStore {
       [projectId],
     );
     this.cache.delete(projectId);
+    this.automaticCheckpoints.delete(projectId);
   }
 }

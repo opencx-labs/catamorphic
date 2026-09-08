@@ -70,7 +70,25 @@ const GITHUB_SKILL_PATH = "publishing-to-github/SKILL.md";
 describe("hostSkills hook", () => {
   it("defaults to the framework host skills", () => {
     const core = dummyCore();
-    expect(core.hostSkillFiles).toEqual(HOST_SKILLS);
+    expect(core.hostSkillFiles).toMatchObject(HOST_SKILLS);
+    expect(core.hostSkillFiles["building-apps/SKILL.md"]).toBe(
+      SEED_SKILLS[MECHANICS_SKILL_PATH],
+    );
+  });
+
+  it("offers the host's resolved project skills without seeding imported repositories", () => {
+    const core = dummyCore({
+      projectSeeds: () => ({
+        ".agents/skills/acme/SKILL.md": "# Acme",
+        ".agents/skills/acme/example.ts": "export const example = true;",
+        "package.json": "{}",
+      }),
+    });
+    expect(core.hostSkillFiles["acme/SKILL.md"]).toBe("# Acme");
+    expect(core.hostSkillFiles["acme/example.ts"]).toBeDefined();
+    expect(core.hostSkillFiles["building-apps/SKILL.md"]).toBeUndefined();
+    expect(core.hostSkillFiles["package.json"]).toBeUndefined();
+    expect(dummyCore({ hostSkills: () => ({}) }).hostSkillFiles).toEqual({});
   });
 
   it("ships publishing-to-github with parseable frontmatter", () => {
@@ -114,6 +132,6 @@ describe("hostSkills hook", () => {
       },
     });
     expect(HOST_SKILLS[GITHUB_SKILL_PATH]).toBeDefined();
-    expect(dummyCore().hostSkillFiles).toEqual(HOST_SKILLS);
+    expect(dummyCore().hostSkillFiles).toMatchObject(HOST_SKILLS);
   });
 });

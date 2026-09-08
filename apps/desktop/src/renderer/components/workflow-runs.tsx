@@ -10,6 +10,7 @@ import type { ParameterInfo } from "@catamorphic/react/types";
 import { friendlyParamName } from "@catamorphic/ui";
 import { ChevronDown, Play } from "lucide-react";
 import { useEffect, useId, useState } from "react";
+import { desktopApi } from "../lib/desktop-api.js";
 import { RunDetail } from "./catamorphic/runs-panel.js";
 import { Collapsible } from "./collapsible.js";
 import { PendingButton } from "./pending-button.js";
@@ -90,6 +91,7 @@ export function WorkflowRuns({
 }) {
   const formId = useId();
   const [versionOpen, setVersionOpen] = useState(false);
+  const [recording, setRecording] = useState(false);
   const status = useProjectGit(projectId);
   const published = useWorkflow(
     status.data?.remoteHead ? projectId : undefined,
@@ -128,8 +130,39 @@ export function WorkflowRuns({
       : !published.data
         ? "Publish a project version containing this workflow first"
         : undefined;
+  const recordableFiles = (status.data?.modifiedFiles ?? []).filter(
+    (file) => !file.startsWith("store/"),
+  );
+  const record = async () => {
+    if (dirty || !canPublish || recording || !recordableFiles.length) return;
+    setRecording(true);
+    setError(undefined);
+    try {
+      await desktopApi.gitRecord({
+        projectId,
+        paths: recordableFiles,
+        message: `Record changes for ${workflowName}`,
+      });
+      await status.refetch();
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Could not record the changes.",
+      );
+    } finally {
+      setRecording(false);
+    }
+  };
   const publish = async () => {
-    if (dirty || !canPublish || deploy.isPending) return;
+    if (
+      dirty ||
+      status.data?.dirty ||
+      !canPublish ||
+      deploy.isPending ||
+      recording
+    )
+      return;
     setError(undefined);
     try {
       const result = await deploy.mutateAsync({
@@ -191,19 +224,51 @@ export function WorkflowRuns({
         <Collapsible open={versionOpen}>
           <div id={`${formId}-version`}>
             <p className="mt-3 text-xs text-fg-muted">
-              Publishing includes all saved changes in this project, including
-              its other workflows and apps. Existing runs keep their version.
-              Automatic runs require a separate review.
+              Publishing uses the latest Git commit, including its workflows and
+              apps. Recording changes saves local history. Publishing makes that
+              version available for runs; it does not upload private documents.
+              Existing runs keep their version. Automatic runs require a
+              separate review.
             </p>
+            {recordableFiles.length > 0 && (
+              <div className="mt-3">
+                <p className="text-xs text-fg-muted">
+                  Review the saved files to record:
+                </p>
+                <ul className="mt-2 max-h-36 overflow-y-auto text-xs font-mono">
+                  {recordableFiles.map((file) => (
+                    <li key={file}>{file}</li>
+                  ))}
+                </ul>
+                <PendingButton
+                  type="button"
+                  className="workflow-secondary mt-3"
+                  pending={recording}
+                  disabled={dirty || !canPublish || deploy.isPending}
+                  data-disabled-reason={
+                    dirty
+                      ? "Save your workflow edits first"
+                      : !canPublish
+                        ? "Only project builders can record changes"
+                        : "Publishing is in progress"
+                  }
+                  onClick={() => void record()}
+                >
+                  Record changes in Git
+                </PendingButton>
+              </div>
+            )}
             <PendingButton
               type="button"
               className="workflow-secondary mt-3"
               pending={deploy.isPending}
-              disabled={dirty || !canPublish}
+              disabled={dirty || !canPublish || status.data?.dirty || recording}
               data-disabled-reason={
                 !canPublish
                   ? "Only project builders can publish a version"
-                  : "Save your workflow changes before publishing"
+                  : dirty
+                    ? "Save your workflow changes before publishing"
+                    : "Record your saved changes in Git before publishing"
               }
               onClick={() => void publish()}
             >

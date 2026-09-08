@@ -138,8 +138,7 @@ export function visibleSidebarConfig({
           .filter(
             (section) =>
               matchesProjectExperience(section.when, context) &&
-              (context.builder ||
-                !["git", "prs", "remote"].includes(section.type)),
+              (context.builder || !["git", "prs"].includes(section.type)),
           )
           .map((section) => ({ ...section, items: items(section.items) })),
       }))

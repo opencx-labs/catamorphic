@@ -8,6 +8,7 @@ import {
   DocumentNotFoundError,
   type DocumentsService,
   type DocumentVersion,
+  normalizeDocumentPath,
 } from "./documents-service.js";
 
 /**
@@ -71,6 +72,7 @@ export interface RemoteDocumentsClient {
 }
 
 interface ManifestEntry {
+  conflict?: { serverCopy: string; serverVersion: number };
   source: "program" | "store";
   version?: number;
   digest?: string;
@@ -86,6 +88,7 @@ interface ManifestEntry {
 interface Manifest {
   version: 1;
   files: Record<string, ManifestEntry>;
+  serverCopies?: string[];
 }
 
 export const MANIFEST_PATH = ".catamorphic/remote-sync.json";
@@ -114,6 +117,8 @@ export interface ShipReport {
 }
 
 export interface LocalStatus {
+  /** Unresolved server versions. Uploading requires an explicit resolution. */
+  conflicts: Array<{ path: string; serverCopy: string; serverVersion: number }>;
   /** Store paths edited or created locally since the last sync. */
   modified: string[];
   /** Store paths deleted locally since the last sync. */
@@ -132,7 +137,11 @@ function readManifest(root: string): Manifest {
       fs.readFileSync(path.join(root, MANIFEST_PATH), "utf8"),
     ) as Partial<Manifest>;
     if (raw.version === 1 && raw.files && typeof raw.files === "object") {
-      return { version: 1, files: raw.files };
+      return {
+        version: 1,
+        files: raw.files,
+        serverCopies: raw.serverCopies ?? [],
+      };
     }
   } catch {
     // Absent or unreadable: first sync.
@@ -145,15 +154,36 @@ function writeManifest(root: string, manifest: Manifest): void {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const sorted: Manifest = {
     version: 1,
+    serverCopies: manifest.serverCopies ?? [],
     files: Object.fromEntries(
       Object.entries(manifest.files).sort(([a], [b]) => a.localeCompare(b)),
     ),
   };
-  fs.writeFileSync(target, `${JSON.stringify(sorted, null, 2)}\n`);
+  const temporary = `${target}.${crypto.randomUUID()}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify(sorted, null, 2)}\n`);
+  fs.renameSync(temporary, target);
 }
 
 function localPath(root: string, relative: string): string {
+  normalizeDocumentPath(relative);
+  if (relative === MANIFEST_PATH)
+    throw new Error("The synchronization manifest is local state");
   const target = path.resolve(root, relative);
+  if (!target.startsWith(`${path.resolve(root)}${path.sep}`))
+    throw new Error(`Path escapes the project: ${relative}`);
+  const canonicalRoot = fs.realpathSync(root);
+  let ancestor = target;
+  while (ancestor !== path.resolve(root)) {
+    if (fs.existsSync(ancestor)) {
+      const canonical = fs.realpathSync(ancestor);
+      if (
+        canonical !== canonicalRoot &&
+        !canonical.startsWith(`${canonicalRoot}${path.sep}`)
+      )
+        throw new Error(`Path follows a link outside the project: ${relative}`);
+    }
+    ancestor = path.dirname(ancestor);
+  }
   if (!target.startsWith(`${path.resolve(root)}${path.sep}`)) {
     throw new Error(
       `Refusing to write outside the project folder: ${relative}`,
@@ -217,6 +247,28 @@ export function serverCopyPath(relative: string, version: number): string {
   return `${base} (server v${version})${ext}`;
 }
 
+function writeServerCopy(
+  root: string,
+  manifest: Manifest,
+  relative: string,
+  version: number,
+  bytes: Uint8Array,
+): string {
+  const initial = serverCopyPath(relative, version);
+  let copy = initial;
+  for (let suffix = 2; ; suffix++) {
+    const existing = readLocal(root, copy);
+    if (!existing || sha256(existing) === sha256(bytes)) break;
+    const ext = path.extname(initial);
+    copy = `${initial.slice(0, initial.length - ext.length)}-${suffix}${ext}`;
+  }
+  writeLocal(root, copy, bytes);
+  manifest.serverCopies = [
+    ...new Set([...(manifest.serverCopies ?? []), copy]),
+  ];
+  return copy;
+}
+
 /** Every file under `store/` in the folder, relative, forward-slashed. */
 function walkStore(root: string): string[] {
   const out: string[] = [];
@@ -249,7 +301,7 @@ export function localStatus(root: string): LocalStatus {
   const seen = new Set<string>();
   for (const relative of walkStore(root)) {
     // Server copies from a conflict are scratch, never shipped.
-    if (/ \(server v\d+\)(\.[^/]*)?$/.test(relative)) continue;
+    if (manifest.serverCopies?.includes(relative)) continue;
     seen.add(relative);
     const entry = manifest.files[relative];
     if (!entry || !unchangedLocally(root, relative, entry)) {
@@ -270,11 +322,46 @@ export function localStatus(root: string): LocalStatus {
       programEdits.push(relative);
     }
   }
-  return { modified, deleted, programEdits };
+  const conflicts = Object.entries(manifest.files).flatMap(([path, entry]) =>
+    entry.conflict ? [{ path, ...entry.conflict }] : [],
+  );
+  return { modified, deleted, programEdits, conflicts };
+}
+
+const pendingOperations = new Map<string, Promise<unknown>>();
+async function serializeSync<T>(
+  root: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const key = fs.realpathSync(root);
+  const previous = pendingOperations.get(key) ?? Promise.resolve();
+  const current = previous.catch(() => {}).then(operation);
+  pendingOperations.set(key, current);
+  try {
+    return await current;
+  } finally {
+    if (pendingOperations.get(key) === current) pendingOperations.delete(key);
+  }
+}
+
+export function syncRemoteProject(
+  root: string,
+  client: RemoteDocumentsClient,
+): Promise<SyncReport> {
+  return serializeSync(root, () => syncRemoteProjectInner(root, client));
+}
+export function shipRemoteProject(
+  root: string,
+  client: RemoteDocumentsClient,
+  options?: { paths: readonly string[]; resolveConflicts?: readonly string[] },
+): Promise<ShipReport> {
+  return serializeSync(root, () =>
+    shipRemoteProjectInner(root, client, options),
+  );
 }
 
 /** Pull the scoped tree into the folder. */
-export async function syncRemoteProject(
+async function syncRemoteProjectInner(
   root: string,
   client: RemoteDocumentsClient,
 ): Promise<SyncReport> {
@@ -299,21 +386,32 @@ export async function syncRemoteProject(
       known?.source === "store"
         ? String(known.version ?? 0)
         : (known?.digest ?? "");
-    const local = readLocal(root, entry.path);
-    const localModified =
-      known !== undefined && local !== null && sha256(local) !== known.hash;
+    if (known?.conflict) {
+      report.conflicts.push({ path: entry.path, ...known.conflict });
+      continue;
+    }
 
-    if (known && knownMarker === remoteMarker && local !== null) {
+    if (known && knownMarker === remoteMarker) {
       report.unchanged += 1;
       continue;
     }
     const { bytes } = await client.readBytes(entry.path);
-    if (localModified) {
+    const local = readLocal(root, entry.path);
+    const localModified =
+      local !== null
+        ? !known || sha256(local) !== known.hash
+        : known !== undefined;
+    if (localModified && (local === null || sha256(local) !== sha256(bytes))) {
       // Both sides moved: keep the user's edit, park the server's beside it
       // (program files too — a local program edit is a commit-in-waiting,
       // never something a pull may silently revert).
-      const copy = serverCopyPath(entry.path, entry.version ?? 0);
-      writeLocal(root, copy, bytes);
+      const copy = writeServerCopy(
+        root,
+        manifest,
+        entry.path,
+        entry.version ?? 0,
+        bytes,
+      );
       report.conflicts.push({
         path: entry.path,
         serverCopy: copy,
@@ -327,6 +425,7 @@ export async function syncRemoteProject(
           ? { version: entry.version }
           : { digest: entry.digest }),
         hash: sha256(bytes),
+        conflict: { serverCopy: copy, serverVersion: entry.version ?? 0 },
       };
       continue;
     }
@@ -339,6 +438,7 @@ export async function syncRemoteProject(
       hash: sha256(bytes),
       stat: statLocal(root, entry.path),
     };
+    writeManifest(root, manifest);
     report.pulled.push(entry.path);
   }
 
@@ -362,9 +462,10 @@ export async function syncRemoteProject(
 }
 
 /** Push local store changes. */
-export async function shipRemoteProject(
+async function shipRemoteProjectInner(
   root: string,
   client: RemoteDocumentsClient,
+  options?: { paths: readonly string[]; resolveConflicts?: readonly string[] },
 ): Promise<ShipReport> {
   const manifest = readManifest(root);
   const status = localStatus(root);
@@ -378,7 +479,25 @@ export async function shipRemoteProject(
   const describe = (error: unknown) =>
     error instanceof Error ? error.message : String(error);
 
+  const selected = options
+    ? new Set(options.paths.map(normalizeDocumentPath))
+    : null;
+  const resolutions = new Set(options?.resolveConflicts ?? []);
+  const mayUpload = (relative: string): boolean => {
+    if (selected && !selected.has(relative)) return false;
+    const conflict = manifest.files[relative]?.conflict;
+    if (conflict && !resolutions.has(relative)) {
+      report.conflicts.push({
+        path: relative,
+        serverCopy: conflict.serverCopy,
+        currentVersion: conflict.serverVersion,
+      });
+      return false;
+    }
+    return true;
+  };
   for (const relative of status.modified) {
+    if (!mayUpload(relative)) continue;
     const bytes = readLocal(root, relative);
     if (!bytes) continue;
     const known = manifest.files[relative];
@@ -399,8 +518,8 @@ export async function shipRemoteProject(
         source: "store",
         version: result.entry.version,
         hash: sha256(bytes),
-        stat: statLocal(root, relative),
       };
+      writeManifest(root, manifest);
       report.shipped.push(relative);
       continue;
     }
@@ -409,12 +528,20 @@ export async function shipRemoteProject(
     // against a tombstone (they deleted it) has nothing to fetch: just
     // remember the version so the retry supersedes the deletion.
     const theirs = await client.readBytes(relative).catch(() => null);
-    const copy = serverCopyPath(relative, result.currentVersion);
-    if (theirs) writeLocal(root, copy, theirs.bytes);
+    const copy = theirs
+      ? writeServerCopy(
+          root,
+          manifest,
+          relative,
+          result.currentVersion,
+          theirs.bytes,
+        )
+      : serverCopyPath(relative, result.currentVersion);
     manifest.files[relative] = {
       source: "store",
       version: result.currentVersion,
       hash: theirs ? sha256(theirs.bytes) : "",
+      conflict: { serverCopy: copy, serverVersion: result.currentVersion },
     };
     report.conflicts.push({
       path: relative,
@@ -424,6 +551,7 @@ export async function shipRemoteProject(
   }
 
   for (const relative of status.deleted) {
+    if (!mayUpload(relative)) continue;
     const known = manifest.files[relative];
     let result: Awaited<ReturnType<RemoteDocumentsClient["delete"]>>;
     try {
@@ -437,18 +565,27 @@ export async function shipRemoteProject(
     }
     if (result.ok || !("conflict" in result)) {
       delete manifest.files[relative];
+      writeManifest(root, manifest);
       report.deleted.push(relative);
       continue;
     }
     // Deleted here, edited there: bring theirs back beside nothing — the
     // user sees the server copy and decides.
     const theirs = await client.readBytes(relative).catch(() => null);
-    const copy = serverCopyPath(relative, result.currentVersion);
-    if (theirs) writeLocal(root, copy, theirs.bytes);
+    const copy = theirs
+      ? writeServerCopy(
+          root,
+          manifest,
+          relative,
+          result.currentVersion,
+          theirs.bytes,
+        )
+      : serverCopyPath(relative, result.currentVersion);
     manifest.files[relative] = {
       source: "store",
       version: result.currentVersion,
       hash: theirs ? sha256(theirs.bytes) : "",
+      conflict: { serverCopy: copy, serverVersion: result.currentVersion },
     };
     report.conflicts.push({
       path: relative,

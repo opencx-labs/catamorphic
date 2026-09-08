@@ -149,7 +149,7 @@ export class ProposalsService {
         remoteBranch: "main",
       });
       const base = await dev
-        .resolveRef("refs/remotes/origin/main")
+        .resolveRef("refs/catamorphic/published/main")
         .catch(() => "HEAD");
       await dev.resetWorkingTree();
       await dev.createBranch(branch, base);

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FsBackend } from "../fs-backend.js";
 import { InMemoryObjectStore } from "../in-memory-object-store.js";
+import { nativeGit } from "../native-git.js";
 import { ObjectRemoteBackend } from "../object-remote-backend.js";
 import { ProjectManager } from "../project-manager.js";
 
@@ -91,10 +92,19 @@ describe("ProjectManager", () => {
     await expect(fs.access(isolatedPath)).rejects.toThrow();
   });
 
-  it("importExisting adopts files and adds a manifest without overwriting", async () => {
+  it("importExisting opens a Git checkout without writing a manifest", async () => {
     const rootPath = path.join(tmpDir, "existing");
     await fs.mkdir(rootPath, { recursive: true });
     await fs.writeFile(path.join(rootPath, "notes.md"), "# Notes\n");
+    await nativeGit(rootPath, ["init", "-b", "feature"]);
+    await expect(
+      manager.create(TENANT, PROJECT, { rootPath, importExisting: true }),
+    ).rejects.toThrow("Register the checkout");
+    manager = new ProjectManager(
+      new FsBackend(tmpDir, async () => rootPath),
+      undefined,
+      async () => rootPath,
+    );
 
     const repo = await manager.create(TENANT, PROJECT, {
       name: "adopted",
@@ -104,7 +114,7 @@ describe("ProjectManager", () => {
 
     const files = await repo.listFiles();
     expect(files).toContain("notes.md");
-    expect(files).toContain(".catamorphic/project.json");
+    expect(files).not.toContain(".catamorphic/project.json");
     expect(await repo.readFile("notes.md")).toBe("# Notes\n");
 
     await repo.dispose();

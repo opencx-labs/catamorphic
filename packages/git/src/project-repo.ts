@@ -36,7 +36,7 @@ const ALLOWED_DOT_DIRS = new Set([".agents", ".catamorphic"]);
  */
 const ALLOWED_DOT_FILES = new Set([".gitignore"]);
 
-function assertSafePath(filePath: string): void {
+export function assertSafePath(filePath: string): void {
   const normalized = path.normalize(filePath);
   if (path.isAbsolute(normalized)) {
     throw new Error("Absolute paths not allowed");
@@ -153,8 +153,19 @@ export class ProjectRepoImpl implements ProjectRepo {
     await fs.unlink(path.join(this.repoPath, filePath));
   }
 
-  async listFiles(): Promise<string[]> {
-    return walkDirectory(this.repoPath, this.repoPath);
+  async listFiles(opts?: { prefix?: string }): Promise<string[]> {
+    if (!opts?.prefix) return walkDirectory(this.repoPath, this.repoPath);
+    assertSafePath(opts.prefix);
+    try {
+      return await walkDirectory(
+        path.join(this.repoPath, opts.prefix),
+        this.repoPath,
+      );
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+        return [];
+      throw error;
+    }
   }
 
   async readAllFiles(
@@ -185,38 +196,44 @@ export class ProjectRepoImpl implements ProjectRepo {
     return readFileSnapshot({
       paths,
       options,
-      read: async (file, maxBytes) => {
-        assertSafePath(file);
-        const handle = await fs.open(path.join(this.repoPath, file), "r");
-        try {
-          const size = (await handle.stat()).size;
-          if (size > maxBytes)
-            throw new Error(
-              `Project file '${file}' exceeds the ${maxBytes}-byte snapshot limit`,
-            );
-          // A concurrent writer cannot make this read grow beyond its budget.
-          const buffer = Buffer.alloc(size + 1);
-          let bytesRead = 0;
-          while (bytesRead < buffer.length) {
-            const chunk = await handle.read(
-              buffer,
-              bytesRead,
-              buffer.length - bytesRead,
-              bytesRead,
-            );
-            if (chunk.bytesRead === 0) break;
-            bytesRead += chunk.bytesRead;
-          }
-          if (bytesRead > size)
-            throw new Error(
-              `Project file '${file}' changed during snapshot; retry the read`,
-            );
-          return buffer.toString("utf8", 0, bytesRead);
-        } finally {
-          await handle.close();
-        }
-      },
+      read: async (file, maxBytes) =>
+        new TextDecoder().decode(await this.readSnapshotBytes(file, maxBytes)),
     });
+  }
+
+  protected async readSnapshotBytes(
+    file: string,
+    maxBytes: number,
+  ): Promise<Uint8Array> {
+    assertSafePath(file);
+    const handle = await fs.open(path.join(this.repoPath, file), "r");
+    try {
+      const size = (await handle.stat()).size;
+      if (size > maxBytes)
+        throw new Error(
+          `Project file '${file}' exceeds the ${maxBytes}-byte snapshot limit`,
+        );
+      // A concurrent writer cannot make this read grow beyond its budget.
+      const buffer = Buffer.alloc(size + 1);
+      let bytesRead = 0;
+      while (bytesRead < buffer.length) {
+        const chunk = await handle.read(
+          buffer,
+          bytesRead,
+          buffer.length - bytesRead,
+          bytesRead,
+        );
+        if (chunk.bytesRead === 0) break;
+        bytesRead += chunk.bytesRead;
+      }
+      if (bytesRead > size)
+        throw new Error(
+          `Project file '${file}' changed during snapshot; retry the read`,
+        );
+      return buffer.subarray(0, bytesRead);
+    } finally {
+      await handle.close();
+    }
   }
 
   async readAllFilesAtRef(
@@ -236,20 +253,28 @@ export class ProjectRepoImpl implements ProjectRepo {
   async readBlobAtRef(
     ref: string,
     filePath: string,
+    options?: { maxBytes?: number },
   ): Promise<Uint8Array | null> {
     assertSafePath(filePath);
+    let blob: Uint8Array;
     try {
       const oid = await git.resolveRef({ fs: nodeFs, dir: this.repoPath, ref });
-      const { blob } = await git.readBlob({
-        fs: nodeFs,
-        dir: this.repoPath,
-        oid,
-        filepath: filePath,
-      });
-      return blob;
+      blob = (
+        await git.readBlob({
+          fs: nodeFs,
+          dir: this.repoPath,
+          oid,
+          filepath: filePath,
+        })
+      ).blob;
     } catch {
       return null;
     }
+    if (options?.maxBytes !== undefined && blob.byteLength > options.maxBytes)
+      throw new Error(
+        `Project file '${filePath}' exceeds the ${options.maxBytes}-byte snapshot limit`,
+      );
+    return blob;
   }
 
   async readFileBytes(filePath: string): Promise<Uint8Array | null> {
@@ -310,8 +335,8 @@ export class ProjectRepoImpl implements ProjectRepo {
     return readFileSnapshot({
       paths: blobs.map((blob) => blob.path),
       options,
-      read: async (file) => {
-        const content = await this.readBlobAtRef(ref, file);
+      read: async (file, maxBytes) => {
+        const content = await this.readBlobAtRef(ref, file, { maxBytes });
         if (!content)
           throw new Error(`Project file '${file}' disappeared from '${ref}'`);
         return new TextDecoder().decode(content);
@@ -483,7 +508,7 @@ export class ProjectRepoImpl implements ProjectRepo {
       .map(([filepath]) => filepath);
 
     const baseCommit = await this.resolveRef("HEAD").catch(() => null);
-    const remoteRef = `refs/remotes/origin/main`;
+    const remoteRef = `refs/catamorphic/published/main`;
     const remoteHead = await git
       .resolveRef({ fs: nodeFs, dir: this.repoPath, ref: remoteRef })
       .catch(() => null);
@@ -635,13 +660,14 @@ export class ProjectRepoImpl implements ProjectRepo {
     ].filter((file) => baseFiles.get(file) !== headFiles.get(file));
     const snapshots = await readFileSnapshot({
       paths: changed.flatMap((file) => [`before/${file}`, `after/${file}`]),
-      read: async (key) => {
+      read: async (key, maxBytes) => {
         const before = key.startsWith("before/");
         const file = key.slice(before ? 7 : 6);
         if (!(before ? baseFiles : headFiles).has(file)) return "";
         const blob = await this.readBlobAtRef(
           before ? opts.base : opts.head,
           file,
+          { maxBytes },
         );
         return blob ? new TextDecoder().decode(blob) : "";
       },

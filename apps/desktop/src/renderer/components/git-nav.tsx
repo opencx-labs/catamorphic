@@ -1,5 +1,5 @@
 import { ChevronRight, GitBranch } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import {
   desktopApi,
   type GitChangedFile,
@@ -7,17 +7,11 @@ import {
   type GitOverview,
   type GitWorktree,
 } from "../lib/desktop-api.js";
+import { Collapsible } from "./collapsible.js";
 import type { WorkspaceTab } from "./workspace-tabs.js";
 
-/**
- * The sidebar's Changes section: uncommitted files per git worktree
- * (main worktree first, extra worktrees under a small branch header,
- * each with a "vs main" group for the branch's own changes). Files are
- * grouped into a collapsible directory tree (single-child directory
- * chains collapse into one "a/b/c" row, VS Code style). Clicking a file
- * opens a read-only diff tab. Data is a 15s poll plus a push refresh
- * whenever a turn checkpoint moves git state — stale rows would open
- * diffs against a HEAD that already contains them.
+/** Per-checkout changes, with separate index, working-file and committed comparisons.
+ * Refresh on focus, Git mutations and a bounded poll; preserve each disclosure's state.
  */
 
 const REFRESH_MS = 15_000;
@@ -31,6 +25,7 @@ const KIND_BADGES: Record<
   modified: { letter: "M", className: "text-info" },
   deleted: { letter: "D", className: "text-danger" },
   renamed: { letter: "R", className: "text-warning" },
+  conflicted: { letter: "!", className: "text-danger" },
 };
 
 interface ChangeTreeDir {
@@ -75,111 +70,215 @@ export function GitNav({
 }: {
   projectId: string;
   onOpenDiff: (tab: WorkspaceTab) => void;
-  /** Reports emptiness up so hide-when-empty sections can drop entirely. */
   onEmptyChange?: (empty: boolean) => void;
 }) {
   const [overview, setOverview] = useState<GitOverview | null>(null);
-
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
+    let running = false;
+    let queued = false;
     setOverview(null);
-    const load = () =>
-      void desktopApi
-        .gitOverview(projectId)
-        .then((next) => {
-          if (!cancelled) setOverview(next);
-        })
-        .catch(() => {});
-    load();
-    const timer = window.setInterval(load, REFRESH_MS);
+    setError(null);
+    const load = async () => {
+      if (running) {
+        queued = true;
+        return;
+      }
+      running = true;
+      try {
+        const next = await desktopApi.gitOverview(projectId);
+        if (!cancelled) {
+          setOverview(next);
+          setError(null);
+        }
+      } catch (reason) {
+        if (!cancelled)
+          setError(
+            reason instanceof Error
+              ? reason.message
+              : "Could not read Git changes.",
+          );
+      } finally {
+        running = false;
+        if (queued && !cancelled) {
+          queued = false;
+          void load();
+        }
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => void load(), REFRESH_MS);
+    const focus = () => void load();
+    window.addEventListener("focus", focus);
     const unsubscribe = desktopApi.onGitChanged((change) => {
-      if (change.projectId === projectId) load();
+      if (change.projectId === projectId) void load();
     });
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      window.removeEventListener("focus", focus);
       unsubscribe();
     };
   }, [projectId]);
-
-  const hasChanges =
-    overview?.available === true &&
-    overview.worktrees.some(
-      (tree) => tree.changes.length > 0 || (tree.vsMain?.length ?? 0) > 0,
-    );
-  const isEmpty = !overview || (overview.available && !hasChanges);
+  const hasContent = overview?.worktrees.some(
+    (tree) =>
+      tree.changes.length ||
+      tree.branchChanges.length ||
+      tree.error ||
+      tree.comparisonError,
+  );
+  const isEmpty =
+    !error &&
+    !overview?.error &&
+    overview?.available !== false &&
+    !hasContent &&
+    (overview?.worktrees.length ?? 0) <= 1;
   useEffect(() => {
     onEmptyChange?.(isEmpty);
   }, [isEmpty, onEmptyChange]);
-
-  if (!overview) return null;
-  if (!overview.available) {
+  if (!overview && !error) return null;
+  if (overview?.available === false)
     return (
       <p className="px-2 py-1 text-xs text-fg-faint">
         Install git to see changes.
       </p>
     );
-  }
-  if (!hasChanges) {
-    return <p className="px-2 py-1 text-xs text-fg-faint">No changes.</p>;
-  }
+  return (
+    <div className="flex flex-col gap-1" data-testid="git-changes">
+      {(error || overview?.error) && (
+        <p role="alert" className="break-words px-2 py-1 text-xs text-danger">
+          {error ?? overview?.error}
+        </p>
+      )}
+      {overview?.worktrees.map((tree) => (
+        <WorktreeSection
+          key={`${projectId}:${tree.path}`}
+          tree={tree}
+          projectId={projectId}
+          onOpenDiff={onOpenDiff}
+        />
+      ))}
+    </div>
+  );
+}
 
-  const diffTab = (
-    tree: GitWorktree,
-    file: GitChangedFile,
-    mode: GitDiffMode,
-  ): WorkspaceTab => {
-    const modeLabel = mode === "uncommitted" ? "uncommitted" : "vs main";
-    const treeName = tree.path.split("/").at(-1) ?? tree.path;
-    return {
+const GROUPS: Array<{ mode: GitDiffMode; label: string }> = [
+  { mode: "conflict", label: "Conflicts" },
+  { mode: "staged", label: "Staged" },
+  { mode: "unstaged", label: "Unstaged" },
+  { mode: "untracked", label: "Untracked" },
+];
+function WorktreeSection({
+  tree,
+  projectId,
+  onOpenDiff,
+}: {
+  tree: GitWorktree;
+  projectId: string;
+  onOpenDiff: (tab: WorkspaceTab) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  const contentId = useId();
+  const count = new Set(
+    [...tree.changes, ...tree.branchChanges].map((file) => file.path),
+  ).size;
+  const openFile = (file: GitChangedFile) => {
+    const label =
+      file.mode === "branch"
+        ? `vs ${tree.baseLabel}`
+        : (GROUPS.find((group) => group.mode === file.mode)?.label ??
+          file.mode);
+    const checkout = tree.branch ?? "Detached HEAD";
+    onOpenDiff({
       kind: "diff",
-      // Unique per worktree + file + mode, so reopening focuses the
-      // existing tab; the label stays the short basename.
-      name: tree.isMain
-        ? `${file.path} (${modeLabel})`
-        : `${treeName} · ${file.path} (${modeLabel})`,
+      name: JSON.stringify([tree.path, file.mode, file.path]),
       label: file.path.split("/").at(-1) ?? file.path,
-      detail: `${file.path} (${modeLabel})`,
+      detail: `${checkout} · ${file.path} (${label})`,
       projectId,
       source: {
         type: "local",
         worktreePath: tree.path,
         filePath: file.path,
-        mode,
+        mode: file.mode,
+        previousPath: file.previousPath,
+        baseRef: tree.baseRef,
       },
-    };
+    });
   };
-
-  const onlyMain = overview.worktrees.length === 1;
   return (
-    <div className="flex flex-col gap-0.5">
-      {overview.worktrees.map((tree) => (
-        <div key={tree.path} className="flex flex-col gap-0.5">
-          {/* The lone main worktree needs no header — it IS the project. */}
-          {!(tree.isMain && onlyMain) && (
-            <div className="flex h-7 min-w-0 items-center gap-2 px-2 text-[13px] text-fg-muted">
-              <GitBranch className="size-3.5 shrink-0 text-fg-faint" />
-              <span className="truncate">{tree.branch ?? "detached"}</span>
-              <span className="ml-auto shrink-0 text-[11px] text-fg-faint">
-                {tree.path.split("/").at(-1)}
-              </span>
+    <div className="flex flex-col gap-0.5" data-worktree-path={tree.path}>
+      <h4>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={contentId}
+          onClick={() => setOpen((value) => !value)}
+          title={tree.path}
+          className="flex h-7 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-left text-[13px] text-fg-muted hover:bg-bg-overlay/60"
+        >
+          <ChevronRight
+            className={`size-3 shrink-0 transition-transform duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${open ? "rotate-90" : ""}`}
+          />
+          <GitBranch className="size-3.5 shrink-0 text-fg-faint" />
+          <span className="min-w-0 truncate">
+            {tree.branch ?? "Detached HEAD"}
+          </span>
+          {tree.isCurrent && (
+            <span className="text-[10px] text-fg-faint">Current</span>
+          )}
+          <span className="ml-auto text-[11px] text-fg-faint">{count}</span>
+        </button>
+      </h4>
+      <div id={contentId} className="pl-3">
+        <Collapsible open={open}>
+          <p
+            className="truncate px-2 text-[10px] text-fg-faint"
+            title={tree.path}
+          >
+            {tree.path.split("/").at(-1) ?? tree.path}
+          </p>
+          {tree.locked && (
+            <p className="px-2 text-xs text-fg-faint">Locked: {tree.locked}</p>
+          )}
+          {tree.error && (
+            <p role="alert" className="break-words px-2 text-xs text-danger">
+              {tree.error}
+            </p>
+          )}
+          {GROUPS.map((group) => {
+            const files = tree.changes.filter(
+              (file) => file.mode === group.mode,
+            );
+            return (
+              files.length > 0 && (
+                <div key={group.mode} data-change-group={group.mode}>
+                  <h5 className="px-2 pt-1 text-[11px] text-fg-faint">
+                    {group.label} <span>{files.length}</span>
+                  </h5>
+                  <ChangeTree files={files} onOpen={openFile} />
+                </div>
+              )
+            );
+          })}
+          {tree.branchChanges.length > 0 && (
+            <div data-change-group="branch">
+              <h5 className="px-2 pt-1 text-[11px] text-fg-faint">
+                Committed vs {tree.baseLabel}
+              </h5>
+              <ChangeTree files={tree.branchChanges} onOpen={openFile} />
             </div>
           )}
-          <ChangeTree
-            files={tree.changes}
-            onOpen={(file) => onOpenDiff(diffTab(tree, file, "uncommitted"))}
-          />
-          {(tree.vsMain?.length ?? 0) > 0 && (
-            <>
-              <p className="px-2 pt-1 text-[11px] text-fg-faint">vs main</p>
-              <ChangeTree
-                files={tree.vsMain ?? []}
-                onOpen={(file) => onOpenDiff(diffTab(tree, file, "vs-main"))}
-              />
-            </>
+          {tree.comparisonError && (
+            <p role="alert" className="break-words px-2 text-xs text-danger">
+              Could not compare branch: {tree.comparisonError}
+            </p>
           )}
-        </div>
-      ))}
+          {!count && !tree.error && !tree.comparisonError && (
+            <p className="px-2 py-1 text-xs text-fg-faint">No changes.</p>
+          )}
+        </Collapsible>
+      </div>
     </div>
   );
 }
@@ -230,26 +329,24 @@ function DirNode({
         />
         <span className="truncate">{dir.name}/</span>
       </button>
-      {open && (
-        <>
-          {dir.dirs.map((child) => (
-            <DirNode
-              key={child.name}
-              dir={child}
-              depth={depth + 1}
-              onOpen={onOpen}
-            />
-          ))}
-          {dir.files.map((file) => (
-            <FileRow
-              key={file.path}
-              file={file}
-              depth={depth + 1}
-              onOpen={onOpen}
-            />
-          ))}
-        </>
-      )}
+      <Collapsible open={open}>
+        {dir.dirs.map((child) => (
+          <DirNode
+            key={child.name}
+            dir={child}
+            depth={depth + 1}
+            onOpen={onOpen}
+          />
+        ))}
+        {dir.files.map((file) => (
+          <FileRow
+            key={file.path}
+            file={file}
+            depth={depth + 1}
+            onOpen={onOpen}
+          />
+        ))}
+      </Collapsible>
     </div>
   );
 }
@@ -270,7 +367,9 @@ function FileRow({
     <button
       type="button"
       onClick={() => onOpen(file)}
-      title={file.path}
+      title={
+        file.previousPath ? `${file.previousPath} → ${file.path}` : file.path
+      }
       style={{ paddingLeft: `${8 + depth * 12 + (depth > 0 ? 16 : 0)}px` }}
       className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md pr-2 text-left font-mono text-xs transition-colors duration-150 hover:bg-bg-overlay/60"
     >

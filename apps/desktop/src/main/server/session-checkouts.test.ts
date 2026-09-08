@@ -355,12 +355,32 @@ describe("SessionCheckouts", () => {
     });
   });
 
-  it("names and checkpoints a detached external worktree for review", async () => {
+  it("requires an explicit commit before naming a detached external worktree for review", async () => {
     const external = path.join(tmpDir, "detached-external");
     await git(rootPath, ["worktree", "add", "--detach", external]);
     await checkouts.adopt({ projectId, sessionId, path: external });
     await fs.writeFile(path.join(external, "review.txt"), "ready\n");
 
+    await expect(
+      checkouts.preparePullRequest({
+        projectId,
+        sessionId,
+        message: "Prepare review",
+      }),
+    ).rejects.toThrow("Record your changes");
+    expect((await git(external, ["status", "--porcelain"])).trim()).toBe(
+      "?? review.txt",
+    );
+    await git(external, ["add", "review.txt"]);
+    await git(external, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "Explicit review",
+    ]);
     const prepared = await checkouts.preparePullRequest({
       projectId,
       sessionId,

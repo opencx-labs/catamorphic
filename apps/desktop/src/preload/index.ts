@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
 import type { DesktopUpdateState } from "../shared/update.js";
 
 export interface ServerInfo {
@@ -344,8 +345,11 @@ const api = {
     ipcRenderer.invoke("catamorphic:remote-status", projectId),
   remoteSync: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:remote-sync", projectId),
-  remoteShip: (projectId: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:remote-ship", projectId),
+  remoteShip: (input: {
+    projectId: string;
+    paths: string[];
+    resolveConflicts?: string[];
+  }): Promise<unknown> => ipcRenderer.invoke("catamorphic:remote-ship", input),
   remoteHistory: (input: unknown): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:remote-history", input),
   remoteReadVersion: (input: unknown): Promise<unknown> =>
@@ -761,23 +765,14 @@ const api = {
   },
 
   // --- git + pull requests (dev surfaces) ---
+  gitRecord: (input: GitRecordInput): Promise<string> =>
+    ipcRenderer.invoke("catamorphic:git-record", input),
   gitOverview: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:git-overview", projectId),
   sessionCheckouts: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:session-checkouts", projectId),
-  gitFileDiff: (
-    projectId: string,
-    worktreePath: string,
-    filePath: string,
-    mode: "uncommitted" | "vs-main",
-  ): Promise<unknown> =>
-    ipcRenderer.invoke(
-      "catamorphic:git-file-diff",
-      projectId,
-      worktreePath,
-      filePath,
-      mode,
-    ),
+  gitFileDiff: (input: GitDiffInput) =>
+    ipcRenderer.invoke("catamorphic:git-file-diff", input),
   prList: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:pr-list", projectId),
   prFiles: (projectId: string, number: number): Promise<unknown> =>

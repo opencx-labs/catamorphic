@@ -1,5 +1,7 @@
 import nodeFs from "node:fs";
 import git from "isomorphic-git";
+import { nativeGit } from "./native-git.js";
+import { NativeProjectRepo } from "./native-project-repo.js";
 import { fetchFromRemote, pushToRemote } from "./network.js";
 import type { GitCredentials, ProjectRepo } from "./types.js";
 
@@ -50,6 +52,79 @@ export async function syncWithNetworkRemote(opts: {
   const dir = dev.repoPath;
 
   const currentBranch = await dev.currentBranch();
+  if (dev instanceof NativeProjectRepo) {
+    if (currentBranch === "HEAD")
+      return { status: "no-op", localSha: null, remoteSha: null };
+    const localSha = await dev.resolveRef();
+    const auth = opts.credentials
+      ? { ...opts.credentials, url: opts.url }
+      : undefined;
+    const target =
+      (
+        await nativeGit(dir, [
+          "config",
+          "--get",
+          `branch.${currentBranch}.merge`,
+        ]).catch(() => "")
+      )
+        .trim()
+        .replace(/^refs\/heads\//, "") || currentBranch;
+    const remote = (
+      await nativeGit(
+        dir,
+        ["ls-remote", opts.url, `refs/heads/${target}`],
+        auth,
+      )
+    ).trim();
+    const remoteSha = remote.split(/\s+/)[0] || null;
+    const push = () =>
+      pushToRemote({
+        repoPath: dir,
+        native: true,
+        url: opts.url,
+        credentials: opts.credentials,
+        ref: currentBranch,
+        remoteBranch: target,
+      });
+    if (!remoteSha) {
+      await push();
+      return { status: "pushed", localSha, remoteSha: localSha };
+    }
+    if (remoteSha === localSha)
+      return { status: "up-to-date", localSha, remoteSha };
+    await nativeGit(dir, ["fetch", opts.url, `refs/heads/${target}`], auth);
+    if (
+      await nativeGit(dir, [
+        "merge-base",
+        "--is-ancestor",
+        remoteSha,
+        localSha,
+      ]).then(
+        () => true,
+        () => false,
+      )
+    ) {
+      await push();
+      return { status: "pushed", localSha, remoteSha: localSha };
+    }
+    if ((await dev.status()).dirty)
+      return { status: "deferred", localSha, remoteSha };
+    if (
+      await nativeGit(dir, [
+        "merge-base",
+        "--is-ancestor",
+        localSha,
+        remoteSha,
+      ]).then(
+        () => true,
+        () => false,
+      )
+    ) {
+      await nativeGit(dir, ["merge", "--ff-only", remoteSha]);
+      return { status: "pulled", localSha: remoteSha, remoteSha };
+    }
+    return { status: "diverged", localSha, remoteSha };
+  }
   if (currentBranch !== "main") {
     return { status: "no-op", localSha: null, remoteSha: null };
   }

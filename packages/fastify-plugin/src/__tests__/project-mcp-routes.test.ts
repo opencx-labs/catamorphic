@@ -401,6 +401,7 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
       "lookupWeather",
       "daily_digest",
       "catamorphic_poll_run",
+      "documents_storage",
       "documents_list",
       "documents_read",
       "documents_search",

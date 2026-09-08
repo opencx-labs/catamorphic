@@ -1,3 +1,4 @@
+export { CheckoutRemoteBackend } from "./checkout-remote-backend.js";
 export { type FileReadOptions, readFileSnapshot } from "./file-reads.js";
 export { FsBackend } from "./fs-backend.js";
 export { FsOriginRepo, FsRemoteBackend } from "./fs-remote-backend.js";
@@ -9,6 +10,13 @@ export {
 } from "./git-sync.js";
 export { InMemoryObjectStore } from "./in-memory-object-store.js";
 export { migrateWorkflowToProject } from "./migrate-workflow.js";
+export {
+  discoverCheckout,
+  INTERNAL_REMOTE_PREFIX,
+  type LocalCheckout,
+  nativeGit,
+} from "./native-git.js";
+export { NativeProjectRepo } from "./native-project-repo.js";
 export {
   type CloneFromRemoteOptions,
   cloneFromRemote,

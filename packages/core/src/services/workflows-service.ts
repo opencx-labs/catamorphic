@@ -17,7 +17,7 @@ import {
   ProjectNotFoundError,
   type ProjectsService,
 } from "./projects-service.js";
-import { WORKFLOW_READ_OPTIONS } from "./workflow-source-files.js";
+import { workflowSourceFiles } from "./workflow-source-files.js";
 
 export interface WorkflowSummary {
   name: string;
@@ -123,9 +123,7 @@ export class WorkflowsService {
   }): Promise<DeclaredSecret[]> {
     await this.requireProject(args.identity, args.projectId);
     return this.withDev(args.identity, args.projectId, async (repo) => {
-      const files = args.ref
-        ? await repo.readAllFilesAtRef(args.ref, WORKFLOW_READ_OPTIONS)
-        : await repo.readAllFiles(WORKFLOW_READ_OPTIONS);
+      const files = await workflowSourceFiles(repo, args.ref);
       const key = `${args.projectId}:${hashParseableSources(files)}`;
       const hit = this.declaredSecretsCache.get(key);
       if (hit) return hit;
@@ -163,11 +161,7 @@ export class WorkflowsService {
   ): Promise<T> {
     if (isBuilder(args.identity, args.projectId)) {
       return this.withDev(args.identity, args.projectId, async (repo) =>
-        read(
-          args.ref
-            ? await repo.readAllFilesAtRef(args.ref, WORKFLOW_READ_OPTIONS)
-            : await repo.readAllFiles(WORKFLOW_READ_OPTIONS),
-        ),
+        read(await workflowSourceFiles(repo, args.ref)),
       );
     }
     // A member sees the deployed program, never another user's draft or an
@@ -179,9 +173,8 @@ export class WorkflowsService {
       args.identity.tenantId,
       args.projectId,
       async (repo, ref) =>
-        read(
-          ref ? await repo.readAllFilesAtRef(ref, WORKFLOW_READ_OPTIONS) : {},
-        ),
+        read(ref ? await workflowSourceFiles(repo, ref) : {}),
+      { publishedOnly: true },
     );
   }
 

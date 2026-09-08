@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import type { GitDiffMode } from "../../shared/git.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { AnimatedTitle } from "./animated-title";
@@ -125,7 +126,9 @@ export type DiffSource =
       type: "local";
       worktreePath: string;
       filePath: string;
-      mode: "uncommitted" | "vs-main";
+      mode: GitDiffMode;
+      previousPath?: string;
+      baseRef?: string;
     }
   | {
       type: "pr";

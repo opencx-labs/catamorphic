@@ -6,6 +6,7 @@ import {
   type PullRequestSummary,
   type SidebarMenuEntry,
 } from "../lib/desktop-api.js";
+import { Collapsible } from "./collapsible.js";
 import { ShortcutHint } from "./shortcut-hint.js";
 import { MenuPortal } from "./sidebar-item-row.js";
 import type { WorkspaceTab } from "./workspace-tabs.js";
@@ -45,7 +46,8 @@ export function PrsNav({
   onEmptyChange?: (empty: boolean) => void;
 }) {
   const [prs, setPrs] = useState<PullRequestSummary[] | null>(null);
-  const isEmpty = !prs || prs.length === 0;
+  const [error, setError] = useState<string | null>(null);
+  const isEmpty = !error && (!prs || prs.length === 0);
   useEffect(() => {
     onEmptyChange?.(isEmpty);
   }, [isEmpty, onEmptyChange]);
@@ -53,21 +55,47 @@ export function PrsNav({
   useEffect(() => {
     let cancelled = false;
     setPrs(null);
-    const load = () =>
+    setError(null);
+    let revision = 0;
+    const load = () => {
+      const request = ++revision;
       void desktopApi
         .prList(projectId)
         .then((next) => {
-          if (!cancelled) setPrs(next);
+          if (!cancelled && request === revision) {
+            setPrs(next);
+            setError(null);
+          }
         })
-        .catch(() => {});
+        .catch((reason) => {
+          if (!cancelled && request === revision)
+            setError(
+              reason instanceof Error
+                ? reason.message
+                : "Could not load pull requests.",
+            );
+        });
+    };
     load();
     const timer = window.setInterval(load, REFRESH_MS);
+    window.addEventListener("focus", load);
+    const unsubscribe = desktopApi.onGitChanged((change) => {
+      if (change.projectId === projectId) load();
+    });
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      window.removeEventListener("focus", load);
+      unsubscribe();
     };
   }, [projectId]);
 
+  if (error)
+    return (
+      <p role="alert" className="break-words px-2 py-1 text-xs text-danger">
+        {error}
+      </p>
+    );
   if (!prs) return null;
   if (prs.length === 0) {
     return (
@@ -78,7 +106,7 @@ export function PrsNav({
     <ul className="flex flex-col gap-0.5">
       {prs.map((pr) => (
         <PrRow
-          key={pr.number}
+          key={`${projectId}:${pr.number}`}
           pr={pr}
           projectId={projectId}
           onOpenDiff={onOpenDiff}
@@ -101,8 +129,8 @@ function PrRow({
   onOpenUrl: (url: string, mode: "tab" | "replace") => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  // Fetched once per mount, on first expand; a PR's file list changes
-  // far slower than the expand/collapse toggle.
+  // Refresh patches when the PR changes or its disclosure reopens.
+  const [fileError, setFileError] = useState<string | null>(null);
   const [files, setFiles] = useState<PullRequestFile[] | null>(null);
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -141,15 +169,30 @@ function PrRow({
     };
   }, [menuOpen]);
 
-  const toggle = () => {
-    setExpanded((value) => !value);
-    if (files === null) {
-      void desktopApi
-        .prFiles(projectId, pr.number)
-        .then(setFiles)
-        .catch(() => setFiles([]));
-    }
-  };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: A PR update invalidates its cached file patches.
+  useEffect(() => {
+    if (!expanded) return;
+    let cancelled = false;
+    setFileError(null);
+    setFiles(null);
+    void desktopApi
+      .prFiles(projectId, pr.number)
+      .then((next) => {
+        if (!cancelled) setFiles(next);
+      })
+      .catch((reason) => {
+        if (!cancelled)
+          setFileError(
+            reason instanceof Error
+              ? reason.message
+              : "Could not load changed files.",
+          );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [expanded, projectId, pr.number, pr.updatedAt]);
+  const toggle = () => setExpanded((value) => !value);
 
   const fileDiffTab = (file: PullRequestFile): WorkspaceTab => ({
     kind: "diff",
@@ -231,9 +274,13 @@ function PrRow({
           />
         )}
       </div>
-      {expanded && (
+      <Collapsible open={expanded}>
         <ul className="ml-5 flex flex-col gap-0.5">
-          {files === null ? (
+          {fileError ? (
+            <li role="alert" className="px-2 py-1 text-xs text-danger">
+              {fileError}
+            </li>
+          ) : files === null ? (
             <li className="px-2 py-1 text-xs text-fg-faint">Loading…</li>
           ) : files.length === 0 ? (
             <li className="px-2 py-1 text-xs text-fg-faint">No files.</li>
@@ -270,7 +317,7 @@ function PrRow({
             })
           )}
         </ul>
-      )}
+      </Collapsible>
     </li>
   );
 }

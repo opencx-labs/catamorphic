@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   fetchRemote,
+  NativeProjectRepo,
   type ProjectManager,
   type ProjectRepo,
 } from "@catamorphic/git";
@@ -44,7 +47,24 @@ export async function withProgram<T>(
   tenantId: string,
   projectId: string,
   fn: (repo: ProjectRepo, ref: string | null) => Promise<T>,
+  options?: { workingTree?: boolean; publishedOnly?: boolean },
 ): Promise<T> {
+  if (await projectManager.localPath({ tenantId, projectId })) {
+    const repo = await projectManager.open(tenantId, projectId);
+    try {
+      if (options?.workingTree) return await fn(repo, null);
+      const ref = await repo
+        .resolveRef("refs/catamorphic/published/main")
+        .catch(() =>
+          options?.publishedOnly
+            ? null
+            : repo.resolveRef("HEAD").catch(() => null),
+        );
+      return await fn(repo, ref);
+    } finally {
+      await repo.dispose();
+    }
+  }
   const remote = projectManager.remoteBackend;
   const repo = remote
     ? await projectManager.openDev(tenantId, projectId, PROGRAM_READER)
@@ -69,7 +89,7 @@ export async function withProgram<T>(
       remoteBranch: "main",
     });
     const sha = await repo
-      .resolveRef("refs/remotes/origin/main")
+      .resolveRef("refs/catamorphic/published/main")
       .catch(() => null);
     for (const [cachedKey, value] of recentFetches) {
       if (Date.now() - value.at >= FETCH_TTL_MS || recentFetches.size >= 256)
@@ -95,7 +115,7 @@ export async function listProgramFiles(
 
 /**
  * File paths + content digests of the program under a prefix: git blob
- * ids at a ref, a sha-256 of the working-tree file otherwise. Digests let
+ * ids at a ref, a size/mtime/ctime marker of the local working file otherwise. Digests let
  * a syncing client skip unchanged files without fetching them.
  */
 export async function listProgramBlobs(
@@ -111,14 +131,27 @@ export async function listProgramBlobs(
     }));
   }
   const files = await listProgramFiles(repo, ref, prefix);
-  return Promise.all(
-    files.map(async (file) => ({
-      path: file,
-      digest: `sha256:${createHash("sha256")
-        .update(await repo.readFile(file))
-        .digest("hex")}`,
-    })),
-  );
+  const entries: Array<{ path: string; digest: string }> = [];
+  for (const file of files) {
+    if (!(repo instanceof NativeProjectRepo)) {
+      const bytes = await repo.readFileBytes(file);
+      if (bytes)
+        entries.push({
+          path: file,
+          digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+        });
+      continue;
+    }
+    const stat = await fs
+      .lstat(path.join(repo.repoPath, file))
+      .catch(() => null);
+    if (stat)
+      entries.push({
+        path: file,
+        digest: `stat:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`,
+      });
+  }
+  return entries;
 }
 
 /** Contents of the program's files under a prefix. */
@@ -133,10 +166,18 @@ export async function readProgramFiles(
       : repo.readAllFilesAtRef(ref);
   }
   const files = await listProgramFiles(repo, ref, prefix);
-  const entries = await Promise.all(
-    files.map(async (file) => [file, await repo.readFile(file)] as const),
-  );
-  return Object.fromEntries(entries);
+  const result: Record<string, string> = {};
+  for (const file of files) {
+    const bytes = await repo.readFileBytes(file);
+    if (!bytes || bytes.byteLength > 2 * 1024 * 1024 || bytes.includes(0))
+      continue;
+    try {
+      result[file] = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      /* Binary document. */
+    }
+  }
+  return result;
 }
 
 /** One program file's raw bytes (binaries intact), or null when absent. */

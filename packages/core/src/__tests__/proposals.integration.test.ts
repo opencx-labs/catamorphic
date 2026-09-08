@@ -132,7 +132,7 @@ describeIf("ProposalsService (ADR 0055)", () => {
         remoteBranch: result.branch,
       });
       const files = await reviewer.readFilesAtRef(
-        `refs/remotes/origin/${result.branch}`,
+        `refs/catamorphic/published/${result.branch}`,
         { prefix: "docs/" },
       );
       expect(files["docs/handbook.md"]).toContain("3 days");
@@ -145,13 +145,16 @@ describeIf("ProposalsService (ADR 0055)", () => {
         projectId,
         remoteBranch: "main",
       });
-      const main = await reviewer.readFilesAtRef("refs/remotes/origin/main", {
-        prefix: "docs/",
-      });
+      const main = await reviewer.readFilesAtRef(
+        "refs/catamorphic/published/main",
+        {
+          prefix: "docs/",
+        },
+      );
       expect(main["docs/handbook.md"]).toContain("5 days");
       expect(main["docs/faq.md"]).toBeUndefined();
       const log = await reviewer.log({
-        ref: `refs/remotes/origin/${result.branch}`,
+        ref: `refs/catamorphic/published/${result.branch}`,
         maxCount: 1,
       });
       expect(log[0]?.author.name).toBe("alice");

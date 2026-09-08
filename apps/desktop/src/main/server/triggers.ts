@@ -102,16 +102,17 @@ export class DesktopTriggers {
       .forUser({ externalUserId: DESKTOP_USER_ID });
   }
 
-  onAgentTurnSettled(event: AgentTurnSettledEvent): void {
+  onAgentTurnSettled(event: AgentTurnSettledEvent, refreshTypes = true): void {
     void this.fireChatTurn(event).catch((error) => {
       warn("chat.turn-completed", error);
     });
     // The turn may have created or edited workflows; keep the generated
     // trigger types in the project fresh for the next turn. No-op when
     // nothing drifted.
-    void this.scoped.triggers
-      .syncTypes({ projectId: event.projectId })
-      .catch((error) => warn("sync-types", error));
+    if (refreshTypes)
+      void this.scoped.triggers
+        .syncTypes({ projectId: event.projectId })
+        .catch((error) => warn("sync-types", error));
   }
 
   onTerminalIdle(
@@ -129,14 +130,18 @@ export class DesktopTriggers {
   }
 
   /** Seed/refresh the generated trigger types across existing projects. */
-  async syncAllProjectTypes(): Promise<void> {
+  async syncAllProjectTypes(
+    shouldSync: (projectId: string) => boolean = () => true,
+  ): Promise<void> {
     const { items } = await this.scoped.projects.list({ limit: 100 });
     await Promise.allSettled(
-      items.map((project) =>
-        this.scoped.triggers
-          .syncTypes({ projectId: project.id })
-          .catch((error) => warn(`sync-types ${project.name}`, error)),
-      ),
+      items
+        .filter((project) => shouldSync(project.id))
+        .map((project) =>
+          this.scoped.triggers
+            .syncTypes({ projectId: project.id })
+            .catch((error) => warn(`sync-types ${project.name}`, error)),
+        ),
     );
   }
 

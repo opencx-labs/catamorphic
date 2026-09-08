@@ -82,7 +82,7 @@ export class DeploymentService {
         projectId,
         remoteBranch: REMOTE_BRANCH,
       }).catch(() => null);
-      const ref = opts?.ref ?? `refs/remotes/origin/${REMOTE_BRANCH}`;
+      const ref = opts?.ref ?? `refs/catamorphic/published/${REMOTE_BRANCH}`;
       return repo.log({ ref, maxCount: opts?.maxCount ?? 50 });
     });
   }
@@ -174,6 +174,14 @@ export class DeploymentService {
     opts?: { message?: string; files?: Record<string, string> },
   ) {
     return this.withDev(tenantId, projectId, externalUserId, async (repo) => {
+      if (
+        opts?.files &&
+        (await this.projectManager.localPath({ tenantId, projectId }))
+      ) {
+        throw new Error(
+          "Save and record these changes in Git before publishing this local project.",
+        );
+      }
       if (opts?.files) {
         for (const [path, content] of Object.entries(opts.files)) {
           await repo.writeFile(path, content);
@@ -182,6 +190,35 @@ export class DeploymentService {
       const status = await repo.status();
       const author = authorFor(externalUserId);
 
+      if (await this.projectManager.localPath({ tenantId, projectId })) {
+        if (status.dirty)
+          throw new Error(
+            "Record the changes you want to publish in Git first. Publishing keeps your branch and pending work unchanged.",
+          );
+        if (!status.baseCommit)
+          return {
+            status: "nothing-to-deploy" as const,
+            commitSha: null,
+            remoteSha: null,
+            conflicts: [],
+          };
+        const publishedSha = status.baseCommit;
+        const remote = requireRemote(this.projectManager);
+        await remote.withOrigin(tenantId, projectId, async (origin) => {
+          await origin.updateRef({
+            ref: "refs/heads/main",
+            sha: publishedSha,
+            expected: await origin.resolveRef("refs/heads/main"),
+          });
+        });
+        forgetProgramFetch(this.projectManager, tenantId, projectId);
+        return {
+          status: "deployed" as const,
+          commitSha: status.baseCommit,
+          remoteSha: status.baseCommit,
+          conflicts: [],
+        };
+      }
       const currentBranch = status.branch;
       const isMainBranch = currentBranch === "main";
 
@@ -209,7 +246,7 @@ export class DeploymentService {
         remoteBranch: REMOTE_BRANCH,
       }).catch(() => null);
       const remoteSha = await repo
-        .resolveRef(`refs/remotes/origin/${REMOTE_BRANCH}`)
+        .resolveRef(`refs/catamorphic/published/${REMOTE_BRANCH}`)
         .catch(() => null);
 
       if (!commitSha) {
@@ -297,6 +334,11 @@ export class DeploymentService {
     opts?: { files?: Record<string, string> },
   ) {
     return this.withDev(tenantId, projectId, externalUserId, async (repo) => {
+      if (await this.projectManager.localPath({ tenantId, projectId })) {
+        throw new Error(
+          "This project uses its existing Git remote. Use Git sync to download changes; its published snapshot is already available locally.",
+        );
+      }
       if (opts?.files) {
         for (const [path, content] of Object.entries(opts.files)) {
           await repo.writeFile(path, content);
@@ -322,7 +364,10 @@ export class DeploymentService {
     return this.withDev(tenantId, projectId, externalUserId, async (repo) => {
       await repo.resetWorkingTree();
       const branch = await repo.currentBranch();
-      if (branch !== "main") {
+      if (
+        branch !== "main" &&
+        !(await this.projectManager.localPath({ tenantId, projectId }))
+      ) {
         await repo.checkout("main");
         await repo.deleteBranch(branch).catch(() => {});
       }

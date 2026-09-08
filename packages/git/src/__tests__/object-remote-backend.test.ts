@@ -251,7 +251,9 @@ describe("git-sync over ObjectRemoteBackend", () => {
         projectId: PROJECT,
       });
       expect(result.sha).toBe(bSha);
-      expect(await repoA.resolveRef("refs/remotes/origin/main")).toBe(bSha);
+      expect(await repoA.resolveRef("refs/catamorphic/published/main")).toBe(
+        bSha,
+      );
     } finally {
       await repoB.dispose();
     }

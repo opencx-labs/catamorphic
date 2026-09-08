@@ -16,6 +16,7 @@ import { workflowKeys } from "../workflow-keys.js";
 export interface WriteProjectFileInput {
   path: string;
   content: string;
+  expectedContent?: string;
   commitMessage?: string;
 }
 
@@ -54,6 +55,7 @@ export function useWriteProjectFile(
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             content: input.content,
+            expectedContent: input.expectedContent,
             commitMessage: input.commitMessage,
           }),
         });

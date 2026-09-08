@@ -7,7 +7,9 @@ manifests before reading contents. Working-copy snapshots respect hierarchical
 Git ignores, retain tracked files, and can exclude nested repositories.
 
 Bulk project snapshots read eight files at a time. Defaults are 8 MiB per file
-and 64 MiB per snapshot, configurable through `FileReadOptions`. Oversized reads
+and 64 MiB per snapshot, configurable through `FileReadOptions`. Native checkout
+text snapshots keep their existing selection of UTF-8 files up to 2 MiB; binary
+files remain available through the byte APIs. Oversized reads
 fail explicitly; files are never silently truncated. Historical Git reads still
 depend on the Git backend to materialize an individual blob before the snapshot
 budget can be checked. Diff readers compare object IDs before reading contents.

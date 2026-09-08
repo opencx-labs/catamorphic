@@ -3,10 +3,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { FsBackend } from "./fs-backend.js";
 import { push } from "./git-sync.js";
+import { discoverCheckout } from "./native-git.js";
+import { NativeProjectRepo } from "./native-project-repo.js";
 import { cloneFromRemote } from "./network.js";
 import { ProjectRepoImpl } from "./project-repo.js";
 import type {
   GitCredentials,
+  ProjectPathResolver,
   ProjectRepo,
   RemoteBackend,
   StorageBackend,
@@ -51,6 +54,7 @@ export class ProjectManager {
   constructor(
     private readonly storage: StorageBackend,
     private readonly remote?: RemoteBackend,
+    private readonly localRoots?: ProjectPathResolver,
   ) {}
 
   async open(
@@ -63,7 +67,9 @@ export class ProjectManager {
       projectId,
       externalUserId,
     );
-    return new ProjectRepoImpl(projectId, repoPath, release);
+    return (await this.localPath({ tenantId, projectId }))
+      ? new NativeProjectRepo(projectId, repoPath, release)
+      : new ProjectRepoImpl(projectId, repoPath, release);
   }
 
   /**
@@ -197,6 +203,13 @@ export class ProjectManager {
     }
   }
 
+  async localPath(input: {
+    tenantId: string;
+    projectId: string;
+  }): Promise<string | null> {
+    return (await this.localRoots?.(input.tenantId, input.projectId)) ?? null;
+  }
+
   async create(
     tenantId: string,
     projectId: string,
@@ -207,9 +220,8 @@ export class ProjectManager {
       /** Explicit directory for the working copy (user-visible folder). */
       rootPath?: string;
       /**
-       * Adopt the folder's existing contents instead of scaffolding a blank
-       * workspace. Existing files are never overwritten; a git repo is
-       * initialized only when the folder is not already one.
+       * Attach an existing Git checkout without writing files or history.
+       * The host handles explicit initialization of folders without Git.
        */
       importExisting?: boolean;
       /**
@@ -225,21 +237,36 @@ export class ProjectManager {
       };
     },
   ): Promise<ProjectRepo> {
+    if (opts?.importExisting) {
+      if (!opts.rootPath)
+        throw new Error("Opening a repository requires its folder path");
+      const checkout = await discoverCheckout({ path: opts.rootPath });
+      const local = await this.localPath({ tenantId, projectId });
+      if (!local || (await fs.realpath(local)) !== checkout.path)
+        throw new Error(
+          "Register the checkout's canonical folder with localCheckouts before importing it",
+        );
+      return new NativeProjectRepo(projectId, checkout.path, async () => {});
+    }
     const repoPath = await this.storage.initProject(tenantId, projectId, {
       externalUserId: opts?.externalUserId,
       rootPath: opts?.rootPath,
     });
     const projectName = opts?.name ?? "my-project";
+    const local = await this.localPath({ tenantId, projectId });
 
     if (opts?.cloneFrom) {
       await cloneFromRemote({
         repoPath,
+        native: Boolean(local),
         url: opts.cloneFrom.url,
         credentials: opts.cloneFrom.credentials,
         branch: opts.cloneFrom.branch,
       });
-      const repo = new ProjectRepoImpl(projectId, repoPath, async () => {});
-      if (this.remote) {
+      const repo = local
+        ? new NativeProjectRepo(projectId, repoPath, async () => {})
+        : new ProjectRepoImpl(projectId, repoPath, async () => {});
+      if (this.remote && !local) {
         await this.remote.initRemote(tenantId, projectId);
         await push({
           dev: repo,
@@ -297,37 +324,23 @@ export class ProjectManager {
     if (opts?.initialFiles) {
       for (const [filePath, content] of Object.entries(opts.initialFiles)) {
         const fullPath = path.join(repoPath, filePath);
-        if (opts.importExisting) {
-          const exists = await fs.access(fullPath).then(
-            () => true,
-            () => false,
-          );
-          if (exists) continue;
-        }
         await fs.mkdir(path.dirname(fullPath), { recursive: true });
         await fs.writeFile(fullPath, content);
       }
     }
 
     // Use the path initProject returned rather than re-acquiring: when the
-    // host maps this project to an explicit rootPath, its resolver may not
-    // know the id yet (hosts record the mapping after create returns).
-    const repo = new ProjectRepoImpl(projectId, repoPath, async () => {});
+    // host supplies an explicit rootPath, that path is the initialized checkout.
+    const repo = local
+      ? new NativeProjectRepo(projectId, repoPath, async () => {})
+      : new ProjectRepoImpl(projectId, repoPath, async () => {});
 
     const hasHead = await repo.resolveRef("HEAD").then(
       () => true,
       () => false,
     );
     if (!hasHead) {
-      await repo.commit(
-        opts?.importExisting ? "Import project" : "Initial commit",
-        SYSTEM_AUTHOR,
-      );
-    } else if (opts?.importExisting) {
-      const status = await repo.status();
-      if (status.dirty) {
-        await repo.commit("Import project into Catamorphic", SYSTEM_AUTHOR);
-      }
+      await repo.commit("Initial commit", SYSTEM_AUTHOR);
     }
 
     if (this.remote) {

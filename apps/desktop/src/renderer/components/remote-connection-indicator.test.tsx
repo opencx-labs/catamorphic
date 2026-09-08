@@ -59,7 +59,7 @@ describe("RemoteConnectionIndicator", () => {
     expect(desktopApi.remoteReconnect).toHaveBeenCalledWith("local-1");
   });
 
-  it("surfaces and ships pending files without starting a duplicate pull", async () => {
+  it("downloads updates without uploading private local files", async () => {
     const status: RemoteProjectStatus = {
       serverUrl: "https://brain.acme.dev/api",
       remoteProjectId: "remote-1",
@@ -103,10 +103,10 @@ describe("RemoteConnectionIndicator", () => {
       '[data-testid="remote-connection-status"]',
     );
     expect(button?.getAttribute("aria-label")).toContain(
-      "1 change waiting to sync",
+      "1 local change on this device",
     );
     await act(async () => button?.click());
-    expect(desktopApi.remoteShip).toHaveBeenCalledWith("local-1");
-    expect(desktopApi.remoteSync).not.toHaveBeenCalled();
+    expect(desktopApi.remoteShip).not.toHaveBeenCalled();
+    expect(desktopApi.remoteSync).toHaveBeenCalledWith("local-1");
   });
 });

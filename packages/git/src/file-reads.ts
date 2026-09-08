@@ -15,7 +15,7 @@ export async function readFileSnapshot({
   options = {},
 }: {
   paths: readonly string[];
-  read: (path: string, maxBytes: number) => Promise<string>;
+  read: (path: string, maxBytes: number) => Promise<string | null>;
   options?: FileReadOptions;
 }): Promise<Record<string, string>> {
   const selected = paths.filter((path) => options.filter?.(path) ?? true);
@@ -32,6 +32,7 @@ export async function readFileSnapshot({
     const batch = await Promise.allSettled(
       selected.slice(offset, offset + 8).map(async (path) => {
         const content = await read(path, maxFileBytes);
+        if (content === null) return;
         const bytes = Buffer.byteLength(content);
         if (bytes > maxFileBytes)
           throw new Error(

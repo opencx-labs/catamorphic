@@ -159,7 +159,7 @@ export class DevSandboxService {
     if (!status || status.dirty) return undefined;
     const head = await opts.repo.resolveRef("HEAD").catch(() => null);
     const remoteSha = await opts.repo
-      .resolveRef("refs/remotes/origin/main")
+      .resolveRef("refs/catamorphic/published/main")
       .catch(() => null);
     if (!head || head !== remoteSha) return undefined;
     return remoteBackend.getCloneSource(

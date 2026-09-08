@@ -300,6 +300,11 @@ describe("workflow authoring", { retry: 0 }, () => {
       await run(`return $('[data-testid="workflow-runs"]').innerText;`),
     ).toContain("published project version");
     await wait(
+      `return !!button('Record changes in Git') && !button('Record changes in Git').disabled;`,
+      "saved files available to record",
+    );
+    await run(`button('Record changes in Git').click(); return true;`);
+    await wait(
       `return !!button('Publish project version') && !button('Publish project version').disabled;`,
       "publishing available",
     );

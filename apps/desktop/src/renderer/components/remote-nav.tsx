@@ -41,6 +41,7 @@ export function RemoteNav({
   const [busy, setBusy] = useState<"sync" | "ship" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [membersOpen, setMembersOpen] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
 
   const refresh = useCallback(async () => {
     try {
@@ -51,6 +52,9 @@ export function RemoteNav({
   }, [projectId]);
 
   useEffect(() => {
+    setSelected([]);
+    setMessage(null);
+    setStatus(null);
     void refresh();
     const timer = setInterval(() => void refresh(), REFRESH_MS);
     const unsubscribe = desktopApi.onGitChanged((change) => {
@@ -76,8 +80,17 @@ export function RemoteNav({
       const report =
         verb === "sync"
           ? await desktopApi.remoteSync(projectId)
-          : await desktopApi.remoteShip(projectId);
+          : await desktopApi.remoteShip({
+              projectId,
+              paths: selected,
+              resolveConflicts: selected.filter((path) =>
+                status.local.conflicts?.some(
+                  (conflict) => conflict.path === path,
+                ),
+              ),
+            });
       setMessage(describe(verb, report));
+      setSelected([]);
     } catch (cause) {
       setMessage(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -134,19 +147,19 @@ export function RemoteNav({
             className="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-border text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Download className="size-3.5" />
-            Sync
+            Download updates
           </PendingButton>
           <PendingButton
             type="button"
             pending={busy === "ship"}
-            disabled={busy !== null || localCount === 0}
-            data-disabled-reason="No local changes to send, or a server action is in progress"
+            disabled={busy !== null || selected.length === 0}
+            data-disabled-reason="Select files to upload, or wait for the server action to finish"
             onClick={() => void run("ship")}
             data-testid="remote-ship"
             className="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md bg-accent text-xs font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Upload className="size-3.5" />
-            Ship{localCount > 0 ? ` ${localCount}` : ""}
+            Upload{selected.length > 0 ? ` ${selected.length}` : ""}
           </PendingButton>
         </div>
         {canManageMembers && (
@@ -177,12 +190,26 @@ export function RemoteNav({
             )}
           </p>
         )}
+        <p className="text-xs text-fg-faint">
+          Files stay on this device until you select them for upload to {host}.
+        </p>
         {localCount > 0 && (
           <ul className="flex flex-col gap-0.5">
             {status.local.modified.map((path) => (
               <ChangeRow
                 key={path}
                 path={path}
+                selected={selected.includes(path)}
+                onSelect={() =>
+                  setSelected((current) =>
+                    current.includes(path)
+                      ? current.filter((entry) => entry !== path)
+                      : [...current, path],
+                  )
+                }
+                conflict={status.local.conflicts?.some(
+                  (entry) => entry.path === path,
+                )}
                 badge="M"
                 onOpen={() => onOpenFile(path)}
                 onHistory={() => onOpenHistory(path)}
@@ -195,6 +222,17 @@ export function RemoteNav({
               <ChangeRow
                 key={path}
                 path={path}
+                selected={selected.includes(path)}
+                onSelect={() =>
+                  setSelected((current) =>
+                    current.includes(path)
+                      ? current.filter((entry) => entry !== path)
+                      : [...current, path],
+                  )
+                }
+                conflict={status.local.conflicts?.some(
+                  (entry) => entry.path === path,
+                )}
                 badge="D"
                 onHistory={() => onOpenHistory(path)}
               />
@@ -204,8 +242,8 @@ export function RemoteNav({
         {status.local.programEdits.length > 0 && (
           <div className="flex items-center gap-2">
             <p className="min-w-0 flex-1 text-xs text-warning">
-              {status.local.programEdits.length} edited outside store/ won't
-              ship
+              {status.local.programEdits.length} project files need review
+              before sharing
               {canPropose ? "." : ". This server takes no proposals."}
             </p>
             {canPropose && (
@@ -236,8 +274,14 @@ function ChangeRow({
   onOpen,
   onHistory,
   onPublish,
+  selected,
+  onSelect,
+  conflict,
 }: {
   path: string;
+  selected: boolean;
+  onSelect: () => void;
+  conflict?: boolean;
   badge: "M" | "D";
   onOpen?: () => void;
   onHistory: () => void;
@@ -245,7 +289,25 @@ function ChangeRow({
 }) {
   const name = path.split("/").at(-1) ?? path;
   return (
-    <li className="group flex h-6 items-center gap-1.5 rounded-md pl-1 pr-0.5 text-xs hover:bg-bg-overlay">
+    <li className="group flex min-h-6 items-center gap-1.5 rounded-md pl-1 pr-0.5 text-xs hover:bg-bg-overlay">
+      <input
+        type="checkbox"
+        checked={selected}
+        onChange={onSelect}
+        aria-label={
+          conflict
+            ? `Replace the server version of ${name} with my version`
+            : `Upload ${name}`
+        }
+      />
+      {conflict && (
+        <span
+          className="text-warning"
+          title="Selecting this file replaces the server version with your local version"
+        >
+          Keep mine
+        </span>
+      )}
       <span
         className={`w-3 shrink-0 text-center font-mono text-[10px] ${
           badge === "M" ? "text-info" : "text-danger"
@@ -304,7 +366,7 @@ function describe(
   }
   const r = report as RemoteShipReport;
   const parts: string[] = [];
-  if (r.shipped.length) parts.push(`${r.shipped.length} shipped`);
+  if (r.shipped.length) parts.push(`${r.shipped.length} uploaded`);
   if (r.deleted.length) parts.push(`${r.deleted.length} deleted`);
   if (r.conflicts.length) {
     parts.push(
@@ -319,7 +381,7 @@ function describe(
       `${r.failed.length} refused: ${r.failed.map((f) => f.error).join("; ")}`,
     );
   }
-  return parts.length ? parts.join(", ") : "Nothing to ship";
+  return parts.length ? parts.join(", ") : "Nothing to upload";
 }
 
 function ago(iso: string): string {

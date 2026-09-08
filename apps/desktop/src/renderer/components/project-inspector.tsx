@@ -145,7 +145,8 @@ export function ProjectInspectorView({
     ]),
   );
   const changed = worktrees.reduce(
-    (count, worktree) => count + worktree.changes.length,
+    (count, worktree) =>
+      count + new Set(worktree.changes.map((file) => file.path)).size,
     0,
   );
   const prs = snapshot.prs ?? [];
@@ -233,15 +234,17 @@ export function ProjectInspectorView({
                 className="flex min-w-0 items-center gap-2 py-0.5"
               >
                 <span
-                  className={`size-1.5 shrink-0 rounded-full ${worktree.changes.length ? "bg-warning" : "bg-success"}`}
+                  className={`size-1.5 shrink-0 rounded-full ${worktree.error ? "bg-danger" : worktree.changes.length ? "bg-warning" : "bg-success"}`}
                 />
                 <span className="min-w-0 flex-1 truncate text-fg">
-                  {worktree.branch ?? (worktree.isMain ? "main" : "Detached")}
+                  {worktree.branch ?? "Detached HEAD"}
                 </span>
                 <span className="shrink-0 text-[10px] text-fg-faint">
-                  {worktree.changes.length
-                    ? `${worktree.changes.length} changed`
-                    : "Clean"}
+                  {new Set(worktree.changes.map((file) => file.path)).size
+                    ? `${new Set(worktree.changes.map((file) => file.path)).size} changed`
+                    : worktree.error
+                      ? "Unavailable"
+                      : "Clean"}
                 </span>
               </div>
             ))

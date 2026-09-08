@@ -34,7 +34,12 @@ import {
   migrateToLatest,
 } from "@catamorphic/db";
 import type { ProjectPathResolver } from "@catamorphic/git";
-import { FsBackend, FsRemoteBackend, ProjectManager } from "@catamorphic/git";
+import {
+  CheckoutRemoteBackend,
+  FsBackend,
+  FsRemoteBackend,
+  ProjectManager,
+} from "@catamorphic/git";
 import type { PluginResolver } from "@catamorphic/plugins";
 import type {
   CodingAgentProvider,
@@ -85,6 +90,8 @@ export type StorageConfig =
        * paths.
        */
       projectPathResolver?: ProjectPathResolver;
+      /** Existing local checkouts use native Git and retain published commits in place. */
+      localCheckouts?: boolean;
     }
   /** Custom `ProjectManager` wiring (e.g. Artifacts remote backend). */
   | { projectManager: ProjectManager };
@@ -280,9 +287,12 @@ function resolveStorage(config: StorageConfig): ProjectManager {
   if ("projectManager" in config) {
     return config.projectManager;
   }
+  const shared = new FsRemoteBackend(config.remotesPath);
+  const roots = config.localCheckouts ? config.projectPathResolver : undefined;
   return new ProjectManager(
     new FsBackend(config.projectsPath, config.projectPathResolver),
-    new FsRemoteBackend(config.remotesPath),
+    roots ? new CheckoutRemoteBackend(roots, shared) : shared,
+    roots,
   );
 }
 
@@ -415,11 +425,8 @@ export class Catamorphic {
     });
     const owned = {
       stop: async () => {
-        try {
-          await handle.stop();
-        } finally {
-          this.agentWorkerHandles.delete(owned);
-        }
+        await handle.stop();
+        this.agentWorkerHandles.delete(owned);
       },
     };
     this.agentWorkerHandles.add(owned);

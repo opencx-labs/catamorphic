@@ -281,6 +281,19 @@ describe("import an existing folder", () => {
     fs.mkdirSync(path.join(importDir, "nested"), { recursive: true });
     fs.writeFileSync(path.join(importDir, "notes.md"), NOTES);
     fs.writeFileSync(path.join(importDir, "nested", "data.txt"), DATA);
+    git(importDir, "init", "-b", "feature");
+    git(importDir, "add", ".");
+    git(
+      importDir,
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "Existing history",
+    );
+    fs.writeFileSync(path.join(importDir, "draft.txt"), "Private draft");
     app = await launchApp({
       env: { CATAMORPHIC_E2E_PICK_FOLDER: importDir },
     });
@@ -334,22 +347,12 @@ describe("import an existing folder", () => {
       fs.readFileSync(path.join(importDir, "nested", "data.txt"), "utf-8"),
     ).toBe(DATA);
 
-    // The manifest was added in place, named after the folder.
-    const manifest = JSON.parse(
-      fs.readFileSync(
-        path.join(importDir, ".catamorphic/project.json"),
-        "utf-8",
-      ),
-    ) as { name: string };
-    expect(manifest.name).toBe("imported-notes");
-
-    // Git initialized in place: one "Import project" commit, clean tree.
-    await until(
-      () => git(importDir, "status", "--porcelain") === "",
-      10_000,
-      "clean status after import",
-    );
-    expect(git(importDir, "log", "--format=%s")).toBe("Import project");
+    expect(
+      fs.existsSync(path.join(importDir, ".catamorphic/project.json")),
+    ).toBe(false);
+    expect(git(importDir, "log", "--format=%s")).toBe("Existing history");
+    expect(git(importDir, "branch", "--show-current")).toBe("feature");
+    expect(git(importDir, "status", "--porcelain")).toBe("?? draft.txt");
 
     // Import never scaffolds the workflow workspace either.
     for (const file of ["package.json", "workflows", "contracts"]) {
