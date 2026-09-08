@@ -455,6 +455,7 @@ const KEY_CODES = {
   Tab: { windowsVirtualKeyCode: 9, code: "Tab" },
   ArrowUp: { windowsVirtualKeyCode: 38, code: "ArrowUp" },
   ArrowDown: { windowsVirtualKeyCode: 40, code: "ArrowDown" },
+  PageDown: { windowsVirtualKeyCode: 34, code: "PageDown" },
   ArrowLeft: { windowsVirtualKeyCode: 37, code: "ArrowLeft" },
   ArrowRight: { windowsVirtualKeyCode: 39, code: "ArrowRight" },
 } as const;

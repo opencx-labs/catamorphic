@@ -53,7 +53,7 @@ export const BUILTIN_ACTIONS = [
   },
   {
     id: "new-floating-chat",
-    label: "New floating chat",
+    label: "New chat",
     description: "open the small floating chat",
     defaultBinding: "Cmd+N",
     keywords: ["chat", "assistant", "agent", "ai", "quick"],
@@ -152,6 +152,76 @@ export const BUILTIN_ACTIONS = [
     description: "open a terminal tab in the project folder",
     defaultBinding: "Ctrl+`",
     keywords: ["terminal", "shell", "console", "cli", "command line"],
+  },
+  {
+    id: "toggle-floating-terminal",
+    hiddenInPalette: true,
+    label: "Toggle floating terminal",
+    description: "show or hide the project's floating shell",
+    defaultBinding: "Ctrl+Alt+`",
+    keywords: ["terminal", "float", "shell", "overlay"],
+  },
+  {
+    id: "new-floating-browser",
+    hiddenInPalette: true,
+    label: "New floating browser",
+    description: "open a page above the current workspace",
+    defaultBinding: "Cmd+Alt+N",
+    keywords: ["preview", "glance", "float", "browser"],
+  },
+  {
+    id: "open-floating-settings",
+    hiddenInPalette: true,
+    label: "Open floating Settings",
+    description: "adjust preferences above the current workspace",
+    defaultBinding: null,
+    keywords: ["settings", "preferences", "float"],
+  },
+  {
+    id: "dismiss-floating",
+    hiddenInPalette: true,
+    label: "Dismiss floating panel",
+    description: "hide the floating panel and keep its tab running",
+    defaultBinding: "Escape",
+    keywords: ["hide", "dismiss", "preview", "floating"],
+  },
+  {
+    id: "floating-to-tab",
+    hiddenInPalette: true,
+    label: "Expand floating panel to tab",
+    description:
+      "use the full content area without restarting the page or terminal",
+    defaultBinding: null,
+    keywords: ["float", "expand", "fullscreen", "tab"],
+  },
+  {
+    id: "floating-to-split",
+    hiddenInPalette: true,
+    label: "Tile floating panel",
+    description: "place the floating panel beside its original tab",
+    defaultBinding: null,
+    keywords: ["float", "tile", "split"],
+  },
+  {
+    id: "browser-focus-address",
+    label: "Focus address bar",
+    description: "edit the focused browser's address",
+    defaultBinding: "Cmd+L",
+    keywords: ["url", "address", "browser"],
+  },
+  {
+    id: "browser-reload",
+    label: "Reload page",
+    description: "reload the focused browser page",
+    defaultBinding: "Cmd+R",
+    keywords: ["reload", "refresh", "browser"],
+  },
+  {
+    id: "browser-reload-hard",
+    label: "Reload page without cache",
+    description: "reload the focused browser page ignoring cached resources",
+    defaultBinding: "Cmd+Shift+R",
+    keywords: ["reload", "refresh", "cache", "browser"],
   },
   {
     id: "new-editor-tab",
@@ -362,18 +432,13 @@ export const BUILTIN_ACTIONS = [
 /** Union of built-in action ids ("new-tab" | "command-palette" | …). */
 export type ActionId = (typeof BUILTIN_ACTIONS)[number]["id"];
 
-/** Built-in actions that have a keybinding (all of them, today). */
-export type KeybindingAction = Extract<
-  (typeof BUILTIN_ACTIONS)[number],
-  { defaultBinding: string }
->["id"];
+/** Every action can be bound; an empty value leaves it unbound. */
+export type KeybindingAction = ActionId;
 
 export type Keybindings = Record<KeybindingAction, string>;
 
 export const DEFAULT_KEYBINDINGS = Object.fromEntries(
-  BUILTIN_ACTIONS.filter((action) => action.defaultBinding !== null).map(
-    (action) => [action.id, action.defaultBinding],
-  ),
+  BUILTIN_ACTIONS.map((action) => [action.id, action.defaultBinding ?? ""]),
 ) as Keybindings;
 
 export const KEYBINDING_ACTIONS = Object.keys(

@@ -46,7 +46,7 @@ afterAll(async () => {
 
 it("leaves settled chat icons without hidden animation loops or backdrop filters", async () => {
   await app.eval(
-    `window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:true,bubbles:true}))`,
+    `window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))`,
   );
   await app.waitFor(
     `!!document.querySelector('[data-chat-local-id]:not([inert]) [data-composer-input]')`,
@@ -66,7 +66,7 @@ it("restores guest visibility and destroys closed browser guests across repeated
   try {
     for (let index = 0; index < 3; index += 1) {
       await app.eval(
-        `window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',metaKey:true,altKey:true,bubbles:true}))`,
+        `window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),altKey:true,bubbles:true}))`,
       );
       await app.waitFor(
         `!!document.querySelector('input[aria-label="Address and search bar"]')`,
@@ -88,7 +88,7 @@ it("restores guest visibility and destroys closed browser guests across repeated
         `document.querySelector('webview').executeJavaScript('window.framesRun')`,
       );
       await app.eval(
-        `window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',metaKey:true,altKey:true,bubbles:true}))`,
+        `window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),altKey:true,bubbles:true}))`,
       );
       await app.waitFor(
         `getComputedStyle(document.querySelector('webview')).display==='none'`,
@@ -146,7 +146,7 @@ it("restores guest visibility and destroys closed browser guests across repeated
       }
       stage = "close browser tab";
       await app.eval(
-        `window.dispatchEvent(new KeyboardEvent('keydown',{key:'w',metaKey:true,bubbles:true}))`,
+        `window.dispatchEvent(new KeyboardEvent('keydown',{key:'w',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))`,
       );
       await app.waitFor(`document.querySelectorAll('webview').length===0`);
       expect(await app.cdp("Target.getTargets")).not.toEqual(
@@ -157,7 +157,7 @@ it("restores guest visibility and destroys closed browser guests across repeated
         }),
       );
       await app.eval(
-        `window.dispatchEvent(new KeyboardEvent('keydown',{key:'w',metaKey:true,bubbles:true}))`,
+        `window.dispatchEvent(new KeyboardEvent('keydown',{key:'w',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))`,
       );
     }
   } catch (error) {

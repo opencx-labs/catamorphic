@@ -1,6 +1,5 @@
 import Editor, { type OnMount } from "@monaco-editor/react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import "../lib/monaco-setup.js";
 import { ExternalLink, FileCode, FileText, Search } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ShortcutHint } from "../components/shortcut-hint.js";
@@ -14,6 +13,7 @@ import {
   localEditorPath,
   useLocalProjectFiles,
 } from "../lib/local-project-files.js";
+import { useMonacoTheme } from "../lib/monaco-setup.js";
 import { useTheme } from "../lib/theme.js";
 
 type EditorInstance = Parameters<OnMount>[0];
@@ -64,6 +64,7 @@ export function EditorScreen({
   onShare,
 }: EditorScreenProps) {
   const theme = useTheme();
+  const editorTheme = useMonacoTheme();
   const officeFile = filePath ? isOfficePath(filePath) : false;
   const pdfFile = filePath ? isPdfPath(filePath) : false;
   const fileQuery = useQuery({
@@ -245,7 +246,10 @@ export function EditorScreen({
       className="flex min-h-0 flex-1 flex-col"
       onCopy={stampSelectionOnClipboard}
     >
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-bg-inset px-3">
+      <div
+        data-editor-toolbar
+        className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-bg-inset px-3"
+      >
         <ShortcutHint label="Open another file">
           <button
             type="button"
@@ -340,7 +344,7 @@ export function EditorScreen({
           <Editor
             height="100%"
             path={`catamorphic-editor://${encodeURIComponent(projectId)}/${encodeURIComponent(filePath)}`}
-            theme={theme?.appearance === "light" ? "light" : "vs-dark"}
+            theme={editorTheme}
             value={draft ?? savedContent}
             onChange={(value) => handleChange(value ?? "")}
             onMount={handleMount}

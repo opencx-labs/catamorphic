@@ -206,6 +206,8 @@ same change (the desktop counterpart of the ADR rule).
 
 ## Resource links and unavailable actions
 
+Resource opening and composer paste follow ADR 0108 and the 2026-09-09 DESIGN.md entry. Use `shared/open-mode.ts` and the resource button/menu primitives: click/Enter opens here, Cmd (Ctrl outside macOS) opens a tab, Cmd+Shift opens to the side, Option/Alt opens floating. Do not add a shortcut that floats the current surface. Persist pathless clipboard files when they cannot be sent as model media; never silently discard them.
+
 Use the shared `surface-link.ts` resolver for agent-visible destinations. Keep
 workflow/app targets aligned with `open_surface` and the workspace tab keys.
 Changes to chat Markdown link handling belong in the registry source and both

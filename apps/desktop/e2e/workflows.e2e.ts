@@ -200,7 +200,7 @@ describe("workflow authoring", { retry: 0 }, () => {
     );
 
     await run(
-      `window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',metaKey:true,bubbles:true,cancelable:true})); return true;`,
+      `window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true,cancelable:true})); return true;`,
     );
     await wait(
       `return !!$('textarea[placeholder*="Search or ask"]') && !!$('.workflow-workbench')?.closest('.hidden');`,
@@ -214,7 +214,7 @@ describe("workflow authoring", { retry: 0 }, () => {
       "draft preserved",
     );
     await run(
-      `window.dispatchEvent(new KeyboardEvent('keydown',{key:'w',metaKey:true,bubbles:true,cancelable:true})); return true;`,
+      `window.dispatchEvent(new KeyboardEvent('keydown',{key:'w',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true,cancelable:true})); return true;`,
     );
     await wait(
       `return !!$$('[role="dialog"]').find(el=>!el.closest('[inert]')&&el.textContent.includes('Discard workflow edits?'));`,
@@ -277,7 +277,7 @@ describe("workflow authoring", { retry: 0 }, () => {
       "draft ready to discard",
     );
     await run(
-      `window.dispatchEvent(new KeyboardEvent('keydown',{key:'w',metaKey:true,bubbles:true,cancelable:true})); return true;`,
+      `window.dispatchEvent(new KeyboardEvent('keydown',{key:'w',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true,cancelable:true})); return true;`,
     );
     await wait(
       `const discard=$$('button').find(el=>!el.closest('[inert]')&&el.textContent==='Discard and close'); if(discard){discard.click(); return true;} return false;`,
@@ -285,7 +285,7 @@ describe("workflow authoring", { retry: 0 }, () => {
     );
     await wait(`return !$('.workflow-workbench');`, "workflow closed");
     await run(
-      `window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',metaKey:true,shiftKey:true,bubbles:true,cancelable:true})); return true;`,
+      `window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),shiftKey:true,bubbles:true,cancelable:true})); return true;`,
     );
     await wait(
       `return $('.workflow-header h1')?.textContent==='Team report' && button('Save')?.disabled;`,

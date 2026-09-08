@@ -886,6 +886,23 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       return;
     }
 
+    if (prompt.includes("desktop layout: sidebar")) {
+      await this.sandboxProvider.uploadFiles(
+        state.sandboxId,
+        {
+          ".catamorphic/desktop/layout.json": JSON.stringify({
+            tabPlacement: "sidebar",
+            pinnedBookmarks: "list",
+            headerPlacement: "sidebar",
+          }),
+        },
+        state.workingDirectory,
+      );
+      yield { type: "text", content: "Updated your workspace layout." };
+      yield { type: "done" };
+      return;
+    }
+
     if (prompt.includes("edit a file")) {
       yield { type: "title", content: "File edit exercise" };
       yield { type: "file_edit", content: "write", filePath: "HELLO.md" };

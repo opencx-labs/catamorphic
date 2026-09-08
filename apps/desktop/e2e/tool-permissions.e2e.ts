@@ -28,7 +28,7 @@ const helpers = `
   ${setReactValueJs}
   const pressKey = (key, mods = {}) =>
     window.dispatchEvent(new KeyboardEvent('keydown',
-      { key, bubbles: true, cancelable: true, ...mods }));
+      { key, bubbles: true, cancelable: true, ...(mods.metaKey && !/Mac/.test(navigator.platform) ? { ...mods, metaKey: false, ctrlKey: true } : mods) }));
   const composer = () =>
     $$('section[aria-label]').find((el) => !el.inert && el.querySelector('[data-composer-input]'))
       ?.querySelector('[data-composer-input]');

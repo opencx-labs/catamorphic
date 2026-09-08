@@ -1,15 +1,10 @@
 import { FitAddon, init as initGhostty, Terminal } from "ghostty-web";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { KEYBINDING_ACTIONS } from "../../shared/actions.js";
-import { DEFAULT_THEME_FONTS } from "../../shared/theme-fonts.js";
-import {
-  desktopApi,
-  type ResolvedTheme,
-  type ThemeColors,
-} from "../lib/desktop-api.js";
+import { desktopApi } from "../lib/desktop-api.js";
 import { matchesBinding, useKeybindings } from "../lib/keybindings.js";
 import { sanitizeScrollback } from "../lib/scrollback.js";
-import { useTheme } from "../lib/theme.js";
+import { useTerminalAppearance } from "../lib/terminal-appearance.js";
 
 /**
  * A terminal tab. Emulation runs in-process via ghostty-web — libghostty-vt
@@ -22,15 +17,6 @@ import { useTheme } from "../lib/theme.js";
 // The WASM module is shared by every Terminal instance; load it once.
 let ghosttyReady: Promise<void> | null = null;
 const ensureGhostty = () => (ghosttyReady ??= initGhostty());
-
-/** App theme tokens → terminal colors. ANSI palette stays Ghostty's. */
-const terminalTheme = (colors: ThemeColors) => ({
-  background: colors["bg-inset"],
-  foreground: colors.fg,
-  cursor: colors.accent,
-  selectionBackground: colors.accent,
-  selectionForeground: colors["accent-fg"],
-});
 
 // Matches the browser tab's deferred mount: opening the (canvas-heavy)
 // terminal mid tab-animation would stutter the slide-in.
@@ -45,6 +31,10 @@ export interface TerminalScreenProps {
    * and output streams live. The session is NOT killed on unmount.
    */
   attachSessionId?: string;
+  /** Runs once in a newly created shell, never when changing its layout. */
+  initialCommand?: string;
+  macroShortcuts?: string[];
+  floating?: boolean;
   /**
    * Reopened tab (Cmd+Shift+T): replay the closed session's scrollback,
    * close it with a divider, and start the fresh shell beneath — the
@@ -69,6 +59,9 @@ export function TerminalScreen({
   projectId,
   active,
   attachSessionId,
+  initialCommand,
+  macroShortcuts = [],
+  floating = false,
   restoreSessionId,
   readOnly = false,
   onTitle,
@@ -77,8 +70,15 @@ export function TerminalScreen({
 }: TerminalScreenProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
+  const { appearance, ready: appearanceReady } = useTerminalAppearance();
+  const [ready, setReady] = useState(appearanceReady);
+  const [appliedAppearance, setAppliedAppearance] = useState(appearance);
+  const appearanceRef = useRef(appearance);
+  appearanceRef.current = appearance;
+  useEffect(() => {
+    if (appearanceReady) setReady(true);
+  }, [appearanceReady]);
   const fitRef = useRef<FitAddon | null>(null);
-  const theme = useTheme();
   const keybindings = useKeybindings();
   const keybindingsRef = useRef(keybindings);
   keybindingsRef.current = keybindings;
@@ -93,12 +93,15 @@ export function TerminalScreen({
   onSessionRef.current = onSession;
   const readOnlyRef = useRef(readOnly);
   readOnlyRef.current = readOnly;
-  const themeRef = useRef<ResolvedTheme | null>(theme);
-  themeRef.current = theme;
+  const initialCommandRef = useRef(initialCommand);
+  const floatingRef = useRef(floating);
+  floatingRef.current = floating;
+  const macroShortcutsRef = useRef(macroShortcuts);
+  macroShortcutsRef.current = macroShortcuts;
 
   useEffect(() => {
     const container = containerRef.current;
-    if (!container) return;
+    if (!container || !ready) return;
     let disposed = false;
     let term: Terminal | null = null;
     let fit: FitAddon | null = null;
@@ -109,13 +112,14 @@ export function TerminalScreen({
       void (async () => {
         await ensureGhostty();
         if (disposed) return;
-        const colors = themeRef.current?.colors;
+        const currentAppearance = appearanceRef.current;
+        setAppliedAppearance(currentAppearance);
         term = new Terminal({
-          fontSize: 13,
-          fontFamily: themeRef.current?.fonts.mono ?? DEFAULT_THEME_FONTS.mono,
+          fontSize: currentAppearance.fontSize,
+          fontFamily: currentAppearance.fontFamily,
           cursorBlink: true,
           scrollback: 10_000,
-          ...(colors ? { theme: terminalTheme(colors) } : {}),
+          theme: currentAppearance.theme,
         });
         term.open(container);
         termRef.current = term;
@@ -130,8 +134,13 @@ export function TerminalScreen({
         term.attachCustomKeyEventHandler((event) => {
           const bindings = keybindingsRef.current;
           if (
-            KEYBINDING_ACTIONS.some((action) =>
-              matchesBinding(event, bindings[action]),
+            macroShortcutsRef.current.some((binding) =>
+              matchesBinding(event, binding),
+            ) ||
+            KEYBINDING_ACTIONS.some(
+              (action) =>
+                (action !== "dismiss-floating" || floatingRef.current) &&
+                matchesBinding(event, bindings[action]),
             )
           ) {
             return true;
@@ -168,8 +177,28 @@ export function TerminalScreen({
         fit = new FitAddon();
         fitRef.current = fit;
         term.loadAddon(fit);
-        fit.fit();
-        fit.observeResize();
+        const fitToContainer = () => {
+          const dimensions = fit?.proposeDimensions();
+          if (dimensions) term?.resize(dimensions.cols, dimensions.rows);
+        };
+        fitToContainer();
+        // FitAddon's observer drops changes during its 50ms resize lock.
+        // A window manager or layout transition can shrink again inside
+        // that interval, leaving a permanently cropped canvas. Coalesce
+        // to the next frame, but always apply the latest container size.
+        let resizeFrame = 0;
+        const observer = new ResizeObserver(() => {
+          cancelAnimationFrame(resizeFrame);
+          resizeFrame = requestAnimationFrame(fitToContainer);
+        });
+        observer.observe(container);
+        unsubscribes.push(() => {
+          observer.disconnect();
+          cancelAnimationFrame(resizeFrame);
+        });
+        term.onResize(({ cols, rows }) => {
+          if (sessionId) void desktopApi.terminalResize(sessionId, cols, rows);
+        });
 
         if (attachSessionId) {
           // Attach to the agent's live session: replay, then stream. The
@@ -209,6 +238,8 @@ export function TerminalScreen({
           sessionId = created.sessionId;
         }
         onSessionRef.current?.(sessionId);
+        // The layout may have changed while the PTY was being created.
+        void desktopApi.terminalResize(sessionId, term.cols, term.rows);
 
         unsubscribes.push(
           desktopApi.onTerminalData((payload) => {
@@ -493,12 +524,11 @@ export function TerminalScreen({
           pinCursorWhileTyping();
           if (sessionId) void desktopApi.terminalWrite(sessionId, data);
         });
-        // Resize is viewing geometry, not input — readOnly only blocks
-        // keystrokes, so a watched agent terminal still fits this view.
-        term.onResize(({ cols, rows }) => {
-          if (sessionId) void desktopApi.terminalResize(sessionId, cols, rows);
-        });
         term.onTitleChange((title) => onTitleRef.current(title));
+        const command = initialCommandRef.current?.trim();
+        if (command && sessionId && !attachSessionId && !restoreSessionId) {
+          await desktopApi.terminalWrite(sessionId, `${command}\r`);
+        }
         term.focus();
       })();
     }, TAB_OPEN_ANIMATION_MS);
@@ -516,18 +546,17 @@ export function TerminalScreen({
       term?.dispose();
       termRef.current = null;
     };
-  }, [projectId, attachSessionId, restoreSessionId]);
+  }, [projectId, attachSessionId, restoreSessionId, ready]);
 
-  // Live theme edits restyle the running terminal.
+  // This ghostty-web version bakes colors into its WASM terminal at open().
+  // Apply appearance to new terminals; never restart a running shell for it.
+
   useEffect(() => {
     const term = termRef.current;
-    if (!theme || !term) return;
-    term.renderer?.setTheme(terminalTheme(theme.colors));
-    if (term.options.fontFamily !== theme.fonts.mono) {
-      term.options.fontFamily = theme.fonts.mono;
-      fitRef.current?.fit();
-    }
-  }, [theme]);
+    if (!term || term.options.fontFamily === appearance.fontFamily) return;
+    term.options.fontFamily = appearance.fontFamily;
+    fitRef.current?.fit();
+  }, [appearance.fontFamily]);
 
   // Switching back to the tab lands keystrokes in the shell immediately.
   useEffect(() => {
@@ -555,7 +584,9 @@ export function TerminalScreen({
   return (
     <div
       className="min-h-0 flex-1 overflow-hidden px-2 pt-2"
-      style={{ backgroundColor: theme?.colors["bg-inset"] }}
+      data-terminal-appearance={appliedAppearance.name}
+      data-terminal-font-size={appliedAppearance.fontSize}
+      style={{ backgroundColor: appliedAppearance.theme.background }}
     >
       {/* ghostty-web owns everything inside; the wrapper gives the
           FitAddon a measurable box and clips any canvas overshoot while

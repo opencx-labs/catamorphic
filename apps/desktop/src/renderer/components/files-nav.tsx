@@ -1,9 +1,10 @@
 import { ChevronRight, File, Folder } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import type { OpenMode } from "../../shared/open-mode.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { useLocalProjectFiles } from "../lib/local-project-files.js";
-
 import { Collapsible } from "./collapsible.js";
+import { OpenResourceButton } from "./open-resource-button.js";
 
 interface FileTreeNode {
   name: string;
@@ -22,7 +23,7 @@ export function FilesNav({
   activePath?: string;
   /** Member shells show work products, not the repository's implementation. */
   contentOnly?: boolean;
-  onOpen: (path: string) => void;
+  onOpen: (path: string, mode?: OpenMode) => void;
   onEmptyChange?: (empty: boolean) => void;
 }) {
   const query = useLocalProjectFiles(projectId);
@@ -71,7 +72,7 @@ function FileNode({
 }: {
   node: FileTreeNode;
   activePath?: string;
-  onOpen: (path: string) => void;
+  onOpen: (path: string, mode?: OpenMode) => void;
 }) {
   const [open, setOpen] = useState(node.path === "store");
   if (node.children) {
@@ -106,9 +107,9 @@ function FileNode({
   }
   return (
     <li>
-      <button
+      <OpenResourceButton
         type="button"
-        onClick={() => onOpen(node.path)}
+        onOpen={(mode) => onOpen(node.path, mode)}
         className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] hover:text-fg ${
           activePath === node.path
             ? "bg-bg-overlay text-fg"
@@ -118,7 +119,7 @@ function FileNode({
       >
         <File className="size-3.5 shrink-0 text-fg-faint" />
         <span className="truncate">{node.name}</span>
-      </button>
+      </OpenResourceButton>
     </li>
   );
 }

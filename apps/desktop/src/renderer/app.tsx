@@ -27,6 +27,7 @@ import {
   Settings as SettingsIcon,
   Share2,
   Sparkles,
+  Wand2,
   Workflow as WorkflowIcon,
 } from "lucide-react";
 import {
@@ -46,10 +47,20 @@ import {
   KEYBINDING_ACTIONS,
 } from "../shared/actions.js";
 import {
+  chatBookmarkUrl,
+  parseChatBookmarkUrl,
+} from "../shared/bookmark-target.js";
+import {
+  type OpenMode as CommitMode,
+  type OpenModifiers,
+  openModeFromEvent,
+} from "../shared/open-mode.js";
+import {
   matchesProjectExperience,
   type ProjectExperienceContext,
 } from "../shared/project-experience.js";
 import { sidebarSections, visibleSidebarConfig } from "../shared/sidebar.js";
+import type { TerminalMacro } from "../shared/terminal-macros.js";
 import {
   type AgentPointer,
   AgentPointers,
@@ -75,9 +86,11 @@ import {
   type PendingElicitation,
 } from "./components/elicitation-modal.js";
 import { FilesNav } from "./components/files-nav.js";
+import { FloatingPanelBar } from "./components/floating-panel-bar.js";
 import { GitNav } from "./components/git-nav.js";
 import { MobilePairingModal } from "./components/mobile-pairing-modal.js";
 import { Modal } from "./components/modal.js";
+import { OpenResourceButton } from "./components/open-resource-button.js";
 import { PendingButton } from "./components/pending-button.js";
 import { ProfileBar } from "./components/profile-bar.js";
 import { ProjectAgentConsentDialog } from "./components/project-agent-consent.js";
@@ -140,6 +153,7 @@ import {
   type SidebarSectionConfig,
 } from "./lib/desktop-api.js";
 import { readEditorSelection } from "./lib/editor-selection.js";
+import { useFloatingMotion } from "./lib/floating-motion.js";
 import {
   formatBinding,
   matchesBinding,
@@ -154,9 +168,12 @@ import {
   parseSurfaceLink,
   resolveProjectFileLocation,
 } from "./lib/surface-link.js";
+import { TAB_DRAG_TYPE, type TabDragPayload } from "./lib/tab-drag.js";
+import { useSidebarReveal } from "./lib/use-sidebar-reveal.js";
 import { NEW_WORKFLOW_PROMPT } from "./lib/workflow-authoring.js";
 import { AppScreen, useApps } from "./screens/app-screen.js";
 import {
+  type BrowserCommands,
   type BrowserPageState,
   BrowserScreen,
 } from "./screens/browser-screen.js";
@@ -215,6 +232,9 @@ interface BrowserEntry {
 
 interface TerminalEntry {
   localId: string;
+  floatingTool?: "terminal";
+  macroId?: string;
+  initialCommand?: string;
   /** Shell title (OSC 0/2) — feeds the tab label. */
   title: string;
   /** Chat this tab is attached to (its surfaces rail), if any. */
@@ -310,6 +330,8 @@ const NO_CHAT_SIGNALS: ChatLiveSignals = {
 interface Workspace {
   tabs: WorkspaceTab[];
   activeTabKey?: string;
+  /** A live surface over the active tab; expanding never remounts it. */
+  floatingKey?: string;
   chats: ChatDockEntry[];
   activeChatId?: string;
   browsers: BrowserEntry[];
@@ -434,6 +456,9 @@ const serializeWorkspace = (ws: Workspace): Workspace => {
     ...(ws.activeTabKey && keys.has(ws.activeTabKey)
       ? { activeTabKey: ws.activeTabKey }
       : {}),
+    ...(ws.floatingKey && keys.has(ws.floatingKey)
+      ? { floatingKey: ws.floatingKey }
+      : {}),
     chats,
     ...(ws.activeChatId && chatIds.has(ws.activeChatId)
       ? { activeChatId: ws.activeChatId }
@@ -469,6 +494,9 @@ const hydrateWorkspace = (raw: unknown): Workspace | null => {
     closedTabs: Array.isArray(snapshot.closedTabs) ? snapshot.closedTabs : [],
     ...(typeof snapshot.activeTabKey === "string"
       ? { activeTabKey: snapshot.activeTabKey }
+      : {}),
+    ...(typeof snapshot.floatingKey === "string"
+      ? { floatingKey: snapshot.floatingKey }
       : {}),
     ...(typeof snapshot.activeChatId === "string"
       ? { activeChatId: snapshot.activeChatId }
@@ -810,6 +838,10 @@ export function App() {
   // when an agent finishes or asks a question. Also carries relaunch
   // state: sidebar visibility and the last active project.
   const [prefs, setPrefs] = useState<AppPrefs | null>(null);
+  const [browserNavigationHost, setBrowserNavigationHost] =
+    useState<HTMLDivElement | null>(null);
+  const [browserToolbarHost, setBrowserToolbarHost] =
+    useState<HTMLDivElement | null>(null);
   useEffect(() => {
     void desktopApi.getPrefs().then((loaded) => {
       setPrefs(loaded);
@@ -1445,7 +1477,15 @@ export function App() {
           (projectId
             ? defaultWorkspaceFor(projectId)
             : emptyUtilityWorkspace());
-        const next = updater(previous);
+        const updated = updater(previous);
+        const next =
+          updated.floatingKey &&
+          (updated.floatingKey === updated.activeTabKey ||
+            !orderedTabKeys(updated).includes(updated.floatingKey) ||
+            (updated.activeTabKey !== previous.activeTabKey &&
+              updated.floatingKey === previous.floatingKey))
+            ? { ...updated, floatingKey: undefined }
+            : updated;
         // Background reconciliation must not materialize a default workspace
         // before the persisted snapshot has had a chance to restore.
         return next === previous
@@ -1455,6 +1495,22 @@ export function App() {
     },
     [projectId, workspaceKey, defaultWorkspaceFor],
   );
+
+  const floatingMotion = useFloatingMotion(
+    workspace.floatingKey ? `${projectId}:${workspace.floatingKey}` : undefined,
+  );
+  const dismissFloating = () =>
+    floatingMotion.dismiss(() =>
+      updateWorkspace((ws) => ({ ...ws, floatingKey: undefined })),
+    );
+  const floatingEscapeEnabledRef = useRef(false);
+  floatingEscapeEnabledRef.current = Boolean(
+    workspace.floatingKey &&
+      !paletteOpen &&
+      !wizardModalOpen &&
+      !connectorsModalOpen,
+  );
+  const focusedTabKey = workspace.floatingKey ?? workspace.activeTabKey;
 
   // --- workspace persistence --------------------------------------------
   // Each project's open workspace survives a relaunch. Restore runs once
@@ -1535,7 +1591,7 @@ export function App() {
     });
   }, [projectId, sessionsQuery.data, updateWorkspace, workspaceReady]);
 
-  const openTab = (tab: WorkspaceTab, mode?: "side") =>
+  const openTab = (tab: WorkspaceTab, mode?: CommitMode) =>
     updateWorkspace((ws) => {
       const key = tabKey(tab);
       const exists = ws.tabs.some((existing) => tabKey(existing) === key);
@@ -1550,7 +1606,13 @@ export function App() {
               tab.kind === "diff" && tabKey(existing) === key ? tab : existing,
             )
           : [...ws.tabs, tab],
-        activeTabKey: key,
+        activeTabKey:
+          mode === "floating"
+            ? ws.activeTabKey === key
+              ? orderedTabKeys(ws).find((candidate) => candidate !== key)
+              : ws.activeTabKey
+            : key,
+        floatingKey: mode === "floating" ? key : undefined,
         split,
       };
     });
@@ -1573,6 +1635,10 @@ export function App() {
           kind: "chat",
           name: chat.localId,
           label: chatLabels[chat.localId] ?? "Chat",
+          bookmarkUrl:
+            projectId && chat.sessionId
+              ? chatBookmarkUrl({ projectId, sessionId: chat.sessionId })
+              : undefined,
           chatIcon: icons[chat.localId] ?? null,
           fork: forks[chat.localId] ?? false,
           // Hover card: which agent runs this conversation (+ lineage).
@@ -1609,6 +1675,7 @@ export function App() {
         faviconUrl: browser.faviconUrl,
         // Hover card: the page's address under its full title.
         detail: browser.url || browser.initialUrl || undefined,
+        bookmarkUrl: browser.url || browser.initialUrl || undefined,
       }),
     );
 
@@ -1655,6 +1722,7 @@ export function App() {
             : null;
       return {
         ...ws,
+        floatingKey: undefined,
         split,
         activeTabKey: key,
         ...(key.startsWith("chat:")
@@ -1672,6 +1740,7 @@ export function App() {
         chatLocalId?: string;
         side?: boolean;
         title?: string;
+        floating?: boolean;
       },
     ) => {
       if (!activeProfile) return;
@@ -1696,7 +1765,18 @@ export function App() {
         return {
           ...ws,
           browsers: [...ws.browsers, entry],
-          activeTabKey: opts?.background ? ws.activeTabKey : key,
+          chats: opts?.floating
+            ? ws.chats.map((chat) =>
+                chat.mode === "partial" ? { ...chat, mode: "min" } : chat,
+              )
+            : ws.chats,
+          activeTabKey:
+            opts?.background || opts?.floating ? ws.activeTabKey : key,
+          floatingKey: opts?.floating
+            ? key
+            : opts?.background
+              ? ws.floatingKey
+              : undefined,
           split,
         };
       });
@@ -1705,18 +1785,36 @@ export function App() {
   );
 
   /** Open a terminal tab; the shell starts in the project folder. */
-  const openTerminalTab = (opts?: { chatLocalId?: string; side?: boolean }) => {
+  const openTerminalTab = (opts?: {
+    chatLocalId?: string;
+    side?: boolean;
+    floatingTool?: "terminal";
+    macroId?: string;
+    floating?: boolean;
+    initialCommand?: string;
+    title?: string;
+  }) => {
+    const floating = opts?.floating ?? Boolean(opts?.floatingTool);
     const entry: TerminalEntry = {
       localId: crypto.randomUUID(),
-      title: "",
+      title: opts?.title ?? "",
       chatLocalId: opts?.chatLocalId,
+      floatingTool: opts?.floatingTool,
+      macroId: opts?.macroId,
+      initialCommand: opts?.initialCommand,
     };
     updateWorkspace((ws) => {
       const key = terminalTabKey(entry.localId);
       return {
         ...ws,
         terminals: [...ws.terminals, entry],
-        activeTabKey: key,
+        chats: floating
+          ? ws.chats.map((chat) =>
+              chat.mode === "partial" ? { ...chat, mode: "min" } : chat,
+            )
+          : ws.chats,
+        activeTabKey: floating ? ws.activeTabKey : key,
+        floatingKey: floating ? key : undefined,
         split:
           opts?.side && ws.activeTabKey
             ? { leftKey: ws.activeTabKey, rightKey: key, ratio: 0.5 }
@@ -1730,6 +1828,7 @@ export function App() {
     filePath?: string;
     chatLocalId?: string;
     side?: boolean;
+    floating?: boolean;
   }) => {
     const entry: EditorEntry = {
       localId: crypto.randomUUID(),
@@ -1742,7 +1841,8 @@ export function App() {
       return {
         ...ws,
         editors: [...ws.editors, entry],
-        activeTabKey: key,
+        activeTabKey: opts?.floating ? ws.activeTabKey : key,
+        floatingKey: opts?.floating ? key : undefined,
         split:
           opts?.side && ws.activeTabKey
             ? { leftKey: ws.activeTabKey, rightKey: key, ratio: 0.5 }
@@ -1760,8 +1860,11 @@ export function App() {
       side?: boolean;
       background?: boolean;
       newTab?: boolean;
+      mode?: CommitMode;
     } = {},
   ): Promise<string> => {
+    const intent =
+      opts.mode ?? (opts.side ? "side" : opts.newTab ? "tab" : "replace");
     const target = parseSurfaceLink(value);
     if (!target)
       throw new Error("This link is not a supported workspace target");
@@ -1792,11 +1895,31 @@ export function App() {
           : null;
     if (browserUrl && !activeProfileRef.current)
       throw new Error("Choose a profile before opening this link");
+    const focusedKey =
+      workspaceRef.current.floatingKey ?? workspaceRef.current.activeTabKey;
+    if (
+      browserUrl &&
+      intent === "replace" &&
+      !opts.background &&
+      focusedKey?.startsWith("browser:")
+    ) {
+      const navigate = browserNavigatorsRef.current.get(focusedKey.slice(8));
+      if (navigate) {
+        navigate(browserUrl);
+        return focusedKey;
+      }
+    }
     const existingEditor =
-      target.kind === "file" && !browserUrl && !opts.newTab
-        ? workspaceRef.current.editors.find(
+      target.kind === "file" && !browserUrl && intent !== "tab"
+        ? (workspaceRef.current.editors.find(
             (editor) => editor.filePath === location?.relativePath,
-          )
+          ) ??
+          (intent === "replace" && !opts.background
+            ? workspaceRef.current.editors.find(
+                (editor) =>
+                  editorTabKey(editor.localId) === focusedKey && !editor.dirty,
+              )
+            : undefined))
         : undefined;
     const key = browserUrl
       ? browserTabKey(localId)
@@ -1811,7 +1934,10 @@ export function App() {
       target.kind === "tab" &&
       !orderedTabKeys(workspaceRef.current, {
         includeCollapsed: true,
-      }).includes(key)
+      }).includes(key) &&
+      !workspaceRef.current.chats.some(
+        (chat) => chatTabKey(chat.localId) === key,
+      )
     )
       throw new Error("This tab is no longer open");
     updateWorkspace((ws) => ({
@@ -1841,6 +1967,7 @@ export function App() {
                     editor.localId === existingEditor.localId
                       ? {
                           ...editor,
+                          filePath: location.relativePath,
                           background: false,
                           line: target.line,
                           column: target.column,
@@ -1875,13 +2002,11 @@ export function App() {
                     ],
               }
             : {}),
-      activeTabKey: opts.background ? ws.activeTabKey : key,
-      split: opts.background
-        ? ws.split
-        : opts.side && ws.activeTabKey && ws.activeTabKey !== key
-          ? { leftKey: ws.activeTabKey, rightKey: key, ratio: 0.5 }
-          : null,
     }));
+    // Materialize first, then use the same placement rules as sidebar rows and
+    // surface chips. Reusing the focused editor keeps its floating/split frame.
+    if (!opts.background && !(intent === "replace" && key === focusedKey))
+      openSurface(key, intent);
     return key;
   };
   const openLinkedSurfaceRef = useRef(openLinkedSurface);
@@ -1889,32 +2014,19 @@ export function App() {
   const openMessageLink = (
     value: string,
     entry: ChatDockEntry,
-    modifiers: { metaKey: boolean; shiftKey: boolean },
+    modifiers: OpenModifiers | CommitMode,
   ) => {
     void openLinkedSurface(value, {
       chatLocalId: entry.localId,
-      side: modifiers.metaKey && modifiers.shiftKey,
-      newTab: modifiers.metaKey,
-    })
-      .then(() => {
-        if (modifiers.metaKey || entry.mode !== "tab") return;
-        updateWorkspace((ws) => ({
-          ...ws,
-          activeChatId: entry.localId,
-          chats: ws.chats.map((chat) =>
-            chat.localId === entry.localId
-              ? { ...chat, mode: "partial" }
-              : chat.mode === "partial"
-                ? { ...chat, mode: "min" }
-                : chat,
-          ),
-        }));
-      })
-      .catch((cause: unknown) =>
-        setLinkError(
-          cause instanceof Error ? cause.message : "Could not open this link",
-        ),
-      );
+      mode:
+        typeof modifiers === "string"
+          ? modifiers
+          : openModeFromEvent(modifiers),
+    }).catch((cause: unknown) =>
+      setLinkError(
+        cause instanceof Error ? cause.message : "Could not open this link",
+      ),
+    );
   };
 
   const onTerminalTitle = useCallback(
@@ -1924,7 +2036,7 @@ export function App() {
           (terminal) => terminal.localId === localId,
         );
         // Shells re-announce the same title on every prompt — skip those.
-        if (!target || target.title === title) return ws;
+        if (!target || target.macroId || target.title === title) return ws;
         return {
           ...ws,
           terminals: ws.terminals.map((terminal) =>
@@ -1968,11 +2080,20 @@ export function App() {
   const openBrowserTabRef = useRef(openBrowserTab);
   openBrowserTabRef.current = openBrowserTab;
   useEffect(() => {
-    return desktopApi.onBrowserOpenUrl((url) => openBrowserTabRef.current(url));
+    return desktopApi.onBrowserOpenUrl((url, mode) =>
+      openBrowserTabRef.current(url, {
+        floating: mode
+          ? mode === "floating"
+          : prefsRef.current?.linkOpenMode === "floating",
+        side: mode === "side",
+      }),
+    );
   }, []);
 
   // navigate(url) handles per live browser tab, for "open in current tab"
   // (bookmarks/links with open:"replace").
+  const browserShortcutTargetRef = useRef<string | undefined>(undefined);
+  const browserCommandsRef = useRef(new Map<string, BrowserCommands>());
   const browserNavigatorsRef = useRef(new Map<string, (url: string) => void>());
   const browserHistoryNavigatorsRef = useRef(
     new Map<string, (direction: "back" | "forward") => void>(),
@@ -2005,10 +2126,68 @@ export function App() {
    * Bookmark/link click behavior: "replace" reuses the focused browser
    * tab; anything else (or no focused browser tab) opens a new tab.
    */
-  const openUrl = (url: string, mode: "tab" | "replace" | "side") => {
+  const openUrl = async (url: string, mode: CommitMode) => {
+    const target = parseChatBookmarkUrl(url);
+    if (target) {
+      if (!projects.some((project) => project.id === target.projectId)) {
+        throw new Error(
+          "This chat's project is not available in this profile.",
+        );
+      }
+      const saved = await desktopApi.workspaceStateGet(target.projectId);
+      setWorkspaces((current) => {
+        const targetWorkspace =
+          current[target.projectId] ??
+          hydrateWorkspace(saved) ??
+          defaultWorkspaceFor(target.projectId);
+        const existing = targetWorkspace.chats.find(
+          (chat) => chat.sessionId === target.sessionId,
+        );
+        const entry: ChatDockEntry = {
+          ...(existing ?? newChatEntry("tab")),
+          sessionId: target.sessionId,
+          mode: mode === "floating" ? "partial" : "tab",
+        };
+        return {
+          ...current,
+          [target.projectId]: {
+            ...targetWorkspace,
+            chats: [
+              ...targetWorkspace.chats.filter(
+                (chat) => chat.localId !== entry.localId,
+              ),
+              entry,
+            ],
+            activeChatId: entry.localId,
+            activeTabKey:
+              mode === "floating"
+                ? targetWorkspace.activeTabKey === chatTabKey(entry.localId)
+                  ? orderedTabKeys(targetWorkspace).find(
+                      (key) => key !== targetWorkspace.activeTabKey,
+                    )
+                  : targetWorkspace.activeTabKey
+                : chatTabKey(entry.localId),
+            floatingKey: undefined,
+            split:
+              mode === "side" &&
+              targetWorkspace.activeTabKey &&
+              targetWorkspace.activeTabKey !== chatTabKey(entry.localId)
+                ? {
+                    leftKey: targetWorkspace.activeTabKey,
+                    rightKey: chatTabKey(entry.localId),
+                    ratio: 0.5,
+                  }
+                : null,
+          },
+        };
+      });
+      selectProject(target.projectId);
+      return;
+    }
     const ws = workspaceRef.current;
-    const focusedBrowserId = ws.activeTabKey?.startsWith("browser:")
-      ? ws.activeTabKey.slice("browser:".length)
+    const focusedKey = ws.floatingKey ?? ws.activeTabKey;
+    const focusedBrowserId = focusedKey?.startsWith("browser:")
+      ? focusedKey.slice("browser:".length)
       : undefined;
     const navigate = focusedBrowserId
       ? browserNavigatorsRef.current.get(focusedBrowserId)
@@ -2017,10 +2196,13 @@ export function App() {
       navigate(url);
       return;
     }
-    openBrowserTab(url, mode === "side" ? { side: true } : undefined);
+    openBrowserTab(url, {
+      side: mode === "side",
+      floating: mode === "floating",
+    });
   };
 
-  const closeTab = (
+  const closeTabImmediately = (
     key: string,
     opts?: { force?: boolean; discardDraft?: boolean },
   ) => {
@@ -2247,6 +2429,15 @@ export function App() {
             : ws.activeTabKey,
       };
     });
+  };
+
+  const closeTab = (
+    key: string,
+    opts?: { force?: boolean; discardDraft?: boolean },
+  ) => {
+    if (workspaceRef.current.floatingKey === key)
+      floatingMotion.dismiss(() => closeTabImmediately(key, opts));
+    else closeTabImmediately(key, opts);
   };
 
   /** Cmd+Shift+T: restore the most recently closed tab (re-tiled when
@@ -2586,7 +2777,10 @@ export function App() {
       ),
     }));
 
-  const openSession = (session: AgentSession, placement?: "tab" | "split") =>
+  const openSession = (
+    session: AgentSession,
+    placement?: CommitMode | "split",
+  ) =>
     updateWorkspace((ws) => {
       const existing = ws.chats.find((chat) => chat.sessionId === session.id);
       // Already-tabbed chats stay tabs; everything else opens as the
@@ -2599,9 +2793,16 @@ export function App() {
         ws.editors.length === 0 &&
         ws.chats.every((chat) => chat.mode !== "tab");
       const mode =
-        placement || existing?.mode === "tab" || noTabsOpen
-          ? ("tab" as const)
-          : ("partial" as const);
+        placement === "floating"
+          ? "partial"
+          : placement === "replace" ||
+              placement === "tab" ||
+              placement === "side" ||
+              placement === "split" ||
+              existing?.mode === "tab" ||
+              noTabsOpen
+            ? ("tab" as const)
+            : ("partial" as const);
       const parentLocalId = session.parentSessionId
         ? ws.chats.find((chat) => chat.sessionId === session.parentSessionId)
             ?.localId
@@ -2613,9 +2814,13 @@ export function App() {
       };
       const key = chatTabKey(entry.localId);
       const split =
-        placement === "split" && ws.activeTabKey && ws.activeTabKey !== key
+        (placement === "split" || placement === "side") &&
+        ws.activeTabKey &&
+        ws.activeTabKey !== key
           ? { leftKey: ws.activeTabKey, rightKey: key, ratio: 0.5 }
-          : placement === "tab"
+          : placement === "tab" ||
+              (mode === "partial" &&
+                (ws.split?.leftKey === key || ws.split?.rightKey === key))
             ? null
             : ws.split;
       return {
@@ -2631,7 +2836,13 @@ export function App() {
           { ...entry, mode },
         ],
         activeChatId: entry.localId,
-        activeTabKey: mode === "tab" ? key : ws.activeTabKey,
+        floatingKey: undefined,
+        activeTabKey:
+          mode === "tab"
+            ? key
+            : ws.activeTabKey === key
+              ? nextActiveTabKey(ws, key, ws.chats)
+              : ws.activeTabKey,
         split,
       };
     });
@@ -2836,6 +3047,10 @@ export function App() {
     window.setTimeout(() => {
       closeDispatchPendingRef.current = false;
       const ws = workspaceRef.current;
+      if (ws.floatingKey) {
+        closeTabRef.current(ws.floatingKey);
+        return;
+      }
       const focusedChat = ws.chats.find(
         (chat) => chat.localId === requestedChatId,
       );
@@ -2875,13 +3090,6 @@ export function App() {
     (chat) =>
       chat.localId === workspace.activeChatId && chatVisible(workspace, chat),
   );
-  const navigateFocusedBrowserHistory = (direction: "back" | "forward") => {
-    const activeKey = workspaceRef.current.activeTabKey;
-    if (!activeKey?.startsWith("browser:")) return;
-    browserHistoryNavigatorsRef.current.get(
-      activeKey.slice("browser:".length),
-    )?.(direction);
-  };
   const focusedSession = focusedChat?.sessionId
     ? sessionsById.get(focusedChat.sessionId)
     : undefined;
@@ -3442,7 +3650,15 @@ export function App() {
     closeTab(key, { force: true });
   };
 
-  const openSurface = (key: string, mode: "tab" | "split") => {
+  const openSurface = (key: string, requestedMode: CommitMode | "split") => {
+    const mode =
+      requestedMode === "side"
+        ? "split"
+        : requestedMode === "replace"
+          ? "tab"
+          : requestedMode;
+    if (requestedMode !== "floating")
+      updateWorkspace((ws) => ({ ...ws, floatingKey: undefined }));
     // Opening a surface answers any attention its chip was holding
     // (open_surface-in-background) — dismissal-by-interaction.
     setChipAttention((current) => {
@@ -3458,7 +3674,7 @@ export function App() {
     });
     if (key.startsWith("session:")) {
       const session = sessionsById.get(key.slice("session:".length));
-      if (session) openSession(session, mode);
+      if (session) openSession(session, requestedMode);
       return;
     }
     // App chips point at the app by name — materialize its tab if the
@@ -3507,6 +3723,10 @@ export function App() {
             : terminal,
         ),
       }));
+    }
+    if (requestedMode === "floating") {
+      if (workspaceRef.current.floatingKey !== key) floatSurface(key);
+      return;
     }
     // Chat surfaces (fork chips) may be minimized bubbles — a chat only
     // occupies a view slot in tab mode, so promote it first.
@@ -3635,11 +3855,121 @@ export function App() {
     }));
   };
 
-  const actionHandlers: Record<ActionId, (mode?: "side") => void> = {
+  const floatSurface = (key: string) => {
+    if (workspaceRef.current.floatingKey === key) {
+      dismissFloating();
+      return;
+    }
+    updateWorkspace((ws) => {
+      const keys = orderedTabKeys(ws);
+      const previous = previousActiveTabKeyRef.current;
+      const anchor =
+        ws.activeTabKey !== key
+          ? ws.activeTabKey
+          : previous && previous !== key && keys.includes(previous)
+            ? previous
+            : keys.find((candidate) => candidate !== key);
+      if (key.startsWith("chat:")) {
+        const localId = key.slice(5);
+        return {
+          ...ws,
+          floatingKey: undefined,
+          activeTabKey: anchor,
+          split: null,
+          activeChatId: localId,
+          chats: ws.chats.map((chat) =>
+            chat.localId === localId
+              ? { ...chat, mode: "partial" }
+              : chat.mode === "partial"
+                ? { ...chat, mode: "min" }
+                : chat,
+          ),
+        };
+      }
+      return {
+        ...ws,
+        activeTabKey: anchor,
+        floatingKey: key,
+        split: null,
+        chats: ws.chats.map((chat) =>
+          chat.mode === "partial" ? { ...chat, mode: "min" } : chat,
+        ),
+      };
+    });
+  };
+  const toggleFloatingTerminal = () => {
+    const existing = workspaceRef.current.terminals.find(
+      (terminal) => terminal.floatingTool === "terminal",
+    );
+    if (existing) floatSurface(terminalTabKey(existing.localId));
+    else openTerminalTab({ floatingTool: "terminal" });
+  };
+
+  const runTerminalMacro = (macro: TerminalMacro, mode?: CommitMode) => {
+    const existing = workspaceRef.current.terminals.find(
+      (terminal) => terminal.macroId === macro.id,
+    );
+    if (existing) {
+      const key = terminalTabKey(existing.localId);
+      if (mode === undefined) floatSurface(key);
+      else if (mode === "floating") {
+        if (workspaceRef.current.floatingKey !== key) floatSurface(key);
+      } else openSurface(key, mode === "side" ? "split" : "tab");
+    } else
+      openTerminalTab({
+        macroId: macro.id,
+        title: macro.name,
+        initialCommand: macro.command,
+        floating: mode === undefined || mode === "floating",
+        side: mode === "side",
+      });
+  };
+  const runTerminalMacroRef = useRef(runTerminalMacro);
+  runTerminalMacroRef.current = runTerminalMacro;
+
+  const runBrowserCommand = (command: keyof BrowserCommands) => {
+    const ws = workspaceRef.current;
+    const key = ws.floatingKey ?? ws.activeTabKey;
+    const browserId =
+      browserShortcutTargetRef.current ??
+      (key?.startsWith("browser:") ? key.slice(8) : undefined);
+    if (browserId) browserCommandsRef.current.get(browserId)?.[command]();
+  };
+  const actionHandlers: Record<ActionId, (mode?: CommitMode) => void> = {
+    "browser-focus-address": () => runBrowserCommand("focusAddress"),
+    "browser-reload": () => runBrowserCommand("reload"),
+    "browser-reload-hard": () => runBrowserCommand("reloadIgnoringCache"),
+    "browser-back": () => runBrowserCommand("back"),
+    "browser-forward": () => runBrowserCommand("forward"),
     "new-tab": openPaletteTab,
     "command-palette": () => setPaletteOpen((value) => !value),
     "check-for-updates": () => void desktopApi.updateCheck(),
     "new-floating-chat": () => addChat(),
+    "toggle-floating-terminal": () => toggleFloatingTerminal(),
+    "new-floating-browser": () => openBrowserTab("", { floating: true }),
+    "open-floating-settings": () => {
+      updateWorkspace((ws) =>
+        ws.tabs.some((tab) => tab.kind === "settings")
+          ? ws
+          : {
+              ...ws,
+              tabs: [
+                ...ws.tabs,
+                { kind: "settings", name: "settings", label: "Settings" },
+              ],
+            },
+      );
+      floatSurface("settings:settings");
+    },
+    "dismiss-floating": dismissFloating,
+    "floating-to-tab": () => {
+      const key = workspaceRef.current.floatingKey;
+      if (key) openSurface(key, "tab");
+    },
+    "floating-to-split": () => {
+      const key = workspaceRef.current.floatingKey;
+      if (key) openSurface(key, "split");
+    },
     // Policy-gated (ADR 0062): hidden from the palette when the project
     // committed allowIncognito: false; the handler double-checks.
     "new-incognito-chat": () => {
@@ -3653,14 +3983,15 @@ export function App() {
     "next-tab": () => cycleTab(1),
     "split-view": toggleSplit,
     "new-browser-tab": (mode) =>
-      openBrowserTab("", mode === "side" ? { side: true } : undefined),
-    "browser-back": () => navigateFocusedBrowserHistory("back"),
-    "browser-forward": () => navigateFocusedBrowserHistory("forward"),
+      openBrowserTab("", {
+        side: mode === "side",
+        floating: mode === "floating",
+      }),
     "reopen-tab": reopenTab,
     "new-terminal-tab": (mode) =>
-      openTerminalTab(mode === "side" ? { side: true } : undefined),
+      openTerminalTab({ side: mode === "side", floating: mode === "floating" }),
     "new-editor-tab": (mode) =>
-      openEditorTab(mode === "side" ? { side: true } : undefined),
+      openEditorTab({ side: mode === "side", floating: mode === "floating" }),
     "toggle-right-sidebar": () =>
       setRightSidebarOpen((value) => {
         void desktopApi.setPrefs({ rightSidebarOpen: !value });
@@ -3715,24 +4046,66 @@ export function App() {
     // Returns true when the key matched an app shortcut. Also fed by
     // guest-key forwarding: shortcuts pressed inside webview page content
     // never reach this window, so main relays them (see main/browser.ts).
-    const dispatchShortcut = (event: {
-      key: string;
-      metaKey: boolean;
-      ctrlKey: boolean;
-      altKey: boolean;
-      shiftKey: boolean;
-    }): boolean => {
+    const dispatchShortcut = (
+      event: {
+        key: string;
+        code?: string;
+        metaKey: boolean;
+        ctrlKey: boolean;
+        altKey: boolean;
+        shiftKey: boolean;
+      },
+      guestId?: number,
+    ): boolean => {
       const bindings = keybindingsRef.current;
-      const keyEvent = event as globalThis.KeyboardEvent;
-      const action = KEYBINDING_ACTIONS.find((candidate) =>
-        matchesBinding(keyEvent, bindings[candidate]),
+      const action = KEYBINDING_ACTIONS.find(
+        (candidate) =>
+          (candidate !== "dismiss-floating" ||
+            (floatingEscapeEnabledRef.current &&
+              ![
+                ...document.querySelectorAll(
+                  '[role="dialog"], [role="alertdialog"], [role="menu"]',
+                ),
+              ].some(
+                (element) =>
+                  !element.closest("[inert]") &&
+                  element.checkVisibility({
+                    checkOpacity: true,
+                    checkVisibilityCSS: true,
+                  }),
+              ))) &&
+          matchesBinding(event, bindings[candidate]),
       );
-      if (!action) return false;
-      actionHandlersRef.current[action]();
+      const macro = prefsRef.current?.terminalMacros.find((candidate) =>
+        matchesBinding(event, candidate.shortcut),
+      );
+      if (!action && !macro) return false;
+      browserShortcutTargetRef.current =
+        guestId === undefined
+          ? undefined
+          : [...browserGuestIdsRef.current].find(
+              ([, id]) => id === guestId,
+            )?.[0];
+      try {
+        if (action) actionHandlersRef.current[action]();
+        else if (macro) runTerminalMacroRef.current(macro);
+      } finally {
+        browserShortcutTargetRef.current = undefined;
+      }
       return true;
     };
 
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      // Ghostty marks intercepted app shortcuts handled to suppress PTY input,
+      // then deliberately bubbles them to this dispatcher.
+      if (
+        event.defaultPrevented &&
+        !(
+          event.target instanceof Element &&
+          event.target.closest("[data-terminal-appearance]")
+        )
+      )
+        return;
       if (dispatchShortcut(event)) {
         event.preventDefault();
         return;
@@ -3757,13 +4130,17 @@ export function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     const unsubscribeGuestKeys = desktopApi.onBrowserGuestKey((key) =>
-      dispatchShortcut({
-        key: key.key,
-        metaKey: key.meta,
-        ctrlKey: key.control,
-        altKey: key.alt,
-        shiftKey: key.shift,
-      }),
+      dispatchShortcut(
+        {
+          key: key.key,
+          code: key.code,
+          metaKey: key.meta,
+          ctrlKey: key.control,
+          altKey: key.alt,
+          shiftKey: key.shift,
+        },
+        key.webContentsId,
+      ),
     );
     return () => {
       window.removeEventListener("keydown", onKeyDown);
@@ -4489,14 +4866,14 @@ export function App() {
       return groupId ? { ...tab, groupId } : tab;
     })
     .filter((tab): tab is WorkspaceTab => tab !== null);
-  const activeChatTabId = workspace.activeTabKey?.startsWith("chat:")
-    ? workspace.activeTabKey.slice("chat:".length)
+  const activeChatTabId = focusedTabKey?.startsWith("chat:")
+    ? focusedTabKey.slice("chat:".length)
     : undefined;
-  const activeBrowserTabId = workspace.activeTabKey?.startsWith("browser:")
-    ? workspace.activeTabKey.slice("browser:".length)
+  const activeBrowserTabId = focusedTabKey?.startsWith("browser:")
+    ? focusedTabKey.slice("browser:".length)
     : undefined;
-  const activeTerminalTabId = workspace.activeTabKey?.startsWith("terminal:")
-    ? workspace.activeTabKey.slice("terminal:".length)
+  const activeTerminalTabId = focusedTabKey?.startsWith("terminal:")
+    ? focusedTabKey.slice("terminal:".length)
     : undefined;
   // The split renders only while valid: both panes still exist and one of
   // them is focused. Any mutation that breaks that (a close, a chat mode
@@ -4514,16 +4891,21 @@ export function App() {
       : null;
 
   /** Which tabs the content area shows, and where. */
-  const viewSlots: Record<string, "full" | "left" | "right"> = split
-    ? { [split.leftKey]: "left", [split.rightKey]: "right" }
-    : workspace.activeTabKey
-      ? { [workspace.activeTabKey]: "full" }
-      : {};
+  const viewSlots: Record<string, "full" | "left" | "right" | "floating"> =
+    split
+      ? { [split.leftKey]: "left", [split.rightKey]: "right" }
+      : workspace.activeTabKey
+        ? { [workspace.activeTabKey]: "full" }
+        : {};
+  if (workspace.floatingKey && allTabKeysNow.includes(workspace.floatingKey))
+    viewSlots[workspace.floatingKey] = "floating";
   const splitRatio = split?.ratio ?? 0.5;
   const SLOT_CLASSES = {
     full: "absolute inset-0 flex flex-col",
     left: "absolute inset-y-0 left-0 flex flex-col border-r border-border",
     right: "absolute inset-y-0 right-0 flex flex-col",
+    floating:
+      "absolute z-30 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-bg shadow-2xl",
   } as const;
   // Un-siding (and re-tiling) tweens the pane edges instead of snapping;
   // the transition pauses during a divider drag so resizing tracks the
@@ -4546,18 +4928,42 @@ export function App() {
     const slot = viewSlots[key];
     if (slot === "left") return { right: `${(1 - splitRatio) * 100}%` };
     if (slot === "right") return { left: `${splitRatio * 100}%` };
+    if (slot === "floating") return { inset: "max(12px, 8%) max(12px, 8%)" };
     return undefined;
   };
   /** Clicking anywhere in an unfocused pane focuses it. */
-  const paneFocusProps = (key: string) =>
-    split && workspace.activeTabKey !== key && viewSlots[key]
+  const isSplitSlot = (key: string) =>
+    viewSlots[key] === "left" || viewSlots[key] === "right";
+  const paneFocusProps = (key: string) => ({
+    "data-floating-surface": viewSlots[key] === "floating" ? key : undefined,
+    "data-floating-state":
+      viewSlots[key] === "floating"
+        ? floatingMotion.closing
+          ? "closing"
+          : "open"
+        : undefined,
+    ...(split && workspace.activeTabKey !== key && isSplitSlot(key)
       ? { onMouseDownCapture: () => selectTab(key) }
-      : {};
+      : {}),
+  });
   const splitCompanionKey = split
     ? workspace.activeTabKey === split.leftKey
       ? split.rightKey
       : split.leftKey
     : undefined;
+  const floatingBar = (key: string) =>
+    workspace.floatingKey === key ? (
+      <FloatingPanelBar
+        title={tabByKey.get(key)?.label ?? "Preview"}
+        canTile={Boolean(
+          workspace.activeTabKey && workspace.activeTabKey !== key,
+        )}
+        onExpand={() => openSurface(key, "tab")}
+        onTile={() => openSurface(key, "split")}
+        onHide={dismissFloating}
+        onClose={() => closeTab(key)}
+      />
+    ) : null;
 
   /**
    * A rail chip for an attention key with no attached surface behind it
@@ -4763,6 +5169,8 @@ export function App() {
     canCreateWorkflows: Boolean(projectId) && !memberShell,
     onRunSkill: runSkill,
     actionHandlers,
+    terminalMacros: prefs?.terminalMacros ?? [],
+    onRunTerminalMacro: runTerminalMacro,
     actionAvailability: projectId
       ? paletteActionAvailability
       : Object.fromEntries(
@@ -4802,7 +5210,61 @@ export function App() {
     onHighlightTarget: setPaletteTarget,
   };
 
-  const sidebarTabs = (side: "left" | "right") => visibleSidebars?.[side] ?? [];
+  const customizeSidebar = (side: "left" | "right") => {
+    void Promise.all([
+      desktopApi.sidebarConfigGet(projectId),
+      desktopApi.sidebarConfigFile(),
+      projectId ? desktopApi.projectRoot(projectId) : Promise.resolve(null),
+    ])
+      .then(([resolved, profileFile, root]) => {
+        const file =
+          resolved.layer === "project" && root
+            ? `${root}/.catamorphic/sidebar.js`
+            : resolved.layer === "project-local" && projectId
+              ? `${profileFile.slice(0, profileFile.lastIndexOf("/"))}/sidebar-projects/${projectId}.js`
+              : profileFile;
+        sendToAgent(
+          [
+            `Help me customize my ${side} sidebar. Walk me through the available tabs and widgets, then make the changes I ask for.`,
+            `The live sidebar configuration file on this machine is ${JSON.stringify(file)}. Read it first, or create it from the current layout below if it does not exist. Edits apply live.`,
+            "The file exports module.exports = { left: [...], right: [...] }. Each tab has a stable id, title, Lucide icon and sections. Each section has a stable id and type (bookmarks, tabs, workflows, apps, chats, files, remote, git, prs, activity, note, custom or app). Preserve existing ids and the other sidebar. Profile selection and Settings are fixed in the left footer. A single tab hides its icon strip. Do not commit these local settings.",
+            `Current layout: ${JSON.stringify(resolved.config)}`,
+          ].join("\n\n"),
+          "float",
+        );
+      })
+      .catch((cause: unknown) =>
+        setLinkError(
+          cause instanceof Error
+            ? cause.message
+            : "Could not open sidebar customization",
+        ),
+      );
+  };
+
+  const sidebarTabs = (side: "left" | "right") => {
+    const tabs = visibleSidebars?.[side] ?? [];
+    if (
+      side !== "left" ||
+      !tabsInSidebar ||
+      tabs.some((tab) =>
+        tab.sections.some((section) => section.type === "tabs"),
+      )
+    )
+      return tabs;
+    // Older customized layouts still need a home for their open workspace tabs.
+    return tabs.map((tab, index) =>
+      index === 0
+        ? {
+            ...tab,
+            sections: [
+              ...tab.sections,
+              { id: "workspace-tabs", type: "tabs" as const },
+            ],
+          }
+        : tab,
+    );
+  };
   const renderSidebarSection = (
     section: SidebarSectionConfig,
     visible: boolean,
@@ -4811,10 +5273,10 @@ export function App() {
       <ConfiguredSection
         key={section.id}
         visible={visible}
-        onCustomize={() =>
-          sendToAgent("Customize my sidebar widgets and tabs.", "float")
-        }
+        onCustomize={() => customizeSidebar("left")}
         section={section}
+        pinnedStyle={prefs?.pinnedBookmarks ?? "tiles"}
+        tabs={tabsInSidebar ? workspaceTabBar : null}
         experienceContext={projectExperienceContext}
         memberShell={memberShell}
         projectId={projectId}
@@ -4858,13 +5320,14 @@ export function App() {
         onOpenSession={openSession}
         onSessionAction={applySessionAction}
         onOpenUrl={openUrl}
-        onOpenFile={(filePath) => {
-          void openLinkedSurface(`file:${filePath}`).catch((cause: unknown) =>
-            setLinkError(
-              cause instanceof Error
-                ? cause.message
-                : "Could not open this file",
-            ),
+        onOpenFile={(filePath, mode) => {
+          void openLinkedSurface(`file:${filePath}`, { mode }).catch(
+            (cause: unknown) =>
+              setLinkError(
+                cause instanceof Error
+                  ? cause.message
+                  : "Could not open this file",
+              ),
           );
         }}
         onOpenHistory={setRemoteHistoryPath}
@@ -4879,8 +5342,85 @@ export function App() {
       candidate.terminals.some((terminal) => terminal.busy),
     );
 
+  const tabsInSidebar = prefs?.tabPlacement === "sidebar";
+  const headerInSidebar = tabsInSidebar && prefs?.headerPlacement === "sidebar";
+  const compactWindow = headerInSidebar && !sidebarOpen;
+  const { sidebarRef, revealed, reveal, revealOnHover } =
+    useSidebarReveal(compactWindow);
+  const sidebarVisible = sidebarOpen || revealed;
+  const chromeBrowserId = workspace.activeTabKey?.startsWith("browser:")
+    ? workspace.activeTabKey.slice(8)
+    : undefined;
+  const activeHeaderTitle =
+    activeTab?.kind === "palette"
+      ? ""
+      : (allTabs.find((tab) => tabKey(tab) === workspace.activeTabKey)?.label ??
+        "");
+  const sidebarToggle = (
+    <ShortcutHint
+      label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+      shortcut={formatBinding(keybindings["toggle-sidebar"])}
+    >
+      <button
+        type="button"
+        onClick={() =>
+          setSidebarOpen((value) => {
+            void desktopApi.setPrefs({ sidebarOpen: !value });
+            return !value;
+          })
+        }
+        className="app-no-drag grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay/60 hover:text-fg"
+        aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+        aria-expanded={sidebarOpen}
+      >
+        <PanelLeft className="size-4" />
+      </button>
+    </ShortcutHint>
+  );
+  const workspaceTitle = (
+    <div
+      className="flex h-full min-w-0 flex-1 items-center"
+      data-workspace-title
+    >
+      {/* Keep the portal host empty of React-owned title children. Clearing
+          a title must never remove the browser toolbar before its portal. */}
+      <div
+        ref={setBrowserToolbarHost}
+        className={`h-full min-w-0 flex-1 ${chromeBrowserId ? "flex" : "hidden"}`}
+      />
+      {!chromeBrowserId && Boolean(activeHeaderTitle) && (
+        <span className="truncate px-2 text-[13px] text-fg-muted">
+          {activeHeaderTitle}
+        </span>
+      )}
+    </div>
+  );
+  const workspaceTabBar = (
+    <WorkspaceTabBar
+      orientation={tabsInSidebar ? "vertical" : "horizontal"}
+      tabs={allTabs}
+      activeKey={focusedTabKey}
+      secondaryKey={splitCompanionKey}
+      highlightKey={targetedTabKey}
+      groups={tabGroups}
+      onSelect={(key, mode) =>
+        mode === "side" || mode === "floating"
+          ? openSurface(key, mode)
+          : selectTab(key)
+      }
+      onClose={closeTab}
+      onNew={openPaletteTab}
+      onToggleGroup={toggleChatGroup}
+      onReorder={reorderTab}
+      onDragStateChange={(key) => {
+        setTabDragKey(key);
+        if (!key) setDropSideHover(null);
+      }}
+    />
+  );
+
   return (
-    <div className="flex h-full">
+    <div className="relative isolate flex h-full bg-sidebar">
       {/* Agent pointers: glow + scroll on data-point-key elements. The
           workspace object is the re-resolve trigger — a pointed tab may
           mount after the point_at call. */}
@@ -4988,14 +5528,31 @@ export function App() {
         side="left"
         scope={`${activeProfile?.id}:${projectId}`}
         tabs={sidebarTabs("left")}
-        open={sidebarOpen}
+        open={sidebarVisible}
+        sidebarRef={sidebarRef}
+        overlay={compactWindow}
+        revealed={revealed}
         error={sidebarError}
-        onCustomize={() =>
-          sendToAgent("Customize my left sidebar tabs and widgets.", "float")
-        }
+        onCustomize={() => customizeSidebar("left")}
         header={
           <>
-            <div className="app-drag h-10 shrink-0" />
+            <div className="app-drag flex h-10 shrink-0 items-center justify-end gap-1 pl-[86px] pr-3">
+              {sidebarVisible && sidebarToggle}
+              {headerInSidebar && (
+                <div
+                  ref={setBrowserNavigationHost}
+                  className="app-no-drag flex items-center gap-1"
+                  data-sidebar-navigation
+                />
+              )}
+            </div>
+            {headerInSidebar && (
+              <div
+                className={`relative z-30 mx-3 mb-2 h-8 ${activeHeaderTitle || chromeBrowserId ? "" : "hidden"}`}
+              >
+                {workspaceTitle}
+              </div>
+            )}
 
             <div className="flex items-center gap-1 px-3 pb-3">
               <ProjectSwitcher
@@ -5013,7 +5570,7 @@ export function App() {
           </>
         }
         footer={
-          <footer className="border-t border-border p-2">
+          <footer className="flex h-12 shrink-0 items-center gap-1 px-2">
             {profilesData && activeProfile && (
               <ProfileBar
                 data={profilesData}
@@ -5032,7 +5589,17 @@ export function App() {
                 }
               />
             )}
-            <div className="flex items-center gap-1">
+            <ShortcutHint label="Customize sidebar" side="top">
+              <button
+                type="button"
+                onClick={() => customizeSidebar("left")}
+                className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay/60 hover:text-fg"
+                aria-label="Customize sidebar"
+              >
+                <Wand2 className="size-3.5" />
+              </button>
+            </ShortcutHint>
+            <ShortcutHint label="Settings" side="top">
               <button
                 type="button"
                 onClick={() =>
@@ -5042,16 +5609,13 @@ export function App() {
                     label: "Settings",
                   })
                 }
-                className={`flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 text-[13px] transition-colors duration-150 ${
-                  activeTab?.kind === "settings"
-                    ? "bg-bg-overlay text-fg"
-                    : "text-fg-muted hover:bg-bg-overlay hover:text-fg"
-                }`}
+                className={`grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay/60 hover:text-fg ${activeTab?.kind === "settings" ? "bg-bg-overlay/60 text-fg" : ""}`}
+                aria-label="Settings"
               >
-                <SettingsIcon className="size-3.5" />
-                Settings
+                <SettingsIcon className="size-4" />
+                <span className="sr-only">Settings</span>
               </button>
-            </div>
+            </ShortcutHint>
           </footer>
         }
         renderSection={renderSidebarSection}
@@ -5060,92 +5624,12 @@ export function App() {
       {/* min-h-0/overflow-hidden: the content column must clip its panes
           (terminal canvases refit asynchronously and may overshoot for a
           frame) rather than push the document taller than the window. */}
-      <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        {/* One chrome row: drag region + sidebar toggle + tabs. */}
-        <div className="app-drag flex h-10 shrink-0 items-center gap-1 border-b border-border pl-2 pr-3">
-          <span
-            className={`app-no-drag transition-[margin] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-              sidebarOpen ? "" : "ml-[70px]"
-            }`}
-          >
-            <ShortcutHint
-              label="Toggle sidebar"
-              shortcut={formatBinding(keybindings["toggle-sidebar"])}
-            >
-              <button
-                type="button"
-                onClick={() =>
-                  setSidebarOpen((value) => {
-                    void desktopApi.setPrefs({ sidebarOpen: !value });
-                    return !value;
-                  })
-                }
-                className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-                aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
-                aria-expanded={sidebarOpen}
-              >
-                <PanelLeft className="size-4" />
-              </button>
-            </ShortcutHint>
-          </span>
-
-          {(projectId || workspace.browsers.length > 0) && (
-            <WorkspaceTabBar
-              tabs={allTabs}
-              activeKey={workspace.activeTabKey}
-              secondaryKey={splitCompanionKey}
-              highlightKey={targetedTabKey}
-              groups={tabGroups}
-              onSelect={selectTab}
-              onClose={closeTab}
-              onNew={openPaletteTab}
-              onToggleGroup={toggleChatGroup}
-              onReorder={reorderTab}
-              onDragStateChange={(key) => {
-                setTabDragKey(key);
-                if (!key) setDropSideHover(null);
-              }}
-            />
-          )}
-          {(() => {
-            const editorId = workspace.activeTabKey?.startsWith("editor:")
-              ? workspace.activeTabKey.slice("editor:".length)
-              : undefined;
-            const editor = editorId
-              ? workspace.editors.find(
-                  (candidate) => candidate.localId === editorId,
-                )
-              : undefined;
-            if (
-              !editor?.filePath?.startsWith("store/") ||
-              !remoteSurfaceStatus ||
-              remoteSurfaceStatus.capabilities?.features.publications === false
-            ) {
-              return null;
-            }
-            return (
-              <ShortcutHint label="Share this file">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const share = editorShareHandlersRef.current.get(
-                      editor.localId,
-                    );
-                    if (share) void share().catch(() => undefined);
-                  }}
-                  className="app-no-drag grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors hover:bg-bg-overlay hover:text-fg"
-                  aria-label="Share this file"
-                  data-testid="surface-share"
-                >
-                  <Share2 className="size-3.5" />
-                </button>
-              </ShortcutHint>
-            );
-          })()}
-          <ShortcutHint
-            label="Toggle right sidebar"
-            shortcut={formatBinding(keybindings["toggle-right-sidebar"])}
-          >
+      <main
+        data-tab-layout={tabsInSidebar ? "sidebar" : "top"}
+        className={`workspace-surface relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${tabsInSidebar ? "bg-sidebar" : "bg-bg"}`}
+      >
+        {headerInSidebar && (
+          <ShortcutHint label="Toggle right sidebar">
             <button
               type="button"
               aria-label={
@@ -5153,17 +5637,97 @@ export function App() {
                   ? "Collapse right sidebar"
                   : "Expand right sidebar"
               }
-              aria-expanded={rightSidebarOpen}
-              className="app-no-drag grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:text-fg"
-              onClick={() => actionHandlers["toggle-right-sidebar"]?.()}
+              onClick={() => actionHandlers["toggle-right-sidebar"]()}
+              className="app-no-drag absolute right-2 top-2 z-20 grid size-7 place-items-center rounded-md bg-sidebar text-fg-muted hover:text-fg"
             >
               <PanelRight className="size-4" />
             </button>
           </ShortcutHint>
-        </div>
+        )}
+        {compactWindow && (
+          <button
+            type="button"
+            data-sidebar-reveal-edge
+            aria-label="Show sidebar"
+            tabIndex={revealed ? -1 : 0}
+            className={`absolute inset-y-0 left-0 z-40 w-1.5 cursor-default ${revealed ? "pointer-events-none" : ""}`}
+            onPointerEnter={revealOnHover}
+            onFocus={reveal}
+            onClick={reveal}
+          />
+        )}
+        {!headerInSidebar && (
+          <div className="workspace-chrome app-drag relative z-20 flex h-10 shrink-0 items-center gap-1 pl-2 pr-3">
+            {!sidebarOpen && (
+              <span className="app-no-drag ml-[70px] flex shrink-0 items-center">
+                {sidebarToggle}
+              </span>
+            )}
+            {(projectId || workspace.browsers.length > 0) &&
+              !tabsInSidebar &&
+              workspaceTabBar}
+            {projectId && tabsInSidebar && !headerInSidebar && workspaceTitle}
+            {(() => {
+              const editorId = workspace.activeTabKey?.startsWith("editor:")
+                ? workspace.activeTabKey.slice("editor:".length)
+                : undefined;
+              const editor = editorId
+                ? workspace.editors.find(
+                    (candidate) => candidate.localId === editorId,
+                  )
+                : undefined;
+              if (
+                !editor?.filePath?.startsWith("store/") ||
+                !remoteSurfaceStatus ||
+                remoteSurfaceStatus.capabilities?.features.publications ===
+                  false
+              ) {
+                return null;
+              }
+              return (
+                <ShortcutHint label="Share this file">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const share = editorShareHandlersRef.current.get(
+                        editor.localId,
+                      );
+                      if (share) void share().catch(() => undefined);
+                    }}
+                    className="app-no-drag grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors hover:bg-bg-overlay hover:text-fg"
+                    aria-label="Share this file"
+                    data-testid="surface-share"
+                  >
+                    <Share2 className="size-3.5" />
+                  </button>
+                </ShortcutHint>
+              );
+            })()}
+            <ShortcutHint
+              label="Toggle right sidebar"
+              shortcut={formatBinding(keybindings["toggle-right-sidebar"])}
+            >
+              <button
+                type="button"
+                aria-label={
+                  rightSidebarOpen
+                    ? "Collapse right sidebar"
+                    : "Expand right sidebar"
+                }
+                aria-expanded={rightSidebarOpen}
+                className="app-no-drag ml-auto grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:text-fg"
+                onClick={() => actionHandlers["toggle-right-sidebar"]?.()}
+              >
+                <PanelRight className="size-4" />
+              </button>
+            </ShortcutHint>
+          </div>
+        )}
 
         {projectId ? (
-          <div className="relative flex min-h-0 flex-1 flex-col">
+          <div
+            className={`relative flex min-h-0 flex-1 flex-col bg-bg ${headerInSidebar && sidebarOpen ? "mt-1.5" : ""} ${tabsInSidebar ? `workspace-content overflow-hidden ${compactWindow ? "" : "mb-1.5 rounded-[14px]"}` : ""}`}
+          >
             {/* Every tab pane lives in this wrapper so keyboard cycling
                   can nudge the visible content from the direction of
                   travel; chat docks and bubbles stay outside (they own
@@ -5182,6 +5746,17 @@ export function App() {
                 }
               }}
             >
+              {workspace.floatingKey && (
+                <button
+                  type="button"
+                  aria-label="Dismiss floating panel"
+                  className="absolute inset-0 z-20 cursor-default bg-black/15"
+                  data-floating-backdrop={
+                    floatingMotion.closing ? "closing" : "open"
+                  }
+                  onClick={dismissFloating}
+                />
+              )}
               {/* Screen-style tabs render whenever they occupy a view
                     slot — in a split that can be two at once. */}
               {workspace.tabs
@@ -5195,7 +5770,8 @@ export function App() {
                     style={paneStyle(tabKey(tab))}
                     {...paneFocusProps(tabKey(tab))}
                   >
-                    {viewSlots[tabKey(tab)] !== "full" && (
+                    {floatingBar(tabKey(tab))}
+                    {isSplitSlot(tabKey(tab)) && (
                       <PaneUnsplitButton
                         onClick={() => openSurface(tabKey(tab), "tab")}
                       />
@@ -5303,6 +5879,7 @@ export function App() {
                   style={paneStyle(browserTabKey(browser.localId))}
                   {...paneFocusProps(browserTabKey(browser.localId))}
                 >
+                  {floatingBar(browserTabKey(browser.localId))}
                   <BrowserScreen
                     profileId={browser.profileId}
                     projectId={projectId}
@@ -5310,6 +5887,23 @@ export function App() {
                     // last known URL, not the tab's original one.
                     initialUrl={browser.url || browser.initialUrl}
                     active={browser.localId === activeBrowserTabId}
+                    toolbarActive={browser.localId === chromeBrowserId}
+                    integratedToolbar={
+                      tabsInSidebar &&
+                      viewSlots[browserTabKey(browser.localId)] !== "floating"
+                    }
+                    toolbarHost={browserToolbarHost}
+                    sidebarToolbar={
+                      headerInSidebar &&
+                      viewSlots[browserTabKey(browser.localId)] !== "floating"
+                    }
+                    navigationHost={browserNavigationHost}
+                    onRevealToolbar={() => {
+                      if (!sidebarOpen) {
+                        setSidebarOpen(true);
+                        void desktopApi.setPrefs({ sidebarOpen: true });
+                      }
+                    }}
                     visible={Boolean(viewSlots[browserTabKey(browser.localId)])}
                     keepAwake={Boolean(
                       browser.agentControlled &&
@@ -5320,6 +5914,27 @@ export function App() {
                     onStateChange={(state) =>
                       onBrowserState(browser.localId, state)
                     }
+                    previewLinksWithAlt={prefs?.previewLinksWithAlt ?? true}
+                    floatingDismissShortcut={keybindings["dismiss-floating"]}
+                    onDismissFloating={
+                      workspace.floatingKey === browserTabKey(browser.localId)
+                        ? dismissFloating
+                        : undefined
+                    }
+                    onPreviewLink={(url, mode) =>
+                      openBrowserTab(url, {
+                        floating: mode === "floating",
+                        side: mode === "side",
+                      })
+                    }
+                    registerCommands={(commands) => {
+                      if (commands)
+                        browserCommandsRef.current.set(
+                          browser.localId,
+                          commands,
+                        );
+                      else browserCommandsRef.current.delete(browser.localId);
+                    }}
                     registerNavigate={(navigate) =>
                       browserNavigatorsRef.current.set(
                         browser.localId,
@@ -5343,8 +5958,7 @@ export function App() {
                       }
                     }}
                     onUnsplit={
-                      viewSlots[browserTabKey(browser.localId)] &&
-                      viewSlots[browserTabKey(browser.localId)] !== "full"
+                      isSplitSlot(browserTabKey(browser.localId))
                         ? () =>
                             openSurface(browserTabKey(browser.localId), "tab")
                         : undefined
@@ -5376,18 +5990,26 @@ export function App() {
                   style={paneStyle(terminalTabKey(terminal.localId))}
                   {...paneFocusProps(terminalTabKey(terminal.localId))}
                 >
-                  {viewSlots[terminalTabKey(terminal.localId)] !== undefined &&
-                    viewSlots[terminalTabKey(terminal.localId)] !== "full" && (
-                      <PaneUnsplitButton
-                        onClick={() =>
-                          openSurface(terminalTabKey(terminal.localId), "tab")
-                        }
-                      />
-                    )}
+                  {floatingBar(terminalTabKey(terminal.localId))}
+                  {isSplitSlot(terminalTabKey(terminal.localId)) && (
+                    <PaneUnsplitButton
+                      onClick={() =>
+                        openSurface(terminalTabKey(terminal.localId), "tab")
+                      }
+                    />
+                  )}
                   <Suspense fallback={<div className="flex-1 bg-bg" />}>
                     <TerminalScreen
                       projectId={projectId}
                       active={terminal.localId === activeTerminalTabId}
+                      initialCommand={terminal.initialCommand}
+                      macroShortcuts={prefs?.terminalMacros.map(
+                        (macro) => macro.shortcut,
+                      )}
+                      floating={
+                        workspace.floatingKey ===
+                        terminalTabKey(terminal.localId)
+                      }
                       attachSessionId={terminal.attachSessionId}
                       restoreSessionId={terminal.restoreSessionId}
                       readOnly={Boolean(terminal.agentControlled)}
@@ -5444,14 +6066,14 @@ export function App() {
                   style={paneStyle(editorTabKey(editor.localId))}
                   {...paneFocusProps(editorTabKey(editor.localId))}
                 >
-                  {viewSlots[editorTabKey(editor.localId)] !== undefined &&
-                    viewSlots[editorTabKey(editor.localId)] !== "full" && (
-                      <PaneUnsplitButton
-                        onClick={() =>
-                          openSurface(editorTabKey(editor.localId), "tab")
-                        }
-                      />
-                    )}
+                  {floatingBar(editorTabKey(editor.localId))}
+                  {isSplitSlot(editorTabKey(editor.localId)) && (
+                    <PaneUnsplitButton
+                      onClick={() =>
+                        openSurface(editorTabKey(editor.localId), "tab")
+                      }
+                    />
+                  )}
                   <Suspense fallback={<div className="flex-1 bg-bg" />}>
                     <EditorScreen
                       line={editor.line}
@@ -5560,7 +6182,13 @@ export function App() {
                   entry.localId === workspace.activeChatId &&
                   chatVisible(workspace, entry)
                 }
-                slot={viewSlots[chatTabKey(entry.localId)] ?? "full"}
+                slot={
+                  viewSlots[chatTabKey(entry.localId)] === "left"
+                    ? "left"
+                    : viewSlots[chatTabKey(entry.localId)] === "right"
+                      ? "right"
+                      : "full"
+                }
                 splitRatio={splitRatio}
                 splitResizing={dividerDragging}
                 bubbleClearance={bubblesCollapsed ? "corner" : "strip"}
@@ -5584,17 +6212,23 @@ export function App() {
                       toolInput: view.toolInput,
                       toolResult: view.toolResult,
                     },
-                    mode === "split" ? "side" : undefined,
+                    mode === "split" ? "side" : mode,
                   );
                 }}
                 onLinkClick={(url, modifiers) =>
                   openMessageLink(url, entry, modifiers)
                 }
-                onFileClick={(path) =>
-                  openMessageLink(`file:${path}`, entry, {
-                    metaKey: false,
-                    shiftKey: false,
-                  })
+                onFileClick={(path, modifiers) =>
+                  openMessageLink(
+                    `file:${path}`,
+                    entry,
+                    modifiers ?? {
+                      metaKey: false,
+                      ctrlKey: false,
+                      altKey: false,
+                      shiftKey: false,
+                    },
+                  )
                 }
                 onFork={(messageId) => forkChat(entry, messageId)}
                 onForkCurrent={() => forkChat(entry)}
@@ -5723,6 +6357,7 @@ export function App() {
                 <BrowserScreen
                   profileId={browser.profileId}
                   projectId={null}
+                  floatingDismissShortcut={keybindings["dismiss-floating"]}
                   initialUrl={browser.url || browser.initialUrl}
                   active={browser.localId === activeBrowserTabId}
                   visible={Boolean(viewSlots[browserTabKey(browser.localId)])}
@@ -5768,9 +6403,7 @@ export function App() {
         tabs={sidebarTabs("right")}
         open={rightSidebarOpen}
         error={sidebarError}
-        onCustomize={() =>
-          sendToAgent("Customize my right sidebar tabs and widgets.", "float")
-        }
+        onCustomize={() => customizeSidebar("right")}
         renderSection={renderSidebarSection}
       />
 
@@ -5957,6 +6590,8 @@ function ConfiguredSection({
   memberShell,
   projectId,
   profileId,
+  pinnedStyle,
+  tabs,
   activeTab,
   activeChatSessionId,
   activeFilePath,
@@ -5984,6 +6619,8 @@ function ConfiguredSection({
   memberShell: boolean;
   projectId: string;
   profileId?: string;
+  pinnedStyle: "tiles" | "list";
+  tabs: ReactNode;
   activeTab?: WorkspaceTab;
   activeChatSessionId?: string;
   activeFilePath?: string;
@@ -5992,14 +6629,14 @@ function ConfiguredSection({
   defaultAgentId: string | null;
   projectAgentNames: Record<string, string>;
   unreadSessionIds: ReadonlySet<string>;
-  onOpenTab: (tab: WorkspaceTab) => void;
+  onOpenTab: (tab: WorkspaceTab, mode?: CommitMode) => void;
   onNewChat: () => void;
   onNewWorkflow: () => void;
-  onOpenSession: (session: AgentSession) => void;
+  onOpenSession: (session: AgentSession, mode?: CommitMode) => void;
   onSessionCommand: (session: AgentSession, command: SessionCommand) => void;
   onSessionAction: (sessionId: string, action: ChatSessionAction) => void;
-  onOpenUrl: (url: string, mode: "tab" | "replace") => void;
-  onOpenFile: (filePath: string) => void;
+  onOpenUrl: (url: string, mode: CommitMode) => void;
+  onOpenFile: (filePath: string, mode?: CommitMode) => void;
   onOpenHistory: (filePath: string) => void;
   onPublish: (filePath: string, features: RemoteFeatures | undefined) => void;
   onPropose: (files: string[], features: RemoteFeatures | undefined) => void;
@@ -6116,12 +6753,15 @@ function ConfiguredSection({
                 activeTab?.kind === "workflow" ? activeTab.name : undefined
               }
               onEmptyChange={setEmpty}
-              onSelect={(workflow) =>
-                onOpenTab({
-                  kind: "workflow",
-                  name: workflow.name,
-                  label: workflow.displayName ?? workflow.name,
-                })
+              onSelect={(workflow, mode) =>
+                onOpenTab(
+                  {
+                    kind: "workflow",
+                    name: workflow.name,
+                    label: workflow.displayName ?? workflow.name,
+                  },
+                  mode,
+                )
               }
             />
           </SidebarSection>
@@ -6136,7 +6776,9 @@ function ConfiguredSection({
               projectId={projectId}
               active={activeTab?.kind === "app" ? activeTab.name : undefined}
               onEmptyChange={setEmpty}
-              onSelect={(appName) => onOpenTab({ kind: "app", name: appName })}
+              onSelect={(appName, mode) =>
+                onOpenTab({ kind: "app", name: appName }, mode)
+              }
             />
           </SidebarSection>
         );
@@ -6187,6 +6829,15 @@ function ConfiguredSection({
             />
           </SidebarSection>
         );
+      case "tabs":
+        return tabs ? (
+          <SidebarSection
+            title={section.title ?? "Tabs"}
+            defaultOpen={defaultOpen}
+          >
+            {tabs}
+          </SidebarSection>
+        ) : null;
       case "bookmarks":
         if (!profileId) return null;
         return (
@@ -6197,6 +6848,8 @@ function ConfiguredSection({
             <BookmarksNav
               projectId={projectId}
               profileId={profileId}
+              pinnedStyle={pinnedStyle}
+              defaultOpenMode={section.open}
               menuOverride={section.menu}
               onEmptyChange={setEmpty}
               onOpen={(url, mode) =>
@@ -6284,7 +6937,7 @@ function CustomItems({
 }: {
   section: SidebarSectionConfig;
   experienceContext: ProjectExperienceContext;
-  onOpenUrl: (url: string, mode: "tab" | "replace") => void;
+  onOpenUrl: (url: string, mode: CommitMode) => void;
   onEmptyChange?: (empty: boolean) => void;
 }) {
   const items = (section.items ?? []).filter((item) =>
@@ -6325,15 +6978,15 @@ function CustomItem({
   item: SidebarItem;
   section: SidebarSectionConfig;
   experienceContext: ProjectExperienceContext;
-  onOpenUrl: (url: string, mode: "tab" | "replace") => void;
+  onOpenUrl: (url: string, mode: CommitMode) => void;
 }) {
   const [open, setOpen] = useState(item.collapsed !== true);
   const children = (item.items ?? []).filter((child) =>
     sidebarItemVisible(child, experienceContext),
   );
   const mode = item.open ?? section.open ?? "replace";
-  const openItem = () => {
-    if (item.url) onOpenUrl(item.url, mode);
+  const openItem = (intent: CommitMode = mode) => {
+    if (item.url) onOpenUrl(item.url, intent);
     else if (children.length > 0) setOpen((value) => !value);
   };
   return (
@@ -6360,6 +7013,8 @@ function CustomItem({
             ? { open, onToggle: () => setOpen((value) => !value) }
             : undefined
         }
+        resource={Boolean(item.url)}
+        defaultOpenMode={mode}
         onOpen={openItem}
         onAction={(entry) => {
           if (!item.url) return;
@@ -6427,7 +7082,7 @@ function SidebarSection({
     if (defaultOpen) setVisited(true);
   }, [defaultOpen]);
   return (
-    <section className="pb-2">
+    <section className="sidebar-section pb-2">
       <div className="flex items-center">
         <button
           type="button"
@@ -6435,15 +7090,15 @@ function SidebarSection({
             setVisited(true);
             setOpen((value) => !value);
           }}
-          className="flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-1 rounded-md px-2 text-[11px] font-semibold uppercase tracking-wider text-fg-faint transition-colors duration-150 hover:text-fg-muted"
+          className="flex h-7 min-w-0 flex-1 cursor-pointer items-center justify-between gap-2 rounded-md px-2 text-xs font-medium text-fg-muted hover:text-fg"
           aria-expanded={open}
         >
+          <span className="truncate">{title}</span>
           <ChevronRight
-            className={`size-3 transition-transform duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+            className={`size-3 shrink-0 transition-transform duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
               open ? "rotate-90" : ""
             }`}
           />
-          {title}
         </button>
         {action}
       </div>
@@ -6466,7 +7121,10 @@ function WorkflowsNav({
   active?: string;
   /** Reports emptiness up so hide-when-empty sections can drop entirely. */
   onEmptyChange?: (empty: boolean) => void;
-  onSelect: (workflow: { name: string; displayName?: string }) => void;
+  onSelect: (
+    workflow: { name: string; displayName?: string },
+    mode?: CommitMode,
+  ) => void;
 }) {
   const workflowsQuery = useWorkflows(projectId);
   const workflows = workflowsQuery.data ?? [];
@@ -6485,13 +7143,16 @@ function WorkflowsNav({
     <ul className="flex flex-col gap-0.5">
       {workflows.map((workflow) => (
         <li key={workflow.name}>
-          <button
+          <OpenResourceButton
             type="button"
-            onClick={() =>
-              onSelect({
-                name: workflow.name,
-                displayName: workflow.displayName ?? undefined,
-              })
+            onOpen={(mode) =>
+              onSelect(
+                {
+                  name: workflow.name,
+                  displayName: workflow.displayName ?? undefined,
+                },
+                mode,
+              )
             }
             className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${
               workflow.name === active
@@ -6503,7 +7164,7 @@ function WorkflowsNav({
             <span className="truncate">
               {workflow.displayName ?? workflow.name}
             </span>
-          </button>
+          </OpenResourceButton>
         </li>
       ))}
     </ul>
@@ -6519,7 +7180,7 @@ function AppsNav({
   projectId: string;
   active?: string;
   onEmptyChange?: (empty: boolean) => void;
-  onSelect: (appName: string) => void;
+  onSelect: (appName: string, mode?: CommitMode) => void;
 }) {
   const appsQuery = useApps(projectId);
   const apps = appsQuery.data ?? [];
@@ -6538,9 +7199,9 @@ function AppsNav({
     <ul className="flex flex-col gap-0.5">
       {apps.map((app) => (
         <li key={app.name} data-point-key={`app:${app.name}`}>
-          <button
+          <OpenResourceButton
             type="button"
-            onClick={() => onSelect(app.name)}
+            onOpen={(mode) => onSelect(app.name, mode)}
             className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${
               app.name === active
                 ? "bg-bg-overlay text-fg"
@@ -6549,7 +7210,7 @@ function AppsNav({
           >
             <LayoutGrid className="size-3.5 shrink-0" />
             <span className="truncate">{app.name}</span>
-          </button>
+          </OpenResourceButton>
         </li>
       ))}
     </ul>
@@ -6576,7 +7237,7 @@ function SessionsNav({
   unreadSessionIds: ReadonlySet<string>;
   onEmptyChange?: (empty: boolean) => void;
   onCommand: (session: AgentSession, command: SessionCommand) => void;
-  onSelect: (session: AgentSession) => void;
+  onSelect: (session: AgentSession, mode?: CommitMode) => void;
   onSessionAction: (sessionId: string, action: ChatSessionAction) => void;
 }) {
   const sessionsQuery = useAgentSessions(projectId, { limit: 100 });
@@ -6669,6 +7330,21 @@ function SessionsNav({
         <li
           key={session.id}
           data-session-id={session.id}
+          draggable
+          onDragStart={(event) => {
+            const url = chatBookmarkUrl({ projectId, sessionId: session.id });
+            event.dataTransfer.setData(
+              TAB_DRAG_TYPE,
+              JSON.stringify({
+                key: `session:${session.id}`,
+                kind: "chat",
+                title: sessionLabel(session),
+                bookmarkUrl: url,
+              } satisfies TabDragPayload),
+            );
+            event.dataTransfer.setData("text/uri-list", url);
+            event.dataTransfer.effectAllowed = "copy";
+          }}
           className={
             exiting ? "animate-session-row-out" : "animate-session-row-in"
           }
@@ -6775,7 +7451,8 @@ function SessionsNav({
                 ) : null}
               </>
             }
-            onOpen={() => onSelect(session)}
+            resource
+            onOpen={(mode) => onSelect(session, mode)}
             onAction={(entry) => onSessionAction(session.id, entry.action)}
           />
           {children.length > 0 && (

@@ -56,7 +56,9 @@ import {
   BUILTIN_ACTIONS,
   type KeybindingAction,
 } from "../../shared/actions.js";
+import type { OpenMode as CommitMode } from "../../shared/open-mode.js";
 import { sidebarSections } from "../../shared/sidebar.js";
+import type { TerminalMacro } from "../../shared/terminal-macros.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
 import { commandScore } from "../lib/command-score.js";
 import {
@@ -79,6 +81,7 @@ import { NEW_WORKFLOW_PROMPT } from "../lib/workflow-authoring.js";
 import { useApps } from "../screens/app-screen.js";
 import { resolveInput } from "../screens/browser-screen.js";
 import { PILL_SURFACE } from "./context-pill.js";
+import { OpenResourceButton } from "./open-resource-button.js";
 import { SiteFavicon } from "./site-favicon.js";
 import type { WorkspaceTab } from "./workspace-tabs.js";
 
@@ -98,7 +101,6 @@ import type { WorkspaceTab } from "./workspace-tabs.js";
  * current tab, ⌘↵ in a new tab, ⌘⇧↵ tiled to the side of the current
  * view. Rows that can't tile (pure actions) treat "side" as "tab".
  */
-type CommitMode = "replace" | "tab" | "side";
 
 /**
  * Icons stay renderer-side (the shared registry is plain data usable by
@@ -473,6 +475,8 @@ export function CommandPalette({
   canCreateWorkflows = false,
   onRunSkill,
   actionHandlers,
+  terminalMacros,
+  onRunTerminalMacro,
   actionAvailability,
   agents,
   defaultAgentId,
@@ -505,8 +509,8 @@ export function CommandPalette({
   activeProfileId?: string;
   sidebarConfig: SidebarConfig | null;
   onOpenUrl: (url: string, mode: CommitMode) => void;
-  onOpenTab: (tab: WorkspaceTab, mode?: "side") => void;
-  onOpenSession: (session: AgentSession) => void;
+  onOpenTab: (tab: WorkspaceTab, mode?: CommitMode) => void;
+  onOpenSession: (session: AgentSession, mode?: CommitMode) => void;
   onSelectProject: (id: string) => void;
   onSwitchProfile: (profile: Profile) => void;
   onSendToAgent: (
@@ -523,7 +527,9 @@ export function CommandPalette({
    */
   onRunSkill: (name: string, mode: "float" | "tab") => void;
   /** One handler per registry action — the same map the shortcuts use. */
-  actionHandlers: Record<ActionId, (mode?: "side") => void>;
+  actionHandlers: Record<ActionId, (mode?: CommitMode) => void>;
+  terminalMacros: TerminalMacro[];
+  onRunTerminalMacro: (macro: TerminalMacro, mode?: CommitMode) => void;
   /** False means the command cannot change the current workspace state. */
   actionAvailability?: Partial<Record<ActionId, boolean>>;
   /** The profile's configured agents (for the agent/effort pickers). */
@@ -833,6 +839,8 @@ export function CommandPalette({
   // would cascade into the results memo and the FLIP pass per render.
   const actionHandlersRef = useRef(actionHandlers);
   actionHandlersRef.current = actionHandlers;
+  const macroHandlerRef = useRef(onRunTerminalMacro);
+  macroHandlerRef.current = onRunTerminalMacro;
   const hasFocusedChat = focusedChat !== null;
   const actionItems = useMemo<PaletteItem[]>(() => {
     const available = BUILTIN_ACTIONS.filter(
@@ -858,7 +866,7 @@ export function CommandPalette({
           ...available.filter((action) => !chatScoped.has(action.id)),
         ]
       : available;
-    return ordered.map((action) => {
+    const commands = ordered.map((action): PaletteItem => {
       const targetPicker = PICKER_ACTIONS[action.id];
       return {
         id: `action:${action.id}`,
@@ -874,17 +882,30 @@ export function CommandPalette({
         // everything else runs the shared handler.
         run: targetPicker
           ? () => enterPicker(targetPicker)
-          : (mode) =>
-              actionHandlersRef.current[action.id](
-                mode === "side" ? "side" : undefined,
-              ),
+          : (mode) => actionHandlersRef.current[action.id](mode),
       };
     });
+    return [
+      ...commands,
+      ...terminalMacros.map(
+        (macro): PaletteItem => ({
+          id: `macro:${macro.id}`,
+          icon: SquareTerminal,
+          label: macro.name,
+          detail: "Macro",
+          keywords: ["macro", "terminal", macro.command],
+          shortcut: formatBinding(macro.shortcut),
+          kind: "action",
+          run: (mode) => macroHandlerRef.current(macro, mode),
+        }),
+      ),
+    ];
   }, [
     keybindings,
     hasFocusedChat,
     enterPicker,
     incognitoAllowed,
+    terminalMacros,
     actionAvailability,
   ]);
 
@@ -989,10 +1010,7 @@ export function CommandPalette({
         keywords: [workflow.name, "workflow", "go to", "open"],
         kind: "navigate",
         run: (mode) =>
-          onOpenTab(
-            { kind: "workflow", name: workflow.name, label },
-            mode === "side" ? "side" : undefined,
-          ),
+          onOpenTab({ kind: "workflow", name: workflow.name, label }, mode),
       });
     }
     for (const app of apps) {
@@ -1003,11 +1021,7 @@ export function CommandPalette({
         detail: "App",
         keywords: [app.name, "app", "go to", "open"],
         kind: "navigate",
-        run: (mode) =>
-          onOpenTab(
-            { kind: "app", name: app.name },
-            mode === "side" ? "side" : undefined,
-          ),
+        run: (mode) => onOpenTab({ kind: "app", name: app.name }, mode),
       });
     }
     for (const session of sessions) {
@@ -1029,7 +1043,7 @@ export function CommandPalette({
           ...(session.visibility === "archived" ? ["archived"] : []),
         ],
         kind: "navigate",
-        run: () => onOpenSession(session),
+        run: (mode) => onOpenSession(session, mode),
       });
     }
     for (const bookmark of bookmarks) {
@@ -1087,8 +1101,11 @@ export function CommandPalette({
       detail: "Open settings",
       keywords: ["settings", "preferences", "shortcuts", "theme", "keys"],
       kind: "navigate",
-      run: () =>
-        onOpenTab({ kind: "settings", name: "settings", label: "Settings" }),
+      run: (mode) =>
+        onOpenTab(
+          { kind: "settings", name: "settings", label: "Settings" },
+          mode,
+        ),
     });
     items.push({
       id: "tab:usage",
@@ -1097,7 +1114,8 @@ export function CommandPalette({
       detail: "Tokens and cost across agents",
       keywords: ["usage", "cost", "tokens", "spend", "billing", "consumption"],
       kind: "navigate",
-      run: () => onOpenTab({ kind: "usage", name: "usage", label: "Usage" }),
+      run: (mode) =>
+        onOpenTab({ kind: "usage", name: "usage", label: "Usage" }, mode),
     });
     return items;
   }, [
@@ -1744,7 +1762,12 @@ export function CommandPalette({
     return () => onHighlightTargetRef.current?.(null);
   }, [highlightTarget]);
 
-  const commit = (item: PaletteItem, withCmd: boolean, withShift = false) => {
+  const commit = (
+    item: PaletteItem,
+    withCmd: boolean,
+    withShift = false,
+    floating = false,
+  ) => {
     // Disabled rows (invalid project agents) are informational only.
     if (item.disabled) return;
     if (item.id === "pick:model:catalog-status") {
@@ -1774,8 +1797,13 @@ export function CommandPalette({
     // A chip-mode row with nothing typed has nothing to do yet.
     if (item.id.startsWith("mode:") && trimmed === "") return;
     const inTab = variant === "tab";
-    const commitMode: CommitMode =
-      withCmd && withShift ? "side" : inTab || withCmd ? "tab" : "replace";
+    const commitMode: CommitMode = floating
+      ? "floating"
+      : withCmd && withShift
+        ? "side"
+        : inTab || withCmd
+          ? "tab"
+          : "replace";
     if (variant === "overlay") onClose();
     item.run(commitMode);
     // A palette tab is consumed by whatever it opened; pure actions
@@ -1831,12 +1859,21 @@ export function CommandPalette({
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       moveSelection(-1);
-    } else if (event.key === "Enter" && (!event.shiftKey || event.metaKey)) {
+    } else if (
+      event.key === "Enter" &&
+      (!event.shiftKey ||
+        (/Mac/.test(navigator.platform) ? event.metaKey : event.ctrlKey))
+    ) {
       // Shift+Enter alone stays a newline; ⌘⇧↵ is the side commit.
       event.preventDefault();
       const item = results[selected];
       if (item) {
-        commit(item, event.metaKey || event.ctrlKey, event.shiftKey);
+        commit(
+          item,
+          /Mac/.test(navigator.platform) ? event.metaKey : event.ctrlKey,
+          event.shiftKey,
+          event.altKey && !event.metaKey && !event.ctrlKey,
+        );
       }
     }
   };
@@ -1948,17 +1985,27 @@ export function CommandPalette({
                     {groupLabel}
                   </div>
                 )}
-                <button
+                <OpenResourceButton
+                  isResource={item.kind === "navigate"}
+                  openOnMouseDown
                   data-item-id={item.id}
                   type="button"
                   role="option"
                   aria-selected={isSelected}
                   aria-disabled={item.disabled || undefined}
                   data-disabled-reason={item.disabled ? item.detail : undefined}
+                  onOpen={(mode) =>
+                    commit(
+                      item,
+                      mode === "tab" || mode === "side",
+                      mode === "side",
+                      mode === "floating",
+                    )
+                  }
                   // mousedown so the textarea's focus never flickers away.
                   onMouseDown={(event) => {
+                    if (event.button !== 0) return;
                     event.preventDefault();
-                    commit(item, event.metaKey, event.shiftKey);
                   }}
                   onMouseEnter={() => setSelectedIndex(index)}
                   className={`flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors duration-100 ${
@@ -2000,7 +2047,7 @@ export function CommandPalette({
                       )}
                     </span>
                   )}
-                </button>
+                </OpenResourceButton>
               </Fragment>
             );
           })}
@@ -2029,6 +2076,7 @@ export function CommandPalette({
         <FooterHint keycap="↵" label="open" />
         <FooterHint keycap="⌘↵" label="new tab" />
         <FooterHint keycap="⌘⇧↵" label="side" />
+        <FooterHint keycap="⌥↵" label="floating" />
       </footer>
     </div>
   );

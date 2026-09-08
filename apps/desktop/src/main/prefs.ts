@@ -1,5 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  normalizeTerminalMacros,
+  type TerminalMacro,
+} from "../shared/terminal-macros.js";
 
 /**
  * Per-profile app preferences, stored as plain JSON at
@@ -15,6 +19,15 @@ export interface AppPrefs {
   desktopNotifications: boolean;
   /** Whether the left sidebar is shown. */
   sidebarOpen: boolean;
+  /** Workspace tabs can live above the content or in the sidebar. */
+  tabPlacement: "top" | "sidebar";
+  headerPlacement: "top" | "sidebar";
+  /** Profile-wide favorites can be compact tiles or labeled rows. */
+  pinnedBookmarks: "tiles" | "list";
+  linkOpenMode: "tab" | "floating";
+  previewLinksWithAlt: boolean;
+  terminalMacros: TerminalMacro[];
+  terminalAppearance: "app" | "ghostty";
   rightSidebarOpen: boolean;
   /** The project the profile last worked in — where a relaunch lands. */
   lastProjectId?: string;
@@ -26,6 +39,13 @@ export const DEFAULT_PREFS: AppPrefs = {
   notificationSounds: true,
   desktopNotifications: true,
   sidebarOpen: true,
+  tabPlacement: "top",
+  headerPlacement: "top",
+  pinnedBookmarks: "tiles",
+  linkOpenMode: "tab",
+  previewLinksWithAlt: true,
+  terminalMacros: [],
+  terminalAppearance: "app",
   rightSidebarOpen: true,
   unreadSessionIds: [],
 };
@@ -61,6 +81,17 @@ export function normalizePrefs(raw: unknown): AppPrefs {
       typeof record.sidebarOpen === "boolean"
         ? record.sidebarOpen
         : DEFAULT_PREFS.sidebarOpen,
+    tabPlacement: record.tabPlacement === "sidebar" ? "sidebar" : "top",
+    headerPlacement: record.headerPlacement === "sidebar" ? "sidebar" : "top",
+    pinnedBookmarks: record.pinnedBookmarks === "list" ? "list" : "tiles",
+    terminalAppearance:
+      record.terminalAppearance === "ghostty" ? "ghostty" : "app",
+    linkOpenMode: record.linkOpenMode === "floating" ? "floating" : "tab",
+    previewLinksWithAlt:
+      typeof record.previewLinksWithAlt === "boolean"
+        ? record.previewLinksWithAlt
+        : true,
+    terminalMacros: normalizeTerminalMacros(record.terminalMacros),
     ...(typeof record.lastProjectId === "string"
       ? { lastProjectId: record.lastProjectId }
       : {}),
@@ -78,7 +109,7 @@ export class PrefsStore {
     try {
       return normalizePrefs(JSON.parse(fs.readFileSync(this.file, "utf-8")));
     } catch {
-      return { ...DEFAULT_PREFS };
+      return normalizePrefs({});
     }
   }
 

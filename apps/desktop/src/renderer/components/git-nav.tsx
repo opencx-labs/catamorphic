@@ -1,5 +1,6 @@
 import { ChevronRight, GitBranch } from "lucide-react";
 import { useEffect, useId, useState } from "react";
+import type { OpenMode } from "../../shared/open-mode.js";
 import {
   desktopApi,
   type GitChangedFile,
@@ -8,6 +9,7 @@ import {
   type GitWorktree,
 } from "../lib/desktop-api.js";
 import { Collapsible } from "./collapsible.js";
+import { OpenResourceButton } from "./open-resource-button.js";
 import type { WorkspaceTab } from "./workspace-tabs.js";
 
 /** Per-checkout changes, with separate index, working-file and committed comparisons.
@@ -69,7 +71,7 @@ export function GitNav({
   onEmptyChange,
 }: {
   projectId: string;
-  onOpenDiff: (tab: WorkspaceTab) => void;
+  onOpenDiff: (tab: WorkspaceTab, mode?: OpenMode) => void;
   onEmptyChange?: (empty: boolean) => void;
 }) {
   const [overview, setOverview] = useState<GitOverview | null>(null);
@@ -176,35 +178,38 @@ function WorktreeSection({
 }: {
   tree: GitWorktree;
   projectId: string;
-  onOpenDiff: (tab: WorkspaceTab) => void;
+  onOpenDiff: (tab: WorkspaceTab, mode?: OpenMode) => void;
 }) {
   const [open, setOpen] = useState(true);
   const contentId = useId();
   const count = new Set(
     [...tree.changes, ...tree.branchChanges].map((file) => file.path),
   ).size;
-  const openFile = (file: GitChangedFile) => {
+  const openFile = (file: GitChangedFile, mode?: OpenMode) => {
     const label =
       file.mode === "branch"
         ? `vs ${tree.baseLabel}`
         : (GROUPS.find((group) => group.mode === file.mode)?.label ??
           file.mode);
     const checkout = tree.branch ?? "Detached HEAD";
-    onOpenDiff({
-      kind: "diff",
-      name: JSON.stringify([tree.path, file.mode, file.path]),
-      label: file.path.split("/").at(-1) ?? file.path,
-      detail: `${checkout} · ${file.path} (${label})`,
-      projectId,
-      source: {
-        type: "local",
-        worktreePath: tree.path,
-        filePath: file.path,
-        mode: file.mode,
-        previousPath: file.previousPath,
-        baseRef: tree.baseRef,
+    onOpenDiff(
+      {
+        kind: "diff",
+        name: JSON.stringify([tree.path, file.mode, file.path]),
+        label: file.path.split("/").at(-1) ?? file.path,
+        detail: `${checkout} · ${file.path} (${label})`,
+        projectId,
+        source: {
+          type: "local",
+          worktreePath: tree.path,
+          filePath: file.path,
+          mode: file.mode,
+          previousPath: file.previousPath,
+          baseRef: tree.baseRef,
+        },
       },
-    });
+      mode,
+    );
   };
   return (
     <div className="flex flex-col gap-0.5" data-worktree-path={tree.path}>
@@ -288,7 +293,7 @@ function ChangeTree({
   onOpen,
 }: {
   files: GitChangedFile[];
-  onOpen: (file: GitChangedFile) => void;
+  onOpen: (file: GitChangedFile, mode?: OpenMode) => void;
 }) {
   const root = buildChangeTree(files);
   return (
@@ -310,7 +315,7 @@ function DirNode({
 }: {
   dir: ChangeTreeDir;
   depth: number;
-  onOpen: (file: GitChangedFile) => void;
+  onOpen: (file: GitChangedFile, mode?: OpenMode) => void;
 }) {
   const [open, setOpen] = useState(true);
   return (
@@ -359,14 +364,14 @@ function FileRow({
 }: {
   file: GitChangedFile;
   depth: number;
-  onOpen: (file: GitChangedFile) => void;
+  onOpen: (file: GitChangedFile, mode?: OpenMode) => void;
 }) {
   const base = file.path.split("/").at(-1) ?? file.path;
   const badge = KIND_BADGES[file.kind];
   return (
-    <button
+    <OpenResourceButton
       type="button"
-      onClick={() => onOpen(file)}
+      onOpen={(mode) => onOpen(file, mode)}
       title={
         file.previousPath ? `${file.previousPath} → ${file.path}` : file.path
       }
@@ -377,6 +382,6 @@ function FileRow({
       <span className={`shrink-0 text-[11px] font-semibold ${badge.className}`}>
         {badge.letter}
       </span>
-    </button>
+    </OpenResourceButton>
   );
 }

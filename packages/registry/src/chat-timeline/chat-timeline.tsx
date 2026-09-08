@@ -63,13 +63,26 @@ export interface ChatTimelineProps {
    */
   onLinkClick?: (
     url: string,
-    modifiers: { metaKey: boolean; shiftKey: boolean },
+    modifiers: {
+      metaKey: boolean;
+      ctrlKey: boolean;
+      altKey: boolean;
+      shiftKey: boolean;
+    },
   ) => void;
   /**
    * A changed-file chip was clicked. Hosts open the file (e.g. in an
    * editor surface). Without it the chips stay inert.
    */
-  onFileClick?: (path: string) => void;
+  onFileClick?: (
+    path: string,
+    modifiers?: {
+      metaKey: boolean;
+      ctrlKey: boolean;
+      shiftKey: boolean;
+      altKey: boolean;
+    },
+  ) => void;
   /**
    * Icon URL for a tool name (MCP tools are `server/tool`; the host maps
    * the server key to its connector icon). Undefined → generic glyph.
@@ -180,9 +193,22 @@ function Message({
   message: ChatTimelineMessage;
   onLinkClick?: (
     url: string,
-    modifiers: { metaKey: boolean; shiftKey: boolean },
+    modifiers: {
+      metaKey: boolean;
+      ctrlKey: boolean;
+      altKey: boolean;
+      shiftKey: boolean;
+    },
   ) => void;
-  onFileClick?: (path: string) => void;
+  onFileClick?: (
+    path: string,
+    modifiers?: {
+      metaKey: boolean;
+      ctrlKey: boolean;
+      shiftKey: boolean;
+      altKey: boolean;
+    },
+  ) => void;
   resolveToolIcon?: (toolName: string) => string | undefined;
   actionable: boolean;
   onRetry?: () => void;
@@ -293,7 +319,9 @@ function Message({
                           event.preventDefault();
                           if (href) {
                             onLinkClick(href, {
-                              metaKey: event.metaKey || event.ctrlKey,
+                              metaKey: event.metaKey,
+                              ctrlKey: event.ctrlKey,
+                              altKey: event.altKey,
                               shiftKey: event.shiftKey,
                             });
                           }
@@ -317,7 +345,15 @@ function Message({
               <button
                 key={file}
                 type="button"
-                onClick={() => onFileClick(file)}
+                data-file-path={file}
+                onClick={(event) =>
+                  onFileClick(file, {
+                    metaKey: event.metaKey,
+                    ctrlKey: event.ctrlKey,
+                    shiftKey: event.shiftKey,
+                    altKey: event.altKey,
+                  })
+                }
                 className="cursor-pointer rounded border border-success/50 bg-success/10 px-1.5 py-0.5 font-mono text-[11px] text-success transition-colors duration-100 hover:bg-success/20"
               >
                 {file}

@@ -43,8 +43,8 @@ import { WorkflowEnablementPanel } from "../components/workflow-enablement-panel
 import { WorkflowRuns } from "../components/workflow-runs.js";
 import type { WorkflowDraft } from "../components/workspace-tabs.js";
 import { desktopApi } from "../lib/desktop-api.js";
+import { useMonacoTheme } from "../lib/monaco-setup.js";
 import { useTheme } from "../lib/theme.js";
-import "../lib/monaco-setup.js";
 import "./workflow-screen.css";
 
 interface WorkflowScreenProps {
@@ -158,6 +158,7 @@ function WorkflowWorkbench({
   refreshFile: ReturnType<typeof useProjectFile>["refetch"];
 }) {
   const theme = useTheme();
+  const editorTheme = useMonacoTheme();
   const workflow = useWorkflow(projectId, workflowName, {
     refetchInterval: active ? 2000 : false,
   });
@@ -507,9 +508,7 @@ function WorkflowWorkbench({
                       }}
                       path={`file:///${projectId}/${filePath}`}
                       fontFamily={theme?.fonts.mono}
-                      theme={
-                        theme?.appearance === "light" ? "light" : "vs-dark"
-                      }
+                      theme={editorTheme}
                     />
                   </div>
                 </div>

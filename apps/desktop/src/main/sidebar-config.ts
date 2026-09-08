@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
+import type { OpenMode } from "../shared/open-mode.js";
 import { sanitizeProjectExperienceWhen } from "../shared/project-experience.js";
 
 /**
@@ -33,7 +34,7 @@ export const DEFAULT_BOOKMARK_MENU: SidebarMenuEntry[] = [
   { label: "Open in new tab", action: "open-tab" },
   { label: "Copy link", action: "copy-url" },
   { label: "Pin across projects", action: "pin" },
-  { label: "Rename…", action: "rename" },
+  { label: "Edit bookmark…", action: "edit" },
   { label: "Delete", action: "remove", danger: true },
 ];
 
@@ -59,18 +60,14 @@ export const DEFAULT_SIDEBAR_CONFIG: SidebarConfig = {
       title: "Project",
       icon: "House",
       sections: [
+        { id: "bookmarks", type: "bookmarks" },
         { id: "workflows", type: "workflows" },
         { id: "apps", type: "apps" },
         { id: "chats", type: "chats" },
-        { id: "bookmarks", type: "bookmarks" },
+        { id: "tabs", type: "tabs" },
+        { id: "files", type: "files", collapsed: true },
         { id: "remote", type: "remote", title: "Server" },
       ],
-    },
-    {
-      id: "files",
-      title: "Files",
-      icon: "Folder",
-      sections: [{ id: "files", type: "files" }],
     },
   ],
   right: [
@@ -125,6 +122,7 @@ const VALID_TYPES = new Set([
   "files",
   "chats",
   "bookmarks",
+  "tabs",
   "git",
   "prs",
   "remote",
@@ -138,15 +136,23 @@ const VALID_ACTIONS = new Set<SidebarAction>([
   "open",
   "open-tab",
   "open-here",
+  "open-side",
+  "open-floating",
   "copy-url",
   "pin",
   "unpin",
   "rename",
+  "edit",
   "remove",
 ]);
 
-const asOpenMode = (value: unknown): "tab" | "replace" | undefined =>
-  value === "tab" || value === "replace" ? value : undefined;
+const asOpenMode = (value: unknown): OpenMode | undefined =>
+  value === "tab" ||
+  value === "replace" ||
+  value === "side" ||
+  value === "floating"
+    ? value
+    : undefined;
 
 function sanitizeMenu(raw: unknown): SidebarMenuEntry[] | undefined {
   if (!Array.isArray(raw)) return undefined;

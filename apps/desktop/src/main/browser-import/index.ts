@@ -46,6 +46,11 @@ export const BROWSER_IMPORTERS: BrowserImporter[] = [
     darwinDir: "Library/Application Support/Arc/User Data",
   }),
   chromiumImporter({
+    id: "aside",
+    label: "Aside",
+    darwinDir: "Library/Application Support/Aside",
+  }),
+  chromiumImporter({
     id: "chromium",
     label: "Chromium",
     darwinDir: "Library/Application Support/Chromium",

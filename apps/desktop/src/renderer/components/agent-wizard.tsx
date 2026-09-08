@@ -36,6 +36,11 @@ type Flow =
   | "free";
 type AiSdkProvider = "anthropic" | "openai" | "openrouter";
 
+const primaryActionClass =
+  "min-h-9 w-full cursor-pointer rounded-md bg-accent px-3 py-2 text-sm font-medium text-accent-fg hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50";
+const secondaryActionClass =
+  "min-h-7 w-full cursor-pointer rounded-md px-3 py-1 text-sm text-fg-muted hover:bg-bg-overlay hover:text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50";
+
 const OPTIONS: Array<{
   id: "claude-code" | "codex" | "api-key" | "free";
   title: string;
@@ -316,11 +321,12 @@ export function AgentWizard({
       Name
       <input
         type="text"
+        name="agentName"
         value={name}
         onChange={(event) => setName(event.target.value)}
         placeholder={placeholder}
         autoComplete="off"
-        className="field h-8 px-2 text-[13px] text-fg placeholder:text-fg-faint"
+        className="field h-9 min-w-0 px-2 text-sm text-fg placeholder:text-fg-faint max-sm:text-base"
       />
     </label>
   );
@@ -367,7 +373,7 @@ export function AgentWizard({
 
   const content = (
     // Re-mounting on step swap restarts the fade-in for the new content.
-    <div key={step} className="animate-fade-in">
+    <div key={step} className="min-w-0 animate-fade-in">
       {step === "choose" ? (
         <>
           <div className="mb-1 flex items-center gap-2">
@@ -421,7 +427,11 @@ export function AgentWizard({
               );
             })}
           </ul>
-          {error && <p className="mt-3 text-[12px] text-danger">{error}</p>}
+          {error && (
+            <p role="alert" className="mt-3 break-words text-sm text-danger">
+              {error}
+            </p>
+          )}
           {variant === "tab" && (
             <p className="mt-4 text-[12px] text-fg-faint">
               Closing this tab skips setup. The wizard comes back when you start
@@ -444,13 +454,12 @@ export function AgentWizard({
           {step === "claude-code" &&
             (status?.claudeCode ? (
               <>
-                <h2 className="text-[15px] font-semibold">
-                  Claude Code is already set up on this machine
+                <h2 className="text-balance text-base font-semibold">
+                  Use your Claude Code setup
                 </h2>
-                <p className="mt-2 text-[13px] text-fg-muted">
-                  Catamorphic can use that sign-in directly. Nothing else to
-                  configure. Or sign in with a different account, kept separate
-                  for this agent.
+                <p className="mt-2 text-pretty text-sm text-fg-muted">
+                  Claude Code is already set up on this machine. Use that
+                  account, or sign in with another account for this agent.
                 </p>
                 <div className="mt-3">{nameField("Claude Code")}</div>
                 {connectionsField}
@@ -459,12 +468,12 @@ export function AgentWizard({
                   <button
                     type="button"
                     onClick={onDone}
-                    className="mt-4 h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90"
+                    className={`mt-4 ${primaryActionClass}`}
                   >
                     Continue
                   </button>
                 ) : (
-                  <div className="mt-4 flex items-center gap-2">
+                  <div className="mt-4 flex flex-col gap-2">
                     <PendingButton
                       type="button"
                       pending={busy && busyFlow === "claude-code"}
@@ -472,9 +481,9 @@ export function AgentWizard({
                       disabled={busy}
                       data-disabled-reason="Wait for the current action to finish"
                       onClick={() => void addExistingSetup("claude-code")}
-                      className="h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                      className={primaryActionClass}
                     >
-                      Use my existing setup
+                      Use existing setup
                     </PendingButton>
                     <PendingButton
                       type="button"
@@ -485,19 +494,19 @@ export function AgentWizard({
                       onClick={() =>
                         void startTerminalSignIn("claude-code-account")
                       }
-                      className="h-8 cursor-pointer rounded-md px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+                      className={secondaryActionClass}
                     >
-                      Sign in with a different account
+                      Use another account
                     </PendingButton>
                   </div>
                 )}
               </>
             ) : (
               <>
-                <h2 className="text-[15px] font-semibold">
+                <h2 className="text-balance text-base font-semibold">
                   Sign in to Claude Code
                 </h2>
-                <p className="mt-2 text-[13px] text-fg-muted">
+                <p className="mt-2 text-pretty text-sm text-fg-muted">
                   Claude Code needs a one-time sign-in from your terminal. Start
                   it here, finish it there, and you're set on this machine for
                   good.
@@ -505,12 +514,12 @@ export function AgentWizard({
                 <div className="mt-3">{nameField("Claude Code")}</div>
                 {connectionsField}
                 {commandBlock}
-                <div className="mt-4 flex items-center gap-2">
+                <div className="mt-4 flex flex-col gap-2">
                   {ccStarted ? (
                     <button
                       type="button"
                       onClick={onDone}
-                      className="h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90"
+                      className={primaryActionClass}
                     >
                       Continue
                     </button>
@@ -520,7 +529,7 @@ export function AgentWizard({
                       pending={busy}
                       pendingLabel="Starting…"
                       onClick={() => void startTerminalSignIn("claude-code")}
-                      className="h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                      className={primaryActionClass}
                     >
                       Sign in in Terminal
                     </PendingButton>
@@ -528,7 +537,7 @@ export function AgentWizard({
                   <button
                     type="button"
                     onClick={() => goto("api-key")}
-                    className="h-8 cursor-pointer rounded-md px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                    className={secondaryActionClass}
                   >
                     Use an API key instead
                   </button>
@@ -539,17 +548,16 @@ export function AgentWizard({
           {step === "codex" &&
             (status?.codex ? (
               <>
-                <h2 className="text-[15px] font-semibold">
-                  Codex is already signed in on this machine
+                <h2 className="text-balance text-base font-semibold">
+                  Use your Codex sign-in
                 </h2>
-                <p className="mt-2 text-[13px] text-fg-muted">
-                  Catamorphic can use the Codex sign-in already stored on this
-                  computer. Choose another account only if you want this agent
-                  kept separate from your current ChatGPT account.
+                <p className="mt-2 text-pretty text-sm text-fg-muted">
+                  Codex is already signed in on this machine. Use that account,
+                  or sign in with another ChatGPT account for this agent.
                 </p>
                 <div className="mt-3">{nameField("Codex")}</div>
                 {connectionsField}
-                <div className="mt-4 flex items-center gap-2">
+                <div className="mt-4 flex flex-col gap-2">
                   <PendingButton
                     type="button"
                     pending={busy && busyFlow === "codex"}
@@ -557,7 +565,7 @@ export function AgentWizard({
                     disabled={busy}
                     data-disabled-reason="Wait for the current action to finish"
                     onClick={() => void addExistingSetup("codex")}
-                    className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[12px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                    className={primaryActionClass}
                   >
                     Use existing sign-in
                   </PendingButton>
@@ -568,9 +576,9 @@ export function AgentWizard({
                     disabled={busy}
                     data-disabled-reason="Wait for the current action to finish"
                     onClick={() => void startBrowserSignIn("codex-account")}
-                    className="h-8 cursor-pointer rounded-md px-3 text-[12px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+                    className={secondaryActionClass}
                   >
-                    Use another account
+                    Use another ChatGPT account
                   </PendingButton>
                 </div>
                 {waitingFlow === "codex-account" && (
@@ -581,10 +589,10 @@ export function AgentWizard({
               </>
             ) : (
               <>
-                <h2 className="text-[15px] font-semibold">
+                <h2 className="text-balance text-base font-semibold">
                   Sign in with ChatGPT
                 </h2>
-                <p className="mt-2 text-[13px] text-fg-muted">
+                <p className="mt-2 text-pretty text-sm text-fg-muted">
                   Codex runs locally via the Codex CLI and signs in with your
                   ChatGPT account in the browser.
                 </p>
@@ -595,7 +603,7 @@ export function AgentWizard({
                   pending={busy}
                   pendingLabel="Opening…"
                   onClick={() => void startBrowserSignIn("codex")}
-                  className="mt-4 h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                  className={`mt-4 ${primaryActionClass}`}
                 >
                   Sign in with ChatGPT
                 </PendingButton>
@@ -609,11 +617,14 @@ export function AgentWizard({
 
           {step === "api-key" && (
             <form onSubmit={submitApiKey} className="flex flex-col gap-3">
-              <h2 className="text-[15px] font-semibold">Bring an API key</h2>
+              <h2 className="text-balance text-base font-semibold">
+                Bring an API key
+              </h2>
               {nameField("Built-in")}
               <label className="flex flex-col gap-1 text-xs text-fg-muted">
                 Provider
                 <select
+                  name="provider"
                   value={provider}
                   onChange={(event) =>
                     setProvider(event.target.value as AiSdkProvider)
@@ -630,6 +641,7 @@ export function AgentWizard({
                 API key
                 <input
                   type="password"
+                  name="apiKey"
                   value={apiKey}
                   onChange={(event) => setApiKey(event.target.value)}
                   placeholder={
@@ -643,7 +655,7 @@ export function AgentWizard({
                   autoFocus
                   autoComplete="off"
                   data-testid="agent-wizard-key-input"
-                  className="field h-8 px-2 font-mono text-[13px] text-fg placeholder:font-sans placeholder:text-fg-faint"
+                  className="field h-9 min-w-0 px-2 font-mono text-sm text-fg placeholder:font-sans placeholder:text-fg-faint max-sm:text-base"
                 />
               </label>
               {profileConnections.length > 0 && (
@@ -664,14 +676,18 @@ export function AgentWizard({
                 disabled={!apiKey.trim()}
                 data-disabled-reason="Enter an API key first"
                 data-testid="agent-wizard-key-submit"
-                className="h-8 w-fit cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                className={primaryActionClass}
               >
                 Add agent
               </PendingButton>
             </form>
           )}
 
-          {error && <p className="mt-3 text-[12px] text-danger">{error}</p>}
+          {error && (
+            <p role="alert" className="mt-3 break-words text-sm text-danger">
+              {error}
+            </p>
+          )}
         </>
       )}
     </div>
@@ -680,8 +696,13 @@ export function AgentWizard({
   if (variant === "modal") {
     return (
       <Modal open={open === true && waitingFlow === null} onClose={onClose}>
-        <div data-testid="agent-wizard" className="px-5 py-5">
-          {content}
+        <div
+          data-testid="agent-wizard"
+          className="max-h-[calc(100dvh-3rem)] overflow-y-auto p-5"
+        >
+          <div className={step === "choose" ? "" : "mx-auto max-w-xs"}>
+            {content}
+          </div>
         </div>
       </Modal>
     );
@@ -690,9 +711,13 @@ export function AgentWizard({
   return (
     <div
       data-testid="agent-wizard"
-      className="grid flex-1 place-items-center px-6"
+      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto bg-bg-raised p-6"
     >
-      <div className="w-full max-w-md">{content}</div>
+      <div
+        className={`m-auto w-full shrink-0 ${step === "choose" ? "max-w-md" : "max-w-xs"}`}
+      >
+        {content}
+      </div>
     </div>
   );
 }

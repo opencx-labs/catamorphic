@@ -42,6 +42,7 @@ import {
   useRef,
   useState,
 } from "react";
+import type { OpenMode, OpenModifiers } from "../../shared/open-mode.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
 import { commandScore } from "../lib/command-score";
 import {
@@ -81,6 +82,10 @@ import {
 import { ContextMeter, latestReportedModel } from "./context-meter.js";
 import { EnvironmentConnections } from "./environment-connections.js";
 import { Modal } from "./modal.js";
+import {
+  OpenResourceButton,
+  ResourceLinkBoundary,
+} from "./open-resource-button.js";
 import { PendingButton } from "./pending-button.js";
 import {
   ProjectAuthorityProvider,
@@ -655,9 +660,9 @@ function SurfaceChip({
   onToggleInfo,
 }: {
   surface: ChatSurface;
-  onOpenSurface: (key: string, mode: "tab" | "split") => void;
+  onOpenSurface: (key: string, mode: OpenMode | "split") => void;
   onRemoveSurface?: (key: string) => void;
-  onOpenMcpApp?: (view: McpAppRef, mode: "tab" | "split") => void;
+  onOpenMcpApp?: (view: McpAppRef, mode: OpenMode | "split") => void;
   onToggleInfo: (key: string) => void;
 }) {
   const Icon = SURFACE_ICONS[surface.kind];
@@ -672,14 +677,15 @@ function SurfaceChip({
       // agent can glow one on its own chat.
       data-point-key={`chip:${surface.key}`}
     >
-      <button
+      <OpenResourceButton
+        isResource={!surface.info}
         type="button"
-        onClick={(event) =>
+        onOpen={(mode) =>
           surface.mcpApp
-            ? onOpenMcpApp?.(surface.mcpApp, event.metaKey ? "split" : "tab")
+            ? onOpenMcpApp?.(surface.mcpApp, mode)
             : surface.info
               ? onToggleInfo(surface.key)
-              : onOpenSurface(surface.key, event.metaKey ? "split" : "tab")
+              : onOpenSurface(surface.key, mode)
         }
         className="flex min-w-0 cursor-pointer items-center gap-1.5 py-1 pl-2 pr-2 transition-colors duration-100 hover:text-fg"
       >
@@ -712,14 +718,14 @@ function SurfaceChip({
           )}
         </span>
         <span className="max-w-36 truncate">{surface.label}</span>
-      </button>
+      </OpenResourceButton>
       {/* The split affordance only exists under the pointer: an overlay
           on the chip's right end that fades over the label's tail (its
           left edge is a gradient into the chip background) instead of
           permanently reserving width on every chip. */}
       {!surface.info && (
         <span className="pointer-events-none absolute inset-y-0 right-0 flex items-center bg-gradient-to-l from-bg-inset from-70% to-transparent pl-3 pr-0.5 opacity-0 transition-opacity duration-100 group-hover/chip:pointer-events-auto group-hover/chip:opacity-100">
-          <ShortcutHint label="Open to the right" shortcut="⌘-click">
+          <ShortcutHint label="Open to the right" shortcut="⌘⇧-click">
             <button
               type="button"
               onClick={() => onOpenSurface(surface.key, "split")}
@@ -824,9 +830,9 @@ function KindStrip({
   animateEnter: boolean;
   openGroup: ChatSurface["kind"] | null;
   onToggleGroup: (kind: ChatSurface["kind"]) => void;
-  onOpenSurface: (key: string, mode: "tab" | "split") => void;
+  onOpenSurface: (key: string, mode: OpenMode | "split") => void;
   onRemoveSurface?: (key: string) => void;
-  onOpenMcpApp?: (view: McpAppRef, mode: "tab" | "split") => void;
+  onOpenMcpApp?: (view: McpAppRef, mode: OpenMode | "split") => void;
   onToggleInfo: (key: string) => void;
 }) {
   const collapsed = group.length > SURFACE_GROUP_THRESHOLD;
@@ -939,9 +945,9 @@ function SurfacesRail({
   onOpenMcpApp,
 }: {
   surfaces: ChatSurface[];
-  onOpenSurface: (key: string, mode: "tab" | "split") => void;
+  onOpenSurface: (key: string, mode: OpenMode | "split") => void;
   onRemoveSurface?: (key: string) => void;
-  onOpenMcpApp?: (view: McpAppRef, mode: "tab" | "split") => void;
+  onOpenMcpApp?: (view: McpAppRef, mode: OpenMode | "split") => void;
 }) {
   const [openGroup, setOpenGroup] = useState<ChatSurface["kind"] | null>(null);
   const [openInfoKey, setOpenInfoKey] = useState<string | null>(null);
@@ -1034,14 +1040,12 @@ function SurfacesRail({
             key={surface.key}
             className="group/chip flex items-center rounded-md text-[12px] text-fg-muted transition-colors duration-100 hover:bg-bg-overlay"
           >
-            <button
+            <OpenResourceButton
+              isResource={!surface.info}
               type="button"
-              onClick={(event) => {
+              onOpen={(mode) => {
                 if (surface.mcpApp) {
-                  onOpenMcpApp?.(
-                    surface.mcpApp,
-                    event.metaKey ? "split" : "tab",
-                  );
+                  onOpenMcpApp?.(surface.mcpApp, mode);
                   setOpenGroup(null);
                   return;
                 }
@@ -1049,7 +1053,7 @@ function SurfacesRail({
                   toggleInfo(surface.key);
                   return;
                 }
-                onOpenSurface(surface.key, event.metaKey ? "split" : "tab");
+                onOpenSurface(surface.key, mode);
                 setOpenGroup(null);
               }}
               className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 py-1.5 text-left hover:text-fg"
@@ -1079,10 +1083,10 @@ function SurfacesRail({
                 )}
               </span>
               <span className="truncate">{surface.label}</span>
-            </button>
+            </OpenResourceButton>
             {!surface.info && (
               <span className="mr-1 flex shrink-0 items-center opacity-0 transition-opacity duration-100 group-hover/chip:opacity-100">
-                <ShortcutHint label="Open to the right" shortcut="⌘-click">
+                <ShortcutHint label="Open to the right" shortcut="⌘⇧-click">
                   <button
                     type="button"
                     onClick={() => {
@@ -1206,11 +1210,11 @@ export interface ChatDockProps {
    * Open an attached surface: "tab" focuses it as a full tab, "split"
    * tiles it to the right of the current view.
    */
-  onOpenSurface?: (key: string, mode: "tab" | "split") => void;
+  onOpenSurface?: (key: string, mode: OpenMode | "split") => void;
   /** Permanently dispose an attached surface from its chip. */
   onRemoveSurface?: (key: string) => void;
   /** Open an MCP Apps view (a connection tool's ui:// template) as a tab. */
-  onOpenMcpApp?: (view: McpAppRef, mode: "tab" | "split") => void;
+  onOpenMcpApp?: (view: McpAppRef, mode: OpenMode | "split") => void;
   /** Set while this tab is the unfocused pane of a split: click focuses. */
   onFocusRequest?: () => void;
   /**
@@ -1222,17 +1226,12 @@ export interface ChatDockProps {
   /** Set while this tab sits in a split: return it to a full-width tab. */
   onUnsplit?: () => void;
   /**
-   * Agent-message link clicked — opens as an attached browser tab. The
-   * modifiers follow the palette's grammar: plain opens (a fullscreen
-   * chat steps down to the floating dock), ⌘ opens a new tab with the
-   * chat untouched, ⌘⇧ tiles it to the side of the current view.
+   * Agent-message links and menus follow the shared resource-opening
+   * grammar (ADR 0108), retaining the current chat and its draft.
    */
-  onLinkClick?: (
-    url: string,
-    modifiers: { metaKey: boolean; shiftKey: boolean },
-  ) => void;
+  onLinkClick?: (url: string, modifiers: OpenModifiers | OpenMode) => void;
   /** An edited-file row in the turn-step log was clicked — open the file. */
-  onFileClick?: (path: string) => void;
+  onFileClick?: (path: string, modifiers?: OpenModifiers) => void;
   /** Fork the conversation from this assistant message (hover action). */
   onFork?: (messageId: string) => void;
   /** Fork at the latest settled message from the session inspector. */
@@ -1344,6 +1343,9 @@ function ChatDockContent({
 }: ChatDockProps) {
   const authority = useRemoteAuthority();
   const catalog = useAgentCatalog(authority ? projectId : undefined);
+  const [transferError, setTransferError] = useState<string>();
+  const [pendingTransfers, setPendingTransfers] = useState(0);
+  const pendingTransfersRef = useRef(0);
   const [localRunnerError, setLocalRunnerError] = useState<string>();
   const [connectingRunner, setConnectingRunner] = useState(false);
   const [remoteAgentId, setRemoteAgentId] = useState<string>();
@@ -1576,6 +1578,7 @@ function ChatDockContent({
 
   /** Commit a slash-menu row: send the invocation (attachments ride along). */
   const runSlash = (entry: SlashEntry) => {
+    if (pendingTransfersRef.current > 0) return;
     const files = composerRef.current?.read().attachments ?? [];
     composerRef.current?.clear();
     setRecall(null);
@@ -2144,6 +2147,7 @@ function ChatDockContent({
     message: string;
     files: AgentChatAttachment[];
   } | null => {
+    if (pendingTransfersRef.current > 0) return null;
     const composed = composerRef.current?.read();
     if (!composed) return null;
     const { message, attachments: files } = composed;
@@ -2294,56 +2298,127 @@ function ChatDockContent({
     ) {
       return;
     }
+    if (composer.read().attachments.length >= MAX_ATTACHMENTS) {
+      setTransferError(
+        "This message already has 32 attachments. Send these first, then paste again.",
+      );
+      return;
+    }
     composer.insertPills([{ ...pill, id: crypto.randomUUID() }], { at });
   };
   const addTextPillRef = useRef(addTextPill);
   addTextPillRef.current = addTextPill;
 
-  /**
-   * Dropped/pasted files become inline pills. Media (image/document) when
-   * the agent takes that kind, the file fits the per-file cap, and the
-   * message's media budget has room; ANYTHING else — a .pcap, an oversized
-   * video, media for a text-only agent — still attaches, as a path pill
-   * the agent reads itself. Only a pathless File that can't ship as media
-   * (a synthetic clipboard bitmap too big to send) is dropped.
-   */
+  /** Serialize transfers so budgets, caret position and send stay coherent. */
   const addFilesQueueRef = useRef<Promise<void>>(Promise.resolve());
   const addFiles = (files: File[], at?: { x: number; y: number }) => {
-    if (files.length === 0) return;
-    // Serialized through one chain: the media budget is read from a
-    // snapshot of the composer, so a second drop landing while the first
-    // is still encoding must wait for its pills to insert or both drops
-    // would each be granted the full budget.
-    addFilesQueueRef.current = addFilesQueueRef.current.then(async () => {
-      const current = composerRef.current?.read().attachments ?? [];
-      let budget =
-        MAX_TOTAL_MEDIA_BYTES -
-        current.reduce(
-          (total, attachment) =>
-            attachment.kind === "text"
-              ? total
-              : total + Math.round((attachment.dataBase64.length * 3) / 4),
-          0,
-        );
-      const pills: ComposerAttachment[] = [];
-      for (const file of files) {
-        const kind = mediaKindOf(file);
-        const asMedia =
-          kind !== null &&
-          accepts.includes(kind) &&
-          file.size > 0 &&
-          file.size <= MAX_ATTACHMENT_BYTES &&
-          file.size <= budget;
-        if (asMedia) {
-          pills.push(await encodeFile(file, kind));
-          budget -= file.size;
-          continue;
+    const composer = composerRef.current;
+    const root = composer?.element();
+    if (files.length === 0 || !composer || !root) return;
+    const selection = window.getSelection();
+    const currentRange = at
+      ? document.caretRangeFromPoint(at.x, at.y)
+      : selection?.rangeCount
+        ? selection.getRangeAt(0)
+        : null;
+    const range =
+      currentRange && root.contains(currentRange.commonAncestorContainer)
+        ? currentRange.cloneRange()
+        : document.createRange();
+    if (!currentRange || !root.contains(currentRange.commonAncestorContainer)) {
+      range.selectNodeContents(root);
+      range.collapse(false);
+    }
+    pendingTransfersRef.current += 1;
+    setPendingTransfers(pendingTransfersRef.current);
+    setTransferError(undefined);
+    addFilesQueueRef.current = addFilesQueueRef.current
+      .then(async () => {
+        // A closed/replaced composer must never receive another chat's files.
+        if (composerRef.current !== composer || !root.isConnected) return;
+        const current = composer.read().attachments;
+        let budget =
+          MAX_TOTAL_MEDIA_BYTES -
+          current.reduce(
+            (total, attachment) =>
+              attachment.kind === "text"
+                ? total
+                : total + Math.round((attachment.dataBase64.length * 3) / 4),
+            0,
+          );
+        const pills: ComposerAttachment[] = [];
+        const failures: string[] = [];
+        for (const file of files) {
+          if (current.length + pills.length >= MAX_ATTACHMENTS) {
+            failures.push(
+              `${file.name || "File"}: a message can hold ${MAX_ATTACHMENTS} attachments. Send these first, then paste the remaining files.`,
+            );
+            continue;
+          }
+          try {
+            const kind = mediaKindOf(file);
+            if (
+              kind &&
+              accepts.includes(kind) &&
+              file.size > 0 &&
+              file.size <= MAX_ATTACHMENT_BYTES &&
+              file.size <= budget
+            ) {
+              pills.push(await encodeFile(file, kind));
+              budget -= file.size;
+            } else {
+              const existing = pathPillFor(file);
+              if (existing) pills.push(existing);
+              else {
+                if (file.size > 128 * 1024 * 1024)
+                  throw new Error(
+                    "Save this file to disk, then attach it from there (clipboard limit: 128 MB).",
+                  );
+                const saved = await desktopApi.composerFileSave({
+                  projectId,
+                  name: file.name || "clipboard-file",
+                  bytes: new Uint8Array(await file.arrayBuffer()),
+                });
+                pills.push({
+                  id: crypto.randomUUID(),
+                  ...textPill(
+                    saved.path,
+                    { type: "path", path: saved.path },
+                    saved.name,
+                  ),
+                });
+              }
+            }
+          } catch (error) {
+            failures.push(
+              `${file.name || "File"}: ${error instanceof Error ? error.message : "Could not attach this file. Paste it again or attach it from disk."}`,
+            );
+          }
         }
-        const pathPill = pathPillFor(file);
-        if (pathPill) pills.push(pathPill);
-      }
-      if (pills.length > 0) composerRef.current?.insertPills(pills, { at });
-    });
+        if (composerRef.current !== composer || !root.isConnected) return;
+        // Text pills can arrive while a file is being read; report overflow.
+        const room = Math.max(
+          0,
+          MAX_ATTACHMENTS - composer.read().attachments.length,
+        );
+        if (pills.length > room)
+          failures.push(
+            "Some files could not fit. Send these attachments first, then paste the remaining files.",
+          );
+        composer.insertPills(pills.slice(0, room), { range });
+        if (failures.length > 0) setTransferError(failures.join("\n"));
+      })
+      .catch((error: unknown) => {
+        setTransferError(
+          error instanceof Error
+            ? error.message
+            : "Could not attach files. Try pasting again.",
+        );
+      })
+      .finally(() => {
+        pendingTransfersRef.current -= 1;
+        setPendingTransfers(pendingTransfersRef.current);
+      });
   };
 
   const addFilesRef = useRef(addFiles);
@@ -2421,8 +2496,8 @@ function ChatDockContent({
 
   /** Paste aimed at the composer: always ours (plain text, pills, files). */
   const onComposerPaste = (event: ClipboardEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    consumePaste(event.clipboardData, { intoComposer: true });
+    if (consumePaste(event.clipboardData, { intoComposer: true }))
+      event.preventDefault();
   };
 
   // Paste is ALSO handled at the WINDOW while this chat is the front
@@ -2434,15 +2509,6 @@ function ChatDockContent({
     if (!frontSurface) return;
     const onWindowPaste = (event: globalThis.ClipboardEvent) => {
       if (event.defaultPrevented) return;
-      // Files attach regardless of focus: a text field has no native
-      // handling for a file paste, so gating on the target would silently
-      // drop "copy a screenshot, Cmd+V" whenever a field had the caret.
-      const files = filesFrom(event.clipboardData);
-      if (files.length > 0) {
-        addFilesRef.current(files);
-        event.preventDefault();
-        return;
-      }
       const target = event.target;
       const inField =
         target instanceof HTMLInputElement ||
@@ -2983,36 +3049,40 @@ function ChatDockContent({
               {watcherQuery.stop.error.message}
             </p>
           )}
-          <ChatTimeline
-            className="min-h-0 flex-1"
-            contentClassName={isTab ? "mx-auto w-full max-w-4xl pt-12" : ""}
-            messages={messages}
-            activity={chat.connectionLost ? undefined : activity}
-            queue={chat.queue}
-            onUpdateQueued={chat.updateQueued}
-            onRemoveQueued={chat.removeQueued}
-            onSendQueuedNow={chat.sendQueuedNow}
-            onHoldQueued={chat.holdQueued}
-            onRetry={() => void chat.retry()}
-            onReauth={reauth?.run}
-            reauthLabel={reauth?.label}
-            resolveAgentName={(agentId) =>
-              roster.agents.find((agent) => agent.id === agentId)?.name
-            }
-            error={
-              chat.connectionLost
-                ? "Connection lost. Reconnecting to check your agent's progress. It may still be running."
-                : (chat.error?.message ?? null)
-            }
-            emptyState={emptyPrompt.empty}
-            onLinkClick={onLinkClick}
-            onFileClick={onFileClick}
-            resolveToolIcon={resolveToolIcon}
-            onFork={entry.sessionId ? onFork : undefined}
-            registerJumpToPreviousUserMessage={(jump) => {
-              jumpToPreviousRef.current = jump;
-            }}
-          />
+          <ResourceLinkBoundary
+            onOpen={(url, mode) => onLinkClick?.(url, mode)}
+          >
+            <ChatTimeline
+              className="min-h-0 flex-1"
+              contentClassName={isTab ? "mx-auto w-full max-w-4xl pt-12" : ""}
+              messages={messages}
+              activity={chat.connectionLost ? undefined : activity}
+              queue={chat.queue}
+              onUpdateQueued={chat.updateQueued}
+              onRemoveQueued={chat.removeQueued}
+              onSendQueuedNow={chat.sendQueuedNow}
+              onHoldQueued={chat.holdQueued}
+              onRetry={() => void chat.retry()}
+              onReauth={reauth?.run}
+              reauthLabel={reauth?.label}
+              resolveAgentName={(agentId) =>
+                roster.agents.find((agent) => agent.id === agentId)?.name
+              }
+              error={
+                chat.connectionLost
+                  ? "Connection lost. Reconnecting to check your agent's progress. It may still be running."
+                  : (chat.error?.message ?? null)
+              }
+              emptyState={emptyPrompt.empty}
+              onLinkClick={onLinkClick}
+              onFileClick={onFileClick}
+              resolveToolIcon={resolveToolIcon}
+              onFork={entry.sessionId ? onFork : undefined}
+              registerJumpToPreviousUserMessage={(jump) => {
+                jumpToPreviousRef.current = jump;
+              }}
+            />
+          </ResourceLinkBoundary>
           {runtimeSettingsError ? (
             <p
               role="alert"
@@ -3161,6 +3231,27 @@ function ChatDockContent({
                     </p>
                   </div>
                 ))}
+            {pendingTransfers > 0 && (
+              <p role="status" className="mx-3 text-xs text-muted">
+                Preparing attachments…
+              </p>
+            )}
+            {transferError && (
+              <div
+                role="alert"
+                data-testid="attachment-error"
+                className="mx-3 flex gap-2 text-xs text-danger"
+              >
+                <p className="whitespace-pre-wrap">{transferError}</p>
+                <button
+                  type="button"
+                  aria-label="Dismiss attachment error"
+                  onClick={() => setTransferError(undefined)}
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
             {localRunnerError && (
               <p role="alert" className="mx-3 text-xs text-danger">
                 {localRunnerError}
@@ -3209,9 +3300,7 @@ function ChatDockContent({
                 projectId={projectId}
                 environment={chat.authenticationRequired?.environment ?? ""}
                 requirement={requirement}
-                onOpenLink={(url) =>
-                  onLinkClick?.(url, { metaKey: true, shiftKey: false })
-                }
+                onOpenLink={(url) => onLinkClick?.(url, "tab")}
                 onAuthorized={chat.resumeAfterAuthentication}
               />
             ))}
@@ -3302,7 +3391,7 @@ function ChatDockContent({
                   onPaste={onComposerPaste}
                   onOpenTab={
                     onOpenSurface
-                      ? (key) => onOpenSurface(key, "tab")
+                      ? (key, mode) => onOpenSurface(key, mode)
                       : undefined
                   }
                   maxPills={MAX_ATTACHMENTS}
@@ -3323,7 +3412,9 @@ function ChatDockContent({
                   <button
                     type="submit"
                     className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-fg transition-opacity duration-150 disabled:opacity-35"
-                    disabled={!draft.trim() && pillCount === 0}
+                    disabled={
+                      pendingTransfers > 0 || (!draft.trim() && pillCount === 0)
+                    }
                     data-disabled-reason="Write a message or attach a file first"
                     aria-label="Send message"
                   >
@@ -3366,9 +3457,7 @@ function ChatDockContent({
           <EnvironmentConnections
             projectId={projectId}
             environment={activeEnvironment}
-            onOpenLink={(url) =>
-              onLinkClick?.(url, { metaKey: true, shiftKey: false })
-            }
+            onOpenLink={(url) => onLinkClick?.(url, "tab")}
           />
         )}
       </Modal>

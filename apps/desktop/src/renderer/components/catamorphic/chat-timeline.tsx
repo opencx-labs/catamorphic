@@ -126,14 +126,27 @@ export interface ChatTimelineProps {
   resolveAgentName?: (agentId: string) => string | undefined;
   onLinkClick?: (
     url: string,
-    modifiers: { metaKey: boolean; shiftKey: boolean },
+    modifiers: {
+      metaKey: boolean;
+      ctrlKey: boolean;
+      shiftKey: boolean;
+      altKey: boolean;
+    },
   ) => void;
   /**
    * A file path in the turn-step log was clicked ("Edited docs/plan.md").
    * Hosts open the file in an editor surface; without it the rows stay
    * inert text.
    */
-  onFileClick?: (path: string) => void;
+  onFileClick?: (
+    path: string,
+    modifiers?: {
+      metaKey: boolean;
+      ctrlKey: boolean;
+      shiftKey: boolean;
+      altKey: boolean;
+    },
+  ) => void;
   /**
    * Icon URL for a tool name (MCP tools are `server/tool`; the host maps
    * the server key to its connector icon). Undefined → generic glyph.
@@ -426,7 +439,15 @@ function MessageImpl({
   isLast: boolean;
   resolveAgentName?: (agentId: string) => string | undefined;
   onLinkClick?: ChatTimelineProps["onLinkClick"];
-  onFileClick?: (path: string) => void;
+  onFileClick?: (
+    path: string,
+    modifiers?: {
+      metaKey: boolean;
+      ctrlKey: boolean;
+      shiftKey: boolean;
+      altKey: boolean;
+    },
+  ) => void;
   resolveToolIcon?: (toolName: string) => string | undefined;
   onRetry?: () => void;
   onReauth?: () => void;
@@ -612,7 +633,9 @@ function MessageImpl({
                           event.preventDefault();
                           if (href) {
                             onLinkClick(href, {
-                              metaKey: event.metaKey || event.ctrlKey,
+                              metaKey: event.metaKey,
+                              ctrlKey: event.ctrlKey,
+                              altKey: event.altKey,
                               shiftKey: event.shiftKey,
                             });
                           }
@@ -1020,7 +1043,15 @@ function TurnSteps({
 }: {
   steps: TurnStep[];
   resolveToolIcon?: (toolName: string) => string | undefined;
-  onFileClick?: (path: string) => void;
+  onFileClick?: (
+    path: string,
+    modifiers?: {
+      metaKey: boolean;
+      ctrlKey: boolean;
+      shiftKey: boolean;
+      altKey: boolean;
+    },
+  ) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   if (steps.length === 0) return null;
@@ -1073,7 +1104,15 @@ function StepRow({
 }: {
   step: TurnStep;
   iconUrl?: string;
-  onFileClick?: (path: string) => void;
+  onFileClick?: (
+    path: string,
+    modifiers?: {
+      metaKey: boolean;
+      ctrlKey: boolean;
+      shiftKey: boolean;
+      altKey: boolean;
+    },
+  ) => void;
 }) {
   const [open, setOpen] = useState(false);
   const Icon = STEP_ICONS[step.kind];
@@ -1082,12 +1121,18 @@ function StepRow({
   const opensFile = Boolean(step.filePath && onFileClick);
   const interactive = expandable || opensFile;
   return (
-    <div data-testid="chat-step">
+    <div data-testid="chat-step" data-file-path={step.filePath}>
       <button
         type="button"
         onClick={
           opensFile
-            ? () => onFileClick?.(step.filePath as string)
+            ? (event) =>
+                onFileClick?.(step.filePath as string, {
+                  metaKey: event.metaKey,
+                  ctrlKey: event.ctrlKey,
+                  shiftKey: event.shiftKey,
+                  altKey: event.altKey,
+                })
             : expandable
               ? () => setOpen((value) => !value)
               : undefined

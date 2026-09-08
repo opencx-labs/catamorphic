@@ -34,7 +34,7 @@ const helpers = `
   ${setReactValueJs}
   const pressKey = (key, mods = {}) =>
     window.dispatchEvent(new KeyboardEvent('keydown',
-      { key, bubbles: true, cancelable: true, ...mods }));
+      { key, bubbles: true, cancelable: true, ...(mods.metaKey && !/Mac/.test(navigator.platform) ? { ...mods, metaKey: false, ctrlKey: true } : mods) }));
   const timelineMessages = () =>
     $$('[role="log"] article').map((el) => ({
       // No name tags in the timeline — side placement is the role: user
@@ -619,8 +619,8 @@ describe("chat flows", () => {
       label: "dock session menu dismissed",
     });
 
-    // Right-clicking the matching sidebar row exposes the same current-state
-    // actions. Marking it read removes the shared dot.
+    // The sidebar resource menu adds placement choices to the same current-state
+    // session actions. Marking it read removes the shared dot.
     await run(`
       const row = [...document.querySelectorAll('aside li[data-session-id]')]
         .find((item) => item.textContent.includes('Session menu'));
@@ -631,7 +631,7 @@ describe("chat flows", () => {
     `);
     await runWait(
       `const labels = $$('[role="menuitem"]').map((item) => item.textContent.trim());
-       return labels.join('|') === 'New subsession|Mark as read|Archive';`,
+       return labels.join('|') === 'Open here|Open in new tab|Open to the side|Open floating|New subsession|Mark as read|Archive';`,
       { label: "sidebar session menu matches the dock" },
     );
     await run(
@@ -694,7 +694,7 @@ describe("chat flows", () => {
     await run(`
       const option = $$('[role="option"]')
         .find((el) => !el.closest('[inert]') && el.textContent.includes('Session menu'));
-      option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, altKey: true }));
       return true;
     `);
     await runWait(
@@ -820,7 +820,7 @@ describe("palette intent", () => {
        return options.length > 0 &&
               options.some((el) => el.textContent.includes('Toggle left sidebar')) &&
               options.some((el) => el.textContent.includes('Toggle right sidebar')) &&
-              !options.some((el) => el.textContent.includes('Settings'));`,
+              !options.some((el) => el.querySelector('span.truncate')?.textContent === 'Settings');`,
       { label: "> shows commands, hides navigate rows" },
     );
     const footer = await run<boolean>(
@@ -834,8 +834,8 @@ describe("palette intent", () => {
 });
 
 describe("chat tab activity indicators", () => {
-  // The tab strip is the only .app-no-drag flex row with items-end.
-  const tabStrip = `document.querySelector('.app-no-drag.items-end')`;
+  // Locate the tab surface independently of its placement and styling.
+  const tabStrip = `document.querySelector('[data-tab-orientation]')`;
   const tabSpinnerOn = `[...${tabStrip}.querySelectorAll('svg.animate-spin')]
     .some((el) => getComputedStyle(el).opacity === '1')`;
   const tabDotOn = `[...${tabStrip}.querySelectorAll('span.bg-accent')]
@@ -1215,6 +1215,39 @@ describe("navigation shortcuts", () => {
 });
 
 describe("tiling and chat surfaces", () => {
+  it("opens an existing chat link floating and back as the same tab", async () => {
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return !!floatingDock();`, { label: "chat open" });
+    const localId = await run<string>(
+      `return floatingDock().dataset.chatLocalId;`,
+    );
+    await run(`pressKey('m', { metaKey: true, shiftKey: true }); return true;`);
+    await runWait(`return !floatingDock();`, { label: "chat is a tab" });
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, ${JSON.stringify(`[This chat](chat:${localId})`)});
+      ta.closest('form').requestSubmit();
+    `);
+    const link = `.cat-markdown a[href="chat:${localId}"]`;
+    await runWait(
+      `return !!visibleDock()?.querySelector(${JSON.stringify(link)});`,
+    );
+    await run(
+      `visibleDock().querySelector(${JSON.stringify(link)}).dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, altKey:true}));`,
+    );
+    await runWait(
+      `return floatingDock()?.dataset.chatLocalId === ${JSON.stringify(localId)};`,
+    );
+    expect(await run(`return !!$('[data-floating-surface]');`)).toBe(false);
+    await run(`floatingDock().querySelector(${JSON.stringify(link)}).click();`);
+    await runWait(
+      `return !floatingDock() && visibleDock()?.dataset.chatLocalId === ${JSON.stringify(localId)};`,
+    );
+    expect(
+      await run(`return $$('[data-chat-local-id="${localId}"]').length;`),
+    ).toBe(1);
+  });
+
   it("attaches agent-linked pages and rail terminals to the chat", async () => {
     await run(`pressKey('n', { metaKey: true }); return true;`);
     await runWait(`return !!floatingDock();`, { label: "chat open" });

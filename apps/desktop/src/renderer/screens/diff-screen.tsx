@@ -1,8 +1,8 @@
 import { DiffEditor } from "@monaco-editor/react";
-import "../lib/monaco-setup.js";
 import { useEffect, useState } from "react";
 import type { DiffSource } from "../components/workspace-tabs.js";
 import { desktopApi, type GitFileDiff } from "../lib/desktop-api.js";
+import { useMonacoTheme } from "../lib/monaco-setup.js";
 import { useTheme } from "../lib/theme.js";
 
 /**
@@ -42,6 +42,7 @@ function LocalDiff({
   source: Extract<DiffSource, { type: "local" }>;
 }) {
   const theme = useTheme();
+  const editorTheme = useMonacoTheme();
   const [diff, setDiff] = useState<GitFileDiff | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -120,7 +121,7 @@ function LocalDiff({
             modifiedModelPath={`file:///diff-modified/${encodeURIComponent(projectId)}/${encodeURIComponent(source.worktreePath)}/${source.mode}/${source.filePath.split("/").map(encodeURIComponent).join("/")}`}
             original={diff.before}
             modified={diff.after}
-            theme={theme?.appearance === "light" ? "light" : "vs-dark"}
+            theme={editorTheme}
             options={{
               readOnly: true,
               renderSideBySide: true,

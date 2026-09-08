@@ -18,6 +18,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { type OpenMode, openModeFromEvent } from "../../shared/open-mode.js";
 import { textStats } from "../lib/text-pills";
 import type { ChatAttachmentView } from "./catamorphic/chat-timeline";
 
@@ -123,7 +124,7 @@ export interface ContextPillProps {
   /** Whether arrival plays pill-in (composer inserts do; history doesn't). */
   animateIn?: boolean;
   /** Clicking the body (e.g. open a tab pill's tab). */
-  onOpen?: () => void;
+  onOpen?: (mode: OpenMode) => void;
   className?: string;
   /** Extra data-* for tests. */
   testId?: string;
@@ -188,6 +189,15 @@ export function ContextPill({
     if (exiting) closeNow();
   }, [exiting]);
 
+  const exitedRef = useRef(onExited);
+  exitedRef.current = onExited;
+  useEffect(() => {
+    if (!exiting) return;
+    // Editing another inline pill can cancel Chromium's animation event.
+    const timer = window.setTimeout(() => exitedRef.current?.(), 220);
+    return () => window.clearTimeout(timer);
+  }, [exiting]);
+
   const label =
     view.kind === "text" && view.source.type === "tab"
       ? view.source.title
@@ -212,11 +222,16 @@ export function ContextPill({
       <span
         role={onOpen ? "button" : undefined}
         tabIndex={onOpen ? -1 : undefined}
-        onClick={onOpen}
+        onClick={
+          onOpen ? (event) => onOpen(openModeFromEvent(event)) : undefined
+        }
         onKeyDown={
           onOpen
             ? (event) => {
-                if (event.key === "Enter") onOpen();
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  onOpen(openModeFromEvent(event));
+                }
               }
             : undefined
         }

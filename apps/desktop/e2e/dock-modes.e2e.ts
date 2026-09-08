@@ -42,7 +42,7 @@ const helpers = `
   ${setReactValueJs}
   const pressKey = (key, mods = {}) =>
     window.dispatchEvent(new KeyboardEvent('keydown', {
-      key, bubbles: true, cancelable: true, ...mods }));
+      key, bubbles: true, cancelable: true, ...(mods.metaKey && !/Mac/.test(navigator.platform) ? { ...mods, metaKey: false, ctrlKey: true } : mods) }));
   const dockH = () => frontDock()?.getBoundingClientRect().height ?? 0;
   const hoverDock = () => frontDock().dispatchEvent(
     new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }));
@@ -251,9 +251,13 @@ describe("dock modes", () => {
         `return !!frontDock().querySelector('button[aria-label$=" terminals"]');`,
       );
       if (grouped) break;
-      await run(`setComposer('terminal: echo ${label}'); send(); return true;`);
+      const marker = `${label}-${Date.now()}`;
+      await run(
+        `setComposer('terminal: echo ${marker}'); send(); return true;`,
+      );
       await runWait(
-        `return frontDock().querySelector('[role="log"]').textContent.includes('${label}');`,
+        `return [...frontDock().querySelectorAll('[role="log"] article')].some(el =>
+          el.textContent.includes('terminal result:') && el.textContent.includes('${marker}'));`,
         { timeoutMs: 30_000, label: `terminal turn ${label}` },
       );
     }

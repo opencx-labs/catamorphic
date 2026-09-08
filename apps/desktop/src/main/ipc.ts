@@ -41,6 +41,7 @@ import {
   type AgentAuthHealthReport,
   claudeOauthHealth,
 } from "./auth-health.js";
+import { saveComposerFile } from "./composer-files.js";
 import { parseConnectLink } from "./connect-link.js";
 import {
   type CreateConnectionInput,
@@ -111,6 +112,7 @@ import {
   windowBackgroundColor,
 } from "./theme.js";
 import { createUsageScanner } from "./usage-scan.js";
+import { watchSidebarEdge } from "./window-sidebar-edge.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT_REMOTE_PROJECT_PERMISSIONS: RemoteMe["projects"][number]["permissions"] =
@@ -426,6 +428,42 @@ export function registerIpcHandlers(
     window.show();
     window.focus();
   });
+
+  ipcMain.handle(
+    "catamorphic:window-controls-visible",
+    (event, visible: unknown) => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (process.platform === "darwin" && typeof visible === "boolean") {
+        window?.setWindowButtonVisibility(visible);
+      }
+    },
+  );
+
+  const sidebarEdgeWatchers = new Map<number, () => void>();
+  ipcMain.handle(
+    "catamorphic:sidebar-edge-enabled",
+    (event, enabled: unknown, width: unknown) => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (!window || typeof enabled !== "boolean") return;
+      if (!enabled) {
+        sidebarEdgeWatchers.get(window.id)?.();
+        return;
+      }
+      sidebarEdgeWatchers.get(window.id)?.();
+      const sidebarWidth =
+        typeof width === "number" && Number.isFinite(width)
+          ? Math.max(220, Math.min(520, width))
+          : 260;
+      const stopWatching = watchSidebarEdge(window, sidebarWidth);
+      const stop = () => {
+        stopWatching();
+        sidebarEdgeWatchers.delete(window.id);
+        window.removeListener("closed", stop);
+      };
+      sidebarEdgeWatchers.set(window.id, stop);
+      window.once("closed", stop);
+    },
+  );
 
   // --- per-profile agents ---
 
@@ -2184,6 +2222,19 @@ export function registerIpcHandlers(
   ipcMain.handle("catamorphic:reveal-folder", (_event, folderPath: string) => {
     if (path.isAbsolute(folderPath)) shell.openPath(folderPath);
   });
+
+  ipcMain.handle(
+    "catamorphic:composer-file-save",
+    async (
+      _event,
+      input: { projectId: string; name: string; bytes: Uint8Array },
+    ) =>
+      saveComposerFile({
+        rootPath: await requireRoot(input.projectId),
+        name: input.name,
+        bytes: input.bytes,
+      }),
+  );
 
   ipcMain.handle(
     "catamorphic:editor-file-read",

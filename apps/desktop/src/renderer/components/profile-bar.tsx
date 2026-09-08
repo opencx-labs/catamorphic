@@ -1,5 +1,5 @@
 import type { ProjectSummary } from "@catamorphic/react/types";
-import { Check, Plus, Star } from "lucide-react";
+import { Check, ChevronDown, Plus, Star } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Profile, ProfilesData } from "../lib/desktop-api.js";
 import { desktopApi } from "../lib/desktop-api.js";
@@ -28,6 +28,7 @@ export function ProfileBar({
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const createInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -51,7 +52,17 @@ export function ProfileBar({
       }
     };
     window.addEventListener("pointerdown", onPointerDown);
-    return () => window.removeEventListener("pointerdown", onPointerDown);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
   }, [open]);
 
   useEffect(() => {
@@ -82,9 +93,9 @@ export function ProfileBar({
   if (!active) return null;
 
   return (
-    <div ref={containerRef} className="relative">
+    <div ref={containerRef} className="relative min-w-0 flex-1">
       <div
-        className={`absolute inset-x-0 bottom-full z-50 mb-1 origin-bottom rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl transition-[opacity,translate,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+        className={`absolute left-0 w-[244px] bottom-full z-50 mb-1 origin-bottom rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl transition-[opacity,translate,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
           open
             ? "translate-y-0 scale-100 opacity-100"
             : "pointer-events-none translate-y-1 scale-[0.98] opacity-0"
@@ -192,19 +203,31 @@ export function ProfileBar({
             {...inspectorProps}
             type="button"
             onClick={() => setOpen((value) => !value)}
-            className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-[13px] transition-colors duration-150 ${
+            className={`flex h-8 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-[13px] transition-colors duration-150 ${
               open
                 ? "bg-bg-overlay text-fg"
                 : "text-fg-muted hover:bg-bg-overlay hover:text-fg"
             }`}
+            ref={triggerRef}
+            aria-label={`Switch profile: ${active.name}`}
             aria-haspopup="menu"
             aria-expanded={open}
           >
             <span
-              className="size-2.5 shrink-0 rounded-full"
-              style={{ backgroundColor: active.color }}
+              className="grid size-6 shrink-0 place-items-center rounded-full font-medium ring-1 ring-fg/10"
+              style={{
+                color: active.color,
+                backgroundColor: `color-mix(in srgb, ${active.color} 12%, var(--color-bg-raised))`,
+              }}
+            >
+              {active.name.slice(0, 1).toUpperCase()}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-left">
+              {active.name}
+            </span>
+            <ChevronDown
+              className={`size-3.5 shrink-0 transition-transform duration-150 ${open ? "rotate-180" : ""}`}
             />
-            <span className="truncate">{active.name}</span>
           </button>
         )}
       </ResourceInspector>

@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import type { BookmarkPlacement } from "../shared/bookmark-target.js";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
+import type { OpenMode } from "../shared/open-mode.js";
 import type { DesktopUpdateState } from "../shared/update.js";
 
 export interface ServerInfo {
@@ -40,6 +42,13 @@ const api = {
       return "";
     }
   },
+
+  composerFileSave: (input: {
+    projectId: string;
+    name: string;
+    bytes: Uint8Array;
+  }): Promise<{ path: string; name: string }> =>
+    ipcRenderer.invoke("catamorphic:composer-file-save", input),
 
   // --- window ↔ profile ---
   windowProfile: (): Promise<string> =>
@@ -407,6 +416,22 @@ const api = {
   },
   windowFocus: (): Promise<void> =>
     ipcRenderer.invoke("catamorphic:window-focus"),
+  windowSetControlsVisible: (visible: boolean): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:window-controls-visible", visible),
+  windowSetSidebarEdgeEnabled: (
+    enabled: boolean,
+    width?: number,
+  ): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:sidebar-edge-enabled", enabled, width),
+  onSidebarPointerZone: (
+    listener: (zone: "edge" | "inside" | "outside") => void,
+  ): (() => void) => {
+    const handler = (_event: unknown, zone: "edge" | "inside" | "outside") =>
+      listener(zone);
+    ipcRenderer.on("catamorphic:sidebar-pointer-zone", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:sidebar-pointer-zone", handler);
+  },
 
   getTheme: (): Promise<unknown> => ipcRenderer.invoke("catamorphic:theme-get"),
   setTheme: (config: unknown): Promise<unknown> =>
@@ -469,9 +494,13 @@ const api = {
     matches: { url: string; title: string }[];
     inline: string | null;
   }> => ipcRenderer.invoke("catamorphic:browser-suggest", input),
-  onBrowserOpenUrl: (listener: (url: string) => void): (() => void) => {
-    const handler = (_event: unknown, payload: { url: string }) =>
-      listener(payload.url);
+  onBrowserOpenUrl: (
+    listener: (url: string, mode?: OpenMode) => void,
+  ): (() => void) => {
+    const handler = (
+      _event: unknown,
+      payload: { url: string; mode?: OpenMode },
+    ) => listener(payload.url, payload.mode);
     ipcRenderer.on("catamorphic:browser-open-url", handler);
     return () =>
       ipcRenderer.removeListener("catamorphic:browser-open-url", handler);
@@ -496,6 +525,7 @@ const api = {
     listener: (key: {
       webContentsId: number;
       key: string;
+      code?: string;
       meta: boolean;
       control: boolean;
       alt: boolean;
@@ -550,6 +580,8 @@ const api = {
     ipcRenderer.invoke("catamorphic:browser-credential-fill", input),
 
   // --- terminal tabs (PTY sessions live in main; see main/terminal.ts) ---
+  terminalGhosttyAppearance: () =>
+    ipcRenderer.invoke("catamorphic:terminal-ghostty-appearance"),
   terminalCreate: (input: {
     projectId?: string;
     cols?: number;
@@ -712,6 +744,8 @@ const api = {
     faviconUrl?: string;
   }): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:bookmarks-add", input),
+  bookmarksPlace: (input: BookmarkPlacement): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:bookmarks-place", input),
   bookmarksAddFolder: (input: {
     projectId: string;
     profileId: string;

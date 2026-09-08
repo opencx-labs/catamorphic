@@ -34,7 +34,7 @@ const helpers = `
   ${setReactValueJs}
   const pressKey = (key, mods = {}) =>
     window.dispatchEvent(new KeyboardEvent('keydown',
-      { key, bubbles: true, cancelable: true, ...mods }));
+      { key, bubbles: true, cancelable: true, ...(mods.metaKey && !/Mac/.test(navigator.platform) ? { ...mods, metaKey: false, ctrlKey: true } : mods) }));
   const paletteInput = () => (
     $$('textarea[aria-label="Search commands, pages, and more"]')
       .find((el) => document.activeElement === el) ??
@@ -1348,14 +1348,14 @@ describe("agents and profiles", () => {
       { label: "linked Markdown in Tiptap" },
     );
     await run(
-      `byText('a', 'Inspect linked source').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true, shiftKey: true })); return true;`,
+      `byText('a', 'Inspect linked source').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform), shiftKey: true })); return true;`,
     );
     await runWait(
       `return !!$('.monaco-editor') && !!$('[data-point-key^="editor:"]') && !!$('[data-split-divider]');`,
       { label: "linked source editor" },
     );
     await run(
-      `byText('a', 'Open linked graph').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true })); return true;`,
+      `byText('a', 'Open linked graph').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform) })); return true;`,
     );
     await runWait(
       `return !!$('[data-point-key="workflow:linkedWorkflow"]') && !!$('.react-flow__node');`,
@@ -1363,13 +1363,13 @@ describe("agents and profiles", () => {
     );
 
     await run(
-      `byText('a', 'Open linked app').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true })); return true;`,
+      `byText('a', 'Open linked app').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform) })); return true;`,
     );
     await runWait(`return !!$('[data-point-key="app:linked-app"]');`, {
       label: "linked app tab",
     });
     await run(
-      `byText('a', 'Read linked PDF').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true })); return true;`,
+      `byText('a', 'Read linked PDF').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform) })); return true;`,
     );
     await runWait(
       `return $$('webview').some((view) => (view.getAttribute('src') ?? '').startsWith('file:') && (view.getAttribute('src') ?? '').includes('artifact.pdf'));`,

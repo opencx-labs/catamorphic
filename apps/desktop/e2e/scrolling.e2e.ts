@@ -53,7 +53,7 @@ it("scrolls Settings to the last section without moving the workspace chrome", a
     `return document.querySelector('main').getBoundingClientRect().top;`,
   );
   const point = await run<{ x: number; y: number }>(`
-    const panel = $('[data-testid="settings-screen"]');
+    const panel = $('[data-settings-scroll]');
     panel.scrollTop = 0;
     const rect = panel.getBoundingClientRect();
     return { x: rect.right - 30, y: rect.top + 100 };
@@ -66,9 +66,8 @@ it("scrolls Settings to the last section without moving the workspace chrome", a
   });
   await app.waitFor(
     `(() => {
-    const panel = document.querySelector('[data-testid="settings-screen"]');
-    const button = [...panel.querySelectorAll('button')].find(
-      el => el.textContent.trim() === 'Reset sidebar to default');
+    const panel = document.querySelector('[data-settings-scroll]');
+    const button = [...panel.querySelectorAll('button')].filter(el => el.getClientRects().length > 0).at(-1);
     const rect = button.getBoundingClientRect();
     const bounds = panel.getBoundingClientRect();
     return panel.scrollTop > 0 && rect.top >= bounds.top && rect.bottom <= bounds.bottom;
@@ -83,8 +82,8 @@ it("scrolls Settings to the last section without moving the workspace chrome", a
   expect(await app.eval("document.scrollingElement.scrollTop")).toBe(0);
   expect(
     await run(`
-    const panel = $('[data-testid="settings-screen"]');
-    const button = byText('button', 'Reset sidebar to default');
+    const panel = $('[data-settings-scroll]');
+    const button = [...panel.querySelectorAll('button')].filter(el => el.getClientRects().length > 0).at(-1);
     const rect = button.getBoundingClientRect();
     return panel.scrollWidth <= panel.clientWidth &&
       button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
@@ -93,7 +92,7 @@ it("scrolls Settings to the last section without moving the workspace chrome", a
 });
 
 it("keeps long agent dialogs inside the window and scrolls their bottom actions into view", async () => {
-  await run(`$('[data-testid="settings-screen"]').scrollTop = 0;
+  await run(`$('[data-settings-scroll]').scrollTop = 0;
     $('[aria-label="Edit Fake Agent"]').click();`);
   await app.waitFor(
     `!!document.querySelector('[data-testid="configure-agent-modal"]')`,

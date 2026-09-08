@@ -5,6 +5,8 @@ const visibleSuites = [
   "e2e/scrolling.e2e.ts",
   "e2e/sidebars.e2e.ts",
   "e2e/motion.e2e.ts",
+  // Floating surfaces exercise native keyboard focus and entrance/exit motion.
+  "e2e/floating-surfaces.e2e.ts",
   "e2e/runtime-idle.e2e.ts",
   "e2e/session-runtime.e2e.ts",
   // Live preview polling and animation require a visible renderer.

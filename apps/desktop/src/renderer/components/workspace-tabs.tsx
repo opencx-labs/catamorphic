@@ -21,11 +21,13 @@ import {
 import { Fragment, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { GitDiffMode } from "../../shared/git.js";
+import type { OpenMode } from "../../shared/open-mode.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { AnimatedTitle } from "./animated-title";
 import { ChatGlyph, hasCustomChatIcon } from "./chat-icon";
 import { SignalBadge, SignalGlyph } from "./chat-signals";
+import { OpenResourceButton } from "./open-resource-button.js";
 import { ShortcutHint } from "./shortcut-hint";
 
 /**
@@ -49,6 +51,7 @@ interface TabIndicators {
   groupId?: string;
   /** Secondary hover-card line: URL, file path, agent name … */
   detail?: string;
+  bookmarkUrl?: string;
 }
 
 /** The card's status line — most urgent signal first. */
@@ -288,6 +291,7 @@ export interface TabGroup {
 }
 
 export function WorkspaceTabBar({
+  orientation = "horizontal",
   tabs,
   activeKey,
   secondaryKey,
@@ -300,6 +304,7 @@ export function WorkspaceTabBar({
   onReorder,
   onDragStateChange,
 }: {
+  orientation?: "horizontal" | "vertical";
   tabs: WorkspaceTab[];
   activeKey?: string;
   /** The unfocused pane of a split view — styled active but muted. */
@@ -311,7 +316,7 @@ export function WorkspaceTabBar({
   highlightKey?: string;
   /** Chat groups: parent chat tab + its attached surfaces. */
   groups?: TabGroup[];
-  onSelect: (key: string) => void;
+  onSelect: (key: string, mode?: OpenMode) => void;
   onClose: (key: string) => void;
   /** Chrome-style + after the last tab; always opens a new tab. */
   onNew?: () => void;
@@ -322,6 +327,7 @@ export function WorkspaceTabBar({
   /** A tab drag started (key) or ended (null) — hosts show drop zones. */
   onDragStateChange?: (key: string | null) => void;
 }) {
+  const vertical = orientation === "vertical";
   const keybindings = useKeybindings();
   const [rendered, setRendered] = useState<RenderedTab[]>(() =>
     mergeRendered([], tabs),
@@ -349,7 +355,14 @@ export function WorkspaceTabBar({
     clearTimeout(hoverTimerRef.current);
     hoverTimerRef.current = setTimeout(() => {
       const rect = element.getBoundingClientRect();
-      setHoverCard({ key, x: rect.left, y: rect.bottom + 8, exiting: false });
+      setHoverCard({
+        key,
+        exiting: false,
+        x: vertical ? rect.right + 12 : rect.left,
+        y: vertical
+          ? Math.min(rect.top, window.innerHeight - 140)
+          : rect.bottom + 8,
+      });
     }, HOVER_CARD_DELAY_MS);
   };
   const disarmHoverCard = () => {
@@ -394,12 +407,10 @@ export function WorkspaceTabBar({
 
   if (rendered.length === 0 && !onNew) return null;
   return (
-    // overflow-y-hidden: tabs hang 1px below the row (-mb-px overlaps the
-    // border), and overflow-x-auto alone turns that spill into a phantom
-    // vertical scrollbar in the corner.
     // biome-ignore lint/a11y/noStaticElementInteractions: drag-and-drop target for tab reordering; tabs themselves are buttons
     <div
-      className="app-no-drag flex min-w-0 flex-1 items-end gap-1 self-stretch overflow-x-auto overflow-y-hidden"
+      className={`app-no-drag flex min-w-0 gap-1 ${vertical ? "flex-col" : "flex-1 items-center [justify-content:safe_center] self-stretch overflow-x-auto overflow-y-hidden"}`}
+      data-tab-orientation={orientation}
       onDragOver={(event) => {
         if (dragKey) {
           event.preventDefault();
@@ -437,8 +448,10 @@ export function WorkspaceTabBar({
               (tabKey(neighbor.tab) === activeKey ||
                 tabKey(neighbor.tab) === secondaryKey),
           );
-        const mergeRight = inPair && neighborInPair(rendered[index + 1]);
-        const mergeLeft = inPair && neighborInPair(rendered[index - 1]);
+        const mergeRight =
+          !vertical && inPair && neighborInPair(rendered[index + 1]);
+        const mergeLeft =
+          !vertical && inPair && neighborInPair(rendered[index - 1]);
         return (
           <Fragment key={key}>
             <div
@@ -456,6 +469,7 @@ export function WorkspaceTabBar({
                     kind: tab.kind,
                     title: tab.label ?? tab.name,
                     detail: tab.detail,
+                    bookmarkUrl: tab.bookmarkUrl,
                   } satisfies TabDragPayload),
                 );
                 event.dataTransfer.effectAllowed = "copyMove";
@@ -489,36 +503,54 @@ export function WorkspaceTabBar({
                 onDragStateChange?.(null);
               }}
               onAnimationEnd={(event) => {
-                if (event.animationName === "tab-out") removeExited(key);
+                if (
+                  event.animationName === "tab-out" ||
+                  event.animationName === "sidebar-tab-out"
+                )
+                  removeExited(key);
               }}
-              className={`group -mb-px flex h-8 shrink-0 items-center rounded-t-lg border px-1 text-[12px] transition-[margin,border-radius,color,background-color,border-color] duration-150 ${
-                mergeRight ? "rounded-tr-none border-r-0 " : ""
-              }${mergeLeft ? "-ml-1 rounded-tl-none border-l-0 " : ""}${
-                tab.groupId ? "border-t-2 border-t-accent/40 " : ""
+              className={`group flex h-8 shrink-0 items-center border px-1 text-xs transition-[margin,border-radius,color,background-color,border-color] duration-150 ${vertical ? "min-w-0 rounded-lg" : "rounded-lg"} ${
+                mergeRight ? "rounded-r-none border-r-0 " : ""
+              }${mergeLeft ? "-ml-1 rounded-l-none border-l-0 " : ""}${
+                tab.groupId
+                  ? vertical
+                    ? "border-l-2 border-l-accent/40 "
+                    : "border-t-2 border-t-accent/40 "
+                  : ""
               }${dragKey === key ? "opacity-50 " : ""}${
-                dropBeforeKey === key ? "border-l-2 border-l-accent " : ""
+                dropBeforeKey === key
+                  ? vertical
+                    ? "border-t-2 border-t-accent "
+                    : "border-l-2 border-l-accent "
+                  : ""
               }${
                 exiting
-                  ? "animate-tab-out pointer-events-none"
-                  : "animate-tab-in"
+                  ? vertical
+                    ? "animate-sidebar-tab-out pointer-events-none"
+                    : "animate-tab-out pointer-events-none"
+                  : vertical
+                    ? "animate-sidebar-tab-in"
+                    : "animate-tab-in"
               } ${
-                highlighted
-                  ? active
-                    ? "border-accent border-b-bg bg-bg text-fg"
-                    : "border-accent text-fg"
-                  : active
-                    ? "border-border border-b-bg bg-bg text-fg"
-                    : secondary
-                      ? "border-border border-b-bg bg-bg text-fg-muted"
-                      : "border-transparent text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
+                vertical
+                  ? `${highlighted ? "border-accent" : active || secondary ? "border-border" : "border-transparent"} ${active ? "bg-bg-raised text-fg" : secondary ? "bg-bg-raised text-fg-muted" : "text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"}`
+                  : highlighted
+                    ? active
+                      ? "border-accent bg-bg text-fg"
+                      : "border-accent text-fg"
+                    : active
+                      ? "border-border bg-bg text-fg"
+                      : secondary
+                        ? "border-border bg-bg text-fg-muted"
+                        : "border-transparent text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
               }`}
               aria-hidden={exiting || undefined}
             >
-              <button
+              <OpenResourceButton
                 type="button"
-                onClick={() => {
+                onOpen={(mode) => {
                   disarmHoverCard();
-                  onSelect(key);
+                  onSelect(key, mode);
                 }}
                 onMouseEnter={(event) => {
                   if (!exiting && !dragKey) {
@@ -526,7 +558,8 @@ export function WorkspaceTabBar({
                   }
                 }}
                 onMouseLeave={disarmHoverCard}
-                className="flex cursor-pointer items-center gap-1.5 px-1.5"
+                className={`flex min-w-0 cursor-pointer items-center gap-1.5 px-1.5 ${vertical ? "h-full flex-1 text-left" : ""}`}
+                aria-current={active || undefined}
               >
                 {/* Same signal vocabulary as the chat bubbles: spinner
                   while working; unread/draft/question land as badges. */}
@@ -577,9 +610,9 @@ export function WorkspaceTabBar({
                 </span>
                 <AnimatedTitle
                   text={tab.label ?? tab.name}
-                  className="max-w-40"
+                  className={vertical ? "min-w-0 flex-1" : "max-w-40"}
                 />
-              </button>
+              </OpenResourceButton>
               {/* Collapsed group parent: expand its folded surfaces. */}
               {parentGroup?.collapsed && onToggleGroup && (
                 <ShortcutHint label="Expand grouped tabs">
@@ -600,7 +633,11 @@ export function WorkspaceTabBar({
               <CloseButton
                 hint={active}
                 label={`Close ${tab.label ?? tab.name}`}
-                className={active ? "" : "opacity-0 group-hover:opacity-100"}
+                className={
+                  active
+                    ? ""
+                    : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                }
                 onClick={() => onClose(key)}
               />
             </div>
@@ -653,15 +690,17 @@ export function WorkspaceTabBar({
         <div className="flex shrink-0 items-center self-stretch">
           <ShortcutHint
             label="New tab"
+            className={vertical ? "w-full" : undefined}
             shortcut={formatBinding(keybindings["new-tab"])}
           >
             <button
               type="button"
               onClick={onNew}
-              className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+              className={`flex shrink-0 cursor-pointer items-center gap-2 rounded-md text-fg-muted hover:bg-bg-overlay/60 hover:text-fg ${vertical ? "h-8 w-full justify-start px-2 text-xs" : "h-7 w-7 justify-center"}`}
               aria-label="New tab"
             >
               <Plus className="size-4" />
+              {vertical && "New tab"}
             </button>
           </ShortcutHint>
         </div>

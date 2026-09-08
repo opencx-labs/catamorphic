@@ -114,6 +114,10 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0099](0099-shared-postgres-server-environments.md) | Shared-Postgres server instances as managed Environments | Accepted |
 | [0100](0100-workspace-resource-admission.md) | Workspace reservations and provider-enforced resource limits | Accepted |
 | [0101](0101-harness-capabilities-and-session-monitors.md) | Harness capabilities and session monitors | Accepted |
-| [0102](0102-tabbed-sidebars-and-app-widgets.md) | Tabbed sidebars and compact app widgets | Accepted |
+| [0102](0102-tabbed-sidebars-and-app-widgets.md) | Tabbed sidebars and compact app widgets | Accepted (refined by 0107) |
 | [0103](0103-agent-context-and-deferred-capabilities.md) | Agent context and deferred capabilities | Accepted |
 | [0104](0104-local-checkouts-and-explicit-file-sharing.md) | Local checkouts and explicit file sharing | Accepted |
+| [0105](0105-configurable-desktop-browser-layout.md) | Configurable desktop browser layout, light surfaces, bookmark tiles and folders | Accepted |
+| [0106](0106-profile-terminal-macros.md) | Profile-owned terminal macros and configurable floating dismissal | Accepted |
+| [0107](0107-sidebar-footer-and-floating-chrome.md) | Sidebar footer, centered tabs, floating chrome and editor themes | Accepted |
+| [0108](0108-unified-resource-opening-and-paste.md) | Unified resource opening and composer file paste | Accepted |

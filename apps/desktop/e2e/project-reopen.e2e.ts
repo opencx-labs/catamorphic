@@ -5,7 +5,7 @@ let app: AppHandle;
 
 async function checkFromPalette() {
   await app.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {
-    key: 'p', metaKey: true, bubbles: true, cancelable: true
+    key: 'p', metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform), bubbles: true, cancelable: true
   }));`);
   await app.waitFor(`(() => {
     const input = document.querySelector('[aria-hidden="false"] [aria-label="Command palette"] textarea');

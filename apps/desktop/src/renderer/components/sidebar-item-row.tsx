@@ -11,6 +11,12 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import {
+  OPEN_ACTIONS,
+  type OpenMode,
+  openModeForAction,
+  openModeFromEvent,
+} from "../../shared/open-mode.js";
 import type { SidebarMenuEntry, SidebarPreview } from "../lib/desktop-api.js";
 import { ShortcutHint } from "./shortcut-hint";
 import {
@@ -34,7 +40,11 @@ function TitleHint({
   children: React.ReactNode;
 }) {
   if (!title) return <>{children}</>;
-  return <ShortcutHint label={title}>{children}</ShortcutHint>;
+  return (
+    <ShortcutHint label={title} className="h-full min-w-0 flex-1">
+      {children}
+    </ShortcutHint>
+  );
 }
 
 /**
@@ -49,6 +59,10 @@ function TitleHint({
 export function SidebarItemRow<
   TMenuEntry extends ContextMenuEntry = SidebarMenuEntry,
 >({
+  presentation = "row",
+  expanded,
+  resource = false,
+  defaultOpenMode = "replace",
   label,
   title,
   icon,
@@ -66,6 +80,10 @@ export function SidebarItemRow<
   onRenameSubmit,
   onRenameCancel,
 }: {
+  presentation?: "row" | "tile";
+  expanded?: boolean;
+  resource?: boolean;
+  defaultOpenMode?: OpenMode;
   label: string;
   /** Tooltip; usually the URL. */
   title?: string;
@@ -79,7 +97,7 @@ export function SidebarItemRow<
   labelContent?: ReactNode;
   end?: ReactNode;
   disclosure?: { open: boolean; onToggle: () => void };
-  onOpen: () => void;
+  onOpen: (mode: OpenMode) => void;
   onAction: (entry: TMenuEntry) => void;
   /** Swap the label for an inline rename field. */
   renaming?: boolean;
@@ -94,7 +112,18 @@ export function SidebarItemRow<
   const buttonRef = useRef<HTMLButtonElement>(null);
   const rowRef = useRef<HTMLDivElement>(null);
   const renameRef = useRef<HTMLInputElement>(null);
-  const pendingActionRef = useRef<TMenuEntry | null>(null);
+  const pendingActionRef = useRef<
+    TMenuEntry | (typeof OPEN_ACTIONS)[number] | null
+  >(null);
+  const resolvedMenu = resource
+    ? [
+        ...OPEN_ACTIONS,
+        ...(menu ?? []).filter(
+          (entry) =>
+            !openModeForAction(entry.action) && entry.action !== "open",
+        ),
+      ]
+    : menu;
   const previewId = useId();
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
@@ -229,7 +258,7 @@ export function SidebarItemRow<
     <div
       ref={rowRef}
       style={style}
-      className={`group relative flex h-7 items-center rounded-md transition-colors duration-150 ${
+      className={`group relative flex items-center rounded-md transition-colors duration-150 ${presentation === "tile" ? "h-9 border border-border bg-bg-raised" : "h-7"} ${
         active ? "bg-bg-overlay" : "hover:bg-bg-overlay/60"
       }`}
       data-point-key={`sidebar:${label}`}
@@ -254,7 +283,7 @@ export function SidebarItemRow<
       // Right-click = the ⋯ menu, at the cursor. Same entries, same
       // portal — two paths into one menu, never two menus.
       onContextMenu={
-        menu && menu.length > 0 && !renaming
+        resolvedMenu && resolvedMenu.length > 0 && !renaming
           ? (event) => {
               event.preventDefault();
               if (pendingActionRef.current) return;
@@ -299,14 +328,23 @@ export function SidebarItemRow<
           <TitleHint title={previewEnabled ? undefined : title}>
             <button
               type="button"
-              onClick={() => {
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  if (pendingActionRef.current) return;
+                  disarmPreview();
+                  onOpen(openModeFromEvent(event, defaultOpenMode));
+                }
+              }}
+              onClick={(event) => {
                 if (pendingActionRef.current) return;
                 disarmPreview();
-                onOpen();
+                onOpen(openModeFromEvent(event, defaultOpenMode));
               }}
-              className={`flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 ${disclosure ? "pr-2" : "px-2"} text-left text-[13px] hover:text-fg ${
+              className={`flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 ${disclosure ? "pr-2" : "px-2"} text-left text-[13px] ${presentation === "tile" ? "justify-center" : ""} hover:text-fg ${
                 active ? "text-fg" : "text-fg-muted"
               }`}
+              aria-expanded={expanded}
               aria-current={active || undefined}
               aria-describedby={
                 previewEnabled && !previewContent ? previewId : undefined
@@ -320,15 +358,21 @@ export function SidebarItemRow<
               ) : (
                 icon
               )}
-              {labelContent ?? <span className="truncate">{label}</span>}
+              {presentation === "tile" ? (
+                <span className="sr-only">{label}</span>
+              ) : (
+                (labelContent ?? (
+                  <span className="min-w-0 flex-1 truncate">{label}</span>
+                ))
+              )}
               {end}
             </button>
           </TitleHint>
-          {menu && menu.length > 0 && (
+          {resolvedMenu && resolvedMenu.length > 0 && (
             <button
               ref={buttonRef}
               type="button"
-              onClick={() => {
+              onClick={(_event) => {
                 if (pendingActionRef.current) return;
                 disarmPreview();
                 const rect = buttonRef.current?.getBoundingClientRect();
@@ -337,8 +381,10 @@ export function SidebarItemRow<
                 }
                 setOpen((value) => !value);
               }}
-              className={`mr-1 grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg ${
-                open ? "" : "opacity-0 group-hover:opacity-100"
+              className={`grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg ${presentation === "tile" ? "absolute right-0 top-0 bg-bg-raised" : "mr-1"} ${
+                open
+                  ? ""
+                  : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
               }`}
               aria-label={`More actions for ${label}`}
               aria-haspopup="menu"
@@ -350,11 +396,11 @@ export function SidebarItemRow<
         </>
       )}
 
-      {position && menu && (
+      {position && resolvedMenu && (
         <MenuPortal
           open={open}
           position={position}
-          entries={menu}
+          entries={resolvedMenu}
           onPick={(entry) => {
             pendingActionRef.current = entry;
             setOpen(false);
@@ -363,7 +409,14 @@ export function SidebarItemRow<
             setPosition(null);
             const pendingAction = pendingActionRef.current;
             pendingActionRef.current = null;
-            if (pendingAction) onAction(pendingAction);
+            if (pendingAction) {
+              const mode = openModeForAction(pendingAction.action);
+              if (resource && mode) onOpen(mode);
+              else {
+                const original = menu?.find((entry) => entry === pendingAction);
+                if (original) onAction(original);
+              }
+            }
           }}
         />
       )}
@@ -438,13 +491,21 @@ export function MenuPortal<TMenuEntry extends ContextMenuEntry>({
   useLayoutEffect(() => {
     const rect = ref.current?.getBoundingClientRect();
     if (!rect) return;
-    const next = { ...position };
-    if (rect.bottom > window.innerHeight - 8) {
-      next.y = Math.max(8, position.y - rect.height - 8);
-    }
-    if (rect.right > window.innerWidth - 8) {
-      next.x = window.innerWidth - 8;
-    }
+    const next = {
+      x: Math.max(
+        8,
+        Math.min(position.x - rect.width, window.innerWidth - rect.width - 8),
+      ),
+      y: Math.max(
+        8,
+        Math.min(
+          position.y + rect.height > window.innerHeight - 8
+            ? position.y - rect.height - 8
+            : position.y,
+          window.innerHeight - rect.height - 8,
+        ),
+      ),
+    };
     if (next.x !== adjusted.x || next.y !== adjusted.y) setAdjusted(next);
   }, [position, adjusted.x, adjusted.y]);
 
@@ -475,7 +536,7 @@ export function MenuPortal<TMenuEntry extends ContextMenuEntry>({
         }
       }}
       style={{ left: adjusted.x, top: adjusted.y }}
-      className={`fixed z-[140] min-w-44 -translate-x-full ${open ? "" : "pointer-events-none"}`}
+      className={`fixed z-[140] max-h-[calc(100dvh-16px)] min-w-44 max-w-[calc(100vw-16px)] overflow-y-auto ${open ? "" : "pointer-events-none"}`}
     >
       <div
         onAnimationEnd={(event) => {

@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
+import { matchesShortcut } from "../shared/keybindings.js";
+import { openModeFromEvent } from "../shared/open-mode.js";
 
 /**
  * Guest preload for browser-tab webviews. Runs inside untrusted pages with
@@ -303,3 +305,57 @@ ipcRenderer.on(
     target.password.focus();
   },
 );
+
+// Option-click previews are intercepted in the isolated guest preload. Only
+// web navigations are relayed; page code never receives desktop IPC access.
+let previewLinksEnabled = true;
+ipcRenderer.on(
+  "catamorphic:preview-links-enabled",
+  (_event, enabled: unknown) => {
+    previewLinksEnabled = enabled === true;
+  },
+);
+document.addEventListener(
+  "click",
+  (event) => {
+    const mode = openModeFromEvent(event);
+    if (
+      event.button !== 0 ||
+      mode === "replace" ||
+      (mode === "floating" && !previewLinksEnabled)
+    )
+      return;
+    const anchor =
+      event.target instanceof Element ? event.target.closest("a[href]") : null;
+    if (
+      !(anchor instanceof HTMLAnchorElement) ||
+      anchor.hasAttribute("download") ||
+      !/^https?:\/\//i.test(anchor.href)
+    )
+      return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    ipcRenderer.sendToHost("catamorphic:open-link", { url: anchor.href, mode });
+  },
+  { capture: true },
+);
+
+// Scope Escape to floating previews; normal page and terminal shortcuts stay local.
+let floatingPreview = "";
+ipcRenderer.on("catamorphic:floating-preview", (_event, enabled: unknown) => {
+  floatingPreview = typeof enabled === "string" ? enabled : "";
+});
+window.addEventListener("keydown", (event) => {
+  if (
+    !floatingPreview ||
+    !matchesShortcut({
+      event,
+      binding: floatingPreview,
+      mac: /Mac/.test(navigator.platform),
+    }) ||
+    event.defaultPrevented
+  )
+    return;
+  event.preventDefault();
+  ipcRenderer.sendToHost("catamorphic:dismiss-floating");
+});

@@ -1,3 +1,6 @@
+import type { BookmarkPlacement } from "../../shared/bookmark-target.js";
+import type { OpenMode } from "../../shared/open-mode.js";
+import type { TerminalAppearanceResult } from "../../shared/terminal-appearance.js";
 import type { ThemeFonts } from "../../shared/theme-fonts.js";
 import type { DesktopUpdateState } from "../../shared/update.js";
 import type { UsageSummary } from "../../shared/usage.js";
@@ -638,6 +641,7 @@ export type ThemeToken =
   | "bg-raised"
   | "bg-overlay"
   | "bg-inset"
+  | "sidebar"
   | "border"
   | "border-strong"
   | "fg"
@@ -671,6 +675,13 @@ export interface AppPrefs {
   notificationSounds: boolean;
   desktopNotifications: boolean;
   sidebarOpen: boolean;
+  tabPlacement: "top" | "sidebar";
+  headerPlacement: "top" | "sidebar";
+  pinnedBookmarks: "tiles" | "list";
+  linkOpenMode: "tab" | "floating";
+  previewLinksWithAlt: boolean;
+  terminalMacros: import("../../shared/terminal-macros.js").TerminalMacro[];
+  terminalAppearance: "app" | "ghostty";
   rightSidebarOpen: boolean;
   lastProjectId?: string;
   unreadSessionIds: string[];
@@ -686,6 +697,11 @@ export interface ResolvedTheme extends ThemeConfig {
 export interface CatamorphicDesktopApi {
   /** Absolute path of a pasted/dropped File; "" when it has none. */
   pathForFile: (file: File) => string;
+  composerFileSave: (input: {
+    projectId: string;
+    name: string;
+    bytes: Uint8Array;
+  }) => Promise<{ path: string; name: string }>;
   githubConnectStart: () => Promise<{
     userCode: string;
     verificationUri: string;
@@ -960,6 +976,14 @@ export interface CatamorphicDesktopApi {
   setPrefs: (patch: Partial<AppPrefs>) => Promise<AppPrefs>;
   onPrefsChanged: (listener: (prefs: AppPrefs) => void) => () => void;
   windowFocus: () => Promise<void>;
+  windowSetControlsVisible: (visible: boolean) => Promise<void>;
+  windowSetSidebarEdgeEnabled: (
+    enabled: boolean,
+    width?: number,
+  ) => Promise<void>;
+  onSidebarPointerZone: (
+    listener: (zone: "edge" | "inside" | "outside") => void,
+  ) => () => void;
   getKeybindings: () => Promise<Record<string, string>>;
   setKeybindings: (
     bindings: Record<string, string>,
@@ -994,6 +1018,7 @@ export interface CatamorphicDesktopApi {
   }) => Promise<void>;
   projectOpenFile: (projectId: string, filePath: string) => Promise<void>;
 
+  terminalGhosttyAppearance: () => Promise<TerminalAppearanceResult>;
   terminalCreate: (input: {
     projectId?: string;
     cols?: number;
@@ -1057,7 +1082,9 @@ export interface CatamorphicDesktopApi {
     profileId: string;
     query: string;
   }) => Promise<BrowserSuggestions>;
-  onBrowserOpenUrl: (listener: (url: string) => void) => () => void;
+  onBrowserOpenUrl: (
+    listener: (url: string, mode?: OpenMode) => void,
+  ) => () => void;
   /** Close browser tabs whose URL starts with `prefix` (OAuth callback). */
   onBrowserCloseUrl: (listener: (prefix: string) => void) => () => void;
   onBrowserFocusAddress: (
@@ -1067,6 +1094,7 @@ export interface CatamorphicDesktopApi {
     listener: (key: {
       webContentsId: number;
       key: string;
+      code?: string;
       meta: boolean;
       control: boolean;
       alt: boolean;
@@ -1152,6 +1180,7 @@ export interface CatamorphicDesktopApi {
     folderId?: string;
     faviconUrl?: string;
   }) => Promise<Bookmark>;
+  bookmarksPlace: (input: BookmarkPlacement) => Promise<Bookmark>;
   bookmarksAddFolder: (input: {
     projectId: string;
     profileId: string;

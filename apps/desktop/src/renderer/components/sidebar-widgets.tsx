@@ -3,11 +3,13 @@ import type { AgentSession } from "@catamorphic/react/types";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import type { OpenMode } from "../../shared/open-mode.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import {
   localEditorPath,
   useLocalProjectFiles,
 } from "../lib/local-project-files.js";
+import { OpenResourceButton } from "./open-resource-button.js";
 import type { WorkspaceTab } from "./workspace-tabs.js";
 
 export function SidebarActivity({
@@ -18,8 +20,8 @@ export function SidebarActivity({
 }: {
   projectId: string;
   visible: boolean;
-  onOpenSession: (session: AgentSession) => void;
-  onOpenTab: (tab: WorkspaceTab) => void;
+  onOpenSession: (session: AgentSession, mode?: OpenMode) => void;
+  onOpenTab: (tab: WorkspaceTab, mode?: OpenMode) => void;
 }) {
   const sessions = useAgentSessions(projectId, {
     limit: 100,
@@ -35,11 +37,11 @@ export function SidebarActivity({
         <p className="px-2 py-1 text-warning">Could not load activity.</p>
       )}
       {active.map((session) => (
-        <button
+        <OpenResourceButton
           key={session.id}
           type="button"
           className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-bg-overlay"
-          onClick={() => onOpenSession(session)}
+          onOpen={(mode) => onOpenSession(session, mode)}
         >
           <span
             className={`size-1.5 shrink-0 rounded-full ${session.attentionRequired ? "bg-accent" : "bg-success"}`}
@@ -50,7 +52,7 @@ export function SidebarActivity({
           <span className="shrink-0 text-fg-faint">
             {session.attentionRequired ? "Needs you" : "Working"}
           </span>
-        </button>
+        </OpenResourceButton>
       ))}
       {!sessions.isLoading && !sessions.isError && active.length === 0 && (
         <p className="px-2 py-1 text-fg-faint">No agents need attention.</p>
@@ -76,7 +78,7 @@ function WorkflowActivity({
   projectId: string;
   name: string;
   visible: boolean;
-  onOpenTab: (tab: WorkspaceTab) => void;
+  onOpenTab: (tab: WorkspaceTab, mode?: OpenMode) => void;
 }) {
   const runs = useRuns({
     projectId,
@@ -98,11 +100,11 @@ function WorkflowActivity({
   return (
     <>
       {active.map((run) => (
-        <button
+        <OpenResourceButton
           key={run.id}
           type="button"
           className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-bg-overlay"
-          onClick={() => onOpenTab({ kind: "workflow", name })}
+          onOpen={(mode) => onOpenTab({ kind: "workflow", name }, mode)}
         >
           <span className="min-w-0 flex-1 truncate">{name}</span>
           <span
@@ -112,7 +114,7 @@ function WorkflowActivity({
           >
             {run.status}
           </span>
-        </button>
+        </OpenResourceButton>
       ))}
     </>
   );
@@ -130,7 +132,7 @@ export function SidebarNote({
   scope: string;
   path?: string;
   visible: boolean;
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, mode?: OpenMode) => void;
 }) {
   const key = `catamorphic:sidebar-note:${scope}`;
   const [pinned, setPinned] = useState(() => localStorage.getItem(key) ?? "");
@@ -198,13 +200,13 @@ export function SidebarNote({
       )}
       {file && (
         <>
-          <button
+          <OpenResourceButton
             type="button"
             className="mb-2 max-w-full truncate text-fg-muted hover:text-accent"
-            onClick={() => onOpenFile(file)}
+            onOpen={(mode) => onOpenFile(file, mode)}
           >
             Open {file}
-          </button>
+          </OpenResourceButton>
           {note.isError ? (
             <p role="alert" className="text-warning">
               This note could not be read.{" "}

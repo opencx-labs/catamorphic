@@ -1,3 +1,4 @@
+import type { OpenMode } from "./open-mode.js";
 import {
   matchesProjectExperience,
   type ProjectExperienceWhen,
@@ -7,10 +8,13 @@ import {
 export type SidebarAction =
   | "open" // open the item's url per its `open` mode
   | "open-tab" // force a new browser tab
+  | "open-side"
+  | "open-floating"
   | "open-here" // force reuse of the focused browser tab
   | "copy-url"
   | "pin" // bookmarks: promote to the profile-wide list
   | "unpin"
+  | "edit"
   | "rename"
   | "remove";
 
@@ -39,7 +43,7 @@ export interface SidebarItem {
   url?: string;
   /** Icon name from lucide-react, e.g. "Globe", "FileText". */
   icon?: string;
-  open?: "tab" | "replace";
+  open?: OpenMode;
   /** Hover menu (three-dots). Omit for the section default. */
   menu?: SidebarMenuEntry[];
   /** Hover preview content, or false to explicitly disable it. */
@@ -63,6 +67,7 @@ export interface SidebarSectionConfig {
     | "apps"
     | "files"
     | "chats"
+    | "tabs"
     | "bookmarks"
     | "git"
     | "prs"
@@ -83,7 +88,7 @@ export interface SidebarSectionConfig {
   /** For type "custom": the entries to render. */
   items?: SidebarItem[];
   /** Default click behavior for this section's items. */
-  open?: "tab" | "replace";
+  open?: OpenMode;
   /** Override the per-item hover menu for the whole section. */
   menu?: SidebarMenuEntry[];
   /** Project-authorized visibility; invalid predicates fail closed. */

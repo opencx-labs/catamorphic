@@ -40,7 +40,7 @@ const helpers = `
   };
   const pressKey = (key, mods = {}) =>
     window.dispatchEvent(new KeyboardEvent('keydown',
-      { key, bubbles: true, cancelable: true, ...mods }));
+      { key, bubbles: true, cancelable: true, ...(mods.metaKey && !/Mac/.test(navigator.platform) ? { ...mods, metaKey: false, ctrlKey: true } : mods) }));
 `;
 const run = <T>(body: string) =>
   app.eval<T>(`(() => { ${helpers}\n${body} })()`);
@@ -362,18 +362,15 @@ describe("remote projects (ADR 0055)", () => {
       { timeoutMs: 30_000, label: "remote sign-in in workspace browser tab" },
     );
 
-    // Member documents are available through Files; explicit sharing stays
-    // in the Project tab without exposing builder-only Git controls.
+    // Member documents and sharing live in the default Project sidebar.
+    // Files is a collapsible section, without builder-only Git controls.
     await runWait(
-      `$('[data-sidebar="left"] [role="tab"][aria-label="Files"]')?.click();
+      `$('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]')?.click();
        return $('[data-testid="files-nav"]')?.textContent.includes('store');`,
       {
         timeoutMs: 60_000,
         label: "member files",
       },
-    );
-    await run(
-      `$('[data-sidebar="left"] [role="tab"][aria-label="Project"]').click(); return true;`,
     );
     await runWait(`return !!$('[data-testid="remote-sync"]');`, {
       label: "member download control",
@@ -449,7 +446,7 @@ describe("remote projects (ADR 0055)", () => {
 
   it("Publish ships a dirty store file first, then hands back the link", async () => {
     await run(
-      `$('[data-sidebar="left"] [role="tab"][aria-label="Files"]').click(); return true;`,
+      `$('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]')?.click(); return true;`,
     );
     await run(
       `byText('[data-testid="files-nav"] button', 'customers').click(); return true;`,

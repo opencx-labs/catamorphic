@@ -14,6 +14,11 @@ import {
   type WebContents,
   webContents,
 } from "electron";
+import { KEYBINDING_ACTIONS, type Keybindings } from "../shared/actions.js";
+import type { BookmarkPlacement } from "../shared/bookmark-target.js";
+import { matchesShortcut } from "../shared/keybindings.js";
+import { OPEN_ACTIONS } from "../shared/open-mode.js";
+import type { TerminalMacro } from "../shared/terminal-macros.js";
 import { BookmarksStore } from "./bookmarks.js";
 import { BrowserHistoryStore } from "./browser-history.js";
 import {
@@ -347,28 +352,27 @@ export function registerBrowserSupport(
     }
   };
 
-  // Guest page wiring. Webview guests are created by Chromium — this event
-  // is the only place to attach main-process behavior to them.
+  const guestBindings = new Map<string, Keybindings>();
+  const guestMacros = new Map<string, TerminalMacro[]>();
+  profileConfig.onPrefsChanged((profileId, prefs) =>
+    guestMacros.set(profileId, prefs.terminalMacros),
+  );
+  profileConfig.onKeybindingsChanged((profileId, bindings) =>
+    guestBindings.set(profileId, bindings),
+  );
+  // Guests send actions only to their owning window. Match the same configured
+  // bindings as the renderer, including Ctrl/Option combinations inside pages.
   app.on("web-contents-created", (_event, contents: WebContents) => {
     if (contents.getType() !== "webview") return;
     contents.on("preload-error", (_event, preloadPath, error) => {
       console.error("[browser] Guest preload failed", preloadPath, error);
     });
-
-    // target=_blank / window.open → new workspace browser tab.
     contents.setWindowOpenHandler(({ url }) => {
       const host = contents.hostWebContents;
-      if (/^https?:/.test(url) && host && !host.isDestroyed()) {
+      if (/^https?:/.test(url) && host && !host.isDestroyed())
         host.send("catamorphic:browser-open-url", { url });
-      }
       return { action: "deny" };
     });
-
-    // App shortcuts (Cmd+L, Cmd+T, …) pressed while focus is inside page
-    // content never reach the renderer's window listeners — observe guest
-    // keys and forward Cmd-combos for the renderer to match against its
-    // (user-configurable) bindings. Cmd+L is special-cased to the address
-    // bar of the owning tab.
     contents.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown") return;
       const browserDirection =
@@ -391,21 +395,49 @@ export function registerBrowserSupport(
         });
         return;
       }
-      if (!input.meta) return;
+      const host = contents.hostWebContents;
+      if (!host || host.isDestroyed()) return;
+      const profileId = windows.profileFor(host);
+      const bindings =
+        guestBindings.get(profileId) ??
+        profileConfig.forProfile(profileId).keybindings.load();
+      guestBindings.set(profileId, bindings);
+      const macros =
+        guestMacros.get(profileId) ??
+        profileConfig.forProfile(profileId).prefs.load().terminalMacros;
+      guestMacros.set(profileId, macros);
+      const key = {
+        key: input.key,
+        code: input.code,
+        metaKey: input.meta,
+        ctrlKey: input.control,
+        altKey: input.alt,
+        shiftKey: input.shift,
+      };
       if (
-        !input.control &&
-        !input.alt &&
-        !input.shift &&
-        input.key.toLowerCase() === "l"
-      ) {
-        broadcast("catamorphic:browser-focus-address", {
-          webContentsId: contents.id,
-        });
+        !macros.some((macro) =>
+          matchesShortcut({
+            event: key,
+            binding: macro.shortcut,
+            mac: process.platform === "darwin",
+          }),
+        ) &&
+        !KEYBINDING_ACTIONS.some(
+          (action) =>
+            action !== "dismiss-floating" &&
+            matchesShortcut({
+              event: key,
+              binding: bindings[action],
+              mac: process.platform === "darwin",
+            }),
+        )
+      )
         return;
-      }
-      broadcast("catamorphic:browser-guest-key", {
+      event.preventDefault();
+      host.send("catamorphic:browser-guest-key", {
         webContentsId: contents.id,
         key: input.key,
+        code: input.code,
         meta: input.meta,
         control: input.control,
         alt: input.alt,
@@ -414,6 +446,24 @@ export function registerBrowserSupport(
     });
 
     contents.on("context-menu", (_event, params) => {
+      if (/^https?:\/\//i.test(params.linkURL)) {
+        const url = params.linkURL;
+        Menu.buildFromTemplate(
+          OPEN_ACTIONS.map(({ label, mode }) => ({
+            label,
+            click: () => {
+              if (contents.isDestroyed()) return;
+              if (mode === "replace") void contents.loadURL(url);
+              else {
+                const host = contents.hostWebContents;
+                if (host && !host.isDestroyed())
+                  host.send("catamorphic:browser-open-url", { url, mode });
+              }
+            },
+          })),
+        ).popup();
+        return;
+      }
       if (params.formControlType !== "input-password") return;
       const context = guestContext(contents);
       if (!context) return;
@@ -734,6 +784,14 @@ export function registerBrowserSupport(
       },
     ) => {
       const bookmark = bookmarks.addBookmark(input.projectId, input);
+      bookmarksChanged(input.projectId, input.profileId);
+      return bookmark;
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:bookmarks-place",
+    (_event, input: BookmarkPlacement) => {
+      const bookmark = bookmarks.place(input);
       bookmarksChanged(input.projectId, input.profileId);
       return bookmark;
     },

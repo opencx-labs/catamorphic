@@ -13,19 +13,20 @@
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
 
   /* Surfaces */
-  --color-bg: light-dark(#f7f7f5, #0a0a0b);
+  --color-bg: light-dark(#f7f8fa, #0a0a0b);
   --color-bg-raised: light-dark(#ffffff, #101012);
-  --color-bg-overlay: light-dark(#efefec, #16161a);
-  --color-bg-inset: light-dark(#ececea, #060607);
+  --color-bg-overlay: light-dark(#eef0f3, #16161a);
+  --color-bg-inset: light-dark(#eceef1, #060607);
+  --color-sidebar: light-dark(#d9dce2, #101012);
 
   /* Borders */
-  --color-border: light-dark(#dcdcd7, #232329);
-  --color-border-strong: light-dark(#c4c4bd, #33333b);
+  --color-border: light-dark(#22252b1a, #232329);
+  --color-border-strong: light-dark(#22252b33, #33333b);
 
   /* Text */
-  --color-fg: light-dark(#1c1c1f, #e6e6e9);
-  --color-fg-muted: light-dark(#5f5f66, #9a9aa3);
-  --color-fg-faint: light-dark(#9a9aa0, #5c5c66);
+  --color-fg: light-dark(#22252b, #e6e6e9);
+  --color-fg-muted: light-dark(#555b65, #9a9aa3);
+  --color-fg-faint: light-dark(#59616b, #5c5c66);
 
   /* Accent: Catamorphic orange */
   --color-accent: light-dark(#d63c0c, #f95225);
@@ -38,7 +39,7 @@
   --color-info: light-dark(#3a6ea0, #6d9ec4);
 
   /* Message tints */
-  --color-user-tint: light-dark(#e3edf7, #14202e);
+  --color-user-tint: light-dark(#e9edf3, #14202e);
   --color-agent-tint: light-dark(#ffffff, #101012);
 }
 
@@ -55,6 +56,7 @@
   --color-bg-raised: var(--color-bg-raised);
   --color-bg-overlay: var(--color-bg-overlay);
   --color-bg-inset: var(--color-bg-inset);
+  --color-sidebar: var(--color-sidebar);
   --color-border: var(--color-border);
   --color-border-strong: var(--color-border-strong);
   --color-fg: var(--color-fg);
@@ -75,6 +77,24 @@
   --radius-lg: 10px;
 
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* The light workspace sits inside the sidebar-colored window frame.
+   Scope its shape to appearance so custom palettes and Paper share it.
+   The sidebar's selection/hover surfaces remain neutral and token-driven. */
+@layer components {
+  :where([data-theme="light"]) .tabbed-sidebar {
+    --color-bg-overlay: var(--color-bg-raised);
+  }
+
+  [data-theme="light"] .workspace-surface[data-tab-layout="top"] {
+    margin: 6px 6px 6px 0;
+    border-radius: calc(var(--radius-lg) + 6px);
+  }
+
+  [data-theme="light"] .sidebar-section + .sidebar-section {
+    padding-top: 8px;
+  }
 }
 
 * {
@@ -734,6 +754,42 @@ kbd {
 }
 
 /* Workspace tab arrival (new tab opened, incl. chat promoted to a tab) */
+@keyframes sidebar-tab-in {
+  from {
+    height: 0;
+    opacity: 0;
+    margin-bottom: -4px;
+  }
+  to {
+    height: 32px;
+    opacity: 1;
+    margin-bottom: 0;
+  }
+}
+
+@keyframes sidebar-tab-out {
+  from {
+    height: 32px;
+    opacity: 1;
+    margin-bottom: 0;
+  }
+  to {
+    height: 0;
+    opacity: 0;
+    margin-bottom: -4px;
+  }
+}
+
+.animate-sidebar-tab-in {
+  animation: sidebar-tab-in 200ms cubic-bezier(0.2, 0, 0, 1);
+  overflow: hidden;
+}
+
+.animate-sidebar-tab-out {
+  animation: sidebar-tab-out 200ms cubic-bezier(0.2, 0, 0, 1) forwards;
+  overflow: hidden;
+}
+
 @keyframes tab-in {
   from {
     max-width: 0;
@@ -880,12 +936,76 @@ kbd {
   pointer-events: none;
 }
 
+/* Floating panes never remount: only their frame enters and exits. */
+@keyframes floating-surface-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes floating-surface-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+@keyframes floating-backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes floating-backdrop-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+[data-floating-state="open"] {
+  animation: floating-surface-in 200ms var(--ease-standard) both;
+}
+[data-floating-state="closing"] {
+  animation: floating-surface-out 200ms var(--ease-standard) both;
+  pointer-events: none;
+}
+[data-floating-backdrop="open"] {
+  animation: floating-backdrop-in 200ms var(--ease-standard) both;
+}
+[data-floating-backdrop="closing"] {
+  animation: floating-backdrop-out 200ms var(--ease-standard) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-floating-state],
+  [data-floating-backdrop] {
+    animation: none;
+  }
+}
+
+.settings-category > section:first-child {
+  margin-top: 0;
+}
+.settings-category[hidden] {
+  display: none;
+}
+
 /* Bare icon tabs. Both sidebars share the same quiet chrome and motion. */
 .tabbed-sidebar {
   position: relative;
   flex-shrink: 0;
   overflow: hidden;
-  background: var(--color-bg-raised);
+  background: var(--color-sidebar);
   transition: width 200ms var(--ease-standard);
 }
 .tabbed-sidebar[data-sidebar="left"] {
@@ -1039,4 +1159,29 @@ kbd {
   padding: 8px;
   background: var(--color-bg-inset);
   border-radius: var(--radius-sm);
+}
+
+/* Floating controls use the same corner chrome as chat tabs. Reserve the
+   content's existing toolbar row so controls never cover its actions. */
+[data-floating-surface] :is([data-settings] > header) {
+  padding-right: 156px;
+}
+[data-floating-surface]
+  [data-settings]
+  > header
+  > button[aria-label="Close settings"] {
+  display: none;
+}
+
+[data-floating-surface] [data-browser-toolbar],
+[data-floating-surface] [data-editor-toolbar],
+[data-floating-surface] .workflow-header {
+  padding-right: 148px;
+}
+[data-floating-surface] [data-terminal-appearance] {
+  padding-top: 44px;
+}
+
+.tabbed-sidebar[data-overlay="true"] {
+  position: absolute;
 }

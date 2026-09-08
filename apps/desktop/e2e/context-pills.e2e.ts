@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
@@ -35,7 +37,7 @@ const helpers = `
   // The dock stays mounted (inert) while minimized — "front" means a live,
   // non-inert section that holds the composer.
   const frontDock = () =>
-    $$('section[aria-label]').find((el) => !el.inert && el.querySelector('[data-composer-input]'));
+    $$('section[aria-label]').find((el) => !el.closest('[inert]') && el.querySelector('[data-composer-input]'));
   const composer = () => frontDock()?.querySelector('[data-composer-input]');
   const pills = () => [...(frontDock()?.querySelectorAll('[data-testid="composer-pill"]') ?? [])].map((el) => ({
     source: el.dataset.pillKind,
@@ -66,7 +68,7 @@ const helpers = `
   ${setReactValueJs}
   const pressKey = (key, mods = {}) =>
     window.dispatchEvent(new KeyboardEvent('keydown', {
-      key, bubbles: true, cancelable: true, ...mods }));
+      key, bubbles: true, cancelable: true, ...(mods.metaKey && !/Mac/.test(navigator.platform) ? { ...mods, metaKey: false, ctrlKey: true } : mods) }));
   const composerKey = (key, mods = {}) =>
     composer().dispatchEvent(new KeyboardEvent('keydown', {
       key, bubbles: true, cancelable: true, ...mods }));
@@ -462,7 +464,7 @@ describe("context pills", () => {
     ).toBe("absolute");
   });
 
-  it("unsupported and oversized files fall back to path pills; pathless ones drop quietly", async () => {
+  it("unsupported files keep their paths and clipboard-only files are saved", async () => {
     await run(`
       window.__e2ePathForFile = (file) => file.name === 'trace.pcap' ? '/tmp/captures/trace.pcap' : '';
       const dt = new DataTransfer();
@@ -475,8 +477,7 @@ describe("context pills", () => {
       { label: "pcap path pill" },
     );
     expect(withPath.label).toBe("trace.pcap");
-    // A pathless unsupported file (synthetic clipboard payload) is dropped
-    // without touching the composer.
+    // A clipboard-only file is saved so the agent can read the path.
     const before = await run<number>(`return pills().length;`);
     await run(`
       const dt = new DataTransfer();
@@ -484,16 +485,75 @@ describe("context pills", () => {
       composer().dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
       return true;
     `);
-    await run(`return true;`);
-    expect(await run<number>(`return pills().length;`)).toBe(before);
+    await runWait(`return pills().length === ${before + 1};`, {
+      label: "clipboard binary saved",
+    });
+    const root = await app.eval<string>(
+      `(async()=>{ const {url}=await window.catamorphicDesktop.getServerState(); const projects=await fetch(url+'/api/projects').then(r=>r.json()); return window.catamorphicDesktop.projectRoot(projects.items.find(p=>p.name==='pills-e2e').id); })()`,
+    );
+    const directory = path.join(root, ".catamorphic", "attachments");
+    const saved = fs
+      .readdirSync(directory)
+      .find((name) => name.endsWith("-mystery.bin"));
+    expect(saved).toBeTruthy();
+    expect([...fs.readFileSync(path.join(directory, saved ?? ""))]).toEqual([
+      1,
+    ]);
     await run(`
       delete window.__e2ePathForFile;
-      frontDock().querySelector('[data-testid="composer-pill"][data-pill-kind="path"] button[aria-label^="Remove"]').click();
+      frontDock().querySelectorAll('[data-testid="composer-pill"][data-pill-kind="path"] button[aria-label^="Remove"]').forEach(b=>b.click());
       return true;
     `);
     await runWait(`return pills().every((p) => p.source !== 'path');`, {
       label: "path pill cleaned up",
     });
+  });
+
+  it("keeps the paste caret, waits before sending, and recovers after a failed file read", async () => {
+    await run(`
+      typeText('before after');
+      const range=document.createRange();range.setStart([...composer().childNodes].find(n=>n.nodeType===Node.TEXT_NODE && n.textContent.includes('before after')),7);range.collapse(true);getSelection().removeAllRanges();getSelection().addRange(range);
+      window.__originalFileRead=File.prototype.arrayBuffer;
+      File.prototype.arrayBuffer=function(){return new Promise((resolve,reject)=>{window.__releasePaste=()=>window.__originalFileRead.call(this).then(resolve,reject)})};
+      const data=new DataTransfer();data.items.add(new File([new Uint8Array([7,8])],'delayed.bin'));
+      composer().dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));
+    `);
+    await runWait(
+      `return frontDock().textContent.includes('Preparing attachments');`,
+    );
+    await run(`composerKey('Enter'); caretToEnd();`);
+    expect(await run(`return composerText();`)).toBe("before after");
+    await run(
+      `File.prototype.arrayBuffer=window.__originalFileRead;window.__releasePaste();`,
+    );
+    await runWait(`return pills().some(p=>p.label==='delayed.bin');`);
+    expect(await run(`return composerText();`)).toContain("before delayed.bin");
+    await run(`composerKey('Enter');`);
+    await runWait(
+      `return timelineText().includes('Received 1 attachment: delayed.bin');`,
+    );
+    expect(await run(`return timelineText();`)).toContain(
+      ".catamorphic/attachments/",
+    );
+    await run(`
+      File.prototype.arrayBuffer=function(){return Promise.reject(new Error('Clipboard read failed'))};
+      const data=new DataTransfer();data.items.add(new File(['bad'],'failed.bin'));
+      composer().dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));
+    `);
+    await runWait(`return !!$('[data-testid="attachment-error"]');`);
+    expect(
+      await run(`return $('[data-testid="attachment-error"]').textContent;`),
+    ).toContain("Clipboard read failed");
+    await run(`
+      File.prototype.arrayBuffer=window.__originalFileRead;
+      const data=new DataTransfer();data.items.add(new File(['ok'],'recovered.bin'));
+      composer().dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));
+    `);
+    await runWait(`return pills().some(p=>p.label==='recovered.bin');`);
+    await run(`composerKey('Enter');`);
+    await runWait(
+      `return timelineText().includes('Received 1 attachment: recovered.bin');`,
+    );
   });
 
   it("a multi-megabyte image survives the round trip (server body limit)", async () => {
@@ -708,4 +768,50 @@ describe("context pills", () => {
     expect(echoed).toContain("[editor sel.md:1-1]");
     expect(echoed).toContain("Selection test");
   }, 60_000);
+  it("saves a clipboard screenshot for a text-only agent and sends its usable path", async () => {
+    const agent = await app.eval<{ id: string }>(
+      `window.catamorphicDesktop.agentsCreate({name:'Text-only paste',harness:'codex',auth:'local'})`,
+    );
+    await app.eval(
+      `window.catamorphicDesktop.agentsSetDefault(${JSON.stringify(agent.id)})`,
+    );
+    await run(`pressKey('n', {metaKey:true});`);
+    await runWait(
+      `return frontDock()?.textContent.includes('Text-only paste');`,
+      { label: "text-only composer capabilities" },
+    );
+    await run(
+      `composer().replaceChildren();composer().dispatchEvent(new InputEvent('input',{bubbles:true}));`,
+    );
+    await runWait(`return pills().length===0;`);
+    const png =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
+    await run(`
+      caretToEnd();
+      const data=new DataTransfer();data.items.add(new File([Uint8Array.from(atob(${JSON.stringify(png)}),c=>c.charCodeAt(0))],'Screenshot.png',{type:'image/png'}));
+      composer().dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));
+    `);
+    await runWait(
+      `return pills().some(p=>p.label==='Screenshot.png' && p.source==='path');`,
+      { label: "screenshot path instead of dropped image" },
+    );
+    const root = await app.eval<string>(
+      `(async()=>{const {url}=await window.catamorphicDesktop.getServerState();const {items}=await fetch(url+'/api/projects').then(r=>r.json());return window.catamorphicDesktop.projectRoot(items.find(p=>p.name==='pills-e2e').id)})()`,
+    );
+    const directory = path.join(root, ".catamorphic", "attachments");
+    const saved = fs
+      .readdirSync(directory)
+      .find((name) => name.endsWith("-Screenshot.png"));
+    expect(saved).toBeTruthy();
+    expect(
+      fs.readFileSync(path.join(directory, saved ?? "")).toString("base64"),
+    ).toBe(png);
+    await run(`composerKey('Enter');`);
+    await runWait(
+      `return timelineText().includes('Received 1 attachment: Screenshot.png');`,
+    );
+    expect(await run(`return timelineText();`)).toContain(
+      ".catamorphic/attachments/",
+    );
+  });
 });

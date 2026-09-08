@@ -1,6 +1,6 @@
 # 0102: Tabbed sidebars and compact app widgets
 
-- **Status:** Accepted
+- **Status:** Accepted (default layout and chrome refined by 0107)
 - **Date:** 2026-09-08
 - **Builds on:** 0037, 0048, 0049, 0092
 

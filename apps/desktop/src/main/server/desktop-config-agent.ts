@@ -12,6 +12,7 @@ import {
   type Keybindings,
   normalizeKeybindings,
 } from "../keybindings.js";
+import type { AppPrefs } from "../prefs.js";
 import type { ProfileStores } from "../profile-config.js";
 import type { SidebarConfigStore } from "../sidebar-config.js";
 import { normalizeTheme, THEME_PRESETS, THEME_TOKENS } from "../theme.js";
@@ -24,6 +25,7 @@ export const DESKTOP_SIDEBAR_WORKSPACE_PATH = ".catamorphic/desktop/sidebar.js";
 export const DESKTOP_SIDEBAR_LOCAL_WORKSPACE_PATH =
   ".catamorphic/desktop/sidebar.local.js";
 export const DESKTOP_THEME_WORKSPACE_PATH = ".catamorphic/desktop/theme.json";
+export const DESKTOP_LAYOUT_WORKSPACE_PATH = ".catamorphic/desktop/layout.json";
 
 /** Every mirror file staged into (and read back from) the sandbox. */
 const MIRROR_PATHS = [
@@ -32,11 +34,12 @@ const MIRROR_PATHS = [
   DESKTOP_SIDEBAR_WORKSPACE_PATH,
   DESKTOP_SIDEBAR_LOCAL_WORKSPACE_PATH,
   DESKTOP_THEME_WORKSPACE_PATH,
+  DESKTOP_LAYOUT_WORKSPACE_PATH,
 ];
 
 export const DESKTOP_CONFIG_SKILL = `---
 name: configuring-catamorphic-desktop
-description: Change Catamorphic desktop app settings (keyboard shortcuts, both sidebars' icon tabs and widgets, theme colors, and fonts) when the user asks to customize the app itself, e.g. "rebind new chat to Cmd+N", "hide the workflows section", "switch to the light theme", "make the accent purple", "change the interface font", "use Menlo for code".
+description: Change Catamorphic desktop app settings (keyboard shortcuts, both sidebars' icon tabs and widgets, workspace tab placement, bookmarks, theme colors, and fonts) when the user asks to customize the app itself, e.g. "rebind new chat to Cmd+N", "hide the workflows section", "switch to the light theme", "make the accent purple", "change the interface font", "use Menlo for code".
 ---
 
 # Configuring the Catamorphic desktop app
@@ -61,15 +64,17 @@ ${JSON.stringify(DEFAULT_KEYBINDINGS, null, 2)}
 \`\`\`
 
 Actions:
-${BUILTIN_ACTIONS.filter((action) => action.defaultBinding !== null)
-  .map((action) => `- \`${action.id}\`: ${action.description}`)
-  .join("\n")}
+${BUILTIN_ACTIONS.map(
+  (action) => `- \`${action.id}\`: ${action.description}`,
+).join("\n")}
 
 Binding format: zero or more modifiers (\`Cmd\`, \`Ctrl\`, \`Alt\`,
 \`Shift\`) joined with \`+\`, then a key: \`"Cmd+T"\`,
 \`"Cmd+Shift+P"\`, \`"Ctrl+Alt+N"\`. Single letters are uppercase; named
 keys use their DOM name (\`Escape\`, \`F5\`, \`ArrowUp\`). Invalid
-bindings are ignored and fall back to the default.
+bindings are ignored and fall back to the default. An empty string disables
+the shortcut while leaving the action available in the command palette.
+Punctuation keys such as \`Cmd+[\` and \`Ctrl+;\` are supported.
 
 Warn the user if they pick a binding that collides with a common OS or
 app shortcut (Cmd+Q, Cmd+C/V/X/A/Z, Cmd+N).
@@ -103,7 +108,7 @@ shared \`.catamorphic/sidebar.js\`; "just for me" / "just in this
 project" belongs in \`sidebar.local.js\`.
 
 Built-in section types: \`workflows\`, \`apps\`, \`chats\`, \`files\`,
-\`bookmarks\`, \`git\` (uncommitted changes per git worktree; clicking a
+\`bookmarks\`, \`tabs\` (open workspace tabs in sidebar mode), \`git\` (uncommitted changes per git worktree; clicking a
 file opens its diff), \`prs\` (the project's open pull requests), and the
 legacy manual \`remote\` controls. Views without a builder checkout omit
 \`git\`, \`prs\`, and \`remote\`; builder views retain them.
@@ -137,8 +142,10 @@ Your own section:
 }
 \`\`\`
 
-- \`open\`: \`"tab"\` (new browser tab) or \`"replace"\` (reuse the focused
-  browser tab, falling back to a new tab). Set per section or per item.
+- \`open\`: \`"replace"\` (open here), \`"tab"\`, \`"side"\`, or \`"floating"\`.
+  Set per section or per item. Explicit gestures override this default:
+  Cmd+click/Enter opens a tab, Cmd+Shift opens beside it, Option/Alt opens floating.
+  Ctrl substitutes for Cmd outside macOS. Do not add a shortcut to float the current surface.
 - \`icon\`: any lucide-react icon name, e.g. \`"Globe"\`, \`"FileText"\`.
 - \`preview\`: a compact hover card with optional \`title\`, \`description\`,
   and up to four \`metadata: [{ label, value }]\` rows. Set
@@ -163,8 +170,9 @@ menu: [
 ]
 \`\`\`
 
-Actions: \`open\`, \`open-tab\`, \`open-here\`, \`copy-url\`, \`pin\`,
-\`unpin\`, \`rename\`, \`remove\`. \`menu: []\` removes the ⋯ button.
+Actions: \`open\`, \`open-tab\`, \`open-here\`, \`open-side\`, \`open-floating\`, \`copy-url\`, \`pin\`,
+\`unpin\`, \`rename\`, \`edit\` (bookmark address and folder), \`remove\`.
+Resource menus always include the four opening choices; \`menu: []\` removes only extra actions.
 \`pin\`/\`unpin\`/\`rename\`/\`remove\` only do anything on bookmarks.
 
 Rules: keep it valid JavaScript with a \`module.exports = { left: [...], right: [...] }\`.
@@ -235,6 +243,23 @@ Omit or remove a font key to restore its default: Inter for \`sans\`,
 JetBrains Mono for \`mono\`, each with system fallbacks. Preserve the other
 font key and existing colors when changing one font; preserve \`fonts\` when
 changing only colors. Fonts are also editable in Settings under Theme.
+## Workspace layout
+
+Edit \`${DESKTOP_LAYOUT_WORKSPACE_PATH}\` to set \`tabPlacement\` to
+\`"top"\` or \`"sidebar"\`, and \`pinnedBookmarks\` to \`"tiles"\` or
+\`"list"\`. Set \`headerPlacement\` to \`"sidebar"\` for the full Arc layout,
+or \`"top"\` for a title-only header above the content. All apply live to the current profile. These are independent
+of the color theme and sidebar section order. Sidebar mode always keeps
+tabs out of the header, including while the
+sidebar is collapsed. The header shows the active title or browser address
+controls; keyboard shortcuts and the palette still reach every open tab.
+The collapse control lives in the sidebar, and an empty New Tab page leaves
+the header blank. To match the light
+browser layout, choose the light theme, sidebar tabs, pinned tiles, and
+put the bookmarks section first. The \`sidebar\` color token controls the
+sidebar and surrounding window frame. The profile switcher stays at the
+bottom. Bookmarks and folders can be added or edited in the sidebar;
+removing a folder keeps its bookmarks at the root.
 
 ## Other app settings
 
@@ -329,6 +354,7 @@ export class DesktopConfigAgent implements CodingAgentProvider {
     if (!session.sandboxId) return;
     try {
       const stores = this.stores(session);
+      const prefs = stores.prefs.load();
       await this.sandboxProvider.uploadFiles(
         session.sandboxId,
         {
@@ -348,6 +374,7 @@ export class DesktopConfigAgent implements CodingAgentProvider {
             null,
             2,
           )}\n`,
+          [DESKTOP_LAYOUT_WORKSPACE_PATH]: `${JSON.stringify({ tabPlacement: prefs.tabPlacement, headerPlacement: prefs.headerPlacement, pinnedBookmarks: prefs.pinnedBookmarks }, null, 2)}\n`,
         },
         session.workingDirectory,
       );
@@ -367,6 +394,7 @@ export class DesktopConfigAgent implements CodingAgentProvider {
     await this.applySidebar(session);
     await this.applySidebarLocal(session);
     await this.applyTheme(session);
+    await this.applyLayout(session);
     try {
       // Commit even when unchanged: an agent edit that normalizes to the
       // current state must still not sync back as a project draft.
@@ -462,6 +490,47 @@ export class DesktopConfigAgent implements CodingAgentProvider {
       }
     } catch (cause) {
       console.warn("[desktop] Failed to apply theme edits:", cause);
+    }
+  }
+
+  private async applyLayout(session: ProviderSession): Promise<void> {
+    try {
+      const raw: unknown = JSON.parse(
+        await this.sandboxProvider.downloadFile(
+          session.sandboxId,
+          `${session.workingDirectory}/${DESKTOP_LAYOUT_WORKSPACE_PATH}`,
+        ),
+      );
+      if (typeof raw !== "object" || raw === null) return;
+      const patch: Partial<AppPrefs> = {};
+      if (
+        "tabPlacement" in raw &&
+        (raw.tabPlacement === "top" || raw.tabPlacement === "sidebar")
+      )
+        patch.tabPlacement = raw.tabPlacement;
+      if (
+        "pinnedBookmarks" in raw &&
+        (raw.pinnedBookmarks === "tiles" || raw.pinnedBookmarks === "list")
+      )
+        patch.pinnedBookmarks = raw.pinnedBookmarks;
+      if (
+        "headerPlacement" in raw &&
+        (raw.headerPlacement === "top" || raw.headerPlacement === "sidebar")
+      )
+        patch.headerPlacement = raw.headerPlacement;
+      const store = this.stores(session).prefs;
+      const current = store.load();
+      if (
+        (patch.tabPlacement !== undefined &&
+          patch.tabPlacement !== current.tabPlacement) ||
+        (patch.pinnedBookmarks !== undefined &&
+          patch.pinnedBookmarks !== current.pinnedBookmarks) ||
+        (patch.headerPlacement !== undefined &&
+          patch.headerPlacement !== current.headerPlacement)
+      )
+        store.save(patch);
+    } catch (cause) {
+      console.warn("[desktop] Failed to apply layout edits:", cause);
     }
   }
 

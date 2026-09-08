@@ -7,9 +7,7 @@ let app: AppHandle;
 let configFile: string;
 beforeAll(async () => {
   app = await launchApp();
-  await app.waitFor(
-    `!!document.querySelector('[data-sidebar="right"] [role="tab"]')`,
-  );
+  await app.waitFor(`!!document.querySelector('[data-sidebar="right"]')`);
   configFile = await app.eval<string>(
     "window.catamorphicDesktop.sidebarConfigFile()",
   );
@@ -28,6 +26,54 @@ const writeConfig = (config: unknown) =>
   fs.writeFileSync(configFile, `module.exports = ${JSON.stringify(config)};\n`);
 
 describe("tabbed sidebars", () => {
+  it("hides the default left tab strip and keeps the footer below customized tabs", async () => {
+    expect(
+      await app.eval(
+        `!!document.querySelector('[data-sidebar="left"] [role="tablist"]')`,
+      ),
+    ).toBe(false);
+    const config = structuredClone(DEFAULT_SIDEBAR_CONFIG);
+    config.left.push({
+      id: "extra",
+      title: "Extra",
+      icon: "Files",
+      sections: [{ id: "extra-files", type: "files" }],
+    });
+    writeConfig(config);
+    await app.waitFor(
+      `!!document.querySelector('[data-sidebar="left"] [role="tab"][aria-label="Extra"]')`,
+    );
+    expect(
+      await app.eval(`(() => {
+      const side = document.querySelector('[data-sidebar="left"]');
+      const tabs = side.querySelector('[role="tablist"]').getBoundingClientRect();
+      const bounds = side.getBoundingClientRect();
+      return Math.abs((tabs.left + tabs.right) / 2 - (bounds.left + bounds.right) / 2);
+    })()`),
+    ).toBeLessThan(2);
+    await app.eval(
+      `document.querySelector('[data-sidebar="left"] [aria-label="Extra"]').click()`,
+    );
+    expect(
+      await app.eval(`(() => {
+      const side = document.querySelector('[data-sidebar="left"]');
+      const profile = side.querySelector('[aria-label^="Switch profile:"]');
+      const customize = side.querySelector('[aria-label="Customize sidebar"]');
+      const settings = [...side.querySelectorAll('button')].find(b => b.getAttribute('aria-label') === 'Settings');
+      return [profile, customize, settings].every(b => b && !b.closest('[role="tabpanel"]') && b.getBoundingClientRect().bottom > side.getBoundingClientRect().bottom - 60);
+    })()`),
+    ).toBe(true);
+    expect(
+      await app.eval(
+        `!!document.querySelector('[data-sidebar="right"] [aria-label="Customize sidebar"]')`,
+      ),
+    ).toBe(false);
+    writeConfig(DEFAULT_SIDEBAR_CONFIG);
+    await app.waitFor(
+      `!document.querySelector('[data-sidebar="left"] [role="tablist"]')`,
+    );
+  });
+
   it("keeps the initial selection when config tabs are reordered before any click", async () => {
     const config = structuredClone(DEFAULT_SIDEBAR_CONFIG);
     config.right.reverse();
@@ -156,5 +202,29 @@ describe("tabbed sidebars", () => {
     if (process.env.CATAMORPHIC_SIDEBAR_SCREENSHOT)
       await app.screenshot(process.env.CATAMORPHIC_SIDEBAR_SCREENSHOT);
     expect(app.getRendererErrors()).toEqual([]);
+  });
+
+  it("centers Add tab in an empty right sidebar and opens customization", async () => {
+    writeConfig({ ...DEFAULT_SIDEBAR_CONFIG, right: [] });
+    await app.waitFor(
+      `document.querySelector('[data-sidebar="right"]')?.textContent.includes('Add tab')`,
+    );
+    expect(
+      await app.eval(`(() => {
+      const side = document.querySelector('[data-sidebar="right"]');
+      const button = [...side.querySelectorAll('button')].find(b => b.textContent.includes('Add tab'));
+      const bounds = side.getBoundingClientRect();
+      const rect = button.getBoundingClientRect();
+      return Math.abs((rect.left + rect.right) / 2 - (bounds.left + bounds.right) / 2);
+    })()`),
+    ).toBeLessThan(2);
+    await app.eval(
+      `document.querySelector('[data-sidebar="right"] button').click()`,
+    );
+    await app.waitFor(
+      `document.body.innerText.includes('The live sidebar configuration file on this machine is')`,
+    );
+    expect(await app.eval("document.body.innerText")).toContain(configFile);
+    writeConfig(DEFAULT_SIDEBAR_CONFIG);
   });
 });

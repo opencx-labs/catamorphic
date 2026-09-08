@@ -1,5 +1,6 @@
 import { ChevronRight, GitPullRequest, MoreHorizontal } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import type { OpenMode } from "../../shared/open-mode.js";
 import {
   desktopApi,
   type PullRequestFile,
@@ -7,6 +8,7 @@ import {
   type SidebarMenuEntry,
 } from "../lib/desktop-api.js";
 import { Collapsible } from "./collapsible.js";
+import { OpenResourceButton } from "./open-resource-button.js";
 import { ShortcutHint } from "./shortcut-hint.js";
 import { MenuPortal } from "./sidebar-item-row.js";
 import type { WorkspaceTab } from "./workspace-tabs.js";
@@ -40,8 +42,8 @@ export function PrsNav({
   onEmptyChange,
 }: {
   projectId: string;
-  onOpenDiff: (tab: WorkspaceTab) => void;
-  onOpenUrl: (url: string, mode: "tab" | "replace") => void;
+  onOpenDiff: (tab: WorkspaceTab, mode?: OpenMode) => void;
+  onOpenUrl: (url: string, mode: OpenMode) => void;
   /** Reports emptiness up so hide-when-empty sections can drop entirely. */
   onEmptyChange?: (empty: boolean) => void;
 }) {
@@ -125,8 +127,8 @@ function PrRow({
 }: {
   pr: PullRequestSummary;
   projectId: string;
-  onOpenDiff: (tab: WorkspaceTab) => void;
-  onOpenUrl: (url: string, mode: "tab" | "replace") => void;
+  onOpenDiff: (tab: WorkspaceTab, mode?: OpenMode) => void;
+  onOpenUrl: (url: string, mode: OpenMode) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   // Refresh patches when the PR changes or its disclosure reopens.
@@ -294,9 +296,9 @@ function PrRow({
                 separator >= 0 ? file.path.slice(separator + 1) : file.path;
               return (
                 <li key={file.path}>
-                  <button
+                  <OpenResourceButton
                     type="button"
-                    onClick={() => onOpenDiff(fileDiffTab(file))}
+                    onOpen={(mode) => onOpenDiff(fileDiffTab(file), mode)}
                     className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left font-mono text-xs transition-colors duration-150 hover:bg-bg-overlay/60"
                   >
                     <span className="min-w-0 flex-1 truncate">
@@ -311,7 +313,7 @@ function PrRow({
                     <span className="shrink-0 text-[11px] text-fg-muted">
                       +{file.additions} −{file.deletions}
                     </span>
-                  </button>
+                  </OpenResourceButton>
                 </li>
               );
             })
