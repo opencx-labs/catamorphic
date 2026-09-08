@@ -16,7 +16,10 @@ afterAll(async () => {
 const helpers = `
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => [...document.querySelectorAll(selector)];
-  const dock = () => $$('section[aria-label]').find(el => !el.inert && el.querySelector('[data-composer-input]'));
+  const dock = () => {
+    const candidates = $$('section[data-chat-local-id]').filter(el => !el.closest('[inert]') && el.getBoundingClientRect().width > 0 && el.querySelector('[data-composer-input]'));
+    return candidates.find(el => el.dataset.floatingChat === 'true') ?? candidates[0];
+  };
   ${setReactValueJs}
 `;
 const run = (body: string) =>
@@ -108,4 +111,126 @@ describe("session runtime controls", () => {
       `const content = $('[data-testid="session-inspector-content"]'); return !!content && !content.textContent.includes('fake-model-b');`,
     );
   });
+});
+
+it("keeps environment controls in status and dismisses connections by clicking outside", async () => {
+  await app.press("Escape");
+  await wait(`return !$('[data-testid="resource-inspector"]');`);
+  // The floating title and status controls share one centered layout row.
+  expect(
+    await run(`const row = dock().querySelector('[data-testid="chat-status-chrome"]').getBoundingClientRect();
+    const controls = dock().querySelector('[data-testid="chat-status-controls"]').getBoundingClientRect();
+    return Math.abs((row.top + row.bottom) / 2 - (controls.top + controls.bottom) / 2);`),
+  ).toBeLessThan(1);
+  expect(
+    await run(
+      `return !!dock().querySelector('[data-testid="chat-environment-badge"], [aria-label="Manage environment connections"]');`,
+    ),
+  ).toBe(false);
+  for (const theme of ["light", "dark"]) {
+    await run(
+      `await window.catamorphicDesktop.setTheme({ selection: '${theme}', overrides: {} });`,
+    );
+    await wait(`return document.documentElement.dataset.theme === '${theme}';`);
+    await inspector();
+    await wait(
+      `return !!$('[data-testid="session-inspector-content"] [data-testid="chat-environment-badge"]') && !!$('[aria-label="Manage environment connections"]');`,
+    );
+    if (process.env.CATAMORPHIC_INSPECTOR_SCREENSHOT) {
+      await wait(
+        `return getComputedStyle($('[data-testid="resource-inspector"]')).opacity === '1';`,
+      );
+      await app.screenshot(
+        `${process.env.CATAMORPHIC_INSPECTOR_SCREENSHOT}-${theme}.png`,
+      );
+    }
+    await run(`$('[aria-label="Manage environment connections"]').click();`);
+    await wait(
+      `return !!$('[aria-labelledby="environment-connections-title"]') && !$('[data-testid="resource-inspector"]');`,
+    );
+    if (process.env.CATAMORPHIC_INSPECTOR_SCREENSHOT) {
+      await app.screenshot(
+        `${process.env.CATAMORPHIC_INSPECTOR_SCREENSHOT}-${theme}-connections.png`,
+      );
+    }
+    // CDP uses Chromium's actual hit testing, including inherited pointer-events.
+    // A synthetic click would pass even with a non-interactive backdrop.
+    const point = await app.eval<{ x: number; y: number }>(`(() => {
+      const panel = document.querySelector('[aria-labelledby="environment-connections-title"]').getBoundingClientRect();
+      return { x: panel.left - 20, y: panel.top + panel.height / 2 };
+    })()`);
+    await app.cdp("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      ...point,
+      button: "left",
+      clickCount: 1,
+    });
+    await app.cdp("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      ...point,
+      button: "left",
+      clickCount: 1,
+    });
+    await wait(
+      `return !$('[aria-labelledby="environment-connections-title"]');`,
+    );
+    expect(await run(`return !!dock();`)).toBe(true);
+  }
+  await run(`dock().querySelector('[aria-label="Open as tab"]').click();`);
+  await wait(
+    `return !!dock()?.querySelector('[aria-label="Pop out to floating chat"]');`,
+  );
+  await wait(
+    `return !document.getAnimations().some(a => a.playState === "running" && a.effect?.getTiming().iterations !== Infinity);`,
+  );
+  await inspector();
+  await wait(`return !!$('[aria-label="Manage environment connections"]');`);
+  if (process.env.CATAMORPHIC_INSPECTOR_SCREENSHOT) {
+    await wait(
+      `return getComputedStyle($('[data-testid="resource-inspector"]')).opacity === '1';`,
+    );
+    await app.screenshot(
+      `${process.env.CATAMORPHIC_INSPECTOR_SCREENSHOT}-tab.png`,
+    );
+  }
+});
+
+it("uses themed harness marks in new-chat status", async () => {
+  await app.press("Escape");
+  for (const [harness, provider, brand] of [
+    ["codex", "openai", "openai"],
+    ["claude-code", "anthropic", "claude"],
+    ["ai-sdk", "openrouter", "openrouter"],
+  ]) {
+    await run(`const agent = await window.catamorphicDesktop.agentsCreate({ name: '${brand} agent', harness: '${harness}', provider: '${provider}' });
+      await window.catamorphicDesktop.agentsSetDefault(agent.id);`);
+    await run(
+      `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', metaKey: true, bubbles: true }));`,
+    );
+    await wait(
+      `return !!dock()?.querySelector('[data-harness-icon="${brand}"]');`,
+    );
+    for (const theme of ["light", "dark"]) {
+      await run(
+        `await window.catamorphicDesktop.setTheme({ selection: '${theme}', overrides: {} });`,
+      );
+      await wait(
+        `return document.documentElement.dataset.theme === '${theme}' && !document.getAnimations().some(a => a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity);`,
+      );
+      expect(
+        await run(`const icon = dock().querySelector('[data-harness-icon="${brand}"]'); const style = getComputedStyle(icon);
+        return { mask: style.maskImage, background: style.backgroundColor, color: style.color };`),
+      ).toMatchObject({
+        mask: expect.stringContaining("url("),
+        background: expect.not.stringMatching(/rgba\(0, 0, 0, 0\)/),
+      });
+      if (process.env.CATAMORPHIC_INSPECTOR_SCREENSHOT) {
+        await app.screenshot(
+          `${process.env.CATAMORPHIC_INSPECTOR_SCREENSHOT}-${brand}-${theme}.png`,
+        );
+      }
+    }
+    await run(`dock().querySelector('[aria-label="Close chat"]').click();`);
+    await wait(`return !$('section[data-floating-chat="true"]');`);
+  }
 });
