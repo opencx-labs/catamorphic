@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import type { ParameterInfo } from "@catamorphic/react/types";
 import { describe, expect, it } from "vitest";
 import { parseWorkflowInput } from "./workflow-runs.js";

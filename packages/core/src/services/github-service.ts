@@ -39,6 +39,8 @@ export type GithubConnectionStatus =
   | { connected: true; login: string };
 
 export interface ImportGithubRepoInput {
+  /** Host-reserved local registration id. */
+  id?: string;
   /** e.g. `octocat/hello-world` */
   fullName: string;
   /** Project name; defaults to the repo name. */
@@ -337,6 +339,7 @@ export class GithubService {
     const repo = await api.getRepo(input.fullName);
 
     const project = await this.projects.create(identity, {
+      id: input.id,
       name: input.name ?? repo.name,
       rootPath: input.rootPath,
       cloneFrom: {
@@ -351,6 +354,7 @@ export class GithubService {
       .set({
         remote_url: repo.cloneUrl,
         remote_branch: repo.defaultBranch,
+        default_branch: repo.defaultBranch,
         updated_at: new Date(),
       })
       .where("id", "=", project.id)
@@ -380,8 +384,14 @@ export class GithubService {
     );
     try {
       const remote = this.projectManager.remoteBackend;
-      let ref = "main";
-      if (remote) {
+      const local = Boolean(
+        await this.projectManager.localPath({
+          tenantId: identity.tenantId,
+          projectId,
+        }),
+      );
+      let ref = local ? "HEAD" : "main";
+      if (remote && !local) {
         const fetched = await fetchRemote({
           dev,
           remote,
@@ -389,10 +399,11 @@ export class GithubService {
           projectId,
           remoteBranch: "main",
         });
-        if (fetched.sha) ref = "refs/remotes/origin/main";
+        if (fetched.sha) ref = "refs/catamorphic/published/main";
       }
       await pushToRemote({
         repoPath: dev.repoPath,
+        native: local,
         url: row.remote_url,
         credentials: gitCredentialsFor(token),
         ref,

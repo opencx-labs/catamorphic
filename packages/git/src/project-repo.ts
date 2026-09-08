@@ -34,7 +34,7 @@ const ALLOWED_DOT_DIRS = new Set([".agents", ".catamorphic"]);
  */
 const ALLOWED_DOT_FILES = new Set([".gitignore"]);
 
-function assertSafePath(filePath: string): void {
+export function assertSafePath(filePath: string): void {
   const normalized = path.normalize(filePath);
   if (path.isAbsolute(normalized)) {
     throw new Error("Absolute paths not allowed");
@@ -106,16 +106,36 @@ export class ProjectRepoImpl implements ProjectRepo {
     await fs.unlink(path.join(this.repoPath, filePath));
   }
 
-  async listFiles(): Promise<string[]> {
-    return walkDirectory(this.repoPath, this.repoPath);
+  async listFiles(opts?: { prefix?: string }): Promise<string[]> {
+    if (!opts?.prefix) return walkDirectory(this.repoPath, this.repoPath);
+    assertSafePath(opts.prefix);
+    try {
+      return await walkDirectory(
+        path.join(this.repoPath, opts.prefix),
+        this.repoPath,
+      );
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+        return [];
+      throw error;
+    }
   }
 
   async readAllFiles(): Promise<Record<string, string>> {
-    const files = await this.listFiles();
-    const entries = await Promise.all(
-      files.map(async (f) => [f, await this.readFile(f)] as const),
-    );
-    return Object.fromEntries(entries);
+    const result: Record<string, string> = {};
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    for (const file of await this.listFiles()) {
+      const stat = await fs.lstat(path.join(this.repoPath, file));
+      if (!stat.isFile() || stat.size > 2 * 1024 * 1024) continue;
+      const bytes = await this.readFileBytes(file);
+      if (!bytes || bytes.includes(0)) continue;
+      try {
+        result[file] = decoder.decode(bytes);
+      } catch {
+        /* Binary file. */
+      }
+    }
+    return result;
   }
 
   async readAllFilesAtRef(ref: string): Promise<Record<string, string>> {
@@ -396,7 +416,7 @@ export class ProjectRepoImpl implements ProjectRepo {
       .map(([filepath]) => filepath);
 
     const baseCommit = await this.resolveRef("HEAD").catch(() => null);
-    const remoteRef = `refs/remotes/origin/main`;
+    const remoteRef = `refs/catamorphic/published/main`;
     const remoteHead = await git
       .resolveRef({ fs: nodeFs, dir: this.repoPath, ref: remoteRef })
       .catch(() => null);

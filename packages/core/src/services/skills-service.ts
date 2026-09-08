@@ -143,7 +143,11 @@ export class SkillsService {
       this.projectManager,
       identity.tenantId,
       projectId,
-      (repo, ref) => readProgramFiles(repo, ref, `${SKILLS_DIR}/`),
+      (repo, ref) =>
+        ref
+          ? readProgramFiles(repo, ref, `${SKILLS_DIR}/`)
+          : Promise.resolve<Record<string, string>>({}),
+      { publishedOnly: true },
     );
     const projectSkills = skillsFromFiles(files);
     const names = new Set(projectSkills.map((skill) => skill.name));
@@ -164,7 +168,11 @@ export class SkillsService {
       this.projectManager,
       identity.tenantId,
       projectId,
-      (repo, ref) => readProgramFiles(repo, ref, `${SKILLS_DIR}/`),
+      (repo, ref) =>
+        ref
+          ? readProgramFiles(repo, ref, `${SKILLS_DIR}/`)
+          : Promise.resolve<Record<string, string>>({}),
+      { publishedOnly: true },
     );
     const skill = skillsFromFiles(files).find((entry) => entry.name === name);
     if (skill) {
@@ -178,7 +186,7 @@ export class SkillsService {
   }
 
   private async listProjectSkills(repo: ProjectRepo): Promise<ProjectSkill[]> {
-    const files = await repo.listFiles();
+    const files = await repo.listFiles({ prefix: `${SKILLS_DIR}/` });
     const skillFiles = files.filter(
       (file) => file.startsWith(`${SKILLS_DIR}/`) && file.endsWith("/SKILL.md"),
     );

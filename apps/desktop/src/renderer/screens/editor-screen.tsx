@@ -50,8 +50,6 @@ export interface EditorScreenProps {
   /** Register the surface-level Share action in the window's top bar. */
   registerShare?: (share: () => Promise<void>) => void;
   onShare?: (filePath: string) => void;
-  /** Called after a durable local save so a linked host can sync it. */
-  onSaved?: (filePath: string) => void | Promise<void>;
 }
 
 export function EditorScreen({
@@ -64,12 +62,10 @@ export function EditorScreen({
   onDirtyChange,
   registerShare,
   onShare,
-  onSaved,
 }: EditorScreenProps) {
   const theme = useTheme();
   const officeFile = filePath ? isOfficePath(filePath) : false;
   const pdfFile = filePath ? isPdfPath(filePath) : false;
-  const localFile = Boolean(filePath?.startsWith("/"));
   const fileQuery = useQuery({
     queryKey: ["desktop-editor-file", projectId, filePath],
     enabled: Boolean(filePath) && !officeFile && !pdfFile,
@@ -156,8 +152,11 @@ export function EditorScreen({
       { path: filePath, content },
       {
         onSuccess: () => {
-          setDrafts(({ [filePath]: _saved, ...rest }) => rest);
-          if (!localFile) void onSaved?.(filePath);
+          setDrafts((current) => {
+            if (current[filePath] !== content) return current;
+            const { [filePath]: _saved, ...rest } = current;
+            return rest;
+          });
         },
       },
     );
@@ -169,8 +168,11 @@ export function EditorScreen({
     const content = draftsRef.current[filePath];
     if (content !== undefined) {
       await writeFile.mutateAsync({ path: filePath, content });
-      setDrafts(({ [filePath]: _saved, ...rest }) => rest);
-      if (!localFile) await onSaved?.(filePath);
+      setDrafts((current) => {
+        if (current[filePath] !== content) return current;
+        const { [filePath]: _saved, ...rest } = current;
+        return rest;
+      });
     }
     onShare?.(filePath);
   };
@@ -254,6 +256,12 @@ export function EditorScreen({
             <span className="truncate">{filePath}</span>
           </button>
         </ShortcutHint>
+        <span
+          className="ml-auto text-xs text-fg-faint"
+          title="Saving updates this file on your device. Uploading and recording a Git commit are separate actions."
+        >
+          On this device
+        </span>
         {draft !== undefined && (
           <button
             type="button"
@@ -331,7 +339,7 @@ export function EditorScreen({
         ) : savedContent !== undefined ? (
           <Editor
             height="100%"
-            path={`file:///${filePath}`}
+            path={`catamorphic-editor://${encodeURIComponent(projectId)}/${encodeURIComponent(filePath)}`}
             theme={theme?.appearance === "light" ? "light" : "vs-dark"}
             value={draft ?? savedContent}
             onChange={(value) => handleChange(value ?? "")}
@@ -349,8 +357,21 @@ export function EditorScreen({
             }}
           />
         ) : (
-          <div className="flex h-full items-center justify-center text-sm text-fg-muted">
-            {fileQuery.isError ? `Couldn't open ${filePath}` : "Loading…"}
+          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-sm text-fg-muted">
+            <p>{fileQuery.isError ? fileQuery.error.message : "Loading…"}</p>
+            {fileQuery.isError && (
+              <button
+                type="button"
+                className="rounded border border-border px-3 py-1.5"
+                onClick={() =>
+                  void localEditorPath(projectId, filePath).then(
+                    (absolutePath) => desktopApi.revealFolder(absolutePath),
+                  )
+                }
+              >
+                Open in default app
+              </button>
+            )}
           </div>
         )}
       </div>

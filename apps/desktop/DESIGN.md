@@ -3511,3 +3511,29 @@ these transitions. Invalid saves retain the previous layout and show an error.
 Custom widgets mount ordinary project apps with compact presentation, host
 tokens and existing isolation. Hidden apps retain drafts and receive visibility
 updates so optional refresh work can pause.
+
+### 2026-09-08: Open existing work, save and share explicitly
+
+Opening a repository uses its checkout in place and leaves Git state and files
+unchanged. Saving locally, recording project history, and uploading selected
+documents are separate actions. Attached repositories use explicit commits;
+private document drafts stay on this device until selected for upload. Use
+plain action labels and show the destination and any conflicting server version.
+The local folder, document tools, terminals, and the selected agent checkout
+must agree about where work lives. See ADR 0104.
+
+### 2026-09-08: Worktree-aware Git review
+
+Changes keeps one collapsible subsection per checkout, including clean linked
+worktrees, with the actual branch, folder, and current-checkout identity. Each
+section separates conflicts, staged, unstaged, untracked, and committed branch
+changes. Comparisons name the discovered base branch and compare committed
+versions only. Renames preserve the original path; binary, oversized, mode-only,
+and unavailable files get explicit explanations. Git failures must never appear
+as a clean checkout. Focus, Git notifications, and polling refresh the sidebar
+and open local diffs. Worktree paths form part of tab and editor-model identities.
+
+Workflow run setup lists saved files and offers an explicit **Record changes in
+Git** action before **Publish project version**. Recording preserves unrelated
+staged files; publication retains the recorded revision without moving the
+checkout. Private store documents are excluded from this path.

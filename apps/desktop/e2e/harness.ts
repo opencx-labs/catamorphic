@@ -131,6 +131,8 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
       cdpPort: port,
       ci: process.env.CI,
       platform: process.platform,
+      // Only fake-credential tests use Chromium's test key. Real-provider evals retain OS encryption.
+      useMockKeychain: (opts.env?.CATAMORPHIC_E2E_FAKE_AGENT ?? "1") === "1",
     }),
     {
       cwd: DESKTOP_DIR,

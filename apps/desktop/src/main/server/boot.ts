@@ -372,6 +372,7 @@ export async function startEmbeddedServer(
     toolPermissions,
     database: { db },
     storage: {
+      localCheckouts: true,
       projectsPath: paths.projects,
       remotesPath: paths.remotes,
       projectPathResolver: (_tenantId, projectId) =>
@@ -423,10 +424,22 @@ export async function startEmbeddedServer(
         }
         return current.path;
       },
-      checkpoint: (input) => sessionCheckouts.checkpoint(input),
+      checkpoint: async (input) => {
+        const checkout = await sessionCheckouts.describe(input);
+        if (
+          checkout.kind === "external" ||
+          (checkout.kind !== "managed" &&
+            !projectRoots.checkpointsEnabled(input.projectId))
+        )
+          return null;
+        return sessionCheckouts.checkpoint(input);
+      },
     },
     appBundleStore: new FsBundleStore(paths.appBundles),
     pushNotifications: createPushTransport({ dataDir: paths.root }),
+    documentBlobStore: new FsBundleStore(
+      path.join(paths.root, "document-blobs"),
+    ),
     // Local projects: the folder IS the store; remote projects sync their
     // store/ explicitly (Ship). No per-turn pull/ship into the local store.
     storeSyncAroundTurns: false,
@@ -450,12 +463,16 @@ export async function startEmbeddedServer(
     // `triggers` is assigned right after construction; turns can only
     // settle later, once a chat message round-trips.
     onAgentTurnSettled: (event) => {
-      triggers.onAgentTurnSettled(event);
+      triggers.onAgentTurnSettled(
+        event,
+        projectRoots.checkpointsEnabled(event.projectId),
+      );
       // Linked projects converge with their remote after every settled
       // turn (ADR 0044); no-remote projects no-op on one row read.
       const primary = projectRoots.getSync(event.projectId);
       if (
         primary &&
+        projectRoots.checkpointsEnabled(event.projectId) &&
         path.resolve(primary) === path.resolve(event.workingDirectory)
       ) {
         catamorphic.core.remoteSync.syncInBackground(
@@ -1137,7 +1154,11 @@ export async function startEmbeddedServer(
   // Project workspaces type-check `trigger()` against a generated
   // catamorphic-triggers.d.ts; refresh it everywhere in the background so
   // the coding agent always sees the host's current kinds.
-  void triggers.syncAllProjectTypes().catch(() => {});
+  void triggers
+    .syncAllProjectTypes((projectId) =>
+      projectRoots.checkpointsEnabled(projectId),
+    )
+    .catch(() => {});
 
   // Remote sync sweep (ADR 0044): converge every linked project at boot and
   // on an interval. Sync also fires after each settled turn; the service
@@ -1151,6 +1172,7 @@ export async function startEmbeddedServer(
       limit: 100,
     });
     for (const project of items) {
+      if (!projectRoots.checkpointsEnabled(project.id)) continue;
       catamorphic.core.remoteSync.syncInBackground(identity, project.id);
     }
   };

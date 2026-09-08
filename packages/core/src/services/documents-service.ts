@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import pathModule from "node:path";
 import type { DB } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
@@ -10,6 +12,11 @@ import {
 } from "../identity.js";
 import type { AppBundleStore } from "./app-bundle-store.js";
 import { AccessDeniedError } from "./artifact-scope.js";
+import {
+  listLocalDocuments,
+  localDocumentPath,
+  protectLocalDocuments,
+} from "./local-document-files.js";
 import {
   listProgramBlobs,
   readProgramBytes,
@@ -90,6 +97,15 @@ export class DocumentNotFoundError extends Error {
   constructor(readonly path: string) {
     super(`Document '${path}' not found`);
     this.name = "DocumentNotFoundError";
+  }
+}
+
+export class DocumentBlobUnavailableError extends Error {
+  constructor() {
+    super(
+      "The stored file could not be loaded. Check the connected document storage and try again.",
+    );
+    this.name = "DocumentBlobUnavailableError";
   }
 }
 
@@ -258,6 +274,89 @@ export class DocumentsService {
     this.blobStore = deps.blobStore;
   }
 
+  async storage(input: { identity: Identity; projectId: string }) {
+    await this.requireProject(input.identity, input.projectId);
+    const local = await this.projectManager.localPath({
+      tenantId: input.identity.tenantId,
+      projectId: input.projectId,
+    });
+    return {
+      location: local ? ("device" as const) : ("server" as const),
+      blobs: this.blobStore ? ("connected" as const) : ("database" as const),
+      maxDocumentBytes: MAX_DOCUMENT_BYTES,
+      uploadIsExplicit: Boolean(local),
+    };
+  }
+
+  private async programVisible(input: {
+    identity: Identity;
+    projectId: string;
+  }): Promise<boolean> {
+    if (
+      input.identity.scope === undefined ||
+      !(await this.projectManager.localPath({
+        tenantId: input.identity.tenantId,
+        projectId: input.projectId,
+      }))
+    )
+      return true;
+    const repo = await this.projectManager.open(
+      input.identity.tenantId,
+      input.projectId,
+    );
+    try {
+      return await repo.resolveRef("refs/catamorphic/published/main").then(
+        () => true,
+        () => false,
+      );
+    } finally {
+      await repo.dispose();
+    }
+  }
+
+  private async refreshLocal(input: {
+    identity: Identity;
+    projectId: string;
+    path: string;
+  }): Promise<void> {
+    if (!isStorePath(input.path) || input.path === STORE_ROOT) return;
+    const root = await this.projectManager.localPath({
+      tenantId: input.identity.tenantId,
+      projectId: input.projectId,
+    });
+    if (!root) return;
+    const target = await localDocumentPath(root, input.path);
+    const stat = await fs.stat(target).catch((error: unknown) => {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+        return null;
+      throw error;
+    });
+    const current = await this.db
+      .selectFrom("store_documents")
+      .where("project_id", "=", input.projectId)
+      .where("path", "=", input.path)
+      .selectAll()
+      .executeTakeFirst();
+    if (!stat) {
+      if (current && !current.deleted)
+        await this.deleteInner({ ...input, ifVersion: current.version }, true);
+      return;
+    }
+    if (!stat.isFile() || stat.size > MAX_DOCUMENT_BYTES)
+      throw new DocumentTooLargeError(input.path);
+    const bytes = new Uint8Array(await fs.readFile(target));
+    if (
+      current &&
+      !current.deleted &&
+      Buffer.from(await this.bytesOf(current)).equals(bytes)
+    )
+      return;
+    await this.writeInner(
+      { ...input, content: bytes, ifVersion: current?.version ?? 0 },
+      true,
+    );
+  }
+
   /**
    * Files under a prefix (`""` = whole tree), program and store together,
    * filtered to what the caller may read. Store tombstones are omitted.
@@ -282,12 +381,13 @@ export class DocumentsService {
         isStorePath(prefix.replace(/\/$/, "")) ||
         `${STORE_ROOT}/`.startsWith(prefix));
 
-    if (wantsProgram) {
+    if (wantsProgram && (await this.programVisible(args))) {
       const blobs = await withProgram(
         this.projectManager,
         args.identity.tenantId,
         args.projectId,
         (repo, ref) => listProgramBlobs(repo, ref, prefix),
+        { workingTree: args.identity.scope === undefined },
       );
       for (const { path, digest } of blobs) {
         if (isStorePath(path)) continue; // gitignored by convention; never program
@@ -306,6 +406,24 @@ export class DocumentsService {
       }
     }
     if (wantsStore) {
+      const root = await this.projectManager.localPath({
+        tenantId: args.identity.tenantId,
+        projectId: args.projectId,
+      });
+      if (root) {
+        for (const relative of await listLocalDocuments(root)) {
+          if (
+            relative.startsWith(prefix) &&
+            documentAccessAllowed(
+              args.identity,
+              args.projectId,
+              relative,
+              "read",
+            )
+          )
+            await this.refreshLocal({ ...args, path: relative });
+        }
+      }
       const storePrefix = prefix.startsWith(`${STORE_ROOT}/`)
         ? prefix
         : `${STORE_ROOT}/`;
@@ -325,6 +443,14 @@ export class DocumentsService {
         .orderBy("path", "asc")
         .execute();
       for (const row of rows) {
+        if (
+          root &&
+          !(await fs.stat(await localDocumentPath(root, row.path)).then(
+            () => true,
+            () => false,
+          ))
+        )
+          continue;
         if (
           !documentAccessAllowed(
             args.identity,
@@ -374,11 +500,14 @@ export class DocumentsService {
     this.assertAccess(args.identity, args.projectId, path, "read");
 
     if (!isStorePath(path)) {
+      if (!(await this.programVisible(args)))
+        throw new DocumentNotFoundError(path);
       const bytes = await withProgram(
         this.projectManager,
         args.identity.tenantId,
         args.projectId,
         (repo, ref) => readProgramBytes(repo, ref, path),
+        { workingTree: args.identity.scope === undefined },
       );
       if (bytes === null) throw new DocumentNotFoundError(path);
       return {
@@ -388,6 +517,22 @@ export class DocumentsService {
         size: bytes.byteLength,
         bytes,
       };
+    }
+
+    if (args.version === undefined) {
+      await this.refreshLocal({ ...args, path });
+      const root = await this.projectManager.localPath({
+        tenantId: args.identity.tenantId,
+        projectId: args.projectId,
+      });
+      if (
+        root &&
+        !(await fs.stat(await localDocumentPath(root, path)).then(
+          () => true,
+          () => false,
+        ))
+      )
+        throw new DocumentNotFoundError(path);
     }
 
     const doc = await this.db
@@ -442,18 +587,32 @@ export class DocumentsService {
           "catamorphic.tenant.id": args.identity.tenantId,
         },
       },
-      () => this.writeInner(args),
+      async () => {
+        await this.requireProject(args.identity, args.projectId);
+        const normalized = normalizeDocumentPath(args.path);
+        if (!isStorePath(normalized) || normalized === STORE_ROOT)
+          throw new DocumentPathError(
+            `Only paths under ${STORE_ROOT}/ are writable; the program changes by commit`,
+          );
+        this.assertAccess(args.identity, args.projectId, normalized, "write");
+        await this.refreshLocal({ ...args, path: normalized });
+        const result = await this.writeInner(args);
+        return result;
+      },
     );
   }
 
-  private async writeInner(args: {
-    identity: Identity;
-    projectId: string;
-    path: string;
-    content: Uint8Array | string;
-    contentType?: string;
-    ifVersion?: number;
-  }): Promise<DocumentEntry> {
+  private async writeInner(
+    args: {
+      identity: Identity;
+      projectId: string;
+      path: string;
+      content: Uint8Array | string;
+      contentType?: string;
+      ifVersion?: number;
+    },
+    localRefresh = false,
+  ): Promise<DocumentEntry> {
     await this.requireProject(args.identity, args.projectId);
     const path = normalizeDocumentPath(args.path);
     if (!isStorePath(path) || path === STORE_ROOT) {
@@ -461,7 +620,12 @@ export class DocumentsService {
         `Only paths under ${STORE_ROOT}/ are writable; the program changes by commit`,
       );
     }
-    this.assertAccess(args.identity, args.projectId, path, "write");
+    this.assertAccess(
+      args.identity,
+      args.projectId,
+      path,
+      localRefresh ? "read" : "write",
+    );
     const bytes =
       typeof args.content === "string"
         ? new TextEncoder().encode(args.content)
@@ -471,37 +635,37 @@ export class DocumentsService {
     }
     const contentType = args.contentType ?? contentTypeFor(path);
     const text = textOf(bytes, contentType);
-    const writtenBy = args.identity.externalUserId;
+    const writtenBy = localRefresh
+      ? "local-filesystem"
+      : args.identity.externalUserId;
 
     return this.db.transaction().execute(async (trx) => {
+      await trx
+        .insertInto("store_documents")
+        .values({
+          project_id: args.projectId,
+          path,
+          version: 0,
+          content_type: contentType,
+          size: 0,
+          written_by: writtenBy,
+        })
+        .onConflict((conflict) =>
+          conflict.columns(["project_id", "path"]).doNothing(),
+        )
+        .execute();
       const current = await trx
         .selectFrom("store_documents")
         .where("project_id", "=", args.projectId)
         .where("path", "=", path)
         .forUpdate()
         .selectAll()
-        .executeTakeFirst();
-      const currentVersion = current?.version ?? 0;
-      if (args.ifVersion !== undefined && args.ifVersion !== currentVersion) {
+        .executeTakeFirstOrThrow();
+      const currentVersion = current.version;
+      if (args.ifVersion !== undefined && args.ifVersion !== currentVersion)
         throw new DocumentConflictError(path, currentVersion);
-      }
       const version = currentVersion + 1;
-      const documentId =
-        current?.id ??
-        (
-          await trx
-            .insertInto("store_documents")
-            .values({
-              project_id: args.projectId,
-              path,
-              version: 0,
-              content_type: contentType,
-              size: 0,
-              written_by: writtenBy,
-            })
-            .returning("id")
-            .executeTakeFirstOrThrow()
-        ).id;
+      const documentId = current.id;
 
       // Where the bytes live: inline text, the blob backend, or inline bytes.
       let blobKey: string | null = null;
@@ -550,6 +714,20 @@ export class DocumentsService {
         })
         .where("id", "=", documentId)
         .execute();
+      if (!localRefresh) {
+        const root = await this.projectManager.localPath({
+          tenantId: args.identity.tenantId,
+          projectId: args.projectId,
+        });
+        if (root) {
+          await protectLocalDocuments(root);
+          const target = await localDocumentPath(root, path);
+          await fs.mkdir(pathModule.dirname(target), { recursive: true });
+          const temporary = `${target}.${crypto.randomUUID()}.tmp`;
+          await fs.writeFile(temporary, bytes);
+          await fs.rename(temporary, target);
+        }
+      }
       return {
         path,
         source: "store",
@@ -577,7 +755,24 @@ export class DocumentsService {
       );
     }
     this.assertAccess(args.identity, args.projectId, path, "write");
-    return this.db.transaction().execute(async (trx) => {
+    await this.refreshLocal({ ...args, path });
+    return this.deleteInner({ ...args, path });
+  }
+
+  private async deleteInner(
+    args: {
+      identity: Identity;
+      projectId: string;
+      path: string;
+      ifVersion?: number;
+    },
+    localRefresh = false,
+  ): Promise<{ version: number }> {
+    const path = args.path;
+    const writtenBy = localRefresh
+      ? "local-filesystem"
+      : args.identity.externalUserId;
+    const result = await this.db.transaction().execute(async (trx) => {
       const current = await trx
         .selectFrom("store_documents")
         .where("project_id", "=", args.projectId)
@@ -599,7 +794,7 @@ export class DocumentsService {
           deleted: true,
           content_type: current.content_type,
           size: 0,
-          written_by: args.identity.externalUserId,
+          written_by: writtenBy,
           written_at: writtenAt,
         })
         .execute();
@@ -612,13 +807,20 @@ export class DocumentsService {
           text_content: null,
           bytes: null,
           blob_key: null,
-          written_by: args.identity.externalUserId,
+          written_by: writtenBy,
           written_at: writtenAt,
         })
         .where("id", "=", current.id)
         .execute();
+      const root = await this.projectManager.localPath({
+        tenantId: args.identity.tenantId,
+        projectId: args.projectId,
+      });
+      if (root && !localRefresh)
+        await fs.rm(await localDocumentPath(root, path), { force: true });
       return { version };
     });
+    return result;
   }
 
   /** A store document's versions, newest first. */
@@ -631,6 +833,7 @@ export class DocumentsService {
     const path = normalizeDocumentPath(args.path);
     this.assertAccess(args.identity, args.projectId, path, "read");
     if (!isStorePath(path)) return [];
+    await this.refreshLocal({ ...args, path });
     const doc = await this.db
       .selectFrom("store_documents")
       .where("project_id", "=", args.projectId)
@@ -687,12 +890,16 @@ export class DocumentsService {
     const matcher = mode === "grep" ? grepMatcher(query) : textMatcher(query);
 
     // Program side: read the files under the prefix and match in process.
-    if (!isStorePath(prefix.replace(/\/$/, ""))) {
+    if (
+      !isStorePath(prefix.replace(/\/$/, "")) &&
+      (await this.programVisible(args))
+    ) {
       const files = await withProgram(
         this.projectManager,
         args.identity.tenantId,
         args.projectId,
         (repo, ref) => readProgramFiles(repo, ref, prefix),
+        { workingTree: args.identity.scope === undefined },
       );
       for (const [path, content] of Object.entries(files)) {
         if (matches.length >= limit) break;
@@ -706,6 +913,17 @@ export class DocumentsService {
         if (lines.length > 0) matches.push({ path, source: "program", lines });
       }
     }
+
+    const localEntries = (await this.projectManager.localPath({
+      tenantId: args.identity.tenantId,
+      projectId: args.projectId,
+    }))
+      ? new Set(
+          (await this.list({ ...args, source: "store" })).map(
+            (entry) => entry.path,
+          ),
+        )
+      : null;
 
     // Store side: let Postgres narrow, then compute lines from the text.
     if (matches.length < limit) {
@@ -730,6 +948,7 @@ export class DocumentsService {
         .limit(limit * 4)
         .execute();
       for (const row of rows) {
+        if (localEntries && !localEntries.has(row.path)) continue;
         if (matches.length >= limit) break;
         if (
           !documentAccessAllowed(
@@ -811,6 +1030,7 @@ export class DocumentsService {
       const blob = await this.blobStore.get(row.blob_key);
       if (blob) return blob.data;
     }
+    if (row.blob_key) throw new DocumentBlobUnavailableError();
     return new Uint8Array();
   }
 

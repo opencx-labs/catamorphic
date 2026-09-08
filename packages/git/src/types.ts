@@ -94,7 +94,13 @@ export interface ProjectRepo {
   readFile(filePath: string): Promise<string>;
   writeFile(filePath: string, content: string): Promise<void>;
   deleteFile(filePath: string): Promise<void>;
-  listFiles(): Promise<string[]>;
+  listFiles(opts?: { prefix?: string }): Promise<string[]>;
+  /** Optional accelerated literal search returning text file paths, without loading their bodies into the host. */
+  findFilesContaining?(input: {
+    text: string;
+    ref?: string;
+    globs: readonly string[];
+  }): Promise<string[]>;
   readAllFiles(): Promise<Record<string, string>>;
   readAllFilesAtRef(ref: string): Promise<Record<string, string>>;
   /**

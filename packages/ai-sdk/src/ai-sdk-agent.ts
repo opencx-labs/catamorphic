@@ -61,7 +61,12 @@ export interface AiSdkCodingAgentOpts {
   /** AI SDK model supplied and configured by the host application. */
   model: LanguageModel;
   /** Provider for the remote development sandbox that contains the project. */
-  sandboxProvider: SandboxProvider;
+  sandboxProvider: Pick<
+    SandboxProvider,
+    "executeCommand" | "uploadFiles" | "downloadFile"
+  >;
+  /** Optional host-owned staging directory for plugin docs, outside a native checkout. */
+  pluginDirectory?: string;
   /** Host-level instructions prepended to every session. */
   instructions?: string;
   /**
@@ -252,14 +257,19 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       await sandboxProvider.uploadFiles(
         opts.sandboxId,
         pluginFiles,
-        opts.workingDirectory,
+        this.opts.pluginDirectory ?? opts.workingDirectory,
       );
     }
 
     const instructions = [
       DEFAULT_INSTRUCTIONS,
       this.opts.instructions,
-      buildPluginsPreamble(opts.attachedPlugins),
+      this.opts.pluginDirectory
+        ? buildPluginsPreamble(opts.attachedPlugins).replaceAll(
+            "_plugins/",
+            `${this.opts.pluginDirectory}/_plugins/`,
+          )
+        : buildPluginsPreamble(opts.attachedPlugins),
       opts.systemPrompt,
     ]
       .filter((part): part is string => Boolean(part))
@@ -690,7 +700,10 @@ function effortProviderOptions(effort: AgentEffort) {
 }
 
 interface ToolContext {
-  provider: SandboxProvider;
+  provider: Pick<
+    SandboxProvider,
+    "executeCommand" | "uploadFiles" | "downloadFile"
+  >;
   sandboxId: string;
   workingDirectory: string;
 }
@@ -961,6 +974,8 @@ function createTools(
           inputSchema: z.object(extra.parameters as z.ZodRawShape),
           execute: async (input: Record<string, unknown>) => {
             const result = await extra.execute(input, extraContext);
+            context.workingDirectory =
+              extraContext.workingDirectory ?? context.workingDirectory;
             return typeof result === "string"
               ? truncateToolOutput(result)
               : result;
@@ -1120,7 +1135,7 @@ function createTools(
     }),
     bash: tool({
       description:
-        "Run a shell command in the project sandbox. Use it for listing, searching, tests, builds, and other project operations.",
+        "Run a shell command in the assigned project workspace. Use it for listing, searching, tests, builds, and other project operations.",
       inputSchema: z.object({
         command: z.string(),
         timeoutMs: z.number().int().positive().max(3_600_000).optional(),

@@ -283,6 +283,7 @@ export const FileContentSchema = z.object({
 
 export const WriteFileSchema = z.object({
   content: z.string(),
+  expectedContent: z.string().optional(),
   commitMessage: z.string().optional(),
 });
 
@@ -1546,7 +1547,13 @@ export const WriteDocumentSchema = z
     path: z.string().min(1),
     /** UTF-8 text content — or `base64` for bytes; exactly one. */
     text: z.string().optional(),
-    base64: z.string().optional(),
+    base64: z
+      .string()
+      .regex(
+        /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/,
+        "Invalid base64 file content",
+      )
+      .optional(),
     contentType: z.string().optional(),
     /** Write only if the document is at this version (0 = does not exist). */
     ifVersion: z.number().int().nonnegative().optional(),

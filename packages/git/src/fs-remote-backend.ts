@@ -69,6 +69,7 @@ export class FsRemoteBackend implements RemoteBackend {
  * Artifacts) that maintain a local bare mirror.
  */
 export class FsOriginRepo implements OriginRepo {
+  private readonly cache = {};
   constructor(readonly gitdir: string) {}
 
   async resolveRef(ref: string): Promise<string | null> {
@@ -129,7 +130,12 @@ export class FsOriginRepo implements OriginRepo {
 
   async hasObject(sha: string): Promise<boolean> {
     try {
-      await git.readObject({ fs: nodeFs, gitdir: this.gitdir, oid: sha });
+      await git.readObject({
+        fs: nodeFs,
+        gitdir: this.gitdir,
+        oid: sha,
+        cache: this.cache,
+      });
       return true;
     } catch {
       return false;
@@ -145,6 +151,7 @@ export class FsOriginRepo implements OriginRepo {
       gitdir: this.gitdir,
       oid: sha,
       format: "content",
+      cache: this.cache,
     });
     if (obj.type === "deflated" || obj.type === "wrapped") {
       throw new Error(`Unexpected object format for ${sha}: ${obj.type}`);

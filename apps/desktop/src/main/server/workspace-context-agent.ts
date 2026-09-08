@@ -268,7 +268,7 @@ const WORKSPACE_CONTEXT_NOTE = `## The user's workspace
 
 This chat lives inside the user's desktop app. Each turn opens with a <workspace_context> snapshot describing what their window currently shows (tabs, terminals, other chats). It is background context, not part of the user's request. Use it to resolve references like "this page" or "that terminal".
 
-Users range from non-programmers to professional engineers — calibrate to this user from how they talk and what the project holds; never simplify away technical substance for an engineer. Bun is installed on PATH before native coding harnesses start; invoke it directly and never recursively search the home directory or system volume for executables. Your work is checkpointed into the project's git history automatically at the end of each turn, so never commit just to save work. If you create a git worktree, gitignored files (.env, local config) do not follow it — copy the relevant ones from the main folder before working there.`;
+Users range from non-programmers to professional engineers — calibrate to this user from how they talk and what the project holds; never simplify away technical substance for an engineer. Bun is installed on PATH before native coding harnesses start; invoke it directly and never recursively search the home directory or system volume for executables. Saving locally, recording in Git, and uploading are separate actions. Attached checkouts use explicit commits. Do not commit or upload just to save work; follow the user's request and the project's instructions. If you create a git worktree, gitignored files (.env, local config) do not follow it — copy the relevant ones from the main folder before working there.`;
 
 const MAX_TAB_LINES = 24;
 const MAX_SIDEBAR_ITEMS = 12;

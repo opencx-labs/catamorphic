@@ -63,17 +63,6 @@ export function RemoteConnectionIndicator({
           setStatus(latest);
           return;
         }
-        if (latest.local.modified.length || latest.local.deleted.length) {
-          const shipped = await desktopApi.remoteShip(projectId);
-          if (shipped.conflicts.length || shipped.failed.length) {
-            await refresh();
-            return;
-          }
-          // Shipping emits the shared project-change event. App owns the
-          // resulting pull so automatic and manual paths share its guard.
-          await refresh();
-          return;
-        }
         await desktopApi.remoteSync(projectId);
       }
       await refresh();
@@ -105,9 +94,9 @@ function statusLabel(status: RemoteProjectStatus): string {
       if (status.local.modified.length || status.local.deleted.length) {
         const count =
           status.local.modified.length + status.local.deleted.length;
-        return `${count} ${count === 1 ? "change" : "changes"} waiting to sync with ${host}. Click to sync now.`;
+        return `${count} ${count === 1 ? "local change" : "local changes"} on this device. Click to download updates from ${host}.`;
       }
-      return `Connected to ${host}. Click to sync now.`;
+      return `Connected to ${host}. Click to download updates.`;
     case "sign_in_required":
       return `Sign in again to ${host}.`;
     case "access_removed":

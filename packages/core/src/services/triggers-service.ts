@@ -676,7 +676,7 @@ export class TriggersService {
         remoteBranch: "main",
       });
       commitSha = await repo
-        .resolveRef("refs/remotes/origin/main")
+        .resolveRef("refs/catamorphic/published/main")
         .catch(() => null);
       if (!commitSha) return { commitSha: null, bindings: [] };
       await this.deps.workflowEnablements?.().markUpdateAvailable({
@@ -756,7 +756,7 @@ export class TriggersService {
         remoteBranch: args.remoteBranch,
       });
       const fetchedCommit = await repo
-        .resolveRef(`refs/remotes/origin/${args.remoteBranch}`)
+        .resolveRef(`refs/catamorphic/published/${args.remoteBranch}`)
         .catch(() => null);
       if (fetchedCommit !== args.commitSha) {
         throw new Error(

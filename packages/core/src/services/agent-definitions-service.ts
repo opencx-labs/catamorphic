@@ -465,7 +465,9 @@ export class AgentDefinitionsService {
   ): Promise<ProjectAgentEntry[]> {
     await this.requireProject(identity, projectId);
     return this.withDev(identity, projectId, async (repo) => {
-      const files = await repo.listFiles();
+      const files = await repo.listFiles({
+        prefix: `${AGENT_DEFINITIONS_DIR}/`,
+      });
       const prefix = `${AGENT_DEFINITIONS_DIR}/`;
       const definitionFiles = files.filter(
         (file) =>

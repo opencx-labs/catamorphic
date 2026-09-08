@@ -151,12 +151,27 @@ export class RemoteSyncService {
       if (!input.localRef) {
         const status = await dev.status();
         if (status.dirty) {
+          if (
+            await this.projectManager.localPath({
+              tenantId: identity.tenantId,
+              projectId,
+            })
+          )
+            throw new Error(
+              "Record the changes you want to share first. Opening a pull request will not stage your pending work.",
+            );
           await dev.commit(input.title, SYNC_AUTHOR);
         }
       }
       const branch = prBranchName(input.title, new Date());
       await pushToRemote({
         repoPath: dev.repoPath,
+        native: Boolean(
+          await this.projectManager.localPath({
+            tenantId: identity.tenantId,
+            projectId,
+          }),
+        ),
         url: remoteUrl,
         credentials,
         ref: input.localRef ?? "HEAD",
@@ -166,7 +181,7 @@ export class RemoteSyncService {
         remoteUrl,
         title: input.title,
         head: branch,
-        base: row?.remote_branch ?? "main",
+        base: row?.default_branch ?? row?.remote_branch ?? "main",
         body: input.body,
       });
       return { ...pr, branch };
@@ -189,12 +204,7 @@ export class RemoteSyncService {
     if (!remoteUrl) return [];
     const host = this.hosts.find((h) => h.handles(remoteUrl));
     if (!host?.listPullRequests) return [];
-    try {
-      return await host.listPullRequests(identity, { remoteUrl });
-    } catch (cause) {
-      console.warn(`PR listing failed for project ${projectId}:`, cause);
-      return [];
-    }
+    return host.listPullRequests(identity, { remoteUrl });
   }
 
   /** A PR's changed files with patches; throws when unsupported. */
@@ -232,7 +242,7 @@ export class RemoteSyncService {
       .selectFrom("projects")
       .where("id", "=", projectId)
       .where("tenant_id", "=", identity.tenantId)
-      .select(["remote_url", "remote_branch"])
+      .select(["remote_url", "remote_branch", "default_branch"])
       .executeTakeFirst();
   }
 }

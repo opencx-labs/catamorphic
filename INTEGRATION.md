@@ -618,6 +618,45 @@ may write. Hosts whose folders are the truth (the desktop's local projects)
 set it `false` and sync explicitly. The framework's
 `searching-documents` host skill carries the recipe agents follow.
 
+### Local checkouts and document storage (ADR 0104)
+
+A desktop-style host opts into native Git with
+`storage: { projectsPath, remotesPath, projectPathResolver, localCheckouts: true }`.
+Register a canonical checkout path before creating its project, passing the
+reserved `id` and `importExisting: true`. Import only attaches an existing Git
+repository. Initialize a plain folder separately with the user's consent.
+No files, seeds, commits, dependency installs, or history copies occur at import.
+The host controls automatic checkpoints through `nativeAgentCheckout.checkpoint`;
+attached checkouts should return `null` unless a commit was explicitly requested.
+
+On local checkouts, `store/` files and the documents API share one working folder.
+Outside edits are indexed on document reads, listing, or search. Binary bytes are
+preserved, version reads remain available, and `ifVersion` detects newer edits.
+Root-local program reads see current files; scoped program reads use the published
+commit. Never expose a root-local bearer token as a scoped remote connection.
+
+`GET /projects/:id/documents/storage` and the `documents_storage` MCP tool describe
+whether writes land on the device or the server and whether a blob backend is
+configured. A remote MCP write saves on that server. To keep a draft on a device,
+use its local connection. Saving, selected document upload, and a Git commit are
+separate actions. `shipRemoteProject(root, client, { paths })` uploads only those
+paths; a conflict also requires `resolveConflicts` naming the chosen local versions.
+Desktop per-turn store upload remains disabled.
+
+Provide `documentBlobStore: new FsBundleStore(documentBlobDirectory)` for disk
+storage, or an `S3ObjectStore` constructed by the host for S3-compatible storage.
+Both implement `get`, `put`, and `deletePrefix`. Store metadata, version history,
+small text, and search indexes remain in Postgres; binary payloads go to that
+backend. Omitting it keeps bytes in Postgres. The desktop and stock server configure filesystem blob storage automatically
+under their own data directories. Back up the database and blob directory/bucket together.
+Changing backends requires migrating existing blob keys; missing objects produce
+an explicit load failure, never an empty document. Keep bucket credentials on the
+host, outside project files. Scoped document access is enforced before blob reads.
+For large binary reads use the authenticated `/documents/raw` endpoint; MCP base64
+responses are capped at 1 MB. Writes accept up to 64 MB, with host route limits
+allowed to be lower. Text editing is limited to valid UTF-8 files up to 2 MB; other
+files remain available as original bytes through the documents surface or on disk.
+
 ### Proposals and publications (ADR 0055)
 
 Two more members' surfaces, both enforced by core and served by the plugin:

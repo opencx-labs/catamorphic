@@ -262,6 +262,7 @@ export {
 export {
   contentTypeFor,
   type DocumentBlobStore,
+  DocumentBlobUnavailableError,
   DocumentConflictError,
   type DocumentContent,
   type DocumentEntry,
@@ -356,8 +357,10 @@ export {
   type ListProjectsResult,
   type Project,
   ProjectDeprovisioningError,
+  ProjectFileConflictError,
   type ProjectFileEntry,
   ProjectFileNotFoundError,
+  ProjectFileNotTextError,
   type ProjectLifecycleHooks,
   ProjectNotFoundError,
   ProjectProvisioningError,

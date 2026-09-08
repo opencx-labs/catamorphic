@@ -3,7 +3,9 @@ import {
   type Identity,
   isBuilder,
   type Project,
+  ProjectFileConflictError,
   ProjectFileNotFoundError,
+  ProjectFileNotTextError,
   ProjectNotFoundError,
   type WorkflowSummary,
 } from "@catamorphic/core";
@@ -219,7 +221,13 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     url: "/projects/:projectId/files/*",
     schema: {
       params: ProjectFileParamsSchema,
-      response: { 200: FileContentSchema, 404: ErrorSchema, 503: ErrorSchema },
+      response: {
+        200: FileContentSchema,
+        404: ErrorSchema,
+        409: ErrorSchema,
+        415: ErrorSchema,
+        503: ErrorSchema,
+      },
     },
     handler: async (request, reply) => {
       if (!ctx.core)
@@ -235,6 +243,10 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
         );
         return reply.send({ path: filePath, content });
       } catch (err) {
+        if (err instanceof ProjectFileConflictError)
+          return reply.status(409).send({ error: err.message });
+        if (err instanceof ProjectFileNotTextError)
+          return reply.status(415).send({ error: err.message });
         if (err instanceof ProjectNotFoundError) {
           return reply.status(404).send({ error: "Project not found" });
         }
@@ -252,7 +264,13 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     schema: {
       params: ProjectFileParamsSchema,
       body: WriteFileSchema,
-      response: { 200: FileContentSchema, 404: ErrorSchema, 503: ErrorSchema },
+      response: {
+        200: FileContentSchema,
+        404: ErrorSchema,
+        409: ErrorSchema,
+        415: ErrorSchema,
+        503: ErrorSchema,
+      },
     },
     handler: async (request, reply) => {
       if (!ctx.core)
@@ -269,6 +287,10 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
         );
         return reply.send({ path: filePath, content });
       } catch (err) {
+        if (err instanceof ProjectFileConflictError)
+          return reply.status(409).send({ error: err.message });
+        if (err instanceof ProjectFileNotTextError)
+          return reply.status(415).send({ error: err.message });
         if (err instanceof ProjectNotFoundError) {
           return reply.status(404).send({ error: "Project not found" });
         }

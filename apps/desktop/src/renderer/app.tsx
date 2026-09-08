@@ -1005,10 +1005,6 @@ export function App() {
           ) {
             syncingRemoteProjectsRef.current.add(projectId);
             void (async () => {
-              if (status.local.modified.length || status.local.deleted.length) {
-                const shipped = await desktopApi.remoteShip(projectId);
-                if (shipped.conflicts.length || shipped.failed.length) return;
-              }
               await desktopApi.remoteSync(projectId);
               const nextStatus = await desktopApi.remoteStatus(projectId);
               if (!cancelled) {
@@ -1549,7 +1545,11 @@ export function App() {
           : null;
       return {
         ...ws,
-        tabs: exists ? ws.tabs : [...ws.tabs, tab],
+        tabs: exists
+          ? ws.tabs.map((existing) =>
+              tab.kind === "diff" && tabKey(existing) === key ? tab : existing,
+            )
+          : [...ws.tabs, tab],
         activeTabKey: key,
         split,
       };
@@ -5477,14 +5477,6 @@ export function App() {
                           features: remoteSurfaceStatus?.capabilities?.features,
                         })
                       }
-                      onSaved={async (path) => {
-                        if (
-                          path.startsWith("store/") &&
-                          remoteSurfaceStatus?.connection.state === "connected"
-                        ) {
-                          await desktopApi.remoteShip(projectId);
-                        }
-                      }}
                     />
                   </Suspense>
                 </div>

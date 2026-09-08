@@ -1882,7 +1882,9 @@ export class RunsService {
         });
         const commitSha =
           args.commitSha ??
-          (await repo.resolveRef("refs/remotes/origin/main").catch(() => null));
+          (await repo
+            .resolveRef("refs/catamorphic/published/main")
+            .catch(() => null));
         if (!commitSha)
           throw new ProductionDeploymentNotFoundError(args.projectId);
         const files = await repo.readAllFilesAtRef(commitSha);

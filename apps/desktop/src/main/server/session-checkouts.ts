@@ -386,10 +386,15 @@ export class SessionCheckouts {
     if (description.kind === "primary") {
       throw new Error("The session is not using an isolated worktree");
     }
-    await this.checkpoint({
-      ...input,
-      workingDirectory: description.path,
-    });
+    if (description.kind === "managed") {
+      await this.checkpoint({ ...input, workingDirectory: description.path });
+    } else if (
+      (await git(description.path, ["status", "--porcelain=v1"])).trim()
+    ) {
+      throw new Error(
+        "Record your changes in Git before opening a pull request from this checkout.",
+      );
+    }
     let branch = (
       await git(description.path, ["branch", "--show-current"])
     ).trim();

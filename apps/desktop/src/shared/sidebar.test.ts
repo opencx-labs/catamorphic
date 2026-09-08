@@ -28,6 +28,7 @@ describe("sidebar presentation", () => {
           title: "Work",
           sections: [
             { id: "git", type: "git" },
+            { id: "remote", type: "remote" },
             {
               id: "links",
               type: "custom",
@@ -55,11 +56,12 @@ describe("sidebar presentation", () => {
     });
     expect(visible?.left).toEqual([]);
     expect(sidebarSections(visible).map((section) => section.id)).toEqual([
+      "remote",
       "links",
     ]);
     expect(
-      sidebarSections(visible)[0]?.items?.[0]?.items?.map((item) => item.label),
+      sidebarSections(visible)[1]?.items?.[0]?.items?.map((item) => item.label),
     ).toEqual(["Public"]);
-    expect(config.right[0]?.sections).toHaveLength(2);
+    expect(config.right[0]?.sections).toHaveLength(3);
   });
 });

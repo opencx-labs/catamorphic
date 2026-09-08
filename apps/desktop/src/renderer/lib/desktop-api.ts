@@ -446,7 +446,16 @@ export interface RemoteProjectStatus {
     checkedAt: string;
     message: string;
   };
-  local: { modified: string[]; deleted: string[]; programEdits: string[] };
+  local: {
+    modified: string[];
+    deleted: string[];
+    programEdits: string[];
+    conflicts?: Array<{
+      path: string;
+      serverCopy: string;
+      serverVersion: number;
+    }>;
+  };
 }
 export interface RemoteDocumentVersion {
   version: number;
@@ -557,37 +566,22 @@ export interface BookmarksChange {
   pinned: ProjectBookmarks;
 }
 
-/** Mirror of main/git-view.ts shapes (the renderer never imports main). */
-export interface GitChangedFile {
-  path: string;
-  kind: "added" | "modified" | "deleted" | "renamed";
-  /** Set when kind is "renamed". */
-  previousPath?: string;
-}
+export type {
+  GitChangedFile,
+  GitDiffInput,
+  GitDiffMode,
+  GitFileDiff,
+  GitOverview,
+  GitRecordInput,
+  GitWorktree,
+} from "../../shared/git.js";
 
-export interface GitWorktree {
-  path: string;
-  branch: string | null;
-  isMain: boolean;
-  /** Uncommitted changes in this worktree (staged + unstaged + untracked). */
-  changes: GitChangedFile[];
-  /** For non-main worktrees: files changed on this branch vs main (3-dot). */
-  vsMain?: GitChangedFile[];
-}
-
-export interface GitOverview {
-  available: boolean;
-  worktrees: GitWorktree[];
-}
-
-export type GitDiffMode = "uncommitted" | "vs-main";
-
-export interface GitFileDiff {
-  path: string;
-  before: string;
-  after: string;
-  binary: boolean;
-}
+import type {
+  GitDiffInput,
+  GitFileDiff,
+  GitOverview,
+  GitRecordInput,
+} from "../../shared/git.js";
 
 /** Mirror of core's host-neutral PR shapes. */
 export interface PullRequestSummary {
@@ -791,7 +785,11 @@ export interface CatamorphicDesktopApi {
     webLinks: string[];
   }>;
   remoteSync: (projectId: string) => Promise<RemoteSyncReport>;
-  remoteShip: (projectId: string) => Promise<RemoteShipReport>;
+  remoteShip: (input: {
+    projectId: string;
+    paths: string[];
+    resolveConflicts?: string[];
+  }) => Promise<RemoteShipReport>;
   remoteHistory: (input: {
     projectId: string;
     path: string;
@@ -1202,14 +1200,10 @@ export interface CatamorphicDesktopApi {
   themeFile: () => Promise<string>;
   onThemeChanged: (listener: (theme: ResolvedTheme) => void) => () => void;
 
+  gitRecord: (input: GitRecordInput) => Promise<string>;
   gitOverview: (projectId: string) => Promise<GitOverview>;
   sessionCheckouts: (projectId: string) => Promise<SessionCheckoutInfo[]>;
-  gitFileDiff: (
-    projectId: string,
-    worktreePath: string,
-    filePath: string,
-    mode: GitDiffMode,
-  ) => Promise<GitFileDiff>;
+  gitFileDiff: (input: GitDiffInput) => Promise<GitFileDiff>;
   prList: (projectId: string) => Promise<PullRequestSummary[]>;
   prFiles: (projectId: string, number: number) => Promise<PullRequestFile[]>;
 

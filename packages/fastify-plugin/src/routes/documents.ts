@@ -1,4 +1,5 @@
 import {
+  DocumentBlobUnavailableError,
   DocumentConflictError,
   DocumentNotFoundError,
   DocumentPathError,
@@ -46,6 +47,8 @@ export function registerDocumentRoutes(
     if (err instanceof ProjectNotFoundError) {
       return reply.status(404).send({ error: "Project not found" });
     }
+    if (err instanceof DocumentBlobUnavailableError)
+      return reply.status(503).send({ error: err.message });
     if (err instanceof DocumentNotFoundError) {
       return reply.status(404).send({ error: err.message });
     }
@@ -62,6 +65,40 @@ export function registerDocumentRoutes(
     }
     throw err;
   };
+
+  typed.route({
+    method: "GET",
+    url: "/projects/:projectId/documents/storage",
+    schema: {
+      params: ProjectIdParamsSchema,
+      response: {
+        200: z.object({
+          location: z.enum(["device", "server"]),
+          blobs: z.enum(["connected", "database"]),
+          maxDocumentBytes: z.number(),
+          uploadIsExplicit: z.boolean(),
+        }),
+        404: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      try {
+        const storage = await core().documents.storage({
+          identity: resolveIdentity(request),
+          projectId: request.params.projectId,
+        });
+        return reply.send({
+          ...storage,
+          maxDocumentBytes: Math.min(
+            storage.maxDocumentBytes,
+            ctx.features.storeUploadMaxBytes,
+          ),
+        });
+      } catch (error) {
+        return handleErrors(error, reply);
+      }
+    },
+  });
 
   typed.route({
     method: "GET",
@@ -100,6 +137,7 @@ export function registerDocumentRoutes(
       }),
       response: {
         200: DocumentContentSchema,
+        503: ErrorSchema,
         400: ErrorSchema,
         404: ErrorSchema,
       },

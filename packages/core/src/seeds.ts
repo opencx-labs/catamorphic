@@ -373,6 +373,19 @@ Then:
 
 Do NOT install the workspace preemptively — only when automations or apps are actually wanted.
 
+## Saving, recording, and sharing files
+
+Call \`documents_storage\` when unsure where an MCP connection saves files.
+A desktop-local connection saves to the project folder on that device. A remote
+MCP connection saves on that server. Use the desktop-local connection or local
+file tools for private drafts. Saving does not mean uploading or committing.
+
+To share selected documents, use the desktop's Server section, choose the files,
+and Upload. Other drafts stay local. A conflict keeps both versions until the
+user chooses which to keep. Sharing a link uploads only the named document.
+To record a document in project history, put it outside \`store/\`, review it,
+and explicitly commit it. Explain where it will go before pushing or sharing.
+
 ## The program, the store, and who may reach what
 
 A project has one path namespace with two backings:
@@ -1621,9 +1634,8 @@ visibility — default to private unless they say otherwise.
 
 ## 5. Wrap up
 
-Report the repository URL. Note for the user: the app's automatic sync
-applies to projects imported from GitHub; this project now pushes and pulls
-through its git \`origin\` remote — you can run those pushes for them on
-request.
+Report the repository URL. Imported repositories use explicit commits and
+pushes. Run those actions when the user asks; saving a file locally does
+not authorize sharing it.
 `,
 };

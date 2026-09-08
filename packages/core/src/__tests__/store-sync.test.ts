@@ -162,6 +162,7 @@ describe("remote project sync (ADR 0055)", () => {
     write(root, "store/customers/acme/brief.md", "# Brief\n");
     write(root, "docs/handbook.md", "# Handbook (edited locally)\n");
     expect(localStatus(root)).toEqual({
+      conflicts: [],
       modified: [
         "store/customers/acme/brief.md",
         "store/customers/acme/notes.md",
@@ -183,7 +184,7 @@ describe("remote project sync (ADR 0055)", () => {
     expect(localStatus(root).modified).toEqual([]);
   });
 
-  it("ship conflict: someone wrote first → their copy lands beside ours, ours stays, next ship wins", async () => {
+  it("ship conflict: someone wrote first → their copy lands beside ours, ours stays, explicit resolution is required", async () => {
     await syncRemoteProject(root, server);
     write(root, "store/customers/acme/notes.md", "my edit\n");
     // Meanwhile the server moved to v3.
@@ -204,8 +205,13 @@ describe("remote project sync (ADR 0055)", () => {
     ]);
     expect(read(root, copy)).toBe("their edit\n");
     expect(read(root, "store/customers/acme/notes.md")).toBe("my edit\n");
-    // The user reconciles (keeps theirs, say) and ships again: lands at v4.
-    const again = await shipRemoteProject(root, server);
+    const retry = await shipRemoteProject(root, server);
+    expect(retry.shipped).toEqual([]);
+    expect(retry.conflicts).toHaveLength(1);
+    const again = await shipRemoteProject(root, server, {
+      paths: ["store/customers/acme/notes.md"],
+      resolveConflicts: ["store/customers/acme/notes.md"],
+    });
     expect(again.shipped).toEqual(["store/customers/acme/notes.md"]);
     expect(server.store.get("store/customers/acme/notes.md")?.version).toBe(4);
     // Server copies are never shipped themselves.
@@ -236,6 +242,39 @@ describe("remote project sync (ADR 0055)", () => {
     const next = await syncRemoteProject(root, server);
     expect(next.pulled).toEqual(["docs/handbook.md"]);
     expect(read(root, "docs/handbook.md")).toBe("# Handbook v2\n");
+  });
+
+  it("uploads only selected documents and keeps siblings private", async () => {
+    write(root, "store/public.md", "share this");
+    write(root, "store/private.md", "keep here");
+    const report = await shipRemoteProject(root, server, {
+      paths: ["store/public.md"],
+    });
+    expect(report.shipped).toEqual(["store/public.md"]);
+    expect(server.store.has("store/private.md")).toBe(false);
+    expect(localStatus(root).modified).toContain("store/private.md");
+  });
+
+  it("preserves unknown local files on first download and never restores a local deletion", async () => {
+    write(root, "store/customers/acme/notes.md", "private draft");
+    const report = await syncRemoteProject(root, server);
+    expect(report.conflicts).toHaveLength(1);
+    expect(read(root, "store/customers/acme/notes.md")).toBe("private draft");
+    fs.rmSync(path.join(root, "docs/handbook.md"));
+    await syncRemoteProject(root, server);
+    expect(fs.existsSync(path.join(root, "docs/handbook.md"))).toBe(false);
+  });
+
+  it("keeps an edit made while an upload is pending visible as a local change", async () => {
+    write(root, "store/draft.md", "first");
+    const original = server.write.bind(server);
+    server.write = async (input) => {
+      write(root, input.path, "second");
+      return original(input);
+    };
+    await shipRemoteProject(root, server, { paths: ["store/draft.md"] });
+    expect(server.store.get("store/draft.md")?.text).toBe("first");
+    expect(localStatus(root).modified).toContain("store/draft.md");
   });
 
   it("deletions travel both ways, but never over someone's newer edit", async () => {

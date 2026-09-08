@@ -7,9 +7,9 @@ import type { ClaudeSlashCommand } from "@catamorphic/claude-code";
 import {
   definitionHash,
   formatProjectAgentId,
-  type Project,
   type ProjectAgentEntry,
 } from "@catamorphic/core";
+import { discoverCheckout, nativeGit } from "@catamorphic/git";
 import {
   buildInstallationUrl,
   GithubAuthError,
@@ -27,6 +27,7 @@ import {
   shell,
   type WebContents,
 } from "electron";
+import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
 import type { UsageSummary, UsageWindowDays } from "../shared/usage.js";
 import type { BindingAuth } from "./agent-bindings-store.js";
 import {
@@ -49,12 +50,7 @@ import {
 import type { ConnectorsService } from "./connectors.js";
 import { defaultDesktopProjectsDir } from "./development-paths.js";
 import { readEditorFile, writeEditorFile } from "./editor-files.js";
-import {
-  type GitDiffMode,
-  gitFileDiff,
-  gitOverview,
-  listWorktreePaths,
-} from "./git-view.js";
+import { gitFileDiff, gitOverview, listWorktreePaths } from "./git-view.js";
 import { githubCliToken } from "./github-cli.js";
 import {
   type HarnessExecutable,
@@ -1439,15 +1435,12 @@ export function registerIpcHandlers(
   const registerProjectForWindow = async ({
     event,
     project,
-    rootPath,
   }: {
     event: Electron.IpcMainInvokeEvent;
     project: { id: string; name: string };
-    rootPath: string;
   }) => {
     const server = state.current;
     if (!server) throw new Error("Server not running");
-    await server.projectRoots.set(project.id, rootPath);
     const profileId = windows.profileFor(event.sender);
     profiles.claimProject(profileId, project.id);
     profileConfig.forProfile(profileId).prefs.save({
@@ -1475,15 +1468,46 @@ export function registerIpcHandlers(
       if (!path.isAbsolute(input.rootPath)) {
         throw new Error("rootPath must be an absolute path");
       }
-      const project = await server.catamorphic.core.projects.create(identity, {
-        name: input.name,
+      if (input.importExisting) {
+        try {
+          await discoverCheckout({ path: input.rootPath });
+        } catch (error) {
+          // An invalid repository is never reinitialized. Only a plain folder can opt in.
+          if (
+            !fs.statSync(input.rootPath).isDirectory() ||
+            fs.existsSync(path.join(input.rootPath, ".git"))
+          )
+            throw error;
+          const choice = await dialog.showMessageBox({
+            type: "question",
+            title: "Add local history?",
+            message: "This folder does not have Git history yet.",
+            detail:
+              "Catamorphic can add local history in this folder. Your files stay where they are. Nothing is committed or uploaded until you ask.",
+            buttons: ["Add local history and open", "Cancel"],
+            cancelId: 1,
+            defaultId: 0,
+          });
+          if (choice.response !== 0)
+            throw new Error("Opening the folder was cancelled.");
+          await nativeGit(input.rootPath, ["init", "--initial-branch=main"]);
+        }
+      }
+      const project = await server.projectRoots.register({
         rootPath: input.rootPath,
-        importExisting: input.importExisting,
+        existing: input.importExisting === true,
+        reopen: (id) => server.catamorphic.core.projects.get(identity, id),
+        create: (id, rootPath) =>
+          server.catamorphic.core.projects.create(identity, {
+            id,
+            name: input.name,
+            rootPath,
+            importExisting: input.importExisting,
+          }),
       });
       return registerProjectForWindow({
         event,
         project,
-        rootPath: input.rootPath,
       });
     },
   );
@@ -1498,9 +1522,16 @@ export function registerIpcHandlers(
       parentDir: defaultProjectsDir(),
       slug: "default-project",
       create: (rootPath) =>
-        server.catamorphic.core.projects.create(identity, {
-          name: "Default Project",
+        server.projectRoots.register({
           rootPath,
+          existing: false,
+          reopen: (id) => server.catamorphic.core.projects.get(identity, id),
+          create: (id, canonical) =>
+            server.catamorphic.core.projects.create(identity, {
+              id,
+              name: "Default Project",
+              rootPath: canonical,
+            }),
         }),
       provision: async ({ project, rootPath }) => {
         await server.projectRoots.set(project.id, rootPath);
@@ -1724,27 +1755,32 @@ export function registerIpcHandlers(
         ? repoFullNameFromUrl(capabilities.source.remoteUrl)
         : null;
       const builderCheckout = Boolean(capabilities.builder && githubFullName);
-      let project: Project;
-      if (builderCheckout && githubFullName) {
-        await ensureGithubRepositoryAccess(server, githubFullName);
-        const github = server.catamorphic.core.github;
-        if (!github) throw new Error("GitHub integration not configured");
-        project = await github.importRepo(identity, {
-          fullName: githubFullName,
-          name: input.name,
-          rootPath: input.rootPath,
-        });
-      } else {
-        const existed = fs.existsSync(input.rootPath);
-        project = await server.catamorphic.core.projects.create(identity, {
-          name: input.name,
-          rootPath: input.rootPath,
-          importExisting: existed,
-        });
-      }
-      await server.projectRoots.set(project.id, input.rootPath);
+      const project = await server.projectRoots.register({
+        rootPath: input.rootPath,
+        existing: false,
+        automaticCheckpoints: !builderCheckout,
+        reopen: (id) => server.catamorphic.core.projects.get(identity, id),
+        create: async (id, rootPath) => {
+          if (builderCheckout && githubFullName) {
+            await ensureGithubRepositoryAccess(server, githubFullName);
+            const github = server.catamorphic.core.github;
+            if (!github) throw new Error("GitHub integration not configured");
+            return github.importRepo(identity, {
+              id,
+              fullName: githubFullName,
+              name: input.name,
+              rootPath,
+            });
+          }
+          return server.catamorphic.core.projects.create(identity, {
+            id,
+            name: input.name,
+            rootPath,
+          });
+        },
+      });
       // The store is never program: keep it out of the local git history.
-      appendGitignore(input.rootPath, [
+      await appendLocalGitExcludes(input.rootPath, [
         "store/",
         ".catamorphic/remote-sync.json",
         REMOTE_PROJECT_LOCATOR_PATH,
@@ -1860,12 +1896,23 @@ export function registerIpcHandlers(
 
   ipcMain.handle(
     "catamorphic:remote-ship",
-    async (event, projectId: string) => {
+    async (
+      event,
+      input: {
+        projectId: string;
+        paths: string[];
+        resolveConflicts?: string[];
+      },
+    ) => {
+      const { projectId } = input;
+      if (!Array.isArray(input.paths) || input.paths.length === 0)
+        throw new Error("Select the files to upload first");
       const link = requireLink(event, projectId);
       const rootPath = await requireRoot(projectId);
       const report = await shipRemoteProject(
         rootPath,
         storedRemoteClient(event, projectId, link),
+        { paths: input.paths, resolveConflicts: input.resolveConflicts },
       );
       storesFor(event).remoteProjects.touch(
         projectId,
@@ -1925,7 +1972,9 @@ export function registerIpcHandlers(
       const client = storedRemoteClient(event, input.projectId, link);
       const status = localStatus(rootPath);
       if (status.modified.includes(input.path)) {
-        const shipped = await shipRemoteProject(rootPath, client);
+        const shipped = await shipRemoteProject(rootPath, client, {
+          paths: [input.path],
+        });
         const failure = shipped.failed.find((f) => f.path === input.path);
         if (failure)
           throw new Error(`Could not ship ${input.path}: ${failure.error}`);
@@ -2198,6 +2247,47 @@ export function registerIpcHandlers(
   );
 
   ipcMain.handle(
+    "catamorphic:git-record",
+    async (_event, input: GitRecordInput) => {
+      const server = state.current;
+      if (!server) throw new Error("Server not running");
+      if (
+        !input.message?.trim() ||
+        !Array.isArray(input.paths) ||
+        !input.paths.length
+      )
+        throw new Error("Choose files and a message before recording changes");
+      if (
+        input.paths.some(
+          (file) =>
+            typeof file !== "string" ||
+            file
+              .split("/")
+              .some(
+                (segment) =>
+                  segment === ".." || segment === "." || segment === "",
+              ) ||
+            file === "store" ||
+            file.startsWith("store/"),
+        )
+      )
+        throw new Error(
+          "Private store documents cannot be recorded in project history",
+        );
+      await requireRoot(input.projectId);
+      const sha = await server.catamorphic.core.projects.commitAll(
+        identity,
+        input.projectId,
+        input.message.trim(),
+        undefined,
+        { paths: input.paths },
+      );
+      notifyGitChanged(input.projectId);
+      return sha;
+    },
+  );
+
+  ipcMain.handle(
     "catamorphic:git-overview",
     async (_event, projectId: string) => {
       const rootPath = await state.current?.projectRoots.get(projectId);
@@ -2214,27 +2304,13 @@ export function registerIpcHandlers(
 
   ipcMain.handle(
     "catamorphic:git-file-diff",
-    async (
-      _event,
-      projectId: string,
-      worktreePath: string,
-      filePath: string,
-      mode: GitDiffMode,
-    ) => {
-      if (mode !== "uncommitted" && mode !== "vs-main") {
-        throw new Error(`Unknown diff mode: ${String(mode)}`);
-      }
-      const rootPath = await state.current?.projectRoots.get(projectId);
+    async (_event, input: GitDiffInput) => {
+      const rootPath = await state.current?.projectRoots.get(input.projectId);
       if (!rootPath) throw new Error("Unknown project");
-      // Only diff inside the project's own worktrees. Worktrees may live
-      // OUTSIDE the project root, so this is an allowlist from `git
-      // worktree list` (one subprocess — not a full status sweep), not a
-      // path-prefix check.
       const worktrees = await listWorktreePaths(rootPath);
-      if (!worktrees.includes(worktreePath)) {
+      if (!worktrees.includes(input.worktreePath))
         throw new Error("Not a worktree of this project");
-      }
-      return gitFileDiff(worktreePath, filePath, mode);
+      return gitFileDiff(input);
     },
   );
 
@@ -2348,18 +2424,23 @@ export function registerIpcHandlers(
       if (!path.isAbsolute(input.rootPath)) {
         throw new Error("rootPath must be an absolute path");
       }
-      const project = await server.catamorphic.core.github.importRepo(
-        identity,
-        {
-          fullName: input.fullName,
-          name: input.name,
-          rootPath: input.rootPath,
-        },
-      );
+      const github = server.catamorphic.core.github;
+      const project = await server.projectRoots.register({
+        rootPath: input.rootPath,
+        existing: false,
+        automaticCheckpoints: false,
+        reopen: (id) => server.catamorphic.core.projects.get(identity, id),
+        create: (id, rootPath) =>
+          github.importRepo(identity, {
+            id,
+            fullName: input.fullName,
+            name: input.name,
+            rootPath,
+          }),
+      });
       return registerProjectForWindow({
         event,
         project,
-        rootPath: input.rootPath,
       });
     },
   );
@@ -2369,9 +2450,18 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
-/** Add lines to the folder's .gitignore when missing (idempotent). */
-function appendGitignore(rootPath: string, lines: string[]): void {
-  const file = path.join(rootPath, ".gitignore");
+/** Keep connection state out of history without editing tracked ignore rules. */
+async function appendLocalGitExcludes(
+  rootPath: string,
+  lines: string[],
+): Promise<void> {
+  const file = path.resolve(
+    rootPath,
+    (
+      await nativeGit(rootPath, ["rev-parse", "--git-path", "info/exclude"])
+    ).trim(),
+  );
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   let current = "";
   try {
     current = fs.readFileSync(file, "utf8");

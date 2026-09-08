@@ -1,9 +1,11 @@
 import nodeFs from "node:fs";
 import git from "isomorphic-git";
 import http from "isomorphic-git/http/node";
+import { nativeGit } from "./native-git.js";
 import type { GitCredentials } from "./types.js";
 
 export interface CloneFromRemoteOptions {
+  native?: boolean;
   /** Directory that already holds an initialized (empty) git repo. */
   repoPath: string;
   url: string;
@@ -33,6 +35,40 @@ function onAuthFor(credentials?: GitCredentials) {
 export async function cloneFromRemote(
   opts: CloneFromRemoteOptions,
 ): Promise<{ sha: string; remoteBranch: string }> {
+  if (opts.native) {
+    const auth = opts.credentials
+      ? { ...opts.credentials, url: opts.url }
+      : undefined;
+    await nativeGit(opts.repoPath, ["remote", "add", "origin", opts.url]);
+    await nativeGit(opts.repoPath, ["fetch", "--tags", "origin"], auth);
+    const remoteBranch =
+      opts.branch ??
+      (
+        await nativeGit(
+          opts.repoPath,
+          ["ls-remote", "--symref", "origin", "HEAD"],
+          auth,
+        )
+      ).match(/ref: refs\/heads\/(.+)\tHEAD/)?.[1];
+    if (!remoteBranch)
+      throw new Error("The repository has no default branch to check out");
+    await nativeGit(opts.repoPath, [
+      "checkout",
+      "-B",
+      remoteBranch,
+      "--track",
+      `origin/${remoteBranch}`,
+    ]);
+    await nativeGit(opts.repoPath, [
+      "symbolic-ref",
+      "refs/remotes/origin/HEAD",
+      `refs/remotes/origin/${remoteBranch}`,
+    ]);
+    return {
+      sha: (await nativeGit(opts.repoPath, ["rev-parse", "HEAD"])).trim(),
+      remoteBranch,
+    };
+  }
   await git.addRemote({
     fs: nodeFs,
     dir: opts.repoPath,
@@ -86,6 +122,7 @@ export async function cloneFromRemote(
  */
 export async function pushToRemote(opts: {
   repoPath: string;
+  native?: boolean;
   url: string;
   credentials?: GitCredentials;
   /** Local ref to push. Defaults to `main`. */
@@ -95,6 +132,19 @@ export async function pushToRemote(opts: {
   force?: boolean;
 }): Promise<void> {
   const ref = opts.ref ?? "main";
+  if (opts.native) {
+    await nativeGit(
+      opts.repoPath,
+      [
+        "push",
+        ...(opts.force ? ["--force-with-lease"] : []),
+        opts.url,
+        `${ref}:refs/heads/${opts.remoteBranch ?? ref}`,
+      ],
+      opts.credentials ? { ...opts.credentials, url: opts.url } : undefined,
+    );
+    return;
+  }
   await git.push({
     fs: nodeFs,
     http,

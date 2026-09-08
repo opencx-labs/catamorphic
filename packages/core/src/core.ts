@@ -391,8 +391,19 @@ export class CatamorphicCore {
     // Doctrine resolves ONCE, at boot: every consumer below (project
     // creation, skill restore) sees the same host-final set (ADR 0049).
     this.seedFiles = config.projectSeeds?.({ ...SEED_SKILLS }) ?? SEED_SKILLS;
+    // Imported repositories stay untouched. Offer their missing framework
+    // skills through the existing host tier; project/user skills still win.
+    const skillPrefix = ".agents/skills/";
+    const defaultHostSkills = {
+      ...Object.fromEntries(
+        Object.entries(this.seedFiles)
+          .filter(([file]) => file.startsWith(skillPrefix))
+          .map(([file, content]) => [file.slice(skillPrefix.length), content]),
+      ),
+      ...HOST_SKILLS,
+    };
     this.hostSkillFiles =
-      config.hostSkills?.({ ...HOST_SKILLS }) ?? HOST_SKILLS;
+      config.hostSkills?.({ ...defaultHostSkills }) ?? defaultHostSkills;
     this.sandboxProvider = config.sandboxProvider
       ? instrumentSandboxProvider(config.sandboxProvider)
       : undefined;

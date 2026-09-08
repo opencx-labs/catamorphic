@@ -46,9 +46,9 @@ import type { ProfilesStore } from "../profiles.js";
 import { projectDefaultAgentSlug } from "../project-manifest.js";
 import { shellBinShimDir } from "../shell-integration.js";
 import { FriendlyAgentErrors } from "./agent-errors.js";
-import { DesktopConfigAgent } from "./desktop-config-agent.js";
 import { E2eFakeCodingAgent } from "./e2e-fakes.js";
 import { composeSkillsNote, type HostSkillsRuntime } from "./host-skills.js";
+import { localAgentWorkspace } from "./local-agent-workspace.js";
 import {
   AsyncInitCodingAgent,
   FailFastCodingAgent,
@@ -938,7 +938,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     return {
       id,
       provider,
-      topology: def.kind === "builtin" ? "controller" : "native",
+      topology: "native",
     };
   }
 
@@ -974,7 +974,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     // (agent lists, switching, effort) exercise the real plumbing. The
     // error decorator stays on so tests cover the auth-failure surfacing.
     if (this.deps.e2eFake) {
-      const topology = config.harness === "ai-sdk" ? "controller" : "native";
+      const topology = "native";
       const fake = new E2eFakeCodingAgent(
         this.deps.sandboxProvider,
         this.workspaceTools(config, topology),
@@ -982,10 +982,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       );
       return {
         id: config.id,
-        provider: this.wrapErrors(
-          topology === "controller" ? this.wrapSandboxAgent(fake) : fake,
-          config,
-        ),
+        provider: this.wrapErrors(fake, config),
         topology,
         defaults: { effort: config.effort },
       };
@@ -1009,12 +1006,13 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             const { buildAiSdkAgent } = await import("./coding-agent.js");
             const loaded = buildAiSdkAgent({
               config,
-              sandboxProvider: this.deps.sandboxProvider,
+              sandboxProvider: localAgentWorkspace,
+              pluginDirectory: path.join(
+                this.agentHome(config.id),
+                "plugin-docs",
+              ),
               modelId,
-              // Mode does not apply to the sandboxed built-in agent (its
-              // edits land as a reviewable draft), so its toolset is never
-              // filtered.
-              extraTools: this.workspaceTools(config, "controller"),
+              extraTools: this.workspaceTools(config, "native"),
               mcpServers: () => this.liveServers(config, profileId),
               // Elicitation from this agent's connectors → the front window,
               // labeled with the agent so the user knows who's asking.
@@ -1035,7 +1033,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             // processes); eviction must close them, not leak them.
             this.closeables.set(config.id, () => loaded.closeMcp());
             return this.wrapErrors(
-              this.withWorkspace(this.wrapSandboxAgent(loaded), {
+              this.withWorkspace(loaded, {
                 hasTools: true,
                 config,
                 profileId,
@@ -1048,7 +1046,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         return {
           id: config.id,
           provider,
-          topology: "controller",
+          topology: "native",
           defaults: { model: modelId, effort: config.effort },
         };
       }
@@ -1323,23 +1321,6 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     } catch {
       return "shared-first";
     }
-  }
-
-  /**
-   * Sandbox agents get the desktop-config decorator: the chat can edit the
-   * owning profile's keybindings/sidebar/theme through sandbox mirrors.
-   * Host agents run outside the sandbox, so they skip it.
-   */
-  private wrapSandboxAgent(inner: CodingAgentProvider): CodingAgentProvider {
-    return new DesktopConfigAgent(
-      inner,
-      this.deps.sandboxProvider,
-      (projectId) =>
-        projectId
-          ? this.deps.profileConfig.forProject(projectId)
-          : this.deps.profileConfig.forDefaultProfile(),
-      (projectId) => this.deps.profileConfig.projectSidebarStore(projectId),
-    );
   }
 }
 
