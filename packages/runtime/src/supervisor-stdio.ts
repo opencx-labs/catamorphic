@@ -193,7 +193,15 @@ export function startStdioSupervisor(
 
   let buffer = "";
   const onData = (chunk: Buffer | string): void => {
+    if (stopped) return;
     buffer += chunk.toString();
+    if (buffer.length > 16 * 1024 * 1024) {
+      buffer = "";
+      stopped = true;
+      buffer = "";
+      input.off("data", onData);
+      return;
+    }
     let newline = buffer.indexOf("\n");
     while (newline !== -1) {
       const line = buffer.slice(0, newline).trim();
@@ -220,6 +228,7 @@ export function startStdioSupervisor(
   return {
     stop: () => {
       stopped = true;
+      buffer = "";
       input.off("data", onData);
     },
   };

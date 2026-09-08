@@ -170,40 +170,42 @@ async function connectTransport(
   config: AgentMcpServerConfig,
   opts?: ConnectMcpOpts,
 ) {
-  if (config.transport === "stdio") {
+  const connect = async (transport: Parameters<Client["connect"]>[0]) => {
     const client = buildClient(opts);
-    await client.connect(
+    try {
+      await client.connect(transport);
+      return client;
+    } catch (error) {
+      await client.close().catch(() => {});
+      throw error;
+    }
+  };
+  if (config.transport === "stdio") {
+    return connect(
       new StdioClientTransport({
         command: config.command,
         args: config.args,
-        env: { ...(process.env as Record<string, string>), ...config.env },
+        env: Object.fromEntries(
+          Object.entries({ ...process.env, ...config.env }).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string",
+          ),
+        ),
         stderr: "ignore",
       }),
     );
-    return client;
   }
-
   const url = new URL(config.url);
   const requestInit = config.headers ? { headers: config.headers } : undefined;
   if (config.transport === "sse") {
-    const client = buildClient(opts);
-    await client.connect(new SSEClientTransport(url, { requestInit }));
-    return client;
+    return connect(new SSEClientTransport(url, { requestInit }));
   }
-
-  // Streamable HTTP first; legacy HTTP+SSE servers answer POSTs with 4xx/405,
-  // so a failed connect falls back to the SSE transport before giving up.
   try {
-    const client = buildClient(opts);
-    await client.connect(
+    return await connect(
       new StreamableHTTPClientTransport(url, { requestInit }),
     );
-    return client;
   } catch (streamableError) {
     try {
-      const client = buildClient(opts);
-      await client.connect(new SSEClientTransport(url, { requestInit }));
-      return client;
+      return await connect(new SSEClientTransport(url, { requestInit }));
     } catch {
       throw streamableError;
     }
@@ -259,60 +261,65 @@ export async function connectMcpServer(
   opts?: ConnectMcpOpts,
 ): Promise<ConnectedMcpServer> {
   const client = await connectTransport(config, opts);
-  const listed = await client.listTools();
-  const tools: McpToolInfo[] = listed.tools.map((tool) => ({
-    name: tool.name,
-    description: tool.description ?? "",
-    inputSchema: (tool.inputSchema ?? { type: "object" }) as Record<
-      string,
-      unknown
-    >,
-    ...((tool as { _meta?: Record<string, unknown> })._meta
-      ? { meta: (tool as { _meta?: Record<string, unknown> })._meta }
-      : {}),
-    ...(tool.annotations
-      ? { annotations: pickAnnotations(tool.annotations) }
-      : {}),
-  }));
-  return {
-    tools,
-    protocolVersion: client.getDiscoverResult() ? "2026-07-28" : undefined,
-    async callTool(name, args) {
-      const result = await client.callTool({ name, arguments: args });
-      return flattenToolResult(
-        result as Parameters<typeof flattenToolResult>[0],
-      );
-    },
-    async callToolRaw(name, args) {
-      return (await client.callTool({ name, arguments: args })) as Record<
+  try {
+    const listed = await client.listTools();
+    const tools: McpToolInfo[] = listed.tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description ?? "",
+      inputSchema: (tool.inputSchema ?? { type: "object" }) as Record<
         string,
         unknown
-      >;
-    },
-    async readResource(uri) {
-      const result = await client.readResource({ uri });
-      const content = (
-        result as {
-          contents?: Array<{
-            uri?: string;
-            mimeType?: string;
-            text?: string;
-            blob?: string;
-            _meta?: Record<string, unknown>;
-          }>;
-        }
-      ).contents?.[0];
-      if (!content) throw new Error(`Resource ${uri} returned no contents`);
-      return {
-        uri: content.uri ?? uri,
-        mimeType: content.mimeType,
-        text: content.text,
-        blob: content.blob,
-        ...(content._meta ? { meta: content._meta } : {}),
-      };
-    },
-    close: () => client.close(),
-  };
+      >,
+      ...((tool as { _meta?: Record<string, unknown> })._meta
+        ? { meta: (tool as { _meta?: Record<string, unknown> })._meta }
+        : {}),
+      ...(tool.annotations
+        ? { annotations: pickAnnotations(tool.annotations) }
+        : {}),
+    }));
+    return {
+      tools,
+      protocolVersion: client.getDiscoverResult() ? "2026-07-28" : undefined,
+      async callTool(name, args) {
+        const result = await client.callTool({ name, arguments: args });
+        return flattenToolResult(
+          result as Parameters<typeof flattenToolResult>[0],
+        );
+      },
+      async callToolRaw(name, args) {
+        return (await client.callTool({ name, arguments: args })) as Record<
+          string,
+          unknown
+        >;
+      },
+      async readResource(uri) {
+        const result = await client.readResource({ uri });
+        const content = (
+          result as {
+            contents?: Array<{
+              uri?: string;
+              mimeType?: string;
+              text?: string;
+              blob?: string;
+              _meta?: Record<string, unknown>;
+            }>;
+          }
+        ).contents?.[0];
+        if (!content) throw new Error(`Resource ${uri} returned no contents`);
+        return {
+          uri: content.uri ?? uri,
+          mimeType: content.mimeType,
+          text: content.text,
+          blob: content.blob,
+          ...(content._meta ? { meta: content._meta } : {}),
+        };
+      },
+      close: () => client.close(),
+    };
+  } catch (error) {
+    await client.close().catch(() => {});
+    throw error;
+  }
 }
 
 export interface McpConnectionProbe {

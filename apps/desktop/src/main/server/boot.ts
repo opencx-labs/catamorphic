@@ -1226,6 +1226,7 @@ export async function startEmbeddedServer(
           { name: "workflow execution", dispose: suspendExecution },
           { name: "HTTP server", dispose: () => app.close() },
           { name: "framework services", dispose: () => catamorphic.close() },
+          { name: "agent clients", dispose: () => agentRegistry.dispose() },
           // The host owns Kysely. Always attempt its WAL flush last and report
           // a failure instead of silently treating an unsafe shutdown as clean.
           { name: "database", dispose: () => db.destroy() },

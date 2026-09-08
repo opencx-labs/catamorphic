@@ -128,7 +128,18 @@ export async function gitFileDiff(
     "show",
     `${baseRef}:${filePath}`,
   ]).catch(() => "");
-  const after = await fs.readFile(abs, "utf8").catch(() => "");
+  const after = await fs
+    .open(abs, "r")
+    .then(async (file) => {
+      try {
+        const buffer = Buffer.alloc(MAX_DIFF_BYTES);
+        const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+        return buffer.toString("utf8", 0, bytesRead);
+      } finally {
+        await file.close();
+      }
+    })
+    .catch(() => "");
 
   const binary = before.includes("\0") || after.includes("\0");
   return {

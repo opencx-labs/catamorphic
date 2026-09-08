@@ -40,6 +40,14 @@ const PROFILE_COLORS: string[] = [
 const FALLBACK_COLOR = "#f95225";
 
 export class ProfilesStore {
+  private readonly removedListeners = new Set<(profileId: string) => void>();
+  onRemoved(listener: (profileId: string) => void): () => void {
+    this.removedListeners.add(listener);
+    return () => {
+      this.removedListeners.delete(listener);
+    };
+  }
+
   private data: ProfilesFile;
 
   constructor(private readonly file: string) {
@@ -158,6 +166,7 @@ export class ProfilesStore {
     const fallback = this.defaultProfile();
     fallback.projectIds.push(...removed.projectIds);
     this.save();
+    for (const listener of this.removedListeners) listener(id);
     return true;
   }
 

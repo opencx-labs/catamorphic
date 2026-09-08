@@ -34,7 +34,7 @@ export interface McpAppView {
 export class McpAppsService {
   /** Live client connections, keyed by profile + connection id. */
   private readonly pool = new Map<string, Promise<ConnectedMcpServer>>();
-  private readonly watchedProfiles = new Set<string>();
+  private readonly watchedProfiles = new Map<string, () => void>();
 
   constructor(
     private readonly deps: {
@@ -127,10 +127,14 @@ export class McpAppsService {
   private keyed(profileId: string): Map<string, McpConnection> {
     const store = this.deps.connectionsFor(profileId);
     if (!this.watchedProfiles.has(profileId)) {
-      this.watchedProfiles.add(profileId);
       // Connection edits invalidate this profile's pooled clients; the
       // next use reconnects with fresh config.
-      store.onChanged(() => this.invalidateProfile(profileId));
+      this.watchedProfiles.set(
+        profileId,
+        store.onChanged(() => {
+          void this.invalidateProfile(profileId);
+        }),
+      );
     }
     return connectionServerKeys(store.list());
   }
@@ -153,19 +157,35 @@ export class McpAppsService {
       this.deps.onElicit ? { onElicit: this.deps.onElicit } : undefined,
     ).catch((error) => {
       // Failed connects must not poison the pool.
-      this.pool.delete(key);
+      if (this.pool.get(key) === pending) this.pool.delete(key);
       throw error;
     });
     this.pool.set(key, pending);
     return pending;
   }
 
-  private invalidateProfile(profileId: string): void {
+  async releaseProfile(profileId: string): Promise<void> {
+    this.watchedProfiles.get(profileId)?.();
+    this.watchedProfiles.delete(profileId);
+    await this.invalidateProfile(profileId);
+  }
+
+  async dispose(): Promise<void> {
+    await Promise.all(
+      [...this.watchedProfiles.keys()].map((profileId) =>
+        this.releaseProfile(profileId),
+      ),
+    );
+  }
+
+  private async invalidateProfile(profileId: string): Promise<void> {
+    const closing: Promise<void>[] = [];
     for (const [key, pending] of [...this.pool]) {
       if (!key.startsWith(`${profileId}:`)) continue;
       this.pool.delete(key);
-      void pending.then((server) => server.close()).catch(() => {});
+      closing.push(pending.then((server) => server.close()).catch(() => {}));
     }
+    await Promise.all(closing);
   }
 }
 

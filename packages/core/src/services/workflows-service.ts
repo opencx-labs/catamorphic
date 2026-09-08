@@ -12,11 +12,12 @@ import {
 } from "@catamorphic/parser";
 import { type Identity, isBuilder } from "../identity.js";
 import { AccessDeniedError, assertBuilder } from "./artifact-scope.js";
-import { readProgramFiles, withProgram } from "./program-reader.js";
+import { withProgram } from "./program-reader.js";
 import {
   ProjectNotFoundError,
   type ProjectsService,
 } from "./projects-service.js";
+import { WORKFLOW_READ_OPTIONS } from "./workflow-source-files.js";
 
 export interface WorkflowSummary {
   name: string;
@@ -123,8 +124,8 @@ export class WorkflowsService {
     await this.requireProject(args.identity, args.projectId);
     return this.withDev(args.identity, args.projectId, async (repo) => {
       const files = args.ref
-        ? await repo.readAllFilesAtRef(args.ref)
-        : await repo.readAllFiles();
+        ? await repo.readAllFilesAtRef(args.ref, WORKFLOW_READ_OPTIONS)
+        : await repo.readAllFiles(WORKFLOW_READ_OPTIONS);
       const key = `${args.projectId}:${hashParseableSources(files)}`;
       const hit = this.declaredSecretsCache.get(key);
       if (hit) return hit;
@@ -164,8 +165,8 @@ export class WorkflowsService {
       return this.withDev(args.identity, args.projectId, async (repo) =>
         read(
           args.ref
-            ? await repo.readAllFilesAtRef(args.ref)
-            : await repo.readAllFiles(),
+            ? await repo.readAllFilesAtRef(args.ref, WORKFLOW_READ_OPTIONS)
+            : await repo.readAllFiles(WORKFLOW_READ_OPTIONS),
         ),
       );
     }
@@ -178,7 +179,9 @@ export class WorkflowsService {
       args.identity.tenantId,
       args.projectId,
       async (repo, ref) =>
-        read(ref ? await readProgramFiles(repo, ref, "") : {}),
+        read(
+          ref ? await repo.readAllFilesAtRef(ref, WORKFLOW_READ_OPTIONS) : {},
+        ),
     );
   }
 

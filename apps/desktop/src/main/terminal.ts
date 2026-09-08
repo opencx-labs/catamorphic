@@ -28,6 +28,7 @@ const BUFFER_CAP = 200_000;
 
 interface TerminalSession {
   pty: IPty;
+  releaseSender?: () => void;
   /** User sessions stream to their window; agent sessions broadcast. */
   sender: WebContents | null;
   /**
@@ -211,6 +212,7 @@ export function registerTerminalSupport(
     for (const [id, session] of sessions) {
       if (session.sender === sender) {
         sessions.delete(id);
+        session.releaseSender?.();
         session.pty.kill();
       }
     }
@@ -320,6 +322,7 @@ export function registerTerminalSupport(
     });
     pty.onExit(({ exitCode }) => {
       session.running = false;
+      session.releaseSender?.();
       if (!sessions.has(sessionId)) return;
       emit(session, "catamorphic:terminal-exit", { sessionId, exitCode });
       // Agent sessions stay readable (buffer) until explicitly killed or
@@ -332,9 +335,13 @@ export function registerTerminalSupport(
     });
     if (input.sender) {
       // A closed window can't kill its tabs' sessions itself.
-      input.sender.once("destroyed", () =>
-        reapFor(input.sender as WebContents),
-      );
+      const sender = input.sender;
+      const onDestroyed = () => reapFor(sender);
+      sender.once("destroyed", onDestroyed);
+      session.releaseSender = () => {
+        sender.removeListener("destroyed", onDestroyed);
+        session.releaseSender = undefined;
+      };
     }
     return { sessionId, cwd };
   };
@@ -368,6 +375,7 @@ export function registerTerminalSupport(
     if (!session) return;
     bury(sessionId, session);
     sessions.delete(sessionId);
+    session.releaseSender?.();
     if (session.running) session.pty.kill();
     // The pty exit callback skips deleted sessions — announce the death
     // ourselves so a kill triggered by a live tab (Cmd+D) still closes
@@ -535,7 +543,9 @@ export function registerTerminalSupport(
       ),
     dispose() {
       clearInterval(busyPoll);
+      for (const session of sessions.values()) session.releaseSender?.();
       sessions.clear();
+      morgue.clear();
       return lifecycle.dispose();
     },
     agentTerminals,

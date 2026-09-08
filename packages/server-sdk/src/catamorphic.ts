@@ -413,8 +413,17 @@ export class Catamorphic {
         options.resolveIdentity ??
         ((args) => this.core.memberships.identityFor(args)),
     });
-    this.agentWorkerHandles.add(handle);
-    return handle;
+    const owned = {
+      stop: async () => {
+        try {
+          await handle.stop();
+        } finally {
+          this.agentWorkerHandles.delete(owned);
+        }
+      },
+    };
+    this.agentWorkerHandles.add(owned);
+    return owned;
   }
 
   redriveExecutionJob(args: {

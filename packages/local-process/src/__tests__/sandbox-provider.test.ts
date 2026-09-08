@@ -17,6 +17,27 @@ describe("LocalProcessSandboxProvider", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it("releases sandbox environments and stopped ids after repeated destruction", async () => {
+    const isolatedRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "catamorphic-lp-cleanup-"),
+    );
+    const isolated = new LocalProcessSandboxProvider({ root: isolatedRoot });
+    try {
+      for (let i = 0; i < 100; i++) {
+        const sandbox = await isolated.createSandbox({
+          envVars: { TEST_PAYLOAD: String(i) },
+        });
+        await isolated.destroySandbox(sandbox.id);
+        await isolated.destroySandbox(sandbox.id);
+      }
+      expect(fs.readdirSync(isolatedRoot)).toEqual([]);
+      expect(Reflect.get(isolated, "sandboxes").size).toBe(0);
+      expect(Reflect.get(isolated, "stopped").size).toBe(0);
+    } finally {
+      fs.rmSync(isolatedRoot, { recursive: true, force: true });
+    }
+  });
+
   it("rejects resource promises it cannot enforce", async () => {
     await expect(
       provider.createSandbox({ resources: { memoryMb: 512 } }),

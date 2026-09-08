@@ -159,6 +159,11 @@ export function registerBrowserSupport(
   const profilesDir = path.join(userData, "profiles");
   const history = new BrowserHistoryStore(profilesDir);
   const vault = new PasswordVault(profilesDir);
+  const unsubscribeRemoved = profiles.onRemoved((profileId) => {
+    history.releaseProfile(profileId);
+    vault.releaseProfile(profileId);
+    preparedSessions.delete(partitionFor(profileId));
+  });
   const bookmarks = new BookmarksStore(path.join(userData, "bookmarks.json"));
   const appCommandListeners = new Map<
     BrowserWindow,
@@ -940,7 +945,10 @@ export function registerBrowserSupport(
       );
       pendingCredentials.clear();
       focusedLoginForms.clear();
+      unsubscribeRemoved();
       history.dispose();
+      vault.dispose();
+      preparedSessions.clear();
     },
   };
 }

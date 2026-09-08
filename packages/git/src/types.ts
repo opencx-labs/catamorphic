@@ -1,3 +1,4 @@
+import type { FileReadOptions } from "./file-reads.js";
 export interface CommitInfo {
   sha: string;
   message: string;
@@ -95,8 +96,11 @@ export interface ProjectRepo {
   writeFile(filePath: string, content: string): Promise<void>;
   deleteFile(filePath: string): Promise<void>;
   listFiles(): Promise<string[]>;
-  readAllFiles(): Promise<Record<string, string>>;
-  readAllFilesAtRef(ref: string): Promise<Record<string, string>>;
+  readAllFiles(options?: FileReadOptions): Promise<Record<string, string>>;
+  readAllFilesAtRef(
+    ref: string,
+    options?: FileReadOptions,
+  ): Promise<Record<string, string>>;
   /**
    * The files under one directory prefix at a ref (e.g. `roles/`), without
    * materializing the whole tree. `prefix` is a directory path with its

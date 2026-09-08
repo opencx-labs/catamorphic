@@ -55,6 +55,10 @@ export class CommandDeploymentRuntimeProvider
 {
   private readonly runtimes = new Map<string, RuntimeRecord>();
   private readonly runtimeKeys = new Map<string, string>();
+  private readonly ensuring = new Map<
+    string,
+    { sandboxId: string; promise: Promise<DeploymentRuntime> }
+  >();
 
   constructor(
     private readonly options: {
@@ -67,6 +71,22 @@ export class CommandDeploymentRuntimeProvider
     args: EnsureDeploymentRuntimeArgs,
   ): Promise<DeploymentRuntime> {
     const key = runtimeKey(args);
+    const existing = this.ensuring.get(key);
+    if (existing) return existing.promise;
+    const pending = this.ensureRuntimeInner(args);
+    this.ensuring.set(key, { sandboxId: args.sandboxId, promise: pending });
+    try {
+      return await pending;
+    } finally {
+      if (this.ensuring.get(key)?.promise === pending)
+        this.ensuring.delete(key);
+    }
+  }
+
+  private async ensureRuntimeInner(
+    args: EnsureDeploymentRuntimeArgs,
+  ): Promise<DeploymentRuntime> {
+    const key = runtimeKey(args);
     const existingId = this.runtimeKeys.get(key);
     const existing = existingId ? this.runtimes.get(existingId) : undefined;
     if (existing) {
@@ -76,6 +96,8 @@ export class CommandDeploymentRuntimeProvider
       if (health.runtimeStatus === "healthy") return existing.runtime;
     }
 
+    if (existingId) this.runtimes.delete(existingId);
+    this.runtimeKeys.delete(key);
     const runtimeId = `runtime-${crypto.randomUUID()}`;
     const token = randomBytes(32).toString("base64url");
     const port = this.options.port ?? 8321;
@@ -132,9 +154,29 @@ export class CommandDeploymentRuntimeProvider
     };
     this.runtimes.set(runtimeId, record);
     this.runtimeKeys.set(key, runtimeId);
-    await this.waitForHealth({ runtimeId, attempts: 20 });
+    try {
+      await this.waitForHealth({ runtimeId, attempts: 20 });
+    } catch (error) {
+      this.runtimes.delete(runtimeId);
+      if (this.runtimeKeys.get(key) === runtimeId) this.runtimeKeys.delete(key);
+      throw error;
+    }
     runtime.status = "healthy";
     return runtime;
+  }
+
+  async releaseSandbox({ sandboxId }: { sandboxId: string }): Promise<void> {
+    await Promise.allSettled(
+      [...this.ensuring.values()]
+        .filter((entry) => entry.sandboxId === sandboxId)
+        .map((entry) => entry.promise),
+    );
+    for (const [id, record] of this.runtimes) {
+      if (record.runtime.sandboxId !== sandboxId) continue;
+      this.runtimes.delete(id);
+      for (const [key, value] of this.runtimeKeys)
+        if (value === id) this.runtimeKeys.delete(key);
+    }
   }
 
   async invoke(args: RuntimeInvocation): Promise<RuntimeInvocationReceipt> {

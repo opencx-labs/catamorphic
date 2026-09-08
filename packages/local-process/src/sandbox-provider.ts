@@ -64,7 +64,7 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
   private readonly baseEnv: Record<string, string>;
   private readonly sandboxes = new Map<
     string,
-    { envVars: Record<string, string>; destroyed: boolean }
+    { envVars: Record<string, string> }
   >();
 
   constructor(config?: LocalProcessProviderConfig) {
@@ -94,7 +94,7 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     for (const dir of ["workspace", "home", "tmp"]) {
       fs.mkdirSync(path.join(this.root, id, dir), { recursive: true });
     }
-    this.sandboxes.set(id, { envVars: opts.envVars ?? {}, destroyed: false });
+    this.sandboxes.set(id, { envVars: opts.envVars ?? {} });
     return { id, providerId: id, sandboxType: "execution", status: "started" };
   }
 
@@ -120,17 +120,20 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
           }),
       ),
     );
+    await this.deploymentRuntime.releaseSandbox?.({ sandboxId });
   }
 
   async destroySandbox(sandboxId: string): Promise<void> {
     if (fs.existsSync(path.join(this.root, sandboxId)))
       await this.stopSandbox(sandboxId);
-    const state = this.sandboxes.get(sandboxId);
-    if (state) state.destroyed = true;
     fs.rmSync(path.join(this.root, sandboxId), {
       recursive: true,
       force: true,
     });
+    this.sandboxes.delete(sandboxId);
+    this.stopped.delete(sandboxId);
+    this.processes.delete(sandboxId);
+    await this.deploymentRuntime.releaseSandbox?.({ sandboxId });
   }
 
   async getSandboxStatus(sandboxId: string): Promise<SandboxStatus> {

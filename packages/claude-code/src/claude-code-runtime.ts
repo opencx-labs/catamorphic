@@ -38,6 +38,8 @@ import type {
   ToolPolicyAnnotations,
 } from "@catamorphic/sandbox";
 import {
+  AgentEventBuffer,
+  type AgentEventBufferOptions,
   AgentRuntimeUnsupportedError,
   agentCapabilityTools,
   mergePolicyLayers,
@@ -65,6 +67,7 @@ export type ClaudeCodeToolPolicyDecision =
   | { decision: "ask"; title?: string; description?: string };
 
 export interface ClaudeCodeAgentRuntimeOpts {
+  eventBuffer?: AgentEventBufferOptions;
   model?: string;
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   env?: Record<string, string>;
@@ -101,12 +104,6 @@ interface EventBase {
   sessionId: string;
   turnId?: string;
   providerPayloadRef?: string;
-}
-
-interface Subscriber {
-  queue: AgentRuntimeEvent[];
-  closed: boolean;
-  wake?: () => void;
 }
 
 interface PendingRequest {
@@ -146,8 +143,7 @@ interface ClaudeRuntimeSessionState {
   session: AgentRuntimeSession;
   systemPrompt?: string;
   transcriptExists: boolean;
-  events: AgentRuntimeEvent[];
-  subscribers: Set<Subscriber>;
+  events: AgentEventBuffer;
   requests: Map<string, PendingRequest>;
   tasks: Map<string, AgentTask>;
   taskIdsByToolUse: Map<string, string>;
@@ -165,6 +161,7 @@ interface ClaudeRuntimeSessionState {
 export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
   readonly name = "claude-code";
   private readonly sessions = new Map<string, ClaudeRuntimeSessionState>();
+  private readonly stoppedEvents = new Map<string, AgentEventBuffer>();
 
   constructor(private readonly opts: ClaudeCodeAgentRuntimeOpts = {}) {}
 
@@ -219,6 +216,7 @@ export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
       systemPrompt: args.systemPrompt,
       transcriptExists: false,
     });
+    this.stoppedEvents.delete(args.sessionId);
     this.sessions.set(args.sessionId, state);
     this.publish(state, {
       eventId: `claude-code:session:${args.sessionId}:started`,
@@ -258,6 +256,7 @@ export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
       transcriptExists: true,
       sequence: args.after.sequence,
     });
+    this.stoppedEvents.delete(args.sessionId);
     this.sessions.set(args.sessionId, state);
     this.publish(state, {
       eventId: `claude-code:session:${args.sessionId}:resumed`,
@@ -271,7 +270,8 @@ export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
   }
 
   async stopSession(args: { sessionId: string }): Promise<void> {
-    const state = this.requireSession(args.sessionId);
+    const state = this.sessions.get(args.sessionId);
+    if (!state) return;
     if (state.stopped) return;
     state.stopped = true;
     const turn = state.activeTurn;
@@ -289,9 +289,12 @@ export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
       turnId: null,
       build: (base) => ({ ...base, type: "session.stopped" }),
     });
-    for (const subscriber of state.subscribers) {
-      subscriber.closed = true;
-      subscriber.wake?.();
+    state.events.close();
+    this.sessions.delete(args.sessionId);
+    this.stoppedEvents.set(args.sessionId, state.events);
+    while (this.stoppedEvents.size > 16) {
+      const oldest = this.stoppedEvents.keys().next().value;
+      if (oldest !== undefined) this.stoppedEvents.delete(oldest);
     }
     state.tasks.clear();
     state.taskIdsByToolUse.clear();
@@ -438,31 +441,13 @@ export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
     }
   }
 
-  async *subscribe(
-    args: SubscribeToAgentEvents,
-  ): AsyncIterable<AgentRuntimeEvent> {
-    const state = this.requireSession(args.sessionId);
-    const after = args.after?.sequence ?? 0;
-    const replay = state.events.filter((event) => event.sequence > after);
-    const subscriber: Subscriber = { queue: [], closed: false };
-    state.subscribers.add(subscriber);
-    try {
-      for (const event of replay) yield event;
-      while (true) {
-        const event = subscriber.queue.shift();
-        if (event) {
-          yield event;
-          continue;
-        }
-        if (subscriber.closed) break;
-        await new Promise<void>((resolve) => {
-          subscriber.wake = resolve;
-        });
-        subscriber.wake = undefined;
-      }
-    } finally {
-      state.subscribers.delete(subscriber);
-    }
+  subscribe(args: SubscribeToAgentEvents): AsyncIterable<AgentRuntimeEvent> {
+    const events =
+      this.sessions.get(args.sessionId)?.events ??
+      this.stoppedEvents.get(args.sessionId);
+    if (!events)
+      throw new Error(`Agent runtime session not found: ${args.sessionId}`);
+    return events.subscribe(args);
   }
 
   async listTasks(_args: { sessionId: string }): Promise<readonly AgentTask[]> {
@@ -493,8 +478,7 @@ export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
       session: args.session,
       systemPrompt: args.systemPrompt,
       transcriptExists: args.transcriptExists,
-      events: [],
-      subscribers: new Set(),
+      events: new AgentEventBuffer(this.opts.eventBuffer),
       requests: new Map(),
       tasks: new Map(),
       taskIdsByToolUse: new Map(),
@@ -1860,16 +1844,15 @@ export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
     };
     const event = args.build(base);
     state.events.push(event);
-    for (const subscriber of state.subscribers) {
-      subscriber.queue.push(event);
-      subscriber.wake?.();
-    }
   }
 
   private requireSession(sessionId: string): ClaudeRuntimeSessionState {
     const state = this.sessions.get(sessionId);
-    if (!state)
+    if (!state) {
+      if (this.stoppedEvents.has(sessionId))
+        throw new Error("The agent runtime session is stopped");
       throw new Error(`Agent runtime session not found: ${sessionId}`);
+    }
     return state;
   }
 }

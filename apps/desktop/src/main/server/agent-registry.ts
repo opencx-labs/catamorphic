@@ -230,12 +230,14 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     string,
     {
       key: string;
+      profileId: string;
       provider: RegisteredCodingAgent["provider"];
       topology: RegisteredCodingAgent["topology"];
       privilege: RegisteredCodingAgent["privilege"];
     }
   >();
   /** Per-agent resource closers (ai-sdk MCP clients), run on eviction. */
+  private readonly closing = new Set<Promise<void>>();
   private readonly closeables = new Map<string, () => Promise<void>>();
   /**
    * OpenRouter's current best free model, warmed from the live catalog —
@@ -401,6 +403,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       : built.provider;
     this.cache.set(id, {
       key,
+      profileId,
       provider,
       topology: built.topology,
       privilege: config.mode ?? "edit",
@@ -416,14 +419,27 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     };
   }
 
+  releaseProfile(profileId: string): void {
+    for (const [id, cached] of this.cache)
+      if (cached.profileId === profileId) this.evict(id);
+  }
+
+  async dispose(): Promise<void> {
+    for (const id of new Set([...this.cache.keys(), ...this.closeables.keys()]))
+      this.evict(id);
+    await Promise.all(this.closing);
+  }
+
   /** Drop a cached provider, closing resources it holds (MCP clients). */
   private evict(id: string): void {
-    if (!this.cache.has(id)) return;
     this.cache.delete(id);
     const close = this.closeables.get(id);
     this.closeables.delete(id);
     if (close) {
-      void close().catch(() => {});
+      const closing = close()
+        .catch(() => {})
+        .finally(() => this.closing.delete(closing));
+      this.closing.add(closing);
     }
   }
 
@@ -877,6 +893,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       : registered.provider;
     this.cache.set(id, {
       key,
+      profileId,
       provider,
       topology: registered.topology,
       privilege: def.mode ?? "edit",

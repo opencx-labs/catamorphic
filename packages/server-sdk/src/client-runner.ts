@@ -75,6 +75,8 @@ export function startClientRunner(args: {
           )
             ownedSandboxes.add(handle.providerId);
         }
+        if (operation.kind === "destroy")
+          ownedSandboxes.delete(operation.sandboxId);
         receipt = { jobId: job.id, response: response ?? null };
       } catch (error) {
         receipt = {

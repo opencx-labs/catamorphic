@@ -55,7 +55,13 @@ describe("WorkflowsService", () => {
     expect(workflows.map((workflow) => workflow.name)).toEqual([
       "referencedWorkflow",
     ]);
-    expect(readAllFilesAtRef).toHaveBeenCalledWith("origin/main");
+    expect(readAllFilesAtRef).toHaveBeenCalledWith(
+      "origin/main",
+      expect.objectContaining({
+        excludeNestedRepositories: true,
+        filter: expect.any(Function),
+      }),
+    );
     expect(readAllFiles).not.toHaveBeenCalled();
     expect(dispose).toHaveBeenCalledOnce();
   });

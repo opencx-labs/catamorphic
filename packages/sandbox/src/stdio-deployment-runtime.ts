@@ -57,7 +57,7 @@ interface PendingRequest {
 }
 
 interface EventSubscription {
-  onEvents: (events: readonly RuntimeInvocationEvent[]) => void;
+  onEvents: (events: readonly RuntimeInvocationEvent[]) => void | Promise<void>;
 }
 
 /**
@@ -71,13 +71,18 @@ class SupervisorChannel {
   private readonly subscriptions = new Map<string, EventSubscription>();
   private buffer = "";
   private closed: Error | undefined;
+  private killing: Promise<void> | undefined;
 
-  private constructor(private readonly handle: SupervisorProcessHandle) {}
+  private constructor(
+    private readonly handle: SupervisorProcessHandle,
+    private readonly onExit: () => void,
+  ) {}
 
   static async open(
     handle: SupervisorProcessHandle,
+    onExit: () => void,
   ): Promise<SupervisorChannel> {
-    const channel = new SupervisorChannel(handle);
+    const channel = new SupervisorChannel(handle, onExit);
     const ready = channel.waitForReady();
     channel.consume();
     try {
@@ -121,7 +126,10 @@ class SupervisorChannel {
       try {
         for await (const chunk of this.handle.stdout) {
           this.buffer += decoder.decode(chunk, { stream: true });
-          this.drainLines();
+          await this.drainLines();
+          if (this.buffer.length > 16 * 1024 * 1024)
+            throw new Error("Supervisor frame exceeds the 16 MiB limit");
+          if (this.closed) break;
         }
         this.close(new Error("Supervisor stream ended"));
       } catch (error) {
@@ -134,17 +142,19 @@ class SupervisorChannel {
     })();
   }
 
-  private drainLines(): void {
+  private async drainLines(): Promise<void> {
     let newline = this.buffer.indexOf("\n");
     while (newline !== -1) {
       const line = this.buffer.slice(0, newline).trim();
       this.buffer = this.buffer.slice(newline + 1);
       newline = this.buffer.indexOf("\n");
-      if (line !== "") this.dispatch(line);
+      if (line.length > 16 * 1024 * 1024)
+        throw new Error("Supervisor frame exceeds the 16 MiB limit");
+      if (line !== "") await this.dispatch(line);
     }
   }
 
-  private dispatch(line: string): void {
+  private async dispatch(line: string): Promise<void> {
     let frame: unknown;
     try {
       frame = JSON.parse(line);
@@ -185,7 +195,7 @@ class SupervisorChannel {
       typeof frame.invocationId === "string" &&
       Array.isArray(frame.events)
     ) {
-      this.subscriptions
+      await this.subscriptions
         .get(frame.invocationId)
         ?.onEvents(frame.events as RuntimeInvocationEvent[]);
     }
@@ -196,10 +206,18 @@ class SupervisorChannel {
   request(op: "cancel", payload: { invocationId: string }): Promise<unknown>;
   request(op: string, payload?: Record<string, unknown>): Promise<unknown> {
     if (this.closed) return Promise.reject(this.closed);
+    if (this.pending.size >= 1024)
+      return Promise.reject(new Error("Too many pending supervisor requests"));
     const id = this.nextId++;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const promise = new Promise<unknown>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-    });
+      if (op !== "invoke")
+        timer = setTimeout(() => {
+          this.pending.delete(id);
+          reject(new Error(`Supervisor ${op} request timed out`));
+        }, 30_000);
+    }).finally(() => clearTimeout(timer));
     void this.handle
       .write(`${JSON.stringify({ id, op, ...payload })}\n`)
       .catch((error: unknown) => {
@@ -213,7 +231,9 @@ class SupervisorChannel {
 
   subscribe(
     invocationId: string,
-    onEvents: (events: readonly RuntimeInvocationEvent[]) => void,
+    onEvents: (
+      events: readonly RuntimeInvocationEvent[],
+    ) => void | Promise<void>,
   ): () => void {
     this.subscriptions.set(invocationId, { onEvents });
     return () => this.subscriptions.delete(invocationId);
@@ -227,14 +247,19 @@ class SupervisorChannel {
     if (this.closed) return;
     this.closed = error;
     this.onClosed?.(error);
+    this.onClosed = undefined;
+    this.onReady = undefined;
+    this.buffer = "";
+    this.onExit();
     for (const pending of this.pending.values()) pending.reject(error);
     this.pending.clear();
     this.subscriptions.clear();
+    this.killing = this.handle.kill().catch(() => {});
   }
 
   async shutdown(): Promise<void> {
     this.close(new Error("Supervisor channel was shut down"));
-    await this.handle.kill().catch(() => {});
+    await this.killing;
   }
 }
 
@@ -253,12 +278,35 @@ interface RuntimeRecord {
 export class StdioDeploymentRuntimeProvider
   implements DeploymentRuntimeProvider
 {
+  private disposed = false;
   private readonly runtimes = new Map<string, RuntimeRecord>();
   private readonly runtimeKeys = new Map<string, string>();
+  private readonly ensuring = new Map<
+    string,
+    { sandboxId: string; promise: Promise<DeploymentRuntime> }
+  >();
 
   constructor(private readonly transport: StdioSupervisorTransport) {}
 
   async ensureRuntime(
+    args: EnsureDeploymentRuntimeArgs,
+  ): Promise<DeploymentRuntime> {
+    if (this.disposed)
+      throw new Error("Deployment runtime provider is shut down");
+    const key = runtimeKey(args);
+    const existing = this.ensuring.get(key);
+    if (existing) return existing.promise;
+    const pending = this.ensureRuntimeInner(args);
+    this.ensuring.set(key, { sandboxId: args.sandboxId, promise: pending });
+    try {
+      return await pending;
+    } finally {
+      if (this.ensuring.get(key)?.promise === pending)
+        this.ensuring.delete(key);
+    }
+  }
+
+  private async ensureRuntimeInner(
     args: EnsureDeploymentRuntimeArgs,
   ): Promise<DeploymentRuntime> {
     const key = runtimeKey(args);
@@ -266,6 +314,8 @@ export class StdioDeploymentRuntimeProvider
     const existing = existingId ? this.runtimes.get(existingId) : undefined;
     if (existing && !existing.channel.isClosed) return existing.runtime;
 
+    if (existingId) this.runtimes.delete(existingId);
+    this.runtimeKeys.delete(key);
     const runtimeId = `runtime-${crypto.randomUUID()}`;
     const runtimeDirectory = `${args.workingDirectory}/../runtime`;
     const writableRoot = `${args.workingDirectory}/../runs`;
@@ -286,7 +336,11 @@ export class StdioDeploymentRuntimeProvider
         CATAMORPHIC_RUNTIME_MAX_CONCURRENCY: String(args.maxConcurrency ?? 4),
       },
     });
-    const channel = await SupervisorChannel.open(handle);
+    const forget = () => {
+      this.runtimes.delete(runtimeId);
+      if (this.runtimeKeys.get(key) === runtimeId) this.runtimeKeys.delete(key);
+    };
+    const channel = await SupervisorChannel.open(handle, forget);
 
     const runtime: DeploymentRuntime = {
       runtimeId,
@@ -298,9 +352,26 @@ export class StdioDeploymentRuntimeProvider
       generation: crypto.randomUUID(),
       status: "healthy",
     };
-    this.runtimes.set(runtimeId, { runtime, channel });
-    this.runtimeKeys.set(key, runtimeId);
+    if (!channel.isClosed) {
+      this.runtimes.set(runtimeId, { runtime, channel });
+      this.runtimeKeys.set(key, runtimeId);
+    }
     return runtime;
+  }
+
+  async releaseSandbox({ sandboxId }: { sandboxId: string }): Promise<void> {
+    await Promise.allSettled(
+      [...this.ensuring.values()]
+        .filter((entry) => entry.sandboxId === sandboxId)
+        .map((entry) => entry.promise),
+    );
+    for (const [id, record] of this.runtimes) {
+      if (record.runtime.sandboxId !== sandboxId) continue;
+      this.runtimes.delete(id);
+      await record.channel.shutdown();
+      for (const [key, value] of this.runtimeKeys)
+        if (value === id) this.runtimeKeys.delete(key);
+    }
   }
 
   async invoke(args: RuntimeInvocation): Promise<RuntimeInvocationReceipt> {
@@ -336,6 +407,7 @@ export class StdioDeploymentRuntimeProvider
               })
               .then(() => {}),
           );
+          return reporting;
         })
       : undefined;
 
@@ -426,6 +498,10 @@ export class StdioDeploymentRuntimeProvider
   }
 
   async shutdown(): Promise<void> {
+    this.disposed = true;
+    await Promise.allSettled(
+      [...this.ensuring.values()].map((entry) => entry.promise),
+    );
     await Promise.all(
       [...this.runtimes.values()].map((record) => record.channel.shutdown()),
     );

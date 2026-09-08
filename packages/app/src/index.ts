@@ -1,4 +1,5 @@
 export {
+  type AppClientOptions,
   createClient,
   getContext,
   reportHeight,

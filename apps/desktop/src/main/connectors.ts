@@ -178,6 +178,10 @@ export class ConnectorsService {
   async searchRegistry(
     query: string,
   ): Promise<ConnectorSearchResult["registry"]> {
+    for (const [key, entry] of this.registryQueryCache) {
+      if (Date.now() - entry.at >= REGISTRY_CACHE_MS)
+        this.registryQueryCache.delete(key);
+    }
     const key = query.trim().toLowerCase();
     const cached = this.registryQueryCache.get(key);
     const registry =
@@ -186,10 +190,12 @@ export class ConnectorsService {
         : await searchMcpRegistry(query, { limit: 20 })
             .then((entries) => {
               this.registryQueryCache.set(key, { entries, at: Date.now() });
+              trimCatalogCache(this.registryQueryCache, 64);
               return entries;
             })
             .catch(() => cached?.entries ?? []);
     for (const entry of registry) this.registryEntries.set(entry.name, entry);
+    trimCatalogCache(this.registryEntries, 512);
     return registry.map((entry) => ({
       ...entry,
       official: false,
@@ -214,6 +220,7 @@ export class ConnectorsService {
     for (const entry of plugins) {
       this.pluginEntries.set(`${entry.marketplace}#${entry.name}`, entry);
     }
+    trimCatalogCache(this.pluginEntries, 512);
     return plugins.map((entry) => ({
       name: entry.name,
       description: entry.description,
@@ -228,6 +235,10 @@ export class ConnectorsService {
   /** Marketplace lists, fetched once per TTL (they're GitHub files — a
    * fetch per keystroke was most of the search latency). */
   private marketplaceEntries(ref: string): Promise<MarketplacePluginEntry[]> {
+    for (const [key, entry] of this.marketplaceCache) {
+      if (Date.now() - entry.at >= MARKETPLACE_CACHE_MS)
+        this.marketplaceCache.delete(key);
+    }
     const cached = this.marketplaceCache.get(ref);
     if (cached && Date.now() - cached.at < MARKETPLACE_CACHE_MS) {
       return cached.entries;
@@ -236,10 +247,17 @@ export class ConnectorsService {
       .catch(() => [] as MarketplacePluginEntry[])
       .then((list) => {
         // Failures aren't cached for long — the next search retries.
-        if (list.length === 0) this.marketplaceCache.delete(ref);
+        if (
+          list.length === 0 ||
+          Buffer.byteLength(JSON.stringify(list)) > 1024 * 1024
+        ) {
+          if (this.marketplaceCache.get(ref)?.entries === entries)
+            this.marketplaceCache.delete(ref);
+        }
         return list;
       });
     this.marketplaceCache.set(ref, { entries, at: Date.now() });
+    trimCatalogCache(this.marketplaceCache, 8);
     return entries;
   }
 
@@ -523,4 +541,16 @@ function pluginPageUrl(entry: MarketplacePluginEntry): string | undefined {
   return entry.source.subdir && base.startsWith("https://github.com/")
     ? `${base}/tree/HEAD/${entry.source.subdir}`
     : base;
+}
+
+/** Bound both search cardinality and the retained payloads from remote catalogs. */
+function trimCatalogCache<T>(cache: Map<string, T>, maxEntries: number): void {
+  let bytes = 0;
+  for (const value of cache.values())
+    bytes += Buffer.byteLength(JSON.stringify(value));
+  for (const [key, value] of cache) {
+    if (cache.size <= maxEntries && bytes <= 4 * 1024 * 1024) break;
+    bytes -= Buffer.byteLength(JSON.stringify(value));
+    cache.delete(key);
+  }
 }

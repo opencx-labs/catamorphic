@@ -2421,3 +2421,33 @@ describe("ClaudeCodeAgentRuntime", () => {
     });
   });
 });
+
+it("releases stopped live sessions and bounds their replay history", async () => {
+  const runtime = new ClaudeCodeAgentRuntime();
+  for (let i = 0; i < 100; i++) {
+    const sessionId = `cleanup-${i}`;
+    await runtime.startSession({
+      sessionId,
+      projectId: "project",
+      allocationId: "allocation",
+      workingDirectory: "/workspace/project",
+    });
+    await runtime.stopSession({ sessionId });
+  }
+  expect(Reflect.get(runtime, "sessions").size).toBe(0);
+  expect(Reflect.get(runtime, "stoppedEvents").size).toBeLessThanOrEqual(16);
+  expect(() => runtime.subscribe({ sessionId: "cleanup-0" })).toThrow(
+    "not found",
+  );
+  const replay = [];
+  for await (const event of runtime.subscribe({ sessionId: "cleanup-99" }))
+    replay.push(event.type);
+  expect(replay).toContain("session.stopped");
+  await runtime.startSession({
+    sessionId: "cleanup-99",
+    projectId: "project",
+    allocationId: "allocation",
+    workingDirectory: "/workspace/project",
+  });
+  await runtime.stopSession({ sessionId: "cleanup-99" });
+});

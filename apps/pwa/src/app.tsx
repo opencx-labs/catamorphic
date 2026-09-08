@@ -24,6 +24,7 @@ import {
   connectionById,
   getState,
   type PwaConnection,
+  subscribe,
   usePwaState,
 } from "./lib/store.js";
 import {
@@ -51,6 +52,15 @@ const connectionQueries = new Map<
   string,
   { epoch?: string; client: QueryClient }
 >();
+subscribe(() => {
+  for (const [id, cached] of connectionQueries) {
+    const current = connectionById(getState(), id);
+    if (!current || current.authEpoch !== cached.epoch) {
+      cached.client.clear();
+      connectionQueries.delete(id);
+    }
+  }
+});
 function queryClientFor(connection: PwaConnection): QueryClient {
   const previous = connectionQueries.get(connection.id);
   if (previous && previous.epoch === connection.authEpoch)

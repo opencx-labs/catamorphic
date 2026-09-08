@@ -8,6 +8,10 @@ export * from "./agent-capabilities.js";
 export { HttpAgentCapabilityGateway } from "./capability-client.js";
 export * from "./capability-mcp.js";
 export {
+  AgentEventBuffer,
+  type AgentEventBufferOptions,
+} from "./coding-agent/event-buffer.js";
+export {
   buildPluginsPreamble,
   PLUGIN_STAGE_DIR,
   stagedPluginFiles,

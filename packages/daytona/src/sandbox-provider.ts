@@ -71,11 +71,13 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   async stopSandbox(sandboxId: string): Promise<void> {
     const sandbox = await this.client.get(sandboxId);
     await sandbox.stop();
+    await this.deploymentRuntime.releaseSandbox?.({ sandboxId });
   }
 
   async destroySandbox(sandboxId: string): Promise<void> {
     const sandbox = await this.client.get(sandboxId);
     await this.client.delete(sandbox);
+    await this.deploymentRuntime.releaseSandbox?.({ sandboxId });
   }
 
   async getSandboxStatus(sandboxId: string): Promise<SandboxStatus> {
