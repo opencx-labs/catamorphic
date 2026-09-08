@@ -14,6 +14,9 @@ import type {
 } from "./types.js";
 
 const IGNORED_DIRS = new Set(["node_modules", ".git", "dist", ".turbo"]);
+// git.add processes array inputs concurrently, even with parallel: false.
+// Bound file reads while amortizing full-index serialization across each batch.
+const STAGING_BATCH_SIZE = 128;
 
 /**
  * Dot-directories that are project content despite the hidden-file skip
@@ -235,9 +238,13 @@ export class ProjectRepoImpl implements ProjectRepo {
     opts?: { paths?: readonly string[] },
   ): Promise<string> {
     for (const file of opts?.paths ?? []) assertSafePath(file);
+    // Keep index/object caches local to this operation, never to the repo's
+    // lifetime: large projects must not retain them after a checkpoint.
+    const cache = {};
     const indexedFiles = await git.listFiles({
       fs: nodeFs,
       dir: this.repoPath,
+      cache,
     });
     if (indexedFiles.some(isPersonalFile)) {
       throw new Error(
@@ -245,20 +252,28 @@ export class ProjectRepoImpl implements ProjectRepo {
       );
     }
     const only = opts?.paths ? new Set(opts.paths) : null;
-    const files = await this.listFiles();
-    for (const file of files) {
-      if (only && !only.has(file)) continue;
-      await git.add({ fs: nodeFs, dir: this.repoPath, filepath: file });
+    const files = (await this.listFiles()).filter(
+      (file) => !only || only.has(file),
+    );
+    for (let offset = 0; offset < files.length; offset += STAGING_BATCH_SIZE) {
+      await git.add({
+        fs: nodeFs,
+        dir: this.repoPath,
+        filepath: files.slice(offset, offset + STAGING_BATCH_SIZE),
+        parallel: false,
+        cache,
+      });
     }
 
     const status = await git.statusMatrix({
       fs: nodeFs,
       dir: this.repoPath,
+      cache,
     });
     for (const [filepath, head, workdir, stage] of status) {
       if (only && !only.has(filepath)) continue;
       if (head === 1 && workdir === 0 && stage === 1) {
-        await git.remove({ fs: nodeFs, dir: this.repoPath, filepath });
+        await git.remove({ fs: nodeFs, dir: this.repoPath, filepath, cache });
       }
     }
 
@@ -267,6 +282,7 @@ export class ProjectRepoImpl implements ProjectRepo {
       dir: this.repoPath,
       message,
       author,
+      cache,
     });
   }
 
