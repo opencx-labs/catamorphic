@@ -1,4 +1,4 @@
-import { Check, Pencil, Plus, Star } from "lucide-react";
+import { Check, ChevronDown, Pencil, Plus, Star } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Profile, ProfilesData } from "../lib/desktop-api.js";
 import { desktopApi } from "../lib/desktop-api.js";
@@ -26,6 +26,7 @@ export function ProfileBar({
   // Inline rename (every profile is renameable, "Default Profile" included).
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const createInputRef = useRef<HTMLInputElement | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
@@ -43,7 +44,18 @@ export function ProfileBar({
       }
     };
     window.addEventListener("pointerdown", onPointerDown);
-    return () => window.removeEventListener("pointerdown", onPointerDown);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
   }, [open]);
 
   useEffect(() => {
@@ -87,9 +99,12 @@ export function ProfileBar({
   if (!active) return null;
 
   return (
-    <div ref={containerRef} className="relative">
+    <div
+      ref={containerRef}
+      className="relative flex min-w-0 flex-1 items-center"
+    >
       <div
-        className={`absolute inset-x-0 bottom-full z-50 mb-1 origin-bottom rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl transition-[opacity,translate,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+        className={`absolute left-0 bottom-full z-50 mb-2 max-h-[calc(100dvh-80px)] w-[244px] overflow-y-auto origin-bottom rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl transition-[opacity,translate,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
           open
             ? "translate-y-0 scale-100 opacity-100"
             : "pointer-events-none translate-y-1 scale-[0.98] opacity-0"
@@ -149,7 +164,7 @@ export function ProfileBar({
                     setRenamingId(profile.id);
                     setRenameValue(profile.name);
                   }}
-                  className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint opacity-0 transition-colors duration-150 hover:text-fg group-hover:opacity-100"
+                  className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint opacity-0 transition-colors duration-150 hover:text-fg group-hover:opacity-100 group-focus-within:opacity-100"
                   aria-label={`Rename ${profile.name}`}
                 >
                   <Pencil className="size-3" />
@@ -167,7 +182,9 @@ export function ProfileBar({
                   type="button"
                   onClick={() => void desktopApi.profilesSetDefault(profile.id)}
                   className={`mr-1 grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg ${
-                    isDefault ? "" : "opacity-0 group-hover:opacity-100"
+                    isDefault
+                      ? ""
+                      : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
                   }`}
                   aria-label={
                     isDefault
@@ -212,23 +229,37 @@ export function ProfileBar({
         )}
       </div>
 
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-[13px] transition-colors duration-150 ${
-          open
-            ? "bg-bg-overlay text-fg"
-            : "text-fg-muted hover:bg-bg-overlay hover:text-fg"
-        }`}
-        aria-haspopup="menu"
-        aria-expanded={open}
-      >
-        <span
-          className="size-2.5 shrink-0 rounded-full"
-          style={{ backgroundColor: active.color }}
-        />
-        <span className="truncate">{active.name}</span>
-      </button>
+      <div className="flex min-w-0 flex-1 flex-col items-center">
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className={`flex h-8 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-[13px] transition-colors duration-150 ${
+            open
+              ? "bg-bg-overlay/60 text-fg"
+              : "text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
+          }`}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label={`Switch profile: ${active.name}`}
+        >
+          <span
+            className="grid size-6 shrink-0 place-items-center rounded-full font-medium ring-1 ring-fg/10"
+            style={{
+              color: active.color,
+              backgroundColor: `color-mix(in srgb, ${active.color} 12%, var(--color-bg-raised))`,
+            }}
+          >
+            {active.name.slice(0, 1).toUpperCase()}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-left">
+            {active.name}
+          </span>
+          <ChevronDown
+            className={`size-3.5 shrink-0 transition-transform duration-150 ${open ? "rotate-180" : ""}`}
+          />
+        </button>
+      </div>
     </div>
   );
 }

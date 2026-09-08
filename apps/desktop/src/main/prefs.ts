@@ -15,6 +15,15 @@ export interface AppPrefs {
   desktopNotifications: boolean;
   /** Whether the left sidebar is shown. */
   sidebarOpen: boolean;
+  /** Workspace tabs can live above the content or in the sidebar. */
+  tabPlacement: "top" | "sidebar";
+  headerPlacement: "top" | "sidebar";
+  /** Profile-wide favorites can be compact tiles or labeled rows. */
+  pinnedBookmarks: "tiles" | "list";
+  linkOpenMode: "tab" | "floating";
+  previewLinksWithAlt: boolean;
+  gitTerminalCommand: string;
+  terminalAppearance: "app" | "ghostty";
   /** The project the profile last worked in — where a relaunch lands. */
   lastProjectId?: string;
 }
@@ -23,6 +32,13 @@ export const DEFAULT_PREFS: AppPrefs = {
   notificationSounds: true,
   desktopNotifications: true,
   sidebarOpen: true,
+  tabPlacement: "top",
+  headerPlacement: "top",
+  pinnedBookmarks: "tiles",
+  linkOpenMode: "tab",
+  previewLinksWithAlt: true,
+  gitTerminalCommand: "lazygit",
+  terminalAppearance: "app",
 };
 
 export function normalizePrefs(raw: unknown): AppPrefs {
@@ -43,6 +59,20 @@ export function normalizePrefs(raw: unknown): AppPrefs {
       typeof record.sidebarOpen === "boolean"
         ? record.sidebarOpen
         : DEFAULT_PREFS.sidebarOpen,
+    tabPlacement: record.tabPlacement === "sidebar" ? "sidebar" : "top",
+    headerPlacement: record.headerPlacement === "sidebar" ? "sidebar" : "top",
+    pinnedBookmarks: record.pinnedBookmarks === "list" ? "list" : "tiles",
+    terminalAppearance:
+      record.terminalAppearance === "ghostty" ? "ghostty" : "app",
+    linkOpenMode: record.linkOpenMode === "floating" ? "floating" : "tab",
+    previewLinksWithAlt:
+      typeof record.previewLinksWithAlt === "boolean"
+        ? record.previewLinksWithAlt
+        : true,
+    gitTerminalCommand:
+      typeof record.gitTerminalCommand === "string"
+        ? record.gitTerminalCommand
+        : "lazygit",
     ...(typeof record.lastProjectId === "string"
       ? { lastProjectId: record.lastProjectId }
       : {}),

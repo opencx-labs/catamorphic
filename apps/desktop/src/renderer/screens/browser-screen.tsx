@@ -10,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ShortcutHint } from "../components/shortcut-hint.js";
 import {
   type Bookmark,
@@ -39,6 +40,14 @@ interface WebviewElement extends HTMLElement {
   focus: () => void;
   send: (channel: string, payload: unknown) => void;
   getWebContentsId: () => number;
+}
+
+export interface BrowserCommands {
+  focusAddress: () => void;
+  reload: () => void;
+  reloadIgnoringCache: () => void;
+  back: () => void;
+  forward: () => void;
 }
 
 export interface BrowserPageState {
@@ -106,11 +115,20 @@ export function BrowserScreen({
   projectId,
   initialUrl,
   active,
+  toolbarActive = active,
   visible = active,
   keepAwake = false,
+  integratedToolbar = false,
+  toolbarHost,
+  sidebarToolbar = false,
+  navigationHost,
+  onRevealToolbar,
   onStateChange,
   registerNavigate,
   registerGuest,
+  registerCommands,
+  onPreviewLink,
+  previewLinksWithAlt = true,
   onUnsplit,
 }: {
   profileId: string;
@@ -118,6 +136,8 @@ export function BrowserScreen({
   initialUrl: string;
   /** This browser tab is the focused workspace tab. */
   active: boolean;
+  /** Keep the anchor page's toolbar available behind a floating panel. */
+  toolbarActive?: boolean;
   /** On screen at all (focused, or the other pane of a split). */
   visible?: boolean;
   /**
@@ -125,6 +145,11 @@ export function BrowserScreen({
    * the page regardless of what the user is looking at).
    */
   keepAwake?: boolean;
+  integratedToolbar?: boolean;
+  toolbarHost?: HTMLElement | null;
+  sidebarToolbar?: boolean;
+  navigationHost?: HTMLElement | null;
+  onRevealToolbar?: () => void;
   onStateChange: (state: BrowserPageState) => void;
   /** Set while this tab sits in a split: return it to a full-width tab. */
   onUnsplit?: () => void;
@@ -132,8 +157,22 @@ export function BrowserScreen({
   registerNavigate?: (navigate: (url: string) => void) => void;
   /** Reports the webview guest's WebContents id (null when unmounted). */
   registerGuest?: (guestId: number | null) => void;
+  registerCommands?: (commands: BrowserCommands | null) => void;
+  onPreviewLink?: (url: string) => void;
+  previewLinksWithAlt?: boolean;
 }) {
   const webviewRef = useRef<WebviewElement | null>(null);
+  const previewLinksRef = useRef(previewLinksWithAlt);
+  previewLinksRef.current = previewLinksWithAlt;
+  const onPreviewLinkRef = useRef(onPreviewLink);
+  onPreviewLinkRef.current = onPreviewLink;
+  useEffect(() => {
+    if (guestReadyRef.current)
+      webviewRef.current?.send(
+        "catamorphic:preview-links-enabled",
+        previewLinksWithAlt,
+      );
+  }, [previewLinksWithAlt]);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [partition, setPartition] = useState<string>();
   const [preloadPath, setPreloadPath] = useState<string>();
@@ -314,6 +353,10 @@ export function BrowserScreen({
         // (see preload/webview.ts) — parked tabs stop playing video and
         // polling at full rate, like Chrome background tabs.
         try {
+          view.send(
+            "catamorphic:preview-links-enabled",
+            previewLinksRef.current,
+          );
           view.send("catamorphic:host-visibility", {
             hidden: hiddenForGuestRef.current,
           });
@@ -404,7 +447,15 @@ export function BrowserScreen({
           channel: string;
           args: unknown[];
         };
-        if (channel === "catamorphic:credentials-submitted") {
+        if (channel === "catamorphic:preview-link") {
+          const payload = args[0];
+          if (
+            typeof payload === "string" &&
+            /^https?:\/\//i.test(payload) &&
+            previewLinksRef.current
+          )
+            onPreviewLinkRef.current?.(payload);
+        } else if (channel === "catamorphic:credentials-submitted") {
           const payload = args[0] as SaveOffer;
           if (payload.password) setSaveOffer(payload);
         } else if (channel === "catamorphic:login-form-detected") {
@@ -457,15 +508,23 @@ export function BrowserScreen({
     registerNavigateRef.current?.(navigate);
   }, [navigate]);
 
+  const revealToolbarRef = useRef(onRevealToolbar);
+  revealToolbarRef.current = onRevealToolbar;
   // Cmd+L from the app (renderer keydown) and from inside page content
   // (forwarded by main via before-input-event on the guest).
   const focusAddress = useCallback(() => {
     const input = inputRef.current;
     if (!input) return;
-    setEditing(true);
-    input.focus();
-    input.select();
-  }, []);
+    const focus = () => {
+      setEditing(true);
+      input.focus();
+      input.select();
+    };
+    if (sidebarToolbar) {
+      revealToolbarRef.current?.();
+      requestAnimationFrame(focus);
+    } else focus();
+  }, [sidebarToolbar]);
 
   // Chrome reloads: Cmd+R, Cmd+Shift+R (hard, cache-ignoring).
   const reload = useCallback((hard: boolean) => {
@@ -475,47 +534,30 @@ export function BrowserScreen({
     else view.reload();
   }, []);
 
+  const registerCommandsRef = useRef(registerCommands);
+  registerCommandsRef.current = registerCommands;
   useEffect(() => {
-    if (!active) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!event.metaKey || event.ctrlKey || event.altKey) return;
-      const key = event.key.toLowerCase();
-      if (key === "l" && !event.shiftKey) {
-        event.preventDefault();
-        focusAddress();
-      } else if (key === "r") {
-        event.preventDefault();
-        reload(event.shiftKey);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [active, focusAddress, reload]);
-
-  useEffect(() => {
-    if (!active) return;
-    return desktopApi.onBrowserFocusAddress((webContentsId) => {
-      if (webviewRef.current?.getWebContentsId() === webContentsId) {
-        focusAddress();
-      }
+    registerCommandsRef.current?.({
+      focusAddress,
+      reload: () => reload(false),
+      reloadIgnoringCache: () => reload(true),
+      back: () => {
+        const view = webviewRef.current;
+        if (view?.canGoBack()) view.goBack();
+      },
+      forward: () => {
+        const view = webviewRef.current;
+        if (view?.canGoForward()) view.goForward();
+      },
     });
-  }, [active, focusAddress]);
-
-  // Cmd+R pressed while focus is inside this tab's page content arrives
-  // via the guest-key relay, addressed by webContentsId.
-  useEffect(() => {
-    return desktopApi.onBrowserGuestKey((key) => {
-      if (!key.meta || key.control || key.alt) return;
-      if (key.key.toLowerCase() !== "r") return;
-      if (webviewRef.current?.getWebContentsId() === key.webContentsId) {
-        reload(key.shift);
-      }
-    });
-  }, [reload]);
+    return () => registerCommandsRef.current?.(null);
+  }, [focusAddress, reload]);
 
   // A fresh New Tab greets with the address bar focused (Chrome behavior).
   useEffect(() => {
-    if (active && firstUrl === null) focusAddress();
+    if (!active) return;
+    if (firstUrl === null) focusAddress();
+    else webviewRef.current?.focus();
   }, [active, firstUrl, focusAddress]);
 
   // Follow bookmark changes from anywhere (this star, another tab's star,
@@ -698,148 +740,164 @@ export function BrowserScreen({
     </button>
   );
 
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {/* Toolbar: back/forward/reload + address bar, scoped to this tab. */}
-      <div className="relative flex h-10 shrink-0 items-center gap-1 border-b border-border bg-bg px-2">
-        <ShortcutHint label="Back">
-          <button
-            type="button"
-            onClick={() => webviewRef.current?.goBack()}
-            disabled={!canGoBack}
-            className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
-            aria-label="Back"
-          >
-            <ArrowLeft className="size-4" />
-          </button>
-        </ShortcutHint>
-        <ShortcutHint label="Forward">
-          <button
-            type="button"
-            onClick={() => webviewRef.current?.goForward()}
-            disabled={!canGoForward}
-            className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
-            aria-label="Forward"
-          >
-            <ArrowRight className="size-4" />
-          </button>
-        </ShortcutHint>
-        <ShortcutHint label={loading ? "Stop loading" : "Reload"}>
-          <button
-            type="button"
-            onClick={() =>
-              loading
-                ? webviewRef.current?.stop()
-                : webviewRef.current?.reload()
-            }
-            className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-            aria-label={loading ? "Stop" : "Reload"}
-          >
-            {loading ? (
-              <X className="size-4" />
-            ) : (
-              <RotateCw className="size-3.5" />
-            )}
-          </button>
-        </ShortcutHint>
+  const navigation = (
+    <>
+      <ShortcutHint label="Back">
+        <button
+          type="button"
+          onClick={() => webviewRef.current?.goBack()}
+          disabled={!canGoBack}
+          className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
+          aria-label="Back"
+        >
+          <ArrowLeft className="size-4" />
+        </button>
+      </ShortcutHint>
+      <ShortcutHint label="Forward">
+        <button
+          type="button"
+          onClick={() => webviewRef.current?.goForward()}
+          disabled={!canGoForward}
+          className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
+          aria-label="Forward"
+        >
+          <ArrowRight className="size-4" />
+        </button>
+      </ShortcutHint>
+      <ShortcutHint label={loading ? "Stop loading" : "Reload"}>
+        <button
+          type="button"
+          onClick={() =>
+            loading ? webviewRef.current?.stop() : webviewRef.current?.reload()
+          }
+          className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+          aria-label={loading ? "Stop" : "Reload"}
+        >
+          {loading ? (
+            <X className="size-4" />
+          ) : (
+            <RotateCw className="size-3.5" />
+          )}
+        </button>
+      </ShortcutHint>
+    </>
+  );
 
-        <div className="relative min-w-0 flex-1">
-          <input
-            ref={inputRef}
-            value={displayValue}
-            spellCheck={false}
-            autoComplete="off"
-            aria-label="Address and search bar"
-            className={`field h-7 w-full rounded-full px-3.5 text-[13px] ${
-              editing ? "text-fg" : "text-fg-muted"
-            }`}
-            onFocus={(event) => {
-              setEditing(true);
-              setInputValue(pageUrl);
-              lastInputLength.current = pageUrl.length;
-              // Chrome selects the full URL on focus.
-              requestAnimationFrame(() => event.target.select());
-            }}
-            onBlur={() => {
+  const toolbar = (
+    <div
+      data-browser-toolbar
+      className={`app-no-drag relative flex min-w-0 shrink-0 items-center gap-1 ${integratedToolbar ? "h-full flex-1" : "h-10 border-b border-border bg-bg px-2"}`}
+    >
+      {!sidebarToolbar && navigation}
+
+      <div className="relative min-w-0 flex-1">
+        <input
+          ref={inputRef}
+          value={displayValue}
+          spellCheck={false}
+          autoComplete="off"
+          aria-label="Address and search bar"
+          className={`field h-7 w-full rounded-full px-3.5 text-[13px] ${
+            editing ? "text-fg" : "text-fg-muted"
+          }`}
+          onFocus={(event) => {
+            setEditing(true);
+            setInputValue(pageUrl);
+            lastInputLength.current = pageUrl.length;
+            // Chrome selects the full URL on focus.
+            requestAnimationFrame(() => event.target.select());
+          }}
+          onBlur={() => {
+            setEditing(false);
+            setSuggestions([]);
+          }}
+          onChange={(event) => {
+            const value = event.target.value;
+            const typedForward = value.length > lastInputLength.current;
+            lastInputLength.current = value.length;
+            setInputValue(value);
+            void updateSuggestions(value, typedForward);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              const selected = suggestions[selectedIndex];
+              if (selected && selected.kind === "history") {
+                commitSuggestion(selected);
+              } else {
+                navigate(inputValue);
+              }
+            } else if (event.key === "ArrowDown" && suggestions.length > 0) {
+              event.preventDefault();
+              setSelectedIndex((index) =>
+                Math.min(index + 1, suggestions.length - 1),
+              );
+            } else if (event.key === "ArrowUp" && suggestions.length > 0) {
+              event.preventDefault();
+              setSelectedIndex((index) => Math.max(index - 1, 0));
+            } else if (event.key === "Escape") {
               setEditing(false);
               setSuggestions([]);
-            }}
-            onChange={(event) => {
-              const value = event.target.value;
-              const typedForward = value.length > lastInputLength.current;
-              lastInputLength.current = value.length;
-              setInputValue(value);
-              void updateSuggestions(value, typedForward);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                const selected = suggestions[selectedIndex];
-                if (selected && selected.kind === "history") {
-                  commitSuggestion(selected);
-                } else {
-                  navigate(inputValue);
-                }
-              } else if (event.key === "ArrowDown" && suggestions.length > 0) {
-                event.preventDefault();
-                setSelectedIndex((index) =>
-                  Math.min(index + 1, suggestions.length - 1),
-                );
-              } else if (event.key === "ArrowUp" && suggestions.length > 0) {
-                event.preventDefault();
-                setSelectedIndex((index) => Math.max(index - 1, 0));
-              } else if (event.key === "Escape") {
-                setEditing(false);
-                setSuggestions([]);
-                setInputValue(pageUrl);
-                webviewRef.current?.focus();
-              }
-            }}
-          />
+              setInputValue(pageUrl);
+              webviewRef.current?.focus();
+            }
+          }}
+        />
 
-          {showSuggestions && (
-            <div className="absolute inset-x-0 top-full z-50 mt-1 rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl">
-              {suggestions.map(suggestionRow)}
-            </div>
-          )}
-        </div>
-
-        {/* Bookmark star, Chrome-style: filled means saved, click toggles. */}
-        {firstUrl && (
-          <ShortcutHint
-            label={currentBookmark ? "Remove bookmark" : "Bookmark this page"}
-          >
-            <button
-              type="button"
-              onClick={toggleBookmark}
-              className={`grid size-7 shrink-0 cursor-pointer place-items-center rounded-md transition-colors duration-150 hover:bg-bg-overlay ${
-                currentBookmark ? "text-accent" : "text-fg-muted hover:text-fg"
-              }`}
-              aria-label={
-                currentBookmark ? "Remove bookmark" : "Bookmark this page"
-              }
-              aria-pressed={Boolean(currentBookmark)}
-            >
-              <Star
-                className={`size-3.5 transition-[fill,color,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
-                  currentBookmark ? "scale-110 fill-current" : "scale-100"
-                }`}
-              />
-            </button>
-          </ShortcutHint>
-        )}
-        {onUnsplit && (
-          <ShortcutHint label="Full width">
-            <button
-              type="button"
-              onClick={onUnsplit}
-              className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-              aria-label="Full width"
-            >
-              <Columns2 className="size-3.5" />
-            </button>
-          </ShortcutHint>
+        {showSuggestions && (
+          <div className="absolute inset-x-0 top-full z-50 mt-1 rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl">
+            {suggestions.map(suggestionRow)}
+          </div>
         )}
       </div>
+
+      {/* Bookmark star, Chrome-style: filled means saved, click toggles. */}
+      {firstUrl && (
+        <ShortcutHint
+          label={currentBookmark ? "Remove bookmark" : "Bookmark this page"}
+        >
+          <button
+            type="button"
+            onClick={toggleBookmark}
+            className={`grid size-7 shrink-0 cursor-pointer place-items-center rounded-md transition-colors duration-150 hover:bg-bg-overlay ${
+              currentBookmark ? "text-accent" : "text-fg-muted hover:text-fg"
+            }`}
+            aria-label={
+              currentBookmark ? "Remove bookmark" : "Bookmark this page"
+            }
+            aria-pressed={Boolean(currentBookmark)}
+          >
+            <Star
+              className={`size-3.5 transition-[fill,color,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+                currentBookmark ? "scale-110 fill-current" : "scale-100"
+              }`}
+            />
+          </button>
+        </ShortcutHint>
+      )}
+      {onUnsplit && (
+        <ShortcutHint label="Full width">
+          <button
+            type="button"
+            onClick={onUnsplit}
+            className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+            aria-label="Full width"
+          >
+            <Columns2 className="size-3.5" />
+          </button>
+        </ShortcutHint>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {sidebarToolbar &&
+        toolbarActive &&
+        navigationHost &&
+        createPortal(navigation, navigationHost)}
+      {integratedToolbar
+        ? toolbarActive && toolbarHost && createPortal(toolbar, toolbarHost)
+        : toolbar}
 
       {/* Password bars: offer-to-save after submit, offer-to-fill on forms. */}
       {saveOffer && (

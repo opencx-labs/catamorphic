@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import {
   DEFAULT_KEYBINDINGS,
   KEYBINDING_ACTIONS,
   type KeybindingAction,
   type Keybindings,
 } from "../shared/actions.js";
+import { isValidBinding, parseBinding } from "../shared/keybindings.js";
 
 export {
   DEFAULT_KEYBINDINGS,
@@ -26,11 +26,7 @@ export {
  * ending in a key name ("Cmd+T", "Ctrl+Shift+P", "Alt+Escape").
  */
 
-const BINDING_PATTERN = /^((Cmd|Ctrl|Alt|Shift)\+)*[\w]([\w-]*)$/;
-
-export function isValidBinding(value: unknown): value is string {
-  return typeof value === "string" && BINDING_PATTERN.test(value);
-}
+export { isValidBinding } from "../shared/keybindings.js";
 
 /** Keep known actions with valid bindings; fall back to defaults. */
 export function normalizeKeybindings(raw: unknown): Keybindings {
@@ -47,8 +43,13 @@ export function normalizeKeybindings(raw: unknown): Keybindings {
 }
 
 /** "Cmd+W" → Electron accelerator ("CmdOrCtrl+W"). */
-export function toAccelerator(binding: string): string {
-  return binding.replace(/^Cmd\+|(\+)Cmd\+/g, "$1CmdOrCtrl+");
+export function toAccelerator(binding: string): string | undefined {
+  const parsed = parseBinding(binding);
+  if (!parsed) return undefined;
+  return [
+    ...[...parsed.modifiers].map((mod) => (mod === "Cmd" ? "CmdOrCtrl" : mod)),
+    parsed.key.replace(/^Arrow/, ""),
+  ].join("+");
 }
 
 export class KeybindingsStore {

@@ -6,7 +6,7 @@
 
 /** A browser installation detected on this machine. */
 export interface ImportableBrowser {
-  id: string; // "chrome" | "edge" | "brave" | "arc" | "chromium"
+  id: string; // "chrome" | "edge" | "brave" | "arc" | "aside" | "chromium"
   label: string; // "Google Chrome"
   profiles: ImportableProfile[];
 }

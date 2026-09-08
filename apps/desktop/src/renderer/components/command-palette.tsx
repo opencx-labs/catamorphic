@@ -64,7 +64,11 @@ import {
   type ProjectAgentInfo,
   type SidebarConfig,
 } from "../lib/desktop-api.js";
-import { formatBinding, useKeybindings } from "../lib/keybindings.js";
+import {
+  formatBinding,
+  matchesBinding,
+  useKeybindings,
+} from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
 import { useProjectSkills } from "../lib/skills.js";
 import { useApps } from "../screens/app-screen.js";
@@ -88,7 +92,7 @@ import type { WorkspaceTab } from "./workspace-tabs.js";
  * current tab, ⌘↵ in a new tab, ⌘⇧↵ tiled to the side of the current
  * view. Rows that can't tile (pure actions) treat "side" as "tab".
  */
-type CommitMode = "replace" | "tab" | "side";
+export type CommitMode = "replace" | "tab" | "side" | "floating";
 
 /**
  * Icons stay renderer-side (the shared registry is plain data usable by
@@ -479,8 +483,8 @@ export function CommandPalette({
   activeProfileId?: string;
   sidebarConfig: SidebarConfig | null;
   onOpenUrl: (url: string, mode: CommitMode) => void;
-  onOpenTab: (tab: WorkspaceTab, mode?: "side") => void;
-  onOpenSession: (session: AgentSession) => void;
+  onOpenTab: (tab: WorkspaceTab, mode?: CommitMode) => void;
+  onOpenSession: (session: AgentSession, mode?: CommitMode) => void;
   onSelectProject: (id: string) => void;
   onSwitchProfile: (profile: Profile) => void;
   onSendToAgent: (message: string, mode: "float" | "tab") => void;
@@ -490,7 +494,7 @@ export function CommandPalette({
    */
   onRunSkill: (name: string, mode: "float" | "tab") => void;
   /** One handler per registry action — the same map the shortcuts use. */
-  actionHandlers: Record<ActionId, (mode?: "side") => void>;
+  actionHandlers: Record<ActionId, (mode?: CommitMode) => void>;
   /** The profile's configured agents (for the agent/effort pickers). */
   agents: AgentInfo[];
   defaultAgentId: string | null;
@@ -803,10 +807,7 @@ export function CommandPalette({
         // everything else runs the shared handler.
         run: targetPicker
           ? () => enterPicker(targetPicker)
-          : (mode) =>
-              actionHandlersRef.current[action.id](
-                mode === "side" ? "side" : undefined,
-              ),
+          : (mode) => actionHandlersRef.current[action.id](mode),
       };
     });
   }, [keybindings, hasFocusedChat, enterPicker, incognitoAllowed]);
@@ -880,10 +881,7 @@ export function CommandPalette({
         keywords: [workflow.name, "workflow", "go to", "open"],
         kind: "navigate",
         run: (mode) =>
-          onOpenTab(
-            { kind: "workflow", name: workflow.name, label },
-            mode === "side" ? "side" : undefined,
-          ),
+          onOpenTab({ kind: "workflow", name: workflow.name, label }, mode),
       });
     }
     for (const app of apps) {
@@ -894,11 +892,7 @@ export function CommandPalette({
         detail: "App",
         keywords: [app.name, "app", "go to", "open"],
         kind: "navigate",
-        run: (mode) =>
-          onOpenTab(
-            { kind: "app", name: app.name },
-            mode === "side" ? "side" : undefined,
-          ),
+        run: (mode) => onOpenTab({ kind: "app", name: app.name }, mode),
       });
     }
     for (const session of sessions) {
@@ -910,7 +904,7 @@ export function CommandPalette({
         detail: "Chat",
         keywords: [session.title, "chat", "session", "conversation"],
         kind: "navigate",
-        run: () => onOpenSession(session),
+        run: (mode) => onOpenSession(session, mode),
       });
     }
     for (const bookmark of bookmarks) {
@@ -950,8 +944,11 @@ export function CommandPalette({
       detail: "Open settings",
       keywords: ["settings", "preferences", "shortcuts", "theme", "keys"],
       kind: "navigate",
-      run: () =>
-        onOpenTab({ kind: "settings", name: "settings", label: "Settings" }),
+      run: (mode) =>
+        onOpenTab(
+          { kind: "settings", name: "settings", label: "Settings" },
+          mode,
+        ),
     });
     items.push({
       id: "tab:usage",
@@ -960,7 +957,8 @@ export function CommandPalette({
       detail: "Tokens and cost across agents",
       keywords: ["usage", "cost", "tokens", "spend", "billing", "consumption"],
       kind: "navigate",
-      run: () => onOpenTab({ kind: "usage", name: "usage", label: "Usage" }),
+      run: (mode) =>
+        onOpenTab({ kind: "usage", name: "usage", label: "Usage" }, mode),
     });
     return items;
   }, [
@@ -1540,7 +1538,12 @@ export function CommandPalette({
     return () => onHighlightTargetRef.current?.(null);
   }, [highlightTarget]);
 
-  const commit = (item: PaletteItem, withCmd: boolean, withShift = false) => {
+  const commit = (
+    item: PaletteItem,
+    withCmd: boolean,
+    withShift = false,
+    floating = false,
+  ) => {
     // Disabled rows (invalid project agents) are informational only.
     if (item.disabled) return;
     // Entering a chip mode swaps palette state — the palette stays open.
@@ -1566,8 +1569,13 @@ export function CommandPalette({
     // A chip-mode row with nothing typed has nothing to do yet.
     if (item.id.startsWith("mode:") && trimmed === "") return;
     const inTab = variant === "tab";
-    const commitMode: CommitMode =
-      withCmd && withShift ? "side" : inTab || withCmd ? "tab" : "replace";
+    const commitMode: CommitMode = floating
+      ? "floating"
+      : withCmd && withShift
+        ? "side"
+        : inTab || withCmd
+          ? "tab"
+          : "replace";
     if (variant === "overlay") onClose();
     item.run(commitMode);
     // A palette tab is consumed by whatever it opened; pure actions
@@ -1590,6 +1598,15 @@ export function CommandPalette({
 
   const onInputKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.nativeEvent.isComposing) return;
+    // The same configurable shortcut floats a tab outside the palette and
+    // opens the selected target as floating here. No duplicate commands.
+    if (matchesBinding(event, keybindings["float-current-tab"])) {
+      event.preventDefault();
+      event.stopPropagation();
+      const item = results[selected];
+      if (item) commit(item, false, false, true);
+      return;
+    }
     // Tab or Space commits a typed mode trigger into a chip ("@agent" →
     // [Ask agent]). Both keys, deliberately — Chrome removed Space once
     // and had to bring it back.
@@ -1808,6 +1825,12 @@ export function CommandPalette({
         <FooterHint keycap="↵" label="open" />
         <FooterHint keycap="⌘↵" label="new tab" />
         <FooterHint keycap="⌘⇧↵" label="side" />
+        {keybindings["float-current-tab"] && (
+          <FooterHint
+            keycap={formatBinding(keybindings["float-current-tab"])}
+            label="floating"
+          />
+        )}
       </footer>
     </div>
   );

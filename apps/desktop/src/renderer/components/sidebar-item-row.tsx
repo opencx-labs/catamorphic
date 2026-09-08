@@ -26,7 +26,11 @@ function TitleHint({
   children: React.ReactNode;
 }) {
   if (!title) return <>{children}</>;
-  return <ShortcutHint label={title}>{children}</ShortcutHint>;
+  return (
+    <ShortcutHint label={title} className="h-full min-w-0 flex-1">
+      {children}
+    </ShortcutHint>
+  );
 }
 
 /**
@@ -39,6 +43,8 @@ function TitleHint({
  * exactly the same interaction.
  */
 export function SidebarItemRow({
+  presentation = "row",
+  expanded,
   label,
   title,
   icon,
@@ -53,6 +59,8 @@ export function SidebarItemRow({
   onRenameSubmit,
   onRenameCancel,
 }: {
+  presentation?: "row" | "tile";
+  expanded?: boolean;
   label: string;
   /** Tooltip; usually the URL. */
   title?: string;
@@ -193,7 +201,7 @@ export function SidebarItemRow({
     // biome-ignore lint/a11y/noStaticElementInteractions: right-click mirrors the row's ⋯ button, which stays keyboard-reachable
     <div
       ref={rowRef}
-      className={`group relative flex h-7 items-center rounded-md transition-colors duration-150 ${
+      className={`group relative flex items-center rounded-md transition-colors duration-150 ${presentation === "tile" ? "h-9 border border-border bg-bg-raised" : "h-7"} ${
         active ? "bg-bg-overlay" : "hover:bg-bg-overlay/60"
       }`}
       data-point-key={`sidebar:${label}`}
@@ -253,10 +261,11 @@ export function SidebarItemRow({
                 disarmPreview();
                 onOpen();
               }}
-              className={`flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-[13px] hover:text-fg ${
+              className={`flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-[13px] hover:text-fg ${presentation === "tile" ? "justify-center" : ""} ${
                 active ? "text-fg" : "text-fg-muted"
               }`}
               aria-current={active || undefined}
+              aria-expanded={expanded}
               aria-describedby={previewEnabled ? previewId : undefined}
             >
               {IconComponent ? (
@@ -264,7 +273,13 @@ export function SidebarItemRow({
               ) : (
                 icon
               )}
-              {labelContent ?? <span className="truncate">{label}</span>}
+              {presentation === "tile" ? (
+                <span className="sr-only">{label}</span>
+              ) : (
+                (labelContent ?? (
+                  <span className="min-w-0 flex-1 truncate">{label}</span>
+                ))
+              )}
               {end}
             </button>
           </TitleHint>
@@ -280,8 +295,10 @@ export function SidebarItemRow({
                 }
                 setOpen((value) => !value);
               }}
-              className={`mr-1 grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg ${
-                open ? "" : "opacity-0 group-hover:opacity-100"
+              className={`grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg ${presentation === "tile" ? "absolute right-0 top-0 bg-bg-raised" : "mr-1"} ${
+                open
+                  ? ""
+                  : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
               }`}
               aria-label={`More actions for ${label}`}
               aria-haspopup="menu"
@@ -346,13 +363,21 @@ export function MenuPortal({
   useLayoutEffect(() => {
     const rect = ref.current?.getBoundingClientRect();
     if (!rect) return;
-    const next = { ...position };
-    if (rect.bottom > window.innerHeight - 8) {
-      next.y = Math.max(8, position.y - rect.height - 8);
-    }
-    if (rect.right > window.innerWidth - 8) {
-      next.x = window.innerWidth - 8;
-    }
+    const next = {
+      x: Math.max(
+        8,
+        Math.min(position.x - rect.width, window.innerWidth - rect.width - 8),
+      ),
+      y: Math.max(
+        8,
+        Math.min(
+          position.y + rect.height > window.innerHeight - 8
+            ? position.y - rect.height - 8
+            : position.y,
+          window.innerHeight - rect.height - 8,
+        ),
+      ),
+    };
     if (next.x !== adjusted.x || next.y !== adjusted.y) setAdjusted(next);
   }, [position, adjusted.x, adjusted.y]);
 
@@ -362,7 +387,7 @@ export function MenuPortal({
       data-sidebar-menu
       role="menu"
       style={{ left: adjusted.x, top: adjusted.y }}
-      className="fixed z-[60] min-w-44 -translate-x-full rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl"
+      className="fixed z-[60] max-h-[calc(100dvh-16px)] min-w-44 max-w-[calc(100vw-16px)] overflow-y-auto rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl"
     >
       {entries.map((entry) => (
         <button

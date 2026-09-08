@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { BookmarkPlacement } from "../shared/bookmark-target.js";
 
 /**
  * Browser bookmarks. Two scopes, Chrome-flavored but project-aware:
@@ -95,6 +96,41 @@ export class BookmarksStore {
     scope.folders.push(folder);
     this.save();
     return folder;
+  }
+
+  /** A drop moves an existing link or creates it once, in one saved mutation. */
+  place({
+    projectId,
+    profileId,
+    label,
+    url,
+    folderId,
+    pinned = false,
+  }: BookmarkPlacement): Bookmark {
+    this.data.byProject[projectId] ??= { folders: [], bookmarks: [] };
+    const project = this.data.byProject[projectId];
+    if (folderId && !project.folders.some((folder) => folder.id === folderId)) {
+      throw new Error("This bookmark folder no longer exists.");
+    }
+    this.data.pinnedByProfile[profileId] ??= [];
+    const favorites = this.data.pinnedByProfile[profileId];
+    const existing =
+      project.bookmarks.find((bookmark) => bookmark.url === url) ??
+      favorites.find((bookmark) => bookmark.url === url);
+    const bookmark: Bookmark = {
+      id: existing?.id ?? randomUUID(),
+      label: existing?.label ?? (label.trim() || url),
+      url,
+      ...(!pinned && folderId ? { folderId } : {}),
+    };
+    project.bookmarks = project.bookmarks.filter((entry) => entry.url !== url);
+    this.data.pinnedByProfile[profileId] = favorites.filter(
+      (entry) => entry.url !== url,
+    );
+    if (pinned) this.data.pinnedByProfile[profileId].push(bookmark);
+    else project.bookmarks.push(bookmark);
+    this.save();
+    return bookmark;
   }
 
   update(
@@ -198,6 +234,14 @@ export class BookmarksStore {
     const owned = this.data.byProject[projectId]?.bookmarks.find(
       (entry) => entry.id === id,
     );
+    const folder = this.data.byProject[projectId]?.folders.find(
+      (entry) => entry.id === id,
+    );
+    if (folder) {
+      folder.label = trimmed;
+      this.save();
+      return;
+    }
     if (owned) {
       owned.label = trimmed;
       this.save();

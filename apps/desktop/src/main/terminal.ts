@@ -6,6 +6,7 @@ import { type IPty, spawn as spawnPty } from "@lydell/node-pty";
 import { BrowserWindow, ipcMain, type WebContents } from "electron";
 import type { ServerState } from "./ipc.js";
 import { shellBinShimDir, shellIntegrationEnv } from "./shell-integration.js";
+import { readGhosttyAppearance } from "./terminal-appearance.js";
 import { scanOsc133 } from "./terminal-text.js";
 
 /**
@@ -327,6 +328,10 @@ export function registerTerminalSupport(
     }
     return { sessionId, cwd };
   };
+
+  ipcMain.handle("catamorphic:terminal-ghostty-appearance", () =>
+    readGhosttyAppearance(),
+  );
 
   ipcMain.handle(
     "catamorphic:terminal-create",

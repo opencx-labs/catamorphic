@@ -59,7 +59,8 @@ Semantic layer only — components never hardcode hex values.
 | Token | Dark anchor | Role |
 |---|---|---|
 | `--color-bg` | `#0a0a0b` | app background |
-| `--color-bg-raised` | `#101012` | sidebar, cards, panels |
+| `--color-bg-raised` | `#101012` | cards, panels |
+| `--color-sidebar` | `#101012` | sidebar and window frame |
 | `--color-bg-overlay` | `#16161a` | menus, dialogs, hover states |
 | `--color-bg-inset` | `#060607` | chat input, code blocks, wells |
 
@@ -107,7 +108,8 @@ Low-chroma so run states don't scream: `--color-success`, `--color-warning`,
 - Radii: `--radius-sm` 4px (inputs, chips), `--radius-md` 6px (buttons, list
   rows), `--radius-lg` 10px (panels, dialogs).
 - Spacing on a 4px grid. Common paddings: 8 (compact), 12 (row), 16 (panel).
-- Sidebar rows are 28px tall; sidebar width 260px; right panel 380px.
+- Sidebar rows are 28px tall; workspace tab rows are 32px; sidebar width
+  260px; right panel 380px.
 - Borders over shadows: `1px solid var(--color-border)`.
 
 ## Motion contract
@@ -2951,3 +2953,129 @@ paths, deliberately independent:
   current state, and the checkout only when one exists. The agent's short
   activity may sit under the title. IDs, timestamps, and provider internals
   stay out of the card unless a future use case makes them actionable.
+
+### 2026-09-08: Configurable browser layout and cool light surfaces
+
+- The light preset follows the Arc and Aside references: cool gray sidebar,
+  near-white content, a rounded content boundary, quiet sentence-case section
+  labels, and neutral selections. Dark remains the default. The independent
+  `sidebar` color token is editable in Settings and `theme.json`; the main
+  and renderer token palettes stay synchronized. The light workspace's
+  outer radius is the panel radius plus its 6px frame inset.
+- Open tabs can live in the top bar or a sidebar Tabs section, selected by
+  the per-profile `tabPlacement` preference. The same tab renderer owns
+  selection, groups, signals, reorder, split targets, and closing in both
+  orientations. The `tabs` section in `sidebar.js` can be reordered,
+  renamed, or collapsed; older configs without it show tabs at the end.
+  With the header above content, collapsing preserves the title-only row.
+  The active browser toolbar portals into that header without remounting its webview. Other
+  surfaces show their title; no horizontal strip or divider is rendered.
+  The sidebar and header share one continuous surface, with the rounded
+  content pane beginning below the header. With `headerPlacement: "sidebar"`,
+  the title/address bar moves above the project switcher and bookmarks;
+  browser navigation sits beside the sidebar toggle. The main content then
+  starts at the top with no header row or extra right gutter. Cmd+L reveals
+  the sidebar before focusing its address field.
+  The collapse control sits at the top-right of the sidebar. In sidebar
+  header mode, collapsing it makes content edge-to-edge, removing the frame
+  insets and inner corner mask. Hovering anywhere along the left edge, or
+  focusing its reveal button, opens the sidebar over the page without
+  changing its size. Address-field focus and sidebar menus hold it open;
+  moving back to the page hides it. Native window controls follow sidebar
+  visibility. The toggle pins the sidebar open; Cmd+B toggles it directly.
+  Hidden chrome does not block page clicks or leave a cutout.
+  Top-header layouts retain the reopen action in their row. The empty
+  New Tab page leaves the sidebar-mode header blank. Top tabs and the
+  reopen control share the same vertical center.
+  Sidebar tab enter/exit use paired 200ms height-collapse animations
+  with the standard easing and animate before unmount.
+- Pinned bookmarks support four-column icon tiles or list rows, controlled
+  by the profile's `pinnedBookmarks` preference. Tiles use centered 16px
+  icons in 36px-high controls; tooltip wrappers fill their targets so they
+  do not introduce unused space on the right. New default sidebars put
+  bookmarks first; existing custom section order is preserved. Site icons
+  load directly from HTTPS bookmark origins with no referrer, with a letter
+  fallback. A small white image backing preserves monochrome site marks
+  in dark themes. No third-party favicon service is involved.
+- Add bookmarks and folders from the sidebar. Edit a bookmark to move it
+  into or out of a folder; folder menus rename or remove the folder while
+  keeping its bookmarks. Favorites remain profile-wide; folders remain
+  project-owned. A single fixed footer aligns the profile switcher, Settings,
+  and customization controls. A compact menu retains profile creation,
+  renaming, and default-profile selection.
+- Settings and the agent's `layout.json` mirror edit the same preferences.
+  Color theme, bookmark presentation, section order, and tab placement are
+  independent. This is host-owned presentation (ADR 0105).
+
+### 2026-09-08: Floating surfaces and drag-to-pin
+
+- A floating surface uses the same workspace key as its tab. The current
+  tab stays behind it as an anchor. The panel controls hide it, expand it
+  into a full tab, tile it beside the anchor, or close it. Browsers,
+  terminals, and editors remain mounted through these changes, preserving
+  page state, shell processes, and drafts. Settings can float too and
+  scrolls within its panel. Floating chats keep the existing dock behavior.
+- The floating terminal and floating Git terminal each reuse one shell per
+  project. The Git command defaults to `lazygit` and is editable in Settings;
+  it runs once when a new shell is created. Hiding or changing its layout
+  never reruns it. Closing an owned terminal ends the process. Terminal
+  processes are not relaunched automatically after quitting the app.
+- Option-clicking a web link opens a floating browser preview. This gesture
+  is configurable; links requesting another window separately choose a new
+  tab or floating preview per profile. Previews keep their own address bar.
+  Popup requests and browser shortcuts go only to the guest's owning window.
+- Floating actions and browser navigation share the existing shortcut
+  registry, Settings editor, and command palette. Unassigned actions may be
+  bound, and an empty binding disables the shortcut. The same matcher handles
+  renderer and guest input, including Control/Option and punctuation keys.
+- Browser tabs, saved chats, and existing bookmarks can be dragged into the
+  bookmarks section, profile-wide favorites, or a project folder. Drop
+  targets highlight and folders expand on drop. Moves retain bookmark IDs
+  and avoid duplicate targets. Chat bookmarks store a project/session link
+  so they reopen the conversation even after its workspace tab closes.
+  A chat must have a saved session before it can be bookmarked.
+- When the native edge watcher is available it owns hover reveal geometry.
+  Stale guest pointer events during the overlay animation cannot dismiss
+  or reopen the sidebar. DOM hover remains a fallback for other hosts.
+
+### 2026-09-08: Terminal appearance independent of the shell
+
+- A profile can use the app appearance or read its installed Ghostty's
+  resolved colors, ANSI palette, font family, and font size. Ghostty resolves
+  its own theme files, includes, and overrides through `+show-config`.
+  The desktop does not import terminal commands, keybindings, or native
+  window effects. Settings offers an explicit reload after config edits.
+- The login shell and its startup files remain authoritative for prompts,
+  aliases, and CLI tools. Appearance is applied when a terminal opens:
+  this version of ghostty-web fixes its VT colors at initialization.
+  Changing appearance never restarts a running shell. Failed config reads
+  retain the last loaded appearance, or use the app theme if none loaded.
+- Terminal sizing always follows the last container dimensions, including
+  rapid window-manager resizes and floating/full-tab/split transitions.
+  Font changes must never leave the canvas wider than its viewport.
+
+### 2026-09-08: One palette entry per target
+
+- Open targets use their existing entry (browser, Terminal, Git terminal,
+  Settings, editor, or app). The configurable "Open as floating" shortcut
+  opens the selected palette target as an overlay. Outside the palette it
+  floats the current tab. The footer displays the active binding. Enter
+  keeps normal opening behavior; the other open modes remain available.
+- Direct floating-tool shortcuts remain in Keyboard shortcuts but are
+  hidden from the palette. The Git terminal has one palette entry; it
+  reuses its shell, and choosing a layout never reruns the command.
+
+### 2026-09-08: Community palettes and continuous workspace surfaces
+
+- Theme selection offers Catppuccin Latte, Frappé, Macchiato, and Mocha,
+  Nord, Rosé Pine, and Rosé Pine Dawn alongside the existing presets.
+  They map onto the existing semantic tokens, with contrast adjustments
+  for small desktop text. Presets remain independent of workspace layout;
+  existing profiles and custom token overrides retain their behavior.
+- Settings previews each palette as a miniature workspace and wraps choices
+  to the available width. Full labels, selection state, and keyboard focus
+  remain visible. Theme attribution and license notices ship with the app
+  in `THEME-NOTICES.md`.
+- The sidebar and workspace header have no separator stroke. Settings and
+  sidebar groups use spacing for section boundaries while controls retain
+  their borders and focus indicators.

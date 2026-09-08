@@ -78,13 +78,20 @@ describe("interrupted turn recovery", () => {
     await runWait(`return !!visibleDock();`);
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'work slowly please');
+      setReactValue(ta, 'work slowly and wait for interruption please');
       ta.closest('form').requestSubmit();
       return true;
     `);
-    await runWait(`return spinnersOn() > 0;`, {
-      label: "turn in flight before the kill",
-    });
+    await runWait(
+      `return timelineMessages().some(message => message.includes('Working on it, give me a moment.')) && spinnersOn() > 0;`,
+      {
+        label: "turn in flight before the kill",
+      },
+    );
+    const sessionId = await runWait<string>(
+      `return $('[data-chat-session]')?.dataset.chatSession;`,
+      { label: "persisted session before the kill" },
+    );
     const { userDataDir } = app;
     await app.kill();
 
@@ -96,7 +103,7 @@ describe("interrupted turn recovery", () => {
       { timeoutMs: 60_000, label: "embedded server ready after relaunch" },
     );
     await runWait(
-      `const chat = $$('button').find((el) => /^Chat /.test(el.textContent.trim()));
+      `const chat = document.querySelector('[data-chat-session="${sessionId}"] button');
        if (!chat) return false; chat.click(); return true;`,
       { timeoutMs: 30_000, label: "orphaned session in the sidebar" },
     );

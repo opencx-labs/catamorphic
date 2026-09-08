@@ -9,6 +9,7 @@ import { App } from "./app.js";
 import { CatamorphicAppProvider } from "./components/catamorphic/catamorphic-provider.js";
 import { desktopApi, type ServerInfo } from "./lib/desktop-api.js";
 import { KeybindingsProvider } from "./lib/keybindings.js";
+import { TerminalAppearanceProvider } from "./lib/terminal-appearance.js";
 import { ThemeProvider } from "./lib/theme.js";
 import "@catamorphic/ui/styles.css";
 import "./styles.css";
@@ -37,7 +38,9 @@ function Root() {
   return (
     <CatamorphicAppProvider key={server.url} baseUrl={server.url}>
       <KeybindingsProvider>
-        <App />
+        <TerminalAppearanceProvider>
+          <App />
+        </TerminalAppearanceProvider>
       </KeybindingsProvider>
     </CatamorphicAppProvider>
   );

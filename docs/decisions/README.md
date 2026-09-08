@@ -79,3 +79,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0064](0064-execution-environments-and-allocations.md) | Execution Environments and immutable Allocations | Accepted |
 | [0065](0065-credential-connections-and-capability-broker.md) | Credential connections and capability broker | Accepted (greenfield cutover refined by 0066) |
 | [0066](0066-greenfield-environment-and-connection-cutover.md) | Greenfield Environment and connection cutover | Accepted |
+| [0105](0105-configurable-desktop-browser-layout.md) | Configurable desktop browser layout, light surfaces, bookmark tiles and folders | Accepted |

@@ -1,3 +1,5 @@
+import type { BookmarkPlacement } from "../../shared/bookmark-target.js";
+import type { TerminalAppearanceResult } from "../../shared/terminal-appearance.js";
 import type { UsageSummary } from "../../shared/usage.js";
 
 export type { UsageSummary };
@@ -546,6 +548,7 @@ export type SidebarAction =
   | "pin"
   | "unpin"
   | "rename"
+  | "edit"
   | "remove";
 
 export interface SidebarMenuEntry {
@@ -580,6 +583,7 @@ export interface SidebarSectionConfig {
     | "apps"
     | "chats"
     | "bookmarks"
+    | "tabs"
     | "git"
     | "prs"
     | "remote"
@@ -617,6 +621,7 @@ export type ThemeToken =
   | "bg-raised"
   | "bg-overlay"
   | "bg-inset"
+  | "sidebar"
   | "border"
   | "border-strong"
   | "fg"
@@ -649,6 +654,13 @@ export interface AppPrefs {
   notificationSounds: boolean;
   desktopNotifications: boolean;
   sidebarOpen: boolean;
+  tabPlacement: "top" | "sidebar";
+  headerPlacement: "top" | "sidebar";
+  pinnedBookmarks: "tiles" | "list";
+  linkOpenMode: "tab" | "floating";
+  previewLinksWithAlt: boolean;
+  gitTerminalCommand: string;
+  terminalAppearance: "app" | "ghostty";
   lastProjectId?: string;
 }
 
@@ -869,6 +881,11 @@ export interface CatamorphicDesktopApi {
   setPrefs: (patch: Partial<AppPrefs>) => Promise<AppPrefs>;
   onPrefsChanged: (listener: (prefs: AppPrefs) => void) => () => void;
   windowFocus: () => Promise<void>;
+  windowSetControlsVisible: (visible: boolean) => Promise<void>;
+  windowSetSidebarEdgeEnabled: (enabled: boolean) => Promise<void>;
+  onSidebarPointerZone: (
+    listener: (zone: "edge" | "inside" | "outside") => void,
+  ) => () => void;
   getKeybindings: () => Promise<Record<string, string>>;
   setKeybindings: (
     bindings: Record<string, string>,
@@ -895,6 +912,7 @@ export interface CatamorphicDesktopApi {
   projectRoot: (projectId: string) => Promise<string | null>;
   revealFolder: (folderPath: string) => Promise<void>;
 
+  terminalGhosttyAppearance: () => Promise<TerminalAppearanceResult>;
   terminalCreate: (input: {
     projectId?: string;
     cols?: number;
@@ -963,6 +981,7 @@ export interface CatamorphicDesktopApi {
     listener: (key: {
       webContentsId: number;
       key: string;
+      code?: string;
       meta: boolean;
       control: boolean;
       alt: boolean;
@@ -1011,6 +1030,7 @@ export interface CatamorphicDesktopApi {
     url: string;
     folderId?: string;
   }) => Promise<Bookmark>;
+  bookmarksPlace: (input: BookmarkPlacement) => Promise<Bookmark>;
   bookmarksAddFolder: (input: {
     projectId: string;
     profileId: string;

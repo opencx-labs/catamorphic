@@ -56,12 +56,12 @@ export function ProjectSwitcher({
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
-        className="app-no-drag flex h-8 w-full cursor-pointer items-center gap-2 rounded-md border border-border bg-bg-inset px-2.5 text-left transition-colors duration-150 hover:border-border-strong"
+        className="app-no-drag flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2.5 text-left hover:bg-bg-overlay/60"
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label="Switch project"
       >
-        <Box className="size-3.5 shrink-0 text-accent" />
+        <Box className="size-3.5 shrink-0 text-fg-muted" />
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-fg">
           {active?.name ?? "No projects"}
         </span>

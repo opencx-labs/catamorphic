@@ -11,7 +11,7 @@ import type {
 
 /**
  * Generic importer for Chromium-family browsers (Chrome, Edge, Brave, Arc,
- * Chromium). They all share the same on-disk layout:
+ * Aside, Chromium). They all share the same on-disk layout:
  *
  *   <user-data-dir>/Local State          — JSON, profile.info_cache maps
  *                                          profile dir names to metadata,

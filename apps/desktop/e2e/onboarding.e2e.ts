@@ -99,10 +99,13 @@ describe("agent-first onboarding", () => {
     fs.mkdirSync(occupiedDir, { recursive: true });
     fs.writeFileSync(path.join(occupiedDir, "KEEP.txt"), "leave me alone\n");
 
-    await runWait(`return !!byText('button', 'New project');`, {
-      timeoutMs: 60_000,
-      label: "empty project state",
-    });
+    await runWait(
+      `return !!byText('button', 'New project') && !!$('[data-testid="empty-start-agent"]');`,
+      {
+        timeoutMs: 60_000,
+        label: "empty project state",
+      },
+    );
     expect(await run(`return !!$('[data-testid="empty-start-agent"]');`)).toBe(
       true,
     );
@@ -127,6 +130,50 @@ describe("agent-first onboarding", () => {
     expect(fs.readFileSync(path.join(occupiedDir, "KEEP.txt"), "utf-8")).toBe(
       "leave me alone\n",
     );
+
+    // Both detected-login branches must fit inside a narrow dialog. In
+    // the old shared row, the long labels wrapped outside 32px buttons.
+    for (const provider of ["codex", "claude-code"]) {
+      await run(`
+        const wizard = $$('[data-testid="agent-wizard"]').find(el => !el.closest('[inert]'));
+        wizard.querySelector('[data-testid="agent-wizard-${provider}"]').click();
+      `);
+      await runWait(
+        `return $$('[data-testid="agent-wizard-back"]').some(el => !el.closest('[inert]'));`,
+      );
+      for (const width of [440, 280]) {
+        const fits = await run<boolean>(`
+          const wizard = $$('[data-testid="agent-wizard"]').find(el => !el.closest('[inert]'));
+          wizard.style.width = '${width}px';
+          const actions = [...wizard.querySelectorAll('button')].filter(el => !el.hasAttribute('data-testid'));
+          return actions.length === 2 && actions.every(button => {
+            const rect = button.getBoundingClientRect();
+            const range = document.createRange();
+            range.selectNodeContents(button.firstElementChild.firstElementChild);
+            const label = range.getBoundingClientRect();
+            return label.left >= rect.left && label.right <= rect.right &&
+              label.top >= rect.top && label.bottom <= rect.bottom;
+          }) && wizard.scrollWidth <= wizard.clientWidth;
+        `);
+        expect(fits, `${provider} actions at ${width}px`).toBe(true);
+      }
+      await run(`
+        const wizard = $$('[data-testid="agent-wizard"]').find(el => !el.closest('[inert]'));
+        wizard.style.maxHeight = '180px';
+        wizard.querySelector('button:last-child').scrollIntoView({block:'end'});
+      `);
+      expect(
+        await run(`
+        const wizard = $$('[data-testid="agent-wizard"]').find(el => !el.closest('[inert]'));
+        return wizard.scrollTop > 0 && wizard.clientHeight <= 180;
+      `),
+      ).toBe(true);
+      await run(`
+        const wizard = $$('[data-testid="agent-wizard"]').find(el => !el.closest('[inert]'));
+        wizard.style.width = ''; wizard.style.maxHeight = '';
+        wizard.querySelector('[data-testid="agent-wizard-back"]').click();
+      `);
+    }
 
     await run(`
       $$('[data-testid="agent-wizard-free"]')

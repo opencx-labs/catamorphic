@@ -10,4 +10,6 @@ export interface TabDragPayload {
   title: string;
   /** Per-kind detail: page URL for browsers, file path for editors. */
   detail?: string;
+  /** A stable destination for a browser tab or saved chat. */
+  bookmarkUrl?: string;
 }

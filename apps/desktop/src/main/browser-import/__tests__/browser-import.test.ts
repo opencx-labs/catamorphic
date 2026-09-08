@@ -179,12 +179,13 @@ describe("chromiumImporter.readBookmarks", () => {
 });
 
 describe("index", () => {
-  it("registers the five known browsers", () => {
+  it("registers the supported browsers", () => {
     expect(BROWSER_IMPORTERS.map((entry) => entry.id)).toEqual([
       "chrome",
       "edge",
       "brave",
       "arc",
+      "aside",
       "chromium",
     ]);
   });

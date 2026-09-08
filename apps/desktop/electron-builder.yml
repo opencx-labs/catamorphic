@@ -5,6 +5,7 @@ directories:
 files:
   - out/**
   - package.json
+  - THEME-NOTICES.md
 extraResources:
   - from: ../pwa/dist
     to: pwa

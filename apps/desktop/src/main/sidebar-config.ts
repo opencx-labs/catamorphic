@@ -24,6 +24,7 @@ export type SidebarAction =
   | "pin" // bookmarks: promote to the profile-wide list
   | "unpin"
   | "rename"
+  | "edit"
   | "remove";
 
 export interface SidebarMenuEntry {
@@ -63,6 +64,7 @@ export interface SidebarSectionConfig {
     | "apps"
     | "chats"
     | "bookmarks"
+    | "tabs"
     | "git"
     | "prs"
     | "remote"
@@ -94,7 +96,7 @@ export const DEFAULT_BOOKMARK_MENU: SidebarMenuEntry[] = [
   { label: "Open in new tab", action: "open-tab" },
   { label: "Copy link", action: "copy-url" },
   { label: "Pin across projects", action: "pin" },
-  { label: "Rename…", action: "rename" },
+  { label: "Edit bookmark…", action: "edit" },
   { label: "Delete", action: "remove", danger: true },
 ];
 
@@ -115,10 +117,11 @@ export const DEFAULT_CUSTOM_MENU: SidebarMenuEntry[] = [
 
 export const DEFAULT_SIDEBAR_CONFIG: SidebarConfig = {
   sections: [
+    { type: "bookmarks" },
     { type: "workflows" },
     { type: "apps" },
     { type: "chats" },
-    { type: "bookmarks" },
+    { type: "tabs" },
     { type: "remote", title: "Server" },
     { type: "git", title: "Changes" },
     { type: "prs", title: "Pull Requests", collapsed: true },
@@ -137,6 +140,7 @@ export const DEFAULT_SIDEBAR_FILE = `// Catamorphic sidebar configuration.
 //   { type: "workflows" }   built-in: this project's workflows
 //   { type: "apps" }        built-in: this project's apps
 //   { type: "chats" }       built-in: this project's chats
+//   { type: "tabs" }        built-in: open tabs (when tab placement is sidebar)
 //   { type: "bookmarks" }   built-in: browser bookmarks (the address-bar
 //                           star writes these; stored in bookmarks.json)
 //   { type: "remote" }      built-in: for projects connected to a server —
@@ -165,16 +169,17 @@ export const DEFAULT_SIDEBAR_FILE = `// Catamorphic sidebar configuration.
 // HOVER MENU (the ⋯ button on an item)
 //   menu: [{ label, action, danger? }]
 //   Actions: "open", "open-tab", "open-here", "copy-url",
-//            "pin", "unpin", "rename", "remove".
+//            "pin", "unpin", "rename", "edit", "remove".
 //   Set menu: [] to give an item no ⋯ button at all.
 //   On a section, \`menu\` overrides the menu for all of its items.
 
 module.exports = {
   sections: [
+    { type: "bookmarks" },
     { type: "workflows" },
     { type: "apps" },
     { type: "chats" },
-    { type: "bookmarks" },
+    { type: "tabs" },
     { type: "remote", title: "Server" },
     { type: "git", title: "Changes" },
     { type: "prs", title: "Pull Requests", collapsed: true },
@@ -203,6 +208,7 @@ const VALID_TYPES = new Set([
   "apps",
   "chats",
   "bookmarks",
+  "tabs",
   "git",
   "prs",
   "remote",
@@ -217,6 +223,7 @@ const VALID_ACTIONS = new Set<SidebarAction>([
   "pin",
   "unpin",
   "rename",
+  "edit",
   "remove",
 ]);
 

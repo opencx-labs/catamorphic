@@ -254,3 +254,39 @@ ipcRenderer.on(
     target.password.focus();
   },
 );
+
+// Option-click previews are intercepted in the isolated guest preload. Only
+// web navigations are relayed; page code never receives desktop IPC access.
+let previewLinksEnabled = true;
+ipcRenderer.on(
+  "catamorphic:preview-links-enabled",
+  (_event, enabled: unknown) => {
+    previewLinksEnabled = enabled === true;
+  },
+);
+document.addEventListener(
+  "click",
+  (event) => {
+    if (
+      !previewLinksEnabled ||
+      !event.altKey ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.button !== 0
+    )
+      return;
+    const anchor =
+      event.target instanceof Element ? event.target.closest("a[href]") : null;
+    if (
+      !(anchor instanceof HTMLAnchorElement) ||
+      anchor.hasAttribute("download") ||
+      !/^https?:\/\//i.test(anchor.href)
+    )
+      return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    ipcRenderer.sendToHost("catamorphic:preview-link", anchor.href);
+  },
+  { capture: true },
+);

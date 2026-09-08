@@ -80,6 +80,7 @@ import {
   windowBackgroundColor,
 } from "./theme.js";
 import { createUsageScanner } from "./usage-scan.js";
+import { watchSidebarEdge } from "./window-sidebar-edge.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -308,6 +309,38 @@ export function registerIpcHandlers(
     window.show();
     window.focus();
   });
+
+  ipcMain.handle(
+    "catamorphic:window-controls-visible",
+    (event, visible: unknown) => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (process.platform === "darwin" && typeof visible === "boolean") {
+        window?.setWindowButtonVisibility(visible);
+      }
+    },
+  );
+
+  const sidebarEdgeWatchers = new Map<number, () => void>();
+  ipcMain.handle(
+    "catamorphic:sidebar-edge-enabled",
+    (event, enabled: unknown) => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (!window || typeof enabled !== "boolean") return;
+      if (!enabled) {
+        sidebarEdgeWatchers.get(window.id)?.();
+        return;
+      }
+      if (sidebarEdgeWatchers.has(window.id)) return;
+      const stopWatching = watchSidebarEdge(window);
+      const stop = () => {
+        stopWatching();
+        sidebarEdgeWatchers.delete(window.id);
+        window.removeListener("closed", stop);
+      };
+      sidebarEdgeWatchers.set(window.id, stop);
+      window.once("closed", stop);
+    },
+  );
 
   // --- per-profile agents ---
 

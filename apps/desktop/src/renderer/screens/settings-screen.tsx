@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ACTION_LABELS, KEYBINDING_ACTIONS } from "../../shared/actions.js";
+import { bindingFromEvent } from "../../shared/keybindings.js";
 import { PendingButton } from "../components/pending-button.js";
 import {
   type AgentHarness,
@@ -26,8 +27,10 @@ import {
   DEFAULT_KEYBINDINGS,
   formatBinding,
   type KeybindingAction,
+  matchesBinding,
   useKeybindings,
 } from "../lib/keybindings.js";
+import { useTerminalAppearance } from "../lib/terminal-appearance.js";
 import { useTheme } from "../lib/theme.js";
 
 export function SettingsScreen({
@@ -43,7 +46,7 @@ export function SettingsScreen({
   onManageConnectors: () => void;
 }) {
   return (
-    <div className="mx-auto w-full max-w-md px-6 py-4">
+    <div className="mx-auto min-h-0 w-full max-w-md flex-1 overflow-y-auto px-6 py-4">
       <header className="mb-6 flex items-center justify-between">
         <h1 className="text-base font-semibold">Settings</h1>
         <button
@@ -62,6 +65,8 @@ export function SettingsScreen({
       />
       <ConnectorsSection onManage={onManageConnectors} />
       <ThemeSection />
+      <TerminalSection />
+      <LayoutSection />
       <NotificationsSection />
       <ShortcutsSection />
       <ImportSection />
@@ -346,7 +351,7 @@ function ConnectorsSection({ onManage }: { onManage: () => void }) {
   }, []);
 
   return (
-    <section className="mt-8 border-t border-border pt-6">
+    <section className="mt-8">
       <h2 className="mb-1 text-sm font-semibold">Connectors</h2>
       <p className="mb-3 text-xs text-fg-muted">
         Tools your agents can use — MCP servers and Claude Code plugins.
@@ -378,6 +383,7 @@ const TOKEN_LABELS: Record<ThemeToken, string> = {
   "bg-raised": "Raised surface",
   "bg-overlay": "Overlay",
   "bg-inset": "Inset",
+  sidebar: "Sidebar and window frame",
   border: "Border",
   "border-strong": "Border (strong)",
   fg: "Text",
@@ -439,7 +445,7 @@ function NotificationsSection() {
   );
 
   return (
-    <section className="mt-8 border-t border-border pt-6">
+    <section className="mt-8">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-sm font-semibold">Notifications</h2>
       </div>
@@ -469,6 +475,182 @@ function NotificationsSection() {
   );
 }
 
+function TerminalSection() {
+  const { appearance, source, loading, error, reload } =
+    useTerminalAppearance();
+  return (
+    <section className="mt-8 flex flex-col gap-3">
+      <h2 className="text-sm font-semibold">Terminal</h2>
+      <label className="flex items-center justify-between gap-4 text-sm">
+        Appearance
+        <select
+          name="terminalAppearance"
+          value={source}
+          onChange={(event) =>
+            void desktopApi.setPrefs({
+              terminalAppearance:
+                event.target.value === "ghostty" ? "ghostty" : "app",
+            })
+          }
+          className="field h-8 rounded-md px-2 text-sm"
+        >
+          <option value="app">App theme</option>
+          <option value="ghostty">Ghostty configuration</option>
+        </select>
+      </label>
+      {source === "ghostty" && (
+        <>
+          <p className="text-xs text-fg-muted" aria-live="polite">
+            {loading
+              ? "Reading Ghostty configuration…"
+              : `${appearance.name} · ${appearance.fontSize} · ${appearance.fontFamily.replaceAll('"', "")}`}
+          </p>
+          {error && (
+            <p role="alert" className="text-xs text-danger">
+              {error} Keeping {appearance.name}.
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={reload}
+            disabled={loading}
+            className="btn self-start rounded-md px-3 py-1.5 text-xs disabled:opacity-50"
+          >
+            Reload from Ghostty
+          </button>
+          <p className="text-xs text-fg-muted">
+            Reads your colors and fonts when the app opens. Reload after editing
+            Ghostty's configuration. Native window effects and Ghostty shortcuts
+            stay in Ghostty.
+          </p>
+        </>
+      )}
+      <p className="text-xs text-fg-muted">
+        Appearance changes apply to new terminals. Terminals use your login
+        shell and its startup files. Your prompt, aliases and shell tools keep
+        their existing configuration.
+      </p>
+    </section>
+  );
+}
+
+function LayoutSection() {
+  const [prefs, setPrefs] = useState<AppPrefs | null>(null);
+  useEffect(() => {
+    void desktopApi.getPrefs().then(setPrefs);
+    return desktopApi.onPrefsChanged(setPrefs);
+  }, []);
+  if (!prefs) return null;
+  return (
+    <section className="mt-8 flex flex-col gap-3">
+      <h2 className="text-sm font-semibold">Workspace layout</h2>
+      <label className="flex items-center justify-between gap-4 text-sm">
+        Open tabs
+        <select
+          name="tabPlacement"
+          value={prefs.tabPlacement}
+          onChange={(event) =>
+            void desktopApi.setPrefs({
+              tabPlacement:
+                event.target.value === "sidebar" ? "sidebar" : "top",
+            })
+          }
+          className="field h-8 rounded-md px-2 text-sm"
+        >
+          <option value="top">Top bar</option>
+          <option value="sidebar">Sidebar</option>
+        </select>
+      </label>
+      {prefs.tabPlacement === "sidebar" && (
+        <label className="flex items-center justify-between gap-4 text-sm">
+          Title and address bar
+          <select
+            name="headerPlacement"
+            value={prefs.headerPlacement}
+            onChange={(event) =>
+              void desktopApi.setPrefs({
+                headerPlacement:
+                  event.target.value === "sidebar" ? "sidebar" : "top",
+              })
+            }
+            className="field h-8 rounded-md px-2 text-sm"
+          >
+            <option value="top">Above content</option>
+            <option value="sidebar">In sidebar</option>
+          </select>
+        </label>
+      )}
+      <label className="flex items-center justify-between gap-4 text-sm">
+        Pinned bookmarks
+        <select
+          name="pinnedBookmarks"
+          value={prefs.pinnedBookmarks}
+          onChange={(event) =>
+            void desktopApi.setPrefs({
+              pinnedBookmarks: event.target.value === "list" ? "list" : "tiles",
+            })
+          }
+          className="field h-8 rounded-md px-2 text-sm"
+        >
+          <option value="tiles">Icon tiles</option>
+          <option value="list">List</option>
+        </select>
+      </label>
+      <label className="flex items-center justify-between gap-4 text-sm">
+        Links requesting a new window
+        <select
+          name="linkOpenMode"
+          value={prefs.linkOpenMode}
+          onChange={(event) =>
+            void desktopApi.setPrefs({
+              linkOpenMode:
+                event.target.value === "floating" ? "floating" : "tab",
+            })
+          }
+          className="field h-8 rounded-md px-2 text-sm"
+        >
+          <option value="tab">New tab</option>
+          <option value="floating">Floating preview</option>
+        </select>
+      </label>
+      <label className="flex items-center justify-between gap-4 text-sm">
+        {/Mac/.test(navigator.platform) ? "Option" : "Alt"}-click links to
+        preview
+        <input
+          type="checkbox"
+          name="previewLinksWithAlt"
+          checked={prefs.previewLinksWithAlt}
+          onChange={(event) =>
+            void desktopApi.setPrefs({
+              previewLinksWithAlt: event.target.checked,
+            })
+          }
+        />
+      </label>
+      <label className="flex flex-col gap-2 text-sm">
+        Floating Git terminal command
+        <input
+          key={prefs.gitTerminalCommand}
+          name="gitTerminalCommand"
+          className="field h-8 rounded-md px-2 font-mono text-sm"
+          defaultValue={prefs.gitTerminalCommand}
+          onBlur={(event) =>
+            void desktopApi.setPrefs({ gitTerminalCommand: event.target.value })
+          }
+        />
+      </label>
+      <p className="text-xs text-fg-muted">
+        The command runs in the project folder when a new Git terminal opens.
+        Configure floating panels and browser actions in Keyboard shortcuts.
+      </p>
+      <p className="text-sm text-fg-muted text-pretty">
+        Changes apply to this profile. You can also ask your agent to arrange
+        the sidebar or change these preferences.
+      </p>
+    </section>
+  );
+}
+
 function ThemeSection() {
   const theme = useTheme();
   const [presets, setPresets] = useState<ThemePreset[]>([]);
@@ -485,7 +667,7 @@ function ThemeSection() {
   const overridden = Object.keys(theme.overrides).length > 0;
 
   return (
-    <section className="mt-8 border-t border-border pt-6">
+    <section className="mt-8">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-sm font-semibold">Theme</h2>
         {overridden && (
@@ -502,36 +684,68 @@ function ThemeSection() {
         )}
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,10rem),1fr))] gap-2">
         {presets.map((preset) => {
           const active = preset.id === theme.preset;
           return (
             <button
               key={preset.id}
               type="button"
+              aria-label={preset.label}
+              aria-pressed={active}
+              data-theme-preset={preset.id}
               onClick={() =>
                 void desktopApi.setTheme({ preset: preset.id, overrides: {} })
               }
-              className={`flex cursor-pointer items-center gap-2.5 rounded-lg border p-2.5 text-left transition-colors duration-150 ${
+              className={`flex min-w-0 cursor-pointer flex-col gap-2 rounded-lg border p-2.5 text-left transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
                 active
                   ? "border-accent bg-accent/10"
                   : "border-border bg-bg-raised/40 hover:border-border-strong"
               }`}
             >
               <span
-                className="grid size-9 shrink-0 grid-cols-2 overflow-hidden rounded-md border"
-                style={{ borderColor: preset.colors.border }}
+                aria-hidden="true"
+                className="flex h-16 w-full gap-1.5 overflow-hidden rounded-md border p-1.5"
+                style={{
+                  background: preset.colors.sidebar,
+                  borderColor: preset.colors.border,
+                }}
               >
-                <span style={{ background: preset.colors.bg }} />
-                <span style={{ background: preset.colors["bg-raised"] }} />
-                <span style={{ background: preset.colors.accent }} />
-                <span style={{ background: preset.colors.fg }} />
-              </span>
-              <span className="min-w-0">
-                <span className="block truncate text-[13px]">
-                  {preset.label}
+                <span className="flex w-1/4 flex-col gap-1 pt-1">
+                  <span
+                    className="h-1 w-3 rounded-sm"
+                    style={{ background: preset.colors["fg-muted"] }}
+                  />
+                  <span
+                    className="mt-1 h-2 rounded-sm"
+                    style={{ background: preset.colors.accent }}
+                  />
+                  <span
+                    className="h-1 w-3/4 rounded-sm"
+                    style={{ background: preset.colors["fg-muted"] }}
+                  />
                 </span>
-                <span className="block text-[11px] text-fg-faint">
+                <span
+                  className="flex min-w-0 flex-1 flex-col gap-1.5 rounded-sm p-2"
+                  style={{ background: preset.colors.bg }}
+                >
+                  <span
+                    className="h-1 w-2/3 rounded-sm"
+                    style={{ background: preset.colors.fg }}
+                  />
+                  <span
+                    className="h-1 w-full rounded-sm"
+                    style={{ background: preset.colors["fg-muted"] }}
+                  />
+                  <span
+                    className="mt-auto h-2.5 w-1/3 rounded-sm"
+                    style={{ background: preset.colors.accent }}
+                  />
+                </span>
+              </span>
+              <span className="w-full min-w-0">
+                <span className="block text-[13px]">{preset.label}</span>
+                <span className="block min-h-4 text-[11px] text-fg-muted">
                   {active && overridden
                     ? "Active · edited"
                     : active
@@ -592,7 +806,7 @@ function ThemeSection() {
 
       <p className="mt-2 text-xs text-fg-faint">
         Changes apply immediately. Also editable as JSON at{" "}
-        <span className="font-mono">{file}</span>
+        <span className="break-all font-mono">{file}</span>
       </p>
     </section>
   );
@@ -678,7 +892,7 @@ function ImportSection() {
   };
 
   return (
-    <section className="mt-8 border-t border-border pt-6">
+    <section className="mt-8">
       <h2 className="mb-1 text-sm font-semibold">Import from browser</h2>
       <p className="mb-3 text-xs text-fg-muted">
         Bring bookmarks over from another browser on this Mac.
@@ -790,7 +1004,7 @@ function SidebarSection() {
   }, []);
 
   return (
-    <section className="mt-8 border-t border-border pt-6">
+    <section className="mt-8">
       <h2 className="mb-1 text-sm font-semibold">Sidebar</h2>
       <p className="text-xs text-fg-muted">
         The left sidebar's sections and items are defined in a JavaScript file.
@@ -822,6 +1036,7 @@ function ShortcutsSection() {
   const bindings = useKeybindings();
   const [recording, setRecording] = useState<KeybindingAction | null>(null);
   const [file, setFile] = useState<string>("");
+  const [notice, setNotice] = useState("");
 
   useEffect(() => {
     void desktopApi.keybindingsFile().then(setFile);
@@ -838,17 +1053,23 @@ function ShortcutsSection() {
       }
       // Wait for a real key, not a bare modifier press.
       if (["Meta", "Control", "Alt", "Shift"].includes(event.key)) return;
-      const parts = [
-        ...(event.metaKey ? ["Cmd"] : []),
-        ...(event.ctrlKey ? ["Ctrl"] : []),
-        ...(event.altKey ? ["Alt"] : []),
-        ...(event.shiftKey ? ["Shift"] : []),
-        event.key.length === 1 ? event.key.toUpperCase() : event.key,
-      ];
-      void desktopApi.setKeybindings({
-        ...bindings,
-        [recording]: parts.join("+"),
-      });
+      const binding = bindingFromEvent(event);
+      if (!binding) {
+        setNotice("That key cannot be used as a shortcut. Try another key.");
+        return;
+      }
+      const conflicts = KEYBINDING_ACTIONS.filter(
+        (action) =>
+          action !== recording && matchesBinding(event, bindings[action]),
+      );
+      const next = { ...bindings, [recording]: binding };
+      for (const action of conflicts) next[action] = "";
+      void desktopApi.setKeybindings(next);
+      setNotice(
+        conflicts.length
+          ? `Shortcut moved from ${conflicts.map((action) => ACTION_LABELS[action]).join(", ")} to ${ACTION_LABELS[recording]}.`
+          : `Shortcut updated for ${ACTION_LABELS[recording]}.`,
+      );
       setRecording(null);
     };
     window.addEventListener("keydown", onKeyDown, { capture: true });
@@ -861,7 +1082,7 @@ function ShortcutsSection() {
   );
 
   return (
-    <section className="mt-8 border-t border-border pt-6">
+    <section className="mt-8">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-sm font-semibold">Keyboard shortcuts</h2>
         {!isDefault && (
@@ -882,22 +1103,46 @@ function ShortcutsSection() {
             className="flex h-9 items-center justify-between rounded-lg border border-border bg-bg-raised/40 px-3"
           >
             <span className="text-[13px]">{ACTION_LABELS[action]}</span>
-            <button
-              type="button"
-              onClick={() => setRecording(recording === action ? null : action)}
-              className={`h-6 cursor-pointer rounded-md border px-2 font-sans text-[12px] transition-colors duration-150 ${
-                recording === action
-                  ? "border-accent bg-accent/10 text-accent"
-                  : "border-border-strong bg-bg-inset text-fg-muted hover:border-fg-faint hover:text-fg"
-              }`}
-            >
-              {recording === action
-                ? "Press keys…"
-                : formatBinding(bindings[action])}
-            </button>
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                aria-label={`Change shortcut for ${ACTION_LABELS[action]}`}
+                onClick={() =>
+                  setRecording(recording === action ? null : action)
+                }
+                className={`h-6 cursor-pointer rounded-md border px-2 font-sans text-[12px] transition-colors duration-150 ${
+                  recording === action
+                    ? "border-accent bg-accent/10 text-accent"
+                    : "border-border-strong bg-bg-inset text-fg-muted hover:border-fg-faint hover:text-fg"
+                }`}
+              >
+                {recording === action
+                  ? "Press keys…"
+                  : formatBinding(bindings[action]) || "Unassigned"}
+              </button>
+              {bindings[action] && (
+                <button
+                  type="button"
+                  aria-label={`Remove shortcut for ${ACTION_LABELS[action]}`}
+                  onClick={() => {
+                    void desktopApi.setKeybindings({
+                      ...bindings,
+                      [action]: "",
+                    });
+                    setNotice(`Shortcut removed for ${ACTION_LABELS[action]}.`);
+                  }}
+                  className="grid size-6 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-overlay hover:text-fg"
+                >
+                  <X className="size-3" />
+                </button>
+              )}
+            </div>
           </div>
         ))}
       </div>
+      <p role="status" className="mt-2 text-xs text-fg-muted">
+        {notice}
+      </p>
       <p className="mt-2 text-xs text-fg-faint">
         Changes apply immediately, in every project. Also editable as JSON at{" "}
         <span className="font-mono">{file}</span>

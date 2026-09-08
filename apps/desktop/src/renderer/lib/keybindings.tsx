@@ -10,6 +10,10 @@ import {
   type KeybindingAction,
   type Keybindings,
 } from "../../shared/actions.js";
+import {
+  matchesShortcut,
+  type ShortcutEvent,
+} from "../../shared/keybindings.js";
 import { desktopApi } from "./desktop-api.js";
 
 export { DEFAULT_KEYBINDINGS, type KeybindingAction, type Keybindings };
@@ -50,15 +54,12 @@ export function useKeybindings(): Keybindings {
 }
 
 /** True when the event matches a "Cmd+Shift+K"-style binding. */
-export function matchesBinding(event: KeyboardEvent, binding: string): boolean {
-  const parts = binding.split("+");
-  const key = parts.at(-1) ?? "";
-  const mods = new Set(parts.slice(0, -1));
-  if (event.metaKey !== mods.has("Cmd")) return false;
-  if (event.ctrlKey !== mods.has("Ctrl")) return false;
-  if (event.altKey !== mods.has("Alt")) return false;
-  if (event.shiftKey !== mods.has("Shift")) return false;
-  return event.key.toLowerCase() === key.toLowerCase();
+export function matchesBinding(event: ShortcutEvent, binding: string): boolean {
+  return matchesShortcut({
+    event,
+    binding,
+    mac: /Mac/.test(navigator.platform),
+  });
 }
 
 const MOD_SYMBOLS: Record<string, string> = {

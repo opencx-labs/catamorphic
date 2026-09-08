@@ -417,7 +417,7 @@ describe("palette intent", () => {
       `const options = ${inDialog('[role="option"]')};
        return options.length > 0 &&
               options.some((el) => el.textContent.includes('Toggle sidebar')) &&
-              !options.some((el) => el.textContent.includes('Settings'));`,
+              !options.some((el) => el.querySelector('span.truncate')?.textContent === 'Settings');`,
       { label: "> shows commands, hides navigate rows" },
     );
     const footer = await run<boolean>(
@@ -431,8 +431,8 @@ describe("palette intent", () => {
 });
 
 describe("chat tab activity indicators", () => {
-  // The tab strip is the only .app-no-drag flex row with items-end.
-  const tabStrip = `document.querySelector('.app-no-drag.items-end')`;
+  // Locate the tab surface independently of its placement and styling.
+  const tabStrip = `document.querySelector('[data-tab-orientation]')`;
   const tabSpinnerOn = `[...${tabStrip}.querySelectorAll('svg.animate-spin')]
     .some((el) => getComputedStyle(el).opacity === '1')`;
   const tabDotOn = `[...${tabStrip}.querySelectorAll('span.bg-accent')]

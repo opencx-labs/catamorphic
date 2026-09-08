@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import type { BookmarkPlacement } from "../shared/bookmark-target.js";
 
 export interface ServerInfo {
   url: string | null;
@@ -333,6 +334,19 @@ const api = {
   },
   windowFocus: (): Promise<void> =>
     ipcRenderer.invoke("catamorphic:window-focus"),
+  windowSetControlsVisible: (visible: boolean): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:window-controls-visible", visible),
+  windowSetSidebarEdgeEnabled: (enabled: boolean): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:sidebar-edge-enabled", enabled),
+  onSidebarPointerZone: (
+    listener: (zone: "edge" | "inside" | "outside") => void,
+  ): (() => void) => {
+    const handler = (_event: unknown, zone: "edge" | "inside" | "outside") =>
+      listener(zone);
+    ipcRenderer.on("catamorphic:sidebar-pointer-zone", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:sidebar-pointer-zone", handler);
+  },
 
   getTheme: (): Promise<unknown> => ipcRenderer.invoke("catamorphic:theme-get"),
   setTheme: (config: unknown): Promise<unknown> =>
@@ -416,6 +430,7 @@ const api = {
     listener: (key: {
       webContentsId: number;
       key: string;
+      code?: string;
       meta: boolean;
       control: boolean;
       alt: boolean;
@@ -432,6 +447,8 @@ const api = {
   },
 
   // --- terminal tabs (PTY sessions live in main; see main/terminal.ts) ---
+  terminalGhosttyAppearance: () =>
+    ipcRenderer.invoke("catamorphic:terminal-ghostty-appearance"),
   terminalCreate: (input: {
     projectId?: string;
     cols?: number;
@@ -574,6 +591,8 @@ const api = {
     folderId?: string;
   }): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:bookmarks-add", input),
+  bookmarksPlace: (input: BookmarkPlacement): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:bookmarks-place", input),
   bookmarksAddFolder: (input: {
     projectId: string;
     profileId: string;

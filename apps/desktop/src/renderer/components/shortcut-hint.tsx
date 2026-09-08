@@ -1,4 +1,10 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 
 const SHOW_DELAY_MS = 800;
@@ -19,6 +25,7 @@ export function ShortcutHint({
   side = "bottom",
   delay = SHOW_DELAY_MS,
   children,
+  className = "",
 }: {
   /** Short action name, e.g. "Toggle sidebar". */
   label: string;
@@ -33,8 +40,10 @@ export function ShortcutHint({
    */
   delay?: number;
   children: ReactNode;
+  className?: string;
 }) {
   const anchorRef = useRef<HTMLSpanElement>(null);
+  const tooltipRef = useRef<HTMLSpanElement>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [position, setPosition] = useState<{ x: number; y: number } | null>(
     null,
@@ -44,6 +53,21 @@ export function ShortcutHint({
   const [visible, setVisible] = useState(false);
 
   useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  useLayoutEffect(() => {
+    const tooltip = tooltipRef.current;
+    if (!position || !tooltip) return;
+    const { width, height } = tooltip.getBoundingClientRect();
+    const x = Math.max(
+      Math.ceil(8 + width / 2),
+      Math.min(position.x, Math.floor(window.innerWidth - 8 - width / 2)),
+    );
+    const y =
+      side === "bottom"
+        ? Math.max(8, Math.min(position.y, window.innerHeight - height - 8))
+        : Math.max(height + 8, Math.min(position.y, window.innerHeight - 8));
+    if (x !== position.x || y !== position.y) setPosition({ x, y });
+  }, [position, side]);
 
   const show = () => {
     clearTimeout(timerRef.current);
@@ -69,7 +93,7 @@ export function ShortcutHint({
     // biome-ignore lint/a11y/noStaticElementInteractions: hover-only hint anchor; the wrapped control stays the interactive element
     <span
       ref={anchorRef}
-      className="inline-flex"
+      className={`inline-flex ${className}`}
       onMouseEnter={show}
       onMouseLeave={hide}
       // Clicking the wrapped control usually changes state; drop the hint.
@@ -79,6 +103,7 @@ export function ShortcutHint({
       {position &&
         createPortal(
           <span
+            ref={tooltipRef}
             role="tooltip"
             style={{
               left: position.x,
@@ -89,7 +114,7 @@ export function ShortcutHint({
             onTransitionEnd={() => {
               if (!visible) setPosition(null);
             }}
-            className={`pointer-events-none fixed z-50 -translate-x-1/2 whitespace-nowrap rounded-md bg-bg-overlay px-2 py-1 text-[11px] text-fg-muted shadow-lg ring-1 ring-border transition-[opacity,translate] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+            className={`pointer-events-none fixed z-50 w-max max-w-[calc(100vw-1rem)] -translate-x-1/2 break-words rounded-md bg-bg-overlay px-2 py-1 text-[11px] text-fg-muted shadow-lg ring-1 ring-border transition-[opacity,translate] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
               visible
                 ? "translate-y-0 opacity-100"
                 : side === "bottom"
