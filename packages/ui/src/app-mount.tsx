@@ -4,6 +4,7 @@ import {
   APP_PROTOCOL_VERSION,
   type AppCallErrorCode,
   type AppContext,
+  type AppDisplay,
   type AppHostTheme,
   type GuestToHostMessage,
   type HostToGuestMessage,
@@ -56,6 +57,10 @@ export interface AppMountProps {
    */
   theme?: AppHostTheme;
   className?: string;
+  /** Presentation and visibility are host-owned; neither grants capabilities. */
+  display?: AppDisplay;
+  /** Fixed viewport height for compact slots; the guest scrolls internally. */
+  viewportHeight?: number;
 }
 
 interface ViewStateReady {
@@ -97,6 +102,8 @@ export function AppMount({
   channel,
   theme,
   className,
+  display = { mode: "full", visible: true },
+  viewportHeight,
 }: AppMountProps) {
   const { apiClient } = useCatamorphic();
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -374,16 +381,15 @@ export function AppMount({
     [apiClient, projectId, appName, channel, view.state],
   );
 
-  useEffect(() => {
-    const listener = (event: MessageEvent) => {
-      if (event.source !== frameRef.current?.contentWindow) return;
-      const data: unknown = event.data;
-      if (!isGuestMessage(data)) return;
-      void handleGuestMessage(data);
+  const sendDisplay = useCallback(() => {
+    const payload: HostToGuestMessage = {
+      catamorphicApp: APP_PROTOCOL_VERSION,
+      kind: "display",
+      display: { mode: display.mode, visible: display.visible },
     };
-    window.addEventListener("message", listener);
-    return () => window.removeEventListener("message", listener);
-  }, [handleGuestMessage]);
+    frameRef.current?.contentWindow?.postMessage(payload, "*");
+  }, [display.mode, display.visible]);
+  useEffect(sendDisplay, [sendDisplay]);
 
   // Hand the guest its context snapshot once it can receive messages.
   const handleFrameLoad = useCallback(() => {
@@ -395,7 +401,32 @@ export function AppMount({
       context,
     };
     frame.contentWindow.postMessage(payload, "*");
-  }, [context]);
+    sendDisplay();
+  }, [context, sendDisplay]);
+
+  useEffect(() => {
+    const listener = (event: MessageEvent) => {
+      if (event.source !== frameRef.current?.contentWindow) return;
+      const data: unknown = event.data;
+      // The existing dual-dialect guest probe is also a readiness handshake.
+      // Lazy React guests may install their listener after the frame's load.
+      if (
+        typeof data === "object" &&
+        data !== null &&
+        "jsonrpc" in data &&
+        data.jsonrpc === "2.0" &&
+        "method" in data &&
+        data.method === "ui/initialize"
+      ) {
+        handleFrameLoad();
+        return;
+      }
+      if (!isGuestMessage(data)) return;
+      void handleGuestMessage(data);
+    };
+    window.addEventListener("message", listener);
+    return () => window.removeEventListener("message", listener);
+  }, [handleGuestMessage, handleFrameLoad]);
 
   if (view.state !== "ready") {
     return (
@@ -413,7 +444,11 @@ export function AppMount({
       sandbox="allow-scripts allow-forms allow-downloads"
       src={guestSrc(view.guestUrl, initialTheme)}
       onLoad={handleFrameLoad}
-      style={{ width: "100%", border: "none", height: `${height}px` }}
+      style={{
+        width: "100%",
+        border: "none",
+        height: `${viewportHeight === undefined || !Number.isFinite(viewportHeight) ? height : Math.max(120, Math.min(MAX_HEIGHT_PX, viewportHeight))}px`,
+      }}
     />
   );
 }

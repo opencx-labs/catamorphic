@@ -259,3 +259,37 @@ describe("createClient in an MCP Apps host", () => {
     expect(note?.params).toEqual({ height: 420 });
   });
 });
+
+describe("app display lifecycle", () => {
+  it("observes compact/hidden state and unsubscribes without recreating the client", async () => {
+    const { subscribeDisplay } = await import("../client.js");
+    const listener = vi.fn();
+    const unsubscribe = subscribeDisplay(listener);
+    expect(listener).toHaveBeenLastCalledWith({ mode: "full", visible: true });
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          catamorphicApp: APP_PROTOCOL_VERSION,
+          kind: "display",
+          display: { mode: "compact", visible: false },
+        },
+      }),
+    );
+    expect(listener).toHaveBeenLastCalledWith({
+      mode: "compact",
+      visible: false,
+    });
+    unsubscribe();
+    const count = listener.mock.calls.length;
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          catamorphicApp: APP_PROTOCOL_VERSION,
+          kind: "display",
+          display: { mode: "full", visible: true },
+        },
+      }),
+    );
+    expect(listener).toHaveBeenCalledTimes(count);
+  });
+});

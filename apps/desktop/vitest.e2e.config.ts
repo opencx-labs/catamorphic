@@ -2,6 +2,7 @@ import { defineConfig } from "vitest/config";
 
 const visibleMode = process.env.CATAMORPHIC_E2E_WINDOW_MODE === "visible";
 const visibleSuites = [
+  "e2e/sidebars.e2e.ts",
   "e2e/motion.e2e.ts",
   "e2e/runtime-idle.e2e.ts",
   "e2e/session-runtime.e2e.ts",

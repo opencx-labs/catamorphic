@@ -458,6 +458,15 @@ supplies two things:
 
 `@catamorphic/ui` ships the workflow canvas (`WorkflowEditor`, `WorkflowCanvas`), member workflow review and consent, Runs panel, toolbar, AI bar, and `AppMount` as composable React components built on `@catamorphic/react`. Everything is opt-in: use `WorkflowEditor` for the full experience, or compose `WorkflowCanvas` + your own chrome. Code editors are plugged in via render props (bring your own Monaco/CodeMirror). Import `@catamorphic/ui/styles.css` once.
 
+`AppMount` also accepts `display={{ mode: "compact", visible }}` and
+`viewportHeight={320}` for sidebar/widget slots. The same app bundle, storage,
+theme tokens and authorization apply. Visibility changes are sent without
+reloading the iframe. Guests import `subscribeDisplay` from `@catamorphic/app`
+to adapt their presentation and suspend optional refresh work while hidden;
+the returned function unsubscribes. Layout and default widget choices belong
+to the host. Compact mounting never grants workspace or Electron access.
+
+
 For Tailwind hosts, import the UI stylesheet from the **same CSS entry** as
 Tailwind so its packaged component classes are included:
 

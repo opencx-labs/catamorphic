@@ -1,107 +1,32 @@
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
-import {
-  type ProjectExperienceWhen,
-  sanitizeProjectExperienceWhen,
-} from "../shared/project-experience.js";
+import { sanitizeProjectExperienceWhen } from "../shared/project-experience.js";
 
 /**
  * User-customizable sidebar. The config is a real JS file at
  * `<userData>/profiles/<id>/sidebar.js` (same philosophy as keybindings.json:
  * plain, user-visible, agent-editable, file-watched, applies live). The file
  * evaluates in an isolated vm context with no require/process/fs and exports
- * an ordered list of sections. Removing a section from the list hides it;
- * adding a `custom` section invents a new one.
+ * left and right arrays of icon tabs, each holding ordered widget sections.
  *
  * Everything crossing into the renderer is DATA: the config is evaluated
  * in the main process and sent over IPC, so menu entries name a declared
  * `action` rather than carrying a callback.
  */
 
-/** What a click (or menu entry) does. Declarative so it can cross IPC. */
-export type SidebarAction =
-  | "open" // open the item's url per its `open` mode
-  | "open-tab" // force a new browser tab
-  | "open-here" // force reuse of the focused browser tab
-  | "copy-url"
-  | "pin" // bookmarks: promote to the profile-wide list
-  | "unpin"
-  | "rename"
-  | "remove";
+import type {
+  SidebarAction,
+  SidebarConfig,
+  SidebarItem,
+  SidebarMenuEntry,
+  SidebarPreview,
+  SidebarPreviewMetadata,
+  SidebarSectionConfig,
+  SidebarTabConfig,
+} from "../shared/sidebar.js";
 
-export interface SidebarMenuEntry {
-  label: string;
-  action: SidebarAction;
-  /** Render in the danger color (destructive). */
-  danger?: boolean;
-}
-
-export interface SidebarPreviewMetadata {
-  label: string;
-  value: string;
-}
-
-/** Compact, declarative content for a sidebar item's hover preview. */
-export interface SidebarPreview {
-  title?: string;
-  description?: string;
-  metadata?: SidebarPreviewMetadata[];
-}
-
-export interface SidebarItem {
-  label: string;
-  /** Optional for a folder-only item. */
-  url?: string;
-  /** Icon name from lucide-react, e.g. "Globe", "FileText". */
-  icon?: string;
-  open?: "tab" | "replace";
-  /** Hover menu (three-dots). Omit for the section default. */
-  menu?: SidebarMenuEntry[];
-  /** Hover preview content, or false to explicitly disable it. */
-  preview?: SidebarPreview | false;
-  /** Nested items use the same complete item model, at any depth. */
-  items?: SidebarItem[];
-  /** Start this item's children collapsed (default open). */
-  collapsed?: boolean;
-  /** Project-authorized visibility; invalid predicates fail closed. */
-  when?: ProjectExperienceWhen;
-}
-
-export interface SidebarSectionConfig {
-  type:
-    | "workflows"
-    | "apps"
-    | "files"
-    | "chats"
-    | "bookmarks"
-    | "git"
-    | "prs"
-    | "remote"
-    | "custom";
-  /** Override the section heading. */
-  title?: string;
-  /** Start collapsed (default open). */
-  collapsed?: boolean;
-  /**
-   * Hide the whole section (header included) while it has nothing to
-   * list. Defaults to true for `workflows` and `apps` — a new project
-   * isn't about either until an agent makes it so — and false elsewhere.
-   */
-  hideEmpty?: boolean;
-  /** For type "custom": the entries to render. */
-  items?: SidebarItem[];
-  /** Default click behavior for this section's items. */
-  open?: "tab" | "replace";
-  /** Override the per-item hover menu for the whole section. */
-  menu?: SidebarMenuEntry[];
-  /** Project-authorized visibility; invalid predicates fail closed. */
-  when?: ProjectExperienceWhen;
-}
-
-export interface SidebarConfig {
-  sections: SidebarSectionConfig[];
-}
+export type { SidebarConfig, SidebarSectionConfig } from "../shared/sidebar.js";
 
 /** Hover menu for a project bookmark when the config doesn't override it. */
 export const DEFAULT_BOOKMARK_MENU: SidebarMenuEntry[] = [
@@ -128,94 +53,70 @@ export const DEFAULT_CUSTOM_MENU: SidebarMenuEntry[] = [
 ];
 
 export const DEFAULT_SIDEBAR_CONFIG: SidebarConfig = {
-  sections: [
-    { type: "chats" },
-    { type: "files" },
-    { type: "apps" },
-    { type: "workflows" },
-    { type: "bookmarks" },
-    { type: "git", title: "Changes" },
-    { type: "prs", title: "Pull Requests", collapsed: true },
+  left: [
+    {
+      id: "project",
+      title: "Project",
+      icon: "House",
+      sections: [
+        { id: "workflows", type: "workflows" },
+        { id: "apps", type: "apps" },
+        { id: "chats", type: "chats" },
+        { id: "bookmarks", type: "bookmarks" },
+        { id: "remote", type: "remote", title: "Server" },
+      ],
+    },
+    {
+      id: "files",
+      title: "Files",
+      icon: "Folder",
+      sections: [{ id: "files", type: "files" }],
+    },
+  ],
+  right: [
+    {
+      id: "companion",
+      title: "Activity and notes",
+      icon: "Activity",
+      sections: [
+        { id: "activity", type: "activity" },
+        { id: "note", type: "note", title: "Project note" },
+        { id: "changes", type: "git", hideEmpty: true },
+      ],
+    },
+    {
+      id: "reviews",
+      title: "Pull requests",
+      icon: "GitPullRequest",
+      when: { builder: true },
+      sections: [{ id: "prs", type: "prs" }],
+    },
   ],
 };
 
-export const DEFAULT_SIDEBAR_FILE = `// Catamorphic sidebar configuration.
+export const DEFAULT_SIDEBAR_FILE = `// Catamorphic sidebars. Edit and save to update both sides live.
+// Ask the assistant to add tabs, move widgets, or build an app widget.
+// Each side is an ordered list of tabs: { id, title, icon, sections }.
+// Tabs use bare Lucide icons. Titles are accessible labels and tooltips.
+// Each section needs a stable id, unique across the layout. Preserve ids when editing.
+// Built-ins: workflows, apps, files, chats, bookmarks, remote, git, prs, activity.
+// Section options: title, collapsed, hideEmpty, when: { builder, permissions }.
+// Tabs also accept when. Visibility never grants authority.
+// Both sides may be empty. Profile/settings and the palette remain available.
 //
-// Plain JavaScript, evaluated in a sandbox (no require/fs/network).
-// Edit and save — the sidebar updates live, no restart.
-// You can also just ask the assistant to change this for you.
-//
-// SECTIONS — the list below is the sidebar, in order.
-//   Remove a section to hide it. Reorder freely. Add your own.
-//
-//   { type: "chats" }       built-in: this project's chats
-//   { type: "files" }       built-in: this project's files and folders
-//   { type: "apps" }        built-in: this project's apps
-//   { type: "workflows" }   built-in: this project's workflows
-//   { type: "bookmarks" }   built-in: browser bookmarks (the address-bar
-//                           star writes these; stored in bookmarks.json)
-//   { type: "remote" }      legacy server controls (normally unnecessary;
-//                           sync is automatic and sharing is contextual)
-//   { type: "git" }         built-in: uncommitted changes per git worktree
-//                           (click a file to open its diff)
-//   { type: "prs" }         built-in: the project's open pull requests
-//   { type: "custom", title: "…", items: [ … ] }   your own list
-//
-// COMMON ATTRIBUTES
-//   title:     override the heading
-//   collapsed: start collapsed
-//   hideEmpty: hide the whole section while it has nothing to list
-//              (default: true for workflows and apps, false elsewhere)
-//   when:       optional capability targeting, e.g.
-//               { permissions: ["brain:maintain"] } or { builder: true }
-//   open:      "tab"     — always open in a new browser tab
-//              "replace" — reuse the focused browser tab (falls back to a
-//                          new tab when the focused tab isn't a browser)
-//
-// CUSTOM ITEMS
-//   { label, url?, icon?, open?, menu?, preview?, items?, collapsed?, when? }
-//   icon: any lucide-react name, e.g. "Globe", "FileText", "Github".
-//   items: nested items using this same shape. Omit url for a folder-only
-//          item, or include it to make a collapsible link.
-//   collapsed: start nested items collapsed (default open).
-//   preview: { title?, description?, metadata?: [{ label, value }] }
-//            Metadata is capped at four rows to keep the card compact.
-//            Set preview: false to explicitly disable the preview.
-//
-// HOVER MENU (the ⋯ button on an item)
-//   menu: [{ label, action, danger? }]
-//   Actions: "open", "open-tab", "open-here", "copy-url",
-//            "pin", "unpin", "rename", "remove".
-//   Set menu: [] to give an item no ⋯ button at all.
-//   On a section, \`menu\` overrides the menu for all of its items.
-
-module.exports = {
-  sections: [
-    { type: "chats" },
-    { type: "files" },
-    { type: "apps" },
-    { type: "workflows" },
-    { type: "bookmarks" },
-    { type: "git", title: "Changes" },
-    { type: "prs", title: "Pull Requests", collapsed: true },
-
-    // Example — uncomment to add your own section:
-    // {
-    //   type: "custom",
-    //   title: "Docs",
-    //   open: "replace",
-    //   items: [
-    //     { label: "MDN", url: "https://developer.mozilla.org", icon: "Globe" },
-    //     {
-    //       label: "Electron",
-    //       url: "https://electronjs.org/docs",
-    //       open: "tab",
-    //       menu: [{ label: "Copy link", action: "copy-url" }],
-    //     },
-    //   ],
-    // },
-  ],
-};
+// App widget: { id: "renewals", type: "app", app: "renewals", height: 320 }
+// Apps use the normal sandboxed app runtime, storage and host theme.
+// Build a responsive compact view; expand opens the same app in a workspace tab.
+// Note widget: { id: "brief", type: "note", path: "docs/brief.md" }
+// Notes preview an existing project document; open it to edit.
+// Custom links: { id: "docs", type: "custom", title: "Docs", items: [
+//   { label: "Docs", url: "https://example.com", icon: "BookOpen", open: "tab" }
+// ] }
+// Items nest with items: [...], collapsed: true. open: "tab" or "replace".
+// Menus: [{ label, action, danger? }]. Actions: open, open-tab, open-here,
+// copy-url, pin, unpin, rename, remove. menu: [] hides the menu.
+// Hover preview: { title?, description?, metadata?: [{ label, value }] } or false.
+module.exports = ${JSON.stringify(DEFAULT_SIDEBAR_CONFIG, null, 2)};
 `;
 
 const VALID_TYPES = new Set([
@@ -228,6 +129,9 @@ const VALID_TYPES = new Set([
   "prs",
   "remote",
   "custom",
+  "activity",
+  "note",
+  "app",
 ]);
 
 const VALID_ACTIONS = new Set<SidebarAction>([
@@ -333,38 +237,118 @@ function sanitizeItems(raw: unknown, depth = 0): SidebarItem[] | undefined {
   });
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stableId(value: unknown): value is string {
+  return (
+    typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(value)
+  );
+}
+
+function isSectionType(value: unknown): value is SidebarSectionConfig["type"] {
+  return typeof value === "string" && VALID_TYPES.has(value);
+}
+
+function sanitizeTabs({
+  raw,
+  ids,
+  sectionIds,
+}: {
+  raw: unknown;
+  ids: Set<string>;
+  sectionIds: Set<string>;
+}): SidebarTabConfig[] {
+  if (!Array.isArray(raw))
+    throw new Error("Both left and right must be arrays of tabs.");
+  return raw
+    .map((tab): SidebarTabConfig => {
+      if (
+        !isRecord(tab) ||
+        !stableId(tab.id) ||
+        ids.has(tab.id) ||
+        typeof tab.title !== "string" ||
+        !tab.title.trim() ||
+        !Array.isArray(tab.sections)
+      ) {
+        throw new Error("Each tab needs a unique id, a title, and sections.");
+      }
+      ids.add(tab.id);
+      const sections = tab.sections.flatMap(
+        (section): SidebarSectionConfig[] => {
+          if (
+            !isRecord(section) ||
+            !stableId(section.id) ||
+            sectionIds.has(section.id) ||
+            !isSectionType(section.type)
+          ) {
+            throw new Error(
+              "Each widget needs a unique id and a supported type.",
+            );
+          }
+          sectionIds.add(section.id);
+          const when = sanitizeProjectExperienceWhen(section.when);
+          if (when === null) return [];
+          if (
+            section.type === "app" &&
+            (typeof section.app !== "string" ||
+              !/^[a-zA-Z0-9_-]+$/.test(section.app))
+          )
+            throw new Error("App widgets need an app name.");
+          if (
+            section.path !== undefined &&
+            (typeof section.path !== "string" ||
+              section.path.startsWith("/") ||
+              section.path.split(/[\\/]/).includes(".."))
+          )
+            throw new Error("Notes need a project-relative path.");
+          return [
+            {
+              id: section.id,
+              type: section.type,
+              title:
+                typeof section.title === "string" ? section.title : undefined,
+              app: typeof section.app === "string" ? section.app : undefined,
+              path: typeof section.path === "string" ? section.path : undefined,
+              height:
+                typeof section.height === "number" &&
+                Number.isFinite(section.height)
+                  ? Math.max(120, Math.min(1200, section.height))
+                  : undefined,
+              collapsed: section.collapsed === true,
+              hideEmpty:
+                typeof section.hideEmpty === "boolean"
+                  ? section.hideEmpty
+                  : undefined,
+              items: sanitizeItems(section.items),
+              open: asOpenMode(section.open),
+              menu: sanitizeMenu(section.menu),
+              when,
+            },
+          ];
+        },
+      );
+      const when = sanitizeProjectExperienceWhen(tab.when);
+      return {
+        id: tab.id,
+        title: tab.title,
+        icon: typeof tab.icon === "string" ? tab.icon : undefined,
+        sections: when === null ? [] : sections,
+        when: when ?? undefined,
+      };
+    })
+    .filter((tab) => tab.sections.length > 0);
+}
+
 function sanitize(raw: unknown): SidebarConfig {
-  const record =
-    typeof raw === "object" && raw !== null
-      ? (raw as Record<string, unknown>)
-      : {};
-  const rawSections = Array.isArray(record.sections) ? record.sections : [];
-  const sections: SidebarSectionConfig[] = [];
-  for (const entry of rawSections) {
-    if (typeof entry !== "object" || entry === null) continue;
-    const section = entry as Record<string, unknown>;
-    if (typeof section.type !== "string" || !VALID_TYPES.has(section.type)) {
-      continue;
-    }
-    const when = sanitizeProjectExperienceWhen(section.when);
-    if (when === null) continue;
-    sections.push({
-      type: section.type as SidebarSectionConfig["type"],
-      title: typeof section.title === "string" ? section.title : undefined,
-      collapsed: section.collapsed === true,
-      // Tri-state: absent means "per-type default" (true for workflows
-      // and apps), so only pass booleans through.
-      hideEmpty:
-        typeof section.hideEmpty === "boolean" ? section.hideEmpty : undefined,
-      items: sanitizeItems(section.items),
-      open: asOpenMode(section.open),
-      menu: sanitizeMenu(section.menu),
-      when,
-    });
-  }
-  // An empty/invalid config would leave the user with no sidebar and no
-  // obvious way back, so fall back to the defaults.
-  return sections.length > 0 ? { sections } : DEFAULT_SIDEBAR_CONFIG;
+  if (!isRecord(raw)) throw new Error("Export a sidebar configuration object.");
+  const ids = new Set<string>();
+  const sectionIds = new Set<string>();
+  return {
+    left: sanitizeTabs({ raw: raw.left, ids, sectionIds }),
+    right: sanitizeTabs({ raw: raw.right, ids, sectionIds }),
+  };
 }
 
 /** Evaluate a sidebar.js source in the isolated vm context. Throws. */
@@ -376,23 +360,38 @@ function evaluateSidebarModule(source: string, filename: string): unknown {
 }
 
 /**
- * Load + sanitize a sidebar config from an arbitrary file. A file that
- * fails to evaluate falls back to the built-in defaults (with the parse
- * error logged) — the same behavior as the profile store, so every layer
- * of the ADR-0043 resolution treats a broken file identically.
+ * Load an entire layout atomically. Invalid edits retain the last valid
+ * layout for this exact file; a first invalid load uses defaults and exposes
+ * an error. Never silently fall through to a different configuration layer.
  */
+const lastGood = new Map<string, SidebarConfig>();
+const loadErrors = new Map<string, string>();
 export function loadSidebarConfigFile(file: string): SidebarConfig {
-  let source: string;
   try {
-    source = fs.readFileSync(file, "utf-8");
-  } catch {
-    return DEFAULT_SIDEBAR_CONFIG;
-  }
-  try {
-    return sanitize(evaluateSidebarModule(source, file));
+    const config = sanitize(
+      evaluateSidebarModule(fs.readFileSync(file, "utf-8"), file),
+    );
+    lastGood.delete(file);
+    lastGood.set(file, config);
+    if (lastGood.size > 100) {
+      const oldest = lastGood.keys().next().value;
+      if (oldest) {
+        lastGood.delete(oldest);
+        loadErrors.delete(oldest);
+      }
+    }
+    loadErrors.delete(file);
+    return config;
   } catch (cause) {
-    console.warn(`[desktop] ${file} failed to evaluate:`, cause);
-    return DEFAULT_SIDEBAR_CONFIG;
+    if (loadErrors.size >= 100) {
+      const oldest = loadErrors.keys().next().value;
+      if (oldest) loadErrors.delete(oldest);
+    }
+    loadErrors.set(
+      file,
+      cause instanceof Error ? cause.message : String(cause),
+    );
+    return lastGood.get(file) ?? DEFAULT_SIDEBAR_CONFIG;
   }
 }
 
@@ -401,6 +400,7 @@ export type SidebarLayer = "project-local" | "project" | "profile" | "default";
 
 export interface ResolvedSidebarConfig {
   config: SidebarConfig;
+  error?: string;
   layer: SidebarLayer;
   /** The winning layer's file (absent for the built-in default). */
   file?: string;
@@ -450,9 +450,9 @@ export function sidebarLayerFiles(opts: {
  * this user's per-project override, then the project's shared
  * `.catamorphic/sidebar.js`, then the profile-global `sidebar.js`, then the
  * built-in default. A file that exists but fails to evaluate does NOT slide
- * to the next layer (that would silently reroute a typo); it falls back to
- * the defaults like a broken profile file always has. `layer` names the
- * file that won even in that case.
+ * to the next layer (that would silently reroute a typo); it retains that
+ * file's last valid layout, or defaults if none has loaded. `layer` names
+ * the file that won even in that case.
  */
 export function resolveSidebarConfig(opts: {
   profileDir: string;
@@ -461,7 +461,8 @@ export function resolveSidebarConfig(opts: {
 }): ResolvedSidebarConfig {
   for (const { layer, file } of sidebarLayerFiles(opts)) {
     if (!fs.existsSync(file)) continue;
-    return { config: loadSidebarConfigFile(file), layer, file };
+    const config = loadSidebarConfigFile(file);
+    return { config, layer, file, error: loadErrors.get(file) };
   }
   return { config: DEFAULT_SIDEBAR_CONFIG, layer: "default" };
 }
@@ -567,31 +568,22 @@ export class SidebarConfigStore {
   }
 
   /**
-   * Does this source evaluate to at least one usable section? Guards the
+   * Does this source evaluate to a valid two-sided layout? Guards the
    * agent-edit path: silently writing a broken file would collapse the
    * user's sidebar to the defaults with no explanation.
    */
   isValidSource(source: string): boolean {
     try {
       const evaluated = evaluateSidebarModule(source, this.file);
-      const exported = evaluated as { sections?: unknown };
-      return (
-        Array.isArray(exported?.sections) &&
-        sanitize(evaluated).sections.length > 0 &&
-        exported.sections.length > 0
-      );
+      sanitize(evaluated);
+      return true;
     } catch {
       return false;
     }
   }
 
   load(): SidebarConfig {
-    try {
-      return sanitize(evaluateSidebarModule(this.read(), this.file));
-    } catch (cause) {
-      console.warn("[desktop] sidebar.js failed to evaluate:", cause);
-      return DEFAULT_SIDEBAR_CONFIG;
-    }
+    return loadSidebarConfigFile(this.file);
   }
 
   watch(onChange: (config: SidebarConfig) => void): void {

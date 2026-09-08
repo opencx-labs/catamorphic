@@ -22,11 +22,11 @@ import {
   Link2,
   MessageSquare,
   PanelLeft,
+  PanelRight,
   Plus,
   Settings as SettingsIcon,
   Share2,
   Sparkles,
-  Wand2,
   Workflow as WorkflowIcon,
 } from "lucide-react";
 import {
@@ -49,6 +49,7 @@ import {
   matchesProjectExperience,
   type ProjectExperienceContext,
 } from "../shared/project-experience.js";
+import { sidebarSections, visibleSidebarConfig } from "../shared/sidebar.js";
 import {
   type AgentPointer,
   AgentPointers,
@@ -104,7 +105,9 @@ import {
   type SessionCommand,
   SidebarSessionInspector,
 } from "./components/sidebar-session-inspector.js";
+import { SidebarActivity, SidebarNote } from "./components/sidebar-widgets.js";
 import { SiteFavicon } from "./components/site-favicon.js";
+import { TabbedSidebar } from "./components/tabbed-sidebar.js";
 import {
   type PendingToolPermission,
   ToolPermissionModal,
@@ -143,6 +146,7 @@ import {
   useKeybindings,
 } from "./lib/keybindings.js";
 import { notifyDesktop, playChime } from "./lib/notify.js";
+import { transitionSidebarUpdate } from "./lib/sidebar-transition.js";
 import { skillInvocation } from "./lib/skills.js";
 import {
   isBrowserFile,
@@ -784,6 +788,8 @@ export function App() {
     null,
   );
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [rightSidebarOpen, setRightSidebarOpen] = useState(true);
+  const [sidebarError, setSidebarError] = useState<string>();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [closingWorkflow, setClosingWorkflow] = useState<string | null>(null);
   // Live per-chat signals reported by each ChatDock (working / draft /
@@ -808,8 +814,13 @@ export function App() {
     void desktopApi.getPrefs().then((loaded) => {
       setPrefs(loaded);
       setSidebarOpen(loaded.sidebarOpen);
+      setRightSidebarOpen(loaded.rightSidebarOpen);
     });
-    return desktopApi.onPrefsChanged(setPrefs);
+    return desktopApi.onPrefsChanged((next) => {
+      setPrefs(next);
+      setSidebarOpen(next.sidebarOpen);
+      setRightSidebarOpen(next.rightSidebarOpen);
+    });
   }, []);
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
@@ -970,6 +981,10 @@ export function App() {
     builder: !memberShell,
     permissions: remoteSurfaceStatus?.capabilities?.permissions ?? [],
   };
+  const visibleSidebars = visibleSidebarConfig({
+    config: sidebarConfig,
+    context: projectExperienceContext,
+  });
 
   useEffect(() => {
     if (!projectId) {
@@ -1069,13 +1084,26 @@ export function App() {
   // changes, and on every main-process change signal.
   useEffect(() => {
     let stale = false;
-    const refetch = () => {
+    let request = 0;
+    let signature: string | undefined;
+    const refetch = (animate = false) => {
+      const currentRequest = ++request;
       void desktopApi.sidebarConfigGet(projectId).then((resolved) => {
-        if (!stale) setSidebarConfig(resolved.config);
+        if (stale || currentRequest !== request) return;
+        setSidebarError(resolved.error);
+        const next = JSON.stringify(resolved.config);
+        if (signature === next) return;
+        const apply = () => {
+          if (stale || currentRequest !== request) return;
+          signature = next;
+          setSidebarConfig(resolved.config);
+        };
+        if (animate) transitionSidebarUpdate(apply);
+        else apply();
       });
     };
     refetch();
-    const unsubscribe = desktopApi.onSidebarConfigChanged(refetch);
+    const unsubscribe = desktopApi.onSidebarConfigChanged(() => refetch(true));
     return () => {
       stale = true;
       unsubscribe();
@@ -1133,6 +1161,8 @@ export function App() {
       setSidebarConfig(sidebar.config);
       setAgentsData(agents);
       setPrefs(nextPrefs);
+      setSidebarOpen(nextPrefs.sidebarOpen);
+      setRightSidebarOpen(nextPrefs.rightSidebarOpen);
       setProfileVeil({ stage: "out" });
     } finally {
       completingSwitchRef.current = false;
@@ -3631,6 +3661,11 @@ export function App() {
       openTerminalTab(mode === "side" ? { side: true } : undefined),
     "new-editor-tab": (mode) =>
       openEditorTab(mode === "side" ? { side: true } : undefined),
+    "toggle-right-sidebar": () =>
+      setRightSidebarOpen((value) => {
+        void desktopApi.setPrefs({ rightSidebarOpen: !value });
+        return !value;
+      }),
     "toggle-sidebar": () =>
       setSidebarOpen((value) => {
         void desktopApi.setPrefs({ sidebarOpen: !value });
@@ -3776,7 +3811,7 @@ export function App() {
   const projectIdRef = useRef(projectId);
   projectIdRef.current = projectId;
   const sidebarConfigRef = useRef<SidebarConfig | null>(sidebarConfig);
-  sidebarConfigRef.current = sidebarConfig;
+  sidebarConfigRef.current = visibleSidebars;
   const activeProfileRef = useRef(activeProfile);
   activeProfileRef.current = activeProfile;
   useEffect(() => {
@@ -3929,7 +3964,7 @@ export function App() {
             // Lets the context snapshot mark the asking agent's own chat.
             sessionId: chat.sessionId ?? null,
           }));
-          const sidebar = (sidebarConfigRef.current?.sections ?? []).map(
+          const sidebar = sidebarSections(sidebarConfigRef.current).map(
             (section) => ({
               type: section.type,
               title: section.title,
@@ -4717,7 +4752,7 @@ export function App() {
     activeProjectId: projectId,
     profiles: profilesData?.profiles ?? [],
     activeProfileId: activeProfile?.id,
-    sidebarConfig,
+    sidebarConfig: visibleSidebars,
     onOpenUrl: openUrl,
     onOpenTab: openTab,
     onOpenSession: openSession,
@@ -4766,6 +4801,77 @@ export function App() {
     onPickModel: pickModel,
     onHighlightTarget: setPaletteTarget,
   };
+
+  const sidebarTabs = (side: "left" | "right") => visibleSidebars?.[side] ?? [];
+  const renderSidebarSection = (
+    section: SidebarSectionConfig,
+    visible: boolean,
+  ) =>
+    projectId ? (
+      <ConfiguredSection
+        key={section.id}
+        visible={visible}
+        onCustomize={() =>
+          sendToAgent("Customize my sidebar widgets and tabs.", "float")
+        }
+        section={section}
+        experienceContext={projectExperienceContext}
+        memberShell={memberShell}
+        projectId={projectId}
+        profileId={activeProfile?.id}
+        activeTab={activeTab}
+        activeFilePath={
+          workspace.editors.find(
+            (editor) => editorTabKey(editor.localId) === workspace.activeTabKey,
+          )?.filePath ?? undefined
+        }
+        activeChatSessionId={
+          workspace.chats.find(
+            (chat) => chat.localId === workspace.activeChatId,
+          )?.sessionId
+        }
+        keybindingLabel={formatBinding(keybindings["new-floating-chat"])}
+        agentsData={agentsData}
+        defaultAgentId={effectiveDefaultAgentId}
+        projectAgentNames={projectAgentNames}
+        unreadSessionIds={unreadSessionIds}
+        onOpenTab={openTab}
+        onNewWorkflow={() => sendToAgent(NEW_WORKFLOW_PROMPT, "float")}
+        onNewChat={() => addChat()}
+        onSessionCommand={(session, command) => {
+          const entry = workspace.chats.find(
+            (chat) => chat.sessionId === session.id,
+          ) ?? { ...newChatEntry("tab"), sessionId: session.id };
+          if (command === "fork") {
+            void desktopApi
+              .sessionIsIncognito(session.id)
+              .then((incognito) => forkChat({ ...entry, incognito }));
+            return;
+          }
+          if (command === "parent") {
+            openParentChat(entry);
+            return;
+          }
+          openSession(session);
+          openPalettePicker(command);
+        }}
+        onOpenSession={openSession}
+        onSessionAction={applySessionAction}
+        onOpenUrl={openUrl}
+        onOpenFile={(filePath) => {
+          void openLinkedSurface(`file:${filePath}`).catch((cause: unknown) =>
+            setLinkError(
+              cause instanceof Error
+                ? cause.message
+                : "Could not open this file",
+            ),
+          );
+        }}
+        onOpenHistory={setRemoteHistoryPath}
+        onPublish={(path, features) => setRemotePublish({ path, features })}
+        onPropose={(files, features) => setRemotePropose({ files, features })}
+      />
+    ) : null;
 
   const hasActiveWork =
     Object.values(signalsByChat).some((signals) => signals.working) ||
@@ -4877,119 +4983,36 @@ export function App() {
           if (archiveRequest) void finishArchive(archiveRequest);
         }}
       />
-      <aside
-        className={`flex shrink-0 flex-col overflow-hidden border-r border-border bg-bg-raised transition-[width] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-          sidebarOpen ? "w-[260px]" : "w-0 border-r-0"
-        }`}
-        aria-hidden={!sidebarOpen}
-        inert={!sidebarOpen ? true : undefined}
-      >
-        <div className="flex w-[260px] flex-1 flex-col overflow-hidden">
-          <div className="app-drag h-10 shrink-0" />
+      <TabbedSidebar
+        key={`left:${activeProfile?.id}:${projectId}`}
+        side="left"
+        scope={`${activeProfile?.id}:${projectId}`}
+        tabs={sidebarTabs("left")}
+        open={sidebarOpen}
+        error={sidebarError}
+        onCustomize={() =>
+          sendToAgent("Customize my left sidebar tabs and widgets.", "float")
+        }
+        header={
+          <>
+            <div className="app-drag h-10 shrink-0" />
 
-          <div className="flex items-center gap-1 px-3 pb-3">
-            <ProjectSwitcher
-              projects={projects}
-              activeProjectId={projectId}
-              onSelect={selectProject}
-              onNewProject={() => setProjectModalOpen(true)}
-              onConnectRemote={() =>
-                setRemoteConnect({ open: true, link: null })
-              }
-              onDeleteProject={setDeletingProject}
-            />
-            <RemoteConnectionIndicator projectId={projectId} />
-          </div>
-
-          <div className="min-h-0 flex-1 overflow-y-auto px-2">
-            {projectId &&
-              (sidebarConfig?.sections ?? [])
-                .filter(
-                  (section) =>
-                    matchesProjectExperience(
-                      section.when,
-                      projectExperienceContext,
-                    ) &&
-                    (!memberShell ||
-                      !["git", "prs", "remote"].includes(section.type)),
-                )
-                .map((section, index) => (
-                  <ConfiguredSection
-                    // biome-ignore lint/suspicious/noArrayIndexKey: sections have no id; the same type may appear twice, and order IS identity here
-                    key={`${section.type}:${index}`}
-                    section={section}
-                    experienceContext={projectExperienceContext}
-                    memberShell={memberShell}
-                    projectId={projectId}
-                    profileId={activeProfile?.id}
-                    activeTab={activeTab}
-                    activeFilePath={
-                      workspace.editors.find(
-                        (editor) =>
-                          editorTabKey(editor.localId) ===
-                          workspace.activeTabKey,
-                      )?.filePath ?? undefined
-                    }
-                    activeChatSessionId={
-                      workspace.chats.find(
-                        (chat) => chat.localId === workspace.activeChatId,
-                      )?.sessionId
-                    }
-                    keybindingLabel={formatBinding(
-                      keybindings["new-floating-chat"],
-                    )}
-                    agentsData={agentsData}
-                    defaultAgentId={effectiveDefaultAgentId}
-                    projectAgentNames={projectAgentNames}
-                    unreadSessionIds={unreadSessionIds}
-                    onOpenTab={openTab}
-                    onNewWorkflow={() =>
-                      sendToAgent(NEW_WORKFLOW_PROMPT, "float")
-                    }
-                    onNewChat={() => addChat()}
-                    onSessionCommand={(session, command) => {
-                      const entry = workspace.chats.find(
-                        (chat) => chat.sessionId === session.id,
-                      ) ?? { ...newChatEntry("tab"), sessionId: session.id };
-                      if (command === "fork") {
-                        void desktopApi
-                          .sessionIsIncognito(session.id)
-                          .then((incognito) =>
-                            forkChat({ ...entry, incognito }),
-                          );
-                        return;
-                      }
-                      if (command === "parent") {
-                        openParentChat(entry);
-                        return;
-                      }
-                      openSession(session);
-                      openPalettePicker(command);
-                    }}
-                    onOpenSession={openSession}
-                    onSessionAction={applySessionAction}
-                    onOpenUrl={openUrl}
-                    onOpenFile={(filePath) => {
-                      void openLinkedSurface(`file:${filePath}`).catch(
-                        (cause: unknown) =>
-                          setLinkError(
-                            cause instanceof Error
-                              ? cause.message
-                              : "Could not open this file",
-                          ),
-                      );
-                    }}
-                    onOpenHistory={setRemoteHistoryPath}
-                    onPublish={(path, features) =>
-                      setRemotePublish({ path, features })
-                    }
-                    onPropose={(files, features) =>
-                      setRemotePropose({ files, features })
-                    }
-                  />
-                ))}
-          </div>
-
+            <div className="flex items-center gap-1 px-3 pb-3">
+              <ProjectSwitcher
+                projects={projects}
+                activeProjectId={projectId}
+                onSelect={selectProject}
+                onNewProject={() => setProjectModalOpen(true)}
+                onConnectRemote={() =>
+                  setRemoteConnect({ open: true, link: null })
+                }
+                onDeleteProject={setDeletingProject}
+              />
+              <RemoteConnectionIndicator projectId={projectId} />
+            </div>
+          </>
+        }
+        footer={
           <footer className="border-t border-border p-2">
             {profilesData && activeProfile && (
               <ProfileBar
@@ -5028,27 +5051,11 @@ export function App() {
                 <SettingsIcon className="size-3.5" />
                 Settings
               </button>
-              {/* The sidebar is agent-authored (sidebar.js) — this hands
-                  the request to the agent instead of a settings form. */}
-              <ShortcutHint label="Customize sidebar">
-                <button
-                  type="button"
-                  onClick={() =>
-                    sendToAgent(
-                      "I want to customize my sidebar. Can you walk me through what's possible and make the changes I ask for?",
-                      "float",
-                    )
-                  }
-                  className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-                  aria-label="Customize sidebar"
-                >
-                  <Wand2 className="size-3.5" />
-                </button>
-              </ShortcutHint>
             </div>
           </footer>
-        </div>
-      </aside>
+        }
+        renderSection={renderSidebarSection}
+      />
 
       {/* min-h-0/overflow-hidden: the content column must clip its panes
           (terminal canvases refit asynchronously and may overshoot for a
@@ -5081,6 +5088,7 @@ export function App() {
               </button>
             </ShortcutHint>
           </span>
+
           {(projectId || workspace.browsers.length > 0) && (
             <WorkspaceTabBar
               tabs={allTabs}
@@ -5134,6 +5142,24 @@ export function App() {
               </ShortcutHint>
             );
           })()}
+          <ShortcutHint
+            label="Toggle right sidebar"
+            shortcut={formatBinding(keybindings["toggle-right-sidebar"])}
+          >
+            <button
+              type="button"
+              aria-label={
+                rightSidebarOpen
+                  ? "Collapse right sidebar"
+                  : "Expand right sidebar"
+              }
+              aria-expanded={rightSidebarOpen}
+              className="app-no-drag grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:text-fg"
+              onClick={() => actionHandlers["toggle-right-sidebar"]?.()}
+            >
+              <PanelRight className="size-4" />
+            </button>
+          </ShortcutHint>
         </div>
 
         {projectId ? (
@@ -5743,6 +5769,18 @@ export function App() {
           />
         )}
       </main>
+      <TabbedSidebar
+        key={`right:${activeProfile?.id}:${projectId}`}
+        side="right"
+        scope={`${activeProfile?.id}:${projectId}`}
+        tabs={sidebarTabs("right")}
+        open={rightSidebarOpen}
+        error={sidebarError}
+        onCustomize={() =>
+          sendToAgent("Customize my right sidebar tabs and widgets.", "float")
+        }
+        renderSection={renderSidebarSection}
+      />
 
       {/* Stays mounted so the close transition can play out. */}
       {paletteProps && (
@@ -5921,6 +5959,8 @@ export function App() {
 /** One sidebar section, shaped by the user's sidebar.js config. */
 function ConfiguredSection({
   section,
+  visible,
+  onCustomize,
   experienceContext,
   memberShell,
   projectId,
@@ -5946,6 +5986,8 @@ function ConfiguredSection({
   onPropose,
 }: {
   section: SidebarSectionConfig;
+  visible: boolean;
+  onCustomize: () => void;
   experienceContext: ProjectExperienceContext;
   memberShell: boolean;
   projectId: string;
@@ -5978,12 +6020,84 @@ function ConfiguredSection({
   // (hidden, not unmounted) so its data fetch is what reveals the section.
   const hideEmpty =
     section.hideEmpty ??
-    (section.type === "workflows" ||
+    (section.type === "git" ||
+      section.type === "workflows" ||
       section.type === "apps" ||
       section.type === "remote");
   const [empty, setEmpty] = useState(true);
   const body = (() => {
     switch (section.type) {
+      case "activity":
+        return (
+          <SidebarSection
+            title={section.title ?? "Activity"}
+            defaultOpen={defaultOpen}
+          >
+            {(expanded) => (
+              <SidebarActivity
+                projectId={projectId}
+                visible={visible && expanded}
+                onOpenSession={onOpenSession}
+                onOpenTab={onOpenTab}
+              />
+            )}
+          </SidebarSection>
+        );
+      case "note":
+        return (
+          <SidebarSection
+            title={section.title ?? "Project note"}
+            defaultOpen={defaultOpen}
+          >
+            {(expanded) => (
+              <SidebarNote
+                key={`${profileId}:${projectId}:${section.id}`}
+                projectId={projectId}
+                scope={`${profileId}:${projectId}:${section.id}`}
+                path={section.path}
+                visible={visible && expanded}
+                onOpenFile={onOpenFile}
+              />
+            )}
+          </SidebarSection>
+        );
+      case "app":
+        return (
+          <SidebarSection
+            title={section.title ?? section.app ?? "App"}
+            defaultOpen={defaultOpen}
+            action={
+              <ShortcutHint label="Open app in tab">
+                <button
+                  type="button"
+                  aria-label="Open app in tab"
+                  className="sidebar-tab"
+                  onClick={() =>
+                    section.app && onOpenTab({ kind: "app", name: section.app })
+                  }
+                >
+                  <PanelRight className="size-3.5" />
+                </button>
+              </ShortcutHint>
+            }
+          >
+            {(expanded) =>
+              section.app ? (
+                <AppScreen
+                  projectId={projectId}
+                  appName={section.app}
+                  compact
+                  height={section.height}
+                  visible={visible && expanded}
+                />
+              ) : (
+                <button type="button" onClick={onCustomize}>
+                  Choose an app
+                </button>
+              )
+            }
+          </SidebarSection>
+        );
       case "workflows":
         return (
           <SidebarSection
@@ -6312,15 +6426,23 @@ function SidebarSection({
   title: string;
   defaultOpen?: boolean;
   action?: ReactNode;
-  children: ReactNode;
+  children: ReactNode | ((expanded: boolean) => ReactNode);
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const [visited, setVisited] = useState(defaultOpen);
+  useEffect(() => {
+    setOpen(defaultOpen);
+    if (defaultOpen) setVisited(true);
+  }, [defaultOpen]);
   return (
     <section className="pb-2">
       <div className="flex items-center">
         <button
           type="button"
-          onClick={() => setOpen((value) => !value)}
+          onClick={() => {
+            setVisited(true);
+            setOpen((value) => !value);
+          }}
           className="flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-1 rounded-md px-2 text-[11px] font-semibold uppercase tracking-wider text-fg-faint transition-colors duration-150 hover:text-fg-muted"
           aria-expanded={open}
         >
@@ -6333,7 +6455,11 @@ function SidebarSection({
         </button>
         {action}
       </div>
-      <Collapsible open={open}>{children}</Collapsible>
+      <Collapsible open={open}>
+        {typeof children === "function"
+          ? (visited || open) && children(open)
+          : children}
+      </Collapsible>
     </section>
   );
 }

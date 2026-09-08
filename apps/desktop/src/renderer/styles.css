@@ -879,3 +879,164 @@ kbd {
   font-size: 11px;
   pointer-events: none;
 }
+
+/* Bare icon tabs. Both sidebars share the same quiet chrome and motion. */
+.tabbed-sidebar {
+  position: relative;
+  flex-shrink: 0;
+  overflow: hidden;
+  background: var(--color-bg-raised);
+  transition: width 200ms var(--ease-standard);
+}
+.tabbed-sidebar[data-sidebar="left"] {
+  border-right: 1px solid var(--color-border);
+}
+.tabbed-sidebar[data-sidebar="right"] {
+  border-left: 1px solid var(--color-border);
+}
+.tabbed-sidebar[aria-hidden="true"] {
+  border-width: 0;
+}
+.tabbed-sidebar[data-resizing] {
+  transition: none;
+  user-select: none;
+}
+.sidebar-inner {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.sidebar-tab {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+  transition:
+    color 150ms var(--ease-standard),
+    transform 150ms var(--ease-standard);
+}
+.sidebar-tab:hover {
+  color: var(--color-fg);
+}
+.sidebar-tab[aria-selected="true"] {
+  color: var(--color-accent);
+}
+.sidebar-tab:active {
+  transform: scale(0.92);
+}
+.sidebar-tab:focus-visible,
+.sidebar-resizer:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+.sidebar-tab-panel {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  padding: 0 8px;
+  opacity: 1;
+  translate: 0;
+  display: block;
+  transition:
+    opacity 200ms var(--ease-standard),
+    translate 200ms var(--ease-standard),
+    display 200ms;
+  transition-behavior: allow-discrete;
+}
+.sidebar-tab-panel[hidden] {
+  display: none;
+  opacity: 0;
+  translate: 0 6px;
+}
+@starting-style {
+  .sidebar-tab-panel {
+    opacity: 0;
+    translate: 0 6px;
+  }
+}
+/* First paint stays still. User tab changes enable the paired transition. */
+.tabbed-sidebar[data-tab-motion="false"] .sidebar-tab-panel {
+  transition: none;
+}
+@starting-style {
+  .tabbed-sidebar[data-tab-motion="false"] .sidebar-tab-panel {
+    opacity: 1;
+    translate: 0;
+  }
+}
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  touch-action: none;
+}
+[data-sidebar="left"] > .sidebar-resizer {
+  right: 0;
+}
+[data-sidebar="right"] > .sidebar-resizer {
+  left: 0;
+}
+.sidebar-resizer:hover,
+.sidebar-resizer:active {
+  background: color-mix(in srgb, var(--color-accent) 25%, transparent);
+}
+/* Config reload snapshots crossfade only the sidebars; the live workspace stays put. */
+::view-transition-group(sidebar-left),
+::view-transition-group(sidebar-right),
+::view-transition-old(sidebar-left),
+::view-transition-new(sidebar-left),
+::view-transition-old(sidebar-right),
+::view-transition-new(sidebar-right) {
+  animation-duration: 200ms;
+  animation-timing-function: var(--ease-standard);
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+}
+::view-transition {
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tabbed-sidebar,
+  .sidebar-tab,
+  .sidebar-tab-panel {
+    transition: none;
+    translate: none;
+  }
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none;
+  }
+}
+.sidebar-note > * + * {
+  margin-top: 0.6em;
+}
+.sidebar-note :is(h1, h2, h3, strong) {
+  font-weight: 600;
+  color: var(--color-fg);
+}
+.sidebar-note :is(ul, ol) {
+  padding-left: 1.2em;
+}
+.sidebar-note ul {
+  list-style: disc;
+}
+.sidebar-note ol {
+  list-style: decimal;
+}
+.sidebar-note pre {
+  overflow-x: auto;
+  padding: 8px;
+  background: var(--color-bg-inset);
+  border-radius: var(--radius-sm);
+}

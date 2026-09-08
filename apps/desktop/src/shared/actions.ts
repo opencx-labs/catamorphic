@@ -161,8 +161,15 @@ export const BUILTIN_ACTIONS = [
     keywords: ["editor", "code", "file", "open", "monaco", "edit"],
   },
   {
+    id: "toggle-right-sidebar",
+    label: "Toggle right sidebar",
+    description: "show or hide the right sidebar",
+    defaultBinding: "Cmd+Shift+B",
+    keywords: ["sidebar", "right", "widgets", "hide", "show"],
+  },
+  {
     id: "toggle-sidebar",
-    label: "Toggle sidebar",
+    label: "Toggle left sidebar",
     description: "show/hide the sidebar",
     defaultBinding: "Cmd+B",
     keywords: ["sidebar", "hide", "show", "collapse", "expand", "panel"],

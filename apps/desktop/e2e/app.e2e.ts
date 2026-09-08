@@ -813,7 +813,8 @@ describe("palette intent", () => {
     await runWait(
       `const options = ${inDialog('[role="option"]')};
        return options.length > 0 &&
-              options.some((el) => el.textContent.includes('Toggle sidebar')) &&
+              options.some((el) => el.textContent.includes('Toggle left sidebar')) &&
+              options.some((el) => el.textContent.includes('Toggle right sidebar')) &&
               !options.some((el) => el.textContent.includes('Settings'));`,
       { label: "> shows commands, hides navigate rows" },
     );
