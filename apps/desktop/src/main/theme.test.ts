@@ -148,17 +148,16 @@ describe("desktop theme", () => {
       harnessComponentsDir: path.join(root, "harness-components"),
       hostSkillsDir: path.join(root, "host-skills"),
     };
-    const manager = new ProfileConfigManager(
-      paths,
-      new ProfilesStore(paths.profilesFile),
-      () => appearance,
-    );
+    const profiles = new ProfilesStore(paths.profilesFile);
+    const systemProfile = profiles.create("System");
+    const fixedProfile = profiles.create("Fixed");
+    const manager = new ProfileConfigManager(paths, profiles, () => appearance);
     profileConfigManagers.push(manager);
     manager
-      .forProfile("system-profile")
+      .forProfile(systemProfile.id)
       .theme.save({ selection: "system", overrides: {} });
     manager
-      .forProfile("fixed-profile")
+      .forProfile(fixedProfile.id)
       .theme.save({ selection: "dark", overrides: {} });
     const changes: Array<{ profileId: string; appearance: string }> = [];
     manager.onThemeChanged((profileId, theme) => {
@@ -169,7 +168,7 @@ describe("desktop theme", () => {
     manager.systemAppearanceChanged();
 
     expect(changes).toEqual([
-      { profileId: "system-profile", appearance: "light" },
+      { profileId: systemProfile.id, appearance: "light" },
     ]);
   });
 });

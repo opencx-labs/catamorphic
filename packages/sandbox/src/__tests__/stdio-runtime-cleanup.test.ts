@@ -121,7 +121,7 @@ describe("stdio runtime ownership", () => {
       await new Promise((resolve) => setImmediate(resolve));
       await expect(
         provider.getHealth({ runtimeId: runtime.runtimeId }),
-      ).rejects.toThrow();
+      ).resolves.toMatchObject({ runtimeStatus: "error" });
     }
     expect(Reflect.get(provider, "runtimes").size).toBe(0);
     expect(Reflect.get(provider, "runtimeKeys").size).toBe(0);
@@ -159,6 +159,6 @@ describe("stdio runtime ownership", () => {
     expect(kill).toHaveBeenCalledOnce();
     await expect(
       provider.getHealth({ runtimeId: one.runtimeId }),
-    ).rejects.toThrow();
+    ).resolves.toMatchObject({ runtimeStatus: "error" });
   });
 });

@@ -29,6 +29,7 @@ describe("profile resource ownership", () => {
           stores.prefs,
         ].map((store) => vi.spyOn(store, "dispose"));
         expect(profiles.remove(profile.id)).toBe(true);
+        expect(() => config.forProfile(profile.id)).toThrow("no longer exists");
         for (const dispose of disposed) expect(dispose).toHaveBeenCalledOnce();
       }
       expect(config.forDefaultProfile()).toBe(original);

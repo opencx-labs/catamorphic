@@ -375,7 +375,14 @@ export class StdioDeploymentRuntimeProvider
   }
 
   async invoke(args: RuntimeInvocation): Promise<RuntimeInvocationReceipt> {
-    const record = this.requireRuntime(args.runtimeId);
+    const record = this.runtimes.get(args.runtimeId);
+    if (!record)
+      throw new RuntimeInfrastructureError({
+        operation: `invocation '${args.invocationId}' handoff`,
+        cause: new Error(
+          `Deployment runtime '${args.runtimeId}' is no longer available`,
+        ),
+      });
     if (
       args.deploymentArtifactId !== record.runtime.deploymentArtifactId ||
       args.artifactDigest !== record.runtime.artifactDigest ||
@@ -474,15 +481,16 @@ export class StdioDeploymentRuntimeProvider
   }
 
   async cancel(args: CancelRuntimeInvocationArgs): Promise<void> {
-    const record = this.requireRuntime(args.runtimeId);
+    const record = this.runtimes.get(args.runtimeId);
+    if (!record) return;
     await record.channel.request("cancel", {
       invocationId: args.invocationId,
     });
   }
 
   async getHealth(args: { runtimeId: string }): Promise<RuntimeHealth> {
-    const record = this.requireRuntime(args.runtimeId);
-    if (record.channel.isClosed) {
+    const record = this.runtimes.get(args.runtimeId);
+    if (!record || record.channel.isClosed) {
       return unhealthy(args.runtimeId);
     }
     try {
@@ -507,12 +515,6 @@ export class StdioDeploymentRuntimeProvider
     );
     this.runtimes.clear();
     this.runtimeKeys.clear();
-  }
-
-  private requireRuntime(runtimeId: string): RuntimeRecord {
-    const record = this.runtimes.get(runtimeId);
-    if (!record) throw new Error(`Deployment runtime '${runtimeId}' not found`);
-    return record;
   }
 }
 
