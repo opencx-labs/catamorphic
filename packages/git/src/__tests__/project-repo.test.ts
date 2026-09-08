@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import git from "isomorphic-git";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FsBackend } from "../fs-backend.js";
 import { ProjectManager } from "../project-manager.js";
 import type { ProjectRepo } from "../types.js";
@@ -23,6 +23,7 @@ describe("ProjectRepo", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await repo.dispose();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
@@ -90,6 +91,192 @@ describe("ProjectRepo", () => {
   });
 
   describe("git operations", () => {
+    it.each([1, 128, 512])(
+      "bounds index IO when committing %i files",
+      async (fileCount) => {
+        const files = Object.fromEntries(
+          Array.from({ length: fileCount }, (_, index) => [
+            `src/file-${index}.ts`,
+            `export const value = ${index};`,
+          ]),
+        );
+        await Promise.all(
+          Object.entries(files).map(([file, content]) =>
+            repo.writeFile(file, content),
+          ),
+        );
+        const indexPath = path.join(repo.repoPath, ".git", "index");
+        const contentPaths = new Set(
+          Object.keys(files).map((file) => path.join(repo.repoPath, file)),
+        );
+        const readFile = fs.readFile;
+        let activeReads = 0;
+        let peakReads = 0;
+        const reads = vi
+          .spyOn(fs, "readFile")
+          .mockImplementation(async (...args) => {
+            const isContent =
+              typeof args[0] === "string" && contentPaths.has(args[0]);
+            if (isContent) {
+              activeReads += 1;
+              peakReads = Math.max(peakReads, activeReads);
+            }
+            try {
+              return await readFile(...args);
+            } finally {
+              if (isContent) activeReads -= 1;
+            }
+          });
+        const writes = vi.spyOn(fs, "writeFile");
+        const sha = await repo.commit("Save project files", {
+          name: "Test",
+          email: "test@test.com",
+        });
+        const indexReads = reads.mock.calls.filter(
+          ([file]) => file === indexPath,
+        ).length;
+        const indexWrites = writes.mock.calls.filter(
+          ([file]) => file === indexPath,
+        ).length;
+        reads.mockRestore();
+        writes.mockRestore();
+
+        expect(await repo.readAllFilesAtRef(sha)).toMatchObject(files);
+        // Actual disk IO, not git.add call counts or a timing threshold:
+        // staging must not parse/rewrite the full index once per file.
+        expect(indexReads).toBeGreaterThan(0);
+        expect(indexReads).toBeLessThanOrEqual(4);
+        expect(indexWrites).toBeGreaterThan(0);
+        expect(indexWrites).toBeLessThanOrEqual(6);
+        expect(peakReads).toBeGreaterThan(0);
+        expect(peakReads).toBeLessThanOrEqual(128);
+      },
+    );
+
+    it("preserves executable-bit changes even when file content is unchanged", async () => {
+      const author = { name: "Test", email: "test@test.com" };
+      await repo.writeFile("script.sh", "#!/bin/sh\necho hello\n");
+      await fs.chmod(path.join(repo.repoPath, "script.sh"), 0o644);
+      await repo.commit("Baseline", author);
+      await fs.chmod(path.join(repo.repoPath, "script.sh"), 0o755);
+      const sha = await repo.commit("Make executable", author);
+      const { tree } = await git.readTree({
+        fs: nodeFs,
+        dir: repo.repoPath,
+        oid: sha,
+      });
+      expect(tree.find((entry) => entry.path === "script.sh")?.mode).toBe(
+        "100755",
+      );
+    });
+
+    it("stages content across nested repositories without their metadata or ignored dependencies", async () => {
+      for (const name of ["one", "two"]) {
+        await git.init({
+          fs: nodeFs,
+          dir: path.join(repo.repoPath, name),
+          defaultBranch: "main",
+        });
+        await repo.writeFile(`${name}/.gitignore`, "cache/\n");
+        await repo.writeFile(`${name}/src/index.ts`, name);
+        await repo.writeFile(`${name}/cache/generated.txt`, "ignored");
+        await repo.writeFile(`${name}/node_modules/dependency.js`, "ignored");
+      }
+      const sha = await repo.commit("Save parent project", {
+        name: "Test",
+        email: "test@test.com",
+      });
+      const files = await repo.readAllFilesAtRef(sha);
+      for (const name of ["one", "two"]) {
+        expect(files[`${name}/src/index.ts`]).toBe(name);
+        expect(files[`${name}/.gitignore`]).toBe("cache/\n");
+        expect(files).not.toHaveProperty(`${name}/cache/generated.txt`);
+        expect(files).not.toHaveProperty(`${name}/node_modules/dependency.js`);
+        expect(
+          Object.keys(files).some((file) => file.startsWith(`${name}/.git/`)),
+        ).toBe(false);
+      }
+    });
+
+    it("commits additions, modifications, and deletions while excluding ignored files", async () => {
+      const author = { name: "Test", email: "test@test.com" };
+      await repo.writeFile("src/changed.ts", "before");
+      await repo.writeFile("src/deleted.ts", "delete me");
+      await repo.commit("Baseline", author);
+      const ignore = await repo.readFile(".gitignore");
+      await repo.writeFile(".gitignore", `${ignore}\n*.log\n`);
+      await repo.writeFile("src/changed.ts", "after");
+      await repo.writeFile("src/added.ts", "new");
+      await repo.deleteFile("src/deleted.ts");
+      await repo.writeFile("src/debug.log", "ignored");
+      await repo.writeFile("node_modules/dependency/index.js", "ignored");
+      await repo.writeFile(".hidden/file.ts", "hidden");
+
+      const sha = await repo.commit("Save changes", author);
+      const files = await repo.readAllFilesAtRef(sha);
+      expect(files).toMatchObject({
+        "src/changed.ts": "after",
+        "src/added.ts": "new",
+      });
+      for (const excluded of [
+        "src/deleted.ts",
+        "src/debug.log",
+        "node_modules/dependency/index.js",
+        ".hidden/file.ts",
+      ]) {
+        expect(files).not.toHaveProperty(excluded);
+      }
+    });
+
+    it("limits staging to requested paths and preserves other staged changes", async () => {
+      const author = { name: "Test", email: "test@test.com" };
+      for (const file of ["selected.ts", "deleted.ts", "outside.ts", "kept.ts"])
+        await repo.writeFile(file, "before");
+      await repo.commit("Baseline", author);
+      await repo.writeFile("selected.ts", "after");
+      await repo.writeFile("added.ts", "new");
+      await repo.writeFile("outside.ts", "unstaged");
+      await repo.writeFile("staged.ts", "already staged");
+      await git.add({ fs: nodeFs, dir: repo.repoPath, filepath: "staged.ts" });
+      await repo.deleteFile("deleted.ts");
+      await repo.deleteFile("kept.ts");
+
+      const sha = await repo.commit("Selected changes", author, {
+        paths: ["selected.ts", "added.ts", "deleted.ts"],
+      });
+      const files = await repo.readAllFilesAtRef(sha);
+      expect(files).toMatchObject({
+        "selected.ts": "after",
+        "added.ts": "new",
+        "outside.ts": "before",
+        "kept.ts": "before",
+        "staged.ts": "already staged",
+      });
+      expect(files).not.toHaveProperty("deleted.ts");
+      expect(await repo.readFile("outside.ts")).toBe("unstaged");
+      expect((await repo.status()).dirty).toBe(true);
+    });
+
+    it("supports deletion-only and empty path selections", async () => {
+      const author = { name: "Test", email: "test@test.com" };
+      await repo.writeFile("deleted.ts", "before");
+      await repo.commit("Baseline", author);
+      await repo.deleteFile("deleted.ts");
+      await repo.writeFile("outside.ts", "unstaged");
+      const empty = await repo.commit("No selected changes", author, {
+        paths: [],
+      });
+      expect(await repo.readAllFilesAtRef(empty)).toMatchObject({
+        "deleted.ts": "before",
+      });
+      const sha = await repo.commit("Delete selected file", author, {
+        paths: ["deleted.ts"],
+      });
+      const files = await repo.readAllFilesAtRef(sha);
+      expect(files).not.toHaveProperty("deleted.ts");
+      expect(files).not.toHaveProperty("outside.ts");
+    });
+
     it("commit stages all files and returns a SHA", async () => {
       await repo.writeFile("src/new.ts", "new file");
 
