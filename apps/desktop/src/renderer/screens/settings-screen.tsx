@@ -48,29 +48,34 @@ export function SettingsScreen({
   onManageConnectors: () => void;
 }) {
   return (
-    <div className="mx-auto w-full max-w-md px-6 py-4">
-      <header className="mb-6 flex items-center justify-between">
-        <h1 className="text-base font-semibold">Settings</h1>
-        <button
-          type="button"
-          onClick={onClose}
-          className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-overlay hover:text-fg"
-          aria-label="Close settings"
-        >
-          <X className="size-4" />
-        </button>
-      </header>
+    <div
+      className="h-full min-h-0 w-full overflow-y-auto overscroll-contain"
+      data-testid="settings-screen"
+    >
+      <div className="mx-auto w-full max-w-md px-6 pt-4 pb-24 [overflow-wrap:anywhere]">
+        <header className="mb-6 flex items-center justify-between">
+          <h1 className="text-base font-semibold">Settings</h1>
+          <button
+            type="button"
+            onClick={onClose}
+            className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-overlay hover:text-fg"
+            aria-label="Close settings"
+          >
+            <X className="size-4" />
+          </button>
+        </header>
 
-      <AgentsSection
-        onAddAgent={onAddAgent}
-        onConfigureAgent={onConfigureAgent}
-      />
-      <ConnectorsSection onManage={onManageConnectors} />
-      <ThemeSection />
-      <NotificationsSection />
-      <ShortcutsSection />
-      <ImportSection />
-      <SidebarSection />
+        <AgentsSection
+          onAddAgent={onAddAgent}
+          onConfigureAgent={onConfigureAgent}
+        />
+        <ConnectorsSection onManage={onManageConnectors} />
+        <ThemeSection />
+        <NotificationsSection />
+        <ShortcutsSection />
+        <ImportSection />
+        <SidebarSection />
+      </div>
     </div>
   );
 }
@@ -826,7 +831,7 @@ function ImportSection() {
                   return (
                     <div
                       key={profile.id}
-                      className="flex h-9 items-center gap-2.5 rounded-lg border border-border bg-bg-raised/40 px-3"
+                      className="flex min-h-9 flex-wrap items-center gap-2.5 rounded-lg border border-border bg-bg-raised/40 px-3 py-2"
                     >
                       <input
                         type="checkbox"
@@ -999,13 +1004,13 @@ function ShortcutsSection() {
         {KEYBINDING_ACTIONS.map((action) => (
           <div
             key={action}
-            className="flex h-9 items-center justify-between rounded-lg border border-border bg-bg-raised/40 px-3"
+            className="flex min-h-9 flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-bg-raised/40 px-3 py-1.5"
           >
             <span className="text-[13px]">{ACTION_LABELS[action]}</span>
             <button
               type="button"
               onClick={() => setRecording(recording === action ? null : action)}
-              className={`h-6 cursor-pointer rounded-md border px-2 font-sans text-[12px] transition-colors duration-150 ${
+              className={`h-6 shrink-0 cursor-pointer whitespace-nowrap rounded-md border px-2 font-sans text-[12px] transition-colors duration-150 ${
                 recording === action
                   ? "border-accent bg-accent/10 text-accent"
                   : "border-border-strong bg-bg-inset text-fg-muted hover:border-fg-faint hover:text-fg"
