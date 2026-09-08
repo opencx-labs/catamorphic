@@ -1420,6 +1420,7 @@ export function registerIpcHandlers(
           maximized: window.isMaximized(),
           focused: window.isFocused(),
           focusable: window.isFocusable(),
+          opacity: window.getOpacity(),
         };
       },
     );

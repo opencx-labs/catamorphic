@@ -90,6 +90,13 @@ and pointer interactions through CDP. Do not restore
 native focus stealing to make a test pass; test OS-focus behavior separately
 only when that behavior is explicitly under test.
 
+On macOS and Windows, isolated test windows also start with native opacity zero
+so even the visible-renderer suites do not cover the developer's screen. This
+preserves the shown lifecycle, layout, animation, and CDP screenshots. To watch a
+test while debugging, explicitly run
+`CATAMORPHIC_E2E_REVEAL_WINDOWS=1 bun run --cwd apps/desktop test:e2e:visible`.
+This opt-in reveals the windows while retaining focus and mouse isolation.
+
 On Linux, Electron's `focusable: false` bypasses the window manager, preventing
 native maximize/restore. Run the gate on a private display with a window manager:
 

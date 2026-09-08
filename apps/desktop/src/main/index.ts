@@ -241,6 +241,11 @@ function createWindow(profileId?: string): BrowserWindow {
     // Pre-paint background from the profile's theme so open doesn't flash;
     // stay hidden until the renderer has actually painted a frame.
     show: false,
+    // Preserve native shown/hidden lifecycles without covering the developer's
+    // screen, including the brief showInactive/hide used for CDP startup.
+    // Opacity is a native macOS/Windows setting; Linux CI uses a private display.
+    opacity:
+      e2eDataDir && process.env.CATAMORPHIC_E2E_REVEAL_WINDOWS !== "1" ? 0 : 1,
     // Linux focusable:false bypasses the window manager and cannot maximize.
     // A private Xvfb display supplies input isolation there while retaining
     // native window management. Real desktop E2E windows remain non-focusable.

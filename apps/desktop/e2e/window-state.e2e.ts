@@ -20,6 +20,7 @@ const geometry = () =>
     maximized: boolean;
     focused: boolean;
     focusable: boolean;
+    opacity: number;
   }>(`window.catamorphicDesktop.devWindow('get')`);
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 700));
@@ -41,6 +42,7 @@ describe("window state", () => {
       expect(await geometry()).toMatchObject({
         focused: false,
         focusable: false,
+        opacity: process.env.CATAMORPHIC_E2E_REVEAL_WINDOWS === "1" ? 1 : 0,
       });
     }
     expect(await app.eval("document.hasFocus()")).toBe(true);
