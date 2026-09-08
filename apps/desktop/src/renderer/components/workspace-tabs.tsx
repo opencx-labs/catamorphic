@@ -453,8 +453,8 @@ export function WorkspaceTabBar({
                   removeExited(key);
               }}
               className={`group flex h-8 shrink-0 items-center border px-1 text-xs transition-[margin,border-radius,color,background-color,border-color] duration-150 ${vertical ? "min-w-0 rounded-lg" : "rounded-lg"} ${
-                mergeRight ? "rounded-tr-none border-r-0 " : ""
-              }${mergeLeft ? "-ml-1 rounded-tl-none border-l-0 " : ""}${
+                mergeRight ? "rounded-r-none border-r-0 " : ""
+              }${mergeLeft ? "-ml-1 rounded-l-none border-l-0 " : ""}${
                 tab.groupId
                   ? vertical
                     ? "border-l-2 border-l-accent/40 "
@@ -479,12 +479,12 @@ export function WorkspaceTabBar({
                   ? `${highlighted ? "border-accent" : active || secondary ? "border-border" : "border-transparent"} ${active ? "bg-bg-raised text-fg" : secondary ? "bg-bg-raised text-fg-muted" : "text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"}`
                   : highlighted
                     ? active
-                      ? "border-accent border-b-bg bg-bg text-fg"
+                      ? "border-accent bg-bg text-fg"
                       : "border-accent text-fg"
                     : active
-                      ? "border-border border-b-bg bg-bg text-fg"
+                      ? "border-border bg-bg text-fg"
                       : secondary
-                        ? "border-border border-b-bg bg-bg text-fg-muted"
+                        ? "border-border bg-bg text-fg-muted"
                         : "border-transparent text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
               }`}
               aria-hidden={exiting || undefined}
