@@ -17,7 +17,11 @@ import type {
   StartAgentTurn,
   SubscribeToAgentEvents,
 } from "@catamorphic/sandbox";
-import { AgentRuntimeUnsupportedError } from "@catamorphic/sandbox";
+import {
+  AgentRuntimeUnsupportedError,
+  agentCapabilityTools,
+  withAgentContext,
+} from "@catamorphic/sandbox";
 import {
   type LanguageModel,
   type ModelMessage,
@@ -275,6 +279,8 @@ export class AiSdkAgentRuntime implements AgentRuntimeProvider {
     void this.runTurn({
       state,
       turn: activeTurn,
+      context: args.context,
+      capabilities: args.capabilities,
       model: args.model,
       effort: args.effort,
     });
@@ -403,6 +409,8 @@ export class AiSdkAgentRuntime implements AgentRuntimeProvider {
   }
 
   private async runTurn(args: {
+    context?: StartAgentTurn["context"];
+    capabilities?: StartAgentTurn["capabilities"];
     state: AiSdkRuntimeSessionState;
     turn: ActiveTurn;
     model?: string;
@@ -425,8 +433,24 @@ export class AiSdkAgentRuntime implements AgentRuntimeProvider {
         const effort = args.effort ?? this.opts.effort;
         const agent = new ToolLoopAgent({
           model,
-          instructions: state.instructions,
-          tools: state.tools,
+          instructions: withAgentContext(state.instructions, args?.context),
+          tools: {
+            ...state.tools,
+            ...Object.fromEntries(
+              (args?.capabilities
+                ? agentCapabilityTools(args.capabilities, turn.abort.signal)
+                : []
+              ).map((definition) => [
+                definition.name,
+                tool({
+                  description: definition.description,
+                  inputSchema: z.object(definition.parameters),
+                  execute: (input) =>
+                    definition.execute(input, { projectId: "" }),
+                }),
+              ]),
+            ),
+          },
           stopWhen: stepCountIs(150),
           ...(effort ? { providerOptions: effortProviderOptions(effort) } : {}),
           ...(this.opts.decideToolUse

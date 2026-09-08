@@ -10,6 +10,8 @@ import { instrumentSandboxProvider } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
 import type { Identity } from "./identity.js";
 import { HOST_SKILLS, SEED_SKILLS } from "./seeds.js";
+import type { AgentCapabilityOptions } from "./services/agent-capabilities-service.js";
+import { AgentCapabilitiesService } from "./services/agent-capabilities-service.js";
 import { AgentContextService } from "./services/agent-context-service.js";
 import { AgentDefinitionsService } from "./services/agent-definitions-service.js";
 import { AgentRuntimeEventsService } from "./services/agent-runtime-events-service.js";
@@ -109,6 +111,7 @@ import { WorkflowEnablementsService } from "./services/workflow-enablements-serv
 import { WorkflowsService } from "./services/workflows-service.js";
 
 export interface CatamorphicCoreConfig {
+  agentCapabilities?: AgentCapabilityOptions;
   /** Stable host identity. Required when `codingAgent` enables sessions. */
   hostId?: string;
   /** Distinct leased execution instance beneath the logical host authority. */
@@ -151,7 +154,7 @@ export interface CatamorphicCoreConfig {
   credentialVault?: CredentialVault;
   /** Host-side external-system drivers. Requires `credentialVault`. */
   connectionProviders?: readonly ConnectionProvider[];
-  /** Re-resolve current member authority for unattended workflow dispatch. */
+  /** Re-resolve current member authority for workflow dispatch and agent capabilities. */
   resolveMemberIdentity?: (args: {
     tenantId: string;
     projectId: string;
@@ -327,6 +330,7 @@ export class CatamorphicCore {
   readonly clientRunners?: ClientRunnersService;
   readonly projectEnvironments: ProjectEnvironmentsService;
   readonly executionEnvironments: ExecutionEnvironmentsService;
+  readonly agentCapabilities: AgentCapabilitiesService;
   readonly executionAllocations: ExecutionAllocationsService;
   readonly connections?: ConnectionsService;
   readonly connectionAdmission?: ConnectionAdmissionService;
@@ -559,6 +563,14 @@ export class CatamorphicCore {
             : config.environmentProvider.get(args),
       },
     );
+    this.agentCapabilities = new AgentCapabilitiesService({
+      db: this.db,
+      hostId: config.workerNode?.id ?? config.hostId,
+      allocations: this.executionAllocations,
+      environments: this.executionEnvironments,
+      options: config.agentCapabilities,
+      resolveMemberIdentity: config.resolveMemberIdentity,
+    });
     const connectionProviders = config.connectionProviders ?? [];
     const credentialVault = config.credentialVault;
     if (connectionProviders.length > 0 && !credentialVault) {
@@ -825,6 +837,7 @@ export class CatamorphicCore {
         ? config.codingAgent
         : singleAgentRegistry(config.codingAgent);
       this.agentSessions = new AgentSessionsService(this.db, {
+        agentCapabilities: this.agentCapabilities,
         hostId: config.hostId,
         workerNode: config.workerNode,
         projectManager: this.projectManager,

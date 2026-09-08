@@ -483,6 +483,7 @@
         "@catamorphic/otel": "workspace:*",
         "@catamorphic/runtime": "workspace:*",
         "@catamorphic/workflow": "workspace:*",
+        "zod": "4.4.3",
       },
       "devDependencies": {
         "@types/node": "^26.1.1",
@@ -506,6 +507,8 @@
         "zod": "^4.4.3",
       },
       "devDependencies": {
+        "@catamorphic/fastify-plugin": "workspace:*",
+        "@electric-sql/pglite": "^0.5.4",
         "@types/node": "^26.1.1",
         "@types/pg": "^8.20.0",
         "@types/web-push": "^3.6.4",

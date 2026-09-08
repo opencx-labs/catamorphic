@@ -361,6 +361,52 @@ describe("AiSdkAgentRuntime conformance", () => {
 });
 
 describe("AiSdkAgentRuntime", () => {
+  it("refreshes factual instructions on each turn without eagerly loading capabilities", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: [textStream("First"), textStream("Second")],
+    });
+    const runtime = new AiSdkAgentRuntime({
+      model,
+      sandboxProvider: createSandboxProvider(),
+    });
+    const session = await startSession(runtime);
+    const capabilities = {
+      discover: vi.fn(async () => ({ items: [] })),
+      invoke: vi.fn(async () => ({})),
+    };
+    for (const context of ["Host A", "Host B"]) {
+      const turn = await runtime.startTurn({
+        sessionId: session.sessionId,
+        message: { role: "user", content: "Hello" },
+        context,
+        capabilities,
+      });
+      await collectUntil({
+        provider: runtime,
+        sessionId: session.sessionId,
+        until: (event) =>
+          event.type === "turn.completed" && event.turnId === turn.turnId,
+      });
+      const call = model.doStreamCalls.at(-1);
+      expect(call?.prompt).toContainEqual({
+        role: "system",
+        content: expect.stringContaining(context),
+      });
+      if (context === "Host B")
+        expect(
+          call?.prompt.find((message) => message.role === "system")?.content,
+        ).not.toContain("Host A");
+      expect(call?.tools).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "discover_capabilities" }),
+          expect.objectContaining({ name: "invoke_capability" }),
+        ]),
+      );
+    }
+    expect(capabilities.discover).not.toHaveBeenCalled();
+    expect(capabilities.invoke).not.toHaveBeenCalled();
+  });
+
   it("publishes native partial text, tool progress, usage, result, and turn end in sequence", async () => {
     const runtime = createRuntime([textStream("Hello world")]);
     const session = await startSession(runtime);

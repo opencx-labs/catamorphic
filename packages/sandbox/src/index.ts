@@ -4,6 +4,9 @@ export {
   RUNTIME_PROTOCOL_VERSION,
   type RuntimeHostCallTransition,
 } from "@catamorphic/runtime";
+export * from "./agent-capabilities.js";
+export { HttpAgentCapabilityGateway } from "./capability-client.js";
+export * from "./capability-mcp.js";
 export {
   buildPluginsPreamble,
   PLUGIN_STAGE_DIR,

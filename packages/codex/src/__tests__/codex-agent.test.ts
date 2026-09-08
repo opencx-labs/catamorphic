@@ -431,6 +431,35 @@ describe("CodexAgent", () => {
     ]);
   });
 
+  it("refreshes host context separately from user messages and defers capability discovery", async () => {
+    const capabilities = {
+      discover: vi.fn(async () => ({ items: [] })),
+      invoke: vi.fn(async () => ({})),
+    };
+    resumeThread.mockImplementation(() => turnDone());
+    const agent = new CodexAgent();
+    for (const context of ["Host A", "Host B"]) {
+      for await (const _event of agent.sendMessage(session, "hello", {
+        context,
+        capabilities,
+      })) {
+        /* drain */
+      }
+      expect(codexCtor.mock.calls.at(-1)?.[0]).toMatchObject({
+        config: {
+          developer_instructions: context,
+          mcp_servers: {
+            catamorphic_capabilities: {
+              url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:/),
+            },
+          },
+        },
+      });
+    }
+    expect(capabilities.discover).not.toHaveBeenCalled();
+    expect(capabilities.invoke).not.toHaveBeenCalled();
+  });
+
   it("passes no config when there are no MCP servers", async () => {
     resumeThread.mockReturnValueOnce(turnDone());
     await collect(new CodexAgent(), "hello");

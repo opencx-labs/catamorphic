@@ -96,3 +96,6 @@ current source when documentation and the installed version differ.
   state and namespaced permissions.
 - Writing Better Auth password hashes or rows directly.
 - Turning setup guidance into a rigid stack recipe.
+
+For agent self-context, permitted people/assignment inspection, and deferred host
+tools, read [references/agent-context-and-capabilities.md](references/agent-context-and-capabilities.md).

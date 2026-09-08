@@ -40,6 +40,7 @@ import type {
 } from "@catamorphic/core";
 import type { Json } from "@catamorphic/db";
 import type { GithubRepo, GithubTokenSet } from "@catamorphic/github";
+import type { AgentCapabilityGateway } from "@catamorphic/sandbox";
 import type { TriggerKindDefinition } from "./define-trigger-kind.js";
 
 export type WorkflowSummary = Omit<CoreWorkflowSummary, "execution">;
@@ -367,6 +368,11 @@ function buildWorkflowEnablements(
  * inline.
  */
 export class ScopedClient {
+  readonly capabilities: (args: {
+    projectId: string;
+    sessionId: string;
+    allocationId?: string;
+  }) => AgentCapabilityGateway;
   readonly projects: ProjectsResource;
   readonly workflows: WorkflowsResource;
   readonly workflowEnablements: WorkflowEnablementsResource;
@@ -379,6 +385,8 @@ export class ScopedClient {
     core: CatamorphicCore,
     private readonly identity: Identity,
   ) {
+    this.capabilities = (args) =>
+      core.agentCapabilities.forSession({ ...args, identity });
     this.projects = buildProjects(core, identity);
     this.workflows = buildWorkflows(core, identity);
     this.workflowEnablements = buildWorkflowEnablements(core, identity);

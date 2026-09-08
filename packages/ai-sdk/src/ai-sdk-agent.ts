@@ -24,6 +24,7 @@ import type {
   TurnOptions,
 } from "@catamorphic/sandbox";
 import {
+  agentCapabilityTools,
   buildPluginsPreamble,
   isMediaAttachment,
   mergePolicyLayers,
@@ -32,6 +33,7 @@ import {
   resolveMcpServers,
   stagedPluginFiles,
   ToolGate,
+  withAgentContext,
 } from "@catamorphic/sandbox";
 import {
   dynamicTool,
@@ -456,10 +458,26 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       opts?.model && this.opts.resolveModel
         ? this.opts.resolveModel(opts.model)
         : this.opts.model;
+    state.abort = new AbortController();
     const agent = new ToolLoopAgent({
       model,
-      instructions: state.instructions,
-      tools: state.tools,
+      instructions: withAgentContext(state.instructions, opts?.context),
+      tools: {
+        ...state.tools,
+        ...Object.fromEntries(
+          (opts?.capabilities
+            ? agentCapabilityTools(opts.capabilities, state.abort.signal)
+            : []
+          ).map((definition) => [
+            definition.name,
+            tool({
+              description: definition.description,
+              inputSchema: z.object(definition.parameters),
+              execute: (input) => definition.execute(input, { projectId: "" }),
+            }),
+          ]),
+        ),
+      },
       // The AI SDK's default stop condition is stepCountIs(20) — far too
       // small for real coding turns (scaffold a workspace, build, fix,
       // rebuild easily exceeds it) and it ends the turn SILENTLY mid-work.
@@ -469,7 +487,6 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     });
 
     state.running = true;
-    state.abort = new AbortController();
     state.messages = requestMessages;
     let text = "";
     let askedToolCallId: string | undefined;

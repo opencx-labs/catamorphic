@@ -303,3 +303,19 @@ user's `openDev`: a host path resolver can map all users to the same real folder
 Dispose temporary checkouts and media on failure as well as success. Stop future
 activations at session close/archive or expiry, retain refs needed by live runs,
 and abort and join polling before closing the database.
+
+## Agent context and deferred capabilities
+
+Read [AGENT-CAPABILITIES.md](../../../AGENT-CAPABILITIES.md) when changing agent
+self-context or host tool discovery. Core refreshes compact facts per turn;
+other users and infrastructure inventory remain authorized capabilities. Reuse
+`AgentCapabilitiesService`, `defineAgentCapability`, and the portable discovery /
+invocation adapters. Do not add a permanent tool family or an owner/admin agent
+role. Distinguish the agent loop's host from its Allocation's command target.
+
+Pin executing gateways to the current Allocation, refresh member identity through
+`resolveMemberIdentity`, and enforce resource access inside the owning service.
+Keep remote credentials scoped to the session and refresh them per call. Test
+revocation after discovery/approval, stale Allocation denial, cancellation, typed
+outputs, and parity between HTTP, MCP, and in-process invocation. Context and
+schemas are descriptive hints, never authorization.
