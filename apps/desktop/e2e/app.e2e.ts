@@ -613,6 +613,11 @@ describe("chat flows", () => {
        return !!row?.querySelector('[data-testid="session-unread"]');`,
       { label: "manual unread dot in the sidebar" },
     );
+    // The dock applies its action before its menu finishes animating out.
+    // Wait for that portal to leave before opening and inspecting another.
+    await runWait(`return !document.querySelector('[data-sidebar-menu]');`, {
+      label: "dock session menu dismissed",
+    });
 
     // Right-clicking the matching sidebar row exposes the same current-state
     // actions. Marking it read removes the shared dot.
