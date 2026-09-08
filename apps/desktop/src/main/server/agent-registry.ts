@@ -1020,10 +1020,19 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           return undefined;
         }
         const bridge = this.deps.workspaceBridge;
+        let disposed = false;
+        let closeLoaded: (() => Promise<void>) | undefined;
+        // Own the lazy initializer before it starts. Eviction during import
+        // must not install a new closer or construct an orphaned provider.
+        this.closeables.set(config.id, async () => {
+          disposed = true;
+          await closeLoaded?.();
+        });
         const provider = new AsyncInitCodingAgent(
           config.harness,
           async () => {
             const { buildAiSdkAgent } = await import("./coding-agent.js");
+            if (disposed) throw new Error("Agent configuration was released");
             const loaded = buildAiSdkAgent({
               config,
               sandboxProvider: this.deps.sandboxProvider,
@@ -1050,7 +1059,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             }
             // This harness owns real MCP client connections (stdio child
             // processes); eviction must close them, not leak them.
-            this.closeables.set(config.id, () => loaded.closeMcp());
+            closeLoaded = () => loaded.closeMcp();
             return this.wrapErrors(
               this.withWorkspace(this.wrapSandboxAgent(loaded), {
                 hasTools: true,

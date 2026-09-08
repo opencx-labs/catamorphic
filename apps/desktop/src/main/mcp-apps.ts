@@ -33,6 +33,7 @@ export interface McpAppView {
 
 export class McpAppsService {
   /** Live client connections, keyed by profile + connection id. */
+  private readonly closing = new Set<Promise<void>>();
   private readonly pool = new Map<string, Promise<ConnectedMcpServer>>();
   private readonly watchedProfiles = new Map<string, () => void>();
 
@@ -176,6 +177,7 @@ export class McpAppsService {
         this.releaseProfile(profileId),
       ),
     );
+    await Promise.all(this.closing);
   }
 
   private async invalidateProfile(profileId: string): Promise<void> {
@@ -183,7 +185,12 @@ export class McpAppsService {
     for (const [key, pending] of [...this.pool]) {
       if (!key.startsWith(`${profileId}:`)) continue;
       this.pool.delete(key);
-      closing.push(pending.then((server) => server.close()).catch(() => {}));
+      const closed = pending
+        .then((server) => server.close())
+        .catch(() => {})
+        .finally(() => this.closing.delete(closed));
+      this.closing.add(closed);
+      closing.push(closed);
     }
     await Promise.all(closing);
   }

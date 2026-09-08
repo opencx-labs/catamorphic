@@ -196,7 +196,17 @@ export class ProjectRepoImpl implements ProjectRepo {
             );
           // A concurrent writer cannot make this read grow beyond its budget.
           const buffer = Buffer.alloc(size + 1);
-          const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+          let bytesRead = 0;
+          while (bytesRead < buffer.length) {
+            const chunk = await handle.read(
+              buffer,
+              bytesRead,
+              buffer.length - bytesRead,
+              bytesRead,
+            );
+            if (chunk.bytesRead === 0) break;
+            bytesRead += chunk.bytesRead;
+          }
           if (bytesRead > size)
             throw new Error(
               `Project file '${file}' changed during snapshot; retry the read`,
