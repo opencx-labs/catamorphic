@@ -38,7 +38,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   tool: vi.fn((name: string) => ({ name })),
 }));
 
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { createSdkMcpServer, query } from "@anthropic-ai/claude-agent-sdk";
 import { ClaudeCodeAgentRuntime } from "../claude-code-runtime.js";
 
 const queryMock = vi.mocked(query);
@@ -980,6 +980,43 @@ describe("ClaudeCodeAgentRuntime conformance", () => {
 });
 
 describe("ClaudeCodeAgentRuntime", () => {
+  it("appends host facts to the preset and exposes only the deferred capability entry points", async () => {
+    const runtime = new ClaudeCodeAgentRuntime();
+    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
+    const session = await startSession(runtime);
+    const capabilities = {
+      discover: vi.fn(async () => ({ items: [] })),
+      invoke: vi.fn(async () => ({})),
+    };
+    const turn = await runtime.startTurn({
+      sessionId: session.sessionId,
+      message: { role: "user", content: "Hello" },
+      context: "Verified host facts",
+      capabilities,
+    });
+    await collectUntil({
+      provider: runtime,
+      sessionId: session.sessionId,
+      until: (event) =>
+        event.type === "turn.completed" && event.turnId === turn.turnId,
+    });
+    expect(optionsFromLastQuery().systemPrompt).toEqual({
+      type: "preset",
+      preset: "claude_code",
+      append: "Host instructions\n\nVerified host facts",
+    });
+    expect(createSdkMcpServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tools: expect.arrayContaining([
+          expect.objectContaining({ name: "discover_capabilities" }),
+          expect.objectContaining({ name: "invoke_capability" }),
+        ]),
+      }),
+    );
+    expect(capabilities.discover).not.toHaveBeenCalled();
+    expect(capabilities.invoke).not.toHaveBeenCalled();
+  });
+
   it("excludes native execution and file mutation in plan mode", async () => {
     const runtime = new ClaudeCodeAgentRuntime({ permissionMode: "plan" });
     queryMock.mockReturnValueOnce(scriptedQuery([successResult]));

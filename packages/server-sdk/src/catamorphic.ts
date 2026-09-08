@@ -1,4 +1,5 @@
 import type {
+  AgentCapabilityOptions,
   AgentTurnSettledEvent,
   AppBundleStore,
   CapabilityProviderRuntime,
@@ -89,6 +90,7 @@ export type StorageConfig =
   | { projectManager: ProjectManager };
 
 export interface CreateCatamorphicConfig {
+  agentCapabilities?: AgentCapabilityOptions;
   /** Stable host identity. Required when `codingAgent` enables sessions. */
   hostId?: string;
   /** Optional leased execution instance. The host owns registration/heartbeat. */
@@ -317,6 +319,7 @@ export class Catamorphic {
     });
     this.core = createCatamorphicCore({
       hostId: config.hostId,
+      agentCapabilities: config.agentCapabilities,
       workerNode: config.workerNode,
       db,
       projectManager: resolveStorage(config.storage),

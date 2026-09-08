@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { AgentCapabilityOptions } from "@catamorphic/core";
 import {
   type ConnectionProvider,
   DurableToolPermissionBroker,
@@ -36,6 +37,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { StockAdmissionService } from "./admission/admission-service.js";
 import { registerStockAdmissionRoutes } from "./admission/routes.js";
+import { stockAgentCapabilities } from "./agent-capabilities.js";
 import { buildAgentRegistry } from "./agents.js";
 import { loadStockAuthConfig } from "./auth/auth-config.js";
 import { openStockAuthDatabase } from "./auth/auth-database.js";
@@ -82,6 +84,7 @@ export const SERVER_TENANT_ID = "00000000-0000-4000-8000-0000000005e1";
 const SETUP_AGENT_USER = "stock-setup-agent";
 
 export interface StockServerOptions {
+  agentCapabilities?: AgentCapabilityOptions;
   dataDir: string;
   /** Public bases, without a trailing slash, used in discovery and links. */
   publicBases?: string[];
@@ -248,6 +251,16 @@ async function buildStockServerInner(
 
   const catamorphic = createCatamorphic({
     hostId,
+    agentCapabilities: stockAgentCapabilities({
+      core: () => catamorphic.core,
+      auth: () => stockAuth,
+      custom: options.agentCapabilities,
+    }),
+    resolveMemberIdentity: ({ tenantId, externalUserId }) =>
+      catamorphic.core.memberships.identityForUser({
+        tenantId,
+        externalUserId,
+      }),
     workerNode: machine.lease,
     clientExecution: true,
     database: databaseConfig,

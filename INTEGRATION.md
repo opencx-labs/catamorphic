@@ -811,3 +811,10 @@ unsupported limits fail rather than falling back to unbounded execution. Native
 host CLI execution does not inherit controller-sandbox resource guarantees.
 See [ADR 0100](docs/decisions/0100-workspace-resource-admission.md) and the
 [stock setup example](skills/setup-catamorphic-server/references/cluster-deployment.md#capacity-and-isolated-development).
+
+### Agent context and deferred host capabilities
+
+[AGENT-CAPABILITIES.md](AGENT-CAPABILITIES.md) describes compact per-turn user and
+execution context, the typed capability registry, permission-filtered discovery,
+MCP/HTTP transports, and host directory/approval integration. Use these existing
+seams when agents need environment or assignment awareness.

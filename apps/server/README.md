@@ -78,3 +78,9 @@ configure each server's workspace budget. Full servers reject new allocations;
 idle development workspaces retain their reservation until archived or closed.
 See the [capacity and recovery setup](../../skills/setup-catamorphic-server/references/cluster-deployment.md#capacity-and-isolated-development)
 for configuration, agent requirements, machine inventory, and cleanup recovery.
+
+Agent context and deferred capabilities are documented in
+[AGENT-CAPABILITIES.md](../../AGENT-CAPABILITIES.md). The stock host supplies the
+current user's display name and a paginated project-member directory for ordinary
+membership managers. `StockServerOptions.agentCapabilities` customizes profiles,
+capabilities, approvals, and activity reporting; host access remains authoritative.

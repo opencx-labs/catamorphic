@@ -32,6 +32,7 @@ import {
   DURABLE_WORKFLOW_SKILL_PATH,
   SEED_SKILLS,
 } from "../seeds.js";
+import type { AgentCapabilitiesService } from "./agent-capabilities-service.js";
 import {
   AgentDefinitionsService,
   type AgentDelegationPolicy,
@@ -565,6 +566,7 @@ interface AgentSessionsDeps {
    * The host's standing agent prompt: `undefined` = framework default,
    * string = replacement, `false` = none (ADR 0049).
    */
+  agentCapabilities?: AgentCapabilitiesService;
   standingAgentPrompt?: string | false;
   /**
    * The project's MCP tool roster (tool name → workflow name) at its
@@ -632,6 +634,7 @@ export class AgentSessionsService {
   private readonly pluginResolver?: PluginResolver;
   private readonly onTurnSettled?: AgentSessionsDeps["onTurnSettled"];
   private readonly seedFiles?: Record<string, string>;
+  private readonly agentCapabilities?: AgentCapabilitiesService;
   private readonly standingAgentPrompt?: string | false;
   private readonly mcpToolNames?: AgentSessionsDeps["mcpToolNames"];
   private readonly appPolicies?: AppPoliciesService;
@@ -788,6 +791,7 @@ export class AgentSessionsService {
     this.onTurnSettled = deps.onTurnSettled;
     this.seedFiles = deps.seedFiles;
     this.standingAgentPrompt = deps.standingAgentPrompt;
+    this.agentCapabilities = deps.agentCapabilities;
     this.mcpToolNames = deps.mcpToolNames;
     this.appPolicies = deps.appPolicies;
     this.storeSync = deps.storeSync;
@@ -3528,6 +3532,21 @@ export class AgentSessionsService {
         agent,
         runtime,
       );
+      if (this.agentCapabilities) {
+        turnOptions.context = await this.agentCapabilities.prompt({
+          allocationId: session.allocation_id ?? undefined,
+          identity,
+          projectId,
+          sessionId,
+          workingDirectory: anchor.providerSession.workingDirectory,
+        });
+        turnOptions.capabilities = this.agentCapabilities.forSession({
+          identity,
+          projectId,
+          sessionId,
+          allocationId: session.allocation_id ?? undefined,
+        });
+      }
       // The caller's view of the store, in the folder the agent works in
       // (ADR 0055): pulled before the turn, shipped after it.
       const storeDir = await this.storeSyncDir(

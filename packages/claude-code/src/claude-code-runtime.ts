@@ -39,9 +39,11 @@ import type {
 } from "@catamorphic/sandbox";
 import {
   AgentRuntimeUnsupportedError,
+  agentCapabilityTools,
   mergePolicyLayers,
   resolveMcpServers,
   resolveToolPermissionAcross,
+  withAgentContext,
 } from "@catamorphic/sandbox";
 import type { ZodRawShape } from "zod";
 
@@ -654,7 +656,12 @@ export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
       sessionId: state.session.sessionId,
       workingDirectory: state.session.workingDirectory,
     };
-    const extraTools = this.opts.extraTools ?? [];
+    const extraTools = [
+      ...(this.opts.extraTools ?? []),
+      ...(input.capabilities
+        ? agentCapabilityTools(input.capabilities, turn.abort.signal)
+        : []),
+    ];
     const workspaceServer =
       extraTools.length > 0
         ? createSdkMcpServer({
@@ -715,7 +722,7 @@ export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
       systemPrompt: {
         type: "preset",
         preset: "claude_code",
-        ...(state.systemPrompt ? { append: state.systemPrompt } : {}),
+        append: withAgentContext(state.systemPrompt, input.context),
       },
       env: {
         ...process.env,

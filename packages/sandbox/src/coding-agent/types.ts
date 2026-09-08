@@ -1,3 +1,4 @@
+import type { AgentCapabilityGateway } from "../agent-capabilities.js";
 import type { AgentEvent, SandboxProvider } from "../types.js";
 import type { McpToolPolicyLayers } from "./tool-policy.js";
 
@@ -219,6 +220,10 @@ export type AgentAttachment = AgentMediaAttachment | AgentTextAttachment;
 
 /** Per-turn overrides; anything unset falls back to the provider's defaults. */
 export interface TurnOptions {
+  /** Fresh host facts, separate from user prose. */
+  context?: string;
+  /** Live session-scoped gateway; remote hosts supply their own transport. */
+  capabilities?: AgentCapabilityGateway;
   model?: string;
   effort?: AgentEffort;
   /** Media sent with this turn's user message. */

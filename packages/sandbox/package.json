@@ -33,7 +33,8 @@
     "@catamorphic/otel": "workspace:*",
     "@catamorphic/runtime": "workspace:*",
     "@catamorphic/workflow": "workspace:*",
-    "@catamorphic/app": "workspace:*"
+    "@catamorphic/app": "workspace:*",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "^26.1.1"

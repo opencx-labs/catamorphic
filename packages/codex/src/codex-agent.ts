@@ -18,6 +18,7 @@ import type {
 } from "@catamorphic/sandbox";
 import {
   buildPluginsPreamble,
+  listenAgentCapabilityGateway,
   mergePolicyLayers,
   positiveTokenCount,
   renderUserMessage,
@@ -160,7 +161,11 @@ export class CodexAgent implements CodingAgentProvider {
    * provider's policies narrowed by the session's caller (ADR 0055) —
    * with no provider rebuild and nothing to cache.
    */
-  private clientFor(session: ProviderSession): Codex {
+  private clientFor(
+    session: ProviderSession,
+    capabilityServer?: AgentMcpServerConfig,
+    contextPrompt?: string,
+  ): Codex {
     const own =
       typeof this.opts.mcpPolicies === "function"
         ? this.opts.mcpPolicies()
@@ -183,6 +188,9 @@ export class CodexAgent implements CodingAgentProvider {
         ...resolveMcpServers(this.opts.mcpServers),
         ...this.opts.mcpServersForSession?.(context),
         ...this.sessionMcpServers.get(session.sessionId),
+        ...(capabilityServer
+          ? { catamorphic_capabilities: capabilityServer }
+          : {}),
       },
       mergePolicyLayers(own, this.callerPolicies.get(session.sessionId)),
       annotations,
@@ -193,7 +201,11 @@ export class CodexAgent implements CodingAgentProvider {
     };
     const config =
       Object.keys(features).length > 0 ? { ...mcpConfig, features } : mcpConfig;
-    return this.buildClient(config);
+    return this.buildClient(
+      contextPrompt
+        ? { ...config, developer_instructions: contextPrompt }
+        : config,
+    );
   }
 
   async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
@@ -235,13 +247,29 @@ export class CodexAgent implements CodingAgentProvider {
     message: string,
     opts?: TurnOptions,
   ): AsyncIterable<AgentEvent> {
+    const gateway = opts?.capabilities
+      ? await listenAgentCapabilityGateway(opts.capabilities)
+      : undefined;
+    try {
+      yield* this.sendMessageOnHost(session, message, opts, gateway?.config);
+    } finally {
+      await gateway?.close();
+    }
+  }
+
+  private async *sendMessageOnHost(
+    session: ProviderSession,
+    message: string,
+    opts?: TurnOptions,
+    capabilityServer?: AgentMcpServerConfig,
+  ): AsyncIterable<AgentEvent> {
     // Each turn spawns a fresh CLI run with this turn's options, so per-turn
     // model/effort overrides take effect without any in-memory thread state.
     // The first turn starts the thread; later turns resume it by id.
     if (opts?.toolPolicies) {
       this.callerPolicies.set(session.sessionId, opts.toolPolicies);
     }
-    const client = this.clientFor(session);
+    const client = this.clientFor(session, capabilityServer, opts?.context);
     const threadOptions = this.threadOptions(session.workingDirectory, opts);
     const thread = session.providerSessionId
       ? client.resumeThread(session.providerSessionId, threadOptions)

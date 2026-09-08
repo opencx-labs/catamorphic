@@ -156,3 +156,75 @@ Do not switch a machine's sandbox backend while it still owns workspaces.
 Member runners report their actual isolation and supported limits at registration;
 This machine remains local trust even when it uses a VM. Unsupported requirements
 are rejected before use, and requested limits travel with sandbox creation.
+
+## Assign a development machine to one user
+
+Use an ordinary named project Environment bound to the intended machine, and
+an ordinary role granting that Environment to the selected member. Keep that
+grant out of other roles; membership managers can grant it to additional members
+when sharing is intended. No developer-owner machine type or separate assignment
+permission exists. A grant controls admission, not OS accounts or network access.
+
+Choose the trust boundary before provisioning. Managed stock instances carry
+shared deployment authority and database access. Do not run untrusted developer
+code with unrestricted access to that server process or its credentials. Use a
+sandbox for that code, or connect a dedicated developer VM as an authenticated
+member runner with host-supplied scoped credentials. A member runner does not
+receive the authority's Postgres credentials. A private Environment grant alone
+does not make unrestricted processes safe on a shared managed node.
+
+## Docker, development services, and private HTTP
+
+Catamorphic does not require a team service manifest or parse Compose files.
+Agents can run `docker compose up`, package scripts, or other ordinary commands
+when their execution provider, harness permission mode, and host policy permit
+those commands. Provision Docker Engine and dependencies on the actual command
+target. Advertising a `docker` capability does not install Docker or grant access
+to its socket. For sandboxed work, verify the selected backend/image supports the
+needed daemon or containers; do not assume a host Docker socket is available.
+Keep database volumes outside disposable checkouts and back them up through the
+host's normal process. Archiving or moving a session can destroy its workspace.
+
+The host owns HTTP routing and access protection. Bind a development service to
+a private interface on its command target, then expose it through the host's
+chosen private network, authenticated reverse proxy, or identity-aware gateway.
+Tailscale is one host option, not a Catamorphic dependency. Configure its access
+rules for the intended user and any explicitly permitted collaborators. If a
+proxy handles authentication, configure it independently of the app's own login
+and block direct access that would bypass it. Environment permission does not
+automatically create a network rule. Do not publish an unprotected URL merely
+because the service is on a developer's private Allocation.
+
+Verify access as the owner, an allowed collaborator, and an unrelated user;
+verify both the advertised endpoint and direct reachability. `localhost` refers
+to the machine where the command executes, which can differ from the agent loop
+or the user's browser. Record the reachable URL and access instructions through
+the host's normal service inventory; a host capability can expose that inventory
+to authorized agents. Catamorphic does not install tunnels or infer proxy rules.
+
+## Updating machines
+
+Use the host's service manager, container deployment, or existing orchestration.
+Catamorphic does not ship a Kubernetes distribution or a second updater for
+managed machines. Pin a release or image digest and keep execution instances on
+a compatible version; do not assume arbitrary mixed-version operation is safe.
+
+1. Back up shared Postgres and verify recovery of the separately protected
+   deployment secret. Review the release's migration and compatibility notes.
+2. Stop submitting new work through the host's maintenance controls. Wait for
+   turns and external actions to settle and verify their checkpoints. Inspect
+   retained workspace processes and data that require persistence.
+3. Disable the machine through the operator API before replacing its process.
+   Disabling fences claims and lease renewal; it is not a graceful drain of
+   running work. Never use it as evidence that an external action was undone.
+4. Update the service/image while preserving that machine's own data volume and
+   identity. Boot applies coordinated migrations. Re-enable the machine through
+   the operator API and verify heartbeat, capabilities, and capacity before use.
+5. Test sign-in, a permitted session, private HTTP access, and checkpoint
+   persistence. Explicitly recover or relocate interrupted sessions. A service
+   restart does not move a live process or promise automatic replay.
+
+A package downgrade cannot undo forward-only database migrations. Follow the
+release's recovery plan, which may require restoring the database and matching
+application version. Hosts with unattended rollout requirements can automate
+these existing controls in their own deployment system.

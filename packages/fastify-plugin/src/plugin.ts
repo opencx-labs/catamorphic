@@ -11,6 +11,7 @@ import {
   type IdentityResolver,
 } from "./http-identity.js";
 import { registerAgentRoutes } from "./routes/agent.js";
+import { registerAgentCapabilityRoutes } from "./routes/agent-capabilities.js";
 import { registerAppRoutes } from "./routes/apps.js";
 import { registerAppsMcpRoutes } from "./routes/apps-mcp.js";
 import { registerClientRunnerRoutes } from "./routes/client-runners.js";
@@ -192,6 +193,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerAppRoutes(app, ctx);
   registerAppsMcpRoutes(app, ctx);
   registerProjectMcpRoutes(app, ctx);
+  registerAgentCapabilityRoutes(app, ctx);
   registerGithubRoutes(app, ctx);
   registerPluginRoutes(app, ctx);
   registerPlaygroundRoutes(app, ctx);

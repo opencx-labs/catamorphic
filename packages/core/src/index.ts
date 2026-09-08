@@ -48,6 +48,16 @@ export {
   SEED_SKILLS,
   workspaceFiles,
 } from "./seeds.js";
+export type {
+  AgentCapability,
+  AgentCapabilityContext,
+  AgentCapabilityInvocation,
+  AgentCapabilityOptions,
+} from "./services/agent-capabilities-service.js";
+export {
+  AgentCapabilitiesService,
+  defineAgentCapability,
+} from "./services/agent-capabilities-service.js";
 export { AgentContextService } from "./services/agent-context-service.js";
 export {
   AGENT_COORDINATION_STRATEGIES,

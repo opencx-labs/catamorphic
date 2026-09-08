@@ -40,6 +40,8 @@
   "devDependencies": {
     "@types/node": "^26.1.1",
     "@types/pg": "^8.20.0",
-    "@types/web-push": "^3.6.4"
+    "@types/web-push": "^3.6.4",
+    "@electric-sql/pglite": "^0.5.4",
+    "@catamorphic/fastify-plugin": "workspace:*"
   }
 }

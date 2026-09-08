@@ -32,6 +32,7 @@ import type {
   TurnOptions,
 } from "@catamorphic/sandbox";
 import {
+  agentCapabilityTools,
   buildPluginsPreamble,
   isMediaAttachment,
   mergePolicyLayers,
@@ -40,6 +41,7 @@ import {
   resolveMcpServers,
   stagePluginDocs,
   ToolGate,
+  withAgentContext,
 } from "@catamorphic/sandbox";
 import type { ZodRawShape } from "zod";
 
@@ -477,7 +479,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         options: {
           ...this.buildOptions(
             cwd,
-            state?.systemPrompt,
+            withAgentContext(state?.systemPrompt, opts?.context),
             state?.toolContext,
             opts,
             live,
@@ -659,7 +661,12 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
   ): Options {
     // Resumed sessions reconstruct this context from ProviderSession before
     // reaching here, so the host's workspace tools survive app restarts.
-    const extraTools = toolContext ? (this.opts.extraTools ?? []) : [];
+    const extraTools = [
+      ...(toolContext ? (this.opts.extraTools ?? []) : []),
+      ...(turn?.capabilities
+        ? agentCapabilityTools(turn.capabilities, live.abort.signal)
+        : []),
+    ];
     const workspaceServer =
       extraTools.length > 0 && toolContext
         ? createSdkMcpServer({

@@ -1,3 +1,4 @@
+import type { AgentCapabilityGateway } from "../agent-capabilities.js";
 import type { ToolPermissionRequest } from "./tool-policy.js";
 
 /** Where a provider's agent loop runs. */
@@ -92,6 +93,10 @@ export interface AgentRuntimeMessage {
 }
 
 export interface StartAgentTurn {
+  /** Fresh host facts, separate from user prose. */
+  context?: string;
+  /** Live session-scoped gateway; remote hosts supply their own transport. */
+  capabilities?: AgentCapabilityGateway;
   sessionId: string;
   message: AgentRuntimeMessage;
   model?: string;
