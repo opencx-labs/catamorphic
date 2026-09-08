@@ -52,6 +52,7 @@ import {
   BUILTIN_ACTIONS,
   type KeybindingAction,
 } from "../../shared/actions.js";
+import type { TerminalMacro } from "../../shared/terminal-macros.js";
 import { commandScore } from "../lib/command-score.js";
 import {
   type AgentEffort,
@@ -452,6 +453,8 @@ export function CommandPalette({
   onSendToAgent,
   onRunSkill,
   actionHandlers,
+  terminalMacros,
+  onRunTerminalMacro,
   agents,
   defaultAgentId,
   focusedChat,
@@ -495,6 +498,8 @@ export function CommandPalette({
   onRunSkill: (name: string, mode: "float" | "tab") => void;
   /** One handler per registry action — the same map the shortcuts use. */
   actionHandlers: Record<ActionId, (mode?: CommitMode) => void>;
+  terminalMacros: TerminalMacro[];
+  onRunTerminalMacro: (macro: TerminalMacro, mode?: CommitMode) => void;
   /** The profile's configured agents (for the agent/effort pickers). */
   agents: AgentInfo[];
   defaultAgentId: string | null;
@@ -767,6 +772,8 @@ export function CommandPalette({
   // would cascade into the results memo and the FLIP pass per render.
   const actionHandlersRef = useRef(actionHandlers);
   actionHandlersRef.current = actionHandlers;
+  const macroHandlerRef = useRef(onRunTerminalMacro);
+  macroHandlerRef.current = onRunTerminalMacro;
   const hasFocusedChat = focusedChat !== null;
   const actionItems = useMemo<PaletteItem[]>(() => {
     const available = BUILTIN_ACTIONS.filter(
@@ -791,7 +798,7 @@ export function CommandPalette({
           ...available.filter((action) => !chatScoped.has(action.id)),
         ]
       : available;
-    return ordered.map((action) => {
+    const commands = ordered.map((action): PaletteItem => {
       const targetPicker = PICKER_ACTIONS[action.id];
       return {
         id: `action:${action.id}`,
@@ -810,7 +817,28 @@ export function CommandPalette({
           : (mode) => actionHandlersRef.current[action.id](mode),
       };
     });
-  }, [keybindings, hasFocusedChat, enterPicker, incognitoAllowed]);
+    return [
+      ...commands,
+      ...terminalMacros.map(
+        (macro): PaletteItem => ({
+          id: `macro:${macro.id}`,
+          icon: SquareTerminal,
+          label: macro.name,
+          detail: "Macro",
+          keywords: ["macro", "terminal", macro.command],
+          shortcut: formatBinding(macro.shortcut),
+          kind: "action",
+          run: (mode) => macroHandlerRef.current(macro, mode),
+        }),
+      ),
+    ];
+  }, [
+    keybindings,
+    hasFocusedChat,
+    enterPicker,
+    incognitoAllowed,
+    terminalMacros,
+  ]);
 
   // Skills as commands (ADR 0052): a row is just a message send — into the
   // focused chat when one exists (an action, chat highlighted like other

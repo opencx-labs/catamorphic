@@ -37,7 +37,10 @@ export function FloatingPanelBar({
       <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
         {title}
       </span>
-      <ShortcutHint label="Hide floating panel">
+      <ShortcutHint
+        label="Hide floating panel"
+        shortcut={formatBinding(bindings["dismiss-floating"])}
+      >
         <button
           type="button"
           aria-label="Hide floating panel"

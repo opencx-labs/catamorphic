@@ -141,14 +141,6 @@ export const BUILTIN_ACTIONS = [
     keywords: ["terminal", "float", "shell", "overlay"],
   },
   {
-    id: "toggle-floating-git",
-    label: "Git terminal",
-    description:
-      "open Lazygit or your configured Git command; the shortcut toggles its floating panel",
-    defaultBinding: null,
-    keywords: ["lazygit", "git", "terminal", "float"],
-  },
-  {
     id: "new-floating-browser",
     hiddenInPalette: true,
     label: "New floating browser",
@@ -172,6 +164,14 @@ export const BUILTIN_ACTIONS = [
       "open the selected palette item as floating, or float the current tab",
     defaultBinding: "Cmd+Alt+F",
     keywords: ["float", "overlay", "settings", "terminal", "preview"],
+  },
+  {
+    id: "dismiss-floating",
+    hiddenInPalette: true,
+    label: "Dismiss floating panel",
+    description: "hide the floating panel and keep its tab running",
+    defaultBinding: "Escape",
+    keywords: ["hide", "dismiss", "preview", "floating"],
   },
   {
     id: "floating-to-tab",

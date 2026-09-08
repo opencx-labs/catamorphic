@@ -48,8 +48,8 @@ This is desktop doctrine, with no new framework dependency or schema.
 Floating surfaces also keep the same workspace key and mounted browser,
 terminal, or editor. A floating key overlays an anchor tab; expanding or
 splitting changes geometry, while closing remains the disposal boundary.
-Floating terminal tools reuse one shell per project, with a configurable
-Git command run only at creation. Option-click previews and new-window
+Terminal macros reuse one shell per project, with user-defined commands
+run only at creation (ADR 0106 supersedes the initial Git launcher). Option-click previews and new-window
 link disposition are per-profile preferences. Every application action,
 including browser and floating controls, uses one configurable shortcut
 registry in the host and its guests. Popups target only the owning window.

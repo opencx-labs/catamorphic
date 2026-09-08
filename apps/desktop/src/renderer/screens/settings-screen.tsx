@@ -5,13 +5,16 @@ import {
   Plug,
   Plus,
   RotateCcw,
+  Search,
   Star,
+  TerminalSquare,
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ACTION_LABELS, KEYBINDING_ACTIONS } from "../../shared/actions.js";
-import { bindingFromEvent } from "../../shared/keybindings.js";
+import { bindingFromEvent, parseBinding } from "../../shared/keybindings.js";
+import type { TerminalMacro } from "../../shared/terminal-macros.js";
 import { PendingButton } from "../components/pending-button.js";
 import {
   type AgentHarness,
@@ -45,32 +48,193 @@ export function SettingsScreen({
   onConfigureAgent: (agentId: string) => void;
   onManageConnectors: () => void;
 }) {
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState("agents");
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sections = [
+    {
+      id: "agents",
+      label: "Agents",
+      keywords: "models authentication accounts sign in",
+      content: (
+        <AgentsSection
+          onAddAgent={onAddAgent}
+          onConfigureAgent={onConfigureAgent}
+        />
+      ),
+    },
+    {
+      id: "connections",
+      label: "Connections",
+      keywords: "connectors plugins mcp tools",
+      content: <ConnectorsSection onManage={onManageConnectors} />,
+    },
+    {
+      id: "appearance",
+      label: "Appearance",
+      keywords:
+        "theme colors dark light nord catppuccin rose pine font ghostty terminal",
+      content: (
+        <>
+          <ThemeSection />
+          <TerminalSection />
+        </>
+      ),
+    },
+    {
+      id: "workspace",
+      label: "Workspace",
+      keywords:
+        "layout sidebar tabs header address bookmarks links preview floating",
+      content: (
+        <>
+          <LayoutSection />
+          <SidebarSection />
+        </>
+      ),
+    },
+    {
+      id: "macros",
+      label: "Macros",
+      keywords: "terminal shell command custom launcher shortcut",
+      content: <MacrosSection />,
+    },
+    {
+      id: "shortcuts",
+      label: "Keyboard shortcuts",
+      keywords: "keys bindings hotkeys",
+      content: <ShortcutsSection />,
+    },
+    {
+      id: "notifications",
+      label: "Notifications",
+      keywords: "sound chime desktop alerts",
+      content: <NotificationsSection />,
+    },
+    {
+      id: "import",
+      label: "Import",
+      keywords: "browser aside chrome arc bookmarks passwords history",
+      content: <ImportSection />,
+    },
+  ];
+  const words = query.toLowerCase().trim().split(/\s+/);
+  const visible = sections.filter((section) =>
+    words.every((word) =>
+      `${section.label} ${section.keywords}`.toLowerCase().includes(word),
+    ),
+  );
+  const navigateTo = (id: string) => {
+    setQuery("");
+    setSelected(id);
+    requestAnimationFrame(() =>
+      scrollRef.current
+        ?.querySelector(`#settings-${id}`)
+        ?.scrollIntoView({ block: "start" }),
+    );
+  };
   return (
-    <div className="mx-auto min-h-0 w-full max-w-md flex-1 overflow-y-auto px-6 py-4">
-      <header className="mb-6 flex items-center justify-between">
-        <h1 className="text-base font-semibold">Settings</h1>
+    <div
+      className="@container/settings flex min-h-0 min-w-0 flex-1 flex-col"
+      data-settings
+    >
+      <header className="mx-auto flex w-full max-w-5xl shrink-0 flex-wrap items-center gap-3 px-6 pt-5 pb-4">
+        <div className="min-w-0 flex-1">
+          <h1 className="text-base font-semibold">Settings</h1>
+          <p className="mt-1 text-xs text-fg-muted">
+            Make this profile your own.
+          </p>
+        </div>
+        <label className="relative order-3 w-full @xl/settings:order-none @xl/settings:w-64">
+          <Search className="pointer-events-none absolute top-2 left-2.5 size-4 text-fg-muted" />
+          <input
+            aria-label="Search settings"
+            type="search"
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              scrollRef.current?.scrollTo({ top: 0 });
+            }}
+            placeholder="Search settings…"
+            className="field h-8 w-full rounded-lg pr-3 pl-8 text-sm"
+          />
+        </label>
         <button
           type="button"
           onClick={onClose}
-          className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-overlay hover:text-fg"
+          className="grid size-8 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-overlay hover:text-fg"
           aria-label="Close settings"
         >
           <X className="size-4" />
         </button>
       </header>
-
-      <AgentsSection
-        onAddAgent={onAddAgent}
-        onConfigureAgent={onConfigureAgent}
-      />
-      <ConnectorsSection onManage={onManageConnectors} />
-      <ThemeSection />
-      <TerminalSection />
-      <LayoutSection />
-      <NotificationsSection />
-      <ShortcutsSection />
-      <ImportSection />
-      <SidebarSection />
+      <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col @2xl/settings:flex-row">
+        <label className="flex shrink-0 items-center gap-3 px-6 pb-4 text-sm text-fg-muted @2xl/settings:hidden">
+          Category
+          <select
+            aria-label="Settings category"
+            value={selected}
+            onChange={(event) => navigateTo(event.target.value)}
+            className="field h-8 min-w-0 flex-1 rounded-lg px-2 text-fg"
+          >
+            {sections.map((section) => (
+              <option key={section.id} value={section.id}>
+                {section.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <nav
+          aria-label="Settings categories"
+          className="hidden w-48 shrink-0 flex-col gap-1 overflow-y-auto px-6 pr-3 pb-3 @2xl/settings:flex"
+        >
+          {sections.map((section) => (
+            <button
+              key={section.id}
+              type="button"
+              aria-current={
+                !query && selected === section.id ? "location" : undefined
+              }
+              onClick={() => navigateTo(section.id)}
+              className={`shrink-0 cursor-pointer whitespace-nowrap rounded-lg px-3 py-2 text-left text-sm transition-colors duration-150 ${!query && selected === section.id ? "bg-bg-overlay font-medium text-fg" : "text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"}`}
+            >
+              {section.label}
+            </button>
+          ))}
+        </nav>
+        <div
+          ref={scrollRef}
+          data-settings-scroll
+          onScroll={() => {
+            const root = scrollRef.current;
+            if (!root || query) return;
+            const top = root.getBoundingClientRect().top;
+            const current = [...sections].reverse().find((section) => {
+              const element = root.querySelector(`#settings-${section.id}`);
+              return element && element.getBoundingClientRect().top <= top + 24;
+            });
+            if (current) setSelected(current.id);
+          }}
+          className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-10"
+        >
+          {visible.length === 0 && (
+            <p role="status" className="py-8 text-sm text-fg-muted">
+              No settings match “{query}”. Try a category such as appearance,
+              macros or shortcuts.
+            </p>
+          )}
+          {sections.map((section) => (
+            <div
+              key={section.id}
+              id={`settings-${section.id}`}
+              hidden={!visible.includes(section)}
+              className="settings-category mb-8 max-w-2xl scroll-mt-2"
+            >
+              {section.content}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -481,7 +645,7 @@ function TerminalSection() {
   return (
     <section className="mt-8 flex flex-col gap-3">
       <h2 className="text-sm font-semibold">Terminal</h2>
-      <label className="flex items-center justify-between gap-4 text-sm">
+      <label className="flex flex-wrap items-center justify-between gap-3 text-sm">
         Appearance
         <select
           name="terminalAppearance"
@@ -544,7 +708,7 @@ function LayoutSection() {
   return (
     <section className="mt-8 flex flex-col gap-3">
       <h2 className="text-sm font-semibold">Workspace layout</h2>
-      <label className="flex items-center justify-between gap-4 text-sm">
+      <label className="flex flex-wrap items-center justify-between gap-3 text-sm">
         Open tabs
         <select
           name="tabPlacement"
@@ -562,7 +726,7 @@ function LayoutSection() {
         </select>
       </label>
       {prefs.tabPlacement === "sidebar" && (
-        <label className="flex items-center justify-between gap-4 text-sm">
+        <label className="flex flex-wrap items-center justify-between gap-3 text-sm">
           Title and address bar
           <select
             name="headerPlacement"
@@ -580,7 +744,7 @@ function LayoutSection() {
           </select>
         </label>
       )}
-      <label className="flex items-center justify-between gap-4 text-sm">
+      <label className="flex flex-wrap items-center justify-between gap-3 text-sm">
         Pinned bookmarks
         <select
           name="pinnedBookmarks"
@@ -596,7 +760,7 @@ function LayoutSection() {
           <option value="list">List</option>
         </select>
       </label>
-      <label className="flex items-center justify-between gap-4 text-sm">
+      <label className="flex flex-wrap items-center justify-between gap-3 text-sm">
         Links requesting a new window
         <select
           name="linkOpenMode"
@@ -613,7 +777,7 @@ function LayoutSection() {
           <option value="floating">Floating preview</option>
         </select>
       </label>
-      <label className="flex items-center justify-between gap-4 text-sm">
+      <label className="flex flex-wrap items-center justify-between gap-3 text-sm">
         {/Mac/.test(navigator.platform) ? "Option" : "Alt"}-click links to
         preview
         <input
@@ -627,25 +791,267 @@ function LayoutSection() {
           }
         />
       </label>
-      <label className="flex flex-col gap-2 text-sm">
-        Floating Git terminal command
-        <input
-          key={prefs.gitTerminalCommand}
-          name="gitTerminalCommand"
-          className="field h-8 rounded-md px-2 font-mono text-sm"
-          defaultValue={prefs.gitTerminalCommand}
-          onBlur={(event) =>
-            void desktopApi.setPrefs({ gitTerminalCommand: event.target.value })
-          }
-        />
-      </label>
-      <p className="text-xs text-fg-muted">
-        The command runs in the project folder when a new Git terminal opens.
-        Configure floating panels and browser actions in Keyboard shortcuts.
-      </p>
       <p className="text-sm text-fg-muted text-pretty">
         Changes apply to this profile. You can also ask your agent to arrange
         the sidebar or change these preferences.
+      </p>
+    </section>
+  );
+}
+
+function MacrosSection() {
+  const [prefs, setPrefs] = useState<AppPrefs | null>(null);
+  const [draft, setDraft] = useState<TerminalMacro | null>(null);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const bindings = useKeybindings();
+  useEffect(() => {
+    void desktopApi.getPrefs().then(setPrefs);
+    return desktopApi.onPrefsChanged(setPrefs);
+  }, []);
+  const macros = prefs?.terminalMacros ?? [];
+  useEffect(() => {
+    if (!recording || !draft) return;
+    const capture = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.key === "Escape") {
+        setRecording(false);
+        return;
+      }
+      if (["Meta", "Control", "Alt", "Shift"].includes(event.key)) return;
+      const shortcut = bindingFromEvent(event);
+      const parsed = shortcut ? parseBinding(shortcut) : null;
+      if (!parsed || (!parsed.modifiers.size && !/^F\d+$/.test(parsed.key))) {
+        setError("Include a modifier key, such as Command, Control or Option.");
+        return;
+      }
+      const conflict = KEYBINDING_ACTIONS.find((action) =>
+        matchesBinding(event, bindings[action]),
+      );
+      const otherMacro = macros.find(
+        (macro) =>
+          macro.id !== draft.id && matchesBinding(event, macro.shortcut),
+      );
+      if (conflict || otherMacro) {
+        setError(
+          `Already used by ${conflict ? ACTION_LABELS[conflict] : otherMacro?.name}. Choose another shortcut.`,
+        );
+        return;
+      }
+      setDraft({ ...draft, shortcut: shortcut ?? "" });
+      setError("");
+      setRecording(false);
+    };
+    window.addEventListener("keydown", capture, true);
+    return () => window.removeEventListener("keydown", capture, true);
+  }, [recording, draft, macros, bindings]);
+  const save = async (next: TerminalMacro[]) => {
+    setSaving(true);
+    setError("");
+    try {
+      setPrefs(await desktopApi.setPrefs({ terminalMacros: next }));
+      setDraft(null);
+      setRecording(false);
+    } catch {
+      setError("Could not save your macros. Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <section className="mt-8 flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold">Terminal macros</h2>
+        <button
+          type="button"
+          disabled={!prefs || saving}
+          onClick={() => {
+            setDraft({
+              id: crypto.randomUUID(),
+              name: "",
+              command: "",
+              shortcut: "",
+            });
+            setError("");
+            setRecording(false);
+          }}
+          className="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-sm hover:bg-bg-overlay disabled:cursor-default disabled:opacity-50"
+        >
+          <Plus className="size-3.5" />
+          Add macro
+        </button>
+      </div>
+      <p className="text-sm text-fg-muted text-pretty">
+        Save commands you use often. Run a macro from the command palette, or
+        assign a shortcut to toggle its floating terminal.
+      </p>
+      {!macros.length && !draft && (
+        <div className="flex items-start gap-3 rounded-xl bg-bg-inset/60 p-4">
+          <TerminalSquare className="mt-0.5 size-5 shrink-0 text-fg-muted" />
+          <div>
+            <p className="text-sm font-medium">Your commands, your choice</p>
+            <p className="mt-1 text-sm text-fg-muted">
+              No macros are installed by default. Add a shell tool, a dev server
+              or any command you want.
+            </p>
+          </div>
+        </div>
+      )}
+      {macros.map((macro) => (
+        <div
+          key={macro.id}
+          className="flex min-w-0 items-center gap-2 rounded-lg bg-bg-raised px-3 py-2"
+        >
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium">{macro.name}</p>
+            <p className="truncate font-mono text-xs text-fg-muted">
+              {macro.command}
+            </p>
+          </div>
+          {macro.shortcut && (
+            <kbd className="shrink-0 text-xs text-fg-muted">
+              {formatBinding(macro.shortcut)}
+            </kbd>
+          )}
+          <button
+            type="button"
+            aria-label={`Edit macro ${macro.name}`}
+            disabled={saving}
+            onClick={() => {
+              setDraft(macro);
+              setError("");
+              setRecording(false);
+            }}
+            className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-overlay"
+          >
+            <Pencil className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            aria-label={`Delete macro ${macro.name}`}
+            disabled={saving}
+            onClick={() =>
+              void save(macros.filter((item) => item.id !== macro.id))
+            }
+            className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-overlay hover:text-danger"
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        </div>
+      ))}
+      {draft && (
+        <form
+          data-macro-editor
+          className="flex min-w-0 flex-col gap-3 rounded-xl bg-bg-inset/60 p-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!draft.name.trim() || !draft.command.trim()) return;
+            void save([
+              ...macros.filter((macro) => macro.id !== draft.id),
+              draft,
+            ]);
+          }}
+        >
+          <label className="flex flex-col gap-1.5 text-sm">
+            Name
+            <input
+              name="macroName"
+              required
+              value={draft.name}
+              onChange={(event) =>
+                setDraft(
+                  (current) =>
+                    current && { ...current, name: event.target.value },
+                )
+              }
+              placeholder="My terminal tool"
+              className="field h-8 rounded-md px-2"
+            />
+          </label>
+          <label className="flex flex-col gap-1.5 text-sm">
+            Command
+            <textarea
+              name="macroCommand"
+              required
+              rows={3}
+              value={draft.command}
+              onChange={(event) =>
+                setDraft(
+                  (current) =>
+                    current && { ...current, command: event.target.value },
+                )
+              }
+              placeholder="Enter a shell command"
+              className="field min-h-20 resize-y rounded-md px-2 py-2 font-mono text-sm"
+            />
+          </label>
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="mr-auto">Shortcut</span>
+            <button
+              type="button"
+              aria-label="Record macro shortcut"
+              aria-pressed={recording}
+              onBlur={() => setRecording(false)}
+              onClick={() => setRecording(!recording)}
+              className="field h-8 cursor-pointer rounded-md px-3"
+            >
+              {recording
+                ? "Press keys…"
+                : formatBinding(draft.shortcut) || "Record shortcut"}
+            </button>
+            {draft.shortcut && (
+              <button
+                type="button"
+                onClick={() => setDraft({ ...draft, shortcut: "" })}
+                className="text-xs text-fg-muted hover:text-fg"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-fg-muted">
+            Runs in the current project folder using your shell setup. Saving
+            does not run the command. Reopening a running macro keeps the same
+            terminal.
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => {
+                setDraft(null);
+                setRecording(false);
+                setError("");
+              }}
+              className="h-8 cursor-pointer rounded-md px-3 text-sm hover:bg-bg-overlay disabled:cursor-default disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={
+                saving ||
+                recording ||
+                !draft.name.trim() ||
+                !draft.command.trim()
+              }
+              className="h-8 cursor-pointer rounded-md bg-accent px-3 text-sm font-medium text-accent-fg disabled:cursor-default disabled:opacity-50"
+            >
+              {saving ? "Saving…" : "Save macro"}
+            </button>
+          </div>
+        </form>
+      )}
+      {error && (
+        <p role="alert" className="text-sm text-danger">
+          {error}
+        </p>
+      )}
+      <p className="text-xs text-fg-muted">
+        Macros belong to this profile. Removing a macro leaves its open
+        terminals running.
       </p>
     </section>
   );
@@ -1013,7 +1419,7 @@ function SidebarSection() {
         apply live.
       </p>
       <p className="mt-2 text-xs text-fg-faint">
-        <span className="font-mono">{file}</span>
+        <span className="break-all font-mono">{file}</span>
       </p>
       <button
         type="button"
@@ -1033,6 +1439,12 @@ function SidebarSection() {
  * rewrites keybindings.json, which broadcasts back to every window.
  */
 function ShortcutsSection() {
+  const [prefs, setPrefs] = useState<AppPrefs | null>(null);
+  const [filter, setFilter] = useState("");
+  useEffect(() => {
+    void desktopApi.getPrefs().then(setPrefs);
+    return desktopApi.onPrefsChanged(setPrefs);
+  }, []);
   const bindings = useKeybindings();
   const [recording, setRecording] = useState<KeybindingAction | null>(null);
   const [file, setFile] = useState<string>("");
@@ -1058,6 +1470,15 @@ function ShortcutsSection() {
         setNotice("That key cannot be used as a shortcut. Try another key.");
         return;
       }
+      const macroConflict = prefs?.terminalMacros.find((macro) =>
+        matchesBinding(event, macro.shortcut),
+      );
+      if (macroConflict) {
+        setNotice(
+          `Already used by macro ${macroConflict.name}. Choose another shortcut.`,
+        );
+        return;
+      }
       const conflicts = KEYBINDING_ACTIONS.filter(
         (action) =>
           action !== recording && matchesBinding(event, bindings[action]),
@@ -1075,7 +1496,7 @@ function ShortcutsSection() {
     window.addEventListener("keydown", onKeyDown, { capture: true });
     return () =>
       window.removeEventListener("keydown", onKeyDown, { capture: true });
-  }, [recording, bindings]);
+  }, [recording, bindings, prefs]);
 
   const isDefault = (Object.keys(bindings) as KeybindingAction[]).every(
     (action) => bindings[action] === DEFAULT_KEYBINDINGS[action],
@@ -1096,17 +1517,29 @@ function ShortcutsSection() {
           </button>
         )}
       </div>
+      <input
+        aria-label="Search keyboard shortcuts"
+        value={filter}
+        onChange={(event) => setFilter(event.target.value)}
+        placeholder="Find a shortcut…"
+        className="field mb-3 h-8 w-full rounded-md px-3 text-sm"
+      />
       <div className="flex flex-col gap-1.5">
-        {KEYBINDING_ACTIONS.map((action) => (
+        {KEYBINDING_ACTIONS.filter((action) =>
+          `${ACTION_LABELS[action]} ${bindings[action]}`
+            .toLowerCase()
+            .includes(filter.toLowerCase()),
+        ).map((action) => (
           <div
             key={action}
-            className="flex h-9 items-center justify-between rounded-lg border border-border bg-bg-raised/40 px-3"
+            className="flex min-h-9 flex-wrap items-center justify-between gap-2 rounded-lg bg-bg-raised/40 px-3 py-1.5"
           >
             <span className="text-[13px]">{ACTION_LABELS[action]}</span>
             <div className="flex shrink-0 items-center gap-1">
               <button
                 type="button"
                 aria-label={`Change shortcut for ${ACTION_LABELS[action]}`}
+                onBlur={() => setRecording(null)}
                 onClick={() =>
                   setRecording(recording === action ? null : action)
                 }
@@ -1145,7 +1578,7 @@ function ShortcutsSection() {
       </p>
       <p className="mt-2 text-xs text-fg-faint">
         Changes apply immediately, in every project. Also editable as JSON at{" "}
-        <span className="font-mono">{file}</span>
+        <span className="break-all font-mono">{file}</span>
       </p>
     </section>
   );

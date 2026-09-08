@@ -17,6 +17,45 @@ afterEach(() => {
 });
 
 describe("workspace preferences", () => {
+  it("starts every profile without macros and keeps saved commands isolated", () => {
+    const first = new PrefsStore(tempFile("prefs.json"));
+    const second = new PrefsStore(tempFile("prefs.json"));
+    expect(first.load().terminalMacros).toEqual([]);
+    first.load().terminalMacros.push({
+      id: "unsaved",
+      name: "Unsaved",
+      command: "pwd",
+      shortcut: "",
+    });
+    expect(first.load().terminalMacros).toEqual([]);
+    expect(second.load().terminalMacros).toEqual([]);
+    expect(
+      normalizePrefs({ gitTerminalCommand: "lazygit" }).terminalMacros,
+    ).toEqual([]);
+    const macro = {
+      id: "serve",
+      name: "Dev server",
+      command: "bun run dev",
+      shortcut: "Ctrl+Alt+D",
+    };
+    first.save({ terminalMacros: [macro] });
+    expect(new PrefsStore(first.file).load().terminalMacros).toEqual([macro]);
+    expect(second.load().terminalMacros).toEqual([]);
+  });
+  it("rejects malformed macros and keeps bare typing keys out of global shortcuts", () => {
+    expect(
+      normalizePrefs({
+        terminalMacros: [
+          null,
+          { id: "bad" },
+          { id: "empty", name: "Name", command: " " },
+          { id: "ok", name: " Shell ", command: " pwd ", shortcut: "A" },
+          { id: "ok", name: "Duplicate", command: "date", shortcut: "Alt+D" },
+        ],
+      }).terminalMacros,
+    ).toEqual([{ id: "ok", name: "Shell", command: "pwd", shortcut: "" }]);
+  });
+
   it("keeps existing profiles on top tabs and preserves unrelated preferences on a layout edit", () => {
     const file = tempFile("prefs.json");
     fs.writeFileSync(
@@ -35,7 +74,14 @@ describe("workspace preferences", () => {
       pinnedBookmarks: "list",
       linkOpenMode: "floating",
       previewLinksWithAlt: false,
-      gitTerminalCommand: "git status",
+      terminalMacros: [
+        {
+          id: "status",
+          name: "Project status",
+          command: "git status",
+          shortcut: "Ctrl+Alt+G",
+        },
+      ],
       terminalAppearance: "ghostty",
     });
     expect(new PrefsStore(file).load()).toMatchObject({
@@ -44,7 +90,14 @@ describe("workspace preferences", () => {
       pinnedBookmarks: "list",
       linkOpenMode: "floating",
       previewLinksWithAlt: false,
-      gitTerminalCommand: "git status",
+      terminalMacros: [
+        {
+          id: "status",
+          name: "Project status",
+          command: "git status",
+          shortcut: "Ctrl+Alt+G",
+        },
+      ],
       terminalAppearance: "ghostty",
       notificationSounds: false,
       lastProjectId: "project",

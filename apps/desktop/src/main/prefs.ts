@@ -1,5 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  normalizeTerminalMacros,
+  type TerminalMacro,
+} from "../shared/terminal-macros.js";
 
 /**
  * Per-profile app preferences, stored as plain JSON at
@@ -22,7 +26,7 @@ export interface AppPrefs {
   pinnedBookmarks: "tiles" | "list";
   linkOpenMode: "tab" | "floating";
   previewLinksWithAlt: boolean;
-  gitTerminalCommand: string;
+  terminalMacros: TerminalMacro[];
   terminalAppearance: "app" | "ghostty";
   /** The project the profile last worked in — where a relaunch lands. */
   lastProjectId?: string;
@@ -37,7 +41,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   pinnedBookmarks: "tiles",
   linkOpenMode: "tab",
   previewLinksWithAlt: true,
-  gitTerminalCommand: "lazygit",
+  terminalMacros: [],
   terminalAppearance: "app",
 };
 
@@ -69,10 +73,7 @@ export function normalizePrefs(raw: unknown): AppPrefs {
       typeof record.previewLinksWithAlt === "boolean"
         ? record.previewLinksWithAlt
         : true,
-    gitTerminalCommand:
-      typeof record.gitTerminalCommand === "string"
-        ? record.gitTerminalCommand
-        : "lazygit",
+    terminalMacros: normalizeTerminalMacros(record.terminalMacros),
     ...(typeof record.lastProjectId === "string"
       ? { lastProjectId: record.lastProjectId }
       : {}),
@@ -89,7 +90,7 @@ export class PrefsStore {
     try {
       return normalizePrefs(JSON.parse(fs.readFileSync(this.file, "utf-8")));
     } catch {
-      return { ...DEFAULT_PREFS };
+      return normalizePrefs({});
     }
   }
 

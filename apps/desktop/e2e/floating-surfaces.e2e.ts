@@ -80,14 +80,20 @@ afterAll(async () => {
 });
 
 describe("floating surfaces", () => {
-  it("keeps the same shell and runs the configured Git command only once through hide, expand and tile", async () => {
+  it("keeps the same shell and runs the configured macro only once through hide, expand and tile", async () => {
     const marker = path.join(app.userDataDir, "git-launch-count");
     const command = `printf 'launch\\n' >> '${marker.replaceAll("'", "'\\''")}'`;
-    await prefs({ gitTerminalCommand: command });
-    await bindings({ "toggle-floating-git": "Ctrl+Alt+G" });
-    await app.waitFor(
-      "window.catamorphicDesktop.getKeybindings().then(b=>b['toggle-floating-git']==='Ctrl+Alt+G')",
-    );
+    await prefs({
+      terminalMacros: [
+        {
+          id: "test-macro",
+          name: "Write marker",
+          command,
+          shortcut: "Ctrl+Alt+G",
+        },
+      ],
+    });
+    expect(fs.existsSync(marker)).toBe(false);
     await key("g", { ctrlKey: true, altKey: true });
     await app.waitFor(`!!${floating} && window.__terminalIds.length===1`);
     await app.waitFor(
@@ -140,6 +146,28 @@ describe("floating surfaces", () => {
         `window.catamorphicDesktop.terminalBuffer(${JSON.stringify(session)}).then(b=>b.running)`,
       ),
     ).toBe(true);
+  });
+
+  it("dismisses the macro with Escape after its exit animation without stopping its shell", async () => {
+    // The shortcut originates in a real browser guest, through main's profile-scoped dispatcher.
+    await run(
+      "const view=[...document.querySelectorAll('webview')].find(v=>v.getTitle()==='Anchor page');view.focus();return view.sendInputEvent({type:'keyDown',keyCode:'G',modifiers:['control','alt']})",
+    );
+    await app.waitFor(`!!${floating}?.querySelector('canvas')`);
+    expect(
+      await run(
+        "return getComputedStyle($('[data-floating-surface]')).animationName",
+      ),
+    ).toBe("floating-surface-in");
+    await run("$('[data-floating-surface] textarea').focus()");
+    await app.press("Escape");
+    await app.waitFor(`!${floating}`);
+    expect(
+      await app.eval(
+        "window.catamorphicDesktop.terminalBuffer(window.__terminalIds[0]).then(b=>b.running)",
+      ),
+    ).toBe(true);
+    expect(await app.eval("window.__terminalIds.length")).toBe(1);
   });
 
   it("previews an Option-click link without navigating its anchor and preserves the guest when expanded", async () => {
@@ -214,18 +242,18 @@ describe("floating surfaces", () => {
     );
     expect(
       await run(
-        "const p=$('[data-floating-surface]');const r=p.getBoundingClientRect();return r.top>=0 && r.bottom<=innerHeight && p.querySelector('h1').parentElement.parentElement.scrollHeight>p.clientHeight",
+        "const p=$('[data-floating-surface]');const r=p.getBoundingClientRect();return r.top>=0 && r.bottom<=innerHeight && p.querySelector('[data-settings-scroll]').scrollHeight>p.querySelector('[data-settings-scroll]').clientHeight",
       ),
     ).toBe(true);
     await click("Open as full tab");
     await app.waitFor(`!${floating}`);
     expect(await run("return !!$('select[name=linkOpenMode]')")).toBe(true);
     await run(
-      "const heading=[...document.querySelectorAll('h1')].find(e=>e.textContent==='Settings');heading.parentElement.parentElement.scrollTop=0;heading.tabIndex=-1;heading.focus()",
+      "const body=$('[data-settings-scroll]');body.scrollTop=0;body.tabIndex=-1;body.focus()",
     );
     await app.press("PageDown");
     await app.waitFor(
-      "[...document.querySelectorAll('h1')].find(e=>e.textContent==='Settings').parentElement.parentElement.scrollTop>0",
+      "document.querySelector('[data-settings-scroll]').scrollTop>0",
     );
 
     guest.close();
@@ -321,5 +349,100 @@ describe("floating surfaces", () => {
       "!!document.querySelector('select[name=terminalAppearance]')",
     );
     expect(await app.eval(`!!${floating}`)).toBe(false);
+  });
+  it("edits profile macros in searchable Settings without executing on save", async () => {
+    await run(
+      "setReactValue($('input[aria-label=\"Search settings\"]'),'macros')",
+    );
+    await app.waitFor(
+      "!document.querySelector('#settings-macros').hidden && document.querySelector('#settings-appearance').hidden",
+    );
+    const sessions = await app.eval<number>("window.__terminalIds.length");
+    await run(
+      "[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Add macro').click()",
+    );
+    await run(
+      "setReactValue($('[name=macroName]'),'Working directory');setReactValue($('[name=macroCommand]'),'pwd')",
+    );
+    await click("Record macro shortcut");
+    await key("p", { metaKey: true });
+    await app.waitFor(
+      "document.querySelector('#settings-macros [role=alert]')?.textContent.includes('Already used')",
+    );
+    await app.press("Escape");
+    await run("$('[data-macro-editor]').requestSubmit()");
+    await app.waitFor(
+      "window.catamorphicDesktop.getPrefs().then(p=>p.terminalMacros.some(m=>m.name==='Working directory'))",
+    );
+    expect(await app.eval("window.__terminalIds.length")).toBe(sessions);
+    await run(
+      "setReactValue($('input[aria-label=\"Search settings\"]'),'nothing matches this')",
+    );
+    await app.waitFor(
+      "document.querySelector('[data-settings-scroll] [role=status]')?.textContent.includes('No settings match')",
+    );
+    await run(
+      "[...document.querySelectorAll('nav[aria-label=\"Settings categories\"] button')].find(b=>b.textContent==='Macros').click()",
+    );
+    await app.waitFor("!document.querySelector('#settings-macros').hidden");
+    await app.waitFor(
+      "!!document.querySelector('button[aria-label=\"Delete macro Working directory\"]')",
+    );
+    await click("Delete macro Working directory");
+    await app.waitFor(
+      "window.catamorphicDesktop.getPrefs().then(p=>!p.terminalMacros.some(m=>m.name==='Working directory'))",
+    );
+  });
+  it("Escape in a floating page returns to the anchor and preserves the page draft", async () => {
+    await bindings({ "float-current-tab": "Cmd+Alt+F" });
+    await run(
+      "[...document.querySelectorAll('aside [data-point-key^=\"browser:\"]')].find(e=>e.textContent.includes('Anchor page')).querySelector('button').click()",
+    );
+    await key("f", { metaKey: true, altKey: true });
+    await app.waitFor(`!!${floating}?.querySelector('webview')`);
+    const guest = await app.connectToFrame(`${origin}/anchor`);
+    const identity = await guest.eval<string>("window.pageIdentity");
+    await guest.eval(
+      "document.querySelector('#draft').value='Escape preserves me'",
+    );
+    await run(
+      "const view=$('[data-floating-surface] webview');view.focus();return view.sendInputEvent({type:'keyDown',keyCode:'Escape'})",
+    );
+    await app.waitFor(`!${floating}`);
+    expect(
+      await guest.eval(
+        "({identity:window.pageIdentity,draft:document.querySelector('#draft').value})",
+      ),
+    ).toEqual({ identity, draft: "Escape preserves me" });
+    guest.close();
+  });
+  it("rebinds and disables floating dismissal in real browser input", async () => {
+    await run(
+      "[...document.querySelectorAll('aside [data-point-key^=\"browser:\"]')].find(e=>e.textContent.includes('Anchor page')).querySelector('button').click()",
+    );
+    await bindings({ "dismiss-floating": "Ctrl+Alt+H" });
+    await key("f", { metaKey: true, altKey: true });
+    await app.waitFor(`!!${floating}?.querySelector('webview')`);
+    const send = (keyCode: string, modifiers: string[] = []) =>
+      run(
+        `const view=$('[data-floating-surface] webview');view.focus();return view.sendInputEvent({type:'keyDown',keyCode:${JSON.stringify(keyCode)},modifiers:${JSON.stringify(modifiers)}})`,
+      );
+    await send("Escape");
+    expect(await app.eval(`!!${floating}`)).toBe(true);
+    await send("H", ["control", "alt"]);
+    await app.waitFor(`!${floating}`);
+    await run(
+      "[...document.querySelectorAll('aside [data-point-key^=\"browser:\"]')].find(e=>e.textContent.includes('Anchor page')).querySelector('button').click()",
+    );
+    await bindings({ "dismiss-floating": "" });
+    await key("f", { metaKey: true, altKey: true });
+    await app.waitFor(`!!${floating}?.querySelector('webview')`);
+    await send("Escape");
+    await send("H", ["control", "alt"]);
+    expect(await app.eval(`!!${floating}`)).toBe(true);
+    // Button remains available even when keyboard dismissal is disabled.
+    await click("Hide floating panel");
+    await app.waitFor(`!${floating}`);
+    await bindings({ "dismiss-floating": "Escape" });
   });
 });

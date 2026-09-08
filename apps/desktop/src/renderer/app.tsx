@@ -36,6 +36,7 @@ import {
   chatBookmarkUrl,
   parseChatBookmarkUrl,
 } from "../shared/bookmark-target.js";
+import type { TerminalMacro } from "../shared/terminal-macros.js";
 import {
   type AgentPointer,
   AgentPointers,
@@ -103,6 +104,7 @@ import {
   type SidebarSectionConfig,
 } from "./lib/desktop-api.js";
 import { readEditorSelection } from "./lib/editor-selection.js";
+import { useFloatingMotion } from "./lib/floating-motion.js";
 import {
   formatBinding,
   matchesBinding,
@@ -166,7 +168,8 @@ interface BrowserEntry {
 
 interface TerminalEntry {
   localId: string;
-  floatingTool?: "terminal" | "git";
+  floatingTool?: "terminal";
+  macroId?: string;
   initialCommand?: string;
   /** Shell title (OSC 0/2) — feeds the tab label. */
   title: string;
@@ -1013,6 +1016,20 @@ export function App() {
     [projectId, defaultWorkspaceFor],
   );
 
+  const floatingMotion = useFloatingMotion(
+    workspace.floatingKey ? `${projectId}:${workspace.floatingKey}` : undefined,
+  );
+  const dismissFloating = () =>
+    floatingMotion.dismiss(() =>
+      updateWorkspace((ws) => ({ ...ws, floatingKey: undefined })),
+    );
+  const floatingEscapeEnabledRef = useRef(false);
+  floatingEscapeEnabledRef.current = Boolean(
+    workspace.floatingKey &&
+      !paletteOpen &&
+      !wizardModalOpen &&
+      !connectorsModalOpen,
+  );
   const focusedTabKey = workspace.floatingKey ?? workspace.activeTabKey;
 
   // --- workspace persistence --------------------------------------------
@@ -1246,16 +1263,19 @@ export function App() {
   const openTerminalTab = (opts?: {
     chatLocalId?: string;
     side?: boolean;
-    floatingTool?: "terminal" | "git";
+    floatingTool?: "terminal";
+    macroId?: string;
     floating?: boolean;
     initialCommand?: string;
+    title?: string;
   }) => {
     const floating = opts?.floating ?? Boolean(opts?.floatingTool);
     const entry: TerminalEntry = {
       localId: crypto.randomUUID(),
-      title: "",
+      title: opts?.title ?? "",
       chatLocalId: opts?.chatLocalId,
       floatingTool: opts?.floatingTool,
+      macroId: opts?.macroId,
       initialCommand: opts?.initialCommand,
     };
     updateWorkspace((ws) => {
@@ -1313,7 +1333,7 @@ export function App() {
           (terminal) => terminal.localId === localId,
         );
         // Shells re-announce the same title on every prompt — skip those.
-        if (!target || target.title === title) return ws;
+        if (!target || target.macroId || target.title === title) return ws;
         return {
           ...ws,
           terminals: ws.terminals.map((terminal) =>
@@ -1462,7 +1482,7 @@ export function App() {
     });
   };
 
-  const closeTab = (key: string, opts?: { force?: boolean }) =>
+  const closeTabImmediately = (key: string, opts?: { force?: boolean }) =>
     updateWorkspace((ws) => {
       // Snapshot enough to bring the tab back with Cmd+Shift+T — plus its
       // split context so a reopened pane re-tiles with its partner.
@@ -1669,6 +1689,12 @@ export function App() {
             : ws.activeTabKey,
       };
     });
+
+  const closeTab = (key: string, opts?: { force?: boolean }) => {
+    if (workspaceRef.current.floatingKey === key)
+      floatingMotion.dismiss(() => closeTabImmediately(key, opts));
+    else closeTabImmediately(key, opts);
+  };
 
   /** Cmd+Shift+T: restore the most recently closed tab (re-tiled when
       its old split partner is still open). */
@@ -2918,9 +2944,12 @@ export function App() {
     }));
   };
 
-  const floatSurface = (key: string) =>
+  const floatSurface = (key: string) => {
+    if (workspaceRef.current.floatingKey === key) {
+      dismissFloating();
+      return;
+    }
     updateWorkspace((ws) => {
-      if (ws.floatingKey === key) return { ...ws, floatingKey: undefined };
       const keys = orderedTabKeys(ws);
       const previous = previousActiveTabKeyRef.current;
       const anchor =
@@ -2956,18 +2985,36 @@ export function App() {
         ),
       };
     });
-  const toggleFloatingTerminal = (tool: "terminal" | "git") => {
+  };
+  const toggleFloatingTerminal = () => {
     const existing = workspaceRef.current.terminals.find(
-      (terminal) => terminal.floatingTool === tool,
+      (terminal) => terminal.floatingTool === "terminal",
     );
     if (existing) floatSurface(terminalTabKey(existing.localId));
-    else
+    else openTerminalTab({ floatingTool: "terminal" });
+  };
+
+  const runTerminalMacro = (macro: TerminalMacro, mode?: CommitMode) => {
+    const existing = workspaceRef.current.terminals.find(
+      (terminal) => terminal.macroId === macro.id,
+    );
+    if (existing) {
+      const key = terminalTabKey(existing.localId);
+      if (mode === undefined) floatSurface(key);
+      else if (mode === "floating") {
+        if (workspaceRef.current.floatingKey !== key) floatSurface(key);
+      } else openSurface(key, mode === "side" ? "split" : "tab");
+    } else
       openTerminalTab({
-        floatingTool: tool,
-        initialCommand:
-          tool === "git" ? prefsRef.current?.gitTerminalCommand : undefined,
+        macroId: macro.id,
+        title: macro.name,
+        initialCommand: macro.command,
+        floating: mode === undefined || mode === "floating",
+        side: mode === "side",
       });
   };
+  const runTerminalMacroRef = useRef(runTerminalMacro);
+  runTerminalMacroRef.current = runTerminalMacro;
 
   const runBrowserCommand = (command: keyof BrowserCommands) => {
     const ws = workspaceRef.current;
@@ -2986,35 +3033,7 @@ export function App() {
     "new-tab": openPaletteTab,
     "command-palette": () => setPaletteOpen((value) => !value),
     "new-floating-chat": () => addChat(),
-    "toggle-floating-terminal": () => toggleFloatingTerminal("terminal"),
-    "toggle-floating-git": (mode) => {
-      if (mode === undefined) {
-        toggleFloatingTerminal("git");
-        return;
-      }
-      const existing = workspaceRef.current.terminals.find(
-        (terminal) => terminal.floatingTool === "git",
-      );
-      if (existing) {
-        if (mode === "floating") {
-          if (
-            workspaceRef.current.floatingKey !==
-            terminalTabKey(existing.localId)
-          )
-            floatSurface(terminalTabKey(existing.localId));
-        } else
-          openSurface(
-            terminalTabKey(existing.localId),
-            mode === "side" ? "split" : "tab",
-          );
-      } else
-        openTerminalTab({
-          floatingTool: "git",
-          floating: mode === "floating",
-          side: mode === "side",
-          initialCommand: prefsRef.current?.gitTerminalCommand,
-        });
-    },
+    "toggle-floating-terminal": () => toggleFloatingTerminal(),
     "new-floating-browser": () => openBrowserTab("", { floating: true }),
     "open-floating-settings": () => {
       updateWorkspace((ws) =>
@@ -3035,6 +3054,7 @@ export function App() {
       const key = ws.floatingKey ?? ws.activeTabKey;
       if (key) floatSurface(key);
     },
+    "dismiss-floating": dismissFloating,
     "floating-to-tab": () => {
       const key = workspaceRef.current.floatingKey;
       if (key) openSurface(key, "tab");
@@ -3117,10 +3137,28 @@ export function App() {
       guestId?: number,
     ): boolean => {
       const bindings = keybindingsRef.current;
-      const action = KEYBINDING_ACTIONS.find((candidate) =>
-        matchesBinding(event, bindings[candidate]),
+      const action = KEYBINDING_ACTIONS.find(
+        (candidate) =>
+          (candidate !== "dismiss-floating" ||
+            (floatingEscapeEnabledRef.current &&
+              ![
+                ...document.querySelectorAll(
+                  '[role="dialog"], [role="alertdialog"], [role="menu"]',
+                ),
+              ].some(
+                (element) =>
+                  !element.closest("[inert]") &&
+                  element.checkVisibility({
+                    checkOpacity: true,
+                    checkVisibilityCSS: true,
+                  }),
+              ))) &&
+          matchesBinding(event, bindings[candidate]),
       );
-      if (!action) return false;
+      const macro = prefsRef.current?.terminalMacros.find((candidate) =>
+        matchesBinding(event, candidate.shortcut),
+      );
+      if (!action && !macro) return false;
       browserShortcutTargetRef.current =
         guestId === undefined
           ? undefined
@@ -3128,7 +3166,8 @@ export function App() {
               ([, id]) => id === guestId,
             )?.[0];
       try {
-        actionHandlersRef.current[action]();
+        if (action) actionHandlersRef.current[action]();
+        else if (macro) runTerminalMacroRef.current(macro);
       } finally {
         browserShortcutTargetRef.current = undefined;
       }
@@ -3136,6 +3175,16 @@ export function App() {
     };
 
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      // Ghostty marks intercepted app shortcuts handled to suppress PTY input,
+      // then deliberately bubbles them to this dispatcher.
+      if (
+        event.defaultPrevented &&
+        !(
+          event.target instanceof Element &&
+          event.target.closest("[data-terminal-appearance]")
+        )
+      )
+        return;
       if (dispatchShortcut(event)) {
         event.preventDefault();
         return;
@@ -4083,6 +4132,12 @@ export function App() {
     viewSlots[key] === "left" || viewSlots[key] === "right";
   const paneFocusProps = (key: string) => ({
     "data-floating-surface": viewSlots[key] === "floating" ? key : undefined,
+    "data-floating-state":
+      viewSlots[key] === "floating"
+        ? floatingMotion.closing
+          ? "closing"
+          : "open"
+        : undefined,
     ...(split && workspace.activeTabKey !== key && isSplitSlot(key)
       ? { onMouseDownCapture: () => selectTab(key) }
       : {}),
@@ -4101,9 +4156,7 @@ export function App() {
         )}
         onExpand={() => openSurface(key, "tab")}
         onTile={() => openSurface(key, "split")}
-        onHide={() =>
-          updateWorkspace((ws) => ({ ...ws, floatingKey: undefined }))
-        }
+        onHide={dismissFloating}
         onClose={() => closeTab(key)}
       />
     ) : null;
@@ -4235,6 +4288,8 @@ export function App() {
         onSendToAgent: sendToAgent,
         onRunSkill: runSkill,
         actionHandlers,
+        terminalMacros: prefs?.terminalMacros ?? [],
+        onRunTerminalMacro: runTerminalMacro,
         agents: agentsData?.agents ?? [],
         defaultAgentId: effectiveDefaultAgentId,
         focusedChat: focusedChat
@@ -4563,9 +4618,10 @@ export function App() {
                   type="button"
                   aria-label="Dismiss floating panel"
                   className="absolute inset-0 z-20 cursor-default bg-black/15"
-                  onClick={() =>
-                    updateWorkspace((ws) => ({ ...ws, floatingKey: undefined }))
+                  data-floating-backdrop={
+                    floatingMotion.closing ? "closing" : "open"
                   }
+                  onClick={dismissFloating}
                 />
               )}
               {/* Screen-style tabs render whenever they occupy a view
@@ -4677,6 +4733,12 @@ export function App() {
                       onBrowserState(browser.localId, state)
                     }
                     previewLinksWithAlt={prefs?.previewLinksWithAlt ?? true}
+                    floatingDismissShortcut={keybindings["dismiss-floating"]}
+                    onDismissFloating={
+                      workspace.floatingKey === browserTabKey(browser.localId)
+                        ? dismissFloating
+                        : undefined
+                    }
                     onPreviewLink={(url) =>
                       openBrowserTab(url, { floating: true })
                     }
@@ -4749,6 +4811,12 @@ export function App() {
                     projectId={projectId}
                     active={terminal.localId === activeTerminalTabId}
                     initialCommand={terminal.initialCommand}
+                    macroShortcuts={prefs?.terminalMacros.map(
+                      (macro) => macro.shortcut,
+                    )}
+                    floating={
+                      workspace.floatingKey === terminalTabKey(terminal.localId)
+                    }
                     attachSessionId={terminal.attachSessionId}
                     restoreSessionId={terminal.restoreSessionId}
                     readOnly={Boolean(terminal.agentControlled)}

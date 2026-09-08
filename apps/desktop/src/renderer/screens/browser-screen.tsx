@@ -129,6 +129,8 @@ export function BrowserScreen({
   registerCommands,
   onPreviewLink,
   previewLinksWithAlt = true,
+  onDismissFloating,
+  floatingDismissShortcut,
   onUnsplit,
 }: {
   profileId: string;
@@ -160,8 +162,19 @@ export function BrowserScreen({
   registerCommands?: (commands: BrowserCommands | null) => void;
   onPreviewLink?: (url: string) => void;
   previewLinksWithAlt?: boolean;
+  onDismissFloating?: () => void;
+  floatingDismissShortcut: string;
 }) {
   const webviewRef = useRef<WebviewElement | null>(null);
+  const dismissFloatingRef = useRef(onDismissFloating);
+  dismissFloatingRef.current = onDismissFloating;
+  const floating = onDismissFloating ? floatingDismissShortcut : "";
+  const floatingBindingRef = useRef(floating);
+  floatingBindingRef.current = floating;
+  useEffect(() => {
+    if (guestReadyRef.current)
+      webviewRef.current?.send("catamorphic:floating-preview", floating);
+  }, [floating]);
   const previewLinksRef = useRef(previewLinksWithAlt);
   previewLinksRef.current = previewLinksWithAlt;
   const onPreviewLinkRef = useRef(onPreviewLink);
@@ -357,6 +370,7 @@ export function BrowserScreen({
             "catamorphic:preview-links-enabled",
             previewLinksRef.current,
           );
+          view.send("catamorphic:floating-preview", floatingBindingRef.current);
           view.send("catamorphic:host-visibility", {
             hidden: hiddenForGuestRef.current,
           });
@@ -458,6 +472,8 @@ export function BrowserScreen({
         } else if (channel === "catamorphic:credentials-submitted") {
           const payload = args[0] as SaveOffer;
           if (payload.password) setSaveOffer(payload);
+        } else if (channel === "catamorphic:dismiss-floating") {
+          dismissFloatingRef.current?.();
         } else if (channel === "catamorphic:login-form-detected") {
           const payload = args[0] as { origin: string };
           void desktopApi

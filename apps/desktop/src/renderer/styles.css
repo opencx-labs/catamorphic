@@ -765,3 +765,67 @@ kbd {
   font-size: 11px;
   pointer-events: none;
 }
+
+/* Floating panes never remount: only their frame enters and exits. */
+@keyframes floating-surface-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes floating-surface-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+@keyframes floating-backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes floating-backdrop-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+[data-floating-state="open"] {
+  animation: floating-surface-in 200ms var(--ease-standard) both;
+}
+[data-floating-state="closing"] {
+  animation: floating-surface-out 200ms var(--ease-standard) both;
+  pointer-events: none;
+}
+[data-floating-backdrop="open"] {
+  animation: floating-backdrop-in 200ms var(--ease-standard) both;
+}
+[data-floating-backdrop="closing"] {
+  animation: floating-backdrop-out 200ms var(--ease-standard) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-floating-state],
+  [data-floating-backdrop] {
+    animation: none;
+  }
+}
+
+.settings-category > section:first-child {
+  margin-top: 0;
+}
+.settings-category[hidden] {
+  display: none;
+}

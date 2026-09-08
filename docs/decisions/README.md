@@ -80,3 +80,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0065](0065-credential-connections-and-capability-broker.md) | Credential connections and capability broker | Accepted (greenfield cutover refined by 0066) |
 | [0066](0066-greenfield-environment-and-connection-cutover.md) | Greenfield Environment and connection cutover | Accepted |
 | [0105](0105-configurable-desktop-browser-layout.md) | Configurable desktop browser layout, light surfaces, bookmark tiles and folders | Accepted |
+| [0106](0106-profile-terminal-macros.md) | Profile-owned terminal macros and configurable floating dismissal | Accepted |

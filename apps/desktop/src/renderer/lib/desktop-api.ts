@@ -659,7 +659,7 @@ export interface AppPrefs {
   pinnedBookmarks: "tiles" | "list";
   linkOpenMode: "tab" | "floating";
   previewLinksWithAlt: boolean;
-  gitTerminalCommand: string;
+  terminalMacros: import("../../shared/terminal-macros.js").TerminalMacro[];
   terminalAppearance: "app" | "ghostty";
   lastProjectId?: string;
 }

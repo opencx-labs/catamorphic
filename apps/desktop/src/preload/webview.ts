@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
+import { matchesShortcut } from "../shared/keybindings.js";
 
 /**
  * Guest preload for browser-tab webviews. Runs inside untrusted pages with
@@ -290,3 +291,23 @@ document.addEventListener(
   },
   { capture: true },
 );
+
+// Scope Escape to floating previews; normal page and terminal shortcuts stay local.
+let floatingPreview = "";
+ipcRenderer.on("catamorphic:floating-preview", (_event, enabled: unknown) => {
+  floatingPreview = typeof enabled === "string" ? enabled : "";
+});
+window.addEventListener("keydown", (event) => {
+  if (
+    !floatingPreview ||
+    !matchesShortcut({
+      event,
+      binding: floatingPreview,
+      mac: /Mac/.test(navigator.platform),
+    }) ||
+    event.defaultPrevented
+  )
+    return;
+  event.preventDefault();
+  ipcRenderer.sendToHost("catamorphic:dismiss-floating");
+});

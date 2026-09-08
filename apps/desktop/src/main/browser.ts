@@ -12,6 +12,7 @@ import {
 import { KEYBINDING_ACTIONS, type Keybindings } from "../shared/actions.js";
 import type { BookmarkPlacement } from "../shared/bookmark-target.js";
 import { matchesShortcut } from "../shared/keybindings.js";
+import type { TerminalMacro } from "../shared/terminal-macros.js";
 import { BookmarksStore } from "./bookmarks.js";
 import { BrowserHistoryStore } from "./browser-history.js";
 import {
@@ -165,6 +166,10 @@ export function registerBrowserSupport(
   };
 
   const guestBindings = new Map<string, Keybindings>();
+  const guestMacros = new Map<string, TerminalMacro[]>();
+  profileConfig.onPrefsChanged((profileId, prefs) =>
+    guestMacros.set(profileId, prefs.terminalMacros),
+  );
   profileConfig.onKeybindingsChanged((profileId, bindings) =>
     guestBindings.set(profileId, bindings),
   );
@@ -187,6 +192,10 @@ export function registerBrowserSupport(
         guestBindings.get(profileId) ??
         profileConfig.forProfile(profileId).keybindings.load();
       guestBindings.set(profileId, bindings);
+      const macros =
+        guestMacros.get(profileId) ??
+        profileConfig.forProfile(profileId).prefs.load().terminalMacros;
+      guestMacros.set(profileId, macros);
       const key = {
         key: input.key,
         code: input.code,
@@ -196,12 +205,21 @@ export function registerBrowserSupport(
         shiftKey: input.shift,
       };
       if (
-        !KEYBINDING_ACTIONS.some((action) =>
+        !macros.some((macro) =>
           matchesShortcut({
             event: key,
-            binding: bindings[action],
+            binding: macro.shortcut,
             mac: process.platform === "darwin",
           }),
+        ) &&
+        !KEYBINDING_ACTIONS.some(
+          (action) =>
+            action !== "dismiss-floating" &&
+            matchesShortcut({
+              event: key,
+              binding: bindings[action],
+              mac: process.platform === "darwin",
+            }),
         )
       )
         return;

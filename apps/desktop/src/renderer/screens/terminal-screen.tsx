@@ -33,6 +33,8 @@ export interface TerminalScreenProps {
   attachSessionId?: string;
   /** Runs once in a newly created shell, never when changing its layout. */
   initialCommand?: string;
+  macroShortcuts?: string[];
+  floating?: boolean;
   /**
    * Reopened tab (Cmd+Shift+T): replay the closed session's scrollback,
    * close it with a divider, and start the fresh shell beneath — the
@@ -58,6 +60,8 @@ export function TerminalScreen({
   active,
   attachSessionId,
   initialCommand,
+  macroShortcuts = [],
+  floating = false,
   restoreSessionId,
   readOnly = false,
   onTitle,
@@ -89,6 +93,10 @@ export function TerminalScreen({
   const readOnlyRef = useRef(readOnly);
   readOnlyRef.current = readOnly;
   const initialCommandRef = useRef(initialCommand);
+  const floatingRef = useRef(floating);
+  floatingRef.current = floating;
+  const macroShortcutsRef = useRef(macroShortcuts);
+  macroShortcutsRef.current = macroShortcuts;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -125,8 +133,13 @@ export function TerminalScreen({
         term.attachCustomKeyEventHandler((event) => {
           const bindings = keybindingsRef.current;
           if (
-            KEYBINDING_ACTIONS.some((action) =>
-              matchesBinding(event, bindings[action]),
+            macroShortcutsRef.current.some((binding) =>
+              matchesBinding(event, binding),
+            ) ||
+            KEYBINDING_ACTIONS.some(
+              (action) =>
+                (action !== "dismiss-floating" || floatingRef.current) &&
+                matchesBinding(event, bindings[action]),
             )
           ) {
             return true;

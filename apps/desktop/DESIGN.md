@@ -3079,3 +3079,22 @@ paths, deliberately independent:
 - The sidebar and workspace header have no separator stroke. Settings and
   sidebar groups use spacing for section boundaries while controls retain
   their borders and focus indicators.
+
+
+### 2026-09-08: Personal terminal macros and floating motion
+
+- ADR 0106 supersedes the built-in Git terminal above. Profiles start with
+  no terminal macros. Users create named commands and optional shortcuts;
+  each contributes one palette entry and reuses its live shell per project.
+  Lazygit is a personal macro choice, never a default for everyone.
+- Floating panes enter and leave with paired 200ms opacity, 8px translation
+  and 0.98 scale animations using the standard easing. Exit finishes before
+  a pane is hidden or disposed. Reduced motion skips both animations.
+- Dismiss floating panel defaults to Escape and can be rebound or disabled,
+  like every other new action. Dismissal hides the overlay and keeps its tab
+  and running processes. Browser guests and terminal input honor the same
+  setting; palette and modal dismissal take precedence.
+- Settings has category navigation, section search, a searchable shortcut
+  editor and a profile-specific macro editor. Navigation stays reachable
+  while the settings body scrolls; narrow panels use a compact category
+  picker. Whitespace groups controls without adding separator lines.
