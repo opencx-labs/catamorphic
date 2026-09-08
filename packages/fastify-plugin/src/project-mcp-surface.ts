@@ -553,15 +553,25 @@ export function surfaceTools(
           definition: {
             name: "create_watcher",
             description:
-              'Temporarily enable an ordinary TypeScript workflow owned by this session. For periodic monitoring, declare a normal schedule trigger and do the check with workflow IO. For event-driven work, use normalized Project Events already supplied by this host. Stop, expiry, or session close/archive disables future invocations. The source must export the named defineWorkflow and declare one or more inline triggers, for example triggers: [trigger("issue.changed")]. Event triggers receive the normalized Project Event envelope; schedule triggers receive their normal scheduled payload. To notify or wake a session, return context.host["catamorphic.sessions"].deliver({ sessionId, content, mode, idempotencyKey }) from a boundary. The workflow is committed to an isolated catamorphic/watchers/<id> ref, pinned, and never merged into project main.',
+              'Temporarily enable an ordinary TypeScript workflow owned by this session. For periodic monitoring, declare a normal schedule trigger and do the check with workflow IO. For event-driven work, use normalized Project Events already supplied by this host. Stop, expiry, or session close/archive disables future invocations. The source must export the named defineWorkflow and declare one or more inline triggers, for example triggers: [trigger("issue.changed")]. Event triggers receive the normalized Project Event envelope; schedule triggers receive their normal scheduled payload. To notify or wake a session, return context.host["catamorphic.sessions"].deliver({ sessionId, content, mode, idempotencyKey }) from a boundary. Pass source directly; do not write it to the user working tree. The host places it at workflows/src/watchers/<id>.ts in an isolated committed-origin checkout, so imports must already exist in that origin. workflowName must be exported by this source. The workflow is committed to an isolated catamorphic/watchers/<id> ref, pinned, and never merged into project main. This is temporary execution, not private storage. Call stop_watcher when the task is complete. Load the workflow-lifecycle skill for lifetime and publishing guidance.',
             inputSchema: {
               type: "object",
               properties: {
                 sessionId: { type: "string" },
                 workflowName: { type: "string" },
-                source: { type: "string" },
+                source: {
+                  type: "string",
+                  description:
+                    "TypeScript source exporting workflowName; no Markdown fences. It runs from workflows/src/watchers/<id>.ts against the committed project origin.",
+                },
                 environment: { type: "string" },
-                expiresInSeconds: { type: "integer", minimum: 60 },
+                expiresInSeconds: {
+                  type: "integer",
+                  minimum: 60,
+                  maximum: 2592000,
+                  description:
+                    "Activation lifetime in seconds; defaults to 24 hours. Stop earlier when the task completes.",
+                },
               },
               required: ["workflowName", "source"],
             },
@@ -653,13 +663,23 @@ export function surfaceTools(
               properties: {
                 sessionId: { type: "string" },
                 workflowName: { type: "string" },
-                source: { type: "string" },
+                source: {
+                  type: "string",
+                  description:
+                    "TypeScript source exporting workflowName; no Markdown fences. It runs from workflows/src/watchers/<id>.ts against the committed project origin.",
+                },
                 environment: { type: "string" },
                 placement: {
                   type: "string",
                   enum: ["local", "remote", "any"],
                 },
-                expiresInSeconds: { type: "integer", minimum: 60 },
+                expiresInSeconds: {
+                  type: "integer",
+                  minimum: 60,
+                  maximum: 2592000,
+                  description:
+                    "Activation lifetime in seconds; defaults to 24 hours. Stop earlier when the task completes.",
+                },
                 pollIntervalSeconds: { type: "integer", minimum: 5 },
               },
               required: ["workflowName", "source"],

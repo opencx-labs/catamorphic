@@ -44,3 +44,13 @@ committed and reviewable, while runtime identity stays explicit and
 revocable. Canonical durable Runs continue to execute exact deployed commits.
 Local personal schedules are best effort and require the desktop to be online;
 remote schedules require an active committed workflow enablement.
+
+## Implementation status (2026-09-08)
+
+The local-only personal namespace is excluded from project file APIs, shared
+source snapshots, and automatic checkpoints, including native session
+worktrees. This is a storage protection, not a personal-workflow product.
+Private discovery, local workflow invocation, and personal schedules from this
+ADR are still deferred. Do not infer their availability from the reserved path.
+Member-owned enablements of committed workflows and session-scoped temporary
+watchers are implemented separately (ADRs 0076 and 0101).

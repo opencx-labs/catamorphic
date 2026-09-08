@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import git from "isomorphic-git";
 import http from "isomorphic-git/http/node";
+import { isPersonalFile } from "./personal-files.js";
 import type {
   BranchInfo,
   CommitInfo,
@@ -38,6 +39,11 @@ function assertSafePath(filePath: string): void {
   if (normalized.startsWith("..")) {
     throw new Error("Path traversal detected");
   }
+  if (isPersonalFile(normalized)) {
+    throw new Error(
+      "Personal files are local-only and cannot be accessed through project APIs",
+    );
+  }
   if (normalized.startsWith(".git/") || normalized === ".git") {
     throw new Error("Cannot access .git directory");
   }
@@ -58,6 +64,7 @@ async function walkDirectory(dir: string, base: string): Promise<string[]> {
 
     const fullPath = path.join(dir, entry.name);
     const relativePath = path.relative(base, fullPath);
+    if (isPersonalFile(relativePath)) continue;
 
     if (entry.isDirectory()) {
       const nested = await walkDirectory(fullPath, base);
@@ -169,6 +176,7 @@ export class ProjectRepoImpl implements ProjectRepo {
       trees: [git.TREE({ ref: oid })],
       map: async (filepath, [entry]) => {
         if (filepath === "." || !entry) return;
+        if (isPersonalFile(filepath)) return null;
         if (prefix !== undefined) {
           const inside = filepath.startsWith(prefix);
           const onTheWay = prefix.startsWith(`${filepath}/`);
@@ -202,6 +210,7 @@ export class ProjectRepoImpl implements ProjectRepo {
       trees: trees.map((t) => t.tree),
       map: async (filepath, [entry]) => {
         if (filepath === "." || !entry) return;
+        if (isPersonalFile(filepath)) return null;
         if (prefix !== undefined) {
           // Prune: a directory outside the prefix (and not on the way to
           // it) is not descended; a file outside it is not read.
@@ -225,6 +234,16 @@ export class ProjectRepoImpl implements ProjectRepo {
     author: { name: string; email: string },
     opts?: { paths?: readonly string[] },
   ): Promise<string> {
+    for (const file of opts?.paths ?? []) assertSafePath(file);
+    const indexedFiles = await git.listFiles({
+      fs: nodeFs,
+      dir: this.repoPath,
+    });
+    if (indexedFiles.some(isPersonalFile)) {
+      throw new Error(
+        "Personal files are tracked. Remove them from the git index before checkpointing or sharing this project.",
+      );
+    }
     const only = opts?.paths ? new Set(opts.paths) : null;
     const files = await this.listFiles();
     for (const file of files) {

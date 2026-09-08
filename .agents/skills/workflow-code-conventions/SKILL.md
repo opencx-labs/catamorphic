@@ -5,6 +5,36 @@ description: Use when creating, reviewing, or changing Catamorphic workflow defi
 
 # Workflow Code Conventions
 
+## Lifetime, files, and publishing
+
+Read the shipped [workflow-lifecycle guidance](../../../packages/core/src/workflow-lifecycle-skill.ts)
+when changing agent workflow creation. Keep this host-tier guide discoverable
+for existing projects; do not overwrite customized project skills to refresh it.
+The default standing prompt and every harness must preserve the same distinctions:
+
+- Session checks pass TypeScript source directly to `create_watcher` or
+  `create_github_watcher`. The host writes `workflows/src/watchers/<id>.ts` on
+  an isolated expiring ref. Imports resolve against the committed origin,
+  not the current session's uncommitted helpers. Never write the temporary
+  source into an automatically checkpointed project folder first.
+- Reusable project definitions live under `workflows/src/`; runtime dependencies
+  belong in `workflows/package.json`. Keep shared frontend/backend types in
+  `contracts/src/`, and expose through `app-api.ts` only when apps need access.
+- Personal **execution** is a member-owned enablement of reviewed shared code.
+  Private **source** requires a host-provided private artifact and invocation
+  capability. The desktop's reserved `.catamorphic/personal/<profile-id>/`
+  namespace is excluded from shared discovery and checkpoints; private workflow
+  discovery, invocation, and schedules remain unimplemented. Do not document
+  those as working features or treat an incognito chat as private source storage.
+- Checkpoint, sync/push, deployment, and unattended enablement are separate
+  outcomes. Desktop checkpoints and configured automatic sync may run after a
+  turn. Choose an isolated review flow before editing when sharing needs review.
+  Triggers remain inert until enabled, and enablements pin a revision.
+
+Use behavioral tests for source isolation, selected-export validation, skill
+availability through host hooks, and checkpoint privacy. Text substring tests
+alone do not establish that agents can create or run the intended workflow.
+
 ## Workflow Definitions
 
 Every workflow is an exported `defineWorkflow` value.

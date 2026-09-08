@@ -1,6 +1,7 @@
 import { APP_THEME_COLOR_TOKENS } from "@catamorphic/app";
 import { PARSER_PACKAGE_VERSION } from "@catamorphic/parser";
 import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
+import { WORKFLOW_LIFECYCLE_SKILL } from "./workflow-lifecycle-skill.js";
 
 const SHARED_TSCONFIG = `{
   "compilerOptions": {
@@ -525,6 +526,15 @@ description: Writes and edits Catamorphic Workflows as exported defineWorkflow d
 
 # Writing Workflows
 
+## Choose lifetime and location first
+
+Load the host's \`workflow-lifecycle\` skill when offered. It explains temporary
+session watchers, reusable project files, member-owned enablements, private
+storage availability, and the distinction between checkpoint, share, deploy,
+and enable. For a reusable project workflow, use \`workflows/src/<name>.ts\`.
+For a temporary watcher, pass source to the watcher tool; do not first save it
+in the project's working tree. Uncommitted or unpushed files are not private.
+
 ## The one authoring model
 
 Every workflow is an exported \`defineWorkflow(...)\` value whose ordered
@@ -733,7 +743,7 @@ pinned on an isolated git ref and expires automatically; it is never merged
 into the project's main branch.
 
 \`\`\`typescript
-import { defineWorkflow, trigger } from "@catamorphic/workflow";
+import { type BoundaryContext, defineWorkflow, trigger } from "@catamorphic/workflow";
 
 export const escalateTicket = defineWorkflow(({ defineBoundary }) => ({
   triggers: [trigger("ticket.created", { onlyPriority: "high" })],
@@ -1543,6 +1553,7 @@ documents — grep is faster and never lies.
 `;
 
 export const HOST_SKILLS: Record<string, string> = {
+  "workflow-lifecycle/SKILL.md": WORKFLOW_LIFECYCLE_SKILL,
   "searching-documents/SKILL.md": SEARCHING_DOCUMENTS_SKILL,
   "publishing-to-github/SKILL.md": `---
 name: publishing-to-github

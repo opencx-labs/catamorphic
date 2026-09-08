@@ -27,6 +27,11 @@ export {
 export type { ObjectStore } from "./object-store.js";
 export { PreconditionFailedError } from "./object-store.js";
 export {
+  ensurePersonalFilesExcluded,
+  isPersonalFile,
+  PERSONAL_FILES_ROOT,
+} from "./personal-files.js";
+export {
   generateWorkBranchName,
   PROJECT_MANIFEST_PATH,
   ProjectManager,

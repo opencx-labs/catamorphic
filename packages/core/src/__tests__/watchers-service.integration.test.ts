@@ -1,10 +1,19 @@
+import { execFile } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import type { DB } from "@catamorphic/db";
 import { migrateToLatest } from "@catamorphic/db";
-import { FsBackend, FsRemoteBackend, ProjectManager } from "@catamorphic/git";
+import {
+  FsBackend,
+  FsRemoteBackend,
+  fetchRemote,
+  ProjectManager,
+  push,
+} from "@catamorphic/git";
+import { resolveWorkflowPackageFallback } from "@catamorphic/sandbox";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
@@ -248,6 +257,64 @@ describe("temporary watchers", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
+  it("requires the selected workflow to be exported by the supplied source", async () => {
+    const repo = await projectManager.openDev(
+      tenantId,
+      projectId,
+      identity.externalUserId,
+    );
+    try {
+      await repo.writeFile(
+        "workflows/src/existing.ts",
+        `
+        import { defineWorkflow, trigger } from "@catamorphic/workflow";
+        export const existingWorkflow = defineWorkflow(({ defineBoundary }) => ({
+          triggers: [trigger("issue.changed")],
+          steps: [defineBoundary({ run: async ({ input }) => input })],
+        }));`,
+      );
+      await repo.commit("Existing shared workflow", {
+        name: "Test",
+        email: "test@example.com",
+      });
+      const remote = projectManager.remoteBackend;
+      if (!remote) throw new Error("Missing test origin");
+      await push({
+        dev: repo,
+        remote,
+        tenantId,
+        projectId,
+        remoteBranch: "main",
+      });
+    } finally {
+      await repo.dispose();
+    }
+    await expect(
+      watchers.create({
+        identity,
+        projectId,
+        sessionId,
+        workflowName: "existingWorkflow",
+        source: "export const unrelated = true;",
+      }),
+    ).rejects.toThrow("Watcher source must export workflow 'existingWorkflow'");
+    await expect(
+      watchers.create({
+        identity,
+        projectId,
+        sessionId,
+        workflowName: "existingWorkflow",
+        source: `import { defineWorkflow, trigger } from "@catamorphic/workflow";
+        export const existingWorkflow = defineWorkflow(({ defineBoundary }) => ({
+          triggers: [trigger("issue.changed")],
+          steps: [defineBoundary({ run: async ({ input }) => input })],
+        }));`,
+      }),
+    ).rejects.toThrow(
+      "Workflow name 'existingWorkflow' already exists in committed project source",
+    );
+  });
+
   it("pins temporary source and dispatches each matching future event once", async () => {
     await events.append({
       projectId,
@@ -286,6 +353,56 @@ describe("temporary watchers", () => {
     });
     expect(watcher.remoteBranch).toBe(`catamorphic/watchers/${watcher.id}`);
     expect(watcher.commitSha).toMatch(/^[0-9a-f]{40}$/);
+    const repo = await projectManager.openDev(
+      tenantId,
+      projectId,
+      identity.externalUserId,
+    );
+    try {
+      const remote = projectManager.remoteBackend;
+      if (!remote) throw new Error("Missing test origin");
+      await fetchRemote({
+        dev: repo,
+        remote,
+        tenantId,
+        projectId,
+        remoteBranch: watcher.remoteBranch,
+      });
+      const files = await repo.readAllFilesAtRef(watcher.commitSha);
+      const payload = await resolveWorkflowPackageFallback({
+        packageJson: files["package.json"],
+      });
+      if (!payload) throw new Error("Watcher runtime dependency is missing");
+      // Load the committed source with only its resolved runtime payload,
+      // outside the repository's node_modules; no registry or model needed.
+      const runtimeDir = path.join(tmpDir, "watcher-runtime");
+      for (const [filePath, contents] of Object.entries({
+        ...files,
+        ...Object.fromEntries(
+          Object.entries(payload.files).map(([name, content]) => [
+            `node_modules/${payload.packageName}/${name}`,
+            content,
+          ]),
+        ),
+      })) {
+        const target = path.join(runtimeDir, filePath);
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        await fs.writeFile(target, contents);
+      }
+      const result = await promisify(execFile)(
+        "bun",
+        [
+          "-e",
+          `const { watchIssue } = await import(${JSON.stringify(`./${watcher.sourcePath}`)}); console.log(typeof watchIssue);`,
+        ],
+        { cwd: runtimeDir, timeout: 10_000 },
+      );
+      expect(result.stdout.trim()).toBe("object");
+      expect(await repo.listFiles()).not.toContain("package.json");
+      expect(await repo.listFiles()).not.toContain(watcher.sourcePath);
+    } finally {
+      await repo.dispose();
+    }
     expect(await watchers.dispatchPending()).toBe(0);
 
     const appended = await events.append({

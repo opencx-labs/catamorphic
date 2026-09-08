@@ -2,6 +2,7 @@ import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import git from "isomorphic-git";
+import { ensurePersonalFilesExcluded } from "./personal-files.js";
 import type {
   InitProjectOptions,
   ProjectPathResolver,
@@ -83,6 +84,7 @@ export class FsBackend implements StorageBackend {
     } catch {
       throw new Error(`Project not found: ${projectId}`);
     }
+    await ensurePersonalFilesExcluded({ repoPath: projectPath });
     return {
       repoPath: projectPath,
       release: async () => {},
@@ -112,6 +114,7 @@ export class FsBackend implements StorageBackend {
     if (!hasRepo) {
       await git.init({ fs: nodeFs, dir: projectPath, defaultBranch: "main" });
     }
+    await ensurePersonalFilesExcluded({ repoPath: projectPath });
     return projectPath;
   }
 

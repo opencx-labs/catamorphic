@@ -3,6 +3,7 @@ import type { DB, Json } from "@catamorphic/db";
 import { type ProjectManager, push } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { parseProject } from "@catamorphic/parser";
+import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
 import { type Kysely, type Selectable, sql } from "kysely";
 import type { Identity } from "../identity.js";
 import type { AgentSessionsService } from "./agent-sessions-service.js";
@@ -189,16 +190,53 @@ export class WatchersService {
       let commitSha: string;
       try {
         await repo.writeFile(sourcePath, input.source);
-        const parsed = parseProject(await repo.readAllFiles());
+        const files = await repo.readAllFiles();
+        // General-purpose projects need no workspace until they use workflows.
+        // Keep this runtime prerequisite on the temporary revision only.
+        const paths = [sourcePath];
+        if (
+          !("package.json" in files) &&
+          !("workflows/package.json" in files)
+        ) {
+          const manifest = JSON.stringify(
+            {
+              private: true,
+              type: "module",
+              dependencies: {
+                "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
+              },
+            },
+            null,
+            2,
+          );
+          await repo.writeFile("package.json", manifest);
+          paths.push("package.json");
+        }
+        const parsed = parseProject(files);
         const parseErrors = parsed.errors.map((error) =>
           error.file ? `${error.file}: ${error.message}` : error.message,
         );
         if (
           !parsed.workflows.some(
-            (workflow) => workflow.functionName === input.workflowName,
+            (workflow) =>
+              workflow.functionName === input.workflowName &&
+              workflow.filePath === sourcePath,
           )
         ) {
-          parseErrors.push(`Workflow '${input.workflowName}' is not exported`);
+          parseErrors.push(
+            `Watcher source must export workflow '${input.workflowName}'`,
+          );
+        }
+        if (
+          parsed.workflows.some(
+            (workflow) =>
+              workflow.functionName === input.workflowName &&
+              workflow.filePath !== sourcePath,
+          )
+        ) {
+          parseErrors.push(
+            `Workflow name '${input.workflowName}' already exists in committed project source`,
+          );
         }
         if (parseErrors.length > 0) {
           throw new Error(
@@ -209,7 +247,7 @@ export class WatchersService {
           `Create watcher ${watcherId}`,
           WATCHER_AUTHOR,
           {
-            paths: [sourcePath],
+            paths,
           },
         );
         const remote = this.deps.projectManager.remoteBackend;

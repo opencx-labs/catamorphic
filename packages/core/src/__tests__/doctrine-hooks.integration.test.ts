@@ -10,6 +10,7 @@ import type { Identity } from "../identity.js";
 import {
   BATCH_WORKFLOW_SKILL_PATH,
   DURABLE_WORKFLOW_SKILL_PATH,
+  HOST_SKILLS,
   SEED_SKILLS,
 } from "../seeds.js";
 import { testEnvironmentProvider } from "./test-environment.js";
@@ -74,6 +75,22 @@ describeIf("doctrine hooks integration", () => {
     await sql`DROP SCHEMA IF EXISTS ${sql.id(schema)} CASCADE`.execute(db);
     await db.destroy();
     await fs.rm(tempDirectory, { recursive: true, force: true });
+  });
+
+  it("offers current lifecycle guidance without replacing customized project skills", async () => {
+    const project = await core.projects.create(identity, {
+      name: "Existing project",
+    });
+    const skill = await core.skills.readShared(
+      identity,
+      project.id,
+      "workflow-lifecycle",
+    );
+    expect(skill?.skill.source).toBe("host");
+    expect(skill?.content).toBe(HOST_SKILLS["workflow-lifecycle/SKILL.md"]);
+    const files = await core.projects.readAllFiles(identity, project.id);
+    expect(files[ACME_DESIGN_SKILL_PATH]).toBe(ACME_DESIGN_SKILL);
+    expect(files[".agents/skills/workflow-lifecycle/SKILL.md"]).toBeUndefined();
   });
 
   it("blank projects carry exactly the embedder's seed set", async () => {

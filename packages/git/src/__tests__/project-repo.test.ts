@@ -1,6 +1,8 @@
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import git from "isomorphic-git";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FsBackend } from "../fs-backend.js";
 import { ProjectManager } from "../project-manager.js";
@@ -144,5 +146,85 @@ describe("ProjectRepo", () => {
       const headSha = await repo.resolveRef();
       expect(headSha).toBe(commitSha);
     });
+  });
+});
+
+describe("personal workflow files", () => {
+  let directory: string;
+  let repo: ProjectRepo;
+  const privatePath = ".catamorphic/personal/profile-one/workflows/private.ts";
+
+  beforeEach(async () => {
+    directory = await fs.mkdtemp(path.join(os.tmpdir(), "personal-workflows-"));
+    repo = await new ProjectManager(new FsBackend(directory)).create(
+      TENANT,
+      PROJECT,
+      { name: "private-files" },
+    );
+    await fs.mkdir(path.dirname(path.join(repo.repoPath, privatePath)), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(repo.repoPath, privatePath),
+      "export const privateValue = 'not project content';",
+    );
+  });
+  afterEach(async () => {
+    await repo.dispose();
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  it("excludes personal files from discovery, sandbox source snapshots, and checkpoints", async () => {
+    expect(await repo.listFiles()).not.toContain(privatePath);
+    expect(await repo.readAllFiles()).not.toHaveProperty(privatePath);
+    await repo.writeFile(
+      "workflows/src/shared.ts",
+      "export const shared = true;",
+    );
+    const commit = await repo.commit("Save shared work", {
+      name: "Test",
+      email: "test@example.com",
+    });
+    const files = await repo.readAllFilesAtRef(commit);
+    expect(files["workflows/src/shared.ts"]).toBeDefined();
+    expect(files[privatePath]).toBeUndefined();
+    expect(
+      await fs.readFile(path.join(repo.repoPath, privatePath), "utf8"),
+    ).toContain("not project content");
+    expect((await repo.status()).dirty).toBe(false);
+  });
+
+  it("refuses indexed private files and hides private blobs from historical program reads", async () => {
+    await git.add({
+      fs: nodeFs,
+      dir: repo.repoPath,
+      filepath: privatePath,
+      force: true,
+    });
+    await expect(
+      repo.commit("Checkpoint", { name: "Test", email: "test@example.com" }),
+    ).rejects.toThrow("Personal files are tracked");
+    // Simulate a pre-existing accidental commit made outside the framework.
+    const sha = await git.commit({
+      fs: nodeFs,
+      dir: repo.repoPath,
+      message: "Legacy accidental commit",
+      author: { name: "Test", email: "test@example.com" },
+    });
+    expect(await repo.listFilesAtRef(sha)).not.toContain(privatePath);
+    expect(await repo.readAllFilesAtRef(sha)).not.toHaveProperty(privatePath);
+    await expect(repo.readBlobAtRef(sha, privatePath)).rejects.toThrow(
+      "local-only",
+    );
+  });
+
+  it("rejects direct project API access, including normalized aliases", async () => {
+    for (const candidate of [privatePath, `workflows/../${privatePath}`]) {
+      await expect(repo.readFile(candidate)).rejects.toThrow("local-only");
+      await expect(repo.writeFile(candidate, "replacement")).rejects.toThrow(
+        "local-only",
+      );
+      await expect(repo.readFileBytes(candidate)).rejects.toThrow("local-only");
+    }
   });
 });

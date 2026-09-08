@@ -54,6 +54,47 @@ describe("SessionCheckouts", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
+  it.each(["primary", "worktree"])(
+    "keeps private workflow files out of %s checkpoints",
+    async (kind) => {
+      const workingDirectory =
+        kind === "primary"
+          ? rootPath
+          : (await checkouts.createManaged({ projectId, sessionId })).path;
+      const personal = ".catamorphic/personal/profile-one/workflows/check.ts";
+      await fs.mkdir(path.dirname(path.join(workingDirectory, personal)), {
+        recursive: true,
+      });
+      await fs.writeFile(
+        path.join(workingDirectory, personal),
+        "private workflow",
+      );
+      await fs.writeFile(
+        path.join(workingDirectory, "shared.txt"),
+        "shared work",
+      );
+      const checkpoint = {
+        projectId,
+        sessionId,
+        workingDirectory,
+        message: "Save work",
+      };
+      expect(await checkouts.checkpoint(checkpoint)).not.toBeNull();
+      expect(
+        await git(workingDirectory, ["ls-tree", "-r", "--name-only", "HEAD"]),
+      ).toContain("shared.txt");
+      expect(
+        await git(workingDirectory, ["ls-tree", "-r", "--name-only", "HEAD"]),
+      ).not.toContain(personal);
+      expect(await git(workingDirectory, ["status", "--porcelain"])).toBe("");
+      expect(await checkouts.checkpoint(checkpoint)).toBeNull();
+      await git(workingDirectory, ["add", "-f", "--", personal]);
+      await expect(checkouts.checkpoint(checkpoint)).rejects.toThrow(
+        "Personal files are tracked",
+      );
+    },
+  );
+
   it("keeps a new session on primary until it creates a worktree", async () => {
     expect(await checkouts.resolve({ projectId, sessionId })).toBe(rootPath);
 

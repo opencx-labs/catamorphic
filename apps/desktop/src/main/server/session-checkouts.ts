@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { ensurePersonalFilesExcluded } from "@catamorphic/git";
 import type { PGlite } from "@electric-sql/pglite";
 
 const execFileAsync = promisify(execFile);
@@ -417,6 +418,17 @@ export class SessionCheckouts {
     await this.assertSameRepository(root, input.workingDirectory);
     const commonDir = await canonicalCommonDir(input.workingDirectory);
     return withRepositoryMutationLock(commonDir, async () => {
+      await ensurePersonalFilesExcluded({ repoPath: input.workingDirectory });
+      const personalFiles = await git(input.workingDirectory, [
+        "ls-files",
+        "--",
+        ".catamorphic/personal",
+      ]);
+      if (personalFiles.trim()) {
+        throw new Error(
+          "Personal files are tracked. Remove them from the git index before checkpointing or sharing this project.",
+        );
+      }
       const status = await git(input.workingDirectory, [
         "status",
         "--porcelain=v1",
