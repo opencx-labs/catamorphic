@@ -40,7 +40,17 @@ export type GuestToHostMessage =
       data: Record<string, string>;
     };
 
+export interface AppDisplay {
+  mode: "full" | "compact";
+  visible: boolean;
+}
+
 export type HostToGuestMessage =
+  | {
+      catamorphicApp: typeof APP_PROTOCOL_VERSION;
+      kind: "display";
+      display: AppDisplay;
+    }
   | {
       catamorphicApp: typeof APP_PROTOCOL_VERSION;
       kind: "result";

@@ -33,17 +33,29 @@ export function useApps(projectId: string | undefined) {
 export function AppScreen({
   projectId,
   appName,
+  compact = false,
+  visible = true,
+  height = 320,
 }: {
   projectId: string;
   appName: string;
+  compact?: boolean;
+  visible?: boolean;
+  height?: number;
 }) {
   const theme = useTheme();
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto bg-bg-inset p-4">
+    <div
+      className={
+        compact ? "min-w-0" : "min-h-0 flex-1 overflow-y-auto bg-bg-inset p-4"
+      }
+    >
       <AppMount
         key={`${projectId}:${appName}`}
         projectId={projectId}
         appName={appName}
+        display={{ mode: compact ? "compact" : "full", visible }}
+        viewportHeight={compact ? height : undefined}
         context={{
           tenantId: DESKTOP_TENANT_ID,
           user: { id: DESKTOP_USER_ID },
@@ -53,7 +65,11 @@ export function AppScreen({
         // shared-vocabulary styling matches it exactly, and keep them
         // current across theme switches.
         theme={theme ? appHostTheme(theme) : undefined}
-        className="mx-auto w-full max-w-5xl overflow-hidden rounded-lg border border-border bg-bg-raised"
+        className={
+          compact
+            ? "block w-full bg-bg-raised"
+            : "mx-auto w-full max-w-5xl overflow-hidden rounded-lg border border-border bg-bg-raised"
+        }
         // The desktop is the owner's surface: show the newest ready build
         // (the version being developed), not just the published one.
         channel="dev"

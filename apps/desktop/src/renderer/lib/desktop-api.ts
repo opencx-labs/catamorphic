@@ -1,4 +1,3 @@
-import type { ProjectExperienceWhen } from "../../shared/project-experience.js";
 import type { ThemeFonts } from "../../shared/theme-fonts.js";
 import type { DesktopUpdateState } from "../../shared/update.js";
 import type { UsageSummary } from "../../shared/usage.js";
@@ -613,72 +612,19 @@ export interface PullRequestFile {
   previousPath?: string;
 }
 
-export type SidebarAction =
-  | "open"
-  | "open-tab"
-  | "open-here"
-  | "copy-url"
-  | "pin"
-  | "unpin"
-  | "rename"
-  | "remove";
+export type {
+  SidebarAction,
+  SidebarConfig,
+  SidebarItem,
+  SidebarMenuEntry,
+  SidebarPreview,
+  SidebarPreviewMetadata,
+  SidebarSectionConfig,
+  SidebarSide,
+  SidebarTabConfig,
+} from "../../shared/sidebar.js";
 
-export interface SidebarMenuEntry {
-  label: string;
-  action: SidebarAction;
-  danger?: boolean;
-}
-
-export interface SidebarPreviewMetadata {
-  label: string;
-  value: string;
-}
-
-export interface SidebarPreview {
-  title?: string;
-  description?: string;
-  metadata?: SidebarPreviewMetadata[];
-}
-
-export interface SidebarItem {
-  label: string;
-  url?: string;
-  icon?: string;
-  open?: "tab" | "replace";
-  menu?: SidebarMenuEntry[];
-  preview?: SidebarPreview | false;
-  items?: SidebarItem[];
-  collapsed?: boolean;
-  when?: ProjectExperienceWhen;
-}
-
-export interface SidebarSectionConfig {
-  type:
-    | "workflows"
-    | "apps"
-    | "files"
-    | "chats"
-    | "bookmarks"
-    | "git"
-    | "prs"
-    | "remote"
-    | "custom";
-  title?: string;
-  collapsed?: boolean;
-  /**
-   * Hide the whole section while it has nothing to list. Absent = the
-   * per-type default (true for workflows and apps, false elsewhere).
-   */
-  hideEmpty?: boolean;
-  items?: SidebarItem[];
-  open?: "tab" | "replace";
-  menu?: SidebarMenuEntry[];
-  when?: ProjectExperienceWhen;
-}
-
-export interface SidebarConfig {
-  sections: SidebarSectionConfig[];
-}
+import type { SidebarConfig } from "../../shared/sidebar.js";
 
 /**
  * Which layer of the layered resolution produced the config: this user's
@@ -689,6 +635,7 @@ export type SidebarLayer = "project-local" | "project" | "profile" | "default";
 
 export interface ResolvedSidebarConfig {
   config: SidebarConfig;
+  error?: string;
   layer: SidebarLayer;
 }
 
@@ -730,6 +677,7 @@ export interface AppPrefs {
   notificationSounds: boolean;
   desktopNotifications: boolean;
   sidebarOpen: boolean;
+  rightSidebarOpen: boolean;
   lastProjectId?: string;
   unreadSessionIds: string[];
 }

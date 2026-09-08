@@ -1,4 +1,9 @@
-export { createClient, getContext, reportHeight } from "./client.js";
+export {
+  createClient,
+  getContext,
+  reportHeight,
+  subscribeDisplay,
+} from "./client.js";
 export type {
   AppClient,
   ClientMethod,
@@ -20,6 +25,7 @@ export {
   AppCallError,
   type AppCallErrorCode,
   type AppContext,
+  type AppDisplay,
   type GuestToHostMessage,
   type HostToGuestMessage,
   isGuestMessage,

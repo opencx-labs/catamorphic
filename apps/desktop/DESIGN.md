@@ -3493,3 +3493,21 @@ tab awake only while agents in its project are working. Inactive guests use
 `display: none` while remaining mounted, allowing Chromium to throttle work.
 Do not overwrite Electron's bridged document visibility properties. Guest
 recovery makes at most two automatic attempts before showing a Reload action.
+
+### Tabbed sidebars and compact app widgets (2026-09-08)
+
+Both sidebars share one configurable tab/section model (ADR 0102). Bare Lucide
+icons identify tabs: accent when selected, muted otherwise, no text or button
+fill. Tooltips and keyboard tab semantics supply labels. Width and selection
+persist per profile/project. Right defaults: Activity, Project note and
+nonempty Changes; Pull requests has its own builder tab. Left keeps project
+navigation and a Files tab. The session inspector remains the sole detailed
+session surface.
+
+Tab content uses paired 200ms opacity/6px translate transitions, including
+exit before display:none. Config reload snapshots crossfade both sidebars at
+200ms on the standard curve without reloading widgets. Reduced motion skips
+these transitions. Invalid saves retain the previous layout and show an error.
+Custom widgets mount ordinary project apps with compact presentation, host
+tokens and existing isolation. Hidden apps retain drafts and receive visibility
+updates so optional refresh work can pause.

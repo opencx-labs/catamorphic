@@ -56,6 +56,7 @@ import {
   BUILTIN_ACTIONS,
   type KeybindingAction,
 } from "../../shared/actions.js";
+import { sidebarSections } from "../../shared/sidebar.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
 import { commandScore } from "../lib/command-score.js";
 import {
@@ -1075,7 +1076,7 @@ export function CommandPalette({
         addCustomItems(item.items);
       }
     };
-    for (const section of sidebarConfig?.sections ?? []) {
+    for (const section of sidebarSections(sidebarConfig)) {
       if (section.type !== "custom") continue;
       addCustomItems(section.items);
     }

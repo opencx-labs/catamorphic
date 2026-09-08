@@ -10,9 +10,9 @@ import {
 } from "./sidebar-config.js";
 
 const CUSTOM = (title: string) =>
-  `module.exports = { sections: [{ type: "custom", title: ${JSON.stringify(
+  `module.exports = { left: [{ id: "project", title: "Project", sections: [{ id: "widget-1", type: "custom", title: ${JSON.stringify(
     title,
-  )}, items: [] }] };\n`;
+  )}, items: [] }] }], right: [] };\n`;
 
 const tmpdirs: string[] = [];
 const disposers: Array<() => void> = [];
@@ -83,7 +83,7 @@ describe("resolveSidebarConfig", () => {
       projectRoot,
     });
     expect(resolved.layer).toBe("profile");
-    expect(resolved.config.sections[0]?.title).toBe("Profile");
+    expect(resolved.config.left[0]!.sections[0]?.title).toBe("Profile");
   });
 
   it("prefers the project's shared .catamorphic/sidebar.js over the profile", () => {
@@ -97,7 +97,7 @@ describe("resolveSidebarConfig", () => {
       projectRoot,
     });
     expect(resolved.layer).toBe("project");
-    expect(resolved.config.sections[0]?.title).toBe("Project");
+    expect(resolved.config.left[0]!.sections[0]?.title).toBe("Project");
   });
 
   it("prefers the user's project-local override over everything", () => {
@@ -112,7 +112,7 @@ describe("resolveSidebarConfig", () => {
       projectRoot,
     });
     expect(resolved.layer).toBe("project-local");
-    expect(resolved.config.sections[0]?.title).toBe("Local");
+    expect(resolved.config.left[0]!.sections[0]?.title).toBe("Local");
   });
 
   it("skips project layers when no projectId/projectRoot is given", () => {
@@ -123,7 +123,7 @@ describe("resolveSidebarConfig", () => {
     void projectRoot;
     const resolved = resolveSidebarConfig({ profileDir });
     expect(resolved.layer).toBe("profile");
-    expect(resolved.config.sections[0]?.title).toBe("Profile");
+    expect(resolved.config.left[0]!.sections[0]?.title).toBe("Profile");
   });
 
   it("does NOT slide past a broken winning layer — it falls to defaults", () => {
@@ -144,7 +144,7 @@ describe("resolveSidebarConfig", () => {
 
   it("treats a config that sanitizes to zero sections as defaults", () => {
     const { profileDir, projectRoot, projectId } = makeLayers({
-      projectLocal: `module.exports = { sections: [{ type: "bogus" }] };`,
+      projectLocal: `module.exports = { left: [{ id: "project", title: "Project", sections: [{ id: "widget-2", type: "bogus" }] }], right: [] };`,
     });
     const resolved = resolveSidebarConfig({
       profileDir,
@@ -157,32 +157,31 @@ describe("resolveSidebarConfig", () => {
 
   it("sanitizes the winning layer like the profile store does", () => {
     const { profileDir, projectRoot, projectId } = makeLayers({
-      project: `module.exports = { sections: [
-        { type: "workflows", collapsed: true },
-        { type: "files", title: "Customer work" },
-        { type: "not-a-type" },
-        { type: "custom", title: "Docs", items: [
+      project: `module.exports = { left: [{ id: "project", title: "Project", sections: [
+        { id: "widget-3", type: "workflows", collapsed: true },
+        { id: "widget-4", type: "files", title: "Customer work" },
+        { id: "widget-6", type: "custom", title: "Docs", items: [
           { label: "MDN", url: "https://developer.mozilla.org" },
           { label: "no url" },
         ] },
-      ] };`,
+      ] }], right: [] };`,
     });
     const resolved = resolveSidebarConfig({
       profileDir,
       projectId,
       projectRoot,
     });
-    expect(resolved.config.sections).toHaveLength(3);
-    expect(resolved.config.sections[0]).toMatchObject({
+    expect(resolved.config.left[0]!.sections).toHaveLength(3);
+    expect(resolved.config.left[0]!.sections[0]).toMatchObject({
       type: "workflows",
       collapsed: true,
     });
-    expect(resolved.config.sections[1]).toMatchObject({
+    expect(resolved.config.left[0]!.sections[1]).toMatchObject({
       type: "files",
       title: "Customer work",
     });
-    expect(resolved.config.sections[2]?.items).toHaveLength(1);
-    expect(resolved.config.sections[2]?.items?.[0]).toMatchObject({
+    expect(resolved.config.left[0]!.sections[2]?.items).toHaveLength(1);
+    expect(resolved.config.left[0]!.sections[2]?.items?.[0]).toMatchObject({
       label: "MDN",
       url: "https://developer.mozilla.org",
     });
@@ -190,9 +189,9 @@ describe("resolveSidebarConfig", () => {
 
   it("preserves valid capability predicates and drops invalid ones", () => {
     const { profileDir, projectRoot, projectId } = makeLayers({
-      project: `module.exports = { sections: [
+      project: `module.exports = { left: [{ id: "project", title: "Project", sections: [
         {
-          type: "custom",
+          id: "widget-9", type: "custom",
           title: "Brain",
           when: { permissions: ["brain:maintain"] },
           items: [
@@ -208,13 +207,13 @@ describe("resolveSidebarConfig", () => {
             },
           ],
         },
-      ] };`,
+      ] }], right: [] };`,
     });
     const section = resolveSidebarConfig({
       profileDir,
       projectId,
       projectRoot,
-    }).config.sections[0];
+    }).config.left[0]!.sections[0];
     expect(section?.when).toEqual({ permissions: ["brain:maintain"] });
     expect(section?.items).toEqual([
       expect.objectContaining({
@@ -229,8 +228,8 @@ describe("resolveSidebarConfig", () => {
 
   it("retains recursive custom items and folder-only nodes", () => {
     const { profileDir, projectRoot, projectId } = makeLayers({
-      project: `module.exports = { sections: [{
-        type: "custom",
+      project: `module.exports = { left: [{ id: "project", title: "Project", sections: [{
+        id: "widget-10", type: "custom",
         title: "Knowledge",
         items: [{
           label: "Engineering",
@@ -241,14 +240,14 @@ describe("resolveSidebarConfig", () => {
             items: [{ label: "Runbook", url: "https://example.test/runbook" }],
           }],
         }],
-      }] };`,
+      }] }], right: [] };`,
     });
 
     const item = resolveSidebarConfig({
       profileDir,
       projectId,
       projectRoot,
-    }).config.sections[0]?.items?.[0];
+    }).config.left[0]!.sections[0]?.items?.[0];
     expect(item).toMatchObject({
       label: "Engineering",
       icon: "Folder",
@@ -264,8 +263,8 @@ describe("resolveSidebarConfig", () => {
 
   it("sanitizes custom item previews and preserves an explicit opt-out", () => {
     const { profileDir, projectRoot, projectId } = makeLayers({
-      project: `module.exports = { sections: [{
-        type: "custom",
+      project: `module.exports = { left: [{ id: "project", title: "Project", sections: [{
+        id: "widget-11", type: "custom",
         items: [
           {
             label: "Deployments",
@@ -289,7 +288,7 @@ describe("resolveSidebarConfig", () => {
             preview: false,
           },
         ],
-      }] };`,
+      }] }], right: [] };`,
     });
 
     const resolved = resolveSidebarConfig({
@@ -298,7 +297,7 @@ describe("resolveSidebarConfig", () => {
       projectRoot,
     });
 
-    expect(resolved.config.sections[0]?.items?.[0]?.preview).toEqual({
+    expect(resolved.config.left[0]!.sections[0]?.items?.[0]?.preview).toEqual({
       title: "Production deployments",
       description: "Release health at a glance",
       metadata: [
@@ -308,7 +307,9 @@ describe("resolveSidebarConfig", () => {
         { label: "Version", value: "2026.8.24" },
       ],
     });
-    expect(resolved.config.sections[0]?.items?.[1]?.preview).toBe(false);
+    expect(resolved.config.left[0]!.sections[0]?.items?.[1]?.preview).toBe(
+      false,
+    );
   });
 });
 
@@ -353,5 +354,58 @@ describe("watchSidebarLayerFile", () => {
     fs.mkdirSync(path.dirname(file));
     fs.writeFileSync(file, CUSTOM("late"));
     await fired;
+  });
+});
+
+describe("tabbed layout reloads", () => {
+  it("retains the last valid layout across invalid saves and recovers", () => {
+    const profileDir = makeDir();
+    const file = path.join(profileDir, "sidebar.js");
+    fs.writeFileSync(file, CUSTOM("Original"));
+    const original = resolveSidebarConfig({ profileDir }).config;
+    fs.writeFileSync(file, "module.exports = {");
+    const broken = resolveSidebarConfig({ profileDir });
+    expect(broken.config).toEqual(original);
+    expect(broken.error).toBeTruthy();
+    fs.writeFileSync(file, CUSTOM("Updated"));
+    const recovered = resolveSidebarConfig({ profileDir });
+    expect(recovered.error).toBeUndefined();
+    expect(recovered.config.left[0]?.sections[0]?.title).toBe("Updated");
+  });
+
+  it("accepts empty sides and rejects duplicate identities atomically", () => {
+    const profileDir = makeDir();
+    const file = path.join(profileDir, "sidebar.js");
+    fs.writeFileSync(file, "module.exports = { left: [], right: [] }");
+    expect(resolveSidebarConfig({ profileDir }).config).toEqual({
+      left: [],
+      right: [],
+    });
+    fs.writeFileSync(
+      file,
+      `module.exports = { left: [{ id: 'same', title: 'One', sections: [] }], right: [{ id: 'same', title: 'Two', sections: [] }] }`,
+    );
+    const invalid = resolveSidebarConfig({ profileDir });
+    expect(invalid.error).toContain("unique id");
+    expect(invalid.config).toEqual({ left: [], right: [] });
+  });
+
+  it("validates app names and bounds compact heights without granting file access", () => {
+    const profileDir = makeDir();
+    const file = path.join(profileDir, "sidebar.js");
+    fs.writeFileSync(
+      file,
+      `module.exports = { left: [], right: [{ id: 'apps', title: 'Apps', icon: 'Box', sections: [{id:'app', type:'app', app:'renewals', height:9999}]}] }`,
+    );
+    expect(
+      resolveSidebarConfig({ profileDir }).config.right[0]?.sections[0],
+    ).toMatchObject({ app: "renewals", height: 1200 });
+    fs.writeFileSync(
+      file,
+      `module.exports = { left: [], right: [{ id: 'notes', title: 'Notes', sections: [{id:'note', type:'note', path:'../secrets'}]}] }`,
+    );
+    expect(resolveSidebarConfig({ profileDir }).error).toContain(
+      "project-relative",
+    );
   });
 });

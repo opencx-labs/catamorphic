@@ -479,17 +479,19 @@ leaves no empty UI behind.
 \`\`\`javascript
 // .catamorphic/sidebar.js
 module.exports = {
-  sections: [
-    { type: "chats" },
-    { type: "files" },
+  left: [{ id: "project", title: "Project", icon: "House", sections: [
+    { id: "chats", type: "chats" },
+    { id: "files", type: "files" },
     {
+      id: "brain",
       type: "custom",
       title: "Company brain",
       when: { permissions: ["brain:maintain"] },
       items: [{ label: "Handbook", url: "https://handbook.example.com" }],
     },
-    { type: "git", title: "Changes", when: { builder: true } },
-  ],
+    { id: "changes", type: "git", title: "Changes", when: { builder: true } },
+  ] }],
+  right: [],
 };
 \`\`\`
 
@@ -968,6 +970,12 @@ other users, agents, or workflows must see does NOT belong in storage —
 define a workflow and call it through the app contract.
 
 - One screen per app; no routing. The host controls where it renders.
+- Hosts may mount the same app in a compact sidebar slot. Use responsive layout
+  and host theme tokens. \`subscribeDisplay(listener)\` from \`@catamorphic/app\`
+  immediately reports \`{ mode: "full" | "compact", visible: boolean }\` and
+  subsequent changes; it returns an unsubscribe function. Pause optional polling
+  while invisible and resume on visibility. Hidden slots retain the app and its
+  drafts. Compact mode changes presentation only, never permissions.
 - \`getContext()\` from \`@catamorphic/app\` gives the mount snapshot
   (tenant, user, host extras). Anything richer is one workflow call away.
 - Verify with \`bun run build\` in the app directory: it must produce

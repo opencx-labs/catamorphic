@@ -15,6 +15,7 @@ export interface AppPrefs {
   desktopNotifications: boolean;
   /** Whether the left sidebar is shown. */
   sidebarOpen: boolean;
+  rightSidebarOpen: boolean;
   /** The project the profile last worked in — where a relaunch lands. */
   lastProjectId?: string;
   /** Sessions this profile has explicitly or implicitly marked unread. */
@@ -25,6 +26,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   notificationSounds: true,
   desktopNotifications: true,
   sidebarOpen: true,
+  rightSidebarOpen: true,
   unreadSessionIds: [],
 };
 
@@ -51,6 +53,10 @@ export function normalizePrefs(raw: unknown): AppPrefs {
       typeof record.desktopNotifications === "boolean"
         ? record.desktopNotifications
         : DEFAULT_PREFS.desktopNotifications,
+    rightSidebarOpen:
+      typeof record.rightSidebarOpen === "boolean"
+        ? record.rightSidebarOpen
+        : DEFAULT_PREFS.rightSidebarOpen,
     sidebarOpen:
       typeof record.sidebarOpen === "boolean"
         ? record.sidebarOpen

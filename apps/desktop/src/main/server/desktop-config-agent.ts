@@ -36,7 +36,7 @@ const MIRROR_PATHS = [
 
 export const DESKTOP_CONFIG_SKILL = `---
 name: configuring-catamorphic-desktop
-description: Change Catamorphic desktop app settings (keyboard shortcuts, the left sidebar's sections/items, theme colors, and fonts) when the user asks to customize the app itself, e.g. "rebind new chat to Cmd+N", "hide the workflows section", "switch to the light theme", "make the accent purple", "change the interface font", "use Menlo for code".
+description: Change Catamorphic desktop app settings (keyboard shortcuts, both sidebars' icon tabs and widgets, theme colors, and fonts) when the user asks to customize the app itself, e.g. "rebind new chat to Cmd+N", "hide the workflows section", "switch to the light theme", "make the accent purple", "change the interface font", "use Menlo for code".
 ---
 
 # Configuring the Catamorphic desktop app
@@ -74,10 +74,12 @@ bindings are ignored and fall back to the default.
 Warn the user if they pick a binding that collides with a common OS or
 app shortcut (Cmd+Q, Cmd+C/V/X/A/Z, Cmd+N).
 
-## Left sidebar
+## Sidebars
 
 The sidebar is fully user-defined by a JS config file exporting an
-ordered list of sections: the list IS the sidebar. Edit it to reorder,
+object with left and right arrays of tabs. Each tab has id, title, icon and
+sections. Each section has a stable id, unique across the layout, and type.
+Edit it to reorder,
 retitle, **hide** (delete the entry), or invent sections.
 
 The config is LAYERED — the app uses the first of these that exists, so
@@ -109,10 +111,23 @@ Bookmarks are real browser bookmarks: the user creates them with the
 star in the address bar; you never hand-write bookmark data here, you
 only control how the section is presented.
 
+Each side contains icon tabs: \`{ id: "project", title: "Project", icon: "House", sections: [...] }\`.
+Preserve stable tab and section ids during edits; moving or reordering must not invent ids.
+Either side may be empty. Move a tab or section by moving its definition between arrays.
+Built-ins also include \`activity\` (running/attention sessions and workflow runs),
+\`note\` (\`path: "docs/brief.md"\`, optional personal pin when omitted), and
+\`app\` (\`app: "renewals", height: 320\`). App widgets are ordinary built project apps,
+not inline JavaScript in this file. Build responsive compact content using host tokens.
+Apps can import \`subscribeDisplay\` from \`@catamorphic/app\` to observe
+\`{ mode: "compact" | "full", visible: boolean }\` and pause refreshes while hidden.
+The sidebar mounts the same app with the same sandbox, storage and authorization;
+expanding opens its full view. It grants no filesystem or active-chat access.
+
 Your own section:
 
 \`\`\`js
 {
+  id: "docs",
   type: "custom",
   title: "Docs",
   open: "replace",
@@ -130,8 +145,8 @@ Your own section:
   \`preview: false\` to explicitly disable it.
 - \`collapsed: true\` starts a section collapsed.
 - \`hideEmpty\`: hide the whole section (header included) while it has
-  nothing to list. Defaults to true for \`workflows\` and \`apps\`, false
-  for every other section; set it explicitly to override either way.
+  nothing to list. Defaults to true for \`workflows\`, \`apps\`, \`git\` and \`remote\`, false
+  for other sections; set it explicitly to override either way.
 - \`when\`: on a section or custom item, target resolved project authority
   with optional \`builder: true|false\` and/or
   \`permissions: ["namespace:capability"]\`. Every condition must match;
@@ -152,10 +167,9 @@ Actions: \`open\`, \`open-tab\`, \`open-here\`, \`copy-url\`, \`pin\`,
 \`unpin\`, \`rename\`, \`remove\`. \`menu: []\` removes the ⋯ button.
 \`pin\`/\`unpin\`/\`rename\`/\`remove\` only do anything on bookmarks.
 
-Rules: keep it valid JavaScript with a \`module.exports = { sections: [...] }\`.
+Rules: keep it valid JavaScript with a \`module.exports = { left: [...], right: [...] }\`.
 It is evaluated in a sandbox: no \`require\`, no I/O, no async. An invalid
-file falls back to the default sidebar, so verify your edit is syntactically
-correct. Preserve the user's existing sections unless they asked otherwise,
+file retains the last valid layout and shows an error. Preserve the user's existing sections unless they asked otherwise,
 and keep the explanatory comments at the top intact.
 
 ## Project New Tab actions

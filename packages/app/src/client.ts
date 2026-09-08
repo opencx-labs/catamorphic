@@ -7,6 +7,7 @@ import {
   toolResultErrorMessage,
   toolResultValue,
 } from "./mcp-host.js";
+import type { AppDisplay } from "./protocol.js";
 import {
   APP_PROTOCOL_VERSION,
   AppCallError,
@@ -55,6 +56,8 @@ interface PendingCall {
 class GuestBridge {
   private readonly pending = new Map<string, PendingCall>();
   private context: AppContext | null = null;
+  private display: AppDisplay = { mode: "full", visible: true };
+  private readonly displayListeners = new Set<(display: AppDisplay) => void>();
   private readonly contextWaiters: ((context: AppContext) => void)[] = [];
   private counter = 0;
   private mode: "catamorphic" | "mcp" = "catamorphic";
@@ -74,6 +77,16 @@ class GuestBridge {
         return;
       }
       if (!isHostMessage(data)) return;
+      if (data.kind === "display") {
+        if (
+          (data.display?.mode !== "full" && data.display?.mode !== "compact") ||
+          typeof data.display?.visible !== "boolean"
+        )
+          return;
+        this.display = data.display;
+        for (const listener of this.displayListeners) listener(this.display);
+        return;
+      }
       if (data.kind === "context") {
         this.context = data.context;
         for (const waiter of this.contextWaiters.splice(0)) {
@@ -92,8 +105,9 @@ class GuestBridge {
         pending.reject(new AppCallError(data.error.code, data.error.message));
     });
 
-    // MCP Apps host probe. Catamorphic hosts drop unknown message shapes,
-    // so this is invisible to them; an answer proves an MCP host.
+    // The initialize probe also announces that this listener is ready. A
+    // Catamorphic mount replays its context/display; a JSON-RPC answer proves
+    // an MCP host. This works even when the bridge starts after iframe load.
     this.postRpc({
       jsonrpc: "2.0",
       id: MCP_INITIALIZE_ID,
@@ -190,6 +204,14 @@ class GuestBridge {
       input: message.input ?? null,
       mode: message.mode,
     });
+  }
+
+  subscribeDisplay(listener: (display: AppDisplay) => void): () => void {
+    this.displayListeners.add(listener);
+    listener(this.display);
+    return () => {
+      this.displayListeners.delete(listener);
+    };
   }
 
   getContext(): Promise<AppContext> {
@@ -324,4 +346,11 @@ export function reportHeight(height: number): void {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Observe compact/full presentation and visibility without remounting the app. */
+export function subscribeDisplay(
+  listener: (display: AppDisplay) => void,
+): () => void {
+  return getBridge().subscribeDisplay(listener);
 }

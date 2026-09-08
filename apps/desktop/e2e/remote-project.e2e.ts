@@ -375,10 +375,11 @@ describe("remote projects (ADR 0055)", () => {
       { timeoutMs: 30_000, label: "remote sign-in in workspace browser tab" },
     );
 
-    // Member projects materialize into the work-focused Files section. The
-    // old Server section and its sync controls intentionally have no trace.
+    // Member projects materialize into the Files tab. Opening that tab
+    // initializes its file tree; builder sync controls remain absent.
     await runWait(
-      `return $('[data-testid="files-nav"]')?.textContent.includes('store');`,
+      `$('[data-sidebar="left"] [role="tab"][aria-label="Files"]')?.click();
+       return $('[data-testid="files-nav"]')?.textContent.includes('store');`,
       {
         timeoutMs: 60_000,
         label: "member files",
