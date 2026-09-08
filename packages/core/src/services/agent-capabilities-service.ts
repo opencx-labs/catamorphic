@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import type { DB } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import {
@@ -110,7 +111,11 @@ export interface AgentCapability {
   inputSchema: z.ZodType;
   outputSchema: z.ZodType;
   authorize(context: AgentCapabilityContext): boolean | Promise<boolean>;
-  execute(context: AgentCapabilityInvocation, input: unknown): Promise<unknown>;
+  /** Validate once, retaining the typed input for approval and execution. */
+  prepare(input: unknown): {
+    input: unknown;
+    execute(context: AgentCapabilityInvocation): Promise<unknown>;
+  };
 }
 /** Typed authoring; the registry erases types only after schema validation. */
 export function defineAgentCapability<
@@ -128,10 +133,16 @@ export function defineAgentCapability<
     input: z.output<I>,
   ): Promise<z.input<O>>;
 }): AgentCapability {
+  const { execute, ...definition } = args;
   return {
-    ...args,
-    execute: (context, input) =>
-      args.execute(context, args.inputSchema.parse(input)),
+    ...definition,
+    prepare: (input) => {
+      const value = args.inputSchema.parse(input);
+      return {
+        input: value,
+        execute: (context) => execute(context, value),
+      };
+    },
   };
 }
 export interface AgentCapabilityOptions {
@@ -238,7 +249,7 @@ export class AgentCapabilitiesService {
         let context = await this.context(args);
         if (!capability || !(await capability.authorize(context)))
           throw new AccessDeniedError();
-        const value = capability.inputSchema.parse(command.input);
+        const prepared = capability.prepare(command.input);
         const event = async (
           type: "started" | "completed" | "failed" | "progress",
           progress?: { message: string; current?: number; total?: number },
@@ -278,23 +289,25 @@ export class AgentCapabilitiesService {
               ...invocation(),
               capability: command.name,
               effect: capability.effect,
-              input: value,
+              input: prepared.input,
             });
-            context = await this.context({
-              ...args,
-              allocationId: context.allocationId,
-            });
-            if (!(await capability.authorize(context)))
-              throw new AccessDeniedError();
-            input.signal?.throwIfAborted();
             await event("started");
             try {
+              // Activity sinks may await IO too. Recheck after every host hook
+              // before handing control to the capability's owning service.
+              context = await this.context({
+                ...args,
+                allocationId: context.allocationId,
+              });
+              if (!(await capability.authorize(context)))
+                throw new AccessDeniedError();
+              input.signal?.throwIfAborted();
               const result = capability.outputSchema.parse(
-                await capability.execute(invocation(), value),
+                await prepared.execute(invocation()),
               );
               // JSON is the contract across in-process and remote transports alike.
               const wire = json.parse(result);
-              if (JSON.stringify(wire).length > 1024 * 1024)
+              if (Buffer.byteLength(JSON.stringify(wire), "utf8") > 1024 * 1024)
                 throw new Error(
                   "Capability result exceeds 1 MiB; use a bounded query or resource reference",
                 );

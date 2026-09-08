@@ -32,6 +32,11 @@ let revokeDuringApproval = false;
 let executions = 0;
 let memberIdentity: Identity | null = null;
 let identityResolutions = 0;
+let normalizations = 0;
+let approvedInput: unknown;
+let outputText = "";
+let cancelOnStart: AbortController | undefined;
+let revokeOnStart = false;
 const events: string[] = [];
 const alice: Identity = {
   tenantId: crypto.randomUUID(),
@@ -43,13 +48,41 @@ const options: AgentCapabilityOptions = {
     timeZone: "Asia/Amman",
     secret: "must-not-appear",
   }),
-  beforeInvoke: async () => {
+  beforeInvoke: async ({ input }) => {
+    approvedInput = input;
     if (revokeDuringApproval) permitted = false;
   },
   onEvent: (event) => {
     events.push(event.type);
+    if (event.type === "started") {
+      cancelOnStart?.abort();
+      if (revokeOnStart) permitted = false;
+    }
   },
   capabilities: [
+    defineAgentCapability({
+      name: "test.normalize",
+      description: "Normalize input once before approval and execution",
+      effect: "read",
+      inputSchema: z.object({
+        value: z.number().overwrite((value) => {
+          normalizations++;
+          return value + 1;
+        }),
+      }),
+      outputSchema: z.object({ value: z.number() }),
+      authorize: () => true,
+      execute: async (_context, input) => input,
+    }),
+    defineAgentCapability({
+      name: "test.output",
+      description: "Return test output for the wire limit",
+      effect: "read",
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.string(),
+      authorize: () => true,
+      execute: async () => outputText,
+    }),
     defineAgentCapability({
       name: "people.search",
       description: "Search the permitted project directory",
@@ -177,6 +210,11 @@ beforeEach(() => {
   events.length = 0;
   memberIdentity = null;
   identityResolutions = 0;
+  normalizations = 0;
+  approvedInput = undefined;
+  outputText = "";
+  cancelOnStart = undefined;
+  revokeOnStart = false;
 });
 
 it("keeps context small and excludes other users, credentials, and permission lists", async () => {
@@ -379,4 +417,59 @@ it("never widens a narrowed caller when membership refresh returns broader grant
     })
     .invoke({ name: "environments.list", input: {}, requestId: "no-widening" });
   expect(value).toEqual({ items: [] });
+});
+
+it("uses the same normalized input for approval and execution", async () => {
+  const result = await gateway.invoke({
+    name: "test.normalize",
+    input: { value: 1 },
+    requestId: "normalize-once",
+  });
+  expect(approvedInput).toEqual({ value: 2 });
+  expect(result).toEqual(approvedInput);
+  expect(normalizations).toBe(1);
+});
+
+it("enforces the output limit in UTF-8 bytes", async () => {
+  outputText = "界".repeat(400_000);
+  await expect(
+    gateway.invoke({
+      name: "test.output",
+      input: {},
+      requestId: "large-output",
+    }),
+  ).rejects.toThrow("1 MiB");
+  expect(events).toEqual(["started", "failed"]);
+  outputText = "a".repeat(400_000);
+  expect(
+    await gateway.invoke({
+      name: "test.output",
+      input: {},
+      requestId: "bounded-output",
+    }),
+  ).toBe(outputText);
+});
+
+it("honors cancellation and revocation during awaited activity reporting", async () => {
+  cancelOnStart = new AbortController();
+  await expect(
+    gateway.invoke({
+      name: "people.search",
+      input: { query: "Bob" },
+      requestId: "cancel-on-start",
+      signal: cancelOnStart.signal,
+    }),
+  ).rejects.toThrow();
+  expect(executions).toBe(0);
+  expect(events).toEqual(["started", "failed"]);
+  cancelOnStart = undefined;
+  revokeOnStart = true;
+  await expect(
+    gateway.invoke({
+      name: "people.search",
+      input: { query: "Bob" },
+      requestId: "revoke-on-start",
+    }),
+  ).rejects.toThrow();
+  expect(executions).toBe(0);
 });

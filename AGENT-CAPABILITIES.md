@@ -88,7 +88,9 @@ const listAssignments = defineAgentCapability({
 `createCatamorphic({ ..., agentCapabilities: { capabilities: [listAssignments] } })`.
 The stock server accepts the same option. Duplicate registered names fail at boot;
 custom stock `people.search` explicitly replaces the stock directory default.
-Schemas must be JSON-schema representable. Results must be JSON and at most 1 MiB;
+Schemas must be JSON-schema representable. Input is normalized once, so approval
+and execution receive the same validated value. Results must be JSON and at most
+1 MiB encoded as UTF-8;
 use bounded queries and resource references for larger output.
 
 `authorize` runs for discovery and invocation. Executors must also enforce access
@@ -102,7 +104,8 @@ carried by the original caller. A fresh turn can bind a newly authorized identit
 `beforeInvoke` receives the validated input, current identity, session,
 Allocation, effect, operation ID, cancellation signal, and progress callback.
 Hosts can reject an operation or await their existing approval mechanism there.
-After it returns, core checks identity, Allocation, and authorization again.
+After approval and activity reporting return, core checks identity, Allocation,
+authorization, and cancellation again before execution.
 Use the existing durable request/approval system when approval must survive a
 process restart; do not make tool prose or a cached schema the approval record.
 
