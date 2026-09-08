@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   expandRole,
+  expandRolePermissions,
   fillTemplate,
   validateRoleDefinition,
 } from "../services/roles-service.js";
@@ -100,6 +101,29 @@ describe("roles as files (ADR 0055): expansion", () => {
     ]);
   });
 
+  it("expands project administration independently from builder access", () => {
+    const teamAdmin = validateRoleDefinition({
+      version: 1,
+      name: "Team admin",
+      permissions: ["memberships:manage", "roles:manage", "brain:maintain"],
+    });
+    if ("error" in teamAdmin) throw new Error(teamAdmin.error);
+    expect(expandRole(teamAdmin.definition, "p1", {})).toEqual([]);
+    expect(expandRolePermissions(teamAdmin.definition, "p1")).toEqual([
+      { projectId: "p1", permission: "memberships:manage" },
+      { projectId: "p1", permission: "roles:manage" },
+      { projectId: "p1", permission: "brain:maintain" },
+    ]);
+
+    const builder = validateRoleDefinition({
+      version: 1,
+      name: "Builder",
+      builder: true,
+    });
+    if ("error" in builder) throw new Error(builder.error);
+    expect(expandRolePermissions(builder.definition, "p1")).toEqual([]);
+  });
+
   it("rejects unsupported versions and malformed files with a readable error", () => {
     expect(validateRoleDefinition({ version: 2, name: "x" })).toMatchObject({
       error: expect.stringMatching(/version 2/),
@@ -114,5 +138,12 @@ describe("roles as files (ADR 0055): expansion", () => {
         documents: [{ path: "a", access: "admin" }],
       }),
     ).toMatchObject({ error: expect.stringMatching(/documents\.0/) });
+    expect(
+      validateRoleDefinition({
+        version: 1,
+        name: "x",
+        permissions: ["not-namespaced"],
+      }),
+    ).toMatchObject({ error: expect.stringMatching(/permissions\.0/) });
   });
 });

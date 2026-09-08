@@ -28,8 +28,11 @@ export interface AppPrefs {
   previewLinksWithAlt: boolean;
   terminalMacros: TerminalMacro[];
   terminalAppearance: "app" | "ghostty";
+  rightSidebarOpen: boolean;
   /** The project the profile last worked in — where a relaunch lands. */
   lastProjectId?: string;
+  /** Sessions this profile has explicitly or implicitly marked unread. */
+  unreadSessionIds: string[];
 }
 
 export const DEFAULT_PREFS: AppPrefs = {
@@ -43,7 +46,18 @@ export const DEFAULT_PREFS: AppPrefs = {
   previewLinksWithAlt: true,
   terminalMacros: [],
   terminalAppearance: "app",
+  rightSidebarOpen: true,
+  unreadSessionIds: [],
 };
+
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(
+      value.filter((item): item is string => typeof item === "string"),
+    ),
+  ];
+}
 
 export function normalizePrefs(raw: unknown): AppPrefs {
   const record =
@@ -59,6 +73,10 @@ export function normalizePrefs(raw: unknown): AppPrefs {
       typeof record.desktopNotifications === "boolean"
         ? record.desktopNotifications
         : DEFAULT_PREFS.desktopNotifications,
+    rightSidebarOpen:
+      typeof record.rightSidebarOpen === "boolean"
+        ? record.rightSidebarOpen
+        : DEFAULT_PREFS.rightSidebarOpen,
     sidebarOpen:
       typeof record.sidebarOpen === "boolean"
         ? record.sidebarOpen
@@ -77,6 +95,7 @@ export function normalizePrefs(raw: unknown): AppPrefs {
     ...(typeof record.lastProjectId === "string"
       ? { lastProjectId: record.lastProjectId }
       : {}),
+    unreadSessionIds: stringList(record.unreadSessionIds),
   };
 }
 

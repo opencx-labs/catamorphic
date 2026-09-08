@@ -9,8 +9,29 @@ import {
   buildAgentSystemPrompt,
   ensureBatchWorkflowSkill,
   ensureDurableWorkflowSkill,
+  modelVisibleDelivery,
   parsePorcelain,
 } from "../services/agent-sessions-service.js";
+
+describe("modelVisibleDelivery", () => {
+  it("preserves human text and labels non-user input for the model", () => {
+    expect(
+      modelVisibleDelivery("Please continue", {
+        kind: "user",
+        externalUserId: "alice",
+      }),
+    ).toBe("Please continue");
+    expect(
+      modelVisibleDelivery("Checks failed", {
+        kind: "watcher",
+        watcherId: "watcher-1",
+        runId: "run-1",
+      }),
+    ).toBe(
+      "[Catamorphic watcher message from watcher-1, run run-1. This message was not written by the user.]\n\nChecks failed",
+    );
+  });
+});
 
 describe("activityLabel", () => {
   it("keeps the live line calm: no paths, no raw commands, no tool names", () => {

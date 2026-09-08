@@ -1,60 +1,54 @@
 @import "tailwindcss";
+@import "@catamorphic/ui/styles.css";
 
 /*
  * Catamorphic Desktop design tokens. See DESIGN.md for the rules.
- * Dark-first: :root is the dark theme; light lives behind [data-theme=light].
+ * Before profile config loads, :root follows the operating system. The
+ * resolved profile theme is then applied as inline tokens by ThemeProvider.
  */
 :root {
+  color-scheme: light dark;
+  /* Pre-JS defaults, mirrored in shared/theme-fonts.ts. */
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+
   /* Surfaces */
-  --color-bg: #0a0a0b;
-  --color-bg-raised: #101012;
-  --color-bg-overlay: #16161a;
-  --color-bg-inset: #060607;
-  --color-sidebar: #101012;
+  --color-bg: light-dark(#f7f8fa, #0a0a0b);
+  --color-bg-raised: light-dark(#ffffff, #101012);
+  --color-bg-overlay: light-dark(#eef0f3, #16161a);
+  --color-bg-inset: light-dark(#eceef1, #060607);
+  --color-sidebar: light-dark(#d9dce2, #101012);
 
   /* Borders */
-  --color-border: #232329;
-  --color-border-strong: #33333b;
+  --color-border: light-dark(#22252b1a, #232329);
+  --color-border-strong: light-dark(#22252b33, #33333b);
 
   /* Text */
-  --color-fg: #e6e6e9;
-  --color-fg-muted: #9a9aa3;
-  --color-fg-faint: #5c5c66;
+  --color-fg: light-dark(#22252b, #e6e6e9);
+  --color-fg-muted: light-dark(#555b65, #9a9aa3);
+  --color-fg-faint: light-dark(#59616b, #5c5c66);
 
   /* Accent: Catamorphic orange */
-  --color-accent: #f95225;
-  --color-accent-fg: #1a0a05;
+  --color-accent: light-dark(#d63c0c, #f95225);
+  --color-accent-fg: light-dark(#ffffff, #1a0a05);
 
   /* Status (low chroma) */
-  --color-success: #7fb069;
-  --color-warning: #f95225;
-  --color-danger: #c46d6d;
-  --color-info: #6d9ec4;
+  --color-success: light-dark(#4d7a3a, #7fb069);
+  --color-warning: light-dark(#d63c0c, #f95225);
+  --color-danger: light-dark(#a04848, #c46d6d);
+  --color-info: light-dark(#3a6ea0, #6d9ec4);
 
   /* Message tints */
-  --color-user-tint: #14202e;
-  --color-agent-tint: #101012;
+  --color-user-tint: light-dark(#e9edf3, #14202e);
+  --color-agent-tint: light-dark(#ffffff, #101012);
 }
 
 [data-theme="light"] {
-  --color-bg: #f7f8fa;
-  --color-bg-raised: #ffffff;
-  --color-bg-overlay: #eef0f3;
-  --color-bg-inset: #eceef1;
-  --color-sidebar: #d9dce2;
-  --color-border: #22252b1a;
-  --color-border-strong: #22252b33;
-  --color-fg: #22252b;
-  --color-fg-muted: #555b65;
-  --color-fg-faint: #59616b;
-  --color-accent: #d63c0c;
-  --color-accent-fg: #ffffff;
-  --color-success: #4d7a3a;
-  --color-warning: #d63c0c;
-  --color-danger: #a04848;
-  --color-info: #3a6ea0;
-  --color-user-tint: #e9edf3;
-  --color-agent-tint: #ffffff;
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 @theme inline {
@@ -75,10 +69,8 @@
   --color-danger: var(--color-danger);
   --color-info: var(--color-info);
 
-  /* Mirrored in packages/app/src/theme.ts (APP_BASE_CSS) so mounted apps
-     share the same primitives — change both together. */
-  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
 
   --radius-sm: 4px;
   --radius-md: 6px;
@@ -91,7 +83,7 @@
    Scope its shape to appearance so custom palettes and Paper share it.
    The sidebar's selection/hover surfaces remain neutral and token-driven. */
 @layer components {
-  [data-theme="light"] .desktop-sidebar {
+  :where([data-theme="light"]) .tabbed-sidebar {
     --color-bg-overlay: var(--color-bg-raised);
   }
 
@@ -383,6 +375,65 @@ kbd {
   animation: pop-out 140ms cubic-bezier(0.2, 0, 0, 1) forwards;
 }
 
+/* Resource inspectors enter from and return to their trigger. Keeping the
+   axis side-aware makes the top-right chat inspector read as one object. */
+@keyframes inspector-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes inspector-out-left {
+  from {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(4px) scale(0.98);
+  }
+}
+
+@keyframes inspector-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes inspector-out-right {
+  from {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-4px) scale(0.98);
+  }
+}
+
+.animate-inspector-in-left {
+  animation: inspector-in-left 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+.animate-inspector-out-left {
+  animation: inspector-out-left 160ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+.animate-inspector-in-right {
+  animation: inspector-in-right 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+.animate-inspector-out-right {
+  animation: inspector-out-right 160ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
 /* Pairing readiness keeps a fixed QR stage, then resolves the code from a
    soft optical blur. Layout never participates in this transition. */
 @keyframes pairing-qr-in {
@@ -412,12 +463,46 @@ kbd {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  @keyframes pop-in {
+    from {
+      opacity: 0;
+      transform: none;
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes pop-out {
+    from {
+      opacity: 1;
+      transform: none;
+    }
+    to {
+      opacity: 0;
+      transform: none;
+    }
+  }
+
+  .animate-pop-in,
+  .animate-pop-out,
+  .animate-inspector-in-left,
+  .animate-inspector-out-left,
+  .animate-inspector-in-right,
+  .animate-inspector-out-right {
+    animation-duration: 100ms;
+  }
+
   .animate-pairing-qr-in {
     animation: pairing-qr-fade-in 100ms cubic-bezier(0.2, 0, 0, 1);
   }
 }
 
-/* Chat dock rise-in, matching its collapse transition in reverse */
+/* Chat dock rise-in and collapse. The explicit exit keyframe keeps the
+   interpolation observable even when it interrupts the entrance animation;
+   relying on a transition after removing dock-in can skip directly to the
+   resting pose in Chromium. */
 @keyframes dock-in {
   from {
     transform: translateY(16px) scale(0.985);
@@ -433,6 +518,23 @@ kbd {
    and same 16px/0.985 resting pose), so open and minimize feel identical. */
 .animate-dock-in {
   animation: dock-in 250ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+@keyframes dock-out {
+  from {
+    translate: 0 0;
+    scale: 1;
+    opacity: 1;
+  }
+  to {
+    translate: 0 16px;
+    scale: 0.985;
+    opacity: 0;
+  }
+}
+
+.animate-dock-out {
+  animation: dock-out 250ms cubic-bezier(0.2, 0, 0, 1) forwards;
 }
 
 /* Text fields (inputs, selects, folder pickers, composer wrappers): one
@@ -494,6 +596,44 @@ kbd {
   animation: fade-out 200ms cubic-bezier(0.2, 0, 0, 1) forwards;
 }
 
+@keyframes session-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes session-row-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+.animate-session-row-in {
+  animation: session-row-in 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.animate-session-row-out {
+  pointer-events: none;
+  animation: session-row-out 180ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-session-row-in,
+  .animate-session-row-out {
+    animation-duration: 1ms;
+  }
+}
+
 /* In-place profile switch: a full-window veil fades up over the old
    profile, the workspace swaps underneath, and the veil fades away. The
    pair is an exact mirror; profile-veil-out holds its final frame so the
@@ -544,21 +684,51 @@ kbd {
   animation: question-in 260ms cubic-bezier(0.2, 0, 0, 1);
 }
 
-/* Composer history recall (↑/↓): the recalled text settles in with a
-   quick fade + drop, so the swap reads as an arrival, not a glitch. */
-@keyframes input-recall {
+/* Composer history recall (↑/↓): motion follows navigation direction and
+   never changes opacity, so rapid swaps cannot flash the input background. */
+@keyframes input-recall-up-a {
   from {
-    opacity: 0.25;
     translate: 0 -3px;
   }
   to {
-    opacity: 1;
     translate: 0 0;
   }
 }
-
-.animate-input-recall {
-  animation: input-recall 150ms cubic-bezier(0.2, 0, 0, 1);
+@keyframes input-recall-up-b {
+  from {
+    translate: 0 -3px;
+  }
+  to {
+    translate: 0 0;
+  }
+}
+@keyframes input-recall-down-a {
+  from {
+    translate: 0 3px;
+  }
+  to {
+    translate: 0 0;
+  }
+}
+@keyframes input-recall-down-b {
+  from {
+    translate: 0 3px;
+  }
+  to {
+    translate: 0 0;
+  }
+}
+.animate-input-recall-up-a {
+  animation: input-recall-up-a 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+.animate-input-recall-up-b {
+  animation: input-recall-up-b 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+.animate-input-recall-down-a {
+  animation: input-recall-down-a 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+.animate-input-recall-down-b {
+  animation: input-recall-down-b 150ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 /* Agent question arrival: the asking chat's bubble nudges — a one-shot
@@ -828,4 +998,188 @@ kbd {
 }
 .settings-category[hidden] {
   display: none;
+}
+
+/* Bare icon tabs. Both sidebars share the same quiet chrome and motion. */
+.tabbed-sidebar {
+  position: relative;
+  flex-shrink: 0;
+  overflow: hidden;
+  background: var(--color-sidebar);
+  transition: width 200ms var(--ease-standard);
+}
+.tabbed-sidebar[data-sidebar="left"] {
+  border-right: 1px solid var(--color-border);
+}
+.tabbed-sidebar[data-sidebar="right"] {
+  border-left: 1px solid var(--color-border);
+}
+.tabbed-sidebar[aria-hidden="true"] {
+  border-width: 0;
+}
+.tabbed-sidebar[data-resizing] {
+  transition: none;
+  user-select: none;
+}
+.sidebar-inner {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.sidebar-tab {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+  transition:
+    color 150ms var(--ease-standard),
+    transform 150ms var(--ease-standard);
+}
+.sidebar-tab:hover {
+  color: var(--color-fg);
+}
+.sidebar-tab[aria-selected="true"] {
+  color: var(--color-accent);
+}
+.sidebar-tab:active {
+  transform: scale(0.92);
+}
+.sidebar-tab:focus-visible,
+.sidebar-resizer:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+.sidebar-tab-panel {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  padding: 0 8px;
+  opacity: 1;
+  translate: 0;
+  display: block;
+  transition:
+    opacity 200ms var(--ease-standard),
+    translate 200ms var(--ease-standard),
+    display 200ms;
+  transition-behavior: allow-discrete;
+}
+.sidebar-tab-panel[hidden] {
+  display: none;
+  opacity: 0;
+  translate: 0 6px;
+}
+@starting-style {
+  .sidebar-tab-panel {
+    opacity: 0;
+    translate: 0 6px;
+  }
+}
+/* First paint stays still. User tab changes enable the paired transition. */
+.tabbed-sidebar[data-tab-motion="false"] .sidebar-tab-panel {
+  transition: none;
+}
+@starting-style {
+  .tabbed-sidebar[data-tab-motion="false"] .sidebar-tab-panel {
+    opacity: 1;
+    translate: 0;
+  }
+}
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  touch-action: none;
+}
+[data-sidebar="left"] > .sidebar-resizer {
+  right: 0;
+}
+[data-sidebar="right"] > .sidebar-resizer {
+  left: 0;
+}
+.sidebar-resizer:hover,
+.sidebar-resizer:active {
+  background: color-mix(in srgb, var(--color-accent) 25%, transparent);
+}
+/* Config reload snapshots crossfade only the sidebars; the live workspace stays put. */
+::view-transition-group(sidebar-left),
+::view-transition-group(sidebar-right),
+::view-transition-old(sidebar-left),
+::view-transition-new(sidebar-left),
+::view-transition-old(sidebar-right),
+::view-transition-new(sidebar-right) {
+  animation-duration: 200ms;
+  animation-timing-function: var(--ease-standard);
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+}
+::view-transition {
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tabbed-sidebar,
+  .sidebar-tab,
+  .sidebar-tab-panel {
+    transition: none;
+    translate: none;
+  }
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none;
+  }
+}
+.sidebar-note > * + * {
+  margin-top: 0.6em;
+}
+.sidebar-note :is(h1, h2, h3, strong) {
+  font-weight: 600;
+  color: var(--color-fg);
+}
+.sidebar-note :is(ul, ol) {
+  padding-left: 1.2em;
+}
+.sidebar-note ul {
+  list-style: disc;
+}
+.sidebar-note ol {
+  list-style: decimal;
+}
+.sidebar-note pre {
+  overflow-x: auto;
+  padding: 8px;
+  background: var(--color-bg-inset);
+  border-radius: var(--radius-sm);
+}
+
+/* Floating controls use the same corner chrome as chat tabs. Reserve the
+   content's existing toolbar row so controls never cover its actions. */
+[data-floating-surface] :is([data-settings] > header) {
+  padding-right: 156px;
+}
+[data-floating-surface]
+  [data-settings]
+  > header
+  > button[aria-label="Close settings"] {
+  display: none;
+}
+
+[data-floating-surface] [data-browser-toolbar] {
+  padding-right: 148px;
+}
+[data-floating-surface] [data-terminal-appearance] {
+  padding-top: 44px;
+}
+
+.tabbed-sidebar[data-overlay="true"] {
+  position: absolute;
 }

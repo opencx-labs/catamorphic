@@ -14,16 +14,20 @@ import {
   Search,
   Settings as SettingsIcon,
   SquareTerminal,
+  UserCog,
   Workflow as WorkflowIcon,
   X,
 } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import type { GitDiffMode } from "../../shared/git.js";
+import type { OpenMode } from "../../shared/open-mode.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { AnimatedTitle } from "./animated-title";
 import { ChatGlyph, hasCustomChatIcon } from "./chat-icon";
 import { SignalBadge, SignalGlyph } from "./chat-signals";
+import { OpenResourceButton } from "./open-resource-button.js";
 import { ShortcutHint } from "./shortcut-hint";
 
 /**
@@ -37,6 +41,8 @@ interface TabIndicators {
   working?: boolean;
   /** Response landed while the tab was hidden → dot on the icon. */
   unread?: boolean;
+  /** A workflow requested user attention → pulsing dot on the icon. */
+  attention?: boolean;
   /** Unsent draft (chat composer, editor changes) → pencil badge. */
   draft?: boolean;
   /** The agent asked and is waiting → pulsing "?" badge. */
@@ -52,14 +58,18 @@ interface TabIndicators {
 function tabStatusLine(tab: WorkspaceTab): string | null {
   if (tab.working) return "Agent is working…";
   if (tab.awaitingInput) return "The agent is waiting for your answer";
+  if (tab.attention) return "Ready for you";
   if (tab.unread) return "New reply";
   if (tab.draft) {
-    return tab.kind === "editor" ? "Unsaved changes" : "Unsent draft";
+    return tab.kind === "editor" || tab.kind === "workflow"
+      ? "Unsaved changes"
+      : "Unsent draft";
   }
   return null;
 }
 
 const HOVER_CARD_DELAY_MS = 500;
+const TAB_EXIT_FALLBACK_MS = 280;
 
 /**
  * Chrome-style tab hover card: the FULL title (the strip truncates at
@@ -70,17 +80,25 @@ const HOVER_CARD_DELAY_MS = 500;
 function TabHoverCard({
   tab,
   anchor,
+  exiting,
+  onExited,
 }: {
   tab: WorkspaceTab;
   anchor: { x: number; y: number };
+  exiting: boolean;
+  onExited: () => void;
 }) {
   const status = tabStatusLine(tab);
   const left = Math.max(8, Math.min(anchor.x, window.innerWidth - 296));
   return createPortal(
     <div
       role="tooltip"
+      data-testid="tab-hover-card"
       style={{ left, top: anchor.y }}
-      className="pointer-events-none fixed z-50 w-72 animate-fade-in rounded-lg border border-border bg-bg-overlay p-2.5 shadow-2xl"
+      onAnimationEnd={(event) => {
+        if (event.animationName === "fade-out" && exiting) onExited();
+      }}
+      className={`pointer-events-none fixed z-50 w-72 rounded-lg border border-border bg-bg-overlay p-2.5 shadow-2xl ${exiting ? "animate-fade-out" : "animate-fade-in"}`}
     >
       <p className="break-words text-[12px] font-medium leading-4 text-fg">
         {tab.label ?? tab.name}
@@ -111,7 +129,9 @@ export type DiffSource =
       type: "local";
       worktreePath: string;
       filePath: string;
-      mode: "uncommitted" | "vs-main";
+      mode: GitDiffMode;
+      previousPath?: string;
+      baseRef?: string;
     }
   | {
       type: "pr";
@@ -122,8 +142,19 @@ export type DiffSource =
       status: string;
     };
 
+export interface WorkflowDraft {
+  filePath: string;
+  code: string;
+  baseline: string;
+}
+
 export type WorkspaceTab = (
-  | { kind: "workflow"; name: string; label?: string }
+  | {
+      kind: "workflow";
+      name: string;
+      label?: string;
+      workflowDraft?: WorkflowDraft;
+    }
   | { kind: "app"; name: string; label?: string }
   | {
       kind: "chat";
@@ -141,6 +172,7 @@ export type WorkspaceTab = (
       faviconUrl?: string | null;
     }
   | { kind: "settings"; name: string; label?: string }
+  | { kind: "profile-settings"; name: string; label?: string }
   | { kind: "usage"; name: string; label?: string }
   | { kind: "palette"; name: string; label?: string }
   | { kind: "agent-setup"; name: string; label?: string }
@@ -164,7 +196,7 @@ export type WorkspaceTab = (
       toolResult?: unknown;
     }
 ) &
-  TabIndicators;
+  TabIndicators & { chatLocalId?: string };
 
 export const tabKey = (tab: WorkspaceTab) => `${tab.kind}:${tab.name}`;
 
@@ -174,6 +206,7 @@ const TAB_ICONS = {
   chat: MessageSquare,
   browser: Globe,
   settings: SettingsIcon,
+  "profile-settings": UserCog,
   usage: ChartColumn,
   palette: Search,
   "agent-setup": Bot,
@@ -283,7 +316,7 @@ export function WorkspaceTabBar({
   highlightKey?: string;
   /** Chat groups: parent chat tab + its attached surfaces. */
   groups?: TabGroup[];
-  onSelect: (key: string) => void;
+  onSelect: (key: string, mode?: OpenMode) => void;
   onClose: (key: string) => void;
   /** Chrome-style + after the last tab; always opens a new tab. */
   onNew?: () => void;
@@ -312,6 +345,7 @@ export function WorkspaceTabBar({
     key: string;
     x: number;
     y: number;
+    exiting: boolean;
   } | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
@@ -323,6 +357,7 @@ export function WorkspaceTabBar({
       const rect = element.getBoundingClientRect();
       setHoverCard({
         key,
+        exiting: false,
         x: vertical ? rect.right + 12 : rect.left,
         y: vertical
           ? Math.min(rect.top, window.innerHeight - 140)
@@ -332,7 +367,7 @@ export function WorkspaceTabBar({
   };
   const disarmHoverCard = () => {
     clearTimeout(hoverTimerRef.current);
-    setHoverCard(null);
+    setHoverCard((current) => (current ? { ...current, exiting: true } : null));
   };
   const groupByParent = new Map(
     groups.map((group) => [group.parentKey, group]),
@@ -347,12 +382,34 @@ export function WorkspaceTabBar({
     setRendered((previous) =>
       previous.filter((entry) => !(entry.exiting && tabKey(entry.tab) === key)),
     );
+  // Hidden or occluded Chromium windows can pause CSS animations and omit
+  // animationend. Keep the event as the precise visible-window path, with a
+  // clock fallback beyond tab-out's 180ms duration so ghost tabs cannot stay
+  // mounted forever after their underlying surface has closed.
+  const exitingKeys = JSON.stringify(
+    rendered.filter((entry) => entry.exiting).map((entry) => tabKey(entry.tab)),
+  );
+  useEffect(() => {
+    const keys: string[] = JSON.parse(exitingKeys);
+    if (keys.length === 0) return;
+    const exiting = new Set(keys);
+    const timer = window.setTimeout(
+      () =>
+        setRendered((previous) =>
+          previous.filter(
+            (entry) => !(entry.exiting && exiting.has(tabKey(entry.tab))),
+          ),
+        ),
+      TAB_EXIT_FALLBACK_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [exitingKeys]);
 
   if (rendered.length === 0 && !onNew) return null;
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: drag-and-drop target for tab reordering; tabs themselves are buttons
     <div
-      className={`app-no-drag flex min-w-0 gap-1 ${vertical ? "flex-col" : "flex-1 items-center self-stretch overflow-x-auto overflow-y-hidden"}`}
+      className={`app-no-drag flex min-w-0 gap-1 ${vertical ? "flex-col" : "flex-1 items-center [justify-content:safe_center] self-stretch overflow-x-auto overflow-y-hidden"}`}
       data-tab-orientation={orientation}
       onDragOver={(event) => {
         if (dragKey) {
@@ -489,11 +546,11 @@ export function WorkspaceTabBar({
               }`}
               aria-hidden={exiting || undefined}
             >
-              <button
+              <OpenResourceButton
                 type="button"
-                onClick={() => {
+                onOpen={(mode) => {
                   disarmHoverCard();
-                  onSelect(key);
+                  onSelect(key, mode);
                 }}
                 onMouseEnter={(event) => {
                   if (!exiting && !dragKey) {
@@ -543,6 +600,7 @@ export function WorkspaceTabBar({
                       signals={{
                         working: tab.working,
                         unread: tab.unread,
+                        attention: tab.attention,
                         draft: tab.draft,
                         awaitingInput: tab.awaitingInput,
                       }}
@@ -554,7 +612,7 @@ export function WorkspaceTabBar({
                   text={tab.label ?? tab.name}
                   className={vertical ? "min-w-0 flex-1" : "max-w-40"}
                 />
-              </button>
+              </OpenResourceButton>
               {/* Collapsed group parent: expand its folded surfaces. */}
               {parentGroup?.collapsed && onToggleGroup && (
                 <ShortcutHint label="Expand grouped tabs">
@@ -610,7 +668,18 @@ export function WorkspaceTabBar({
             )
           : null;
         return hovered && hoverCard ? (
-          <TabHoverCard tab={hovered.tab} anchor={hoverCard} />
+          <TabHoverCard
+            tab={hovered.tab}
+            anchor={hoverCard}
+            exiting={hoverCard.exiting}
+            onExited={() =>
+              setHoverCard((current) =>
+                current?.exiting && current.key === hoverCard.key
+                  ? null
+                  : current,
+              )
+            }
+          />
         ) : null;
       })()}
       {onNew && (

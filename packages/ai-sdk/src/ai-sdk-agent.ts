@@ -24,6 +24,7 @@ import type {
   TurnOptions,
 } from "@catamorphic/sandbox";
 import {
+  agentCapabilityTools,
   buildPluginsPreamble,
   isMediaAttachment,
   mergePolicyLayers,
@@ -32,6 +33,7 @@ import {
   resolveMcpServers,
   stagedPluginFiles,
   ToolGate,
+  withAgentContext,
 } from "@catamorphic/sandbox";
 import {
   dynamicTool,
@@ -59,7 +61,12 @@ export interface AiSdkCodingAgentOpts {
   /** AI SDK model supplied and configured by the host application. */
   model: LanguageModel;
   /** Provider for the remote development sandbox that contains the project. */
-  sandboxProvider: SandboxProvider;
+  sandboxProvider: Pick<
+    SandboxProvider,
+    "executeCommand" | "uploadFiles" | "downloadFile"
+  >;
+  /** Optional host-owned staging directory for plugin docs, outside a native checkout. */
+  pluginDirectory?: string;
   /** Host-level instructions prepended to every session. */
   instructions?: string;
   /**
@@ -244,19 +251,25 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
   }
 
   async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
+    const sandboxProvider = opts.sandboxProvider ?? this.opts.sandboxProvider;
     const pluginFiles = stagedPluginFiles(opts.attachedPlugins);
     if (Object.keys(pluginFiles).length > 0) {
-      await this.opts.sandboxProvider.uploadFiles(
+      await sandboxProvider.uploadFiles(
         opts.sandboxId,
         pluginFiles,
-        opts.workingDirectory,
+        this.opts.pluginDirectory ?? opts.workingDirectory,
       );
     }
 
     const instructions = [
       DEFAULT_INSTRUCTIONS,
       this.opts.instructions,
-      buildPluginsPreamble(opts.attachedPlugins),
+      this.opts.pluginDirectory
+        ? buildPluginsPreamble(opts.attachedPlugins).replaceAll(
+            "_plugins/",
+            `${this.opts.pluginDirectory}/_plugins/`,
+          )
+        : buildPluginsPreamble(opts.attachedPlugins),
       opts.systemPrompt,
     ]
       .filter((part): part is string => Boolean(part))
@@ -309,7 +322,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       instructions,
       tools: createTools(
         {
-          provider: this.opts.sandboxProvider,
+          provider: sandboxProvider,
           sandboxId: opts.sandboxId,
           workingDirectory: opts.workingDirectory,
         },
@@ -455,10 +468,26 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       opts?.model && this.opts.resolveModel
         ? this.opts.resolveModel(opts.model)
         : this.opts.model;
+    state.abort = new AbortController();
     const agent = new ToolLoopAgent({
       model,
-      instructions: state.instructions,
-      tools: state.tools,
+      instructions: withAgentContext(state.instructions, opts?.context),
+      tools: {
+        ...state.tools,
+        ...Object.fromEntries(
+          (opts?.capabilities
+            ? agentCapabilityTools(opts.capabilities, state.abort.signal)
+            : []
+          ).map((definition) => [
+            definition.name,
+            tool({
+              description: definition.description,
+              inputSchema: z.object(definition.parameters),
+              execute: (input) => definition.execute(input, { projectId: "" }),
+            }),
+          ]),
+        ),
+      },
       // The AI SDK's default stop condition is stepCountIs(20) — far too
       // small for real coding turns (scaffold a workspace, build, fix,
       // rebuild easily exceeds it) and it ends the turn SILENTLY mid-work.
@@ -468,7 +497,6 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     });
 
     state.running = true;
-    state.abort = new AbortController();
     state.messages = requestMessages;
     let text = "";
     let askedToolCallId: string | undefined;
@@ -580,6 +608,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     const state = this.sessions.get(session.providerSessionId);
     this.sessions.delete(session.providerSessionId);
     if (state) {
+      state.abort?.abort();
       await Promise.all(
         state.scopedMcp.map((server) => server.close().catch(() => {})),
       );
@@ -671,7 +700,10 @@ function effortProviderOptions(effort: AgentEffort) {
 }
 
 interface ToolContext {
-  provider: SandboxProvider;
+  provider: Pick<
+    SandboxProvider,
+    "executeCommand" | "uploadFiles" | "downloadFile"
+  >;
   sandboxId: string;
   workingDirectory: string;
 }
@@ -942,6 +974,8 @@ function createTools(
           inputSchema: z.object(extra.parameters as z.ZodRawShape),
           execute: async (input: Record<string, unknown>) => {
             const result = await extra.execute(input, extraContext);
+            context.workingDirectory =
+              extraContext.workingDirectory ?? context.workingDirectory;
             return typeof result === "string"
               ? truncateToolOutput(result)
               : result;
@@ -1101,7 +1135,7 @@ function createTools(
     }),
     bash: tool({
       description:
-        "Run a shell command in the project sandbox. Use it for listing, searching, tests, builds, and other project operations.",
+        "Run a shell command in the assigned project workspace. Use it for listing, searching, tests, builds, and other project operations.",
       inputSchema: z.object({
         command: z.string(),
         timeoutMs: z.number().int().positive().max(3_600_000).optional(),

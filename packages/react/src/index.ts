@@ -10,6 +10,7 @@ export {
   collapsedNodeIdsAtom,
   executionStateAtom,
   graphAtom,
+  graphParseStateAtom,
   lastTriggerDataAtom,
   panelVisibilityAtom,
   reactFlowEdgesAtom,
@@ -19,10 +20,16 @@ export {
   selectedNodeIdAtom,
   showRunDialogAtom,
 } from "./atoms.js";
+export { useAcknowledgeAgentSessionAttention } from "./hooks/use-acknowledge-agent-session-attention.js";
+export {
+  type AgentCatalog,
+  useAgentCatalog,
+} from "./hooks/use-agent-catalog.js";
 export {
   type AgentAuthenticationRequired,
+  authenticationRequiredFrom,
   type OptimisticAgentMessage,
-  type QueuedAgentMessage,
+  type PendingAgentTurn,
   type UseAgentChatOptions,
   type UseAgentChatResult,
   useAgentChat,
@@ -34,6 +41,12 @@ export {
   type UseAgentSessionsOptions,
   useAgentSessions,
 } from "./hooks/use-agent-sessions.js";
+export {
+  type ArchiveAgentSessionInput,
+  type ArchiveAgentSessionResult,
+  useArchiveAgentSession,
+  useUnarchiveAgentSession,
+} from "./hooks/use-archive-agent-session.js";
 export {
   type AttachPluginInput,
   useAttachPlugin,
@@ -53,6 +66,7 @@ export {
   useCommitChanges,
 } from "./hooks/use-commit-changes.js";
 export { useCompleteConnectionAuthorization } from "./hooks/use-complete-connection-authorization.js";
+export { useConnectionAuthorizationStatus } from "./hooks/use-connection-authorization-status.js";
 export {
   type CreateAgentSessionInput,
   useCreateAgentSession,
@@ -196,10 +210,21 @@ export {
   type UpsertSecretInput,
   useUpsertProjectSecret,
 } from "./hooks/use-upsert-project-secret.js";
+export { useWatchers, watcherKeys } from "./hooks/use-watchers.js";
 export {
   type UseWorkflowOptions,
   useWorkflow,
 } from "./hooks/use-workflow.js";
+export {
+  useCreateWorkflowEnablement,
+  usePreviewWorkflowEnablement,
+  useUpdateWorkflowEnablement,
+  useWorkflowEnablements,
+  type WorkflowEnablement,
+  type WorkflowEnablementInput,
+  type WorkflowEnablementPreview,
+  workflowEnablementKeys,
+} from "./hooks/use-workflow-enablements.js";
 // Canvas / graph state
 export type {
   OnParseCallback,
@@ -234,6 +259,10 @@ export { findNodeAtPosition } from "./lib/find-node-at-position.js";
 // Lib helpers (workflow code authoring)
 export type { WorkflowDefinition } from "./lib/find-workflow-definitions.js";
 export { findWorkflowDefinitions } from "./lib/find-workflow-definitions.js";
+export {
+  matchWorkflowNodes,
+  workflowNodeKeys,
+} from "./lib/match-workflow-nodes.js";
 export {
   buildUntitledWorkflowName,
   displayNameFromWorkflowName,
@@ -284,11 +313,12 @@ export type {
   RunsList,
   Secret,
   SecretStatus,
-  SentAgentMessage,
+  SessionDeliveryReceipt,
   SignalRunInput,
   SubmitRunInput,
   TriggeredRun,
   TriggerRunInput,
+  Watcher,
   WorkflowCapabilities,
   WorkflowStepAttempt,
 } from "./types.js";

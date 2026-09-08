@@ -4,12 +4,19 @@ import type {
   EnvironmentRequirements,
   WorkloadKind,
 } from "@catamorphic/sandbox";
-import type { Kysely, Selectable, Transaction } from "kysely";
+import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import type { Identity } from "../identity.js";
 import type { ResolvedConnectionBinding } from "./connection-types.js";
 import { requireTenantProject } from "./projects-service.js";
 import { toJson } from "./run-coordinator.js";
+import {
+  capacityFits,
+  EnvironmentCapacityError,
+  WorkerCapacitySchema,
+  WorkerResourceDefaultsSchema,
+  workerUsage,
+} from "./worker-capacity.js";
 
 const AllocationPolicySchema = z.object({
   binding: z.object({
@@ -23,6 +30,9 @@ const AllocationPolicySchema = z.object({
       z.enum(["controller", "contained", "native", "external"]),
     ),
     capabilities: z.array(z.string()),
+    resourceLimits: z
+      .array(z.enum(["cpuMillis", "memoryMb", "storageMb", "gpu"]))
+      .optional(),
     resources: z.record(z.string(), z.union([z.number(), z.boolean()])),
   }),
   requirements: z.object({
@@ -49,12 +59,14 @@ const AllocationPolicySchema = z.object({
       }),
     )
     .optional(),
+  workflowEnablementId: z.string().uuid().optional(),
 });
 
 export interface EnvironmentAllocationPolicy {
   binding: EnvironmentBinding;
   requirements: EnvironmentRequirements;
   connections?: readonly ResolvedConnectionBinding[];
+  workflowEnablementId?: string;
 }
 
 export interface ExecutionAllocation {
@@ -91,7 +103,54 @@ export class ExecutionAllocationsService {
     policy: EnvironmentAllocationPolicy;
     transaction?: Transaction<DB>;
   }): Promise<ExecutionAllocation> {
-    const executor = args.transaction ?? this.db;
+    if (!args.transaction)
+      return this.db
+        .transaction()
+        .execute((transaction) => this.create({ ...args, transaction }));
+    const executor = args.transaction;
+    let policy = args.policy;
+    if (args.workerNodeId) {
+      const node = await executor
+        .selectFrom("worker_nodes")
+        .selectAll()
+        .where("id", "=", args.workerNodeId)
+        .where("tenant_id", "=", args.identity.tenantId)
+        .where("enabled", "=", true)
+        .where("lease_expires_at", ">", sql<Date>`now()`)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!node) throw new EnvironmentCapacityError(args.workerNodeId);
+      const defaults =
+        args.policy.binding.trust === "managed"
+          ? WorkerResourceDefaultsSchema.parse(node.default_resources)
+          : {};
+      policy = {
+        ...args.policy,
+        requirements: {
+          ...args.policy.requirements,
+          resources: {
+            ...args.policy.requirements.resources,
+            cpuMillis:
+              args.policy.requirements.resources?.cpuMillis ??
+              defaults.cpuMillis,
+            memoryMb:
+              args.policy.requirements.resources?.memoryMb ?? defaults.memoryMb,
+          },
+        },
+      };
+      if (
+        node.capacity &&
+        !capacityFits({
+          capacity: WorkerCapacitySchema.parse(node.capacity),
+          usage: await workerUsage({ db: executor, nodeId: node.id }),
+          resources:
+            args.policy.binding.trust === "managed"
+              ? (policy.requirements.resources ?? {})
+              : {},
+        })
+      )
+        throw new EnvironmentCapacityError(node.id);
+    }
     await requireTenantProject(
       executor,
       args.identity.tenantId,
@@ -108,7 +167,15 @@ export class ExecutionAllocationsService {
           workload_kind: args.workloadKind,
           root_workload_id: args.rootWorkloadId,
           worker_node_id: args.workerNodeId ?? null,
-          policy_snapshot: toJson(args.policy),
+          policy_snapshot: toJson(policy),
+          reserved_cpu_millis:
+            args.policy.binding.trust === "managed"
+              ? (policy.requirements.resources?.cpuMillis ?? 0)
+              : 0,
+          reserved_memory_mb:
+            args.policy.binding.trust === "managed"
+              ? (policy.requirements.resources?.memoryMb ?? 0)
+              : 0,
         })
         .returningAll()
         .executeTakeFirstOrThrow();

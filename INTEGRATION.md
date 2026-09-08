@@ -10,6 +10,11 @@ A host application runs catamorphic services in-process against its own Postgres
 
 Most hosts use 2 + 3 together: the server-sdk boots the core once, the fastify plugin exposes it to the frontend.
 
+For agent-guided setup, start with
+[`skills/setup-catamorphic-server`](skills/setup-catamorphic-server/SKILL.md).
+It inspects an existing application, auth, database, and deployment before
+asking questions, then routes to stock-host or custom-host guidance.
+
 ## Host shapes: Catamorphic runs wherever TypeScript runs
 
 Do not assume the host is a multi-tenant SaaS server. Every infrastructure
@@ -43,9 +48,10 @@ Common host shapes, composed from those axes:
   whatever an agent typed five minutes ago. Never use this provider for
   multi-tenant hosts — the only isolation is a process boundary and an
   explicit env. **This shape ships ready-made as the stock server**
-  (`apps/server`, ADR 0059): `docker run` with everything on disk, bearer
-  tokens in `auth.json`, invites over an admin API, mDNS LAN discovery,
-  `DATABASE_URL` to swap PGlite for real Postgres — read it as the
+  (`apps/server`, ADRs 0059, 0071, 0072): `docker run` with everything on
+  disk, stock Better Auth with local or configured provider sign-in,
+  OAuth/PKCE remote clients, credential-free admission links, mDNS LAN
+  discovery, and `DATABASE_URL` to swap PGlite for real Postgres. Read it as the
   reference for this shape before writing a host from scratch.
 - **Read-only embed / reporting**: `@catamorphic/db` migrations plus SQL
   joins, or the SDK without a sandbox provider.
@@ -57,7 +63,30 @@ See [`packages/server-sdk/README.md`](packages/server-sdk/README.md) for the ful
 ```ts
 // Boot, once per process
 import { CloudflareSandboxProvider } from "@catamorphic/cloudflare";
-import { createCatamorphic } from "@catamorphic/server-sdk";
+import {
+  createCatamorphic,
+  defineStaticEnvironments,
+} from "@catamorphic/server-sdk";
+
+const sandboxProvider = new CloudflareSandboxProvider({
+  apiUrl: process.env.CLOUDFLARE_SANDBOX_API_URL!,
+  apiKey: process.env.CLOUDFLARE_SANDBOX_API_KEY,
+});
+const environmentProvider = defineStaticEnvironments([
+  {
+    descriptor: {
+      id: "local",
+      label: "Managed execution",
+      trust: "managed",
+      isolation: "sandbox",
+      workloads: ["agent", "workflow"],
+      agentTopologies: ["controller"],
+      capabilities: ["network.egress"],
+      resources: {},
+    },
+    sandboxProvider,
+  },
+]);
 
 export const catamorphic = createCatamorphic({
   // Pass a pg.Pool the host already owns, or a connection string catamorphic
@@ -69,10 +98,8 @@ export const catamorphic = createCatamorphic({
   },
   // Sandbox backends are vendor plugin packages: @catamorphic/cloudflare
   // (default) or @catamorphic/daytona. Omit for read-only embeds.
-  sandboxProvider: new CloudflareSandboxProvider({
-    apiUrl: process.env.CLOUDFLARE_SANDBOX_API_URL!,
-    apiKey: process.env.CLOUDFLARE_SANDBOX_API_KEY,
-  }),
+  sandboxProvider,
+  environmentProvider,
 });
 
 // Apply pending migrations (idempotent, schema-scoped). Run from a deploy
@@ -82,6 +109,9 @@ await catamorphic.migrate();
 // Worker startup is explicit. Start it once when this host process should
 // process queued production runs.
 const executionWorker = catamorphic.startExecutionWorker({ concurrency: 4 });
+// When coding agents are configured, recover queued turns and retries too.
+// Defaults to current project memberships; inject resolveIdentity for host auth.
+const agentWorker = catamorphic.startAgentWorker();
 
 // Per request
 const scoped = catamorphic
@@ -107,7 +137,7 @@ Advanced hosts can inject their own wiring instead: `database: { db }` with a pr
 ### Identity mapping
 
 - `tenantId` = host's org id. Maps 1:1 to `catamorphic.tenants(id)` and is upserted on first use: hosts never need to pre-register orgs with catamorphic.
-- `externalUserId` = host's user id. Never persisted in catamorphic's DB; used only for (a) per-user git working directories via the `ProjectManager` and (b) git commit authorship.
+- `externalUserId` = host's stable user id. Catamorphic stores it where durable ownership, membership, or audit attribution requires it, but never references the host's user table.
 - The host can freely `JOIN host.orgs.id = catamorphic.projects.tenant_id` for reports, analytics, cascading deletes, etc. Catamorphic never references host tables.
 
 ### Scoped-client surface
@@ -240,6 +270,8 @@ Most hosts do not want to hand-write scopes. Commit roles into the project — `
 }
 // roles/admin.json
 { "version": 1, "name": "Admin", "builder": true, "documents": ["store/**"] }
+// roles/brain-maintainer.json
+{ "version": 1, "name": "Brain Maintainer", "permissions": ["brain:maintain"], "agents": ["brain-maintainer"] }
 ```
 
 `{param}` placeholders are filled from per-user **grants** (`{ customer: ["acme", "globex"] }`), one ref per value; an entry whose placeholder has no grant yields nothing. `builder: true` emits the `project` ref; an admin who may not see the whole store simply lists less. Role files are read from the shared origin `main` (a project without a remote reads its working tree), cached briefly (`rolesCacheTtlMs`, default 10s), and never throw: a broken file is reported by `GET /projects/:id/roles` and contributes nothing.
@@ -261,13 +293,64 @@ identity: async (req) => {
 await catamorphic.core.memberships.grant({ identity: adminIdentity, projectId: BRAIN, externalUserId: "alice", roles: ["csm"], grants: { customer: ["acme"] } });
 ```
 
-The plugin serves the same as HTTP for admin UIs: `GET /projects/:id/roles`, `GET|PUT|DELETE /projects/:id/memberships[/:externalUserId]` (`PUT` body `{ roles, grants? }`). Members arriving with a token the host issued (a connect link, their own agent on the MCP endpoint) use `identityFromBearer(verify)`: the host's `verify(token)` returns the identity (typically via `memberships.identityFor`) or `null`. Every request re-resolves, so revocation is immediate.
+The plugin serves the same as HTTP for project administration: `GET /projects/:id/roles`, `GET|PUT|DELETE /projects/:id/memberships[/:externalUserId]` (`PUT` body `{ roles, grants? }`). Members arriving with a bearer credential from the host's login flow use `identityFromBearer(verify)`: the host's `verify(token)` returns the identity (typically via `memberships.identityFor`) or `null`. Every request re-resolves membership, so revocation is immediate.
+
+Role `permissions` are an extensible, namespaced capability vocabulary. Core
+reserves and enforces the documented names (`memberships:manage` and
+`roles:manage`); an embedder may define and enforce names such as
+`acme:approve_deals`. Unknown names do not grant framework authority by
+themselves, but are preserved in identity and `GET /me` for host services and
+project-owned presentation. Desktop projects can target sidebar sections,
+custom items, and New Tab starting actions with
+`when: { builder?: boolean, permissions?: string[] }`; all declared conditions
+must match. Omit `when` to show an item to everyone.
+
+In the desktop reference host, shared navigation lives in
+`.catamorphic/sidebar.js`. New Tab actions live in the ordinary project
+manifest and remain visually absent when omitted:
+
+```json
+{
+  "startingActions": [
+    {
+      "label": "Review onboarding",
+      "prompt": "Review the onboarding system and propose improvements.",
+      "agent": "brain-maintainer",
+      "when": { "permissions": ["brain:maintain"] }
+    }
+  ]
+}
+```
+
+The desktop accepts at most six valid actions. `label`, `prompt`, and optional
+`agent` are presentation/input only; `when` is evaluated against trusted
+`GET /me` authority. This is a desktop host contract, not workflow logic or a
+stock-server bootstrap file.
 
 ### Feature switches and introspection
 
-Scope is how a host says "may not"; a few coarse switches say what the whole instance offers: `app.register(catamorphicPlugin, { …, features: { publications: "public" | "members" | false, proposals, mcp, storeUploadMaxBytes } })`. They are enforced by the routes concerned (403 / 404 / 413) *and* advertised on **`GET /me`**, together with the caller's own summary — `{ version: 1, identity: { externalUserId, root }, projects: [{ projectId, builder, agents, workflows, apps, documents: [{ path, access }] }], features: { publications, proposals, proposalsOpenPullRequests, mcp, agentSessions, storeUploadMaxBytes } }` — so a client (the desktop, a member's own agent) shows what is possible instead of discovering it by 403. Older hosts without `/me` degrade to "assume everything".
+Scope is how a host says "may not"; a few coarse switches say what the whole instance offers: `app.register(catamorphicPlugin, { …, features: { publications: "public" | "members" | false, proposals, mcp, storeUploadMaxBytes } })`. They are enforced by the routes concerned (403 / 404 / 413) *and* advertised on **`GET /me`**, together with the caller's own summary — `{ version: 1, identity: { externalUserId, root }, projects: [{ projectId, builder, source, permissions, agents, workflows, apps, documents: [{ path, access }] }], features: { publications, proposals, proposalsOpenPullRequests, mcp, agentSessions, storeUploadMaxBytes } }` — so a client (the desktop, a member's own agent) shows what is possible instead of discovering it by 403. `source` contains the Git remote and default branch for builders and is `null` for other members.
 
-**Tokens for desktop members.** The connect link is the host's login flow: the invite page signs the user in with the host's own auth, mints a bearer token, and redirects to `catamorphic://connect?server=…&token=…&project=…&name=…&renew=<host URL>`. `identityFromBearer(verify)` decides what the token means on every request, so revocation is immediate; when a token stops working (401) the desktop offers "Sign in again", which opens `renew` — the host hands back a fresh link. Long-lived revocable tokens are the pragmatic default; refresh is the host's business.
+**Remote login.** Connect links are credential-free locators: `catamorphic://connect?server=…&project=…&invitation=…`. A compatible host publishes OAuth protected-resource and authorization-server metadata. The desktop and PWA dynamically register public clients, use authorization code with S256 PKCE, keep refreshable credentials in local protected storage, and redeem admission after sign-in. A 401 changes the connection state to "Sign in again" and reruns the same OAuth path. Embedders may implement that contract with their existing identity system; Catamorphic's framework packages remain auth-neutral.
+
+### Agent session lifecycle and delegation
+
+Agent sessions carry source provenance, hierarchy, fork lineage, presentation,
+archive, attention, activity, todo, and authority state in one generated
+schema. `parentSessionId` is immediate hierarchy;
+`forkedFromSessionId` is transcript lineage. First-class subsessions are
+ordinary child sessions created through explicit delegation routes, with
+create/list/wait/interrupt endpoints under the parent session. A native
+harness subagent is only an execution optimization when it preserves these
+durable identities and policies.
+
+Archive is a recursive server operation, not a local hidden flag. It reports
+the session ids, running work, Watchers, and processes that would stop and
+returns `409 archive_confirmation_required` until the caller confirms when
+necessary. Unarchive restores navigation; later work re-anchors the chosen
+provider. React hosts use `useArchiveAgentSession`,
+`useUnarchiveAgentSession`, and
+`useAcknowledgeAgentSessionAttention` instead of hand-written state.
 
 ### The project MCP endpoint: bring your own agent
 
@@ -341,7 +424,8 @@ Hooks shipped:
 - **Runs**: `useRuns`, `useRun`, `useTriggerRun`, `useCancelRun`, `usePauseRunProcessing`, `useResumeRunProcessing`, `useSubmitRunInput`, `useRunItems`, `useRunItemSteps`.
 - **Git**: `useProjectGit`, `useProjectBranches`, `useProjectCommits`, `useProjectConflicts`, `useCreateBranch`, `useCheckoutBranch`, `useCommitChanges`, `useDeployProject`, plus the composite `useProjectGitState({ projectId, baselineFiles })` for multi-branch draft persistence.
 - **Plugins + secrets**: `usePluginCatalog`, `useProjectPlugins`, `useAttachPlugin`, `useDetachPlugin`, `useProjectSecrets`, `useUpsertProjectSecret`, `useDeleteProjectSecret`.
-- **Agent (coding sessions)**: `useAgentSessions`, `useAgentSession`, `useCreateAgentSession`, `useSendAgentMessage`.
+- **Agent sessions**: `useAgentSessions`, `useAgentSession`, `useCreateAgentSession`, `useSendAgentMessage`, `useAcknowledgeAgentSessionAttention`, `useArchiveAgentSession`, `useUnarchiveAgentSession`.
+- **Workflow enablement**: `useWorkflowEnablements`, `usePreviewWorkflowEnablement`, `useCreateWorkflowEnablement`, `useUpdateWorkflowEnablement`.
 
 All hooks reject with the typed `CatamorphicError` envelope (discriminated by `code`: `unauthorized`, `not_found`, `validation`, `conflict`, `server_error`, `network`, `unknown`). Use `isCatamorphicError(err)` and switch on `err.code`; never branch on `err.message`. Shared OpenAPI-derived domain types (`Project`, `Run`, `RepoStatus`, `BranchInfo`, `ConflictEntry`, `PluginInfo`, `Secret`, `AgentSession`, …) live behind a single `@catamorphic/react/types` barrel.
 
@@ -372,13 +456,37 @@ supplies two things:
 
 ## Ready-made components: `@catamorphic/ui`
 
-`@catamorphic/ui` ships the workflow canvas (`WorkflowEditor`, `WorkflowCanvas`), detail panel, history sidebar, toolbar, and AI bar as composable React components built on `@catamorphic/react`. Everything is opt-in: use `WorkflowEditor` for the full experience, or compose `WorkflowCanvas` + your own chrome. Code editors are plugged in via render props (bring your own Monaco/CodeMirror). Import `@catamorphic/ui/styles.css` once.
+`@catamorphic/ui` ships the workflow canvas (`WorkflowEditor`, `WorkflowCanvas`), member workflow review and consent, Runs panel, toolbar, AI bar, and `AppMount` as composable React components built on `@catamorphic/react`. Everything is opt-in: use `WorkflowEditor` for the full experience, or compose `WorkflowCanvas` + your own chrome. Code editors are plugged in via render props (bring your own Monaco/CodeMirror). Import `@catamorphic/ui/styles.css` once.
+
+`AppMount` also accepts `display={{ mode: "compact", visible }}` and
+`viewportHeight={320}` for sidebar/widget slots. The same app bundle, storage,
+theme tokens and authorization apply. Visibility changes are sent without
+reloading the iframe. Guests import `subscribeDisplay` from `@catamorphic/app`
+to adapt their presentation and suspend optional refresh work while hidden;
+the returned function unsubscribes. Layout and default widget choices belong
+to the host. Compact mounting never grants workspace or Electron access.
+
+
+For Tailwind hosts, import the UI stylesheet from the **same CSS entry** as
+Tailwind so its packaged component classes are included:
+
+```css
+@import "tailwindcss";
+@import "@catamorphic/ui/styles.css";
+```
+
+A separate JavaScript stylesheet import does not register these class sources
+with the host's Tailwind compilation. Shared controls use the host's theme tokens;
+headless hooks remain independent of Tailwind.
 
 ## Component registry: `@catamorphic/registry`
 
 `@catamorphic/registry` is a shadcn-style copy-paste registry for hosts that want to own the component source. Items are JSON manifests that inline a single React component file; consumers run `npx shadcn add <path-or-url>/r/<item>.json` and the component drops into `components/catamorphic/`. The component then imports hooks from `@catamorphic/react` and primitives from `@catamorphic/ui` only: there's no runtime dependency on the registry itself.
 
-Items shipped: `catamorphic-provider`, `projects-list`, `project-editor`, `file-explorer`, `git-panel`, `diff-drawer`, `runs-panel`, `plugins-settings`, `monaco-editor`, `agent-chat`, `chat-timeline`, `sessions-list`, `tool-permission-card`.
+Items shipped: `catamorphic-provider`, `project-editor`, `file-explorer`,
+`git-panel`, `diff-drawer`, `runs-panel`, `plugins-settings`, `monaco-editor`,
+`agent-chat`, `chat-timeline`, `sessions-list`, `todo-progress`, and
+`tool-permission-card`.
 
 Catamorphic doesn't host the registry itself. After `bun run build`, the built manifests live at `packages/registry/dist/r/<name>.json`; hosts install them from `./node_modules/@catamorphic/registry/dist/r/<name>.json` or from a URL the host serves. To add a new item: drop a `src/<name>/<name>.tsx` + `registry-item.json` under `packages/registry/src/`, run `bun run build`, and re-install it in the host.
 
@@ -452,6 +560,7 @@ const acmeDbPlugin = (cfg: { apiKey: string }) =>
 export const catamorphic = createCatamorphic({
   database: { pool: hostPgPool },
   storage: { projectsPath, remotesPath },
+  environmentProvider,
   plugins: [acmeDbPlugin({ apiKey: process.env.ACME_KEY! })],
   // Loose providers/hooks can also be passed directly:
   // capabilityProviders: [...], projectHooks: [...],
@@ -509,6 +618,45 @@ may write. Hosts whose folders are the truth (the desktop's local projects)
 set it `false` and sync explicitly. The framework's
 `searching-documents` host skill carries the recipe agents follow.
 
+### Local checkouts and document storage (ADR 0104)
+
+A desktop-style host opts into native Git with
+`storage: { projectsPath, remotesPath, projectPathResolver, localCheckouts: true }`.
+Register a canonical checkout path before creating its project, passing the
+reserved `id` and `importExisting: true`. Import only attaches an existing Git
+repository. Initialize a plain folder separately with the user's consent.
+No files, seeds, commits, dependency installs, or history copies occur at import.
+The host controls automatic checkpoints through `nativeAgentCheckout.checkpoint`;
+attached checkouts should return `null` unless a commit was explicitly requested.
+
+On local checkouts, `store/` files and the documents API share one working folder.
+Outside edits are indexed on document reads, listing, or search. Binary bytes are
+preserved, version reads remain available, and `ifVersion` detects newer edits.
+Root-local program reads see current files; scoped program reads use the published
+commit. Never expose a root-local bearer token as a scoped remote connection.
+
+`GET /projects/:id/documents/storage` and the `documents_storage` MCP tool describe
+whether writes land on the device or the server and whether a blob backend is
+configured. A remote MCP write saves on that server. To keep a draft on a device,
+use its local connection. Saving, selected document upload, and a Git commit are
+separate actions. `shipRemoteProject(root, client, { paths })` uploads only those
+paths; a conflict also requires `resolveConflicts` naming the chosen local versions.
+Desktop per-turn store upload remains disabled.
+
+Provide `documentBlobStore: new FsBundleStore(documentBlobDirectory)` for disk
+storage, or an `S3ObjectStore` constructed by the host for S3-compatible storage.
+Both implement `get`, `put`, and `deletePrefix`. Store metadata, version history,
+small text, and search indexes remain in Postgres; binary payloads go to that
+backend. Omitting it keeps bytes in Postgres. The desktop and stock server configure filesystem blob storage automatically
+under their own data directories. Back up the database and blob directory/bucket together.
+Changing backends requires migrating existing blob keys; missing objects produce
+an explicit load failure, never an empty document. Keep bucket credentials on the
+host, outside project files. Scoped document access is enforced before blob reads.
+For large binary reads use the authenticated `/documents/raw` endpoint; MCP base64
+responses are capped at 1 MB. Writes accept up to 64 MB, with host route limits
+allowed to be lower. Text editing is limited to valid UTF-8 files up to 2 MB; other
+files remain available as original bytes through the documents surface or on disk.
+
 ### Proposals and publications (ADR 0055)
 
 Two more members' surfaces, both enforced by core and served by the plugin:
@@ -557,6 +705,7 @@ entries is legitimate:
 export const catamorphic = createCatamorphic({
   database: { pool: hostPgPool },
   storage: { projectsPath, remotesPath },
+  environmentProvider,
   projectSeeds: (defaults) => {
     const seeds = { ...defaults };
     delete seeds[".agents/skills/designing-apps/SKILL.md"];
@@ -604,6 +753,8 @@ retry, rate limit, batch, or child call settles inline) and `.start(input)`
 - Catamorphic uses strict schema scoping on its own DB access: connection strings get `search_path = "catamorphic"`, host-provided pools get Kysely's `WithSchemaPlugin`. Unqualified names cannot fall through to `public`.
 - Host-owned pools and Kysely instances are never destroyed by catamorphic; `catamorphic.close()` only closes what catamorphic created.
 - Stop handles returned by `catamorphic.startExecutionWorker(...)` during host shutdown. Constructing the SDK or Fastify plugin never starts workers implicitly.
+- Start `catamorphic.startAgentWorker({ resolveIdentity? })` after migrations when using coding agents. It restores due queue entries and persisted retries only for this host. Resolve current user authority through your auth model; the default uses Catamorphic memberships. `catamorphic.close()` stops both kinds of worker. Expired agent executions with uncertain outcomes require an explicit retry, not automatic side-effect replay (ADR 0094).
+- Client reconnection does not restart execution. Automatic turn retries require a provider-confirmed rejection before execution began. Reconnecting to the same native provider attempt after an ambiguous disconnect is not yet implemented; the long-lived runtime cutover in ADR 0067 remains separate from this durable queue and progress model.
 
 ## Execution Environments and credential connections
 
@@ -615,9 +766,26 @@ Allocation is the immutable decision for one root session or workflow run.
 WorkerNode selection is a later placement concern and is never a project
 choice.
 
+The managed multi-machine target is multiple Catamorphic server instances of
+one logical authority, sharing network Postgres and accessible authoritative
+storage ([ADR 0099](docs/decisions/0099-shared-postgres-server-environments.md)).
+Project-facing Environments can bind to a named machine or a compatible pool;
+hosts own the physical registration. Instance identity and execution ownership
+must remain distinct from authority identity. Member-device execution appears
+as **This machine** and does not require database credentials (ADR 0098).
+The stock Postgres host implements shared objects, machine leases, auth, and
+durable approvals. Custom hosts register `WorkerNodesService` leases, inject
+`workerNode: { id, token }`, and renew/release them with their host lifecycle.
+Enable `clientExecution: true` to accept authenticated member sandbox runners;
+`startClientRunner` supplies the transport-independent client loop. See the
+[cluster setup reference](skills/setup-catamorphic-server/references/cluster-deployment.md)
+for the current limitations and required evidence. Custom hosts continue to
+inject their own infrastructure and auth.
+
 Pass `credentialVault` and `connectionProviders` to `createCatamorphic` when
-external systems are enabled. The vault stores opaque bytes outside the
-Catamorphic database. Provider code runs in the control plane. Workflows call
+external systems are enabled. The host vault stores opaque encrypted material using an injected store and key.
+`EncryptedCredentialVault` can use `PostgresObjectStore` or a host store; the
+wrapping key remains outside the database. Provider code runs in the control plane. Workflows call
 `context.connections.<alias>.<action>(args)` and agents use allocation-bound
 Catamorphic MCP grants. Neither receives upstream credentials.
 Connection aliases use letters, numbers, underscores, and hyphens only. Core
@@ -661,3 +829,31 @@ requires a Slack app with approved scopes. Google Workspace still requires a
 Google Cloud OAuth client or a service account with administrator-approved
 domain-wide delegation. Remote deployments need stable HTTPS callback URLs,
 correct proxy headers, a backed-up vault key, and a documented rotation plan.
+
+
+### Managed workspace resources
+
+Hosts that enroll multiple workers can import `WorkerNodesService`,
+`WorkerCapacity`, and `cleanupWorkerAllocations` from `@catamorphic/server-sdk`.
+Supply a workspace budget and CPU/memory defaults when registering a node, and
+pass its lease to `createCatamorphic({ workerNode, ... })`. Return its physical
+id and local lease token with the injected Environment runtime binding. Keep
+heartbeats and cleanup independent; call cleanup only on the sandbox's physical
+owner. Stock provisioning is an example, not a library dependency.
+
+Managed Allocations reserve resources atomically in the host's schema-scoped
+Postgres. A session holds its workspace between turns. Retiring it does not free
+capacity until sandbox destruction succeeds. Every Allocation owns at most one
+sandbox, keeping workflow runtime reuse within that workspace and resource limit.
+Providers advertise `resourceLimits` and enforce `CreateSandboxOpts.resources`;
+unsupported limits fail rather than falling back to unbounded execution. Native
+host CLI execution does not inherit controller-sandbox resource guarantees.
+See [ADR 0100](docs/decisions/0100-workspace-resource-admission.md) and the
+[stock setup example](skills/setup-catamorphic-server/references/cluster-deployment.md#capacity-and-isolated-development).
+
+### Agent context and deferred host capabilities
+
+[AGENT-CAPABILITIES.md](AGENT-CAPABILITIES.md) describes compact per-turn user and
+execution context, the typed capability registry, permission-filtered discovery,
+MCP/HTTP transports, and host directory/approval integration. Use these existing
+seams when agents need environment or assignment awareness.

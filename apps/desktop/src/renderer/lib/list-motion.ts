@@ -10,6 +10,7 @@ import { type RefObject, useLayoutEffect, useRef } from "react";
  *   easing to zero (a keystroke mid-glide continues from the in-flight
  *   position, never teleports backwards).
  * - Rows the previous set didn't have fade-rise in.
+ * - Reduced-motion users get the same filtering with no transforms or fades.
  *
  * Rows are the direct children of `sizerRef` that carry `data-item-id`;
  * anything without an id (group labels) is ignored. Reads happen before
@@ -42,6 +43,9 @@ export function useListMotion(
   useLayoutEffect(() => {
     const sizer = sizerRef.current;
     if (!sizer) return;
+    const reducedMotion = window.matchMedia?.(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
     const previousTops = rowTopsRef.current;
     const firstPass = previousTops.size === 0;
     const nextTops = new Map<string, number>();
@@ -66,6 +70,14 @@ export function useListMotion(
       rows.push({ row, delta: Math.round(delta), entering: false });
     }
     rowTopsRef.current = nextTops;
+    if (reducedMotion) {
+      for (const { row } of rows) {
+        row.style.transition = "";
+        row.style.transform = "";
+        row.style.opacity = "";
+      }
+      return;
+    }
     for (const { row, delta, entering } of rows) {
       if (delta) {
         row.style.transition = "none";

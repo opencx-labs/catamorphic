@@ -8,11 +8,17 @@ export { AIBar } from "./ai-bar.js";
 export type { AppMountProps } from "./app-mount.js";
 export { AppMount } from "./app-mount.js";
 export { WorkflowCanvas } from "./canvas.js";
-export type {
-  CodeEditorRenderProps,
-  DetailPanelProps,
-} from "./detail-panel.js";
-export { DetailPanel } from "./detail-panel.js";
+export { AgentEnvironmentControl } from "./components/access/agent-environment-control.js";
+export { AuthenticationRequiredCard } from "./components/access/authentication-required-card.js";
+export { PendingButton } from "./components/access/pending-button.js";
+export { ProjectWorkflows } from "./components/access/project-workflows.js";
+export { WorkflowEnablementPanel } from "./components/access/workflow-enablement-panel.js";
+export { WorkflowReview } from "./components/access/workflow-review.js";
+export {
+  formatDefaultValue,
+  friendlyParamName,
+  friendlyType,
+} from "./display-utils.js";
 export type { RunsPanelProps } from "./runs-panel.js";
 export { RunsPanel } from "./runs-panel.js";
 export { Toolbar } from "./toolbar.js";

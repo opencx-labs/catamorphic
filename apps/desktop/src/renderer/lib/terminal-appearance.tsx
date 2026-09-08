@@ -88,6 +88,7 @@ export function TerminalAppearanceProvider({
     const colors = appTheme?.colors;
     return {
       ...DEFAULT_APPEARANCE,
+      fontFamily: appTheme?.fonts.mono ?? DEFAULT_APPEARANCE.fontFamily,
       theme: colors
         ? {
             background: colors["bg-inset"],

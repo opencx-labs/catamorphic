@@ -10,5 +10,6 @@ export default defineConfig({
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     pool: "threads",
     fileParallelism: true,
+    maxWorkers: 2,
   },
 });

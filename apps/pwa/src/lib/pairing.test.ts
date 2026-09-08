@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { applyPairing, type PairingClaim } from "./pairing.js";
+import {
+  applyPairing,
+  type PairingClaim,
+  preparePairingInstall,
+} from "./pairing.js";
 import { activeProfile, getState } from "./store.js";
 
 const claim = (context?: PairingClaim["context"]): PairingClaim => ({
@@ -7,10 +11,10 @@ const claim = (context?: PairingClaim["context"]): PairingClaim => ({
   name: "Tabaza's MacBook",
   server: "http://192.168.1.71:4756/api/",
   token: "device-token",
+  installCode: "install-code",
   remotes: [
     {
       server: "https://brain.acme.dev/api",
-      token: "remote-token",
       project: "p-remote",
       name: "Acme Brain",
       localProjectId: "p-local",
@@ -20,6 +24,20 @@ const claim = (context?: PairingClaim["context"]): PairingClaim => ({
 });
 
 describe("applyPairing", () => {
+  it("prepares an install manifest that can restore the pairing", () => {
+    const manifest = document.createElement("link");
+    manifest.rel = "manifest";
+    manifest.href = "/manifest.webmanifest";
+    document.head.append(manifest);
+
+    preparePairingInstall("one-time install");
+
+    expect(new URL(manifest.href).searchParams.get("install")).toBe(
+      "one-time install",
+    );
+    manifest.remove();
+  });
+
   it("stores the desktop connection AND the remote links, lands on projects", () => {
     const route = applyPairing(getState(), claim());
     expect(route).toEqual({ kind: "projects" });
@@ -27,12 +45,19 @@ describe("applyPairing", () => {
     const desktop = connections.find(
       (c) => c.serverUrl === "http://192.168.1.71:4756/api",
     );
-    expect(desktop?.token).toBe("device-token");
+    expect(desktop).toMatchObject({
+      kind: "device",
+      credentials: { accessToken: "device-token" },
+    });
     const remote = connections.find(
       (c) => c.serverUrl === "https://brain.acme.dev/api",
     );
     expect(remote?.projectId).toBe("p-remote");
     expect(remote?.projectName).toBe("Acme Brain");
+    expect(remote).toMatchObject({ kind: "remote" });
+    expect(
+      remote && "credentials" in remote ? remote.credentials : undefined,
+    ).toBeUndefined();
     // The failover hint: desktop project → its remote mirror.
     expect(desktop?.mirrors).toEqual({
       "p-local": {

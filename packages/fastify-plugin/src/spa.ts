@@ -50,8 +50,57 @@ export function serveSpaDist(
         ? "public, max-age=31536000, immutable"
         : "no-cache",
     );
-    return reply.type(spaContentType(file)).send(await fs.readFile(file));
+    const contents = await fs.readFile(file);
+    if (file.endsWith(".webmanifest")) {
+      const launch = new URL(
+        request.url,
+        "http://catamorphic.local",
+      ).searchParams.get("launch");
+      if (launch) {
+        return reply
+          .type(spaContentType(file))
+          .send(
+            JSON.stringify(
+              pwaManifestWithLaunch(
+                JSON.parse(contents.toString("utf8")) as Record<
+                  string,
+                  unknown
+                >,
+                launch,
+              ),
+            ),
+          );
+      }
+    }
+    return reply.type(spaContentType(file)).send(contents);
   });
+}
+
+/**
+ * Carry a credential-free connection locator into an installed PWA without
+ * allowing a manifest query to turn the app into an open redirect.
+ */
+export function pwaManifestWithLaunch(
+  manifest: Record<string, unknown>,
+  rawLaunch: string | undefined,
+): Record<string, unknown> {
+  if (!rawLaunch) return manifest;
+  try {
+    const base = new URL("http://catamorphic.local/");
+    const launch = new URL(rawLaunch, base);
+    if (
+      launch.origin !== base.origin ||
+      launch.pathname !== "/" ||
+      launch.username ||
+      launch.password ||
+      launch.hash
+    ) {
+      return manifest;
+    }
+    return { ...manifest, start_url: `${launch.pathname}${launch.search}` };
+  } catch {
+    return manifest;
+  }
 }
 
 type SpaReply = {

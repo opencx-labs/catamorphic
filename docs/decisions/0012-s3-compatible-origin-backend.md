@@ -41,8 +41,8 @@ New vendor plugin package **`@catamorphic/s3`** (per ADR 0008) implementing
 - `getCloneSource` is **not** implemented — buckets don't speak the git
   protocol, so sandboxes use the existing file-upload path (same as
   `FsRemoteBackend`).
-- The playground prefers this backend when `S3_*` env vars are set, ahead of
-  the Artifacts (feature-gated) and filesystem fallbacks.
+- Hosts select this backend explicitly in boot code. `S3_*` variables are a
+  possible host convention, not a library-level backend switch.
 
 Alternatives considered: an fs-shim mirror synced to the bucket (rejected:
 re-adds the mirror complexity for no benefit since no git client reads the

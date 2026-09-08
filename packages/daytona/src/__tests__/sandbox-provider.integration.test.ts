@@ -2,8 +2,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DaytonaSandboxProvider } from "../sandbox-provider.js";
 
 const DAYTONA_API_KEY = process.env.DAYTONA_API_KEY;
+const EXTERNAL_INTEGRATIONS =
+  process.env.CATAMORPHIC_EXTERNAL_INTEGRATIONS === "1";
 
-const describeIf = DAYTONA_API_KEY ? describe : describe.skip;
+const describeIf =
+  DAYTONA_API_KEY && EXTERNAL_INTEGRATIONS ? describe : describe.skip;
+const RUN_ID = crypto.randomUUID();
 
 describeIf("DaytonaSandboxProvider (integration)", () => {
   let provider: DaytonaSandboxProvider;
@@ -29,7 +33,7 @@ describeIf("DaytonaSandboxProvider (integration)", () => {
     const handle = await provider.createSandbox({
       language: "typescript",
       autoStopInterval: 0,
-      labels: { test: "daytona-provider-integration" },
+      labels: { test: "daytona-provider-integration", run: RUN_ID },
     });
 
     createdSandboxIds.push(handle.providerId);
@@ -46,7 +50,7 @@ describeIf("DaytonaSandboxProvider (integration)", () => {
     const handle = await provider.createSandbox({
       language: "typescript",
       autoStopInterval: 0,
-      labels: { test: "daytona-provider-exec" },
+      labels: { test: "daytona-provider-exec", run: RUN_ID },
     });
     createdSandboxIds.push(handle.providerId);
 
@@ -63,7 +67,7 @@ describeIf("DaytonaSandboxProvider (integration)", () => {
     const handle = await provider.createSandbox({
       language: "typescript",
       autoStopInterval: 0,
-      labels: { test: "daytona-provider-files" },
+      labels: { test: "daytona-provider-files", run: RUN_ID },
     });
     createdSandboxIds.push(handle.providerId);
 
@@ -93,7 +97,7 @@ describeIf("DaytonaSandboxProvider (integration)", () => {
     const handle = await provider.createSandbox({
       language: "typescript",
       autoStopInterval: 0,
-      labels: { test: "daytona-provider-bun" },
+      labels: { test: "daytona-provider-bun", run: RUN_ID },
     });
     createdSandboxIds.push(handle.providerId);
 
@@ -119,7 +123,7 @@ describeIf("DaytonaSandboxProvider (integration)", () => {
     const handle = await provider.createSandbox({
       language: "typescript",
       autoStopInterval: 0,
-      labels: { test: "daytona-provider-lifecycle" },
+      labels: { test: "daytona-provider-lifecycle", run: RUN_ID },
     });
     createdSandboxIds.push(handle.providerId);
 
@@ -138,7 +142,7 @@ describeIf("DaytonaSandboxProvider (integration)", () => {
     const handle = await provider.createSandbox({
       language: "typescript",
       autoStopInterval: 0,
-      labels: { test: "daytona-provider-git" },
+      labels: { test: "daytona-provider-git", run: RUN_ID },
     });
     createdSandboxIds.push(handle.providerId);
 

@@ -32,11 +32,8 @@ export function FloatingPanelBar({
       tabIndex={-1}
       aria-label={`${title} panel controls`}
       data-floating-panel-bar
-      className="flex h-10 min-w-0 shrink-0 items-center gap-1 border-b border-border bg-bg-raised px-3"
+      className="absolute right-2 top-2 z-30 flex items-center gap-0.5 rounded-lg bg-bg-raised p-1 shadow-sm ring-1 ring-border outline-none"
     >
-      <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
-        {title}
-      </span>
       <ShortcutHint
         label="Hide floating panel"
         shortcut={formatBinding(bindings["dismiss-floating"])}
@@ -72,6 +69,7 @@ export function FloatingPanelBar({
           aria-label="Tile beside current tab"
           className={button}
           disabled={!canTile}
+          data-disabled-reason="Open another tab to tile beside it"
           onClick={onTile}
         >
           <Columns2 className="size-4" />

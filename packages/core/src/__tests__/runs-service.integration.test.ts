@@ -12,7 +12,15 @@ import type {
 } from "@catamorphic/sandbox";
 import { RuntimeInfrastructureError } from "@catamorphic/sandbox";
 import { sql } from "kysely";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from "vitest";
 import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
 import {
@@ -115,6 +123,12 @@ describeIf("unified RunsService integration", () => {
     await fs.rm(tempDirectory, { recursive: true, force: true });
   });
 
+  afterEach(async () => {
+    // A failed assertion must not leave a worker able to claim jobs created
+    // by the next sequential integration test.
+    await Promise.all([core.runs.stopWorkers(), secondCore.runs.stopWorkers()]);
+  });
+
   beforeEach(() => {
     retryInvocations = 0;
     physicalInvocations = 0;
@@ -204,7 +218,14 @@ describeIf("unified RunsService integration", () => {
 
     const run = await enroll();
     expect(run.correlationKey).toBe("contact-1");
-    await waitForStatus({ runId: run.id, status: "waiting" });
+    await waitForStatus({
+      runId: run.id,
+      status: "waiting",
+      // The first campaign parse competes with every package in the full CI
+      // run. Keep the poll below the test's 30 second budget without treating
+      // expected CPU contention as a scheduling failure.
+      timeout: 15_000,
+    });
 
     // A redelivered enrollment webhook must not start a second journey.
     const duplicate = await enroll();

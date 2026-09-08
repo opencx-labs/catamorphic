@@ -1,10 +1,12 @@
-import { Link2, LoaderCircle } from "lucide-react";
-import { useState } from "react";
+import { Download, Link2, LoaderCircle, PlugZap, Server } from "lucide-react";
+import { type FormEvent, useEffect, useState } from "react";
 import { Screen } from "../components/screen.js";
-import { clientFor, fetchMe } from "../lib/api.js";
 import { type ConnectLink, parseConnectLink } from "../lib/connect-link.js";
-import { navigate } from "../lib/nav.js";
-import { activeProfile, addConnection, usePwaState } from "../lib/store.js";
+import {
+  beginRemoteAuthorization,
+  beginServerAuthorization,
+} from "../lib/oauth.js";
+import type { RemotePwaConnection } from "../lib/store.js";
 
 /** A connect link that arrived via the PWA's own URL, waiting to be shown. */
 let pendingLink: ConnectLink | null = null;
@@ -19,9 +21,19 @@ export function stashPendingLink(link: ConnectLink) {
   pendingLink = link;
 }
 
+export function stashRemoteConnection(connection: RemotePwaConnection) {
+  stashPendingLink({
+    serverUrl: connection.serverUrl,
+    remoteProjectId: connection.projectId,
+    ...(connection.projectName
+      ? { remoteProjectName: connection.projectName }
+      : {}),
+  });
+}
+
 /**
- * Redeem a connect link: paste (or arrive with) an invite, verify it
- * against the server, and store the connection on the active profile.
+ * Start browser sign-in for a credential-free project locator. The callback
+ * verifies membership and stores the resulting connection in App.
  */
 export function ConnectScreen({
   canGoBack,
@@ -30,15 +42,22 @@ export function ConnectScreen({
   canGoBack: boolean;
   animation?: string;
 }) {
-  const state = usePwaState();
-  const profile = activeProfile(state);
   const [raw, setRaw] = useState(() => {
     if (!pendingLink) return "";
     const link = pendingLink;
     pendingLink = null;
-    return `catamorphic://connect?server=${encodeURIComponent(link.serverUrl)}&token=${encodeURIComponent(link.token)}&project=${encodeURIComponent(link.remoteProjectId)}${link.remoteProjectName ? `&name=${encodeURIComponent(link.remoteProjectName)}` : ""}${link.sessionId ? `&session=${encodeURIComponent(link.sessionId)}` : ""}`;
+    const params = new URLSearchParams({
+      server: link.serverUrl,
+      project: link.remoteProjectId,
+    });
+    if (link.remoteProjectName) params.set("name", link.remoteProjectName);
+    if (link.invitationId) params.set("invitation", link.invitationId);
+    if (link.sessionId) params.set("session", link.sessionId);
+    return `catamorphic://connect?${params.toString()}`;
   });
   const [busy, setBusy] = useState(false);
+  const [hostedServerUrl, setHostedServerUrl] = useState<string | null>(null);
+  const [attempted, setAttempted] = useState(false);
   const [error, setError] = useState<string | null>(() => {
     const stashed = pendingError;
     pendingError = null;
@@ -47,56 +66,51 @@ export function ConnectScreen({
 
   const link = raw.trim() ? parseConnectLink(raw) : null;
 
-  const connect = async () => {
+  useEffect(() => {
+    let cancelled = false;
+    void detectHostedServer(window.location.origin).then((serverUrl) => {
+      if (!cancelled) setHostedServerUrl(serverUrl);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const connect = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setAttempted(true);
     if (!link || busy) return;
     setBusy(true);
     setError(null);
     try {
-      const me = await fetchMe({
-        serverUrl: link.serverUrl,
-        token: link.token,
+      const started = await beginRemoteAuthorization({
+        link,
+        redirectUri: `${window.location.origin}/oauth/callback`,
       });
-      // Best effort: the project's display name straight from the server.
-      let projectName = link.remoteProjectName;
-      try {
-        const client = clientFor({
-          id: "probe",
-          serverUrl: link.serverUrl,
-          token: link.token,
-          projectId: link.remoteProjectId,
-          addedAt: "",
-        });
-        const project = await client.GET("/api/projects/{projectId}", {
-          params: { path: { projectId: link.remoteProjectId } },
-        });
-        if (project.data?.name) projectName = project.data.name;
-      } catch {
-        // The scope may not cover the project record; the link name is fine.
-      }
-      const connection = addConnection(profile.id, link, projectName);
-      void me;
-      // A `session` param (a desktop QR onto the remote server) lands in
-      // that exact chat — mirroring keeps it there under the same id.
-      navigate(
-        link.sessionId
-          ? {
-              kind: "chat",
-              connectionId: connection.id,
-              projectId: connection.projectId,
-              sessionId: link.sessionId,
-            }
-          : {
-              kind: "sessions",
-              connectionId: connection.id,
-              projectId: connection.projectId,
-            },
-        { replace: !canGoBack },
-      );
+      window.location.assign(started.authorizationUrl);
     } catch (cause) {
       setError(
         cause instanceof Error ? cause.message : "Could not reach the server.",
       );
     } finally {
+      setBusy(false);
+    }
+  };
+
+  const connectHostedServer = async () => {
+    if (!hostedServerUrl || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const started = await beginServerAuthorization({
+        serverUrl: hostedServerUrl,
+        redirectUri: `${window.location.origin}/oauth/callback`,
+      });
+      window.location.assign(started.authorizationUrl);
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Could not reach the server.",
+      );
       setBusy(false);
     }
   };
@@ -113,39 +127,92 @@ export function ConnectScreen({
             one project on a Catamorphic server.
           </p>
         </div>
-        <textarea
-          className="field min-h-24 w-full resize-none p-3 font-mono text-[16px] leading-6 outline-none placeholder:text-fg-faint"
-          placeholder="catamorphic://connect?server=…&token=…&project=…"
-          value={raw}
-          onChange={(event) => {
-            setRaw(event.target.value);
-            setError(null);
-          }}
-          autoCapitalize="off"
-          autoCorrect="off"
-          spellCheck={false}
-          data-testid="connect-input"
-        />
-        {raw.trim() && !link && (
-          <p className="text-[13px] text-danger">
-            That doesn't look like a connect link.
-          </p>
+        {hostedServerUrl && (
+          <section className="flex flex-col gap-3 rounded-2xl border border-border bg-bg-raised p-4">
+            <span className="flex items-center gap-2 text-sm font-semibold">
+              <Server className="size-4 text-accent" />
+              This server
+            </span>
+            <p className="text-sm leading-6 text-fg-muted">
+              Already a member? Sign in to see every project you can access.
+            </p>
+            <button
+              type="button"
+              onClick={() => void connectHostedServer()}
+              disabled={busy}
+              className="flex h-11 items-center justify-center gap-2 rounded-xl bg-accent px-4 text-sm font-semibold text-accent-fg disabled:opacity-35"
+            >
+              {busy && <LoaderCircle className="size-4 animate-spin" />}
+              Sign in to this server
+            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <a
+                href="https://catamorphic.ai/desktop/"
+                className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-border px-3 text-center text-xs font-medium text-fg-muted"
+              >
+                <Download className="size-4" />
+                Get the desktop app
+              </a>
+              <a
+                href="https://catamorphic.ai/agents/"
+                className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-border px-3 text-center text-xs font-medium text-fg-muted"
+              >
+                <PlugZap className="size-4" />
+                Connect with MCP
+              </a>
+            </div>
+          </section>
         )}
-        {error && (
-          <p className="text-[13px] text-danger" data-testid="connect-error">
-            {error}
-          </p>
-        )}
-        <button
-          type="button"
-          disabled={!link || busy}
-          onClick={() => void connect()}
-          className="flex h-12 items-center justify-center gap-2 rounded-xl bg-accent text-[15px] font-semibold text-accent-fg transition-[opacity,transform] duration-150 active:scale-[0.99] disabled:opacity-35"
-          data-testid="connect-submit"
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(event) => void connect(event)}
         >
-          {busy && <LoaderCircle className="size-4 animate-spin" />}
-          {busy ? "Checking the invite…" : "Connect"}
-        </button>
+          <textarea
+            className="field min-h-24 w-full resize-none p-3 font-mono text-[16px] leading-6 outline-none placeholder:text-fg-faint"
+            placeholder="catamorphic://connect?server=…&project=…"
+            value={raw}
+            onChange={(event) => {
+              setRaw(event.target.value);
+              setAttempted(false);
+              setError(null);
+            }}
+            onBlur={() => setAttempted(true)}
+            required
+            aria-invalid={attempted && !link ? "true" : undefined}
+            aria-errormessage="connect-link-error"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            data-testid="connect-input"
+          />
+          {attempted && !link && (
+            <p
+              id="connect-link-error"
+              className="text-[13px] text-danger"
+              role="alert"
+            >
+              That doesn't look like a connect link.
+            </p>
+          )}
+          {error && (
+            <p
+              className="text-[13px] text-danger"
+              data-testid="connect-error"
+              role="alert"
+            >
+              {error}
+            </p>
+          )}
+          <button
+            type="submit"
+            disabled={busy}
+            className="flex h-12 items-center justify-center gap-2 rounded-xl bg-accent text-[15px] font-semibold text-accent-fg transition-[opacity,transform] duration-150 active:scale-[0.99] disabled:opacity-35"
+            data-testid="connect-submit"
+          >
+            {busy && <LoaderCircle className="size-4 animate-spin" />}
+            {busy ? "Opening sign-in…" : "Sign in and connect"}
+          </button>
+        </form>
         {link && (
           <p className="text-center text-xs text-fg-faint">
             {new URL(link.serverUrl).host}
@@ -155,4 +222,20 @@ export function ConnectScreen({
       </div>
     </Screen>
   );
+}
+
+async function detectHostedServer(origin: string): Promise<string | null> {
+  try {
+    const response = await fetch(
+      new URL("/.well-known/oauth-protected-resource", origin),
+    );
+    if (!response.ok) return null;
+    const metadata = (await response.json()) as { resource?: unknown };
+    if (typeof metadata.resource !== "string") return null;
+    const resource = new URL(metadata.resource);
+    if (resource.origin !== origin || resource.pathname !== "/api") return null;
+    return resource.toString().replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
 }

@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { PROJECT_MANIFEST_PATH } from "@catamorphic/git";
+import {
+  matchesProjectExperience,
+  type ProjectExperienceContext,
+  sanitizeProjectExperienceWhen,
+} from "../shared/project-experience.js";
 
 /**
  * The project manifest (`.catamorphic/project.json`) is the committed home
@@ -28,6 +33,53 @@ function readManifest(rootPath: string): Record<string, unknown> {
     // Missing or broken manifest — a project without one has no config.
   }
   return {};
+}
+
+export interface ProjectStartingAction {
+  label: string;
+  prompt: string;
+  agent?: string;
+}
+
+/**
+ * Minimal, project-authored New Tab starters for the caller's capabilities.
+ * Invalid entries disappear individually and an absent list leaves no UI.
+ */
+export function projectStartingActions(
+  rootPath: string,
+  context: ProjectExperienceContext,
+): ProjectStartingAction[] {
+  const value = readManifest(rootPath).startingActions;
+  if (!Array.isArray(value)) return [];
+  return value
+    .flatMap((entry) => {
+      if (!isRecord(entry)) return [];
+      const action = entry;
+      if (
+        typeof action.label !== "string" ||
+        action.label.trim().length === 0 ||
+        typeof action.prompt !== "string" ||
+        action.prompt.trim().length === 0
+      ) {
+        return [];
+      }
+      const when = sanitizeProjectExperienceWhen(action.when);
+      if (when === null || !matchesProjectExperience(when, context)) return [];
+      return [
+        {
+          label: action.label.trim().slice(0, 80),
+          prompt: action.prompt.trim().slice(0, 20_000),
+          ...(typeof action.agent === "string" && action.agent.trim()
+            ? { agent: action.agent.trim() }
+            : {}),
+        },
+      ];
+    })
+    .slice(0, 6);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**

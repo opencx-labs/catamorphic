@@ -11,6 +11,7 @@ import {
 
 export interface McpConnectionCredential {
   headers?: Record<string, string>;
+  env?: Record<string, string>;
   oauth?: McpOAuthState;
 }
 
@@ -146,7 +147,7 @@ async function connectWithCredential(
   return connectMcpServer({
     ...serverConfig,
     ...(serverConfig.transport === "stdio"
-      ? {}
+      ? { ...(credential.env ? { env: credential.env } : {}) }
       : {
           headers: {
             ...credential.headers,

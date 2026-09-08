@@ -163,12 +163,19 @@ describe("dock modes", () => {
 
   it("lurks while the agent works: shrinks on focus-out, expands on hover, expands when done", async () => {
     await run(
-      `setComposer('terminal: sleep 6 && echo lurk-done'); send(); return true;`,
+      // Keep the turn alive through the animated focus and hover assertions.
+      // Six seconds was shorter than this setup can take on a loaded CI host,
+      // so the dock correctly expanded for the completed turn before the
+      // pointer-leave assertion could observe it re-lurking.
+      `setComposer('terminal: sleep 15 && echo lurk-done'); send(); return true;`,
     );
     // Focus stays in the composer right after sending — the dock stays
     // expanded until attention moves away.
     await runWait(`return dockH() > 400;`, { label: "expanded while focused" });
-    await run(`clickOutside(); return true;`);
+    // Xvfb can leave its virtual pointer over the centered dock even though
+    // this test never moved it there. Clear hover as well as focus so this
+    // assertion exercises the intended fully disengaged state.
+    await run(`unhoverDock(); clickOutside(); return true;`);
     await runWait(
       `return frontDock().hasAttribute('data-lurking') && dockH() < 220;`,
       { label: "shrunk after focusing outside", timeoutMs: 10_000 },

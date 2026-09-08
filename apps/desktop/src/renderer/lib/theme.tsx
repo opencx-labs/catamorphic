@@ -19,10 +19,6 @@ type AppHostTheme = NonNullable<AppMountProps["theme"]>;
  * (hover feedback 150ms, structural enters 220ms, large surfaces 250ms).
  */
 const DESKTOP_FEEL: Omit<AppHostTheme, "appearance" | "colors"> = {
-  fonts: {
-    sans: '"Inter", system-ui, -apple-system, sans-serif',
-    mono: '"JetBrains Mono", ui-monospace, "SF Mono", monospace',
-  },
   radii: { sm: "4px", md: "6px", lg: "10px" },
   easing: "cubic-bezier(0.2, 0, 0, 1)",
   baseFontSize: "13px",
@@ -32,20 +28,21 @@ const DESKTOP_FEEL: Omit<AppHostTheme, "appearance" | "colors"> = {
 
 /**
  * The full theme snapshot a mounted app receives from this shell: the
- * profile's resolved colors plus the desktop's feel tokens. The ONE place
- * the desktop's mount theme is assembled.
+ * profile's resolved colors and fonts plus the desktop's other feel tokens.
+ * The ONE place the desktop's mount theme is assembled.
  */
 export function appHostTheme(theme: ResolvedTheme): AppHostTheme {
   return {
     appearance: theme.appearance,
     colors: theme.colors,
     ...DESKTOP_FEEL,
+    fonts: theme.fonts,
   };
 }
 
 /**
- * Applies the resolved theme by writing every color token as an inline CSS
- * variable on <html>, overriding the :root defaults in styles.css (which
+ * Applies the resolved theme by writing every color and font token as an
+ * inline CSS variable on <html>, overriding the :root defaults in styles.css (which
  * remain the pre-JS first paint). `color-scheme` follows the resolved
  * appearance so native scrollbars/form controls match.
  */
@@ -53,6 +50,9 @@ function applyTheme(theme: ResolvedTheme): void {
   const root = document.documentElement;
   for (const [token, value] of Object.entries(theme.colors)) {
     root.style.setProperty(`--color-${token}`, value);
+  }
+  for (const [token, value] of Object.entries(theme.fonts)) {
+    root.style.setProperty(`--font-${token}`, value);
   }
   root.style.colorScheme = theme.appearance;
   root.dataset.theme = theme.appearance;

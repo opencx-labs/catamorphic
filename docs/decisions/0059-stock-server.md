@@ -1,6 +1,10 @@
 # 0059 — The stock server: zero-dependency, disk-backed, invite-first
 
-Status: Accepted (2026-08-21)
+Status: Accepted (2026-08-21; auth, invites, and administration superseded by 0071 and 0072)
+
+Single-node storage assumption superseded by
+[0099](0099-shared-postgres-server-environments.md) for managed multi-machine
+deployments. The standalone PGlite mode remains supported.
 
 ## Context
 

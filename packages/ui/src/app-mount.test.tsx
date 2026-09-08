@@ -411,3 +411,67 @@ describe("AppMount", () => {
     });
   });
 });
+
+describe("compact app slots", () => {
+  it("retains the iframe and sends display changes while constraining guest resize", async () => {
+    const apiClient = makeApiClient();
+    const view = (visible: boolean) => (
+      <CatamorphicProvider apiClient={apiClient as never}>
+        <AppMount
+          projectId={PROJECT_ID}
+          appName="ops-dashboard"
+          context={{ tenantId: "t-1", user: { id: "viewer-1" } }}
+          display={{ mode: "compact", visible }}
+          viewportHeight={280}
+        />
+      </CatamorphicProvider>
+    );
+    const { container, rerender } = render(view(true));
+    await waitFor(() => expect(container.querySelector("iframe")).toBeTruthy());
+    const frame = container.querySelector("iframe");
+    if (!frame?.contentWindow) throw new Error("Missing frame");
+    const messages = vi.spyOn(frame.contentWindow, "postMessage");
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { jsonrpc: "2.0", id: 1, method: "ui/initialize", params: {} },
+      }),
+    );
+    await waitFor(() =>
+      expect(messages).toHaveBeenCalledWith(
+        {
+          catamorphicApp: APP_PROTOCOL_VERSION,
+          kind: "display",
+          display: { mode: "compact", visible: true },
+        },
+        "*",
+      ),
+    );
+
+    rerender(view(false));
+    await waitFor(() =>
+      expect(messages).toHaveBeenCalledWith(
+        {
+          catamorphicApp: APP_PROTOCOL_VERSION,
+          kind: "display",
+          display: { mode: "compact", visible: false },
+        },
+        "*",
+      ),
+    );
+    expect(container.querySelector("iframe")).toBe(frame);
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: {
+          catamorphicApp: APP_PROTOCOL_VERSION,
+          kind: "resize",
+          height: 5000,
+        },
+      }),
+    );
+    expect(frame.style.height).toBe("280px");
+    rerender(view(true));
+    expect(container.querySelector("iframe")).toBe(frame);
+  });
+});

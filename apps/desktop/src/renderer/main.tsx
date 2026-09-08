@@ -11,7 +11,6 @@ import { desktopApi, type ServerInfo } from "./lib/desktop-api.js";
 import { KeybindingsProvider } from "./lib/keybindings.js";
 import { TerminalAppearanceProvider } from "./lib/terminal-appearance.js";
 import { ThemeProvider } from "./lib/theme.js";
-import "@catamorphic/ui/styles.css";
 import "./styles.css";
 
 function Root() {

@@ -2,19 +2,21 @@
 
 Phone-sized client for a Catamorphic server (ADR 0058): projects →
 sessions → chat. Reply, nudge (queue / send-now + interrupt), answer
-agent questions and tool-permission asks, start simple chats. Auth is a
-connect link (ADR 0055); profiles are local people on this device, each
-holding their redeemed links. Read `docs/decisions/0058-pwa-pwa.md`
+agent questions and tool-permission asks, start simple chats. The session list
+shows promoted sessions only; latent delegated children remain with their
+parent and archived trees stay out of ordinary mobile navigation. Remote auth uses
+OAuth authorization code with S256 PKCE (ADR 0072); profiles are local people
+on this device, each holding refreshable server connections. Read `docs/decisions/0058-mobile-pwa.md`
 before changing architecture.
 
 ## Run
 
 - `bun run dev:pwa` (repo root) — Vite dev server with workspace
   watchers; `--host` is on, so open it from a phone on the LAN.
-- Backend for development: either the desktop app's embedded server
-  (paste a `catamorphic://connect?server=http://127.0.0.1:<port>/api&token=x&project=<id>`
-  link; any token works against the desktop's identity), or the fake:
-  `node scripts/dev-server.mjs` — it prints a redeemable connect link.
+- Backend for development: use the fake with
+  `node scripts/dev-server.mjs`; it prints a credential-free connect link and
+  serves the same OAuth discovery, authorization, refresh, and bearer shape as
+  a remote host. Use desktop QR pairing to exercise the desktop connection.
   The fake's scripted agent: `ask …` parks a tool-permission ask,
   `question …` asks a question, `fail …` fails the turn.
 
@@ -35,11 +37,13 @@ before changing architecture.
 - `components/catamorphic/*` are copies of `packages/registry` sources
   (the intended shadcn-style reuse); diff against the registry when
   updating.
-- The service worker (`public/sw.js`) serves the offline shell ONLY.
-  App logic (queues, reconnection, polling) lives in app code — a
-  Capacitor wrap must be able to drop the SW without losing behavior.
-- No Web Push here: notifications are the future native wrap's job
-  (APNs/FCM); don't engineer around iOS Web Push.
+- The service worker (`public/sw.js`) serves the offline shell, displays Web
+  Push, and opens notification routes. App logic (queues, reconnection,
+  polling, resumable state) lives in app code. A Capacitor wrap must be able
+  to replace the SW transport without losing behavior.
+- Web Push is the installed PWA transport (ADR 0077). Events and subscriptions
+  stay behind the server API so a native wrap can substitute APNs/FCM. Do not
+  add an in-app notification center.
 - Keep every fetch behind `lib/api.ts` (bearer wrapper) and storage
   behind `lib/store.ts` (a wrap swaps in secure storage there).
 - Composer inputs stay ≥16px font-size (iOS zoom) and the page never
@@ -55,6 +59,15 @@ the BUILT bundle, not this app's dev server. `bun run dev:desktop`
 keeps that bundle current for you (a watch build runs alongside the
 desktop); anywhere else, run `bun run build` here after UI changes or
 the QR flow ships a stale app.
+
+Pairing also prepares a ten-minute, single-use install bootstrap in the web
+app manifest (ADR 0080). An installed app may have a separate storage container
+from the browser that scanned the QR; `/?install=...` redeems a second
+credential on the same paired-device record and restores the pairing and chat
+context without exposing the long-lived bearer token in install metadata.
+Remote-server installs preserve only the credential-free project and session
+locator in the manifest and restart OAuth on first launch, then return to the
+same chat.
 
 Failover semantics (troubleshooting "the desktop is asleep"): the claim
 also carries a mirror map (desktop projectId → its remote server), kept

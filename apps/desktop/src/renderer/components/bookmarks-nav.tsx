@@ -6,20 +6,29 @@ import {
   MessageSquare,
   Plus,
 } from "lucide-react";
-import { type DragEvent as ReactDragEvent, useEffect, useState } from "react";
+import {
+  type DragEvent as ReactDragEvent,
+  type ReactNode,
+  useEffect,
+  useState,
+} from "react";
 import { parseChatBookmarkUrl } from "../../shared/bookmark-target.js";
+import type { OpenMode } from "../../shared/open-mode.js";
 import { readBookmarkDrop } from "../lib/bookmark-drag.js";
 import {
   type Bookmark,
   type BookmarksData,
   desktopApi,
+  type ProjectBookmarks,
   type SidebarMenuEntry,
 } from "../lib/desktop-api.js";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag.js";
+import { Collapsible } from "./collapsible.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
 import { ShortcutHint } from "./shortcut-hint.js";
 import { SidebarItemRow } from "./sidebar-item-row.js";
+import { SiteFavicon } from "./site-favicon.js";
 
 const PROJECT_MENU: SidebarMenuEntry[] = [
   { label: "Open in new tab", action: "open-tab" },
@@ -52,40 +61,23 @@ function SiteIcon({
   bookmark: Bookmark;
   tile?: boolean;
 }) {
-  const [failed, setFailed] = useState(false);
-  const iconUrl = (() => {
-    try {
-      const url = new URL(bookmark.url);
-      return url.protocol === "https:" ? `${url.origin}/favicon.ico` : null;
-    } catch {
-      return null;
-    }
-  })();
   if (parseChatBookmarkUrl(bookmark.url))
     return <MessageSquare className="size-4 shrink-0" />;
-  return !failed && iconUrl ? (
-    <img
-      src={iconUrl}
-      alt=""
-      referrerPolicy="no-referrer"
-      className={`shrink-0 rounded-sm bg-white ${tile ? "size-4" : "size-5 p-0.5"}`}
-      onError={() => setFailed(true)}
+  return (
+    <SiteFavicon
+      url={bookmark.url}
+      faviconUrl={bookmark.faviconUrl}
+      className={tile ? "size-4" : "size-3.5"}
     />
-  ) : (
-    <span
-      aria-hidden="true"
-      className={`grid shrink-0 place-items-center font-medium text-fg-muted ${tile ? "size-4 text-sm" : "size-4"}`}
-    >
-      {bookmark.label.slice(0, 1).toUpperCase()}
-    </span>
   );
 }
 
-/** Profile-wide favorites, project bookmarks, and shallow folders share one store. */
+/** Profile-wide favorites, project bookmarks, and recursive folders share one store. */
 export function BookmarksNav({
   projectId,
   profileId,
   pinnedStyle = "tiles",
+  defaultOpenMode = "replace",
   menuOverride,
   onEmptyChange,
   onOpen,
@@ -93,9 +85,10 @@ export function BookmarksNav({
   projectId: string;
   profileId: string;
   pinnedStyle?: "tiles" | "list";
+  defaultOpenMode?: OpenMode;
   menuOverride?: SidebarMenuEntry[];
   onEmptyChange?: (empty: boolean) => void;
-  onOpen: (url: string, mode?: "tab" | "replace") => void | Promise<void>;
+  onOpen: (url: string, mode?: OpenMode) => void | Promise<void>;
 }) {
   const [data, setData] = useState<BookmarksData | null>(null);
   const [edit, setEdit] = useState<BookmarkEdit | null>(null);
@@ -123,7 +116,8 @@ export function BookmarksNav({
   }, []);
   const isEmpty =
     !data ||
-    (data.pinned.length === 0 &&
+    (data.pinned.bookmarks.length === 0 &&
+      data.pinned.folders.length === 0 &&
       data.project.bookmarks.length === 0 &&
       data.project.folders.length === 0);
   useEffect(() => {
@@ -161,7 +155,7 @@ export function BookmarksNav({
       ),
     );
   };
-  const open = (url: string, mode?: "tab" | "replace") =>
+  const open = (url: string, mode?: OpenMode) =>
     perform(Promise.resolve().then(() => onOpen(url, mode)));
   const dropHandlers = (target: string) => ({
     onDragOver: (event: ReactDragEvent<HTMLElement>) => {
@@ -292,11 +286,85 @@ export function BookmarksNav({
           />
         }
         menu={menuOverride ?? (pinned ? PINNED_MENU : PROJECT_MENU)}
-        onOpen={() => open(bookmark.url)}
+        resource
+        defaultOpenMode={defaultOpenMode}
+        onOpen={(mode) => open(bookmark.url, mode)}
         onAction={(entry) => runAction(entry, bookmark, pinned)}
       />
     </li>
   );
+
+  const renderFolders = (
+    scope: ProjectBookmarks,
+    pinned: boolean,
+    parentId?: string,
+  ): ReactNode =>
+    scope.folders
+      .filter((folder) => folder.parentId === parentId)
+      .map((folder) => {
+        const open = expanded.includes(folder.id);
+        const children = scope.bookmarks.filter(
+          (bookmark) => bookmark.folderId === folder.id,
+        );
+        const nested = scope.folders.some(
+          (child) => child.parentId === folder.id,
+        );
+        return (
+          <li
+            key={folder.id}
+            data-bookmark-drop={pinned ? undefined : `folder:${folder.id}`}
+            {...(pinned ? {} : dropHandlers(`folder:${folder.id}`))}
+          >
+            <SidebarItemRow
+              label={folder.label}
+              icon={<Folder className="size-4 shrink-0" />}
+              end={
+                <ChevronRight
+                  className={`size-3 shrink-0 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
+                />
+              }
+              menu={FOLDER_MENU}
+              expanded={open}
+              onOpen={() =>
+                setExpanded((current) =>
+                  open
+                    ? current.filter((id) => id !== folder.id)
+                    : [...current, folder.id],
+                )
+              }
+              onAction={(entry) => {
+                if (entry.action === "rename")
+                  setEdit({
+                    kind: "rename",
+                    id: folder.id,
+                    label: folder.label,
+                  });
+                if (entry.action === "remove")
+                  perform(
+                    (pinned
+                      ? desktopApi.bookmarksRemovePinned
+                      : desktopApi.bookmarksRemove)({
+                      projectId,
+                      profileId,
+                      id: folder.id,
+                    }),
+                  );
+              }}
+            />
+            <Collapsible open={open}>
+              <ul role="list" className="ml-4 flex flex-col gap-0.5">
+                {children.map((bookmark) => row(bookmark, pinned))}
+                {renderFolders(scope, pinned, folder.id)}
+              </ul>
+              {children.length === 0 && !nested && (
+                <p className="px-4 py-2 text-xs text-fg-muted">
+                  Drop a tab or chat here.
+                </p>
+              )}
+            </Collapsible>
+          </li>
+        );
+      });
 
   return (
     <div
@@ -304,7 +372,7 @@ export function BookmarksNav({
       {...dropHandlers("root")}
       className={`flex flex-col gap-2 rounded-md ${dropTarget === "root" ? "bg-accent/10 ring-1 ring-accent" : ""}`}
     >
-      {data && (data.pinned.length > 0 || dragging) && (
+      {data && (data.pinned.bookmarks.length > 0 || dragging) && (
         <ul
           role="list"
           aria-label="Pinned bookmarks"
@@ -316,87 +384,26 @@ export function BookmarksNav({
               : "flex flex-col gap-0.5"
           }`}
         >
-          {data.pinned.length === 0 && dragging && (
+          {data.pinned.bookmarks.length === 0 && dragging && (
             <li className="col-span-4 px-2 py-3 text-center text-xs text-fg-muted">
               Pin across projects
             </li>
           )}
-          {data.pinned.map((bookmark) => row(bookmark, true))}
+          {data.pinned.bookmarks
+            .filter((bookmark) => !bookmark.folderId)
+            .map((bookmark) => row(bookmark, true))}
+        </ul>
+      )}
+      {data && (
+        <ul role="list" className="flex flex-col gap-0.5">
+          {renderFolders(data.pinned, true)}
         </ul>
       )}
       <ul role="list" className="flex flex-col gap-0.5">
         {data?.project.bookmarks
           .filter((bookmark) => !bookmark.folderId)
           .map((bookmark) => row(bookmark, false))}
-        {data?.project.folders.map((folder) => {
-          const open = expanded.includes(folder.id);
-          const children = data.project.bookmarks.filter(
-            (bookmark) => bookmark.folderId === folder.id,
-          );
-          return (
-            <li
-              key={folder.id}
-              data-bookmark-drop={`folder:${folder.id}`}
-              {...dropHandlers(`folder:${folder.id}`)}
-              className={
-                dropTarget === `folder:${folder.id}`
-                  ? "rounded-md bg-accent/10 ring-1 ring-accent"
-                  : ""
-              }
-            >
-              <SidebarItemRow
-                label={folder.label}
-                icon={<Folder className="size-4 shrink-0" />}
-                end={
-                  <ChevronRight
-                    className={`size-3 shrink-0 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
-                  />
-                }
-                menu={FOLDER_MENU}
-                onOpen={() =>
-                  setExpanded((current) =>
-                    open
-                      ? current.filter((id) => id !== folder.id)
-                      : [...current, folder.id],
-                  )
-                }
-                expanded={open}
-                onAction={(entry) => {
-                  if (entry.action === "rename")
-                    setEdit({
-                      kind: "rename",
-                      id: folder.id,
-                      label: folder.label,
-                    });
-                  if (entry.action === "remove")
-                    perform(
-                      desktopApi.bookmarksRemove({
-                        projectId,
-                        profileId,
-                        id: folder.id,
-                      }),
-                    );
-                }}
-              />
-              <div
-                className={`grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}
-                inert={!open ? true : undefined}
-                aria-hidden={!open}
-              >
-                <div className="overflow-hidden">
-                  <ul role="list" className="flex flex-col gap-0.5 pl-4">
-                    {children.map((bookmark) => row(bookmark, false))}
-                  </ul>
-                  {children.length === 0 && (
-                    <p className="px-4 py-2 text-xs text-fg-muted">
-                      Drop a tab or chat here.
-                    </p>
-                  )}
-                </div>
-              </div>
-            </li>
-          );
-        })}
+        {data && renderFolders(data.project, false)}
       </ul>
       <div className="flex items-center gap-1 px-1">
         <button

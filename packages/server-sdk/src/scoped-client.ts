@@ -33,10 +33,14 @@ import type {
   TriggerMode,
   TriggerProductionRunInput,
   UpdateProjectInput,
+  WorkflowEnablement,
+  WorkflowEnablementOwner,
+  WorkflowEnablementPreview,
   WriteFileInput,
 } from "@catamorphic/core";
 import type { Json } from "@catamorphic/db";
 import type { GithubRepo, GithubTokenSet } from "@catamorphic/github";
+import type { AgentCapabilityGateway } from "@catamorphic/sandbox";
 import type { TriggerKindDefinition } from "./define-trigger-kind.js";
 
 export type WorkflowSummary = Omit<CoreWorkflowSummary, "execution">;
@@ -82,6 +86,42 @@ export interface WorkflowsResource {
     workflowName: string;
     ref?: string;
   }): Promise<WorkflowDetail>;
+}
+
+export interface WorkflowEnablementsResource {
+  preview(args: {
+    projectId: string;
+    workflowName: string;
+    environment?: string;
+    owner?: WorkflowEnablementOwner;
+    connectionSelections?: Readonly<Record<string, string>>;
+    commitSha?: string;
+    remoteBranch?: string;
+  }): Promise<WorkflowEnablementPreview>;
+  create(args: {
+    projectId: string;
+    workflowName: string;
+    environment?: string;
+    owner?: WorkflowEnablementOwner;
+    connectionSelections?: Readonly<Record<string, string>>;
+    commitSha?: string;
+    remoteBranch?: string;
+    consentDigest: string;
+    temporary?: boolean;
+    expiresAt?: Date;
+  }): Promise<WorkflowEnablement>;
+  list(args: {
+    projectId: string;
+    workflowName?: string;
+    includeAll?: boolean;
+  }): Promise<WorkflowEnablement[]>;
+  get(args: { enablementId: string }): Promise<WorkflowEnablement>;
+  disable(args: { enablementId: string }): Promise<WorkflowEnablement>;
+  reenable(args: { enablementId: string }): Promise<WorkflowEnablement>;
+  updateDeployment(args: {
+    enablementId: string;
+    consentDigest: string;
+  }): Promise<WorkflowEnablement>;
 }
 
 export interface FilesResource {
@@ -304,6 +344,23 @@ function buildRuns(core: CatamorphicCore, identity: Identity): RunsResource {
   };
 }
 
+function buildWorkflowEnablements(
+  core: CatamorphicCore,
+  identity: Identity,
+): WorkflowEnablementsResource {
+  return {
+    preview: (args) => core.workflowEnablements.preview({ ...args, identity }),
+    create: (args) => core.workflowEnablements.create({ ...args, identity }),
+    list: (args) => core.workflowEnablements.list({ ...args, identity }),
+    get: (args) => core.workflowEnablements.get({ ...args, identity }),
+    disable: (args) => core.workflowEnablements.disable({ ...args, identity }),
+    reenable: (args) =>
+      core.workflowEnablements.reenable({ ...args, identity }),
+    updateDeployment: (args) =>
+      core.workflowEnablements.updateDeployment({ ...args, identity }),
+  };
+}
+
 /**
  * Catamorphic client bound to a specific host org + host user. Produced by
  * `Catamorphic#forTenant({ tenantId }).forUser({ externalUserId })`. Every call
@@ -311,8 +368,14 @@ function buildRuns(core: CatamorphicCore, identity: Identity): RunsResource {
  * inline.
  */
 export class ScopedClient {
+  readonly capabilities: (args: {
+    projectId: string;
+    sessionId: string;
+    allocationId?: string;
+  }) => AgentCapabilityGateway;
   readonly projects: ProjectsResource;
   readonly workflows: WorkflowsResource;
+  readonly workflowEnablements: WorkflowEnablementsResource;
   readonly files: FilesResource;
   readonly runs: RunsResource;
   readonly triggers: TriggersResource;
@@ -322,8 +385,11 @@ export class ScopedClient {
     core: CatamorphicCore,
     private readonly identity: Identity,
   ) {
+    this.capabilities = (args) =>
+      core.agentCapabilities.forSession({ ...args, identity });
     this.projects = buildProjects(core, identity);
     this.workflows = buildWorkflows(core, identity);
+    this.workflowEnablements = buildWorkflowEnablements(core, identity);
     this.files = buildFiles(core, identity);
     this.runs = buildRuns(core, identity);
     this.triggers = buildTriggers(core, identity);
@@ -351,9 +417,9 @@ export class TenantScopedClient {
   ) {}
 
   /**
-   * Binds the user. Omit `scope` for a builder (full project surface); pass
-   * the artifacts a viewer is entitled to — an app, a workflow — for a
-   * scoped identity that can reach exactly those (ADR 0053).
+   * Binds the user. Omit `scope` only for a host-root identity; pass a project
+   * ref for builder access or exact artifact refs for a scoped member
+   * (ADRs 0053 and 0055).
    */
   forUser(args: {
     externalUserId: string;

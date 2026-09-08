@@ -29,5 +29,9 @@ export function useProjectFiles(
         return assertApiOk(result, "Files response empty");
       }),
     enabled: Boolean(projectId),
+    // Files can change outside React Query through agents, terminals, git,
+    // or another process. A newly mounted file surface must read the current
+    // project instead of showing a recently cached directory snapshot.
+    refetchOnMount: "always",
   });
 }

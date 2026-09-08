@@ -9,6 +9,8 @@
 # run with --network host on Linux; mDNS multicast does not cross the
 # default bridge (macOS/Windows Docker cannot host-network — use the IP
 # links the invite response also carries).
+# The setup listener binds to 127.0.0.1:4701 inside the container and is not
+# exposed. Setup agents invoke it from inside the container.
 FROM oven/bun:1.3.14
 
 # The local-process execution provider (ADR 0047) runs agent/workflow

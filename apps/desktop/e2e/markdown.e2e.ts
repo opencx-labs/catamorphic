@@ -35,6 +35,9 @@ const helpers = `
     window.dispatchEvent(new KeyboardEvent('keydown', {
       key, bubbles: true, cancelable: true, ...mods }));
   const mdHandle = () => window.__catMarkdownEditor;
+  // The control remains mounted (and says "Saving…") until the write
+  // succeeds and clears the draft. Its label alone cannot signal completion.
+  const hasUnsavedChanges = () => visible('[data-testid="editor-save"]').length > 0;
 `;
 
 const run = <T = unknown>(body: string) =>
@@ -116,11 +119,23 @@ describe("markdown editor", () => {
     await run(
       `setReactValue($('input[placeholder*="Open a file"]'), 'plain'); return true;`,
     );
-    await runWait(
-      `const row = byText('li button', 'plain.md');
+    try {
+      await runWait(
+        `const row = byText('li button', 'plain.md');
        if (!row) return false; row.click(); return true;`,
-      { label: "plain.md row" },
-    );
+        { timeoutMs: 30_000, label: "plain.md row" },
+      );
+    } catch (error) {
+      const diagnostics = await app.eval(`(async () => {
+        const picker = document.querySelector('[data-testid="editor-file-picker"]');
+        const context = window.__mdE2e;
+        const response = await fetch(context.apiUrl + '/api/projects/' + context.projectId + '/files');
+        return { picker: picker?.outerHTML, visibility: document.visibilityState, activeElement: document.activeElement?.outerHTML, filesStatus: response.status, files: await response.text() };
+      })()`);
+      console.error("Markdown file picker diagnostics", diagnostics);
+      throw error;
+    }
+
     await runWait(
       `return !!$('.cat-mdedit .ProseMirror') && !$('.monaco-editor')
         && $('.cat-mdedit h1')?.textContent === 'Plain notes';`,
@@ -131,9 +146,7 @@ describe("markdown editor", () => {
   it("opening a file is not an edit (no dirty state)", async () => {
     // Give any late initialization transactions a beat to land.
     await new Promise((resolve) => setTimeout(resolve, 800));
-    const save = await run<boolean>(
-      `return visible('button').some((b) => b.textContent === 'Save');`,
-    );
+    const save = await run<boolean>(`return hasUnsavedChanges();`);
     expect(save).toBe(false);
   });
 
@@ -144,19 +157,18 @@ describe("markdown editor", () => {
       h.editor.commands.insertContent('Typed by e2e.');
       return true;
     `);
-    await runWait(
-      `return visible('button').some((b) => b.textContent === 'Save');`,
-      { label: "dirty after typing" },
-    );
+    await runWait(`return hasUnsavedChanges();`, {
+      label: "dirty after typing",
+    });
     await run(`
       $('.cat-mdedit-pane').dispatchEvent(new KeyboardEvent('keydown',
         { key: 's', metaKey: true, bubbles: true, cancelable: true }));
       return true;
     `);
-    await runWait(
-      `return !visible('button').some((b) => b.textContent === 'Save');`,
-      { timeoutMs: 30_000, label: "saved" },
-    );
+    await runWait(`return !hasUnsavedChanges();`, {
+      timeoutMs: 30_000,
+      label: "saved",
+    });
     const content = await app.eval<string>(`(async () => {
       const { apiUrl, projectId } = window.__mdE2e;
       const file = await fetch(apiUrl + '/api/projects/' + projectId +
@@ -194,7 +206,7 @@ describe("markdown editor", () => {
     const clean = await run<{ leak: boolean; save: boolean; hrs: number }>(`
       return {
         leak: $('.cat-mdedit .ProseMirror').textContent.includes('Plain notes'),
-        save: visible('button').some((b) => b.textContent === 'Save'),
+        save: hasUnsavedChanges(),
         hrs: $$('.cat-mdedit .ProseMirror > hr').length,
       };
     `);
@@ -227,19 +239,18 @@ describe("markdown editor", () => {
       setReactValue(ta, ta.value + '\\nedited: true');
       return true;
     `);
-    await runWait(
-      `return visible('button').some((b) => b.textContent === 'Save');`,
-      { label: "dirty after frontmatter edit" },
-    );
+    await runWait(`return hasUnsavedChanges();`, {
+      label: "dirty after frontmatter edit",
+    });
     await run(`
       $('.cat-mdedit-pane').dispatchEvent(new KeyboardEvent('keydown',
         { key: 's', metaKey: true, bubbles: true, cancelable: true }));
       return true;
     `);
-    await runWait(
-      `return !visible('button').some((b) => b.textContent === 'Save');`,
-      { timeoutMs: 30_000, label: "frontmatter saved" },
-    );
+    await runWait(`return !hasUnsavedChanges();`, {
+      timeoutMs: 30_000,
+      label: "frontmatter saved",
+    });
     const content = await app.eval<string>(`(async () => {
       const { apiUrl, projectId } = window.__mdE2e;
       const file = await fetch(apiUrl + '/api/projects/' + projectId +

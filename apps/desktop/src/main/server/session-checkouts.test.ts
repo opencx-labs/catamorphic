@@ -54,6 +54,47 @@ describe("SessionCheckouts", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
+  it.each(["primary", "worktree"])(
+    "keeps private workflow files out of %s checkpoints",
+    async (kind) => {
+      const workingDirectory =
+        kind === "primary"
+          ? rootPath
+          : (await checkouts.createManaged({ projectId, sessionId })).path;
+      const personal = ".catamorphic/personal/profile-one/workflows/check.ts";
+      await fs.mkdir(path.dirname(path.join(workingDirectory, personal)), {
+        recursive: true,
+      });
+      await fs.writeFile(
+        path.join(workingDirectory, personal),
+        "private workflow",
+      );
+      await fs.writeFile(
+        path.join(workingDirectory, "shared.txt"),
+        "shared work",
+      );
+      const checkpoint = {
+        projectId,
+        sessionId,
+        workingDirectory,
+        message: "Save work",
+      };
+      expect(await checkouts.checkpoint(checkpoint)).not.toBeNull();
+      expect(
+        await git(workingDirectory, ["ls-tree", "-r", "--name-only", "HEAD"]),
+      ).toContain("shared.txt");
+      expect(
+        await git(workingDirectory, ["ls-tree", "-r", "--name-only", "HEAD"]),
+      ).not.toContain(personal);
+      expect(await git(workingDirectory, ["status", "--porcelain"])).toBe("");
+      expect(await checkouts.checkpoint(checkpoint)).toBeNull();
+      await git(workingDirectory, ["add", "-f", "--", personal]);
+      await expect(checkouts.checkpoint(checkpoint)).rejects.toThrow(
+        "Personal files are tracked",
+      );
+    },
+  );
+
   it("keeps a new session on primary until it creates a worktree", async () => {
     expect(await checkouts.resolve({ projectId, sessionId })).toBe(rootPath);
 
@@ -314,12 +355,32 @@ describe("SessionCheckouts", () => {
     });
   });
 
-  it("names and checkpoints a detached external worktree for review", async () => {
+  it("requires an explicit commit before naming a detached external worktree for review", async () => {
     const external = path.join(tmpDir, "detached-external");
     await git(rootPath, ["worktree", "add", "--detach", external]);
     await checkouts.adopt({ projectId, sessionId, path: external });
     await fs.writeFile(path.join(external, "review.txt"), "ready\n");
 
+    await expect(
+      checkouts.preparePullRequest({
+        projectId,
+        sessionId,
+        message: "Prepare review",
+      }),
+    ).rejects.toThrow("Record your changes");
+    expect((await git(external, ["status", "--porcelain"])).trim()).toBe(
+      "?? review.txt",
+    );
+    await git(external, ["add", "review.txt"]);
+    await git(external, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "Explicit review",
+    ]);
     const prepared = await checkouts.preparePullRequest({
       projectId,
       sessionId,

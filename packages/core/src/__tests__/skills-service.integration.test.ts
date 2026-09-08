@@ -131,6 +131,28 @@ describeIf("SkillsService host tier (ADR 0049)", () => {
     expect(await core.skills.read(identity, projectId, "missing")).toBeNull();
   });
 
+  it("serves members only shared skills and rejects unrelated project reads", async () => {
+    const member: Identity = {
+      ...identity,
+      scope: [{ kind: "agent", projectId, name: "assistant" }],
+    };
+    // These project skills were committed in Alice's working copy but not
+    // published to origin. A member must never inherit that draft checkout.
+    const skills = await core.skills.list(member, projectId);
+    expect(skills.map((skill) => `${skill.name}:${skill.source}`)).toEqual([
+      "publishing-to-github:host",
+      "shadowed:host",
+    ]);
+    expect(await core.skills.read(member, projectId, "local-notes")).toBeNull();
+    const unrelated: Identity = { ...identity, scope: [] };
+    await expect(core.skills.list(unrelated, projectId)).rejects.toThrow(
+      "Not authorized",
+    );
+    await expect(
+      core.skills.readShared(unrelated, projectId, "shadowed"),
+    ).rejects.toThrow("Not authorized");
+  });
+
   it("user tier (ADR 0056): live-read, between project and host, absent from shared", async () => {
     userSkillFiles["expenses/SKILL.md"] =
       "---\nname: expenses\ndescription: Personal expense filing.\n---\n\nuser body";

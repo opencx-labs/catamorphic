@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
@@ -29,13 +32,31 @@ const DURATION_EXCEPTIONS: Record<string, number> = {
 };
 
 let app: AppHandle;
+let pairingDist: string;
 
 beforeAll(async () => {
-  app = await launchApp();
+  pairingDist = fs.mkdtempSync(path.join(os.tmpdir(), "motion-pwa-stub-"));
+  fs.writeFileSync(
+    path.join(pairingDist, "index.html"),
+    "<!doctype html><title>motion-pwa-stub</title>",
+  );
+  fs.writeFileSync(
+    path.join(pairingDist, "manifest.webmanifest"),
+    JSON.stringify({ name: "Catamorphic", start_url: "/" }),
+  );
+  app = await launchApp({
+    // Motion verification must not block on the host's macOS local-network
+    // permission prompt. The HTTP pairing contract has its own E2E suite.
+    env: {
+      CATAMORPHIC_E2E_MOBILE_PAIRING_ADDRESS: "127.0.0.1",
+      CATAMORPHIC_PWA_DIST: pairingDist,
+    },
+  });
 });
 
 afterAll(async () => {
   await app?.stop();
+  fs.rmSync(pairingDist, { recursive: true, force: true });
 });
 
 const helpers = `
@@ -137,6 +158,30 @@ describe("setup", () => {
 });
 
 describe("design-system bounds (static sweep)", () => {
+  it("composer recall moves by direction without fading", async () => {
+    const keyframes = await run<Array<{ name: string; css: string }>>(`
+      return allStyleRules()
+        .filter((rule) => rule instanceof CSSKeyframesRule &&
+          rule.name.startsWith('input-recall-'))
+        .map((rule) => ({ name: rule.name, css: rule.cssText }));
+    `);
+    expect(keyframes.map((entry) => entry.name).sort()).toEqual([
+      "input-recall-down-a",
+      "input-recall-down-b",
+      "input-recall-up-a",
+      "input-recall-up-b",
+    ]);
+    for (const keyframe of keyframes) {
+      expect(keyframe.css, keyframe.name).not.toContain("opacity");
+    }
+    expect(
+      keyframes.find((entry) => entry.name === "input-recall-up-a")?.css,
+    ).toContain("translate: 0px -3px");
+    expect(
+      keyframes.find((entry) => entry.name === "input-recall-down-a")?.css,
+    ).toContain("translate: 0px 3px");
+  });
+
   it("every app animation uses the standard easing and sanctioned duration", async () => {
     const rules = await collectAnimationRules();
     expect(rules.length).toBeGreaterThan(5);
@@ -202,18 +247,14 @@ describe("paired motion (enter/exit mirrors)", () => {
     ).toBeLessThanOrEqual(50);
   });
 
-  it("dock open animation matches the dock's collapse transition", async () => {
-    await run(`pressKey('n', { metaKey: true }); return true;`);
-    await runWait(`return !!visibleDock();`, { label: "floating dock open" });
-    const timing = await run<{ animationMs: number; transitionMs: number }>(`
-      const cs = getComputedStyle(visibleDock());
-      return {
-        animationMs: toMs(cs.animationDuration.split(',')[0]),
-        transitionMs: toMs(cs.transitionDuration.split(',')[0]),
-      };
-    `);
-    // Open (dock-in keyframe) and minimize (transition) must be one system.
-    expect(timing.animationMs).toBe(timing.transitionMs);
+  it("dock-in and dock-out match in duration and easing", async () => {
+    const rules = await collectAnimationRules();
+    const enter = rules.find((rule) => rule.selector === "animate-dock-in");
+    const exit = rules.find((rule) => rule.selector === "animate-dock-out");
+    expect(enter).toBeDefined();
+    expect(exit).toBeDefined();
+    expect(exit?.durationMs).toBe(enter?.durationMs);
+    expect(exit?.easing).toBe(enter?.easing);
   });
 
   it("the dock's minimized pose mirrors dock-in's starting pose", async () => {
@@ -315,8 +356,8 @@ describe("animate-before-unmount", () => {
         if (overlay) {
           enter.push(parseFloat(getComputedStyle(overlay).opacity));
           enterTransition ||= overlay.getAnimations().some(
-            (animation) => animation instanceof CSSTransition &&
-              animation.transitionProperty === 'opacity');
+            (animation) => animation instanceof CSSAnimation &&
+              animation.animationName === 'fade-in');
           const modal = $('[data-testid="mobile-pairing-modal"]');
           const stage = $('[data-testid="mobile-pairing-qr-stage"]');
           if (modal?.dataset.state === 'loading' && stage) {
@@ -344,7 +385,8 @@ describe("animate-before-unmount", () => {
       while (!$('[data-testid="mobile-pairing-qr"]')) {
         await new Promise(requestAnimationFrame);
       }
-      const readyStage = $('[data-testid="mobile-pairing-qr-stage"]');
+      const readyStageElement = $('[data-testid="mobile-pairing-qr-stage"]');
+      const readyStage = { width: readyStageElement.offsetWidth, height: readyStageElement.offsetHeight };
       const readyHeight = panel.offsetHeight;
       const qrAnimation = getComputedStyle(
         $('[data-testid="mobile-pairing-qr"]'),
@@ -352,8 +394,8 @@ describe("animate-before-unmount", () => {
       pressKey('Escape');
       await new Promise(requestAnimationFrame);
       const exitTransition = overlay.getAnimations().some(
-        (animation) => animation instanceof CSSTransition &&
-          animation.transitionProperty === 'opacity');
+        (animation) => animation instanceof CSSAnimation &&
+          animation.animationName === 'fade-out');
       const exit = await sampleUntilGone(overlay, null, 400);
       return {
         enter,
@@ -363,10 +405,7 @@ describe("animate-before-unmount", () => {
         loadingHeight: loadingLayout.height,
         readyHeight,
         loadingStage: loadingLayout.stage,
-        readyStage: {
-          width: readyStage.offsetWidth,
-          height: readyStage.offsetHeight,
-        },
+        readyStage,
         qrAnimation,
       };
       })();
@@ -425,6 +464,39 @@ describe("animate-before-unmount", () => {
       const tab = button.closest('.animate-tab-in');
       button.click();
       return sampleUntilGone(tab, 'animate-tab-out', 1500);
+    `);
+    expect(
+      samples.some((sample) => sample.exiting),
+      `samples: ${JSON.stringify(samples)}`,
+    ).toBe(true);
+    expect(samples.at(-1)?.gone).toBe(true);
+  });
+
+  it("tab hover cards fade out before unmounting", async () => {
+    await run(`
+      const tab = $('.animate-tab-in[data-point-key]');
+      const body = [...tab.querySelectorAll('button')]
+        .find((button) => !button.getAttribute('aria-label')?.startsWith('Close'));
+      body.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      return true;
+    `);
+    await runWait(
+      `const card = $('[data-testid="tab-hover-card"].animate-fade-in');
+       return !!card && getComputedStyle(card).opacity === '1';`,
+      { label: "tab hover card entered" },
+    );
+    const samples = await run<
+      { t: number; exiting?: boolean; gone?: boolean }[]
+    >(`
+      const tab = $('.animate-tab-in[data-point-key]');
+      const body = [...tab.querySelectorAll('button')]
+        .find((button) => !button.getAttribute('aria-label')?.startsWith('Close'));
+      const card = $('[data-testid="tab-hover-card"]');
+      body.dispatchEvent(new MouseEvent('mouseout', {
+        bubbles: true,
+        relatedTarget: document.body,
+      }));
+      return sampleUntilGone(card, 'animate-fade-out', 1000);
     `);
     expect(
       samples.some((sample) => sample.exiting),

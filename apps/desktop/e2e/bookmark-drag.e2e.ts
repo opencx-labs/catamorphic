@@ -19,7 +19,7 @@ async function drop(source: string, target: string) {
 const bookmarks = () =>
   app.eval<{
     project: { bookmarks: { id: string; url: string; folderId?: string }[] };
-    pinned: { id: string; url: string }[];
+    pinned: { bookmarks: { id: string; url: string }[] };
   }>("window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope)");
 
 beforeAll(async () => {
@@ -85,15 +85,15 @@ describe("drag tabs and chats into bookmarks", () => {
       "setReactValue($('[data-composer-input]'),'remember this pinned conversation');$('[data-composer-input]').focus()",
     );
     await app.press("Enter");
-    await app.waitFor("!!document.querySelector('aside [data-chat-session]')");
+    await app.waitFor("!!document.querySelector('aside [data-session-id]')");
     const sessionId = await run<string>(
-      "return $('aside [data-chat-session]').dataset.chatSession",
+      "return $('aside [data-session-id]').dataset.sessionId",
     );
-    await drop("aside [data-chat-session]", '[data-bookmark-drop="pinned"]');
+    await drop("aside [data-session-id]", '[data-bookmark-drop="pinned"]');
     await app.waitFor(
-      "window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope).then(d=>d.pinned.length===1)",
+      "window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope).then(d=>d.pinned.bookmarks.length===1)",
     );
-    const pinned = (await bookmarks()).pinned[0];
+    const pinned = (await bookmarks()).pinned.bookmarks[0];
     if (!pinned) throw new Error("The chat was not pinned");
     expect(new URL(pinned.url).searchParams.get("session")).toBe(sessionId);
     await app.eval(
@@ -125,7 +125,7 @@ describe("drag tabs and chats into bookmarks", () => {
       `[data-bookmark-drop="folder:${folderId}"]`,
     );
     await app.waitFor(
-      "window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope).then(d=>d.pinned.length===0 && d.project.bookmarks.length===2)",
+      "window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope).then(d=>d.pinned.bookmarks.length===0 && d.project.bookmarks.length===2)",
     );
     expect(
       (await bookmarks()).project.bookmarks.find((b) => b.id === pinned.id),

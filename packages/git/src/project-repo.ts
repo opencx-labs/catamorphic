@@ -1,8 +1,11 @@
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import ignore, { type Ignore } from "ignore";
 import git from "isomorphic-git";
 import http from "isomorphic-git/http/node";
+import { type FileReadOptions, readFileSnapshot } from "./file-reads.js";
+import { isPersonalFile } from "./personal-files.js";
 import type {
   BranchInfo,
   CommitInfo,
@@ -13,6 +16,9 @@ import type {
 } from "./types.js";
 
 const IGNORED_DIRS = new Set(["node_modules", ".git", "dist", ".turbo"]);
+// git.add processes array inputs concurrently, even with parallel: false.
+// Bound file reads while amortizing full-index serialization across each batch.
+const STAGING_BATCH_SIZE = 128;
 
 /**
  * Dot-directories that are project content despite the hidden-file skip
@@ -30,7 +36,7 @@ const ALLOWED_DOT_DIRS = new Set([".agents", ".catamorphic"]);
  */
 const ALLOWED_DOT_FILES = new Set([".gitignore"]);
 
-function assertSafePath(filePath: string): void {
+export function assertSafePath(filePath: string): void {
   const normalized = path.normalize(filePath);
   if (path.isAbsolute(normalized)) {
     throw new Error("Absolute paths not allowed");
@@ -38,12 +44,42 @@ function assertSafePath(filePath: string): void {
   if (normalized.startsWith("..")) {
     throw new Error("Path traversal detected");
   }
+  if (isPersonalFile(normalized)) {
+    throw new Error(
+      "Personal files are local-only and cannot be accessed through project APIs",
+    );
+  }
   if (normalized.startsWith(".git/") || normalized === ".git") {
     throw new Error("Cannot access .git directory");
   }
 }
 
-async function walkDirectory(dir: string, base: string): Promise<string[]> {
+async function walkDirectory(
+  dir: string,
+  base: string,
+  options?: {
+    excludeNestedRepositories?: boolean;
+    tracked: Set<string>;
+    trackedDirectories: Set<string>;
+    rules: Array<{ base: string; matcher: Ignore }>;
+  },
+): Promise<string[]> {
+  if (
+    options?.excludeNestedRepositories &&
+    dir !== base &&
+    (await fs.stat(path.join(dir, ".git")).then(
+      () => true,
+      () => false,
+    ))
+  )
+    return [];
+  const rules = options ? [...options.rules] : [];
+  if (options) {
+    const content = await fs
+      .readFile(path.join(dir, ".gitignore"), "utf8")
+      .catch(() => "");
+    if (content) rules.push({ base: dir, matcher: ignore().add(content) });
+  }
   const entries = await fs.readdir(dir, { withFileTypes: true });
   const results: string[] = [];
 
@@ -58,9 +94,30 @@ async function walkDirectory(dir: string, base: string): Promise<string[]> {
 
     const fullPath = path.join(dir, entry.name);
     const relativePath = path.relative(base, fullPath);
+    if (isPersonalFile(relativePath)) continue;
 
+    if (options) {
+      let ignored = false;
+      for (const rule of rules) {
+        const result = rule.matcher.test(
+          path.relative(rule.base, fullPath) + (entry.isDirectory() ? "/" : ""),
+        );
+        if (result.ignored) ignored = true;
+        if (result.unignored) ignored = false;
+      }
+      if (
+        ignored &&
+        !options.tracked.has(relativePath) &&
+        !options.trackedDirectories.has(relativePath)
+      )
+        continue;
+    }
     if (entry.isDirectory()) {
-      const nested = await walkDirectory(fullPath, base);
+      const nested = await walkDirectory(
+        fullPath,
+        base,
+        options ? { ...options, rules } : undefined,
+      );
       results.push(...nested);
     } else {
       results.push(relativePath);
@@ -96,20 +153,94 @@ export class ProjectRepoImpl implements ProjectRepo {
     await fs.unlink(path.join(this.repoPath, filePath));
   }
 
-  async listFiles(): Promise<string[]> {
-    return walkDirectory(this.repoPath, this.repoPath);
+  async listFiles(opts?: { prefix?: string }): Promise<string[]> {
+    if (!opts?.prefix) return walkDirectory(this.repoPath, this.repoPath);
+    assertSafePath(opts.prefix);
+    try {
+      return await walkDirectory(
+        path.join(this.repoPath, opts.prefix),
+        this.repoPath,
+      );
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+        return [];
+      throw error;
+    }
   }
 
-  async readAllFiles(): Promise<Record<string, string>> {
-    const files = await this.listFiles();
-    const entries = await Promise.all(
-      files.map(async (f) => [f, await this.readFile(f)] as const),
+  async readAllFiles(
+    options: FileReadOptions = {},
+  ): Promise<Record<string, string>> {
+    const tracked = new Set(
+      await git.listFiles({ fs: nodeFs, dir: this.repoPath }),
     );
-    return Object.fromEntries(entries);
+    const trackedDirectories = new Set<string>();
+    for (const file of tracked) {
+      let directory = path.dirname(file);
+      while (directory !== ".") {
+        trackedDirectories.add(directory);
+        directory = path.dirname(directory);
+      }
+    }
+    const excludes = await fs
+      .readFile(path.join(this.repoPath, ".git/info/exclude"), "utf8")
+      .catch(() => "");
+    const paths = await walkDirectory(this.repoPath, this.repoPath, {
+      excludeNestedRepositories: options.excludeNestedRepositories,
+      tracked,
+      trackedDirectories,
+      rules: excludes
+        ? [{ base: this.repoPath, matcher: ignore().add(excludes) }]
+        : [],
+    });
+    return readFileSnapshot({
+      paths,
+      options,
+      read: async (file, maxBytes) =>
+        new TextDecoder().decode(await this.readSnapshotBytes(file, maxBytes)),
+    });
   }
 
-  async readAllFilesAtRef(ref: string): Promise<Record<string, string>> {
-    return this.walkFilesAtRef(ref);
+  protected async readSnapshotBytes(
+    file: string,
+    maxBytes: number,
+  ): Promise<Uint8Array> {
+    assertSafePath(file);
+    const handle = await fs.open(path.join(this.repoPath, file), "r");
+    try {
+      const size = (await handle.stat()).size;
+      if (size > maxBytes)
+        throw new Error(
+          `Project file '${file}' exceeds the ${maxBytes}-byte snapshot limit`,
+        );
+      // A concurrent writer cannot make this read grow beyond its budget.
+      const buffer = Buffer.alloc(size + 1);
+      let bytesRead = 0;
+      while (bytesRead < buffer.length) {
+        const chunk = await handle.read(
+          buffer,
+          bytesRead,
+          buffer.length - bytesRead,
+          bytesRead,
+        );
+        if (chunk.bytesRead === 0) break;
+        bytesRead += chunk.bytesRead;
+      }
+      if (bytesRead > size)
+        throw new Error(
+          `Project file '${file}' changed during snapshot; retry the read`,
+        );
+      return buffer.subarray(0, bytesRead);
+    } finally {
+      await handle.close();
+    }
+  }
+
+  async readAllFilesAtRef(
+    ref: string,
+    options?: FileReadOptions,
+  ): Promise<Record<string, string>> {
+    return this.walkFilesAtRef(ref, undefined, options);
   }
 
   async readFilesAtRef(
@@ -122,20 +253,28 @@ export class ProjectRepoImpl implements ProjectRepo {
   async readBlobAtRef(
     ref: string,
     filePath: string,
+    options?: { maxBytes?: number },
   ): Promise<Uint8Array | null> {
     assertSafePath(filePath);
+    let blob: Uint8Array;
     try {
       const oid = await git.resolveRef({ fs: nodeFs, dir: this.repoPath, ref });
-      const { blob } = await git.readBlob({
-        fs: nodeFs,
-        dir: this.repoPath,
-        oid,
-        filepath: filePath,
-      });
-      return blob;
+      blob = (
+        await git.readBlob({
+          fs: nodeFs,
+          dir: this.repoPath,
+          oid,
+          filepath: filePath,
+        })
+      ).blob;
     } catch {
       return null;
     }
+    if (options?.maxBytes !== undefined && blob.byteLength > options.maxBytes)
+      throw new Error(
+        `Project file '${filePath}' exceeds the ${options.maxBytes}-byte snapshot limit`,
+      );
+    return blob;
   }
 
   async readFileBytes(filePath: string): Promise<Uint8Array | null> {
@@ -169,6 +308,7 @@ export class ProjectRepoImpl implements ProjectRepo {
       trees: [git.TREE({ ref: oid })],
       map: async (filepath, [entry]) => {
         if (filepath === "." || !entry) return;
+        if (isPersonalFile(filepath)) return null;
         if (prefix !== undefined) {
           const inside = filepath.startsWith(prefix);
           const onTheWay = prefix.startsWith(`${filepath}/`);
@@ -186,38 +326,22 @@ export class ProjectRepoImpl implements ProjectRepo {
   private async walkFilesAtRef(
     ref: string,
     prefix?: string,
+    options?: FileReadOptions,
   ): Promise<Record<string, string>> {
-    const oid = await git.resolveRef({
-      fs: nodeFs,
-      dir: this.repoPath,
+    const blobs = await this.listBlobsAtRef(
       ref,
-    });
-    const result: Record<string, string> = {};
-    const TextDecoderCtor = TextDecoder;
-    const decoder = new TextDecoderCtor("utf-8");
-    const trees = [{ tree: git.TREE({ ref: oid }) }];
-    await git.walk({
-      fs: nodeFs,
-      dir: this.repoPath,
-      trees: trees.map((t) => t.tree),
-      map: async (filepath, [entry]) => {
-        if (filepath === "." || !entry) return;
-        if (prefix !== undefined) {
-          // Prune: a directory outside the prefix (and not on the way to
-          // it) is not descended; a file outside it is not read.
-          const inside = filepath.startsWith(prefix);
-          const onTheWay = prefix.startsWith(`${filepath}/`);
-          if (!inside && !onTheWay) return null;
-          if (!inside) return;
-        }
-        const type = await entry.type();
-        if (type !== "blob") return;
-        const content = await entry.content();
-        if (!content) return;
-        result[filepath] = decoder.decode(content);
+      prefix ? { prefix } : undefined,
+    );
+    return readFileSnapshot({
+      paths: blobs.map((blob) => blob.path),
+      options,
+      read: async (file, maxBytes) => {
+        const content = await this.readBlobAtRef(ref, file, { maxBytes });
+        if (!content)
+          throw new Error(`Project file '${file}' disappeared from '${ref}'`);
+        return new TextDecoder().decode(content);
       },
     });
-    return result;
   }
 
   async commit(
@@ -225,21 +349,43 @@ export class ProjectRepoImpl implements ProjectRepo {
     author: { name: string; email: string },
     opts?: { paths?: readonly string[] },
   ): Promise<string> {
+    for (const file of opts?.paths ?? []) assertSafePath(file);
+    // Keep index/object caches local to this operation, never to the repo's
+    // lifetime: large projects must not retain them after a checkpoint.
+    const cache = {};
+    const indexedFiles = await git.listFiles({
+      fs: nodeFs,
+      dir: this.repoPath,
+      cache,
+    });
+    if (indexedFiles.some(isPersonalFile)) {
+      throw new Error(
+        "Personal files are tracked. Remove them from the git index before checkpointing or sharing this project.",
+      );
+    }
     const only = opts?.paths ? new Set(opts.paths) : null;
-    const files = await this.listFiles();
-    for (const file of files) {
-      if (only && !only.has(file)) continue;
-      await git.add({ fs: nodeFs, dir: this.repoPath, filepath: file });
+    const files = (await this.listFiles()).filter(
+      (file) => !only || only.has(file),
+    );
+    for (let offset = 0; offset < files.length; offset += STAGING_BATCH_SIZE) {
+      await git.add({
+        fs: nodeFs,
+        dir: this.repoPath,
+        filepath: files.slice(offset, offset + STAGING_BATCH_SIZE),
+        parallel: false,
+        cache,
+      });
     }
 
     const status = await git.statusMatrix({
       fs: nodeFs,
       dir: this.repoPath,
+      cache,
     });
     for (const [filepath, head, workdir, stage] of status) {
       if (only && !only.has(filepath)) continue;
       if (head === 1 && workdir === 0 && stage === 1) {
-        await git.remove({ fs: nodeFs, dir: this.repoPath, filepath });
+        await git.remove({ fs: nodeFs, dir: this.repoPath, filepath, cache });
       }
     }
 
@@ -248,6 +394,7 @@ export class ProjectRepoImpl implements ProjectRepo {
       dir: this.repoPath,
       message,
       author,
+      cache,
     });
   }
 
@@ -361,7 +508,7 @@ export class ProjectRepoImpl implements ProjectRepo {
       .map(([filepath]) => filepath);
 
     const baseCommit = await this.resolveRef("HEAD").catch(() => null);
-    const remoteRef = `refs/remotes/origin/main`;
+    const remoteRef = `refs/catamorphic/published/main`;
     const remoteHead = await git
       .resolveRef({ fs: nodeFs, dir: this.repoPath, ref: remoteRef })
       .catch(() => null);
@@ -496,16 +643,43 @@ export class ProjectRepoImpl implements ProjectRepo {
   }
 
   async diff(opts: { base: string; head: string }): Promise<DiffEntry[]> {
-    const baseFiles = await this.readAllFilesAtRef(opts.base);
-    const headFiles = await this.readAllFilesAtRef(opts.head);
-    const allPaths = new Set([
-      ...Object.keys(baseFiles),
-      ...Object.keys(headFiles),
-    ]);
+    const baseFiles = new Map(
+      (await this.listBlobsAtRef(opts.base)).map((entry) => [
+        entry.path,
+        entry.oid,
+      ]),
+    );
+    const headFiles = new Map(
+      (await this.listBlobsAtRef(opts.head)).map((entry) => [
+        entry.path,
+        entry.oid,
+      ]),
+    );
+    const changed = [
+      ...new Set([...baseFiles.keys(), ...headFiles.keys()]),
+    ].filter((file) => baseFiles.get(file) !== headFiles.get(file));
+    const snapshots = await readFileSnapshot({
+      paths: changed.flatMap((file) => [`before/${file}`, `after/${file}`]),
+      read: async (key, maxBytes) => {
+        const before = key.startsWith("before/");
+        const file = key.slice(before ? 7 : 6);
+        if (!(before ? baseFiles : headFiles).has(file)) return "";
+        const blob = await this.readBlobAtRef(
+          before ? opts.base : opts.head,
+          file,
+          { maxBytes },
+        );
+        return blob ? new TextDecoder().decode(blob) : "";
+      },
+    });
     const entries: DiffEntry[] = [];
-    for (const filepath of allPaths) {
-      const before = baseFiles[filepath] ?? null;
-      const after = headFiles[filepath] ?? null;
+    for (const filepath of changed) {
+      const before = baseFiles.has(filepath)
+        ? (snapshots[`before/${filepath}`] ?? "")
+        : null;
+      const after = headFiles.has(filepath)
+        ? (snapshots[`after/${filepath}`] ?? "")
+        : null;
       if (before === after) continue;
       if (before == null && after != null) {
         entries.push({

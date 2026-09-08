@@ -87,6 +87,60 @@ describe("runtime protocol JSON", () => {
 });
 
 describe("runtime invocation dispatcher", () => {
+  it("evicts completed receipts by bytes and releases terminated worker handles", async () => {
+    const factory = createWorkerFactory({
+      execute: async () => completed("x".repeat(2000)),
+    });
+    const dispatcher = new RuntimeInvocationDispatcher({
+      artifactRoot,
+      writableRoot,
+      workerFactory: factory,
+      maxConcurrency: 1,
+      maxRetainedBytes: 1,
+      makeDirectory: async () => {},
+    });
+    await dispatcher.invoke(invocation({}));
+    expect(
+      await dispatcher.events({ invocationId: "invocation-1" }),
+    ).toBeNull();
+    await dispatcher.invoke(invocation({ invocationId: "invocation-2" }));
+    expect(
+      await dispatcher.events({ invocationId: "invocation-2" }),
+    ).toBeNull();
+  });
+
+  it("rejects oversized input and active event retention without truncating", async () => {
+    const factory = createWorkerFactory({
+      execute: async ({ onEvent }) => {
+        onEvent({
+          type: "step_completed",
+          nodeId: "step",
+          occurrence: 1,
+          name: "large",
+          output: "x".repeat(4000),
+        });
+        return completed(null);
+      },
+    });
+    const dispatcher = new RuntimeInvocationDispatcher({
+      artifactRoot,
+      writableRoot,
+      workerFactory: factory,
+      maxConcurrency: 1,
+      maxInvocationBytes: 2000,
+      makeDirectory: async () => {},
+    });
+    expect(() =>
+      dispatcher.invoke(invocation({ input: "x".repeat(4000) })),
+    ).toThrow("input exceeds");
+    await expect(dispatcher.invoke(invocation({}))).rejects.toThrow(
+      "memory limit",
+    );
+    expect(
+      await dispatcher.events({ invocationId: "invocation-1" }),
+    ).toBeNull();
+  });
+
   it("bounds concurrent worker threads and drains queued invocations", async () => {
     const controls: Array<{
       resolve: (terminal: RuntimeTerminalResult) => void;

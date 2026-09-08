@@ -8,11 +8,11 @@
     "start": "bun src/index.ts",
     "build": "tsc --project tsconfig.json --noEmit",
     "typecheck": "tsgo --project ./tsconfig.json",
-    "test": "vitest run --config ../../vitest.config.ts"
+    "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/server --config ../../vitest.config.ts"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^4.0.18",
-    "@ai-sdk/openai": "^4.0.17",
+    "@ai-sdk/anthropic": "^4.0.49",
+    "@ai-sdk/openai": "^4.0.60",
     "@catamorphic/ai-sdk": "workspace:*",
     "@catamorphic/claude-code": "workspace:*",
     "@catamorphic/core": "workspace:*",
@@ -22,10 +22,16 @@
     "@catamorphic/sandbox": "workspace:*",
     "@catamorphic/server-sdk": "workspace:*",
     "@electric-sql/pglite": "^0.5.4",
+    "better-auth": "1.6.26",
     "fastify": "^5.10.0",
-    "kysely": "^0.29.3"
+    "kysely": "^0.29.3",
+    "pg": "8.16.3",
+    "zod": "4.4.3",
+    "@catamorphic/mcp": "workspace:*",
+    "@catamorphic/microsandbox": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1"
+    "@types/node": "^26.1.1",
+    "@types/pg": "8.15.5"
   }
 }

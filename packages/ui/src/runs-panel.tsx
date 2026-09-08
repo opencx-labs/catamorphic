@@ -244,7 +244,7 @@ function BatchScopeProgress({ progress }: { progress: BatchProgress }) {
       </dl>
       {progress.artifact !== null ? (
         <div>
-          <span className="catamorphic-detail-section-label">Result</span>
+          <span className="catamorphic-run-section-label">Result</span>
           <JsonView value={progress.artifact} />
         </div>
       ) : null}
@@ -325,7 +325,7 @@ function RunItems({ run, scope }: { run: Run; scope: BatchProgress }) {
             ) : null}
             {selectedItemId === item.id ? (
               <div className="catamorphic-run-item-history">
-                <span className="catamorphic-detail-section-label">
+                <span className="catamorphic-run-section-label">
                   Item history
                 </span>
                 {itemSteps.isLoading ? <span>Loading...</span> : null}

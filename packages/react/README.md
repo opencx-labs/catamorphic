@@ -66,10 +66,9 @@ This is one hook family for the canonical Run model. Workflow/Run capabilities
 control which mutations and item views apply; there are no separate hook
 families for boundaries or batch processing.
 
-- `useRuns({ projectId, workflowName?, mode?, limit?, offset?, pollInterval? })`
+- `useRuns({ projectId, workflowName?, limit?, offset?, pollInterval? })`
 - `useRun({ runId, pollInterval? })`
 - `useTriggerRun({ projectId, workflowName })` — `mutateAsync({ input? })`
-- `useTriggerTestRun({ projectId, workflowName })` — `mutateAsync({ input?, files? })`
 - `useCancelRun({ runId })` — `mutateAsync({ reason? })`
 - `usePauseRunProcessing({ runId })`
 - `useResumeRunProcessing({ runId })`
@@ -82,9 +81,8 @@ families for boundaries or batch processing.
 before a workflow is selected; the query remains disabled until both IDs are
 available.
 
-`useTriggerRun` and `useTriggerTestRun` select production or mutable-source test
-mode within this family. Workflows with persisted continuation currently require
-an immutable production deployment and reject test triggering.
+`useTriggerRun` always executes an immutable production deployment. There is no
+mutable-source test mode or separate Run family.
 
 All server-backed run data uses one cache hierarchy rooted at
 `["cat", "run"]`. Detail and list queries poll `pending`, `running`, and
@@ -129,6 +127,27 @@ workflow prefix so both list summaries and singular workflow graphs refresh.
 - `useAgentSession(projectId, sessionId)`
 - `useCreateAgentSession(projectId)`
 - `useSendAgentMessage(projectId, sessionId)`
+- `useAgentChat(projectId, options)`
+- `useAcknowledgeAgentSessionAttention(projectId)`
+- `useArchiveAgentSession(projectId)`
+- `useUnarchiveAgentSession(projectId)`
+
+Session source, hierarchy, fork lineage, visibility, archive, attention,
+activity, and todos come from the generated server contract. Archive is a
+recursive server lifecycle operation and may return a typed confirmation
+impact; it is not a client-local hidden flag. Latent delegated children should
+remain attached to their parent until promoted.
+
+### Workflow enablement
+
+- `useWorkflowEnablements(projectId, workflowName?)`
+- `usePreviewWorkflowEnablement(projectId)`
+- `useCreateWorkflowEnablement(projectId)`
+- `useUpdateWorkflowEnablement(projectId)`
+
+Always preview and display the exact deployment, trigger, Environment, agent,
+and connection requirements before binding a member's unattended-run consent
+digest.
 
 ### Canvas + panel state (jotai)
 
@@ -253,12 +272,9 @@ to the public graph rather than asserting the two shapes are identical.
 
 ## Run lifecycle
 
-`<WorkflowEditor>` keeps only local run-dialog state. Its production and test
-callbacks return the canonical `Run`, which is handed to the unified Runs
-panel and selected while the query cache refreshes. The Test action is always
-wired by the host when test execution exists; the editor disables it from the
-current parsed graph capability, falling back to the loaded Workflow capability
-until a live graph is available.
+`<WorkflowEditor>` keeps only local run-dialog state. Its `onRun` callback
+returns the canonical production `Run`, which is handed to the host's
+`renderRunsPanel` slot and selected while the query cache refreshes.
 
 `useEditorKeyboard()` wires the Escape-key behaviour (close the Runs pane,
 then the detail panel). Mount it at most once per scope.

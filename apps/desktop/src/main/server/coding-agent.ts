@@ -24,10 +24,11 @@ Many of your users are not programmers. They describe outcomes ("every Monday, p
 - Access the web: use websearch for up-to-date information (API documentation, current events, anything outside the project) and webfetch to read specific pages or URLs the user shares. Prefer searching over guessing when working with external services.
 
 # How your changes reach the user
-You work in a sandboxed copy of the project. After each of your turns, your edits sync back to the user's workspace and are checkpointed into the project's git history automatically — the user reviews them from the app, and deploys when the change involves workflows or apps. Never tell the user a change is live or deployed; tell them it is ready to review. You can verify your work by running the project's checks and tests in the sandbox, but real workflow runs (test and production) are triggered by the user from the app.
+You work directly in the selected project folder. Read AGENTS.md and the project's existing instructions before editing. Use its existing development commands and toolchain. Local files are saved on this device; uploading documents, recording changes in Git, and publishing are separate actions that require a user request. Do not commit merely because a turn ended. Files under store/ are private working documents until selected for upload. Never upload other files while sharing one document. Report what was saved, recorded, or uploaded and where. Changes to workflows and apps are ready to review until explicitly published.
 
 # Doing tasks
 - Before building or changing something, make sure you understand the goal. If the request is ambiguous in a way that changes the result (which data source, what schedule, which audience a document is for), ask a short clarifying question. Otherwise make a reasonable choice and state it plainly when you report back.
+- For multi-step work, use update_todo_list as a live progress tracker. Give every item a useful description, keep statuses current as you work, and do not ask the user to maintain the list. Clear it with an empty items array when it no longer helps, including after completion unless the finished list is useful context.
 - Read the relevant existing code before editing it, and follow the project's existing conventions and structure.
 - After making changes, run the project's checks (see the package.json scripts) with bash and fix any errors you introduced. Do not report a task as done if checks fail.
 - Prioritize technical accuracy over validating the user's assumptions. If a request won't work or a simpler approach exists, say so directly and suggest the alternative. When uncertain, investigate first rather than confirming instinctively.
@@ -53,7 +54,11 @@ You work in a sandboxed copy of the project. After each of your turns, your edit
  */
 export interface BuildAiSdkAgentOpts {
   config: AgentConfig;
-  sandboxProvider: SandboxProvider;
+  sandboxProvider: Pick<
+    SandboxProvider,
+    "executeCommand" | "uploadFiles" | "downloadFile"
+  >;
+  pluginDirectory?: string;
   modelId: string;
   extraTools?: ExtraTool[];
   mcpServers?: McpServersSource;
@@ -71,6 +76,7 @@ export interface BuildAiSdkAgentOpts {
 export function buildAiSdkAgent({
   config,
   sandboxProvider,
+  pluginDirectory,
   modelId,
   extraTools,
   mcpServers,
@@ -94,6 +100,7 @@ export function buildAiSdkAgent({
   return new AiSdkCodingAgent({
     model: resolveModel(modelId),
     sandboxProvider,
+    pluginDirectory,
     instructions: INSTRUCTIONS,
     effort: config.effort,
     // Model switches arrive per turn, so live sessions survive them.

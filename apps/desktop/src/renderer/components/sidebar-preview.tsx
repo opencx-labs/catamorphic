@@ -1,6 +1,10 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { SidebarPreview } from "../lib/desktop-api.js";
+import {
+  computeInspectorPosition,
+  InspectorPortal,
+} from "./resource-inspector";
 
 export const SIDEBAR_PREVIEW_DELAY_MS = 500;
 
@@ -23,6 +27,7 @@ export function SidebarPreviewPopover({
   open,
   anchor,
   preview,
+  content,
   fallbackTitle,
   onMouseEnter,
   onMouseLeave,
@@ -31,7 +36,8 @@ export function SidebarPreviewPopover({
   id: string;
   open: boolean;
   anchor: SidebarPreviewAnchor;
-  preview: SidebarPreview;
+  preview?: SidebarPreview;
+  content?: ReactNode;
   fallbackTitle: string;
   onMouseEnter: () => void;
   onMouseLeave: () => void;
@@ -48,16 +54,30 @@ export function SidebarPreviewPopover({
     if (!card) return;
     const width = card.offsetWidth;
     const height = card.offsetHeight;
-    const left =
-      anchor.right + 8 + width <= window.innerWidth - 8
-        ? anchor.right + 8
-        : Math.max(8, anchor.left - width - 8);
-    const top = Math.max(
-      8,
-      Math.min(anchor.top, window.innerHeight - height - 8),
-    );
-    setPosition({ left, top });
+    const next = computeInspectorPosition({
+      anchor,
+      width,
+      height,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    });
+    setPosition({ left: next.left, top: next.top });
   }, [anchor]);
+
+  if (content !== undefined)
+    return (
+      <InspectorPortal
+        id={id}
+        label={fallbackTitle}
+        anchor={anchor}
+        open={open}
+        onEnter={onMouseEnter}
+        onLeave={onMouseLeave}
+        onExited={onExited}
+      >
+        {content}
+      </InspectorPortal>
+    );
 
   return createPortal(
     <div
@@ -75,27 +95,31 @@ export function SidebarPreviewPopover({
         open ? "animate-pop-in" : "animate-pop-out"
       }`}
     >
-      <p className="break-words text-[12px] font-medium leading-4 text-fg">
-        {preview.title ?? fallbackTitle}
-      </p>
-      {preview.description && (
-        <p className="mt-1 line-clamp-2 break-words text-[11px] leading-4 text-fg-muted">
-          {preview.description}
-        </p>
-      )}
-      {preview.metadata && preview.metadata.length > 0 && (
-        <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 border-t border-border pt-2 text-[11px] leading-4">
-          {preview.metadata.map((entry) => (
-            <div key={`${entry.label}:${entry.value}`} className="contents">
-              <dt className="font-mono text-[10px] uppercase tracking-wide text-fg-faint">
-                {entry.label}
-              </dt>
-              <dd className="truncate text-right text-fg-muted">
-                {entry.value}
-              </dd>
-            </div>
-          ))}
-        </dl>
+      {content ?? (
+        <>
+          <p className="break-words text-[12px] font-medium leading-4 text-fg">
+            {preview?.title ? preview.title : fallbackTitle}
+          </p>
+          {preview?.description && (
+            <p className="mt-1 line-clamp-2 break-words text-[11px] leading-4 text-fg-muted">
+              {preview.description}
+            </p>
+          )}
+          {preview?.metadata && preview.metadata.length > 0 && (
+            <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 border-t border-border pt-2 text-[11px] leading-4">
+              {preview.metadata.map((entry) => (
+                <div key={`${entry.label}:${entry.value}`} className="contents">
+                  <dt className="font-mono text-[10px] uppercase tracking-wide text-fg-faint">
+                    {entry.label}
+                  </dt>
+                  <dd className="truncate text-right text-fg-muted">
+                    {entry.value}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </>
       )}
     </div>,
     document.body,

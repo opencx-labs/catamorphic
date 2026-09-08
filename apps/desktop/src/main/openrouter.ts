@@ -66,11 +66,12 @@ export function bestFreeModelId(models: OpenRouterModel[]): string | undefined {
 }
 
 /**
- * Browser PKCE login: local callback server + system browser. Resolves to
+ * Browser PKCE login: local callback server + workspace browser. Resolves to
  * a user-scoped API key (https://openrouter.ai/docs — OAuth PKCE).
  */
 export async function openRouterPkceLogin(
-  openExternal: (url: string) => void,
+  openUrl: (url: string) => void,
+  onCallbackServed?: (origin: string) => void,
   timeoutMs = 5 * 60 * 1000,
 ): Promise<string> {
   const verifier = randomBytes(32).toString("base64url");
@@ -84,6 +85,7 @@ export async function openRouterPkceLogin(
       response.end(
         "<body style='font-family:system-ui;padding:2rem'>Signed in. You can close this tab and return to Catamorphic.</body>",
       );
+      onCallbackServed?.(`http://${request.headers.host ?? "127.0.0.1"}`);
       if (received) {
         cleanup();
         resolve(received);
@@ -105,7 +107,7 @@ export async function openRouterPkceLogin(
         return;
       }
       const callback = `http://127.0.0.1:${address.port}/callback`;
-      openExternal(
+      openUrl(
         `https://openrouter.ai/auth?callback_url=${encodeURIComponent(callback)}&code_challenge=${challenge}&code_challenge_method=S256`,
       );
     });

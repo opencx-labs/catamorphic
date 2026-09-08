@@ -64,6 +64,71 @@ const runWait = <T>(
   opts?: { timeoutMs?: number; label?: string },
 ) => app.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
 
+const holdAnimationFrames = () =>
+  run(`
+    if (window.__e2eAnimationFrameHold) {
+      throw new Error('animation frames are already held');
+    }
+    const callbacks = new Map();
+    const originalRequest = window.requestAnimationFrame;
+    const originalCancel = window.cancelAnimationFrame;
+    let nextId = 2_000_000_000;
+    window.__e2eAnimationFrameHold = {
+      callbacks,
+      originalRequest,
+      originalCancel,
+    };
+    window.requestAnimationFrame = (callback) => {
+      const id = nextId++;
+      callbacks.set(id, callback);
+      return id;
+    };
+    window.cancelAnimationFrame = (id) => {
+      if (!callbacks.delete(id)) originalCancel(id);
+    };
+    return true;
+  `);
+
+const releaseAnimationFrames = () =>
+  run<number>(`
+    const hold = window.__e2eAnimationFrameHold;
+    if (!hold) return 0;
+    const callbacks = [...hold.callbacks.values()];
+    try {
+      window.requestAnimationFrame = hold.originalRequest;
+      window.cancelAnimationFrame = hold.originalCancel;
+      delete window.__e2eAnimationFrameHold;
+      callbacks.forEach((callback) => callback(performance.now()));
+      return callbacks.length;
+    } finally {
+      window.requestAnimationFrame = hold.originalRequest;
+      window.cancelAnimationFrame = hold.originalCancel;
+      delete window.__e2eAnimationFrameHold;
+    }
+  `);
+
+const restoreAnimationFrames = () =>
+  run(`
+    const hold = window.__e2eAnimationFrameHold;
+    if (!hold) return false;
+    window.requestAnimationFrame = hold.originalRequest;
+    window.cancelAnimationFrame = hold.originalCancel;
+    delete window.__e2eAnimationFrameHold;
+    return true;
+  `);
+
+const waitForHeldAnimationFrame = () =>
+  runWait(`return (window.__e2eAnimationFrameHold?.callbacks.size ?? 0) > 0;`, {
+    label: "deferred autofocus frame held",
+  });
+
+const settleAnimationFrame = () =>
+  run(`
+    return new Promise((resolve) =>
+      requestAnimationFrame(() => resolve(true))
+    );
+  `);
+
 describe("first launch", () => {
   it("boots to the empty state with no projects", async () => {
     await runWait(`return !!byText('button', 'New project');`, {
@@ -90,6 +155,16 @@ describe("first launch", () => {
               !!$('textarea[placeholder*="Search or ask"]');`,
       { timeoutMs: 60_000, label: "palette New Tab after project creation" },
     );
+  });
+
+  it("does not load editor or terminal runtimes before first use", async () => {
+    const resources = await run<string[]>(`
+      return performance.getEntriesByType('resource').map((entry) => entry.name);
+    `);
+    expect(
+      resources.some((url) => /monaco|editor\.api|ts\.worker/.test(url)),
+    ).toBe(false);
+    expect(resources.some((url) => /terminal-screen/.test(url))).toBe(false);
   });
 });
 
@@ -119,6 +194,105 @@ describe("browser tabs", () => {
     });
   });
 
+  it("navigates browser history with Cmd+Left and Cmd+Right", async () => {
+    await run(`
+      const input = $('input[aria-label="Address and search bar"]');
+      input.focus();
+      setReactValue(input, 'data:text/html,<title>Second E2E Page</title><h1>second</h1>');
+      input.dispatchEvent(new KeyboardEvent('keydown',
+        { key: 'Enter', bubbles: true, cancelable: true }));
+      return true;
+    `);
+    await runWait(`return !!byText('button', 'Second E2E Page');`, {
+      timeoutMs: 30_000,
+      label: "second browser history entry",
+    });
+
+    await run(`pressKey('ArrowLeft', { metaKey: true }); return true;`);
+    await runWait(`return !!byText('button', 'E2E Page');`, {
+      timeoutMs: 30_000,
+      label: "browser history moved back",
+    });
+    await run(`pressKey('ArrowRight', { metaKey: true }); return true;`);
+    await runWait(`return !!byText('button', 'Second E2E Page');`, {
+      timeoutMs: 30_000,
+      label: "browser history moved forward",
+    });
+
+    const isMac = await run<boolean>(
+      `return navigator.platform.toLowerCase().startsWith('mac');`,
+    );
+    if (isMac) {
+      await run(`
+        void $('webview').executeJavaScript(
+          "window.dispatchEvent(new MouseEvent('mouseup', { button: 3, bubbles: true, cancelable: true }))",
+        );
+        return true;
+      `);
+      await runWait(`return !!byText('button', 'E2E Page');`, {
+        timeoutMs: 30_000,
+        label: "browser mouse button moved back",
+      });
+      await run(`
+        void $('webview').executeJavaScript(
+          "window.dispatchEvent(new MouseEvent('mouseup', { button: 4, bubbles: true, cancelable: true }))",
+        );
+        return true;
+      `);
+      await runWait(`return !!byText('button', 'Second E2E Page');`, {
+        timeoutMs: 30_000,
+        label: "browser mouse button moved forward",
+      });
+    }
+  });
+
+  it("coalesces duplicate Cmd+W dispatches into one closed tab", async () => {
+    await run(`pressKey('t', { metaKey: true, altKey: true }); return true;`);
+    await runWait(
+      `return $$('input[aria-label="Address and search bar"]').length === 2;`,
+      { label: "second browser tab" },
+    );
+    await run(`
+      const input = $$('input[aria-label="Address and search bar"]').at(-1);
+      input.focus();
+      setReactValue(input, 'data:text/html,<title>Close Target</title><h1>close me</h1>');
+      input.dispatchEvent(new KeyboardEvent('keydown',
+        { key: 'Enter', bubbles: true, cancelable: true }));
+      return true;
+    `);
+    await runWait(`return !!byText('button', 'Close Target');`, {
+      timeoutMs: 30_000,
+      label: "second browser tab navigated",
+    });
+    await run(`
+      pressKey('w', { metaKey: true });
+      pressKey('w', { metaKey: true });
+      return true;
+    `);
+    // Occluded Chromium can pause CSS animations and omit animationend.
+    // Freeze this exit deliberately: the clock fallback must still clear
+    // exactly the one closed tab from the rendered strip.
+    await runWait(
+      `const exiting = $('.animate-tab-out');
+       if (!exiting) return false;
+       exiting.getAnimations().forEach((animation) => animation.pause());
+       return true;`,
+      { label: "outgoing browser tab staged" },
+    );
+    const afterClose = await run<{
+      webviews: number;
+      tabLabels: string[];
+    }>(`
+      return new Promise((resolve) => setTimeout(() => resolve({
+        webviews: $$('webview').length,
+        tabLabels: $$('[data-point-key] button').map((button) =>
+          button.textContent.trim()),
+      }), 800));
+    `);
+    expect(afterClose.webviews).toBe(1);
+    expect(afterClose.tabLabels.join(" ")).not.toContain("Close Target");
+  });
+
   it("closes the browser tab with the close-tab shortcut", async () => {
     await run(`pressKey('w', { metaKey: true }); return true;`);
     await runWait(`return !$('input[aria-label="Address and search bar"]');`, {
@@ -128,11 +302,18 @@ describe("browser tabs", () => {
 
   it("Cmd+Shift+T reopens the closed browser tab at its URL", async () => {
     await run(`pressKey('T', { metaKey: true, shiftKey: true }); return true;`);
-    await runWait(
-      `return !!$('input[aria-label="Address and search bar"]') &&
-              !!byText('button', 'E2E Page');`,
-      { timeoutMs: 30_000, label: "browser tab restored" },
-    );
+    const restored = await run<{
+      inputCount: number;
+      tabLabels: string[];
+    }>(`
+      return new Promise((resolve) => setTimeout(() => resolve({
+        inputCount: $$('input[aria-label="Address and search bar"]').length,
+        tabLabels: $$('[data-point-key] button').map((button) =>
+          button.textContent.trim()),
+      }), 2000));
+    `);
+    expect(restored.inputCount).toBe(1);
+    expect(restored.tabLabels.join(" ")).toContain("E2E Page");
     // Close it again so later groups start from the same slate as before.
     await run(`pressKey('w', { metaKey: true }); return true;`);
     await runWait(`return !$('input[aria-label="Address and search bar"]');`, {
@@ -260,20 +441,95 @@ describe("chat flows", () => {
     `);
 
     await runWait(
-      `const preview = $('[data-testid="sidebar-preview"]');
+      `const preview = $('[data-resource-inspector]');
        return !!preview && parseFloat(getComputedStyle(preview).opacity) > 0.9;`,
       {
         label: "chat metadata hover preview",
       },
     );
     const previewText = await run<string>(
-      `return $('[data-testid="sidebar-preview"]').textContent;`,
+      `return $('[data-resource-inspector]').textContent;`,
     );
     expect(previewText).toContain("Fake Agent");
     expect(previewText).toContain("Environment");
     expect(previewText).toContain("local");
     expect(previewText).toContain("Status");
     expect(previewText).toContain("Ready");
+  });
+
+  it("shows an agent-managed todo progress popover", async () => {
+    await run(`
+      const dock = visibleDock();
+      const input = dock.querySelector('[data-composer-input]');
+      setReactValue(input, 'make a todo list for this task');
+      input.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `const trigger = visibleDock()?.querySelector('[data-testid="todo-progress-trigger"]');
+       return trigger?.textContent.trim() === '1/2';`,
+      { timeoutMs: 30_000, label: "todo progress indicator" },
+    );
+    await run(`
+      visibleDock().querySelector('[data-testid="todo-progress-trigger"]').click();
+      return true;
+    `);
+    await runWait(
+      `const panel = visibleDock()?.querySelector('[data-testid="todo-progress-popover"]');
+       return !!panel && panel.textContent.includes('Verify the result');`,
+      { label: "todo popover" },
+    );
+    const collapsed = await run<boolean>(`
+      const panel = visibleDock().querySelector('[data-testid="todo-progress-popover"]');
+      const item = [...panel.querySelectorAll('button')]
+        .find((button) => button.textContent.includes('Verify the result'));
+      return item?.getAttribute('aria-expanded') === 'false' &&
+        item?.nextElementSibling?.getAttribute('aria-hidden') === 'true';
+    `);
+    expect(collapsed).toBe(true);
+    await run(`
+      const panel = visibleDock().querySelector('[data-testid="todo-progress-popover"]');
+      [...panel.querySelectorAll('button')]
+        .find((button) => button.textContent.includes('Verify the result')).click();
+      return true;
+    `);
+    await runWait(
+      `const panel = visibleDock()?.querySelector('[data-testid="todo-progress-popover"]');
+       const item = [...panel.querySelectorAll('button')]
+         .find((button) => button.textContent.includes('Verify the result'));
+       return item?.getAttribute('aria-expanded') === 'true' &&
+         panel.textContent.includes('Run the focused tests') &&
+         parseFloat(getComputedStyle(panel).opacity) > 0.9;`,
+      { label: "expanded todo description" },
+    );
+
+    await runWait(
+      `const toggle = $$('[data-testid="chat-turn-steps-toggle"]').at(-1);
+       if (!toggle) return false;
+       if (toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+       const step = [...visibleDock().querySelectorAll('[data-testid="chat-step"] button')]
+         .find((button) => button.textContent.includes('Updated the todo list'));
+       if (!step) return false;
+       if (step.getAttribute('aria-expanded') !== 'true') step.click();
+       const detail = step.parentElement.querySelector('[data-testid="chat-step-detail"]');
+       return detail?.textContent.includes('✓ Inspect the project') &&
+         detail.textContent.includes('● Verify the result') &&
+         !detail.textContent.includes('"items"');`,
+      { label: "readable todo tool step" },
+    );
+
+    await run(`
+      const input = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(input, 'clear todo list');
+      input.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return timelineMessages().some((message) =>
+         message.text.includes('I cleared the progress list.')) &&
+         !visibleDock()?.querySelector('[data-testid="todo-progress"]');`,
+      { timeoutMs: 30_000, label: "cleared todo progress leaves the UI" },
+    );
   });
 
   it("streams preambles as separate completed messages", async () => {
@@ -316,6 +572,152 @@ describe("chat flows", () => {
       {
         label: "turn step log shows NOTES.md",
       },
+    );
+  });
+
+  it("shares archive and unread actions between the sidebar and dock", async () => {
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return !!floatingDock();`, { label: "chat dock open" });
+    await run(`
+      const input = floatingDock().querySelector('[data-composer-input]');
+      setReactValue(input, 'exercise the session menu');
+      input.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return !![...document.querySelectorAll('aside li[data-session-id]')]
+        .find((row) => row.textContent.includes('Session menu'));`,
+      { timeoutMs: 30_000, label: "session menu row in the sidebar" },
+    );
+
+    // The dock bubble opens the same menu and can mark the session unread.
+    await run(`
+      const bubble = [...document.querySelectorAll('div[data-session-id]')]
+        .find((row) => !row.closest('aside') && row.querySelector('button[aria-label*="Session menu"]'));
+      bubble.querySelector('button[aria-label*="Session menu"]').dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 420, clientY: 500 }),
+      );
+      return true;
+    `);
+    await runWait(
+      `const labels = $$('[role="menuitem"]').map((item) => item.textContent.trim());
+       return labels.join('|') === 'New subsession|Mark as unread|Archive';`,
+      { label: "dock session menu" },
+    );
+    await run(
+      `byText('[role="menuitem"]', 'Mark as unread').click(); return true;`,
+    );
+    await runWait(
+      `const row = [...document.querySelectorAll('aside li[data-session-id]')]
+         .find((item) => item.textContent.includes('Session menu'));
+       return !!row?.querySelector('[data-testid="session-unread"]');`,
+      { label: "manual unread dot in the sidebar" },
+    );
+    // The dock applies its action before its menu finishes animating out.
+    // Wait for that portal to leave before opening and inspecting another.
+    await runWait(`return !document.querySelector('[data-sidebar-menu]');`, {
+      label: "dock session menu dismissed",
+    });
+
+    // The sidebar resource menu adds placement choices to the same current-state
+    // session actions. Marking it read removes the shared dot.
+    await run(`
+      const row = [...document.querySelectorAll('aside li[data-session-id]')]
+        .find((item) => item.textContent.includes('Session menu'));
+      row.firstElementChild.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 210, clientY: 360 }),
+      );
+      return true;
+    `);
+    await runWait(
+      `const labels = $$('[role="menuitem"]').map((item) => item.textContent.trim());
+       return labels.join('|') === 'Open here|Open in new tab|Open to the side|Open floating|New subsession|Mark as read|Archive';`,
+      { label: "sidebar session menu matches the dock" },
+    );
+    await run(
+      `byText('[role="menuitem"]', 'Mark as read').click(); return true;`,
+    );
+    await runWait(
+      `const row = [...document.querySelectorAll('aside li[data-session-id]')]
+         .find((item) => item.textContent.includes('Session menu'));
+       return !!row && !row.querySelector('[data-testid="session-unread"]');`,
+      { label: "session marked read" },
+    );
+
+    // Archive removes the chat from the sidebar and dock. The palette keeps
+    // the archived chat searchable and visibly marked, and reopening it
+    // provides the way to unarchive it.
+    await run(`
+      const bubble = [...document.querySelectorAll('div[data-session-id]')]
+        .find((row) => !row.closest('aside') && row.querySelector('button[aria-label*="Session menu"]'));
+      bubble.querySelector('button[aria-label*="Session menu"]').dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 420, clientY: 500 }),
+      );
+      return true;
+    `);
+    await runWait(`return !!byText('[role="menuitem"]', 'Archive');`, {
+      label: "archive action available from the dock",
+    });
+    await run(`byText('[role="menuitem"]', 'Archive').click(); return true;`);
+    await runWait(
+      `return ![...document.querySelectorAll('aside li[data-session-id]')]
+        .some((row) => row.textContent.includes('Session menu')) &&
+        ![...document.querySelectorAll('div[data-session-id]')]
+          .some((row) => !row.closest('aside') && row.querySelector('button[aria-label*="Session menu"]'));`,
+      { label: "archived chat removed from the visible workspace" },
+    );
+
+    // Cmd+P toggles the overlay. Earlier flows can leave it open; preserve
+    // that state instead of turning the searchable palette off.
+    await run(`
+      const input = $$('textarea[aria-label="Search commands, pages, and more"]')
+        .find((el) => !el.closest('[inert]'));
+      if (!input) pressKey('p', { metaKey: true });
+      return true;
+    `);
+    await runWait(
+      `const input = $$('textarea[aria-label="Search commands, pages, and more"]')
+        .find((el) => !el.closest('[inert]'));
+       if (!input) return false;
+       setReactValue(input, 'Session menu');
+       return true;`,
+      { label: "archive search in the palette" },
+    );
+    await runWait(
+      `
+      const option = $$('[role="option"]')
+        .find((el) => !el.closest('[inert]') && el.textContent.includes('Session menu'));
+      return !!option && option.textContent.includes('Archived chat');
+    `,
+      { label: "archived chat marked in the palette" },
+    );
+    await run(`
+      const option = $$('[role="option"]')
+        .find((el) => !el.closest('[inert]') && el.textContent.includes('Session menu'));
+      option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, altKey: true }));
+      return true;
+    `);
+    await runWait(
+      `return !![...document.querySelectorAll('div[data-session-id]')]
+      .find((row) => !row.closest('aside') && row.querySelector('button[aria-label*="Session menu"]'));`,
+      { label: "archived chat reopened from the palette" },
+    );
+    await run(`
+      const bubble = [...document.querySelectorAll('div[data-session-id]')]
+        .find((row) => !row.closest('aside') && row.querySelector('button[aria-label*="Session menu"]'));
+      bubble.querySelector('button[aria-label*="Session menu"]').dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 420, clientY: 500 }),
+      );
+      return true;
+    `);
+    await runWait(`return !!byText('[role="menuitem"]', 'Unarchive');`, {
+      label: "unarchive action available from the dock",
+    });
+    await run(`byText('[role="menuitem"]', 'Unarchive').click(); return true;`);
+    await runWait(
+      `return !![...document.querySelectorAll('aside li[data-session-id]')]
+        .find((row) => row.textContent.includes('Session menu'));`,
+      { label: "unarchived chat restored to the sidebar" },
     );
   });
 });
@@ -416,7 +818,8 @@ describe("palette intent", () => {
     await runWait(
       `const options = ${inDialog('[role="option"]')};
        return options.length > 0 &&
-              options.some((el) => el.textContent.includes('Toggle sidebar')) &&
+              options.some((el) => el.textContent.includes('Toggle left sidebar')) &&
+              options.some((el) => el.textContent.includes('Toggle right sidebar')) &&
               !options.some((el) => el.querySelector('span.truncate')?.textContent === 'Settings');`,
       { label: "> shows commands, hides navigate rows" },
     );
@@ -489,8 +892,19 @@ describe("chat tab activity indicators", () => {
     );
     await runWait(`return !(${tabDotOn});`, { label: "dot cleared on open" });
     // Leave a clean slate: close the chat tab and the extra palette tab.
+    const tabsBeforeClose = await run<number>(
+      `return $$('[data-point-key]').length;`,
+    );
     await run(`pressKey('w', { metaKey: true }); return true;`);
+    await runWait(
+      `return $$('[data-point-key]').length === ${tabsBeforeClose - 1};`,
+      { label: "chat tab closed before the next close" },
+    );
     await run(`pressKey('w', { metaKey: true }); return true;`);
+    await runWait(
+      `return $$('[data-point-key]').length === ${tabsBeforeClose - 2};`,
+      { label: "extra palette tab closed" },
+    );
   });
 
   it("closing a chat mid-turn clears its activity", async () => {
@@ -505,19 +919,20 @@ describe("chat tab activity indicators", () => {
     await runWait(`return spinnersOn() > 0;`, {
       label: "spinner during the turn",
     });
-    const mountedChatCount = await run<number>(`
-      return $$('section[aria-label]')
-        .filter((el) => el.querySelector('[data-composer-input]')).length;
+    const closingChatId = await run<string>(`
+      const dock = visibleDock();
+      const composer = dock.querySelector('[data-composer-input]');
+      composer.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      composer.focus();
+      return dock.dataset.chatLocalId;
     `);
     // Close the chat while the agent is still working: no orphaned
     // activity indicator may stay behind anywhere.
     await run(`pressKey('w', { metaKey: true }); return true;`);
-    await runWait(
-      `return $$('section[aria-label]')
-        .filter((el) => el.querySelector('[data-composer-input]')).length
-        === ${mountedChatCount - 1};`,
-      { timeoutMs: 10_000, label: "chat unmounted after the close animation" },
-    );
+    await runWait(`return !$('[data-chat-local-id="${closingChatId}"]');`, {
+      timeoutMs: 10_000,
+      label: "chat unmounted after the close animation",
+    });
     // A hidden renderer pauses the exiting bubble's CSS animation, so its
     // snapshot can remain until the window is visible again. It is not live
     // activity; every live chat/tab/aggregate spinner must already be gone.
@@ -624,15 +1039,112 @@ describe("chat surface shortcuts", () => {
       timeoutMs: 30_000,
       label: "browser tab",
     });
-    await run(`pressKey('n', { metaKey: true }); return true;`);
-    await runWait(`return !!floatingDock();`, { label: "floating chat open" });
-    // Click into the tab's own chrome: focus leaves the dock.
-    await run(`
-      const address = $('input[aria-label="Address and search bar"]');
-      address.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-      address.focus();
-      return document.activeElement === address;
-    `);
+    try {
+      await settleAnimationFrame();
+      // Positive branch: with no newer user input, opening the dock still
+      // lands in its composer when the delayed frame is finally delivered.
+      await holdAnimationFrames();
+      await run(`pressKey('n', { metaKey: true }); return true;`);
+      await runWait(`return !!floatingDock();`, {
+        label: "floating chat open",
+      });
+      await waitForHeldAnimationFrame();
+      await releaseAnimationFrames();
+      const composerAutofocused = await run<boolean>(`
+        return document.activeElement?.matches?.('[data-composer-input]') &&
+          document.activeElement.closest('[data-floating-chat]') !== null;
+      `);
+      expect(composerAutofocused).toBe(true);
+
+      // Keyboard branch: a real Tab after the focus frame was scheduled
+      // makes the newly focused browser control authoritative.
+      await run(`pressKey('m', { metaKey: true }); return true;`);
+      await runWait(`return !floatingDock();`, { label: "chat minimized" });
+      await run(`
+        const address = $('input[aria-label="Address and search bar"]');
+        const origin = document.createElement('button');
+        origin.dataset.e2eKeyboardOrigin = 'true';
+        origin.textContent = 'keyboard focus origin';
+        const target = document.createElement('button');
+        target.dataset.e2eKeyboardFocus = 'true';
+        target.textContent = 'keyboard focus target';
+        address.insertAdjacentElement('afterend', origin);
+        origin.insertAdjacentElement('afterend', target);
+        origin.focus();
+        return true;
+      `);
+      await holdAnimationFrames();
+      await run(`pressKey('m', { metaKey: true }); return true;`);
+      await runWait(`return !!floatingDock();`, { label: "chat restored" });
+      await waitForHeldAnimationFrame();
+      await app.press("Tab");
+      const tabMovedFocus = await run<boolean>(`
+        return document.activeElement?.dataset.e2eKeyboardFocus === 'true';
+      `);
+      expect(tabMovedFocus).toBe(true);
+      await releaseAnimationFrames();
+      const keyboardFocusPreserved = await run<string>(`
+        const active = document.activeElement;
+        if (active?.dataset.e2eKeyboardFocus === 'true') return 'keyboard-target';
+        if (active?.closest?.('[data-floating-chat]')) return 'floating-chat';
+        return active?.outerHTML?.slice(0, 240) ?? String(active);
+      `);
+      expect(keyboardFocusPreserved).toBe("keyboard-target");
+
+      // Assistive technology may move focus without a preceding DOM keyboard
+      // or pointer event. That external focusin is still authoritative.
+      await run(`pressKey('m', { metaKey: true }); return true;`);
+      await runWait(`return !floatingDock();`, { label: "chat minimized" });
+      await holdAnimationFrames();
+      await run(`pressKey('m', { metaKey: true }); return true;`);
+      await runWait(`return !!floatingDock();`, { label: "chat restored" });
+      await waitForHeldAnimationFrame();
+      const assistiveFocusMoved = await run<boolean>(`
+        const address = $('input[aria-label="Address and search bar"]');
+        const target = document.createElement('button');
+        target.dataset.e2eAssistiveFocus = 'true';
+        target.textContent = 'assistive technology focus target';
+        address.insertAdjacentElement('afterend', target);
+        target.focus();
+        return document.activeElement === target;
+      `);
+      expect(assistiveFocusMoved).toBe(true);
+      await releaseAnimationFrames();
+      const assistiveFocusPreserved = await run<boolean>(`
+        return document.activeElement?.dataset.e2eAssistiveFocus === 'true';
+      `);
+      expect(assistiveFocusPreserved).toBe(true);
+
+      // Pointer branch: clicking into the tab's own chrome after a restore
+      // likewise wins over the dock's pending autofocus.
+      await run(`pressKey('m', { metaKey: true }); return true;`);
+      await runWait(`return !floatingDock();`, { label: "chat minimized" });
+      await holdAnimationFrames();
+      await run(`pressKey('m', { metaKey: true }); return true;`);
+      await runWait(`return !!floatingDock();`, { label: "chat restored" });
+      await waitForHeldAnimationFrame();
+      const addressFocused = await run<boolean>(`
+        const address = $('input[aria-label="Address and search bar"]');
+        address.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        address.focus();
+        return document.activeElement === address;
+      `);
+      expect(addressFocused).toBe(true);
+      await releaseAnimationFrames();
+      const browserKeptFocus = await run<boolean>(`
+        return document.activeElement ===
+          $('input[aria-label="Address and search bar"]');
+      `);
+      expect(browserKeptFocus).toBe(true);
+    } finally {
+      await restoreAnimationFrames();
+      await run(`
+        $('[data-e2e-keyboard-origin]')?.remove();
+        $('[data-e2e-keyboard-focus]')?.remove();
+        $('[data-e2e-assistive-focus]')?.remove();
+        return true;
+      `);
+    }
     await run(`pressKey('w', { metaKey: true }); return true;`);
     await runWait(
       `return !$('input[aria-label="Address and search bar"]') && !!floatingDock();`,
@@ -645,12 +1157,21 @@ describe("chat surface shortcuts", () => {
       ta.focus(); return true;
     `);
     await run(`pressKey('w', { metaKey: true }); return true;`);
-    await runWait(`return !floatingDock();`, { label: "floating chat closed" });
+    await runWait(`return !$('[data-floating-chat]');`, {
+      label: "floating chat unmounted",
+    });
   });
 });
 
 describe("navigation shortcuts", () => {
   it("Cmd+. / Cmd+, cycle the floating dock through chats", async () => {
+    // Establish the surface behind the floating dock explicitly. Cmd+N opens
+    // a full chat tab when the workspace is empty, so inheriting the prior
+    // test's last open tab made this test depend on unrelated teardown timing.
+    await run(`pressKey('t', { metaKey: true }); return true;`);
+    await runWait(`return !!$('textarea[placeholder*="Search or ask"]');`, {
+      label: "background New Tab open",
+    });
     // Fresh empty chat ("New chat") joins the titled chats from earlier
     // groups — cycling must swap which chat the dock shows.
     await run(`pressKey('n', { metaKey: true }); return true;`);
@@ -902,6 +1423,11 @@ describe("subagents and background watchers", () => {
          m.text.includes('nothing alarming'));`,
       { timeoutMs: 30_000, label: "turn finished" },
     );
+    expect(
+      await run(
+        `return floatingDock()?.querySelector('[data-testid="surface-chip"][data-kind="subagent"]')?.textContent;`,
+      ),
+    ).toContain("Review the changes");
     await run(`
       floatingDock()
         .querySelector('[data-testid="surface-chip"][data-kind="subagent"] button')

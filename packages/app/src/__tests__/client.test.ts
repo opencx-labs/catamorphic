@@ -48,6 +48,47 @@ describe("createClient", () => {
     );
   });
 
+  it("releases unanswered requests on timeout so subsequent calls can proceed", async () => {
+    vi.useFakeTimers();
+    try {
+      const { createClient } = await import("../client.js");
+      const workflows = createClient<TestContract>({ requestTimeoutMs: 50 });
+      for (let batch = 0; batch < 2; batch++) {
+        const pending = Array.from({ length: 128 }, () =>
+          workflows.listOrders.call({ status: "open" }),
+        );
+        const settled = Promise.allSettled(pending);
+        await expect(
+          workflows.listOrders.call({ status: "open" }),
+        ).rejects.toThrow("Too many pending");
+        await vi.advanceTimersByTimeAsync(50);
+        expect(
+          (await settled).every((result) => result.status === "rejected"),
+        ).toBe(true);
+      }
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts a pending host call and releases its deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const { createClient } = await import("../client.js");
+      const controller = new AbortController();
+      const pending = createClient<TestContract>({
+        signal: controller.signal,
+      }).listOrders.call({ status: "open" });
+      const failed = expect(pending).rejects.toThrow("stop waiting");
+      controller.abort(new Error("stop waiting"));
+      await failed;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("resolves a plain call with the host's value", async () => {
     const { createClient } = await import("../client.js");
     const workflows = createClient<TestContract>();
@@ -257,5 +298,39 @@ describe("createClient in an MCP Apps host", () => {
       (frame) => frame.method === "ui/notifications/size-changed",
     );
     expect(note?.params).toEqual({ height: 420 });
+  });
+});
+
+describe("app display lifecycle", () => {
+  it("observes compact/hidden state and unsubscribes without recreating the client", async () => {
+    const { subscribeDisplay } = await import("../client.js");
+    const listener = vi.fn();
+    const unsubscribe = subscribeDisplay(listener);
+    expect(listener).toHaveBeenLastCalledWith({ mode: "full", visible: true });
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          catamorphicApp: APP_PROTOCOL_VERSION,
+          kind: "display",
+          display: { mode: "compact", visible: false },
+        },
+      }),
+    );
+    expect(listener).toHaveBeenLastCalledWith({
+      mode: "compact",
+      visible: false,
+    });
+    unsubscribe();
+    const count = listener.mock.calls.length;
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: {
+          catamorphicApp: APP_PROTOCOL_VERSION,
+          kind: "display",
+          display: { mode: "full", visible: true },
+        },
+      }),
+    );
+    expect(listener).toHaveBeenCalledTimes(count);
   });
 });

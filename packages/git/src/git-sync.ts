@@ -1,5 +1,7 @@
 import nodeFs from "node:fs";
 import git from "isomorphic-git";
+import { nativeGit } from "./native-git.js";
+import { NativeProjectRepo } from "./native-project-repo.js";
 import type {
   ConflictEntry,
   MergeResult,
@@ -106,7 +108,7 @@ export async function push(opts: PushOpts): Promise<{ sha: string }> {
 
 /**
  * Copy the tip of the remote branch into the dev repo and update the
- * `refs/remotes/origin/<branch>` tracking ref. Does not touch the working tree.
+ * `refs/catamorphic/published/<branch>` tracking ref. Does not touch the working tree.
  */
 export async function fetchRemote(opts: FetchOpts): Promise<{
   sha: string | null;
@@ -265,10 +267,11 @@ interface ObjectSink {
 }
 
 function devSource(dev: ProjectRepo): ObjectSource {
+  const cache = {};
   return {
     hasObject: (sha) =>
       git
-        .readObject({ fs: nodeFs, dir: dev.repoPath, oid: sha })
+        .readObject({ fs: nodeFs, dir: dev.repoPath, oid: sha, cache })
         .then(() => true)
         .catch(() => false),
     readObject: async (sha) => {
@@ -276,6 +279,7 @@ function devSource(dev: ProjectRepo): ObjectSource {
         fs: nodeFs,
         dir: dev.repoPath,
         oid: sha,
+        cache,
         format: "content",
       });
       return {
@@ -287,10 +291,11 @@ function devSource(dev: ProjectRepo): ObjectSource {
 }
 
 function devSink(dev: ProjectRepo): ObjectSink {
+  const cache = {};
   return {
     hasObject: (sha) =>
       git
-        .readObject({ fs: nodeFs, dir: dev.repoPath, oid: sha })
+        .readObject({ fs: nodeFs, dir: dev.repoPath, oid: sha, cache })
         .then(() => true)
         .catch(() => false),
     writeObject: (opts) =>
@@ -343,7 +348,9 @@ async function transferCommits(opts: {
       for (const parent of commit.parents) queue.push(parent);
     } else if (obj.type === "tree") {
       const entries = parseTree(obj.data);
-      for (const entry of entries) queue.push(entry.oid);
+      for (const entry of entries) {
+        if (entry.mode !== "160000") queue.push(entry.oid);
+      }
     }
   }
 }
@@ -405,12 +412,22 @@ async function isAncestor(opts: {
   descendant: string;
 }): Promise<boolean> {
   if (opts.ancestor === opts.descendant) return true;
+  if (opts.dev instanceof NativeProjectRepo)
+    return nativeGit(opts.dev.repoPath, [
+      "merge-base",
+      "--is-ancestor",
+      opts.ancestor,
+      opts.descendant,
+    ]).then(
+      () => true,
+      () => false,
+    );
   try {
     const commits = await git.log({
       fs: nodeFs,
       dir: opts.dev.repoPath,
       ref: opts.descendant,
-      depth: 500,
+      depth: -1,
     });
     return commits.some((c) => c.oid === opts.ancestor);
   } catch {
@@ -422,6 +439,11 @@ async function devHasCommit(opts: {
   dev: ProjectRepo;
   sha: string;
 }): Promise<boolean> {
+  if (opts.dev instanceof NativeProjectRepo)
+    return nativeGit(opts.dev.repoPath, ["cat-file", "-e", opts.sha]).then(
+      () => true,
+      () => false,
+    );
   try {
     await git.readObject({
       fs: nodeFs,
@@ -439,10 +461,18 @@ async function syncRemoteTrackingRef(opts: {
   branch: string;
   sha: string;
 }): Promise<void> {
+  if (opts.dev instanceof NativeProjectRepo) {
+    await nativeGit(opts.dev.repoPath, [
+      "update-ref",
+      `refs/catamorphic/published/${opts.branch}`,
+      opts.sha,
+    ]);
+    return;
+  }
   await git.writeRef({
     fs: nodeFs,
     dir: opts.dev.repoPath,
-    ref: `refs/remotes/origin/${opts.branch}`,
+    ref: `refs/catamorphic/published/${opts.branch}`,
     value: opts.sha,
     force: true,
   });

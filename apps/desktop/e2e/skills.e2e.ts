@@ -124,6 +124,13 @@ describe("skills as commands", () => {
         `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\nBody of ${name}.\n`,
       );
     }
+    await runWaitAsync(
+      `const server = await window.catamorphicDesktop.getServerState();
+       const response = await fetch(server.url + '/api/projects/' + ${JSON.stringify(resolved.id)} + '/skills');
+       const skills = await response.json();
+       return skills.some((skill) => skill.name === 'team-notes');`,
+      { label: "written project skill available through the API" },
+    );
   });
 
   it("lists both tiers in the palette's > command view", async () => {

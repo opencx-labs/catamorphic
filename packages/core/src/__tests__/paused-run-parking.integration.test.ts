@@ -1,6 +1,6 @@
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
 import { sql } from "kysely";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ExecutionJobsService } from "../services/execution-jobs-service.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
@@ -43,6 +43,14 @@ describeIf("paused run job parking", () => {
   afterAll(async () => {
     await sql.raw(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`).execute(db);
     await db.destroy();
+  });
+
+  beforeEach(async () => {
+    // Claims and parked jobs deliberately remain unfinished in these tests.
+    // Clear them so an expired lease from one case cannot be claimed by the
+    // next sequential case under a slower, heavily loaded CI run.
+    await db.deleteFrom("execution_jobs").execute();
+    await db.deleteFrom("workflow_runs").execute();
   });
 
   it("stops a parked job from being reclaimed on the next poll", async () => {

@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import type { OpenMode } from "../../shared/open-mode.js";
 import {
   PILL_ATTR,
   type SerializedComposer,
@@ -55,7 +56,7 @@ export interface ComposerInputHandle {
   /** Insert pills at the caret (or the end when the caret is elsewhere). */
   insertPills(
     attachments: ComposerAttachment[],
-    opts?: { at?: { x: number; y: number } },
+    opts?: { at?: { x: number; y: number }; range?: Range },
   ): void;
   /** Insert plain text at the caret (undoable, like typing). */
   insertText(text: string): void;
@@ -89,7 +90,7 @@ export interface ComposerInputProps {
   onPaste?: (event: ClipboardEvent<HTMLDivElement>) => void;
   onAnimationEnd?: (event: AnimationEvent<HTMLDivElement>) => void;
   /** Tab pills open their tab on click. */
-  onOpenTab?: (key: string) => void;
+  onOpenTab?: (key: string, mode: OpenMode) => void;
   /** Server-side cap, mirrored: inserts past it are dropped. */
   maxPills?: number;
 }
@@ -144,8 +145,9 @@ function removeHost(root: HTMLElement, host: HTMLElement) {
   }
   selection.removeAllRanges();
   selection.addRange(range);
-  const deleted = document.execCommand("delete");
-  if (!deleted && host.isConnected) host.remove();
+  document.execCommand("delete");
+  // Chromium may report success after deleting only an adjacent placeholder.
+  if (host.isConnected) host.remove();
   if (saved) {
     try {
       selection.removeAllRanges();
@@ -270,6 +272,7 @@ export const ComposerInput = forwardRef<
 
   const dropExited = useCallback(
     (id: string) => {
+      if (!exitingRef.current.has(id)) return;
       const entry = pills.find((pill) => pill.id === id);
       const root = rootRef.current;
       exitingRef.current.delete(id);
@@ -284,7 +287,7 @@ export const ComposerInput = forwardRef<
   const insertPills = useCallback(
     (
       attachments: ComposerAttachment[],
-      opts?: { at?: { x: number; y: number } },
+      opts?: { at?: { x: number; y: number }; range?: Range },
     ) => {
       const root = rootRef.current;
       if (!root || attachments.length === 0) return;
@@ -295,7 +298,17 @@ export const ComposerInput = forwardRef<
       for (const attachment of accepted) {
         attachmentsRef.current.set(attachment.id, attachment);
       }
-      claimSelection(root, opts?.at);
+      const range = opts?.range;
+      if (
+        range &&
+        root.contains(range.startContainer) &&
+        root.contains(range.endContainer)
+      ) {
+        root.focus({ preventScroll: true });
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+      } else claimSelection(root, opts?.at);
       // One insertHTML per batch: one undo step, hosts + a trailing space
       // each so typing continues naturally after the token.
       const html = accepted
@@ -519,7 +532,7 @@ export const ComposerInput = forwardRef<
               pill.attachment.source.type === "tab"
                 ? (() => {
                     const key = pill.attachment.source.key;
-                    return () => onOpenTab(key);
+                    return (mode: OpenMode) => onOpenTab(key, mode);
                   })()
                 : undefined
             }

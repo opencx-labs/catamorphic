@@ -43,6 +43,13 @@ export interface CredentialWithSecret extends SavedCredential {
   password: string;
 }
 
+export interface CredentialUpdate {
+  origin: string;
+  username: string;
+  /** Omit to keep the existing password. */
+  password?: string;
+}
+
 interface OpenVault {
   db: kdbx.Kdbx;
   file: string;
@@ -51,10 +58,33 @@ interface OpenVault {
 
 const VAULT_GROUP = "Catamorphic Browser";
 
+export function normalizeCredentialOrigin(raw: string): string {
+  const value = raw.trim();
+  const candidate = /^[a-z][a-z\d+.-]*:\/\//i.test(value)
+    ? value
+    : `https://${value}`;
+  const url = new URL(candidate);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Saved passwords require an HTTP or HTTPS website");
+  }
+  return url.origin;
+}
+
 export class PasswordVault {
   private open = new Map<string, OpenVault>();
+  private opening = new Map<string, Promise<OpenVault>>();
 
   constructor(private readonly profilesDir: string) {}
+
+  releaseProfile(profileId: string): void {
+    this.open.delete(profileId);
+    this.opening.delete(profileId);
+  }
+
+  dispose(): void {
+    this.open.clear();
+    this.opening.clear();
+  }
 
   private vaultFile(profileId: string): string {
     return path.join(this.profilesDir, profileId, "vault.kdbx");
@@ -69,6 +99,24 @@ export class PasswordVault {
     const opened = this.open.get(profileId);
     if (opened) return opened;
 
+    const opening = this.opening.get(profileId);
+    if (opening) return opening;
+
+    const unlockPromise = this.openVault(profileId);
+    this.opening.set(profileId, unlockPromise);
+    try {
+      const vault = await unlockPromise;
+      if (this.opening.get(profileId) === unlockPromise)
+        this.open.set(profileId, vault);
+      return vault;
+    } finally {
+      if (this.opening.get(profileId) === unlockPromise) {
+        this.opening.delete(profileId);
+      }
+    }
+  }
+
+  private async openVault(profileId: string): Promise<OpenVault> {
     const dir = path.join(this.profilesDir, profileId);
     fs.mkdirSync(dir, { recursive: true });
     const keyFile = this.keyFile(profileId);
@@ -76,13 +124,19 @@ export class PasswordVault {
 
     let keyHex: string;
     if (fs.existsSync(keyFile)) {
-      keyHex = safeStorage.decryptString(fs.readFileSync(keyFile));
+      const decrypted = await safeStorage.decryptStringAsync(
+        fs.readFileSync(keyFile),
+      );
+      keyHex = decrypted.result;
+      if (decrypted.shouldReEncrypt) {
+        fs.writeFileSync(keyFile, await safeStorage.encryptStringAsync(keyHex));
+      }
     } else {
       keyHex = randomBytes(32).toString("hex");
       if (!safeStorage.isEncryptionAvailable()) {
         throw new Error("OS keychain encryption unavailable");
       }
-      fs.writeFileSync(keyFile, safeStorage.encryptString(keyHex));
+      fs.writeFileSync(keyFile, await safeStorage.encryptStringAsync(keyHex));
     }
 
     const credentials = new kdbx.Credentials(
@@ -105,7 +159,6 @@ export class PasswordVault {
     }
 
     const vault: OpenVault = { db, file: vaultFile, deviceAuthed: false };
-    this.open.set(profileId, vault);
     return vault;
   }
 
@@ -160,13 +213,24 @@ export class PasswordVault {
   /** Non-secret listing (origin + username) — safe without device auth. */
   async list(profileId: string, origin?: string): Promise<SavedCredential[]> {
     const vault = await this.unlock(profileId);
+    const normalizedOrigin = origin
+      ? normalizeCredentialOrigin(origin)
+      : undefined;
     return this.entries(vault.db)
-      .filter((entry) => !origin || this.originOf(entry) === origin)
+      .filter(
+        (entry) =>
+          !normalizedOrigin || this.originOf(entry) === normalizedOrigin,
+      )
       .map((entry) => ({
         id: entry.uuid.id,
         origin: this.originOf(entry),
         username: this.fieldText(entry, "UserName"),
-      }));
+      }))
+      .sort((a, b) =>
+        `${a.origin}\n${a.username}`.localeCompare(
+          `${b.origin}\n${b.username}`,
+        ),
+      );
   }
 
   /** Secret retrieval — requires device auth (Touch ID) once per run. */
@@ -198,14 +262,15 @@ export class PasswordVault {
     input: { origin: string; username: string; password: string },
   ): Promise<SavedCredential> {
     const vault = await this.unlock(profileId);
+    const origin = normalizeCredentialOrigin(input.origin);
     const existing = this.entries(vault.db).find(
       (entry) =>
-        this.originOf(entry) === input.origin &&
+        this.originOf(entry) === origin &&
         this.fieldText(entry, "UserName") === input.username,
     );
     const entry = existing ?? vault.db.createEntry(vault.db.getDefaultGroup());
-    entry.fields.set("Title", new URL(input.origin).host);
-    entry.fields.set("URL", input.origin);
+    entry.fields.set("Title", new URL(origin).host);
+    entry.fields.set("URL", origin);
     entry.fields.set("UserName", input.username);
     entry.fields.set(
       "Password",
@@ -215,9 +280,34 @@ export class PasswordVault {
     await this.persist(vault);
     return {
       id: entry.uuid.id,
-      origin: input.origin,
+      origin,
       username: input.username,
     };
+  }
+
+  async update(
+    profileId: string,
+    id: string,
+    input: CredentialUpdate,
+  ): Promise<SavedCredential | null> {
+    const vault = await this.unlock(profileId);
+    const entry = this.entries(vault.db).find(
+      (candidate) => candidate.uuid.id === id,
+    );
+    if (!entry) return null;
+    const origin = normalizeCredentialOrigin(input.origin);
+    entry.fields.set("Title", new URL(origin).host);
+    entry.fields.set("URL", origin);
+    entry.fields.set("UserName", input.username);
+    if (input.password !== undefined) {
+      entry.fields.set(
+        "Password",
+        kdbx.ProtectedValue.fromString(input.password),
+      );
+    }
+    entry.times.update();
+    await this.persist(vault);
+    return { id, origin, username: input.username };
   }
 
   async remove(profileId: string, id: string): Promise<void> {

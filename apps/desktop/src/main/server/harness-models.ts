@@ -1,9 +1,9 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { listClaudeCodeModels } from "@catamorphic/claude-code";
 import type { AgentConfig } from "../agents-store.js";
 
-const execFileAsync = promisify(execFile);
+export type ModelCatalogAgent = Pick<
+  AgentConfig,
+  "id" | "harness" | "auth" | "apiKey" | "provider"
+>;
 
 export interface HarnessModel {
   id: string;
@@ -11,6 +11,8 @@ export interface HarnessModel {
   description?: string;
   /** Versioned model id an alias resolves to (claude-code aliases only). */
   resolvedId?: string;
+  supportsEffort?: boolean;
+  supportedEffortLevels?: ("low" | "medium" | "high" | "xhigh" | "max")[];
 }
 
 /**
@@ -18,16 +20,18 @@ export interface HarnessModel {
  * harness has — never a hardcoded list:
  *  - claude-code: the CLI's own catalog (`supportedModels` via the SDK),
  *    account-aware through the agent's env.
- *  - codex: the vendored CLI's `debug models` JSON catalog.
+ *  - codex: the installed CLI's app-server `model/list` catalog.
  *  - built-in on Anthropic/OpenAI keys: the provider's public /v1/models.
  *  - built-in on OpenRouter: not handled here — the palette searches the
  *    OpenRouter catalog directly (see `catamorphic:openrouter-models`).
  */
 export async function listAgentModels(
-  config: AgentConfig,
+  config: ModelCatalogAgent,
   deps: {
     agentHome: (agentId: string) => string;
-    codexBinary: () => string | null;
+    harnessExecutable: (
+      harness: "claude-code" | "codex",
+    ) => Promise<string | null>;
   },
 ): Promise<HarnessModel[]> {
   // E2E: deterministic stub, no CLIs or network.
@@ -44,27 +48,55 @@ export async function listAgentModels(
   }
 
   const cached = cache.get(config.id);
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+  const signature = JSON.stringify(config);
+  if (
+    cached &&
+    cached.signature === signature &&
+    Date.now() - cached.fetchedAt < CACHE_TTL_MS
+  ) {
     return cached.models;
   }
-  const models = await fetchModels(config, deps);
-  cache.set(config.id, { models, fetchedAt: Date.now() });
-  return models;
+  const active = inFlight.get(config.id);
+  if (active?.signature === signature) return active.promise;
+  const promise = fetchModels(config, deps)
+    .then((models) => {
+      cache.set(config.id, { models, signature, fetchedAt: Date.now() });
+      return models;
+    })
+    .finally(() => {
+      if (inFlight.get(config.id)?.promise === promise)
+        inFlight.delete(config.id);
+    });
+  inFlight.set(config.id, { signature, promise });
+  return promise;
 }
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
-const cache = new Map<string, { models: HarnessModel[]; fetchedAt: number }>();
+const cache = new Map<
+  string,
+  { models: HarnessModel[]; fetchedAt: number; signature: string }
+>();
+const inFlight = new Map<
+  string,
+  { signature: string; promise: Promise<HarnessModel[]> }
+>();
 
 async function fetchModels(
-  config: AgentConfig,
+  config: ModelCatalogAgent,
   deps: {
     agentHome: (agentId: string) => string;
-    codexBinary: () => string | null;
+    harnessExecutable: (
+      harness: "claude-code" | "codex",
+    ) => Promise<string | null>;
   },
 ): Promise<HarnessModel[]> {
   switch (config.harness) {
-    case "claude-code":
+    case "claude-code": {
+      const executable = await deps.harnessExecutable("claude-code");
+      if (!executable) return [];
+      const { listClaudeCodeModels } = await import("@catamorphic/claude-code");
       return listClaudeCodeModels({
+        pathToClaudeCodeExecutable: executable,
         env: {
           ...(config.auth === "account"
             ? { CLAUDE_CONFIG_DIR: deps.agentHome(config.id) }
@@ -74,6 +106,7 @@ async function fetchModels(
             : {}),
         },
       });
+    }
     case "codex":
       return codexModels(config, deps);
     case "ai-sdk":
@@ -84,39 +117,33 @@ async function fetchModels(
 }
 
 async function codexModels(
-  config: AgentConfig,
+  config: ModelCatalogAgent,
   deps: {
     agentHome: (agentId: string) => string;
-    codexBinary: () => string | null;
+    harnessExecutable: (
+      harness: "claude-code" | "codex",
+    ) => Promise<string | null>;
   },
 ): Promise<HarnessModel[]> {
-  const binary = deps.codexBinary();
+  const binary = await deps.harnessExecutable("codex");
   if (!binary) return [];
-  const { stdout } = await execFileAsync(binary, ["debug", "models"], {
+  const { listCodexModels } = await import("@catamorphic/codex");
+  return listCodexModels({
+    executable: binary,
     env: {
-      ...process.env,
       ...(config.auth === "account"
         ? { CODEX_HOME: deps.agentHome(config.id) }
         : {}),
+      ...(config.auth === "api-key" && config.apiKey
+        ? { CODEX_API_KEY: config.apiKey, OPENAI_API_KEY: config.apiKey }
+        : {}),
     },
-    timeout: 15_000,
-    maxBuffer: 4 * 1024 * 1024,
   });
-  const raw = JSON.parse(stdout) as Array<{
-    slug?: string;
-    display_name?: string;
-    description?: string;
-  }>;
-  return raw
-    .filter((model) => typeof model.slug === "string")
-    .map((model) => ({
-      id: model.slug as string,
-      name: model.display_name ?? (model.slug as string),
-      description: model.description,
-    }));
 }
 
-async function anthropicModels(config: AgentConfig): Promise<HarnessModel[]> {
+async function anthropicModels(
+  config: ModelCatalogAgent,
+): Promise<HarnessModel[]> {
   if (!config.apiKey) return [];
   const response = await fetch(
     "https://api.anthropic.com/v1/models?limit=100",
@@ -137,7 +164,9 @@ async function anthropicModels(config: AgentConfig): Promise<HarnessModel[]> {
   }));
 }
 
-async function openaiModels(config: AgentConfig): Promise<HarnessModel[]> {
+async function openaiModels(
+  config: ModelCatalogAgent,
+): Promise<HarnessModel[]> {
   if (!config.apiKey) return [];
   const response = await fetch("https://api.openai.com/v1/models", {
     headers: { authorization: `Bearer ${config.apiKey}` },

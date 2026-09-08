@@ -30,7 +30,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0015](0015-first-class-batch-workflows.md) | First-class batch workflows | Superseded by 0026 |
 | [0016](0016-durable-runtime-event-reporting.md) | Persisted runtime event reporting | Accepted (updated by 0024, 0026) |
 | [0017](0017-public-workflow-authoring-package.md) | Public workflow authoring package | Accepted (expanded by 0020, 0026) |
-| [0018](0018-ai-sdk-coding-agent.md) | AI SDK ToolLoopAgent is the flagship coding agent | Accepted |
+| [0018](0018-ai-sdk-coding-agent.md) | AI SDK ToolLoopAgent is the built-in in-process coding agent | Accepted; registry/runtime behavior refined by 0038, 0067, and 0090 |
 | [0019](0019-headless-agent-chat-and-dock.md) | Agent chat is headless state plus a controlled dock | Accepted |
 | [0020](0020-typed-durable-workflow-boundaries.md) | Typed persisted workflow boundaries | Accepted (updated by 0026) |
 | [0021](0021-durable-workflow-visualization.md) | Persisted workflow visualization | Accepted (updated by 0026) |
@@ -50,7 +50,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0035](0035-app-entity-and-build-pipeline.md) | App entity, build pipeline, and bundle storage | Accepted |
 | [0036](0036-app-authorization-and-audience.md) | App authorization: contract surface, frozen sets, audience identities | Accepted (audience headers superseded by 0053) |
 | [0037](0037-app-guest-runtime-and-mount.md) | App guest runtime (`@catamorphic/app`) and host mount | Accepted (mount headers + polling superseded by 0053) |
-| [0038](0038-coding-agent-registry-and-host-execution.md) | Coding-agent registry: per-session agents, host execution, effort | Accepted (topology model refined by 0064) |
+| [0038](0038-coding-agent-registry-and-host-execution.md) | Coding-agent registry: per-session agents, host execution, effort | Accepted (runtime contract refined by 0067; topology model superseded by 0067) |
 | [0039](0039-custom-trigger-kinds.md) | Custom trigger kinds: host-defined events, typed bindings, sync firing | Accepted |
 | [0040](0040-one-workflow-model.md) | One workflow model: every workflow is `defineWorkflow`, every run a deployed commit | Accepted |
 | [0041](0041-generated-projections.md) | Generated projections: schemas and types derived from code | Accepted |
@@ -66,18 +66,58 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0051](0051-no-project-templates.md) | No project templates: agents build from skills | Accepted |
 | [0052](0052-skills-as-commands.md) | Skills as commands, and the agent-initiated auth loop | Accepted |
 | [0053](0053-identity-scope-and-app-routes.md) | Identity scope: one artifact vocabulary, structural narrowing, synchronous calls | Accepted |
-| [0054](0054-tool-permissions.md) | Tool permissions: layered connection/agent policies that intersect; ask via host prompt | Accepted |
+| [0054](0054-tool-permissions.md) | Tool permissions: layered connection/agent policies that intersect; ask via host prompt | Accepted (enforcement transport refined by 0067) |
 | [0055](0055-company-brain-roles-store-and-change-loop.md) | Company brain: program vs. project store, roles as files, scoped agents, the change loop | Accepted |
 | [0056](0056-agent-configuration.md) | Agent configuration: one surface, layered defaults, enforced capabilities | Accepted |
 | [0057](0057-agent-usage-and-cost.md) | Agent usage and cost: transcript-scanned page, per-turn usage in metadata | Accepted |
 | [0058](0058-mobile-pwa.md) | The mobile PWA: chats on the go, wrapper-ready; tool asks answerable over HTTP | Accepted |
-| [0059](0059-stock-server.md) | The stock server: zero-dependency, disk-backed, invite-first; mDNS LAN discovery | Accepted |
+| [0059](0059-stock-server.md) | The stock server: zero-dependency, disk-backed, invite-first; mDNS LAN discovery | Accepted (auth, invites, and administration superseded by 0071 and 0072; multi-machine storage superseded by 0099) |
 | [0060](0060-continue-on-mobile.md) | Continue on mobile: QR pairing, bearer-gated LAN proxy, remote-link handoff | Accepted |
 | [0061](0061-session-mirroring.md) | Session mirroring: local-first chats pushed to the linked remote; fork-on-continuation | Accepted |
-| [0062](0062-session-privacy-and-fork-ux.md) | Session privacy & fork UX: incognito sessions, project policy, fork markers, admin usage | Accepted |
+| [0062](0062-session-privacy-and-fork-ux.md) | Session privacy & fork UX: incognito sessions, project policy, fork markers, admin usage | Accepted (admin-token usage route superseded by 0072) |
 | [0063](0063-agent-checkout-coordination.md) | Agent coordination and optional worktree isolation | Accepted |
-| [0064](0064-execution-environments-and-allocations.md) | Execution Environments and immutable Allocations | Accepted |
-| [0065](0065-credential-connections-and-capability-broker.md) | Credential connections and capability broker | Accepted (greenfield cutover refined by 0066) |
-| [0066](0066-greenfield-environment-and-connection-cutover.md) | Greenfield Environment and connection cutover | Accepted |
+| [0064](0064-execution-environments-and-allocations.md) | Execution Environments and immutable Allocations | Accepted (agent placement model superseded by 0067; missing project policy refined by 0070) |
+| [0065](0065-credential-connections-and-capability-broker.md) | Credential connections and capability broker | Accepted (refined by 0066 and 0068) |
+| [0066](0066-greenfield-environment-and-connection-cutover.md) | Greenfield Environment and connection cutover | Accepted (service-only unattended rule superseded by 0068) |
+| [0067](0067-long-lived-agent-runtimes-and-capability-gateway.md) | Long-lived agent runtimes and a unified capability gateway | Accepted |
+| [0068](0068-personal-artifacts-and-workflow-enablement.md) | Local personal artifacts and explicit workflow enablement | Accepted |
+| [0069](0069-host-owned-processes-watches-and-schedules.md) | Host-owned processes, watches, wakeups, and schedules | Accepted |
+| [0070](0070-default-local-environment-policy.md) | Default local Environment policy | Accepted |
+| [0071](0071-stock-auth-and-agent-driven-setup.md) | Stock auth and agent-driven setup | Accepted |
+| [0072](0072-remote-oauth-admission-and-project-administration.md) | Remote OAuth, admission, and project administration | Accepted |
+| [0073](0073-recoverable-project-remotes-and-builder-checkout.md) | Recoverable project remotes and builder checkout | Accepted |
+| [0074](0074-temporary-watchers-and-session-delivery.md) | Temporary Watchers and durable session delivery | Accepted (Watcher trigger model superseded by 0076) |
+| [0075](0075-parallel-local-development-isolation.md) | Parallel local development isolation | Accepted |
+| [0076](0076-watchers-are-workflow-enablement.md) | Watchers are temporary workflow enablements | Accepted |
+| [0077](0077-explicit-session-handoff-push-and-schedules.md) | Explicit session handoff, durable push, and schedule triggers | Accepted |
+| [0078](0078-agent-owned-session-todos.md) | Agent-owned session todo lists | Accepted |
+| [0079](0079-desktop-browser-credential-broker.md) | Desktop browser credential broker | Accepted |
+| [0080](0080-installed-pairing-bootstrap.md) | Installed pairing uses a one-time start URL bootstrap | Accepted |
+| [0081](0081-recursive-agent-configurable-sidebar-trees.md) | Recursive, agent-configurable sidebar trees | Accepted |
+| [0082](0082-desktop-prerelease-distribution.md) | Desktop prerelease distribution | Accepted; update policy superseded by 0083, harness bundling superseded by 0091 |
+| [0083](0083-desktop-updates-and-migration-backups.md) | Desktop updates and migration backups | Accepted; channel policy updated by 0085 |
+| [0084](0084-first-release-database-baseline.md) | First-release database schema baseline | Accepted |
+| [0085](0085-desktop-stable-and-preview-channels.md) | Desktop Stable and Preview release channels | Accepted |
+| [0086](0086-provider-neutral-workflow-enablement-connections.md) | Provider-neutral workflow enablement connections | Accepted |
+| [0087](0087-workflow-woken-session-attention.md) | Workflow-woken sessions are the notification record | Accepted |
+| [0088](0088-desktop-web-links-stay-in-workspace.md) | Desktop web links stay in the workspace | Accepted |
+| [0089](0089-project-shaped-member-shell.md) | Project-shaped member shell and durable session provenance | Accepted |
+| [0090](0090-first-class-subsessions-and-delegation.md) | First-class subsessions and explicit delegation grants | Accepted |
+| [0091](0091-on-demand-desktop-harness-components.md) | Desktop coding harnesses use verified on-demand components | Accepted |
+| [0092](0092-project-owned-capability-experiences.md) | Project-owned capability experiences | Accepted |
+| [0093](0093-session-model-overrides-and-desktop-toolchain.md) | Session model overrides and the desktop toolchain | Accepted |
+| [0094](0094-durable-agent-reconnects.md) | Durable agent reconnects and unexpected-stop visibility | Accepted |
+| [0095](0095-authoritative-agent-execution.md) | Authoritative agent execution and independent connections | Accepted |
+| [0096](0096-desktop-resource-link-routing.md) | Desktop resource links use workspace targets | Accepted |
+| [0097](0097-host-owned-workflow-inspectors.md) | Host-owned workflow inspectors | Accepted |
+| [0098](0098-project-authorized-local-and-remote-agents.md) | Project-authorized local and remote agent execution | Accepted |
+| [0099](0099-shared-postgres-server-environments.md) | Shared-Postgres server instances as managed Environments | Accepted |
+| [0100](0100-workspace-resource-admission.md) | Workspace reservations and provider-enforced resource limits | Accepted |
+| [0101](0101-harness-capabilities-and-session-monitors.md) | Harness capabilities and session monitors | Accepted |
+| [0102](0102-tabbed-sidebars-and-app-widgets.md) | Tabbed sidebars and compact app widgets | Accepted (refined by 0107) |
+| [0103](0103-agent-context-and-deferred-capabilities.md) | Agent context and deferred capabilities | Accepted |
+| [0104](0104-local-checkouts-and-explicit-file-sharing.md) | Local checkouts and explicit file sharing | Accepted |
 | [0105](0105-configurable-desktop-browser-layout.md) | Configurable desktop browser layout, light surfaces, bookmark tiles and folders | Accepted |
 | [0106](0106-profile-terminal-macros.md) | Profile-owned terminal macros and configurable floating dismissal | Accepted |
+| [0107](0107-sidebar-footer-and-floating-chrome.md) | Sidebar footer, centered tabs, floating chrome and editor themes | Accepted |
+| [0108](0108-unified-resource-opening-and-paste.md) | Unified resource opening and composer file paste | Accepted |

@@ -13,13 +13,12 @@ import type {
   TurnOptions,
 } from "@catamorphic/sandbox";
 import { sql } from "kysely";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
 import { AgentSessionsService } from "../services/agent-sessions-service.js";
+import { AgentTurnsService } from "../services/agent-turns-service.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
 import type { CodingAgentRegistry } from "../services/coding-agent-registry.js";
-import { DbSandboxStore } from "../services/db-sandbox-store.js";
-import { DevSandboxService } from "../services/dev-sandbox-service.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
@@ -78,6 +77,12 @@ class RecordingProvider implements CodingAgentProvider {
     opts?: TurnOptions,
   ): AsyncIterable<AgentEvent> {
     this.turns.push(opts);
+    if (message === "partial then fail") {
+      yield { type: "text", content: "I finished the useful part." };
+      yield { type: "error", content: "Provider connection closed" };
+      yield { type: "done" };
+      return;
+    }
     yield { type: "text", content: `echo: ${message}` };
     yield { type: "done" };
   }
@@ -138,16 +143,11 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
       testEnvironmentProvider(unusedSandboxProvider),
     );
     sessions = new AgentSessionsService(db, {
+      hostId: "scope-test-host",
       projectManager,
-      sandboxProvider: unusedSandboxProvider,
       codingAgents: registry,
       executionEnvironments,
       executionAllocations: new ExecutionAllocationsService(db),
-      devSandboxes: new DevSandboxService({
-        projectManager,
-        provider: unusedSandboxProvider,
-        store: new DbSandboxStore(db),
-      }),
       nativeAgentCheckout: { resolve: () => rootPath },
       // The project's tool roster: two tools, one renamed via its trigger.
       mcpToolNames: async () =>
@@ -189,21 +189,83 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
+  it("reads transcript and execution from one snapshot while another connection settles", async () => {
+    if (!db) throw new Error("unreachable");
+    const database = db;
+    const session = await sessions.create(root, projectId);
+    const receipt = await sessions.turns.deliver({
+      sessionId: session.id,
+      content: "Work",
+      author: { kind: "user", externalUserId: root.externalUserId },
+      mode: "next_turn",
+    });
+    await sessions.turns.claimNextForSession({
+      sessionId: session.id,
+      workerId: "snapshot-test",
+    });
+    const reply = await database
+      .insertInto("agent_messages")
+      .values({
+        session_id: session.id,
+        role: "assistant",
+        content: "Working",
+        author_kind: "agent",
+        author_payload: { kind: "agent", sessionId: session.id, agentId: null },
+        metadata: { status: "in_progress" },
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const execution = AgentTurnsService.prototype.execution;
+    const spy = vi
+      .spyOn(AgentTurnsService.prototype, "execution")
+      .mockImplementationOnce(async function (this: AgentTurnsService, input) {
+        await database.transaction().execute(async (trx) => {
+          await trx
+            .updateTable("agent_messages")
+            .set({ content: "Finished", metadata: { status: "completed" } })
+            .where("id", "=", reply.id)
+            .execute();
+          await trx
+            .updateTable("agent_turns")
+            .set({
+              status: "completed",
+              result_message_id: reply.id,
+              lease_token: null,
+              lease_owner: null,
+              lease_expires_at: null,
+            })
+            .where("id", "=", receipt.turnId)
+            .execute();
+        });
+        return execution.call(this, input);
+      });
+    try {
+      const snapshot = await sessions.get(root, projectId, session.id);
+      expect(snapshot.execution?.status).toBe("running");
+      expect(snapshot.messages.at(-1)?.content).toBe("Working");
+      const fresh = await sessions.get(root, projectId, session.id);
+      expect(fresh.execution?.status).toBe("completed");
+      expect(fresh.messages.at(-1)?.content).toBe("Finished");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("a viewer opens sessions only on the agents its scope names", async () => {
     await expect(
       sessions.create(viewer, projectId, { agentId: salesAgentId }),
     ).rejects.toThrow(AccessDeniedError);
-    // The host's default/personal agent is not a project artifact.
-    await expect(sessions.create(viewer, projectId)).rejects.toThrow(
-      AccessDeniedError,
-    );
+    // A bare create resolves a permitted catalog default, never a personal agent.
+    expect((await sessions.create(viewer, projectId)).agentId).toBe(csmAgentId);
     await expect(
       sessions.create(viewer, projectId, { agentId: "personal" }),
     ).rejects.toThrow(AccessDeniedError);
     const session = await sessions.create(viewer, projectId, {
       agentId: csmAgentId,
+      source: "slack",
     });
     expect(session.agentId).toBe(csmAgentId);
+    expect(session.source).toBe("slack");
     // ...and cannot switch it to an agent outside the scope.
     await expect(
       sessions.update(viewer, projectId, session.id, { agentId: salesAgentId }),
@@ -246,6 +308,78 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     expect((await sessions.list(other, projectId)).total).toBe(0);
   });
 
+  it("persists an agent-owned todo snapshot with stable item ids", async () => {
+    const session = await sessions.create(viewer, projectId, {
+      agentId: csmAgentId,
+    });
+    const created = await sessions.replaceTodos(viewer, projectId, session.id, [
+      {
+        title: "Inspect the project",
+        description: "Find the existing implementation and its tests.",
+        status: "completed",
+      },
+      {
+        title: "Implement the change",
+        description: "Keep the public API and generated client in sync.",
+        status: "in_progress",
+      },
+    ]);
+    expect(created).toMatchObject([
+      { title: "Inspect the project", status: "completed" },
+      { title: "Implement the change", status: "in_progress" },
+    ]);
+    expect(created.every((todo) => todo.id.length > 0)).toBe(true);
+
+    const updated = await sessions.replaceTodos(viewer, projectId, session.id, [
+      {
+        ...created[1]!,
+        description: "Implementation is ready; run focused verification.",
+        status: "completed",
+      },
+    ]);
+    expect(updated).toEqual([
+      {
+        ...created[1],
+        description: "Implementation is ready; run focused verification.",
+        status: "completed",
+      },
+    ]);
+    expect((await sessions.get(viewer, projectId, session.id)).todos).toEqual(
+      updated,
+    );
+
+    const foreign = { ...viewer, externalUserId: "csm-carol" };
+    await expect(
+      sessions.replaceTodos(foreign, projectId, session.id, []),
+    ).rejects.toThrow(AccessDeniedError);
+  });
+
+  it("uses the same session gate for ownership and exact project-agent scope", async () => {
+    const own = await sessions.create(viewer, projectId, {
+      agentId: csmAgentId,
+    });
+    const foreign = { ...viewer, externalUserId: "csm-carol" };
+    const wrongAgent = {
+      ...viewer,
+      scope: [{ kind: "agent" as const, projectId, name: "sales" }],
+    };
+    const documentOnly = {
+      ...viewer,
+      scope: [{ kind: "document" as const, projectId, path: "notes.md" }],
+    };
+    const workflowOnly = {
+      ...viewer,
+      scope: [{ kind: "workflow" as const, projectId, name: "crm.lookup" }],
+    };
+
+    await sessions.assertSession(viewer, projectId, own.id);
+    for (const caller of [foreign, wrongAgent, documentOnly, workflowOnly]) {
+      await expect(
+        sessions.assertSession(caller, projectId, own.id),
+      ).rejects.toThrow(AccessDeniedError);
+    }
+  });
+
   it("the harness receives the caller and the caller's tool-policy layers", async () => {
     const session = await sessions.create(viewer, projectId, {
       agentId: csmAgentId,
@@ -279,6 +413,48 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     // An EMPTY map, not none: it replaces whatever a previous caller left.
     expect(start?.toolPolicies).toEqual({});
     expect(sales.turns.at(-1)?.toolPolicies).toEqual({});
+  });
+
+  it("applies per-session model and effort overrides to the harness", async () => {
+    const created = await sessions.create(admin, projectId, {
+      agentId: salesAgentId,
+    });
+    const configured = await sessions.update(admin, projectId, created.id, {
+      model: "test/model-v2",
+      effort: "high",
+    });
+    expect(configured.model).toBe("test/model-v2");
+    expect(configured.modelEffort).toBe("high");
+
+    await sessions.sendMessage(admin, projectId, created.id, "configured");
+    expect(sales.turns.at(-1)?.model).toBe("test/model-v2");
+    expect(sales.turns.at(-1)?.effort).toBe("high");
+
+    const switched = await sessions.update(admin, projectId, created.id, {
+      agentId: csmAgentId,
+    });
+    expect(switched.model).toBeNull();
+  });
+
+  it("keeps partial assistant prose separate from a fatal provider error", async () => {
+    const session = await sessions.create(admin, projectId, {
+      agentId: salesAgentId,
+    });
+
+    const failed = await sessions.sendMessage(
+      admin,
+      projectId,
+      session.id,
+      "partial then fail",
+    );
+
+    expect(failed.content).toBe("Provider connection closed");
+    expect(failed.metadata).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        partialContent: "I finished the useful part.",
+      }),
+    );
   });
 
   it("revoking the agent from the scope closes the door mid-conversation", async () => {

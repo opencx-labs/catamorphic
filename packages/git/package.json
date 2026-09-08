@@ -15,10 +15,11 @@
   "scripts": {
     "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
     "dev": "tsup --watch --no-clean",
-    "test": "vitest run --config ../../vitest.config.ts",
+    "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/git --config ../../vitest.config.ts",
     "typecheck": "tsgo --project ./tsconfig.json"
   },
   "dependencies": {
+    "ignore": "^5.3.2",
     "isomorphic-git": "^1.38.6"
   },
   "devDependencies": {

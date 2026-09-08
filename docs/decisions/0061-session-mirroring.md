@@ -37,9 +37,10 @@ desktop dies.
 
 **The QR completes the story** (ADR 0060 extension): when the focused
 project is remote-linked, the pairing modal defaults to a QR of the
-**remote server's PWA origin** — `https://server/?server=…&token=…&project=…&session=…`
-(the member's existing token; no pairing code) — with "This Wi-Fi" as
-the toggle. The `session` param deep-links the phone into the mirrored
+**remote server's PWA origin** with `project` and `session` locators. The PWA
+reuses its refreshable server connection or signs in through OAuth as defined
+by ADR 0072. "This Wi-Fi" remains the local pairing toggle. The `session`
+param deep-links the phone into the mirrored
 copy of the exact chat that was on the desktop screen. Works from
 anywhere, survives the desktop dying, and is the origin worth
 installing from.

@@ -5,14 +5,21 @@ import {
   dialog,
   ipcMain,
   Menu,
+  nativeTheme,
   powerMonitor,
   safeStorage,
   type WebContents,
 } from "electron";
+import type { DesktopUpdateChannel } from "../shared/update.js";
 import { registerAgentBridge } from "./agent-bridge.js";
+import { macApplicationMenu } from "./app-menu.js";
 import { registerBrowserSupport } from "./browser.js";
 import { toPublicConnection } from "./connections-store.js";
 import { ConnectorsService } from "./connectors.js";
+import {
+  desktopApplicationName,
+  desktopDataDirFromEnvironment,
+} from "./development-paths.js";
 import {
   shouldShowWindow,
   shouldUseE2ePlainTextEncryption,
@@ -22,13 +29,35 @@ import { registerIpcHandlers, type ServerState } from "./ipc.js";
 import { type Keybindings, toAccelerator } from "./keybindings.js";
 import { McpAppsService } from "./mcp-apps.js";
 import { MobilePairingService } from "./mobile-pairing.js";
+import { prepareVersionBackup } from "./pre-migration-backup.js";
 import { ProfileConfigManager } from "./profile-config.js";
 import { ProfilesStore } from "./profiles.js";
 import { type EmbeddedServer, startEmbeddedServer } from "./server/boot.js";
 import { resolveDataPaths } from "./server/paths.js";
+import {
+  registerDesktopShutdown,
+  shutdownDesktopServices,
+} from "./shutdown.js";
 import { registerTerminalSupport } from "./terminal.js";
 import { windowBackgroundColor } from "./theme.js";
+import {
+  type DesktopUpdaterService,
+  registerDesktopUpdater,
+} from "./updater.js";
 import { WindowStateStore } from "./window-state.js";
+import { desktopProfileMcpProvider } from "./workflow-mcp-connections.js";
+
+// Electron derives the macOS safeStorage Keychain service from the app name.
+// Keep unsigned development and E2E builds away from the consistently signed
+// production identity so local testing cannot poison the production item's
+// access control list and cause prompts after an update.
+const isolatedDataDir = desktopDataDirFromEnvironment(process.env);
+app.setName(
+  desktopApplicationName({
+    isPackaged: app.isPackaged,
+    isolatedDataDir,
+  }),
+);
 
 // macOS 26.x + Apple Silicon: V8's background compiler threads race the
 // OS's MAP_JIT write-protection and SIGTRAP in ThreadIsolation::
@@ -61,21 +90,21 @@ const showWindow = shouldShowWindow({
   e2eDataDir,
   e2eWindowMode: process.env.CATAMORPHIC_E2E_WINDOW_MODE,
 });
-if (e2eDataDir) {
-  app.setPath("userData", e2eDataDir);
+if (isolatedDataDir) {
+  app.setPath("userData", isolatedDataDir);
 }
 
 // PGlite is single-writer: a second instance opening the same data dir
 // aborts deep in WASM ("Aborted(). Build with -sASSERTIONS"). Refuse to
 // start and surface the first instance's window instead.
-if (!e2eDataDir && !app.requestSingleInstanceLock()) {
+if (!isolatedDataDir && !app.requestSingleInstanceLock()) {
   app.quit();
 }
 app.on("second-instance", (_event, argv) => {
   const window = BrowserWindow.getAllWindows()[0];
   if (window) {
     if (window.isMinimized()) window.restore();
-    window.focus();
+    if (!e2eDataDir) window.focus();
   }
   // Windows/Linux deliver a protocol URL as an argv of the second launch.
   const link = argv.find((arg) => arg.startsWith("catamorphic://"));
@@ -103,7 +132,7 @@ function deliverConnectLink(url: string): void {
   if (!window) return;
   window.webContents.send("catamorphic:connect-link", url);
   if (window.isMinimized()) window.restore();
-  window.focus();
+  if (!e2eDataDir) window.focus();
 }
 
 /** The renderer's side of the hand-off (registered here: no ipc.ts cycle). */
@@ -117,7 +146,9 @@ const paths = resolveDataPaths();
 const profilesStore = new ProfilesStore(paths.profilesFile);
 // Per-profile config (theme, keybindings, sidebar, agents) — one manager
 // shared by IPC, the window layer, and the chat agent's config mirror.
-const profileConfig = new ProfileConfigManager(paths, profilesStore);
+const profileConfig = new ProfileConfigManager(paths, profilesStore, () =>
+  nativeTheme.shouldUseDarkColors ? "dark" : "light",
+);
 
 let server: EmbeddedServer | null = null;
 
@@ -173,7 +204,7 @@ const windows: WindowProfileRegistry = {
   },
   openWindow(profileId) {
     const window = createWindow(profileId);
-    window.focus();
+    if (!e2eDataDir) window.focus();
   },
 };
 
@@ -210,6 +241,18 @@ function createWindow(profileId?: string): BrowserWindow {
     // Pre-paint background from the profile's theme so open doesn't flash;
     // stay hidden until the renderer has actually painted a frame.
     show: false,
+    // Preserve native shown/hidden lifecycles without covering the developer's
+    // screen, including the brief showInactive/hide used for CDP startup.
+    // Opacity is a native macOS/Windows setting; Linux CI uses a private display.
+    opacity:
+      e2eDataDir && process.env.CATAMORPHIC_E2E_REVEAL_WINDOWS !== "1" ? 0 : 1,
+    // Linux focusable:false bypasses the window manager and cannot maximize.
+    // A private Xvfb display supplies input isolation there while retaining
+    // native window management. Real desktop E2E windows remain non-focusable.
+    focusable:
+      e2eDataDir === undefined ||
+      (process.platform === "linux" &&
+        process.env.CATAMORPHIC_E2E_VIRTUAL_DISPLAY === "1"),
     backgroundColor: windowBackgroundColor(stores.theme.resolved()),
     webPreferences: {
       preload: path.join(import.meta.dirname, "../preload/index.cjs"),
@@ -226,6 +269,16 @@ function createWindow(profileId?: string): BrowserWindow {
       backgroundThrottling: e2eDataDir === undefined,
     },
   });
+  if (e2eDataDir) window.setIgnoreMouseEvents(true);
+  // Renderer links must stay inside the workspace. Feature-specific flows can
+  // open tabs through IPC, while this boundary catches plain window.open calls
+  // from current and future renderer components.
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/.test(url)) {
+      window.webContents.send("catamorphic:browser-open-url", { url });
+    }
+    return { action: "deny" };
+  });
   if (saved.maximized) window.maximize();
   // A connect link that arrived before any window could take it (cold
   // launch from the link) is delivered once the renderer is up.
@@ -241,7 +294,8 @@ function createWindow(profileId?: string): BrowserWindow {
       window.hide();
       return;
     }
-    window.show();
+    if (e2eDataDir) window.showInactive();
+    else window.show();
     // Fullscreen after show: entering it on a hidden window leaves macOS
     // with a blank space until the next repaint.
     if (saved.fullscreen) window.setFullScreen(true);
@@ -273,8 +327,22 @@ function createWindow(profileId?: string): BrowserWindow {
 // the command palette, and toggle-sidebar are window-level shortcuts handled
 // in the renderer.
 function buildMenu(bindings: Keybindings): Menu {
+  const checkForUpdates = () => {
+    // A macOS app can have no windows while its menu is still reachable.
+    // The new renderer reads the latest updater state after loading.
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    void desktopUpdater?.check(true);
+  };
+  const selectedUpdateChannel = desktopUpdater?.channel() ?? "stable";
+  const chooseUpdateChannel = (channel: DesktopUpdateChannel) => {
+    void desktopUpdater?.setChannel(channel).finally(() => {
+      applyMenuForFocusedWindow();
+    });
+  };
   return Menu.buildFromTemplate([
-    ...(process.platform === "darwin" ? [{ role: "appMenu" } as const] : []),
+    ...(process.platform === "darwin"
+      ? [macApplicationMenu({ appName: app.name, checkForUpdates })]
+      : []),
     {
       label: "File",
       submenu: [
@@ -328,6 +396,33 @@ function buildMenu(bindings: Keybindings): Menu {
           : [{ role: "close" } as const]),
       ],
     },
+    {
+      role: "help",
+      submenu: [
+        {
+          label: "Check for Updates…",
+          click: checkForUpdates,
+        },
+        { type: "separator" },
+        {
+          label: "Update Channel",
+          submenu: [
+            {
+              label: "Stable",
+              type: "radio",
+              checked: selectedUpdateChannel === "stable",
+              click: () => chooseUpdateChannel("stable"),
+            },
+            {
+              label: "Preview",
+              type: "radio",
+              checked: selectedUpdateChannel === "preview",
+              click: () => chooseUpdateChannel("preview"),
+            },
+          ],
+        },
+      ],
+    },
   ]);
 }
 
@@ -344,6 +439,7 @@ function applyMenuForFocusedWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  if (e2eDataDir && process.platform === "darwin") app.dock?.hide();
   // GitHub's Linux runner has no Secret Service. Electron's in-memory key
   // keeps safeStorage-backed flows realistic inside isolated throwaway E2E
   // profiles without weakening normal desktop profiles.
@@ -355,10 +451,19 @@ app.whenReady().then(async () => {
   ) {
     safeStorage.setUsePlainTextEncryption(true);
   }
-  // Legacy config migration first: it seeds the default profile's agent
-  // roster from the old settings.json, whose key needs safeStorage (only
-  // usable once the app is ready).
-  profileConfig.migrate();
+  desktopUpdater = registerDesktopUpdater({
+    broadcast: state.broadcast,
+    canInstall: async () => {
+      if (!server || terminalSupport?.hasActiveWork()) return false;
+      const activeTurn = await server.catamorphic.core.db
+        .selectFrom("agent_turns")
+        .select("id")
+        .where("status", "=", "running")
+        .limit(1)
+        .executeTakeFirst();
+      return !activeTurn;
+    },
+  });
   applyMenuForFocusedWindow();
   // Live-reload: agents and users edit the per-profile config files
   // directly. Changes fan out only to that profile's windows.
@@ -372,6 +477,7 @@ app.whenReady().then(async () => {
       window.webContents.send("catamorphic:theme-changed", theme);
     }
   });
+  nativeTheme.on("updated", () => profileConfig.systemAppearanceChanged());
   profileConfig.onSidebarChanged((profileId) => {
     // No payload: the resolved config depends on each window's active
     // project (layered resolution), so the renderer refetches instead.
@@ -413,6 +519,15 @@ app.whenReady().then(async () => {
         : Promise.resolve({ action: "decline" }),
   });
 
+  const unsubscribeProfileRemoved = profilesStore.onRemoved((id) => {
+    void mcpApps.releaseProfile(id);
+    state.current?.agentRegistry.releaseProfile(id);
+  });
+  disposeProfileResources = async () => {
+    unsubscribeProfileRemoved();
+    await mcpApps.dispose();
+  };
+
   // Incognito sessions (ADR 0062): desktop-local state, consulted by the
   // mirror pusher and written from the renderer's chat creation.
   const incognitoSessions = new IncognitoSessionsStore(
@@ -422,10 +537,17 @@ app.whenReady().then(async () => {
   // "Continue on mobile": the LAN listener that serves the PWA and
   // proxies /api with device-token auth. Auto-listens when phones are
   // already paired, so they reconnect after a desktop restart.
+  const e2eMobilePairingAddress =
+    process.env.CATAMORPHIC_E2E_MOBILE_PAIRING_ADDRESS;
   const mobilePairing = new MobilePairingService({
     file: path.join(paths.root, "..", "mobile-pairing.json"),
     profileConfig,
     serverUrl: () => state.current?.url ?? null,
+    ...(e2eMobilePairingAddress && e2eDataDir
+      ? {
+          lanAddresses: () => [e2eMobilePairingAddress],
+        }
+      : {}),
   });
   if (mobilePairing.hasDevices()) {
     mobilePairing.ensureListening().catch((error) => {
@@ -451,13 +573,13 @@ app.whenReady().then(async () => {
     async (projectId) =>
       (await state.current?.projectRoots.get(projectId)) ?? null,
   );
-  terminalSupport = registerTerminalSupport(
-    state,
-    (projectId) =>
-      // Late-bound: the bridge registers just below, before any terminal
-      // can spawn.
-      agentBridge?.openHookEnv(projectId) ?? {},
-  );
+  terminalSupport = registerTerminalSupport(state, async (projectId) => ({
+    // Late-bound: the bridge registers just below, before any terminal
+    // can spawn.
+    ...((await state.current?.agentRegistry.nativeToolchainEnvironment()) ??
+      {}),
+    ...(agentBridge?.openHookEnv(projectId) ?? {}),
+  }));
   agentBridge = registerAgentBridge(terminalSupport.agentTerminals);
   ipcMain.handle("catamorphic:webview-preload", () =>
     path.join(import.meta.dirname, "../preload/webview.cjs"),
@@ -465,6 +587,17 @@ app.whenReady().then(async () => {
   const window = createWindow();
 
   try {
+    const versionBackup = prepareVersionBackup({
+      appVersion: app.getVersion(),
+      packaged: app.isPackaged,
+      dataRoot: paths.root,
+      dbDir: paths.db,
+    });
+    if (versionBackup.backupPath) {
+      console.log(
+        `[desktop] Backed up the pre-migration database to ${versionBackup.backupPath}`,
+      );
+    }
     server = await startEmbeddedServer(
       paths,
       profilesStore,
@@ -473,7 +606,9 @@ app.whenReady().then(async () => {
       connectors,
       mcpApps,
       incognitoSessions,
+      [desktopProfileMcpProvider],
     );
+    versionBackup.markBootSuccessful();
     state.broadcast("catamorphic:server-changed", {
       url: server.url,
       hasCodingAgent: server.hasCodingAgent,
@@ -483,7 +618,11 @@ app.whenReady().then(async () => {
     // wake; releasing before the freeze parks the job cleanly and resume
     // picks it back up within a poll interval.
     powerMonitor.on("suspend", () => void server?.suspendExecution());
-    powerMonitor.on("resume", () => server?.resumeExecution());
+    powerMonitor.on("resume", () => {
+      server?.resumeExecution();
+      server?.syncSessionMailboxes();
+    });
+    app.on("browser-window-focus", () => server?.syncSessionMailboxes());
     // OAuth-backed connections hand their token to harnesses as a plain
     // header, so the app keeps it fresh: at boot, after sleep, and on a
     // slow tick (refresh only fires when a token is near expiry).
@@ -517,20 +656,35 @@ app.whenReady().then(async () => {
   });
 });
 
+let disposeProfileResources: (() => Promise<void>) | undefined;
 let browserSupport: ReturnType<typeof registerBrowserSupport> | null = null;
 let terminalSupport: ReturnType<typeof registerTerminalSupport> | null = null;
 let agentBridge: ReturnType<typeof registerAgentBridge> | null = null;
+let desktopUpdater: DesktopUpdaterService | null = null;
 
-let quitting = false;
-app.on("before-quit", (event) => {
-  profileConfig.dispose();
-  browserSupport?.dispose();
-  terminalSupport?.dispose();
-  agentBridge?.dispose();
-  if (quitting || !server) return;
-  event.preventDefault();
-  quitting = true;
-  void server.shutdown().finally(() => app.quit());
+registerDesktopShutdown({
+  app,
+  shutdown: async () => {
+    await shutdownDesktopServices({
+      steps: [
+        { name: "profile clients", dispose: () => disposeProfileResources?.() },
+        { name: "profile settings", dispose: () => profileConfig.dispose() },
+        { name: "browser", dispose: () => browserSupport?.dispose() },
+        { name: "terminals", dispose: () => terminalSupport?.dispose() },
+        { name: "agent bridge", dispose: () => agentBridge?.dispose() },
+        { name: "updater", dispose: () => desktopUpdater?.dispose() },
+        {
+          name: "server and database",
+          dispose: async () => {
+            await server?.shutdown();
+            server = null;
+          },
+        },
+      ],
+    });
+    server = null;
+  },
+  onError: (error) => console.error("[desktop] shutdown failed:", error),
 });
 
 app.on("window-all-closed", () => {

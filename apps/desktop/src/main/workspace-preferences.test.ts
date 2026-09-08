@@ -139,10 +139,10 @@ describe("bookmark organization", () => {
     });
     store.pin("first", "profile", bookmark.id);
     expect(store.forProject("first").bookmarks).toEqual([]);
-    expect(store.pinned("profile")[0]?.folderId).toBeUndefined();
+    expect(store.pinned("profile").bookmarks[0]?.folderId).toBeUndefined();
     store.unpin("profile", "second", bookmark.id);
     expect(store.forProject("second").bookmarks[0]?.id).toBe(bookmark.id);
-    expect(store.pinned("profile")).toEqual([]);
+    expect(store.pinned("profile").bookmarks).toEqual([]);
   });
 });
 
@@ -160,13 +160,13 @@ describe("bookmark drops", () => {
     const first = store.place({ ...target, folderId: folder.id });
     store.place({ ...target, pinned: true });
     expect(store.forProject("project").bookmarks).toHaveLength(0);
-    expect(store.pinned("profile")).toEqual([
+    expect(store.pinned("profile").bookmarks).toEqual([
       { id: first.id, label: "Docs", url: target.url },
     ]);
     store.place({ ...target, folderId: folder.id });
     store.place({ ...target, folderId: folder.id });
     const restored = new BookmarksStore(file);
-    expect(restored.pinned("profile")).toHaveLength(0);
+    expect(restored.pinned("profile").bookmarks).toHaveLength(0);
     expect(restored.forProject("project").bookmarks).toEqual([
       { ...first, folderId: folder.id },
     ]);
@@ -183,6 +183,6 @@ describe("bookmark drops", () => {
     expect(() => store.place({ ...target, folderId: "removed" })).toThrow(
       "no longer exists",
     );
-    expect(store.pinned("profile")).toHaveLength(1);
+    expect(store.pinned("profile").bookmarks).toHaveLength(1);
   });
 });

@@ -34,10 +34,10 @@ Top-header layouts retain their existing row. Empty New Tab pages leave
 the sidebar-mode top header blank.
 
 The profile's `pinnedBookmarks` preference selects icon tiles or list rows.
-Project folders remain one level deep; deleting a folder moves its bookmarks
-to the root. The profile switcher remains anchored below the scrollable
-sidebar beside compact Settings and customization controls. A compact menu
-retains profile creation, renaming, and default selection. Existing custom
+Both bookmark scopes retain the recursive folder model (ADR 0081); deleting
+a folder moves its children up one level. The profile switcher remains anchored below the scrollable
+sidebar beside compact Settings and customization controls. A compact menu retains profile creation and inspection; profile settings
+retain renaming and default selection. Existing custom
 sidebar section order remains authoritative.
 
 The light preset uses cool neutral surfaces and an independent `sidebar`
@@ -61,9 +61,8 @@ without adding duplicate palette commands.
 Terminal appearance can follow the app or the installed Ghostty's resolved
 configuration. This optional desktop-only integration reads colors and fonts
 through Ghostty's CLI; it does not import commands, shortcuts, or native
-window effects. The login shell remains unchanged. Appearance applies when
-a terminal opens because the embedded VT renderer fixes colors at creation;
-changing a preference never restarts a running shell.
+window effects. The login shell remains unchanged. The resolved appearance applies to new terminals; live font changes refit
+existing terminals without restarting their shells.
 
 Bookmark drops store stable URLs or local project/session links, never
 ephemeral workspace keys. Favorites are profile-wide and folders project

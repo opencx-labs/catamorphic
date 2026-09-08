@@ -133,7 +133,7 @@ function RunItems({ run, scope }: { run: Run; scope: BatchProgress }) {
   );
 }
 
-function RunDetail({ runId }: { runId: string }) {
+export function RunDetail({ runId }: { runId: string }) {
   const runQuery = useRun({ runId });
   const run = runQuery.data;
   const cancel = useCancelRun({ runId });
@@ -383,6 +383,7 @@ export function RunsPanel({
             type="button"
             onClick={startRun}
             disabled={trigger.isPending || !environment}
+            data-disabled-reason="Choose an environment, or wait for the run to start"
             className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-50"
           >
             {trigger.isPending ? "Starting..." : "Run"}

@@ -1,5 +1,6 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { APP_KIT_CSS } from "../../kit-css.js";
 import { Button } from "../button.js";
 
 describe("Button loading (PendingButton rule)", () => {
@@ -36,5 +37,14 @@ describe("Button loading (PendingButton rule)", () => {
     const { container } = render(<Button loading>Delete</Button>);
     const stack = container.querySelector(".cat-btn-stack");
     expect(stack?.children[1]?.textContent).toBe("Delete");
+  });
+
+  it("prevents fixed-height labels from shrinking or wrapping", () => {
+    expect(APP_KIT_CSS).toMatch(
+      /\.cat-btn\{[^}]*flex:none[^}]*white-space:nowrap/s,
+    );
+    expect(APP_KIT_CSS).toMatch(
+      /\.cat-btn-stack\{[^}]*min-width:max-content[^}]*white-space:nowrap/s,
+    );
   });
 });

@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-23
+- **Unattended ownership refined by:** 0068
 
 ## Context
 

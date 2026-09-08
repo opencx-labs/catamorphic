@@ -19,11 +19,15 @@ import { ArtifactsRemoteBackend } from "../artifacts-remote-backend.js";
 const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
 const API_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
 const NAMESPACE = process.env.CLOUDFLARE_ARTIFACTS_NAMESPACE;
+const EXTERNAL_INTEGRATIONS =
+  process.env.CATAMORPHIC_EXTERNAL_INTEGRATIONS === "1";
 
 const FEATURE_GATE_CODE = 10004;
 
 async function artifactsAccessible(): Promise<boolean> {
-  if (!ACCOUNT_ID || !API_TOKEN || !NAMESPACE) return false;
+  if (!EXTERNAL_INTEGRATIONS || !ACCOUNT_ID || !API_TOKEN || !NAMESPACE) {
+    return false;
+  }
   const client = new ArtifactsClient({
     accountId: ACCOUNT_ID,
     apiToken: API_TOKEN,

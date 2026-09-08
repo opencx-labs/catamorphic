@@ -3,8 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type {
   AgentCoordinationStrategy,
+  AgentDelegationPolicy,
   AgentEnvironmentPolicy,
 } from "@catamorphic/core";
+import { AgentDelegationPolicySchema } from "@catamorphic/core";
 import type { McpToolPolicy } from "@catamorphic/sandbox";
 import { safeStorage } from "electron";
 
@@ -111,6 +113,8 @@ export interface AgentConfig {
    * widen it. The same shape a remote host would define for its agents.
    */
   toolPolicies?: Record<string, McpToolPolicy>;
+  /** Explicit source-to-target subsession grants. */
+  delegation?: AgentDelegationPolicy;
 }
 
 interface StoredAgent extends Omit<AgentConfig, "apiKey"> {
@@ -160,6 +164,7 @@ export interface PublicAgentConfig {
   skills: AgentSkillsSetting;
   /** Per-connection tool policies layered on the profile's (by id). */
   toolPolicies: Record<string, McpToolPolicy>;
+  delegation: AgentDelegationPolicy;
 }
 
 /**
@@ -206,6 +211,7 @@ export interface CreateAgentInput {
   connections?: AgentConnectionsSetting;
   skills?: AgentSkillsSetting;
   toolPolicies?: Record<string, McpToolPolicy>;
+  delegation?: AgentDelegationPolicy;
 }
 
 export interface UpdateAgentInput {
@@ -226,6 +232,7 @@ export interface UpdateAgentInput {
   skills?: AgentSkillsSetting;
   /** Replace the per-connection tool policies (null clears them). */
   toolPolicies?: Record<string, McpToolPolicy> | null;
+  delegation?: AgentDelegationPolicy;
 }
 
 export class AgentsStore {
@@ -362,6 +369,9 @@ export class AgentsStore {
       ...(input.connections ? { connections: input.connections } : {}),
       ...(input.skills ? { skills: input.skills } : {}),
       ...(input.toolPolicies ? { toolPolicies: input.toolPolicies } : {}),
+      ...(input.delegation
+        ? { delegation: AgentDelegationPolicySchema.parse(input.delegation) }
+        : {}),
       ...this.encrypt(input.apiKey ?? null),
     };
     this.data.agents.push(stored);
@@ -408,6 +418,9 @@ export class AgentsStore {
     }
     if (patch.toolPolicies !== undefined) {
       stored.toolPolicies = patch.toolPolicies ?? undefined;
+    }
+    if (patch.delegation !== undefined) {
+      stored.delegation = AgentDelegationPolicySchema.parse(patch.delegation);
     }
     if (patch.apiKey !== undefined) {
       const { apiKeyEncrypted, apiKeyPlaintext } = this.encrypt(
@@ -484,5 +497,16 @@ export function toPublicAgent(agent: AgentConfig): PublicAgentConfig {
     connections: agent.connections ?? { mode: "all" },
     skills: agent.skills ?? { mode: "all" },
     toolPolicies: agent.toolPolicies ?? {},
+    delegation: agent.delegation ?? {
+      enabled: true,
+      maxConcurrentChildren: 10,
+      routes: [
+        {
+          id: "same-agent",
+          target: "self",
+          allowFurtherDelegation: true,
+        },
+      ],
+    },
   };
 }

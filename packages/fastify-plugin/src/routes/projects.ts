@@ -1,6 +1,11 @@
 import {
+  assertMayManageRolePolicy,
+  type Identity,
+  isBuilder,
   type Project,
+  ProjectFileConflictError,
   ProjectFileNotFoundError,
+  ProjectFileNotTextError,
   ProjectNotFoundError,
   type WorkflowSummary,
 } from "@catamorphic/core";
@@ -107,7 +112,10 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
       const { projectId } = request.params;
 
       try {
-        const project = await ctx.core.projects.get(identity, projectId);
+        const project = await ctx.core.projects.getOverview({
+          identity,
+          projectId,
+        });
         const summary = await safeListWorkflows(ctx.core, identity, projectId);
         return reply.send({
           ...toDto(project),
@@ -213,7 +221,13 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     url: "/projects/:projectId/files/*",
     schema: {
       params: ProjectFileParamsSchema,
-      response: { 200: FileContentSchema, 404: ErrorSchema, 503: ErrorSchema },
+      response: {
+        200: FileContentSchema,
+        404: ErrorSchema,
+        409: ErrorSchema,
+        415: ErrorSchema,
+        503: ErrorSchema,
+      },
     },
     handler: async (request, reply) => {
       if (!ctx.core)
@@ -229,6 +243,10 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
         );
         return reply.send({ path: filePath, content });
       } catch (err) {
+        if (err instanceof ProjectFileConflictError)
+          return reply.status(409).send({ error: err.message });
+        if (err instanceof ProjectFileNotTextError)
+          return reply.status(415).send({ error: err.message });
         if (err instanceof ProjectNotFoundError) {
           return reply.status(404).send({ error: "Project not found" });
         }
@@ -246,7 +264,13 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
     schema: {
       params: ProjectFileParamsSchema,
       body: WriteFileSchema,
-      response: { 200: FileContentSchema, 404: ErrorSchema, 503: ErrorSchema },
+      response: {
+        200: FileContentSchema,
+        404: ErrorSchema,
+        409: ErrorSchema,
+        415: ErrorSchema,
+        503: ErrorSchema,
+      },
     },
     handler: async (request, reply) => {
       if (!ctx.core)
@@ -263,6 +287,10 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
         );
         return reply.send({ path: filePath, content });
       } catch (err) {
+        if (err instanceof ProjectFileConflictError)
+          return reply.status(409).send({ error: err.message });
+        if (err instanceof ProjectFileNotTextError)
+          return reply.status(415).send({ error: err.message });
         if (err instanceof ProjectNotFoundError) {
           return reply.status(404).send({ error: "Project not found" });
         }
@@ -532,6 +560,11 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
+        assertMayManageRolePolicy(
+          identity,
+          projectId,
+          Object.keys(request.body.files ?? {}),
+        );
         const result = await ctx.core.deployment.deploy(
           identity.tenantId,
           projectId,
@@ -731,7 +764,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
 
 async function safeListWorkflows(
   core: NonNullable<RouteContext["core"]>,
-  identity: { tenantId: string; externalUserId: string },
+  identity: Identity,
   projectId: string,
 ): Promise<{
   workflows: WorkflowSummary[];
@@ -739,6 +772,7 @@ async function safeListWorkflows(
 }> {
   try {
     const workflows = await core.workflows.list({ identity, projectId });
+    if (!isBuilder(identity, projectId)) return { workflows, files: [] };
     const allFiles = await core.projects.readAllFiles(identity, projectId);
     return { workflows, files: Object.keys(allFiles) };
   } catch {

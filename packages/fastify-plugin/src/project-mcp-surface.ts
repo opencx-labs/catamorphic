@@ -59,6 +59,7 @@ export function surfaceTools(
   identity: Identity,
   projectId: string,
   features: SurfaceFeatures = { publications: "public", proposals: true },
+  currentSessionId?: string,
 ): SurfaceTool[] {
   const tools: SurfaceTool[] = [];
   const guarded =
@@ -82,6 +83,25 @@ export function surfaceTools(
   if (core.documents) {
     const documents = core.documents;
     tools.push(
+      {
+        definition: {
+          name: "documents_storage",
+          description:
+            "Describe where this project's documents are saved, the file-size limit, and whether uploading is a separate action. Device means the computer serving this connection, not necessarily your own computer. A remote MCP connection saves remotely under that server's access rules.",
+          inputSchema: { type: "object", properties: {} },
+          annotations: READ_ONLY,
+        },
+        call: guarded(async () => {
+          const storage = await documents.storage({ identity, projectId });
+          return {
+            ...storage,
+            maxDocumentBytes: Math.min(
+              storage.maxDocumentBytes,
+              features.storeUploadMaxBytes ?? storage.maxDocumentBytes,
+            ),
+          };
+        }),
+      },
       {
         definition: {
           name: "documents_list",
@@ -115,18 +135,35 @@ export function surfaceTools(
         definition: {
           name: "documents_read",
           description:
-            "Read one document (text content when text-like; metadata always). Store documents accept a version to read history.",
+            "Read one document (text content when text-like; metadata always). Store documents accept a version to read history. For a binary file, request encoding=base64 to receive its bytes. Saving through a remote MCP connection saves on that server, not on your device.",
           inputSchema: {
             type: "object",
             properties: {
               path: { type: "string" },
               version: { type: "integer" },
+              encoding: { type: "string", enum: ["text", "base64"] },
             },
             required: ["path"],
           },
           annotations: READ_ONLY,
         },
         call: guarded(async (args) => {
+          if (args.encoding === "base64") {
+            const doc = await documents.readBytes({
+              identity,
+              projectId,
+              path: str(args.path) ?? "",
+              ...(int(args.version) !== undefined
+                ? { version: int(args.version) }
+                : {}),
+            });
+            if (doc.bytes.byteLength > 1024 * 1024)
+              throw new Error(
+                "This file is too large for an MCP text response. Download it from the authenticated documents/raw endpoint.",
+              );
+            const { bytes, ...entry } = doc;
+            return { ...entry, base64: Buffer.from(bytes).toString("base64") };
+          }
           const doc = await documents.read({
             identity,
             projectId,
@@ -192,6 +229,17 @@ export function surfaceTools(
           },
         },
         call: guarded(async (args) => {
+          const text = str(args.text);
+          const base64 = str(args.base64);
+          if ((text === undefined) === (base64 === undefined))
+            throw new Error("Provide exactly one of text or base64");
+          if (
+            base64 !== undefined &&
+            !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+              base64,
+            )
+          )
+            throw new Error("Invalid base64 file content");
           const content =
             str(args.text) !== undefined
               ? (str(args.text) as string)
@@ -476,7 +524,12 @@ export function surfaceTools(
         const agentId = projectAgentId(projectId, agent);
         const sessionId =
           str(args.sessionId) ??
-          (await sessions.create(identity, projectId, { agentId })).id;
+          (
+            await sessions.create(identity, projectId, {
+              agentId,
+              source: "mcp",
+            })
+          ).id;
         const reply = await sessions.sendMessage(
           identity,
           projectId,
@@ -486,6 +539,233 @@ export function surfaceTools(
         return { sessionId, reply: reply.content };
       }),
     });
+
+    tools.push({
+      definition: {
+        name: "send_agent_message",
+        description:
+          "Deliver an attributed message from your current session to this or another agent session. message_only records it without waking the agent; next_turn wakes an idle session or queues behind its active turn; interrupt stops the active turn and runs this next. Use interrupt only when delay would make the work wrong.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            fromSessionId: { type: "string" },
+            toSessionId: { type: "string" },
+            message: { type: "string" },
+            mode: {
+              type: "string",
+              enum: ["message_only", "next_turn", "interrupt"],
+            },
+            idempotencyKey: { type: "string" },
+          },
+          required: ["toSessionId", "message", "mode"],
+        },
+      },
+      call: guarded(async (args) => {
+        const fromSessionId = str(args.fromSessionId) ?? currentSessionId;
+        const toSessionId = str(args.toSessionId);
+        const message = str(args.message);
+        const mode = args.mode;
+        if (
+          !fromSessionId ||
+          !toSessionId ||
+          !message ||
+          (mode !== "message_only" &&
+            mode !== "next_turn" &&
+            mode !== "interrupt")
+        ) {
+          throw new Error(
+            "fromSessionId, toSessionId, message, and a valid mode are required",
+          );
+        }
+        const source = await sessions.get(identity, projectId, fromSessionId);
+        return sessions.deliver(identity, projectId, toSessionId, {
+          content: message,
+          author: {
+            kind: "agent",
+            sessionId: fromSessionId,
+            agentId: source.agentId,
+          },
+          mode,
+          ...(str(args.idempotencyKey)
+            ? { idempotencyKey: str(args.idempotencyKey) }
+            : {}),
+        });
+      }),
+    });
+
+    if (core.watchers) {
+      const watchers = core.watchers;
+      tools.push(
+        {
+          definition: {
+            name: "create_watcher",
+            description:
+              'Temporarily enable an ordinary TypeScript workflow owned by this session. For periodic monitoring, declare a normal schedule trigger and do the check with workflow IO. For event-driven work, use normalized Project Events already supplied by this host. Stop, expiry, or session close/archive disables future invocations. The source must export the named defineWorkflow and declare one or more inline triggers, for example triggers: [trigger("issue.changed")]. Event triggers receive the normalized Project Event envelope; schedule triggers receive their normal scheduled payload. To notify or wake a session, return context.host["catamorphic.sessions"].deliver({ sessionId, content, mode, idempotencyKey }) from a boundary. Pass source directly; do not write it to the user working tree. The host places it at workflows/src/watchers/<id>.ts in an isolated committed-origin checkout, so imports must already exist in that origin. workflowName must be exported by this source. The workflow is committed to an isolated catamorphic/watchers/<id> ref, pinned, and never merged into project main. This is temporary execution, not private storage. Call stop_watcher when the task is complete. Load the workflow-lifecycle skill for lifetime and publishing guidance.',
+            inputSchema: {
+              type: "object",
+              properties: {
+                sessionId: { type: "string" },
+                workflowName: { type: "string" },
+                source: {
+                  type: "string",
+                  description:
+                    "TypeScript source exporting workflowName; no Markdown fences. It runs from workflows/src/watchers/<id>.ts against the committed project origin.",
+                },
+                environment: { type: "string" },
+                expiresInSeconds: {
+                  type: "integer",
+                  minimum: 60,
+                  maximum: 2592000,
+                  description:
+                    "Activation lifetime in seconds; defaults to 24 hours. Stop earlier when the task completes.",
+                },
+              },
+              required: ["workflowName", "source"],
+            },
+          },
+          call: guarded(async (args) => {
+            const sessionId = str(args.sessionId) ?? currentSessionId;
+            const workflowName = str(args.workflowName);
+            const source = str(args.source);
+            if (!sessionId || !workflowName || !source) {
+              throw new Error(
+                "sessionId, workflowName, and source are required",
+              );
+            }
+            return watchers.create({
+              identity,
+              projectId,
+              sessionId,
+              workflowName,
+              source,
+              ...(str(args.environment)
+                ? { environment: str(args.environment) }
+                : {}),
+              ...(int(args.expiresInSeconds) !== undefined
+                ? { expiresInSeconds: int(args.expiresInSeconds) }
+                : {}),
+            });
+          }),
+        },
+        {
+          definition: {
+            name: "list_watchers",
+            description:
+              "List temporary watchers owned by the current session, including pinned commit, expiry, status, and last error.",
+            inputSchema: {
+              type: "object",
+              properties: { sessionId: { type: "string" } },
+            },
+            annotations: READ_ONLY,
+          },
+          call: guarded(async (args) => {
+            const sessionId = str(args.sessionId) ?? currentSessionId;
+            if (!sessionId) throw new Error("sessionId is required");
+            return watchers.list({
+              identity,
+              projectId,
+              sessionId,
+            });
+          }),
+        },
+        {
+          definition: {
+            name: "stop_watcher",
+            description: "Stop a temporary watcher owned by a session.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                sessionId: { type: "string" },
+                watcherId: { type: "string" },
+              },
+              required: ["watcherId"],
+            },
+          },
+          call: guarded(async (args) => {
+            const sessionId = str(args.sessionId) ?? currentSessionId;
+            const watcherId = str(args.watcherId);
+            if (!sessionId || !watcherId) {
+              throw new Error("sessionId and watcherId are required");
+            }
+            return {
+              stopped: await watchers.stop({
+                identity,
+                projectId,
+                sessionId,
+                watcherId,
+              }),
+            };
+          }),
+        },
+      );
+
+      if (core.github) {
+        tools.push({
+          definition: {
+            name: "create_github_watcher",
+            description:
+              'Temporarily enable an ordinary TypeScript workflow for future GitHub repository events. Catamorphic verifies the current user\'s repository access and starts the appropriate local or remote GitHub monitor. Declare GitHub subscriptions inline with trigger(), such as triggers: [trigger("github.pull_request")]. Supported kinds are github.pull_request, github.pull_request_review, github.check_run, github.check_suite, and github.workflow_run.',
+            inputSchema: {
+              type: "object",
+              properties: {
+                sessionId: { type: "string" },
+                workflowName: { type: "string" },
+                source: {
+                  type: "string",
+                  description:
+                    "TypeScript source exporting workflowName; no Markdown fences. It runs from workflows/src/watchers/<id>.ts against the committed project origin.",
+                },
+                environment: { type: "string" },
+                placement: {
+                  type: "string",
+                  enum: ["local", "remote", "any"],
+                },
+                expiresInSeconds: {
+                  type: "integer",
+                  minimum: 60,
+                  maximum: 2592000,
+                  description:
+                    "Activation lifetime in seconds; defaults to 24 hours. Stop earlier when the task completes.",
+                },
+                pollIntervalSeconds: { type: "integer", minimum: 5 },
+              },
+              required: ["workflowName", "source"],
+            },
+          },
+          call: guarded(async (args) => {
+            const sessionId = str(args.sessionId) ?? currentSessionId;
+            const workflowName = str(args.workflowName);
+            const source = str(args.source);
+            if (!sessionId || !workflowName || !source) {
+              throw new Error(
+                "sessionId, workflowName, and source are required",
+              );
+            }
+            return watchers.createGithub({
+              identity,
+              projectId,
+              sessionId,
+              workflowName,
+              source,
+              ...(str(args.environment)
+                ? { environment: str(args.environment) }
+                : {}),
+              ...(args.placement === "local" ||
+              args.placement === "remote" ||
+              args.placement === "any"
+                ? { placement: args.placement }
+                : {}),
+              ...(int(args.expiresInSeconds) !== undefined
+                ? { expiresInSeconds: int(args.expiresInSeconds) }
+                : {}),
+              ...(int(args.pollIntervalSeconds) !== undefined
+                ? { pollIntervalSeconds: int(args.pollIntervalSeconds) }
+                : {}),
+            });
+          }),
+        });
+      }
+    }
   }
 
   return tools;

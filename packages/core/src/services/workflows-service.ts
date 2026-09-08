@@ -10,12 +10,14 @@ import {
   type WorkflowGraph,
   type WorkflowTriggerBinding,
 } from "@catamorphic/parser";
-import type { Identity } from "../identity.js";
-import { assertBuilder } from "./artifact-scope.js";
+import { type Identity, isBuilder } from "../identity.js";
+import { AccessDeniedError, assertBuilder } from "./artifact-scope.js";
+import { withProgram } from "./program-reader.js";
 import {
   ProjectNotFoundError,
   type ProjectsService,
 } from "./projects-service.js";
+import { workflowSourceFiles } from "./workflow-source-files.js";
 
 export interface WorkflowSummary {
   name: string;
@@ -59,23 +61,24 @@ export class WorkflowsService {
     projectId: string;
     ref?: string;
   }): Promise<WorkflowSummary[]> {
-    await this.requireProject(args.identity, args.projectId);
-    return this.withDev(args.identity, args.projectId, async (repo) => {
-      const files = args.ref
-        ? await repo.readAllFilesAtRef(args.ref)
-        : await repo.readAllFiles();
+    await this.projects.getOverview(args);
+    return this.withReadableFiles(args, async (files) => {
       const { workflows } = parseProject(files);
-      return workflows.map((wf) => ({
-        name: wf.functionName,
-        capabilities: wf.graph.capabilities,
-        execution: wf.graph.execution,
-        displayName: wf.graph.displayName ?? null,
-        description: wf.graph.description ?? null,
-        filePath: wf.filePath ?? "",
-        parameterCount: wf.graph.input.parameters.length,
-        triggers: wf.graph.triggers,
-        canSuspend: wf.graph.canSuspend,
-      }));
+      return workflows
+        .filter((wf) =>
+          this.mayRead(args.identity, args.projectId, wf.functionName),
+        )
+        .map((wf) => ({
+          name: wf.functionName,
+          capabilities: wf.graph.capabilities,
+          execution: wf.graph.execution,
+          displayName: wf.graph.displayName ?? null,
+          description: wf.graph.description ?? null,
+          filePath: wf.filePath ?? "",
+          parameterCount: wf.graph.input.parameters.length,
+          triggers: wf.graph.triggers,
+          canSuspend: wf.graph.canSuspend,
+        }));
     });
   }
 
@@ -85,11 +88,10 @@ export class WorkflowsService {
     workflowName: string;
     ref?: string;
   }): Promise<WorkflowDetail> {
-    await this.requireProject(args.identity, args.projectId);
-    return this.withDev(args.identity, args.projectId, async (repo) => {
-      const allFiles = args.ref
-        ? await repo.readAllFilesAtRef(args.ref)
-        : await repo.readAllFiles();
+    await this.projects.getOverview(args);
+    if (!this.mayRead(args.identity, args.projectId, args.workflowName))
+      throw new AccessDeniedError();
+    return this.withReadableFiles(args, async (allFiles) => {
       const graph = parseWorkflowFromProject(allFiles, args.workflowName);
       if (!graph) {
         throw new WorkflowNotFoundError(args.projectId, args.workflowName);
@@ -99,8 +101,10 @@ export class WorkflowsService {
 
       return {
         ...graph,
-        projectFiles: Object.keys(allFiles),
-        allFiles,
+        projectFiles: isBuilder(args.identity, args.projectId)
+          ? Object.keys(allFiles)
+          : [],
+        allFiles: isBuilder(args.identity, args.projectId) ? allFiles : {},
       };
     });
   }
@@ -119,9 +123,7 @@ export class WorkflowsService {
   }): Promise<DeclaredSecret[]> {
     await this.requireProject(args.identity, args.projectId);
     return this.withDev(args.identity, args.projectId, async (repo) => {
-      const files = args.ref
-        ? await repo.readAllFilesAtRef(args.ref)
-        : await repo.readAllFiles();
+      const files = await workflowSourceFiles(repo, args.ref);
       const key = `${args.projectId}:${hashParseableSources(files)}`;
       const hit = this.declaredSecretsCache.get(key);
       if (hit) return hit;
@@ -133,6 +135,47 @@ export class WorkflowsService {
       this.declaredSecretsCache.set(key, secrets);
       return secrets;
     });
+  }
+
+  private mayRead(
+    identity: Identity,
+    projectId: string,
+    workflowName: string,
+  ): boolean {
+    return (
+      isBuilder(identity, projectId) ||
+      Boolean(
+        identity.scope?.some(
+          (ref) =>
+            ref.projectId === projectId &&
+            ref.kind === "workflow" &&
+            ref.name === workflowName,
+        ),
+      )
+    );
+  }
+
+  private async withReadableFiles<T>(
+    args: { identity: Identity; projectId: string; ref?: string },
+    read: (files: Record<string, string>) => Promise<T>,
+  ): Promise<T> {
+    if (isBuilder(args.identity, args.projectId)) {
+      return this.withDev(args.identity, args.projectId, async (repo) =>
+        read(await workflowSourceFiles(repo, args.ref)),
+      );
+    }
+    // A member sees the deployed program, never another user's draft or an
+    // arbitrary historical commit supplied by the client.
+    if (args.ref && args.ref !== "main") throw new AccessDeniedError();
+    if (!this.projectManager.remoteBackend) return read({});
+    return withProgram(
+      this.projectManager,
+      args.identity.tenantId,
+      args.projectId,
+      async (repo, ref) =>
+        read(ref ? await workflowSourceFiles(repo, ref) : {}),
+      { publishedOnly: true },
+    );
   }
 
   private readonly declaredSecretsCache = new Map<string, DeclaredSecret[]>();

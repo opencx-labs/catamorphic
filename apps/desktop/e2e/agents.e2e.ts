@@ -24,8 +24,13 @@ const helpers = `
   const $$ = (selector) => [...document.querySelectorAll(selector)];
   const byText = (selector, text) =>
     $$(selector).find((el) => el.textContent.trim().includes(text));
-  const visibleDock = () =>
-    $$('section[aria-label]').find((el) => !el.inert && el.querySelector('[data-composer-input]'));
+  const visibleDock = () => {
+    const docks = $$('section[data-chat-local-id]').filter((el) =>
+      !el.closest('[inert]') && el.getBoundingClientRect().width > 0 &&
+      el.querySelector('[data-composer-input]'));
+    return docks.find((el) => el.dataset.floatingChat === 'true') ??
+      docks.find((el) => el.contains(document.activeElement)) ?? docks[0];
+  };
   ${setReactValueJs}
   const pressKey = (key, mods = {}) =>
     window.dispatchEvent(new KeyboardEvent('keydown',
@@ -133,9 +138,31 @@ describe("agents and profiles", () => {
     );
     await runWait(
       `return !!byText('[role="tab"], button', 'New Tab') &&
-              !!$('textarea[placeholder*="Search or ask"]');`,
+              !!$('textarea[placeholder*="Search or ask"]') &&
+              !wizardVisible() &&
+              !byText('[role="tab"], button', 'Set up agent');`,
       { timeoutMs: 60_000, label: "palette New Tab after project creation" },
     );
+  });
+
+  it("hides palette actions that cannot affect the empty workspace", async () => {
+    await ensurePalette();
+    await resetPalette();
+    await run(`setReactValue(paletteInput(), '>'); return true;`);
+    await runWait(
+      `const text = paletteRows().map((row) => row.textContent).join('\\n');
+       return text.includes('New browser tab') &&
+              !text.includes('Minimize/restore chat') &&
+              !text.includes('Open chat as tab') &&
+              !text.includes('Previous chat') &&
+              !text.includes('Next chat') &&
+              !text.includes('Previous tab') &&
+              !text.includes('Next tab') &&
+              !text.includes('Split with previous tab') &&
+              !text.includes('Reopen closed tab');`,
+      { label: "only actionable commands shown" },
+    );
+    await run(paletteEscape);
   });
 
   it("changes the default agent through the palette picker", async () => {
@@ -1136,7 +1163,7 @@ describe("agents and profiles", () => {
       return true;
     `);
     await runWait(
-      `return $$('[role="log"] article')
+      `return [...visibleDock().querySelectorAll('[role="log"] article')]
         .some((el) => el.textContent.includes('Working on it, give me a moment.'));`,
       { timeoutMs: 30_000, label: "first host agent running" },
     );
@@ -1179,10 +1206,14 @@ describe("agents and profiles", () => {
         label: "same-turn worktree edit checkpointed before next turn",
       },
     );
+    await run(
+      `visibleDock().querySelector('[data-testid="session-inspector-trigger"]').click(); return true;`,
+    );
     await runWait(
-      `const badge = visibleDock()?.querySelector('[data-testid="chat-checkout-badge"]');
-       return badge?.textContent.includes('catamorphic/');`,
-      { label: "active chat isolated branch badge" },
+      `const inspector = $('[data-testid="session-inspector-content"]');
+       return inspector?.textContent.includes('Checkout') &&
+         inspector.textContent.includes('catamorphic/');`,
+      { label: "active chat isolated checkout in session status" },
     );
   });
 
@@ -1206,7 +1237,7 @@ describe("agents and profiles", () => {
       return true;
     `);
     await runWait(
-      `return $$('[role="log"] article')
+      `return [...visibleDock().querySelectorAll('[role="log"] article')]
         .some((el) => el.textContent.includes('Working on it, give me a moment.'));`,
       { timeoutMs: 30_000, label: "incognito agent running" },
     );
@@ -1302,5 +1333,69 @@ describe("agents and profiles", () => {
          '[data-testid="surface-chip"][data-kind="browser"]');`,
       { label: "PDF chip explicitly removed" },
     );
+  });
+  it("opens reply links in the rich editor, code editor, graph, app and PDF browser", async () => {
+    await openFreshChat("artifact link chat");
+    await run(
+      `const ta = visibleDock().querySelector('[data-composer-input]'); setReactValue(ta, 'artifact links'); ta.closest('form').requestSubmit(); return true;`,
+    );
+    await runWait(`return !!byText('a', 'Read linked notes');`, {
+      label: "artifact reply links",
+    });
+    await run(`byText('a', 'Read linked notes').click(); return true;`);
+    await runWait(
+      `return !!$$('.cat-mdedit h1').find((node) => node.textContent === 'Linked notes');`,
+      { label: "linked Markdown in Tiptap" },
+    );
+    await run(
+      `byText('a', 'Inspect linked source').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true, shiftKey: true })); return true;`,
+    );
+    await runWait(
+      `return !!$('.monaco-editor') && !!$('[data-point-key^="editor:"]') && !!$('[data-split-divider]');`,
+      { label: "linked source editor" },
+    );
+    await run(
+      `byText('a', 'Open linked graph').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true })); return true;`,
+    );
+    await runWait(
+      `return !!$('[data-point-key="workflow:linkedWorkflow"]') && !!$('.react-flow__node');`,
+      { label: "linked workflow graph" },
+    );
+
+    await run(
+      `byText('a', 'Open linked app').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true })); return true;`,
+    );
+    await runWait(`return !!$('[data-point-key="app:linked-app"]');`, {
+      label: "linked app tab",
+    });
+    await run(
+      `byText('a', 'Read linked PDF').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true })); return true;`,
+    );
+    await runWait(
+      `return $$('webview').some((view) => (view.getAttribute('src') ?? '').startsWith('file:') && (view.getAttribute('src') ?? '').includes('artifact.pdf'));`,
+      { label: "linked PDF browser" },
+    );
+  });
+  it("shows the shared session inspector and explains unavailable server moves", async () => {
+    await run(
+      `const row = byText('[data-session-id] button', 'artifact links'); if (!row) throw new Error('Session row missing'); row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); return true;`,
+    );
+    await runWait(
+      `return !!$('[data-resource-inspector]') && !!byText('[data-resource-inspector] button', 'Move to server');`,
+      { label: "sidebar session inspector" },
+    );
+    await runWait(
+      `return byText('[data-resource-inspector] button', 'Move to server')?.getAttribute('aria-disabled') === 'true';`,
+      { label: "move eligibility" },
+    );
+    await run(
+      `byText('[data-resource-inspector] button', 'Move to server').dispatchEvent(new PointerEvent('pointerover', { bubbles: true })); return true;`,
+    );
+    await runWait(
+      `return $$('[role="tooltip"]').some(node => node.textContent === 'Link this project to a server first');`,
+      { label: "disabled move explanation" },
+    );
+
+    await run(`pressKey('Escape'); return true;`);
   });
 });

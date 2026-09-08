@@ -1,8 +1,10 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
   type ConnectionProvider,
+  startProjectEventMonitorWorker,
+  startWatcherDispatcher,
   ToolPermissionBroker,
 } from "@catamorphic/core";
 import type { DB } from "@catamorphic/db";
@@ -11,10 +13,12 @@ import { catamorphicPlugin } from "@catamorphic/fastify-plugin";
 import { MicrosandboxSandboxProvider } from "@catamorphic/microsandbox";
 import {
   type Catamorphic,
+  connectionAuthorizationPage,
   createCatamorphic,
   defineStaticEnvironments,
   FsBundleStore,
 } from "@catamorphic/server-sdk";
+import { createPushTransport } from "@catamorphic/server-sdk/web-push";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import cors from "@fastify/cors";
@@ -32,8 +36,12 @@ import {
 } from "../mcp-apps.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
+import { forwardRemoteApi } from "../remote-api.js";
+import { RemoteClientRunners } from "../remote-client-runner.js";
 import { RemoteSessionMirror } from "../remote-mirror.js";
+import { shutdownDesktopServices } from "../shutdown.js";
 import { userSkillFiles, userSkillInfos } from "../user-skills.js";
+import { syncProfileMcpWorkflowConnections } from "../workflow-mcp-connections.js";
 import { DesktopAgentRegistry } from "./agent-registry.js";
 import { E2eLocalSandboxProvider } from "./e2e-fakes.js";
 import { FileGithubTokenStore, GITHUB_APP } from "./github.js";
@@ -67,6 +75,7 @@ export const DESKTOP_USER_ID = "desktop-user";
 
 export interface EmbeddedServer {
   url: string;
+  clientRunners: RemoteClientRunners;
   catamorphic: Catamorphic;
   projectRoots: ProjectRootsStore;
   /** Desktop-local checkout assignment and Git worktree lifecycle. */
@@ -89,6 +98,16 @@ export interface EmbeddedServer {
   suspendExecution: () => Promise<void>;
   /** Restart the execution worker after OS resume. No-op while running. */
   resumeExecution: () => void;
+  /** Poll linked remote hosts for messages addressed to local sessions. */
+  syncSessionMailboxes: () => void;
+  sessionMoveEligibility: (
+    projectId: string,
+    sessionId: string,
+  ) => Promise<{ canMove: boolean; reason: string | null }>;
+  moveSessionToServer: (
+    projectId: string,
+    sessionId: string,
+  ) => Promise<{ ok: true; serverUrl: string; remoteProjectId: string }>;
   shutdown: () => Promise<void>;
 }
 
@@ -103,6 +122,7 @@ export async function startEmbeddedServer(
   connectionProviders?: readonly ConnectionProvider[],
 ): Promise<EmbeddedServer> {
   fs.mkdirSync(paths.db, { recursive: true });
+  const hostId = loadOrCreateHostId(path.join(paths.root, "host-id"));
 
   const pglite = new PGlite(paths.db, { extensions: { pgcrypto } });
   const db = new Kysely<DB>({
@@ -121,6 +141,7 @@ export async function startEmbeddedServer(
   const sandboxProvider = e2eFakeAgent
     ? new E2eLocalSandboxProvider()
     : new MicrosandboxSandboxProvider();
+  const clientRunners = new RemoteClientRunners(profileConfig, sandboxProvider);
   const environmentProvider = defineStaticEnvironments([
     {
       descriptor: {
@@ -186,6 +207,9 @@ export async function startEmbeddedServer(
     projectId: string,
     sessionId: string,
   ) => Promise<string[]> = async () => [];
+  let syncWorkflowConnections: (profileId?: string) => Promise<void> =
+    async () => {};
+  let workflowConnectionSync = Promise.resolve();
   // Tool-permission asks (ADR 0054) park on this broker so REMOTE clients
   // (the companion app) can list and answer them over HTTP; the registry
   // races it against the desktop's own consent modal — first answer wins.
@@ -193,6 +217,12 @@ export async function startEmbeddedServer(
   // Session mirroring to ADR 0055 remote links (late-bound: reads core
   // through the closure after createCatamorphic returns).
   const sessionMirror = new RemoteSessionMirror({
+    hostId,
+    identity: {
+      tenantId: DESKTOP_TENANT_ID,
+      externalUserId: DESKTOP_USER_ID,
+    },
+    getSessionSync: () => catamorphic.core.sessionSync,
     profiles,
     profileConfig,
     // Desktop-local privacy flag (ADR 0062): never crosses core.
@@ -206,6 +236,59 @@ export async function startEmbeddedServer(
             sessionId,
           )
         : Promise.reject(new Error("agent sessions unavailable")),
+    listSessions: async (projectId) =>
+      catamorphic.core.agentSessions
+        ? (
+            await catamorphic.core.agentSessions.list(
+              {
+                tenantId: DESKTOP_TENANT_ID,
+                externalUserId: DESKTOP_USER_ID,
+              },
+              projectId,
+              { limit: 1_000 },
+            )
+          ).items
+        : [],
+    beginHandoff: (projectId, sessionId, destinationHostId) =>
+      catamorphic.core.agentSessions
+        ? catamorphic.core.agentSessions.beginHandoff(
+            {
+              tenantId: DESKTOP_TENANT_ID,
+              externalUserId: DESKTOP_USER_ID,
+            },
+            projectId,
+            sessionId,
+            { destinationHostId },
+          )
+        : Promise.reject(new Error("agent sessions unavailable")),
+    cancelHandoff: (projectId, sessionId) =>
+      catamorphic.core.agentSessions
+        ? catamorphic.core.agentSessions.cancelHandoff(
+            {
+              tenantId: DESKTOP_TENANT_ID,
+              externalUserId: DESKTOP_USER_ID,
+            },
+            projectId,
+            sessionId,
+          )
+        : Promise.reject(new Error("agent sessions unavailable")),
+    completeHandoff: (
+      projectId,
+      sessionId,
+      destinationHostId,
+      authorityRevision,
+    ) =>
+      catamorphic.core.agentSessions
+        ? catamorphic.core.agentSessions.completeHandoff(
+            {
+              tenantId: DESKTOP_TENANT_ID,
+              externalUserId: DESKTOP_USER_ID,
+            },
+            projectId,
+            sessionId,
+            { destinationHostId, authorityRevision },
+          )
+        : Promise.reject(new Error("agent sessions unavailable")),
     markFork: (projectId, sessionId, fork) =>
       catamorphic.core.agentSessions
         ? catamorphic.core.agentSessions.recordMirrorFork(
@@ -215,12 +298,21 @@ export async function startEmbeddedServer(
             fork,
           )
         : Promise.resolve(),
+    importMailbox: (projectId, item) =>
+      catamorphic.core.agentSessions
+        ? catamorphic.core.agentSessions.importMailbox(
+            { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+            projectId,
+            item,
+          )
+        : Promise.reject(new Error("agent sessions unavailable")),
   });
   const agentRegistry = new DesktopAgentRegistry({
     profiles,
     profileConfig,
     sandboxProvider,
     agentHomesDir: paths.agentHomesDir,
+    harnessComponentsDir: paths.harnessComponentsDir,
     e2eFake: e2eFakeAgent,
     workspaceBridge,
     toolPermissions,
@@ -229,13 +321,20 @@ export async function startEmbeddedServer(
     // agents can call ai.tool-call workflows like any other MCP tool. The
     // embedded server defaults desktop identity headers, so no auth rides
     // the URL.
-    projectMcpUrl: (projectId) =>
-      apiBaseUrl ? `${apiBaseUrl}/api/projects/${projectId}/mcp` : undefined,
+    projectMcpUrl: (projectId, sessionId) =>
+      apiBaseUrl
+        ? `${apiBaseUrl}/api/projects/${projectId}/mcp?sessionId=${encodeURIComponent(sessionId)}`
+        : undefined,
     workspaceMcpServer: (projectId, sessionId, agentId) =>
       apiBaseUrl
         ? {
             transport: "http",
             url: `${apiBaseUrl}/desktop/workspace-mcp/${encodeURIComponent(projectId)}/${encodeURIComponent(sessionId)}/${encodeURIComponent(agentId)}`,
+            // This endpoint is already capability-bound to the exact
+            // agent, project, and session. Codex has no interactive MCP
+            // approval bridge, so authorize these host-owned tools at the
+            // server boundary instead of letting the CLI cancel them.
+            defaultToolsApprovalMode: "approve",
             headers: {
               Authorization: `Bearer ${workspaceMcpCapability({
                 secret: workspaceMcpSecret,
@@ -269,9 +368,11 @@ export async function startEmbeddedServer(
   }
 
   const catamorphic = createCatamorphic({
+    hostId,
     toolPermissions,
     database: { db },
     storage: {
+      localCheckouts: true,
       projectsPath: paths.projects,
       remotesPath: paths.remotes,
       projectPathResolver: (_tenantId, projectId) =>
@@ -323,9 +424,22 @@ export async function startEmbeddedServer(
         }
         return current.path;
       },
-      checkpoint: (input) => sessionCheckouts.checkpoint(input),
+      checkpoint: async (input) => {
+        const checkout = await sessionCheckouts.describe(input);
+        if (
+          checkout.kind === "external" ||
+          (checkout.kind !== "managed" &&
+            !projectRoots.checkpointsEnabled(input.projectId))
+        )
+          return null;
+        return sessionCheckouts.checkpoint(input);
+      },
     },
     appBundleStore: new FsBundleStore(paths.appBundles),
+    pushNotifications: createPushTransport({ dataDir: paths.root }),
+    documentBlobStore: new FsBundleStore(
+      path.join(paths.root, "document-blobs"),
+    ),
     // Local projects: the folder IS the store; remote projects sync their
     // store/ explicitly (Ship). No per-turn pull/ship into the local store.
     storeSyncAroundTurns: false,
@@ -335,6 +449,11 @@ export async function startEmbeddedServer(
     },
     triggerKinds: DESKTOP_TRIGGER_KINDS,
     mcpToolKinds: DESKTOP_MCP_TOOL_KINDS,
+    projectHooks: [
+      {
+        onProjectCreated: async () => syncWorkflowConnections(),
+      },
+    ],
     // The user's personal skill tier (ADR 0056): profile-local files,
     // listed and readable beside project and host skills, never shared.
     userSkills: (_identity, projectId) =>
@@ -344,12 +463,16 @@ export async function startEmbeddedServer(
     // `triggers` is assigned right after construction; turns can only
     // settle later, once a chat message round-trips.
     onAgentTurnSettled: (event) => {
-      triggers.onAgentTurnSettled(event);
+      triggers.onAgentTurnSettled(
+        event,
+        projectRoots.checkpointsEnabled(event.projectId),
+      );
       // Linked projects converge with their remote after every settled
       // turn (ADR 0044); no-remote projects no-op on one row read.
       const primary = projectRoots.getSync(event.projectId);
       if (
         primary &&
+        projectRoots.checkpointsEnabled(event.projectId) &&
         path.resolve(primary) === path.resolve(event.workingDirectory)
       ) {
         catamorphic.core.remoteSync.syncInBackground(
@@ -406,6 +529,49 @@ export async function startEmbeddedServer(
     tenantId: DESKTOP_TENANT_ID,
     externalUserId: DESKTOP_USER_ID,
   };
+  catamorphic.core.agentSessions?.setArchiveResourcesHandler({
+    impact: async ({ projectId, sessionIds }) => ({
+      activeProcessCount: workspaceBridge
+        ? await workspaceBridge.sessionProcessCount(projectId, sessionIds)
+        : 0,
+    }),
+    stop: async (input) => {
+      await catamorphic.core.watchers?.stopForSessions(input);
+      if (workspaceBridge) {
+        await workspaceBridge.stopSessionProcesses(
+          input.projectId,
+          input.sessionIds,
+        );
+      }
+    },
+  });
+  syncWorkflowConnections = (profileId?: string) => {
+    // OAuth discovery, registration, token exchange, and tool probing can
+    // each update the profile store. Serialize their projections so two
+    // snapshots never race the connection service's compare-and-swap.
+    workflowConnectionSync = workflowConnectionSync
+      .then(() =>
+        syncProfileMcpWorkflowConnections({
+          core: catamorphic.core,
+          profiles,
+          profileConfig,
+          identity: desktopIdentity,
+          profileId,
+        }),
+      )
+      .catch((error) =>
+        console.warn(
+          `[desktop] workflow connection sync failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        ),
+      );
+    return workflowConnectionSync;
+  };
+  await syncWorkflowConnections();
+  profileConfig.onConnectionsChanged((profileId) => {
+    void syncWorkflowConnections(profileId);
+  });
   isolationConflictPeers = async (projectId, sessionId) => {
     const detail = await catamorphic.core.agentSessions?.get(
       desktopIdentity,
@@ -483,6 +649,68 @@ export async function startEmbeddedServer(
         })),
       };
     },
+    send: async (projectId, ownSessionId, peerSessionId, content, mode) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      const peers = await sessionPeersResolver?.(projectId, ownSessionId);
+      if (!peers?.some((peer) => peer.id === peerSessionId)) {
+        throw new Error("That project session is not visible.");
+      }
+      const ownSession = await service.get(
+        desktopIdentity,
+        projectId,
+        ownSessionId,
+      );
+      return service.deliver(desktopIdentity, projectId, peerSessionId, {
+        content,
+        author: {
+          kind: "agent",
+          sessionId: ownSessionId,
+          agentId: ownSession.agentId,
+        },
+        mode,
+      });
+    },
+    spawn: async (projectId, sessionId, input) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return service.createSubsession(
+        desktopIdentity,
+        projectId,
+        sessionId,
+        input,
+      );
+    },
+    listSubsessions: async (projectId, sessionId) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return service.listSubsessions(desktopIdentity, projectId, sessionId);
+    },
+    waitForSubsessions: async (projectId, sessionId, input) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return service.waitForSubsessions(
+        desktopIdentity,
+        projectId,
+        sessionId,
+        input,
+      );
+    },
+    interruptSubsession: async (projectId, sessionId, childSessionId) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      await service.interruptSubsession(
+        desktopIdentity,
+        projectId,
+        sessionId,
+        childSessionId,
+      );
+    },
+    requestAttention: async (projectId, sessionId) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return service.requestAttention(desktopIdentity, projectId, sessionId);
+    },
     setActivity: async (projectId, sessionId, activity) => {
       await catamorphic.core.agentSessions?.setActivity(
         desktopIdentity,
@@ -490,6 +718,22 @@ export async function startEmbeddedServer(
         sessionId,
         activity,
       );
+    },
+  });
+  agentRegistry.workspaceToolkit?.setTodoListBridge({
+    read: async (projectId, sessionId) => {
+      const detail = await catamorphic.core.agentSessions?.get(
+        desktopIdentity,
+        projectId,
+        sessionId,
+      );
+      if (!detail) throw new Error("Agent sessions are not configured");
+      return detail.todos;
+    },
+    replace: async (projectId, sessionId, items) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return service.replaceTodos(desktopIdentity, projectId, sessionId, items);
     },
   });
   agentRegistry.workspaceToolkit?.setCheckoutBridge({
@@ -711,6 +955,62 @@ export async function startEmbeddedServer(
   const app: FastifyInstance = Fastify({
     logger: { level: "warn" },
     bodyLimit: 96 * 1024 * 1024,
+    // Windows are already closed at shutdown. Remaining Chromium requests
+    // must not keep HTTP close (and therefore the database flush) waiting.
+    forceCloseConnections: true,
+  });
+  // A linked project is a remote authority. Never execute its API operations
+  // under the desktop's loopback root identity.
+  app.addHook("preHandler", async (request, reply) => {
+    const match = request.url.match(/^\/api\/projects\/([^/?]+)(?:[/?]|$)/);
+    if (!match?.[1]) return;
+    await forwardRemoteApi({
+      request,
+      reply,
+      profiles: profileConfig,
+      projectId: decodeURIComponent(match[1]),
+      apiPath: request.url.slice(4),
+    });
+  });
+  app.route<{ Params: { projectId: string; "*": string } }>({
+    method: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    url: "/desktop/projects/:projectId/remote-api/*",
+    handler: async (request, reply) => {
+      const params = request.params;
+      const query = request.url.includes("?")
+        ? request.url.slice(request.url.indexOf("?"))
+        : "";
+      const forwarded = await forwardRemoteApi({
+        request,
+        reply,
+        profiles: profileConfig,
+        projectId: params.projectId,
+        apiPath: `/${params["*"].replace(/^api\//, "")}${query}`,
+      });
+      if (!forwarded)
+        return reply
+          .status(404)
+          .send({ error: "Project has no remote authority" });
+    },
+  });
+  app.addHook("onSend", (request, reply, payload, done) => {
+    if (
+      request.method === "GET" &&
+      request.url.startsWith("/api/connection-authorizations/callback?") &&
+      request.headers.accept?.includes("text/html")
+    ) {
+      reply
+        .type("text/html; charset=utf-8")
+        .header("cache-control", "no-store")
+        .header(
+          "content-security-policy",
+          "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+        );
+      done(
+        null,
+        connectionAuthorizationPage({ success: reply.statusCode < 400 }),
+      );
+    } else done(null, payload);
   });
   registerWorkspaceMcpRoute(
     app,
@@ -810,7 +1110,38 @@ export async function startEmbeddedServer(
   const startWorker = () =>
     catamorphic.startExecutionWorker({ name: "desktop", concurrency: 1 });
   let worker: ReturnType<typeof startWorker> | null = startWorker();
+  catamorphic.startAgentWorker({
+    resolveIdentity: async ({ tenantId, externalUserId }) =>
+      tenantId === DESKTOP_TENANT_ID && externalUserId === DESKTOP_USER_ID
+        ? { tenantId, externalUserId }
+        : null,
+  });
+  let notificationTick: Promise<unknown> | undefined;
+  const notificationTimer = setInterval(() => {
+    if (shutdownDone || notificationTick) return;
+    notificationTick = catamorphic.core.notifications
+      .publishFailedAgentTurns({ authorityHostId: hostId })
+      .then(() =>
+        catamorphic.core.notifications.drain(`desktop-notifications:${hostId}`),
+      )
+      .catch((error) =>
+        console.warn("[catamorphic] Notification delivery failed", error),
+      )
+      .finally(() => {
+        notificationTick = undefined;
+      });
+  }, 5_000);
+  notificationTimer.unref();
+  const projectEventWorker = startProjectEventMonitorWorker({
+    monitors: catamorphic.core.projectEventMonitors,
+    providers: catamorphic.core.projectEventSources,
+    placement: "local",
+  });
+  const watcherDispatcher = catamorphic.core.watchers
+    ? startWatcherDispatcher({ watchers: catamorphic.core.watchers })
+    : null;
   const suspendExecution = async () => {
+    await clientRunners.stop();
     const current = worker;
     worker = null;
     await current?.stop().catch(() => {});
@@ -823,7 +1154,11 @@ export async function startEmbeddedServer(
   // Project workspaces type-check `trigger()` against a generated
   // catamorphic-triggers.d.ts; refresh it everywhere in the background so
   // the coding agent always sees the host's current kinds.
-  void triggers.syncAllProjectTypes().catch(() => {});
+  void triggers
+    .syncAllProjectTypes((projectId) =>
+      projectRoots.checkpointsEnabled(projectId),
+    )
+    .catch(() => {});
 
   // Remote sync sweep (ADR 0044): converge every linked project at boot and
   // on an interval. Sync also fires after each settled turn; the service
@@ -837,6 +1172,7 @@ export async function startEmbeddedServer(
       limit: 100,
     });
     for (const project of items) {
+      if (!projectRoots.checkpointsEnabled(project.id)) continue;
       catamorphic.core.remoteSync.syncInBackground(identity, project.id);
     }
   };
@@ -845,22 +1181,86 @@ export async function startEmbeddedServer(
     () => void syncAllRemotes().catch(() => {}),
     10 * 60 * 1000,
   );
+  let scheduleTick: Promise<void> | undefined;
+  const runScheduleTick = async () => {
+    const { items } = await catamorphic.core.projects.list(identity, {
+      limit: 1_000,
+    });
+    for (const project of items) {
+      if (shutdownDone) return;
+      const remoteProjects = profileConfig.forProfile(
+        profiles.profileForProject(project.id).id,
+      ).remoteProjects;
+      // A linked project's canonical hosting server owns its schedules.
+      // This desktop does not shadow-run them or become an implicit fallback.
+      if (remoteProjects.get(project.id)) continue;
+      await catamorphic.core.schedules.tick({
+        identity,
+        projectId: project.id,
+      });
+    }
+  };
+  const tickSchedules = (): Promise<void> => {
+    if (shutdownDone) return Promise.resolve();
+    scheduleTick ??= runScheduleTick().finally(() => {
+      scheduleTick = undefined;
+    });
+    return scheduleTick;
+  };
+  void tickSchedules().catch(() => {});
+  const scheduleTimer = setInterval(
+    () => void tickSchedules().catch(() => {}),
+    15_000,
+  );
+  sessionMirror.syncMailboxesInBackground();
+  const sessionMailboxTimer = setInterval(
+    () => sessionMirror.syncMailboxesInBackground(),
+    5_000,
+  );
+  sessionMirror.syncMirrorsInBackground();
+  const sessionMirrorTimer = setInterval(
+    () => sessionMirror.syncMirrorsInBackground(),
+    30_000,
+  );
 
   const shutdown = () => {
     shutdownDone ??= (async () => {
+      await clientRunners.stop();
       clearInterval(remoteSyncTimer);
-      await suspendExecution();
-      await app.close().catch(() => {});
-      await catamorphic.close().catch(() => {});
-      // catamorphic.close() leaves the host-owned Kysely alone; destroying it
-      // closes the PGlite instance (flushes WAL to the data dir).
-      await db.destroy().catch(() => {});
+      clearInterval(notificationTimer);
+      clearInterval(sessionMailboxTimer);
+      clearInterval(sessionMirrorTimer);
+      clearInterval(scheduleTimer);
+      await shutdownDesktopServices({
+        steps: [
+          { name: "schedules", dispose: () => scheduleTick?.catch(() => {}) },
+          {
+            name: "notifications",
+            dispose: async () => {
+              await notificationTick;
+            },
+          },
+          { name: "project events", dispose: () => projectEventWorker.stop() },
+          {
+            name: "watcher dispatch",
+            dispose: () => watcherDispatcher?.stop(),
+          },
+          { name: "workflow execution", dispose: suspendExecution },
+          { name: "HTTP server", dispose: () => app.close() },
+          { name: "framework services", dispose: () => catamorphic.close() },
+          { name: "agent clients", dispose: () => agentRegistry.dispose() },
+          // The host owns Kysely. Always attempt its WAL flush last and report
+          // a failure instead of silently treating an unsafe shutdown as clean.
+          { name: "database", dispose: () => db.destroy() },
+        ],
+      });
     })();
     return shutdownDone;
   };
 
   return {
     url,
+    clientRunners,
     catamorphic,
     projectRoots,
     sessionCheckouts,
@@ -872,6 +1272,24 @@ export async function startEmbeddedServer(
     },
     suspendExecution,
     resumeExecution,
+    syncSessionMailboxes: () => sessionMirror.syncMailboxesInBackground(),
+    sessionMoveEligibility: (projectId, sessionId) =>
+      sessionMirror.eligibility(projectId, sessionId),
+    moveSessionToServer: (projectId, sessionId) =>
+      sessionMirror.moveToServer(projectId, sessionId),
     shutdown,
   };
+}
+
+function loadOrCreateHostId(file: string): string {
+  try {
+    const existing = fs.readFileSync(file, "utf8").trim();
+    if (existing) return existing;
+  } catch {
+    // First boot creates a stable identity below.
+  }
+  const hostId = `desktop:${randomUUID()}`;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${hostId}\n`, { mode: 0o600 });
+  return hostId;
 }

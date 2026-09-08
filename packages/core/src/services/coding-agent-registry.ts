@@ -3,7 +3,11 @@ import type {
   CodingAgentProvider,
   TurnOptions,
 } from "@catamorphic/sandbox";
-import type { AgentEnvironmentPolicy } from "./agent-definitions-service.js";
+import type {
+  AgentDelegationPolicy,
+  AgentEnvironmentPolicy,
+  ProjectAgentEntry,
+} from "./agent-definitions-service.js";
 import type { ConnectionRequirement } from "./connection-types.js";
 
 export interface RegisteredCodingAgent {
@@ -11,12 +15,18 @@ export interface RegisteredCodingAgent {
   id: string;
   provider: CodingAgentProvider;
   topology: AgentExecutionTopology;
+  /** Coarse execution ceiling used to prevent wildcard privilege escalation. */
+  privilege?: "read-only" | "edit" | "full-access";
   /** Additional compatibility requirements for profile-defined agents. */
   environment?: AgentEnvironmentPolicy;
   /** Brokered connection aliases required before this agent can start. */
   connectionRequirements?: readonly (string | ConnectionRequirement)[];
   /** Per-turn defaults applied when the session carries no override. */
   defaults?: TurnOptions;
+  /** Committed persona instructions supplied by a project harness factory. */
+  systemPrompt?: string;
+  /** Explicit source-to-target grants for first-class subsessions. */
+  delegation?: AgentDelegationPolicy;
 }
 
 /**
@@ -34,6 +44,14 @@ export interface CodingAgentRegistry {
   defaultAgentId(projectId?: string): string | undefined;
   get(id: string): RegisteredCodingAgent | undefined;
   list(): RegisteredCodingAgent[];
+  /** Host harness factory. Core loads the committed definition and checks access. */
+  projectAgent?(args: {
+    id: string;
+    entry: ProjectAgentEntry;
+  }):
+    | Promise<RegisteredCodingAgent | undefined>
+    | RegisteredCodingAgent
+    | undefined;
 }
 
 /**

@@ -86,6 +86,16 @@ export interface GithubPullRequestFile {
   previousPath?: string;
 }
 
+export interface GithubRepositoryEvent {
+  id: string;
+  /** GitHub's event class, for example PullRequestEvent. */
+  type: string;
+  actor: string | null;
+  createdAt: string;
+  /** Original GitHub payload. Normalization belongs to the event source. */
+  payload: unknown;
+}
+
 /**
  * A stored connection: the token set plus the GitHub identity it belongs to.
  * The login is denormalized so hosts can render "connected as X" without an

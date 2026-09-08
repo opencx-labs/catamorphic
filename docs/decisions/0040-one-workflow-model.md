@@ -41,9 +41,10 @@ exported `defineWorkflow` value, and every run executes a deployed commit.**
 - Mutable-source test runs are removed with them: the `POST
   /projects/:id/workflows/:name/test-runs` endpoint, `runs.triggerTest`, the
   test-secret split, and the `mode` discriminator are gone. Migration
-  `packages/db/migrations/041_single_run_mode.sql` deletes dev-only test-run
-  rows (greenfield) and drops `workflow_runs.mode`. Provenance is uniform:
-  every run records the deployed commit and artifact it executed.
+  history deleted the dev-only test-run rows (greenfield) and dropped
+  `workflow_runs.mode`; that final shape is now part of the first-release
+  baseline accepted by ADR 0084. Provenance is uniform: every run records the
+  deployed commit and artifact it executed.
 - Inline request-response is a property of execution, not an authoring form.
   The sync trigger-firing path (ADR 0039) runs any workflow inline until its
   first durable wait; the parser's `canSuspend` tells embedders statically

@@ -38,6 +38,7 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
   let projectManager: ProjectManager;
   let projectId: string;
   let admin: Identity;
+  let builder: Identity;
 
   async function commitRoles(files: Record<string, string>) {
     const repo = await projectManager.openDev(
@@ -75,9 +76,9 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
     });
     const project = await core.projects.create(root, { name: "brain" });
     projectId = project.id;
-    admin = {
+    builder = {
       ...root,
-      externalUserId: "admin",
+      externalUserId: "builder",
       scope: [{ kind: "project", projectId }],
     };
 
@@ -96,9 +97,21 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
         version: 1,
         name: "Admin",
         builder: true,
+        permissions: ["memberships:manage", "roles:manage"],
         documents: ["store/**"],
       }),
+      "roles/membership-manager.json": JSON.stringify({
+        version: 1,
+        name: "Membership manager",
+        permissions: ["memberships:manage"],
+      }),
       "roles/broken.json": "{ nope",
+    });
+    admin = await core.roles.resolve({
+      tenantId: root.tenantId,
+      projectId,
+      externalUserId: "admin",
+      roles: ["admin"],
     });
   }, 120_000);
 
@@ -109,8 +122,13 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
   });
 
   it("lists the project's roles for builders, reporting broken files", async () => {
-    const roles = await core.roles.list(admin, projectId);
-    expect(roles.map((r) => r.slug)).toEqual(["admin", "broken", "csm"]);
+    const roles = await core.roles.list(builder, projectId);
+    expect(roles.map((r) => r.slug)).toEqual([
+      "admin",
+      "broken",
+      "csm",
+      "membership-manager",
+    ]);
     expect(roles.find((r) => r.slug === "csm")?.definition?.name).toBe("CSM");
     expect(roles.find((r) => r.slug === "broken")?.invalid?.error).toMatch(
       /JSON/,
@@ -160,6 +178,30 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
       externalUserId: "v",
       scope: [{ kind: "agent", projectId, name: "csm-assistant" }],
     };
+    await expect(
+      core.memberships.grant({
+        identity: builder,
+        projectId,
+        externalUserId: "mallory",
+        roles: ["csm"],
+      }),
+    ).rejects.toThrow(AccessDeniedError);
+
+    const membershipManager = await core.roles.resolve({
+      tenantId: root.tenantId,
+      projectId,
+      externalUserId: "manager",
+      roles: ["membership-manager"],
+    });
+    await expect(
+      core.memberships.grant({
+        identity: membershipManager,
+        projectId,
+        externalUserId: "mallory",
+        roles: ["admin"],
+      }),
+    ).rejects.toThrow(AccessDeniedError);
+
     await expect(
       core.memberships.grant({
         identity: viewer,
@@ -247,6 +289,82 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
     ).toBeNull();
   });
 
+  it("resolves one user across every current project membership", async () => {
+    const second = await core.projects.create(root, { name: "second" });
+    const secondRepo = await projectManager.openDev(
+      root.tenantId,
+      second.id,
+      root.externalUserId,
+    );
+    try {
+      await secondRepo.writeFile(
+        "roles/viewer.json",
+        JSON.stringify({
+          version: 1,
+          name: "Viewer",
+          workflows: ["reports"],
+          environments: ["local"],
+        }),
+      );
+      await secondRepo.commit("roles", {
+        name: "root",
+        email: "root@example.com",
+      });
+      const remote = projectManager.remoteBackend;
+      if (!remote) throw new Error("expected a remote backend");
+      await push({
+        dev: secondRepo,
+        remote,
+        tenantId: root.tenantId,
+        projectId: second.id,
+      });
+    } finally {
+      await secondRepo.dispose();
+    }
+    core.roles.invalidate(second.id);
+
+    await core.memberships.grant({
+      identity: admin,
+      projectId,
+      externalUserId: "multi",
+      roles: ["csm"],
+    });
+    await core.memberships.grant({
+      identity: root,
+      projectId: second.id,
+      externalUserId: "multi",
+      roles: ["viewer"],
+    });
+
+    const identity = await core.memberships.identityForUser({
+      tenantId: root.tenantId,
+      externalUserId: "multi",
+    });
+    expect(identity.scope).toContainEqual({
+      kind: "agent",
+      projectId,
+      name: "csm-assistant",
+    });
+    expect(identity.scope).toContainEqual({
+      kind: "workflow",
+      projectId: second.id,
+      name: "reports",
+    });
+    expect(identity.executionScope).toContainEqual({
+      projectId: second.id,
+      name: "local",
+    });
+
+    const stranger = await core.memberships.identityForUser({
+      tenantId: root.tenantId,
+      externalUserId: "stranger",
+    });
+    expect(stranger.scope).toEqual([]);
+    expect(stranger.executionScope).toEqual([]);
+    expect(stranger.connectionScope).toEqual([]);
+    expect(stranger.projectPermissions).toEqual([]);
+  });
+
   it("role edits reach members after the cache turns over", async () => {
     await core.memberships.grant({
       identity: admin,
@@ -273,5 +391,18 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
       name: "docs.search",
     });
     expect(carol?.scope?.some((r) => r.kind === "document")).toBe(false);
+  });
+
+  it("protects committed role policy from ordinary builders", async () => {
+    await expect(
+      core.projects.writeFile(builder, projectId, "roles/new.json", {
+        content: JSON.stringify({ version: 1, name: "New" }),
+      }),
+    ).rejects.toThrow(AccessDeniedError);
+    await expect(
+      core.projects.writeFile(admin, projectId, "roles/new.json", {
+        content: JSON.stringify({ version: 1, name: "New" }),
+      }),
+    ).resolves.toContain('"name":"New"');
   });
 });

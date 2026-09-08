@@ -10,12 +10,8 @@ import {
   renderAppApiTypesModule,
 } from "@catamorphic/parser";
 import type { Kysely } from "kysely";
-import { z } from "zod";
 import { type Identity, SYSTEM_AUTHOR } from "../identity.js";
 import { PROJECT_CHECK_SCRIPT, PROJECT_CHECK_SCRIPT_PATH } from "../seeds.js";
-import type { ConnectionAdmissionService } from "./connection-admission.js";
-import type { ResolvedConnectionBinding } from "./connection-types.js";
-import type { ExecutionEnvironmentsService } from "./execution-environments-service.js";
 import type {
   EnrollmentConflictPolicy,
   RunSuspensionReason,
@@ -34,6 +30,11 @@ import {
   type TriggerMode,
   triggerKindInfo,
 } from "./trigger-kinds.js";
+import {
+  WorkflowEnablementSuspendedError,
+  type WorkflowEnablementsService,
+} from "./workflow-enablements-service.js";
+import { WORKFLOW_READ_OPTIONS } from "./workflow-source-files.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -52,6 +53,17 @@ export interface TriggerBindingInfo {
   inputSchema: Json;
   /** JSON Schema of the workflow's resolved output. */
   outputSchema: Json;
+}
+
+export interface StoredTriggerBinding extends TriggerBindingInfo {
+  id: string;
+  commitSha: string;
+}
+
+export interface StoredTriggerActivation extends StoredTriggerBinding {
+  activationId: string;
+  enablementId: string;
+  environment: string;
 }
 
 export type TriggerSuspensionReason = RunSuspensionReason;
@@ -110,6 +122,13 @@ export class TriggerPayloadInvalidError extends Error {
   }
 }
 
+export class TriggerNotEnabledError extends Error {
+  constructor(readonly kind: string) {
+    super(`No active workflow enablement subscribes to trigger '${kind}'`);
+    this.name = "TriggerNotEnabledError";
+  }
+}
+
 /** The project's committed code declares bindings the host cannot honor. */
 export class TriggerBindingsInvalidError extends Error {
   constructor(
@@ -131,30 +150,34 @@ interface ScanResult {
   bindings: TriggerBindingInfo[];
 }
 
+interface PinnedRevision {
+  commitSha: string;
+  remoteBranch: string;
+}
+
+interface FireArgs {
+  identity: Identity;
+  projectId: string;
+  kind: string;
+  payload: Json;
+  environment?: string;
+  mode?: TriggerMode;
+  workflows?: readonly string[];
+  enablementIds?: readonly string[];
+  correlationKey?: string;
+  onConflict?: EnrollmentConflictPolicy;
+  budgetMs?: number;
+  /** User-initiated tool calls use the caller's live authority. */
+  interactive?: boolean;
+}
+
 interface TriggersServiceDeps {
   kinds: readonly TriggerKindRuntime[];
   /** Tool-kind declarations; scan validates effective tool-name uniqueness. */
   mcpToolKinds?: readonly McpToolKindSpec[];
   projectManager: ProjectManager;
   runs: RunsService;
-  executionEnvironments: ExecutionEnvironmentsService;
-  connectionAdmission?: ConnectionAdmissionService;
-}
-
-const TriggerAuthorizationSnapshotSchema = z.array(
-  z.object({
-    bindingId: z.string().uuid(),
-    connectionId: z.string().uuid(),
-    alias: z.string(),
-    providerKind: z.string(),
-    principalKind: z.enum(["project_service", "tenant_service"]),
-    capabilities: z.array(z.string()),
-  }),
-);
-
-interface TriggerAuthorization {
-  environment: string;
-  connections: readonly ResolvedConnectionBinding[];
+  workflowEnablements?: () => WorkflowEnablementsService;
 }
 
 const DEFAULT_SYNC_BUDGET_MS = 30_000;
@@ -164,7 +187,7 @@ const MAX_SYNC_BUDGET_MS = 300_000;
  * Host-defined trigger kinds: workflows subscribe with
  * `triggers: [trigger("kind", config)]`, hosts fire a kind with a payload and
  * every subscribed workflow runs. Bindings are extracted from the production
- * commit and frozen per (project, commit) in `trigger_bindings`, so firing —
+ * commit and frozen per (project, commit) in `trigger_definitions`, so firing —
  * a host request-path operation — reads a table, not a ts-morph parse.
  *
  * Sync firing drives the run's existing queue jobs inline (claim → run →
@@ -216,7 +239,7 @@ export class TriggersService {
       args.identity.externalUserId,
     );
     try {
-      const files = await repo.readAllFiles();
+      const files = await repo.readAllFiles(WORKFLOW_READ_OPTIONS);
       // Generated types and the check script exist to serve the workflow
       // workspace. A project without one (docs-only, imported plain repo)
       // must not have a workflows/ directory conjured into it (ADR 0043).
@@ -273,6 +296,122 @@ export class TriggersService {
   }
 
   /**
+   * Lists frozen bindings from an explicit immutable revision. Temporary
+   * workflow enablements use the same parser, registry, and authorization
+   * projection as the production commit.
+   */
+  async listAtCommit(args: {
+    identity: Identity;
+    projectId: string;
+    commitSha: string;
+    remoteBranch: string;
+    environment?: string;
+    kind?: string;
+    workflowName?: string;
+  }): Promise<TriggerBindingInfo[]> {
+    if (args.kind && !this.registry.has(args.kind)) {
+      throw new TriggerKindNotRegisteredError(args.kind, [
+        ...this.registry.keys(),
+      ]);
+    }
+    const bindings = await this.ensureScanAtCommit(args);
+    return bindings.filter(
+      (binding) =>
+        (!args.kind || binding.kind === args.kind) &&
+        (!args.workflowName || binding.workflowName === args.workflowName),
+    );
+  }
+
+  /** Production binding rows for host-owned durable trigger dispatchers. */
+  async storedProductionBindings(args: {
+    identity: Identity;
+    projectId: string;
+    kind: string;
+  }): Promise<StoredTriggerBinding[]> {
+    const scan = await this.ensureScan(args);
+    if (!scan.commitSha) return [];
+    const rows = await this.db
+      .selectFrom("trigger_definitions")
+      .selectAll()
+      .where("project_id", "=", args.projectId)
+      .where("commit_sha", "=", scan.commitSha)
+      .where("trigger_kind", "=", args.kind)
+      .execute();
+    return rows.map((row) => ({
+      id: row.id,
+      commitSha: row.commit_sha,
+      workflowName: row.workflow_name,
+      kind: row.trigger_kind,
+      config: row.config,
+      canSuspend: row.can_suspend,
+      inputParameters: row.input_parameters as unknown as ParameterInfo[],
+      inputSchema: row.input_schema,
+      outputSchema: row.output_schema,
+    }));
+  }
+
+  /** Active runtime instances of production trigger definitions. */
+  async storedProductionActivations(args: {
+    identity: Identity;
+    projectId: string;
+    kind: string;
+  }): Promise<StoredTriggerActivation[]> {
+    const rows = await this.db
+      .selectFrom("workflow_enablement_triggers as activation")
+      .innerJoin(
+        "workflow_enablements as enablement",
+        "enablement.id",
+        "activation.enablement_id",
+      )
+      .innerJoin(
+        "trigger_definitions as definition",
+        "definition.id",
+        "activation.trigger_definition_id",
+      )
+      .innerJoin("projects", "projects.id", "enablement.project_id")
+      .select([
+        "activation.id as activation_id",
+        "activation.enablement_id",
+        "definition.id",
+        "definition.commit_sha",
+        "definition.workflow_name",
+        "definition.trigger_kind",
+        "definition.config",
+        "definition.can_suspend",
+        "definition.input_parameters",
+        "definition.input_schema",
+        "definition.output_schema",
+        "enablement.environment_name",
+      ])
+      .where("projects.tenant_id", "=", args.identity.tenantId)
+      .where("definition.project_id", "=", args.projectId)
+      .where("definition.trigger_kind", "=", args.kind)
+      .where("activation.status", "=", "active")
+      .where("enablement.status", "=", "active")
+      .where(({ or, eb }) =>
+        or([
+          eb("enablement.expires_at", "is", null),
+          eb("enablement.expires_at", ">", new Date()),
+        ]),
+      )
+      .execute();
+    return rows.map((row) => ({
+      activationId: row.activation_id,
+      enablementId: row.enablement_id,
+      id: row.id,
+      commitSha: row.commit_sha,
+      environment: row.environment_name,
+      workflowName: row.workflow_name,
+      kind: row.trigger_kind,
+      config: row.config,
+      canSuspend: row.can_suspend,
+      inputParameters: row.input_parameters as unknown as ParameterInfo[],
+      inputSchema: row.input_schema,
+      outputSchema: row.output_schema,
+    }));
+  }
+
+  /**
    * The project's MCP tool roster at its production commit: effective tool
    * name → workflow name, for every binding of a registered tool kind. The
    * same naming the deploy scan validates and the MCP endpoint serves.
@@ -295,21 +434,29 @@ export class TriggersService {
     return names;
   }
 
-  async fire(args: {
-    identity: Identity;
-    projectId: string;
-    kind: string;
-    payload: Json;
-    environment?: string;
-    /** Defaults to async. */
-    mode?: TriggerMode;
-    /** Restrict to these bound workflows (e.g. the one tool the AI called). */
-    workflows?: readonly string[];
-    correlationKey?: string;
-    onConflict?: EnrollmentConflictPolicy;
-    /** Sync only: wall-clock budget before detaching. Defaults to 30s. */
-    budgetMs?: number;
-  }): Promise<TriggerFireResult> {
+  async fire(args: FireArgs): Promise<TriggerFireResult> {
+    return this.fireFromScan(args, () => this.ensureScan(args));
+  }
+
+  /** Fire ordinary trigger bindings from an explicit immutable revision. */
+  async fireAtCommit(
+    args: FireArgs & PinnedRevision,
+  ): Promise<TriggerFireResult> {
+    return this.fireFromScan(
+      args,
+      async () => ({
+        commitSha: args.commitSha,
+        bindings: await this.ensureScanAtCommit(args),
+      }),
+      { commitSha: args.commitSha, remoteBranch: args.remoteBranch },
+    );
+  }
+
+  private async fireFromScan(
+    args: FireArgs,
+    scan: () => Promise<ScanResult>,
+    pinned?: PinnedRevision,
+  ): Promise<TriggerFireResult> {
     const kind = this.registry.get(args.kind);
     if (!kind) {
       throw new TriggerKindNotRegisteredError(args.kind, [
@@ -340,13 +487,72 @@ export class TriggersService {
         },
       },
       async (span) => {
-        const scan = await this.ensureScan(args);
-        let targets = scan.bindings.filter(
+        const scanned = await scan();
+        const productionDefinitions = scanned.bindings.filter(
           (binding) => binding.kind === kind.name,
         );
+        let targets: Array<{
+          binding: TriggerBindingInfo;
+          enablementId?: string;
+        }>;
+        if (args.interactive) {
+          targets = productionDefinitions.map((binding) => ({ binding }));
+        } else {
+          const activations = await this.db
+            .selectFrom("workflow_enablement_triggers as activation")
+            .innerJoin(
+              "workflow_enablements as enablement",
+              "enablement.id",
+              "activation.enablement_id",
+            )
+            .innerJoin(
+              "trigger_definitions as definition",
+              "definition.id",
+              "activation.trigger_definition_id",
+            )
+            .select([
+              "activation.enablement_id",
+              "definition.id",
+              "definition.commit_sha",
+              "definition.workflow_name",
+              "definition.trigger_kind",
+              "definition.config",
+              "definition.can_suspend",
+              "definition.input_parameters",
+              "definition.input_schema",
+              "definition.output_schema",
+            ])
+            .where("definition.project_id", "=", args.projectId)
+            .where("definition.trigger_kind", "=", kind.name)
+            .where("activation.status", "=", "active")
+            .where("enablement.status", "=", "active")
+            .execute();
+          targets = activations.map((activation) => ({
+            enablementId: activation.enablement_id,
+            binding: {
+              workflowName: activation.workflow_name,
+              kind: activation.trigger_kind,
+              config: activation.config,
+              canSuspend: activation.can_suspend,
+              inputParameters:
+                activation.input_parameters as unknown as ParameterInfo[],
+              inputSchema: activation.input_schema,
+              outputSchema: activation.output_schema,
+            },
+          }));
+          if (productionDefinitions.length > 0 && targets.length === 0) {
+            throw new TriggerNotEnabledError(kind.name);
+          }
+        }
+        if (args.enablementIds) {
+          const enabled = new Set(args.enablementIds);
+          targets = targets.filter(
+            (target) => target.enablementId && enabled.has(target.enablementId),
+          );
+        }
         if (args.workflows) {
           const wanted = new Set(args.workflows);
-          targets = targets.filter((binding) =>
+          targets = targets.filter(({ binding }) =>
             wanted.has(binding.workflowName),
           );
         }
@@ -358,8 +564,8 @@ export class TriggersService {
         );
         const deadline = Date.now() + budgetMs;
 
-        const runs = await Promise.all(
-          targets.map((binding) =>
+        const attempts = await Promise.allSettled(
+          targets.map(({ binding, enablementId }) =>
             this.fireOne({
               identity: args.identity,
               projectId: args.projectId,
@@ -370,12 +576,25 @@ export class TriggersService {
               correlationKey,
               onConflict: args.onConflict,
               deadline,
-              commitSha: scan.commitSha,
+              commitSha: scanned.commitSha,
               triggerKind: binding.kind,
+              enablementId,
+              interactive: args.interactive ?? false,
+              pinned,
             }),
           ),
         );
-        return { kind: kind.name, mode, commitSha: scan.commitSha, runs };
+        const runs: TriggerFireOutcome[] = [];
+        for (const attempt of attempts) {
+          if (attempt.status === "fulfilled") {
+            runs.push(attempt.value);
+          } else if (
+            !(attempt.reason instanceof WorkflowEnablementSuspendedError)
+          ) {
+            throw attempt.reason;
+          }
+        }
+        return { kind: kind.name, mode, commitSha: scanned.commitSha, runs };
       },
     );
   }
@@ -392,34 +611,31 @@ export class TriggersService {
     deadline: number;
     commitSha: string | null;
     triggerKind: string;
+    enablementId?: string;
+    interactive: boolean;
+    pinned?: PinnedRevision;
   }): Promise<TriggerFireOutcome> {
-    const authorization = args.commitSha
-      ? await this.readAuthorization({
-          projectId: args.projectId,
-          commitSha: args.commitSha,
-          triggerKind: args.triggerKind,
-          workflowName: args.workflowName,
-        })
-      : undefined;
-    if (
-      args.environment &&
-      authorization &&
-      args.environment !== authorization.environment
-    ) {
-      throw new Error(
-        `Trigger '${args.triggerKind}' for workflow '${args.workflowName}' is configured for Environment '${authorization.environment}'`,
-      );
-    }
-    const run = await this.deps.runs.triggerUnattendedProduction({
+    const runArgs = {
       identity: args.identity,
       projectId: args.projectId,
       workflowName: args.workflowName,
       input: args.payload,
-      environment: authorization?.environment ?? args.environment,
-      connectionAuthorizationSnapshot: authorization?.connections,
+      environment: args.environment,
       correlationKey: args.correlationKey,
       onConflict: args.onConflict,
-    });
+    };
+    const run = args.enablementId
+      ? await this.deps.runs.triggerWithEnablement({
+          ...runArgs,
+          enablementId: args.enablementId,
+        })
+      : args.pinned
+        ? await this.deps.runs.triggerAtCommit({
+            ...runArgs,
+            commitSha: args.pinned.commitSha,
+            remoteBranch: args.pinned.remoteBranch,
+          })
+        : await this.deps.runs.triggerProduction(runArgs);
     if (args.mode === "async") {
       return {
         workflowName: args.workflowName,
@@ -461,9 +677,13 @@ export class TriggersService {
         remoteBranch: "main",
       });
       commitSha = await repo
-        .resolveRef("refs/remotes/origin/main")
+        .resolveRef("refs/catamorphic/published/main")
         .catch(() => null);
       if (!commitSha) return { commitSha: null, bindings: [] };
+      await this.deps.workflowEnablements?.().markUpdateAvailable({
+        projectId: args.projectId,
+        commitSha,
+      });
 
       const memoKey = `${args.projectId}:${commitSha}`;
       const memoized = this.scans.get(memoKey);
@@ -479,7 +699,7 @@ export class TriggersService {
         this.capScanMemo();
         return { commitSha, bindings: recorded };
       }
-      files = await repo.readAllFilesAtRef(commitSha);
+      files = await repo.readAllFilesAtRef(commitSha, WORKFLOW_READ_OPTIONS);
     } finally {
       await repo.dispose();
     }
@@ -501,6 +721,74 @@ export class TriggersService {
     }
   }
 
+  private async ensureScanAtCommit(args: {
+    identity: Identity;
+    projectId: string;
+    commitSha: string;
+    remoteBranch: string;
+    environment?: string;
+  }): Promise<TriggerBindingInfo[]> {
+    const memoKey = `${args.projectId}:${args.commitSha}`;
+    const memoized = this.scans.get(memoKey);
+    if (memoized) return memoized;
+    const recorded = await this.readRecordedScan(args);
+    if (recorded) {
+      this.scans.set(memoKey, Promise.resolve(recorded));
+      this.capScanMemo();
+      return recorded;
+    }
+
+    const remote = this.deps.projectManager.remoteBackend;
+    if (!remote) {
+      throw new Error("Trigger revisions require durable project storage");
+    }
+    const repo = await this.deps.projectManager.openDev(
+      args.identity.tenantId,
+      args.projectId,
+      `trigger-scan-${args.commitSha}`,
+    );
+    let files: Record<string, string>;
+    try {
+      await fetchRemote({
+        dev: repo,
+        remote,
+        tenantId: args.identity.tenantId,
+        projectId: args.projectId,
+        remoteBranch: args.remoteBranch,
+      });
+      const fetchedCommit = await repo
+        .resolveRef(`refs/catamorphic/published/${args.remoteBranch}`)
+        .catch(() => null);
+      if (fetchedCommit !== args.commitSha) {
+        throw new Error(
+          `Trigger revision ${args.commitSha} is not available at '${args.remoteBranch}'`,
+        );
+      }
+      files = await repo.readAllFilesAtRef(
+        args.commitSha,
+        WORKFLOW_READ_OPTIONS,
+      );
+    } finally {
+      await repo.dispose();
+    }
+
+    const scanning = this.scanAndRecord({
+      identity: args.identity,
+      projectId: args.projectId,
+      commitSha: args.commitSha,
+      files,
+      environment: args.environment,
+    });
+    this.scans.set(memoKey, scanning);
+    this.capScanMemo();
+    try {
+      return await scanning;
+    } catch (error) {
+      this.scans.delete(memoKey);
+      throw error;
+    }
+  }
+
   private capScanMemo(): void {
     // Each deploy strands its predecessor's entry; keep the map bounded.
     while (this.scans.size > 256) {
@@ -515,14 +803,14 @@ export class TriggersService {
     commitSha: string;
   }): Promise<TriggerBindingInfo[] | null> {
     const scan = await this.db
-      .selectFrom("trigger_binding_scans")
+      .selectFrom("trigger_definition_scans")
       .select("scanned_at")
       .where("project_id", "=", args.projectId)
       .where("commit_sha", "=", args.commitSha)
       .executeTakeFirst();
     if (!scan) return null;
     const rows = await this.db
-      .selectFrom("trigger_bindings")
+      .selectFrom("trigger_definitions")
       .selectAll()
       .where("project_id", "=", args.projectId)
       .where("commit_sha", "=", args.commitSha)
@@ -545,6 +833,7 @@ export class TriggersService {
     projectId: string;
     commitSha: string;
     files: Record<string, string>;
+    environment?: string;
   }): Promise<TriggerBindingInfo[]> {
     const parsed = parseProject(args.files);
     const errors: string[] = [];
@@ -556,41 +845,9 @@ export class TriggersService {
       );
     }
     const bindings: Array<
-      TriggerBindingInfo & {
-        environment?: string;
-        connectionRequirements: Json;
-        connectionAuthorizationSnapshot?: readonly ResolvedConnectionBinding[];
-      }
+      TriggerBindingInfo & { connectionRequirements: Json }
     > = [];
-    const authorizations = new Map<string, TriggerAuthorization>();
     for (const workflow of parsed.workflows) {
-      let authorization = authorizations.get(workflow.functionName);
-      if (workflow.graph.triggers.length > 0 && !authorization) {
-        const environment = await this.deps.executionEnvironments.admit({
-          identity: args.identity,
-          projectId: args.projectId,
-          requirements: { workload: "workflow" },
-        });
-        const requirements = workflow.graph.connections ?? [];
-        if (requirements.length > 0 && !this.deps.connectionAdmission) {
-          throw new Error("Connection providers are not configured");
-        }
-        const connections =
-          requirements.length > 0
-            ? await this.deps.connectionAdmission!.admit({
-                identity: args.identity,
-                projectId: args.projectId,
-                environment: environment.environmentName,
-                requirements,
-                unattended: true,
-              })
-            : [];
-        authorization = {
-          environment: environment.environmentName,
-          connections,
-        };
-        authorizations.set(workflow.functionName, authorization);
-      }
       for (const binding of workflow.graph.triggers) {
         const kind = this.registry.get(binding.kind);
         if (!kind) {
@@ -635,12 +892,6 @@ export class TriggersService {
           connectionRequirements: JSON.parse(
             JSON.stringify(workflow.graph.connections),
           ) as Json,
-          ...(authorization
-            ? {
-                environment: authorization.environment,
-                connectionAuthorizationSnapshot: authorization.connections,
-              }
-            : {}),
         });
       }
     }
@@ -680,7 +931,7 @@ export class TriggersService {
     }
     await this.db.transaction().execute(async (trx) => {
       await trx
-        .insertInto("trigger_binding_scans")
+        .insertInto("trigger_definition_scans")
         .values({ project_id: args.projectId, commit_sha: args.commitSha })
         .onConflict((oc) =>
           oc.columns(["project_id", "commit_sha"]).doNothing(),
@@ -688,7 +939,7 @@ export class TriggersService {
         .execute();
       if (bindings.length > 0) {
         await trx
-          .insertInto("trigger_bindings")
+          .insertInto("trigger_definitions")
           .values(
             bindings.map((binding) => ({
               project_id: args.projectId,
@@ -702,14 +953,9 @@ export class TriggersService {
               input_parameters: JSON.stringify(binding.inputParameters),
               input_schema: JSON.stringify(binding.inputSchema),
               output_schema: JSON.stringify(binding.outputSchema),
-              environment_name: binding.environment ?? null,
               connection_requirements: JSON.stringify(
                 binding.connectionRequirements,
               ),
-              connection_authorization_snapshot:
-                binding.connectionAuthorizationSnapshot === undefined
-                  ? null
-                  : JSON.stringify(binding.connectionAuthorizationSnapshot),
             })),
           )
           .onConflict((oc) =>
@@ -726,28 +972,5 @@ export class TriggersService {
       }
     });
     return bindings;
-  }
-
-  private async readAuthorization(args: {
-    projectId: string;
-    commitSha: string;
-    triggerKind: string;
-    workflowName: string;
-  }): Promise<TriggerAuthorization | undefined> {
-    const row = await this.db
-      .selectFrom("trigger_bindings")
-      .where("project_id", "=", args.projectId)
-      .where("commit_sha", "=", args.commitSha)
-      .where("trigger_kind", "=", args.triggerKind)
-      .where("workflow_name", "=", args.workflowName)
-      .select(["environment_name", "connection_authorization_snapshot"])
-      .executeTakeFirst();
-    if (!row?.environment_name) return undefined;
-    return {
-      environment: row.environment_name,
-      connections: TriggerAuthorizationSnapshotSchema.parse(
-        row.connection_authorization_snapshot ?? [],
-      ),
-    };
   }
 }

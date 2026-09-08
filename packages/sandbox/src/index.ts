@@ -4,12 +4,52 @@ export {
   RUNTIME_PROTOCOL_VERSION,
   type RuntimeHostCallTransition,
 } from "@catamorphic/runtime";
+export * from "./agent-capabilities.js";
+export { HttpAgentCapabilityGateway } from "./capability-client.js";
+export * from "./capability-mcp.js";
+export {
+  AgentEventBuffer,
+  type AgentEventBufferOptions,
+} from "./coding-agent/event-buffer.js";
 export {
   buildPluginsPreamble,
   PLUGIN_STAGE_DIR,
   stagedPluginFiles,
   stagePluginDocs,
 } from "./coding-agent/plugin-staging.js";
+export {
+  type AgentRuntimeProvider,
+  AgentRuntimeUnsupportedError,
+} from "./coding-agent/runtime-provider.js";
+export type {
+  AgentApprovalRequest,
+  AgentElicitationRequest,
+  AgentEventCursor,
+  AgentLoopPlacement,
+  AgentQuestionRequest,
+  AgentRuntimeCapabilities,
+  AgentRuntimeDescriptor,
+  AgentRuntimeEvent,
+  AgentRuntimeEventType,
+  AgentRuntimeMessage,
+  AgentRuntimeOperationSupport,
+  AgentRuntimeRequest,
+  AgentRuntimeRequestResponse,
+  AgentRuntimeSession,
+  AgentTask,
+  AgentTaskStatus,
+  AgentTurnHandle,
+  ControlAgentTask,
+  InterruptAgentTurn,
+  ListAgentTasks,
+  RespondToAgentRequest,
+  ResumeAgentRuntimeSession,
+  RetryAgentTurn,
+  StartAgentRuntimeSession,
+  StartAgentTurn,
+  StopAgentRuntimeSession,
+  SubscribeToAgentEvents,
+} from "./coding-agent/runtime-types.js";
 export {
   ATTACHMENT_MARKER,
   describeTextSource,
@@ -123,12 +163,14 @@ export type {
   SandboxHandle,
   SandboxManager,
   SandboxProvider,
+  SandboxResources,
   SandboxStatus,
   SandboxType,
   SessionInfo,
   StepEntry,
 } from "./types.js";
 export {
+  assertSandboxResources,
   positiveTokenCount,
   RuntimeEventReportingError,
   RuntimeInfrastructureError,

@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 export function Modal({
   open,
@@ -13,12 +13,16 @@ export function Modal({
   width?: number;
   labelledBy?: string;
 }) {
+  const [mounted, setMounted] = useState(open);
+  useEffect(() => {
+    if (open) setMounted(true);
+  }, [open]);
   const panelRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !mounted) return;
     const previousFocus =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
@@ -47,7 +51,7 @@ export function Modal({
       const last = focusable.at(-1);
       if (document.activeElement === panelRef.current) {
         event.preventDefault();
-        (event.shiftKey ? last : first)?.focus({ preventScroll: true });
+        (event.shiftKey ? last : first)?.focus();
         return;
       }
       if (
@@ -55,7 +59,7 @@ export function Modal({
         (!event.shiftKey && document.activeElement === last)
       ) {
         event.preventDefault();
-        (event.shiftKey ? last : first)?.focus({ preventScroll: true });
+        (event.shiftKey ? last : first)?.focus();
       }
     };
     window.addEventListener("keydown", onKeyDown, { capture: true });
@@ -69,13 +73,24 @@ export function Modal({
       if (focusStayedInModal && previousFocus?.isConnected)
         previousFocus.focus({ preventScroll: true });
     };
-  }, [open]);
+  }, [open, mounted]);
 
+  if (!mounted) return null;
   return (
     <div
       className={`fixed inset-0 z-[100] grid place-items-center transition-opacity duration-150 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:duration-0 ${
-        open ? "opacity-100" : "pointer-events-none opacity-0"
+        open
+          ? "pointer-events-auto animate-fade-in"
+          : "pointer-events-none animate-fade-out"
       }`}
+      onAnimationEnd={(event) => {
+        if (
+          event.target === event.currentTarget &&
+          event.animationName === "fade-out" &&
+          !open
+        )
+          setMounted(false);
+      }}
       aria-hidden={!open}
       inert={!open ? true : undefined}
     >
@@ -93,7 +108,7 @@ export function Modal({
         aria-labelledby={labelledBy}
         tabIndex={-1}
         style={{ width, maxWidth: "calc(100vw - 48px)" }}
-        className={`relative rounded-xl border border-border bg-bg-raised shadow-2xl outline-none transition-transform duration-150 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transform-none motion-reduce:duration-0 ${
+        className={`relative max-h-[calc(100dvh-48px)] overflow-y-auto overscroll-contain rounded-xl border border-border bg-bg-raised shadow-2xl outline-none transition-transform duration-150 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transform-none motion-reduce:duration-0 ${
           open ? "scale-100" : "scale-95"
         }`}
       >

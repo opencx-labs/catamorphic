@@ -2,8 +2,7 @@
 
 ## Status
 
-Deferred on 2026-08-24. Unattended triggers currently require service
-connections.
+Design accepted in ADR 0068 on 2026-08-24. Implementation remains pending.
 
 ## Goal
 

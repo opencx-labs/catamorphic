@@ -1,4 +1,4 @@
-import type { DB } from "@catamorphic/db";
+import type { DB, JsonObject } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import { fetchRemote, pushToRemote } from "@catamorphic/git";
 import type {
@@ -20,6 +20,7 @@ import {
 import type { Kysely } from "kysely";
 import type { Identity } from "../identity.js";
 import type { CodeHost } from "./code-host.js";
+import type { ProjectEventsService } from "./project-events-service.js";
 import type { ProjectsService } from "./projects-service.js";
 
 export interface GithubServiceConfig {
@@ -38,6 +39,8 @@ export type GithubConnectionStatus =
   | { connected: true; login: string };
 
 export interface ImportGithubRepoInput {
+  /** Host-reserved local registration id. */
+  id?: string;
   /** e.g. `octocat/hello-world` */
   fullName: string;
   /** Project name; defaults to the repo name. */
@@ -84,6 +87,7 @@ export class GithubService {
     private readonly projectManager: ProjectManager,
     private readonly projects: ProjectsService,
     private readonly config: GithubServiceConfig,
+    private readonly projectEvents?: ProjectEventsService,
   ) {
     this.store = config.tokenStore;
     this.fetch = config.fetch;
@@ -172,6 +176,41 @@ export class GithubService {
   }
 
   /**
+   * Validate a host-supplied credential against the exact repository before
+   * replacing the user's stored connection. Desktop hosts use this for a
+   * `gh` CLI credential without creating a second GitHub API path.
+   */
+  async connectForRepository(
+    identity: Identity,
+    tokens: GithubTokenSet,
+    fullName: string,
+  ): Promise<{
+    connection: Extract<GithubConnectionStatus, { connected: true }>;
+    repository: GithubRepo;
+  }> {
+    const api = new GithubApi(tokens.accessToken, { fetch: this.fetch });
+    const repository = await api.getRepo(fullName);
+    const user = await api.getUser();
+    await this.store.set(identity.tenantId, identity.externalUserId, {
+      tokens,
+      githubLogin: user.login,
+      githubUserId: user.id,
+    });
+    return {
+      connection: { connected: true, login: user.login },
+      repository,
+    };
+  }
+
+  /** Verify that the currently stored credential can read one repository. */
+  async repository(identity: Identity, fullName: string): Promise<GithubRepo> {
+    const api = new GithubApi(await this.freshToken(identity), {
+      fetch: this.fetch,
+    });
+    return api.getRepo(fullName);
+  }
+
+  /**
    * Server web-flow completion: exchange the OAuth callback code for tokens
    * and store the connection. Requires the app config to include the client
    * secret.
@@ -196,6 +235,99 @@ export class GithubService {
     return api.listAccessibleRepos();
   }
 
+  /** Poll connected-user repository activity into the durable project log. */
+  async pollProjectEvents(
+    identity: Identity,
+    projectId: string,
+    input: { afterExternalId?: string; signal?: AbortSignal } = {},
+  ): Promise<{ nextCursor: string | null; appended: number }> {
+    if (!this.projectEvents) {
+      throw new Error("Project events are not configured");
+    }
+    const project = await this.db
+      .selectFrom("projects")
+      .select("remote_url")
+      .where("id", "=", projectId)
+      .where("tenant_id", "=", identity.tenantId)
+      .executeTakeFirst();
+    if (!project?.remote_url) {
+      throw new ProjectNotLinkedToGithubError(projectId);
+    }
+    const fullName = repoFullNameFromUrl(project.remote_url);
+    if (!fullName) throw new ProjectNotLinkedToGithubError(projectId);
+    const api = new GithubApi(await this.freshToken(identity, input.signal), {
+      fetch: this.fetch,
+      signal: input.signal,
+    });
+    const observed = await api.listRepositoryWatchEvents(fullName);
+    const cursorIndex = input.afterExternalId
+      ? observed.findIndex((event) => event.id === input.afterExternalId)
+      : -1;
+    const unseen = input.afterExternalId
+      ? cursorIndex >= 0
+        ? observed.slice(0, cursorIndex)
+        : observed
+      : observed;
+    let appended = 0;
+    // GitHub returns newest first; append oldest first for intuitive replay.
+    for (const event of [...unseen].reverse()) {
+      const result = await this.projectEvents.append({
+        projectId,
+        source: "github",
+        kind: githubEventKind(event.type),
+        externalId: event.id,
+        occurredAt: event.createdAt,
+        payload: JSON.parse(
+          JSON.stringify({
+            repository: fullName,
+            eventType: event.type,
+            actor: event.actor,
+            payload: event.payload,
+          }),
+        ),
+      });
+      if (result.created) appended += 1;
+    }
+    return {
+      nextCursor: observed[0]?.id ?? input.afterExternalId ?? null,
+      appended,
+    };
+  }
+
+  /**
+   * Append a GitHub webhook after the embedding host verifies its signature
+   * and resolves the repository to a tenant/project. Transport and secret
+   * custody stay host-owned; webhook and polling payloads share one log.
+   */
+  async ingestWebhook(
+    identity: Identity,
+    projectId: string,
+    input: {
+      deliveryId: string;
+      eventName: string;
+      payload: JsonObject;
+      occurredAt?: string;
+    },
+  ) {
+    if (!this.projectEvents)
+      throw new Error("Project events are not configured");
+    const project = await this.db
+      .selectFrom("projects")
+      .select("id")
+      .where("id", "=", projectId)
+      .where("tenant_id", "=", identity.tenantId)
+      .executeTakeFirst();
+    if (!project) throw new ProjectNotLinkedToGithubError(projectId);
+    return this.projectEvents.append({
+      projectId,
+      source: "github",
+      kind: githubEventKind(input.eventName),
+      externalId: input.deliveryId,
+      occurredAt: input.occurredAt ?? new Date().toISOString(),
+      payload: input.payload,
+    });
+  }
+
   /**
    * Clone a GitHub repo into a new catamorphic project. The repo's history
    * lands on the project's `main`; the GitHub remote + branch are recorded on
@@ -207,6 +339,7 @@ export class GithubService {
     const repo = await api.getRepo(input.fullName);
 
     const project = await this.projects.create(identity, {
+      id: input.id,
       name: input.name ?? repo.name,
       rootPath: input.rootPath,
       cloneFrom: {
@@ -221,6 +354,7 @@ export class GithubService {
       .set({
         remote_url: repo.cloneUrl,
         remote_branch: repo.defaultBranch,
+        default_branch: repo.defaultBranch,
         updated_at: new Date(),
       })
       .where("id", "=", project.id)
@@ -250,8 +384,14 @@ export class GithubService {
     );
     try {
       const remote = this.projectManager.remoteBackend;
-      let ref = "main";
-      if (remote) {
+      const local = Boolean(
+        await this.projectManager.localPath({
+          tenantId: identity.tenantId,
+          projectId,
+        }),
+      );
+      let ref = local ? "HEAD" : "main";
+      if (remote && !local) {
         const fetched = await fetchRemote({
           dev,
           remote,
@@ -259,10 +399,11 @@ export class GithubService {
           projectId,
           remoteBranch: "main",
         });
-        if (fetched.sha) ref = "refs/remotes/origin/main";
+        if (fetched.sha) ref = "refs/catamorphic/published/main";
       }
       await pushToRemote({
         repoPath: dev.repoPath,
+        native: local,
         url: row.remote_url,
         credentials: gitCredentialsFor(token),
         ref,
@@ -274,7 +415,10 @@ export class GithubService {
   }
 
   /** Access token from the store, refreshed and re-persisted when stale. */
-  private async freshToken(identity: Identity): Promise<string> {
+  private async freshToken(
+    identity: Identity,
+    signal?: AbortSignal,
+  ): Promise<string> {
     const connection = await this.store.get(
       identity.tenantId,
       identity.externalUserId,
@@ -291,9 +435,10 @@ export class GithubService {
       tokens = await refreshAccessToken(
         this.config.app,
         connection.tokens.refreshToken,
-        { fetch: this.fetch },
+        { fetch: this.fetch, signal },
       );
     } catch {
+      signal?.throwIfAborted();
       throw new GithubTokenExpiredError();
     }
 
@@ -304,4 +449,12 @@ export class GithubService {
 
     return tokens.accessToken;
   }
+}
+
+export function githubEventKind(eventType: string): string {
+  const name = eventType
+    .replace(/Event$/, "")
+    .replace(/([a-z\d])([A-Z])/g, "$1_$2")
+    .toLowerCase();
+  return `github.${name || "event"}`;
 }

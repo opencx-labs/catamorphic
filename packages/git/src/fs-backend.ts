@@ -2,6 +2,7 @@ import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import git from "isomorphic-git";
+import { ensurePersonalFilesExcluded } from "./personal-files.js";
 import type {
   InitProjectOptions,
   ProjectPathResolver,
@@ -28,6 +29,10 @@ function assertUuid(value: string): void {
  * so older tests and single-user usage remain compatible.
  */
 export class FsBackend implements StorageBackend {
+  // initProject(rootPath) establishes the working copy immediately. The host's
+  // durable resolver may publish that mapping after creation/provisioning hooks;
+  // requests during that interval must never write into an internal fallback.
+  private readonly initializedRoots = new Map<string, string>();
   constructor(
     private readonly basePath: string,
     private readonly pathResolver?: ProjectPathResolver,
@@ -57,6 +62,10 @@ export class FsBackend implements StorageBackend {
   ): Promise<string> {
     const rootPath = await this.pathResolver?.(tenantId, projectId);
     if (rootPath) return rootPath;
+    const initializedRoot = this.initializedRoots.get(
+      `${tenantId}:${projectId}`,
+    );
+    if (initializedRoot) return initializedRoot;
     return this.resolveInternalPath(tenantId, projectId, externalUserId);
   }
 
@@ -75,6 +84,7 @@ export class FsBackend implements StorageBackend {
     } catch {
       throw new Error(`Project not found: ${projectId}`);
     }
+    await ensurePersonalFilesExcluded({ repoPath: projectPath });
     return {
       repoPath: projectPath,
       release: async () => {},
@@ -93,6 +103,8 @@ export class FsBackend implements StorageBackend {
         projectId,
         opts?.externalUserId,
       ));
+    if (opts?.rootPath)
+      this.initializedRoots.set(`${tenantId}:${projectId}`, projectPath);
     await fs.mkdir(projectPath, { recursive: true });
     const gitDir = path.join(projectPath, ".git");
     const hasRepo = await fs.access(gitDir).then(
@@ -102,6 +114,7 @@ export class FsBackend implements StorageBackend {
     if (!hasRepo) {
       await git.init({ fs: nodeFs, dir: projectPath, defaultBranch: "main" });
     }
+    await ensurePersonalFilesExcluded({ repoPath: projectPath });
     return projectPath;
   }
 
@@ -110,6 +123,7 @@ export class FsBackend implements StorageBackend {
     // the user; the host decides separately whether to trash them.
     const projectRoot = path.join(this.basePath, tenantId, projectId);
     await fs.rm(projectRoot, { recursive: true, force: true });
+    this.initializedRoots.delete(`${tenantId}:${projectId}`);
   }
 
   async exists(

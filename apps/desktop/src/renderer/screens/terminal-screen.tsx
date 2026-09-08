@@ -78,6 +78,7 @@ export function TerminalScreen({
   useEffect(() => {
     if (appearanceReady) setReady(true);
   }, [appearanceReady]);
+  const fitRef = useRef<FitAddon | null>(null);
   const keybindings = useKeybindings();
   const keybindingsRef = useRef(keybindings);
   keybindingsRef.current = keybindings;
@@ -174,6 +175,7 @@ export function TerminalScreen({
           return false;
         });
         fit = new FitAddon();
+        fitRef.current = fit;
         term.loadAddon(fit);
         const fitToContainer = () => {
           const dimensions = fit?.proposeDimensions();
@@ -540,6 +542,7 @@ export function TerminalScreen({
         void desktopApi.terminalKill(sessionId);
       }
       fit?.dispose();
+      fitRef.current = null;
       term?.dispose();
       termRef.current = null;
     };
@@ -547,6 +550,13 @@ export function TerminalScreen({
 
   // This ghostty-web version bakes colors into its WASM terminal at open().
   // Apply appearance to new terminals; never restart a running shell for it.
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term || term.options.fontFamily === appearance.fontFamily) return;
+    term.options.fontFamily = appearance.fontFamily;
+    fitRef.current?.fit();
+  }, [appearance.fontFamily]);
 
   // Switching back to the tab lands keystrokes in the shell immediately.
   useEffect(() => {

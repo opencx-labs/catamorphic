@@ -11,8 +11,10 @@ import {
   type IdentityResolver,
 } from "./http-identity.js";
 import { registerAgentRoutes } from "./routes/agent.js";
+import { registerAgentCapabilityRoutes } from "./routes/agent-capabilities.js";
 import { registerAppRoutes } from "./routes/apps.js";
 import { registerAppsMcpRoutes } from "./routes/apps-mcp.js";
+import { registerClientRunnerRoutes } from "./routes/client-runners.js";
 import { registerConnectionMcpRoutes } from "./routes/connection-mcp.js";
 import { registerConnectionRoutes } from "./routes/connections.js";
 import { registerDocumentRoutes } from "./routes/documents.js";
@@ -20,13 +22,17 @@ import { registerEnvironmentRoutes } from "./routes/environments.js";
 import { registerGithubRoutes } from "./routes/github.js";
 import { registerMeRoutes } from "./routes/me.js";
 import { registerMembershipRoutes } from "./routes/memberships.js";
+import { registerNotificationRoutes } from "./routes/notifications.js";
 import { registerPlaygroundRoutes } from "./routes/playground.js";
 import { registerPluginRoutes } from "./routes/plugins.js";
 import { registerProjectMcpRoutes } from "./routes/project-mcp.js";
 import { registerProjectRoutes } from "./routes/projects.js";
 import { registerPublicationRoutes } from "./routes/publications.js";
 import { registerRunRoutes } from "./routes/runs.js";
+import { registerSessionMailboxRoutes } from "./routes/session-mailboxes.js";
 import { registerTriggerRoutes } from "./routes/triggers.js";
+import { registerWatcherRoutes } from "./routes/watchers.js";
+import { registerWorkflowEnablementRoutes } from "./routes/workflow-enablements.js";
 import { registerWorkflowRoutes } from "./routes/workflows.js";
 
 export interface CatamorphicPluginOptions {
@@ -146,7 +152,13 @@ export const catamorphicPlugin: FastifyPluginAsync<
       if (isPublic) return;
       return reply.status(401).send({ error: "Unauthorized" });
     }
-    attachIdentity(request, identity);
+    const runnerId = request.headers["x-catamorphic-runner"];
+    attachIdentity(
+      request,
+      typeof runnerId === "string" && /^[0-9a-f-]{36}$/i.test(runnerId)
+        ? { ...identity, clientRunnerId: runnerId }
+        : identity,
+    );
   });
 
   const ctx: RouteContext = {
@@ -167,15 +179,21 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerConnectionRoutes(app, ctx);
   registerConnectionMcpRoutes(app, ctx);
   registerWorkflowRoutes(app, ctx);
+  registerWorkflowEnablementRoutes(app, ctx);
   registerTriggerRoutes(app, ctx);
   registerRunRoutes(app, ctx);
   registerAgentRoutes(app, ctx);
+  registerClientRunnerRoutes(app, ctx);
+  registerSessionMailboxRoutes(app, ctx);
+  registerNotificationRoutes(app, ctx);
+  registerWatcherRoutes(app, ctx);
   registerMembershipRoutes(app, ctx);
   registerDocumentRoutes(app, ctx);
   registerPublicationRoutes(app, ctx);
   registerAppRoutes(app, ctx);
   registerAppsMcpRoutes(app, ctx);
   registerProjectMcpRoutes(app, ctx);
+  registerAgentCapabilityRoutes(app, ctx);
   registerGithubRoutes(app, ctx);
   registerPluginRoutes(app, ctx);
   registerPlaygroundRoutes(app, ctx);

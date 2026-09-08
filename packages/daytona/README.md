@@ -16,22 +16,44 @@ stack (see `docs/decisions/0008` for the plugin-package layout):
 
 ```ts
 import { DaytonaSandboxProvider } from "@catamorphic/daytona";
-import { createCatamorphic } from "@catamorphic/server-sdk";
+import {
+  createCatamorphic,
+  defineStaticEnvironments,
+} from "@catamorphic/server-sdk";
+
+const sandboxProvider = new DaytonaSandboxProvider({
+  apiKey: process.env.DAYTONA_API_KEY!,
+});
+const environmentProvider = defineStaticEnvironments([
+  {
+    descriptor: {
+      id: "local",
+      label: "Managed execution",
+      trust: "managed",
+      isolation: "sandbox",
+      workloads: ["agent", "workflow"],
+      agentTopologies: ["controller"],
+      capabilities: ["network.egress"],
+      resources: {},
+    },
+    sandboxProvider,
+  },
+]);
 
 const catamorphic = createCatamorphic({
   database: { connectionString: process.env.DATABASE_URL! },
   storage: { projectsPath: "...", remotesPath: "..." },
-  sandboxProvider: new DaytonaSandboxProvider({
-    apiKey: process.env.DAYTONA_API_KEY!,
-  }),
+  sandboxProvider,
+  environmentProvider,
 });
 ```
 
 ## Testing
 
-Integration tests hit the real Daytona API and run automatically whenever
-`DAYTONA_API_KEY` is present in the repo root `.env`:
+The ordinary root `bun run test` stays deterministic and never treats ambient
+credentials as authority. To run the real Daytona integration with
+`DAYTONA_API_KEY` configured, opt in explicitly from the repo root:
 
 ```sh
-bun run test
+bun run test:external
 ```

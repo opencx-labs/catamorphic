@@ -6,23 +6,25 @@ import { buildStockServer } from "./server.js";
 
 /**
  * The stock Catamorphic server. Zero external services: everything lives
- * under the data dir (default /data — mount it as a volume).
+ * under the data dir (default /data; mount it as a volume).
  *
  *   PORT                      listen port (default 4700)
+ *   CATAMORPHIC_OPERATOR_PORT loopback-only setup port (default 4701)
  *   CATAMORPHIC_DATA_DIR      data dir (default /data)
- *   CATAMORPHIC_PUBLIC_URL    public base for invite links (remote setups)
+ *   CATAMORPHIC_PUBLIC_URL    public base for OAuth and connection links
  *   CATAMORPHIC_MDNS          "off" disables LAN discovery; any other
  *                             value is the hostname (default catamorphic-<id>.local, unique per server)
  *   ANTHROPIC_API_KEY | OPENROUTER_API_KEY | OPENAI_API_KEY  enable chat
  *   CATAMORPHIC_MODEL / CATAMORPHIC_EFFORT                   agent tuning
  */
 const port = Number(process.env.PORT ?? 4700);
+const operatorPort = Number(process.env.CATAMORPHIC_OPERATOR_PORT ?? 4701);
 const dataDir = process.env.CATAMORPHIC_DATA_DIR ?? "/data";
 
 /**
  * The default mDNS hostname is UNIQUE per server (a persisted suffix):
  * several people running desktops/servers on one office Wi-Fi must not
- * fight over the same name — mDNS has no referee, and answers would race.
+ * fight over the same name. mDNS has no referee, and answers would race.
  * Set CATAMORPHIC_MDNS=catamorphic.local if you want the pretty name and
  * know the network is yours.
  */
@@ -47,40 +49,56 @@ const mdns =
     ? null
     : startMdnsResponder(mdnsSetting, (line) => console.log(line));
 
-const bases = [
-  ...(process.env.CATAMORPHIC_PUBLIC_URL
-    ? [process.env.CATAMORPHIC_PUBLIC_URL.replace(/\/+$/, "")]
-    : []),
+const configuredPublicUrl = process.env.CATAMORPHIC_PUBLIC_URL?.replace(
+  /\/+$/,
+  "",
+);
+if (configuredPublicUrl && !isSecurePublicUrl(configuredPublicUrl)) {
+  throw new Error(
+    "CATAMORPHIC_PUBLIC_URL must use HTTPS except for a loopback address",
+  );
+}
+const loopbackBase = `http://127.0.0.1:${port}`;
+// OAuth discovery and invitation links publish only a secure public origin
+// or exact loopback. LAN HTTP remains useful for desktop device pairing,
+// but bearer and refresh credentials must never cross it.
+const connectionBases = [
+  ...(configuredPublicUrl ? [configuredPublicUrl] : []),
+  loopbackBase,
+];
+const reachableBases = [
+  ...(configuredPublicUrl ? [configuredPublicUrl] : []),
   ...(mdns ? [`http://${mdns.hostname}:${port}`] : []),
   ...lanAddresses().map((address) => `http://${address}:${port}`),
-  `http://127.0.0.1:${port}`,
+  loopbackBase,
 ];
 
 const server = await buildStockServer({
   dataDir,
-  publicBases: bases,
+  publicBases: connectionBases,
   log: (line) => console.log(line),
 });
 
-await server.app.listen({ port, host: "0.0.0.0" });
-const primary = bases[0] ?? `http://127.0.0.1:${port}`;
-const admin = server.auth.ensureAdmin();
+try {
+  await server.operatorApp.listen({ port: operatorPort, host: "127.0.0.1" });
+  await server.app.listen({ port, host: "0.0.0.0" });
+} catch (error) {
+  mdns?.close();
+  await server.shutdown();
+  throw error;
+}
+const primary = connectionBases[0] ?? loopbackBase;
 
 console.log(`
 Catamorphic server is up.
   ${server.agentsDescription}
-  API:    ${bases.map((base) => `${base}/api`).join("\n          ")}
+  API:    ${reachableBases.map((base) => `${base}/api`).join("\n          ")}
   Docs:   ${primary}/docs
+  Sign in: ${primary}/login
+  Setup:  http://127.0.0.1:${operatorPort}/_catamorphic/operator
 
-Create a project, then an invite (connect links come back ready to send):
-
-  curl -s -X POST ${primary}/admin/projects \\
-    -H "authorization: Bearer ${admin.token}" \\
-    -H "content-type: application/json" -d '{"name":"brain"}'
-
-  curl -s -X POST ${primary}/admin/invites \\
-    -H "authorization: Bearer ${admin.token}" \\
-    -H "content-type: application/json" -d '{"projectId":"<id>","user":"sam"}'
+Point an AI setup agent at this repository or catamorphic.ai to configure
+authentication, projects, ordinary roles, and the first user.
 `);
 
 let stopping = false;
@@ -94,3 +112,14 @@ async function stop(signal: string) {
 }
 process.on("SIGTERM", () => void stop("SIGTERM"));
 process.on("SIGINT", () => void stop("SIGINT"));
+
+function isSecurePublicUrl(raw: string): boolean {
+  const url = new URL(raw);
+  return (
+    url.protocol === "https:" ||
+    (url.protocol === "http:" &&
+      (url.hostname === "localhost" ||
+        url.hostname === "::1" ||
+        /^127(?:\.\d{1,3}){3}$/.test(url.hostname)))
+  );
+}

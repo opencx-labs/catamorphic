@@ -1,47 +1,92 @@
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { AgentCapabilityOptions } from "@catamorphic/core";
 import {
   type ConnectionProvider,
+  DurableToolPermissionBroker,
   type Identity,
-  ToolPermissionBroker,
 } from "@catamorphic/core";
-import { type DB, DEFAULT_SCHEMA } from "@catamorphic/db";
+import {
+  createDatabase,
+  type DB,
+  DEFAULT_SCHEMA,
+  migrateToLatest,
+} from "@catamorphic/db";
 import {
   createApp,
   identityFromBearer,
   serveSpaDist,
 } from "@catamorphic/fastify-plugin";
-import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
 import {
   type Catamorphic,
+  connectionAuthorizationPage,
   createCatamorphic,
-  defineStaticEnvironments,
+  EncryptedCredentialVault,
+  FsBackend,
   FsBundleStore,
+  ObjectRemoteBackend,
+  PostgresObjectStore,
+  ProjectManager,
+  schedule,
 } from "@catamorphic/server-sdk";
+import { createPushTransport } from "@catamorphic/server-sdk/web-push";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
-import { ASSISTANT_SLUG, buildAgentRegistry } from "./agents.js";
-import { AuthStore, type TokenRecord } from "./auth-store.js";
+import { StockAdmissionService } from "./admission/admission-service.js";
+import { registerStockAdmissionRoutes } from "./admission/routes.js";
+import { stockAgentCapabilities } from "./agent-capabilities.js";
+import { buildAgentRegistry } from "./agents.js";
+import { loadStockAuthConfig } from "./auth/auth-config.js";
+import { openStockAuthDatabase } from "./auth/auth-database.js";
+import { registerStockAuthRoutes } from "./auth/fastify-auth.js";
+import {
+  createStockAuth,
+  loadStockAuthSecret,
+  type StockAuth,
+} from "./auth/stock-auth.js";
+import {
+  registerStockMachine,
+  stockAuthorityId,
+  stockPushKeys,
+  stockVaultKey,
+} from "./cluster.js";
+import { loadStockConnectionProviders } from "./connection-config.js";
 import { EncryptedFileCredentialVault } from "./credential-vault.js";
+import { stockExecution } from "./execution-config.js";
+import { registerMachineSetup } from "./setup/machines.js";
+import {
+  loadStockOperatorSecret,
+  verifyStockOperatorSecret,
+} from "./setup/operator-access.js";
+import {
+  ProvisionStockUserInputSchema,
+  provisionStockUser,
+} from "./setup/provision.js";
+import {
+  ProvisionStockProjectInputSchema,
+  provisionStockProject,
+} from "./setup/provision-project.js";
 
 /**
  * The stock Catamorphic server (ADR 0059): everything on disk under one
  * data dir, zero external services. PGlite for the database, bare git
- * repos for project origins, local-process execution (the container IS
- * the sandbox — single-tenant only, per ADR 0047), bearer tokens in a
- * JSON file, invites minted over an admin API.
+ * repos for project origins, local-process execution (the container is
+ * the sandbox, single-tenant only per ADR 0047), stock OAuth, and ordinary
+ * project-role administration.
  */
 
 /** Single-tenant, like the desktop: one fixed tenant for the machine. */
 export const SERVER_TENANT_ID = "00000000-0000-4000-8000-0000000005e1";
 
-const ROOT_USER = "admin";
+const SETUP_AGENT_USER = "stock-setup-agent";
 
 export interface StockServerOptions {
+  agentCapabilities?: AgentCapabilityOptions;
   dataDir: string;
-  /** Public bases (no trailing slash) invite links are minted against. */
+  /** Public bases, without a trailing slash, used in discovery and links. */
   publicBases?: string[];
   env?: Record<string, string | undefined>;
   log?: (line: string) => void;
@@ -49,34 +94,75 @@ export interface StockServerOptions {
 }
 
 export interface StockServer {
+  /** Public application, OAuth, PWA, and scoped Catamorphic API. */
   app: FastifyInstance;
+  /** Machine-local setup API. The host must bind this only to loopback. */
+  operatorApp: FastifyInstance;
   catamorphic: Catamorphic;
-  auth: AuthStore;
+  /** Stock-host authentication and OAuth authorization server. */
+  stockAuth: StockAuth;
   agentsDescription: string;
-  /** Build a connect link for a token against a public API base. */
-  connectLink(base: string, record: TokenRecord, projectName?: string): string;
   shutdown(): Promise<void>;
 }
-
-const MEMBER_ROLE_PATH = "roles/member.json";
-const MEMBER_ROLE = {
-  version: 1,
-  name: "Member",
-  description: "Chat with the assistant; a private store folder.",
-  agents: [ASSISTANT_SLUG],
-  environments: ["local"],
-  documents: [{ path: "store/users/{user}/**", access: "write" as const }],
-};
 
 export async function buildStockServer(
   options: StockServerOptions,
 ): Promise<StockServer> {
+  const disposers: Array<() => Promise<unknown>> = [];
+  let closing: Promise<void> | undefined;
+  const close = () =>
+    (closing ??= (async () => {
+      const errors: unknown[] = [];
+      for (const dispose of disposers.reverse()) {
+        try {
+          await dispose();
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (errors.length)
+        throw new AggregateError(errors, "Server cleanup failed");
+    })());
+  try {
+    return await buildStockServerInner(options, disposers, close);
+  } catch (error) {
+    await close().catch(() => {});
+    throw error;
+  }
+}
+
+async function buildStockServerInner(
+  options: StockServerOptions,
+  disposers: Array<() => Promise<unknown>>,
+  close: () => Promise<void>,
+): Promise<StockServer> {
   const env = options.env ?? process.env;
   const log = options.log ?? (() => {});
   const data = options.dataDir;
+  const publicBase = options.publicBases?.[0] ?? "http://127.0.0.1:4700";
+  if (
+    env.DATABASE_URL &&
+    (!options.publicBases?.[0] || !env.BETTER_AUTH_SECRET)
+  ) {
+    throw new Error(
+      "Postgres deployments require a shared public origin and BETTER_AUTH_SECRET on every instance",
+    );
+  }
+
   for (const dir of ["db", "projects", "remotes", "app-bundles", "sandboxes"]) {
     fs.mkdirSync(path.join(data, dir), { recursive: true });
   }
+  const machineIdentity = loadOrCreateHostId(path.join(data, "host-id"));
+  const nodeId = `node.${createHash("sha256").update(machineIdentity).digest("hex").slice(0, 24)}`;
+  const hostId = env.DATABASE_URL
+    ? stockAuthorityId(publicBase)
+    : machineIdentity;
+  const authSecret = loadStockAuthSecret({
+    dataDir: data,
+    ...(env.BETTER_AUTH_SECRET
+      ? { configuredSecret: env.BETTER_AUTH_SECRET }
+      : {}),
+  });
 
   // --- database: PGlite on disk, or DATABASE_URL for teams ------------
   // PGlite is the zero-dependency default (one serialized connection);
@@ -86,7 +172,9 @@ export async function buildStockServer(
   let workerConcurrency = 1;
   let databaseConfig: { db: Kysely<DB> } | { connectionString: string };
   if (env.DATABASE_URL) {
-    databaseConfig = { connectionString: env.DATABASE_URL };
+    ownDb = createDatabase({ connectionString: env.DATABASE_URL });
+    disposers.push(() => ownDb!.destroy());
+    databaseConfig = { db: ownDb };
     workerConcurrency = 4;
   } else {
     const pglite = new PGlite(path.join(data, "db"), {
@@ -96,6 +184,7 @@ export async function buildStockServer(
       dialect: new PGliteDialect({ pglite }),
       plugins: [new WithSchemaPlugin(DEFAULT_SCHEMA)],
     });
+    disposers.push(() => ownDb!.destroy());
     // WithSchemaPlugin only rewrites built queries; core's raw-SQL paths
     // (the worker's claim CTE) resolve tables via search_path. PGlite is
     // one session for the process's lifetime, so set it once here.
@@ -106,112 +195,398 @@ export async function buildStockServer(
   }
 
   // --- execution: the container is the sandbox (ADR 0047) -------------
-  const sandboxProvider = new LocalProcessSandboxProvider({
-    root: path.join(data, "sandboxes"),
-    env: {
-      PATH: env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
-      LANG: "C.UTF-8",
-    },
+  const execution = stockExecution({ env, data });
+  const sandboxProvider = execution.provider;
+  if (!ownDb) throw new Error("Database was not initialized");
+  await migrateToLatest({ db: ownDb });
+  const objectStore = env.DATABASE_URL
+    ? new PostgresObjectStore(ownDb)
+    : undefined;
+  const stockAuthConfig = loadStockAuthConfig({
+    dataDir: data,
+    ...(env.CATAMORPHIC_AUTH_CONFIG
+      ? { configuredPath: env.CATAMORPHIC_AUTH_CONFIG }
+      : {}),
   });
-  const environmentProvider = defineStaticEnvironments([
-    {
-      descriptor: {
-        id: "local",
-        label: "Managed single node",
-        description: "Run on this server",
-        trust: "managed",
-        isolation: "process",
-        workloads: ["agent", "workflow"],
-        agentTopologies: ["controller"],
-        capabilities: ["network.egress"],
-        resources: {},
-      },
-      sandboxProvider,
-    },
-  ]);
-
-  // Tool-permission asks park here; clients answer over HTTP (ADR 0054).
-  const toolPermissions = new ToolPermissionBroker();
+  if (objectStore) {
+    const key = "stock/deployment-fingerprint";
+    const fingerprint = createHash("sha256")
+      .update(publicBase)
+      .update("\0")
+      .update(authSecret)
+      .update(
+        JSON.stringify({
+          local: stockAuthConfig.local,
+          providers: stockAuthConfig.providers,
+        }),
+      )
+      .digest("hex");
+    await objectStore
+      .put(key, Buffer.from(fingerprint), { ifNoneMatch: "*" })
+      .catch(async (error) => {
+        const current = await objectStore.get(key);
+        if (!current || Buffer.from(current.data).toString() !== fingerprint) {
+          throw new Error(
+            "Server origin, signing secret, or authentication configuration does not match this Postgres deployment",
+            { cause: error },
+          );
+        }
+      });
+  }
+  const machine = await registerStockMachine({
+    db: ownDb,
+    tenantId: SERVER_TENANT_ID,
+    authorityId: hostId,
+    nodeId,
+    label: env.CATAMORPHIC_MACHINE_NAME ?? "Catamorphic server",
+    capacity: execution.capacity,
+    defaults: execution.defaults,
+    isolation: execution.isolation,
+    sandboxProvider,
+  });
+  disposers.push(() => machine.stop());
+  const environmentProvider = machine.environmentProvider;
+  const toolPermissions = new DurableToolPermissionBroker(ownDb);
   const agents = buildAgentRegistry({ sandboxProvider, toolPermissions, env });
 
   const catamorphic = createCatamorphic({
+    hostId,
+    agentCapabilities: stockAgentCapabilities({
+      core: () => catamorphic.core,
+      auth: () => stockAuth,
+      custom: options.agentCapabilities,
+    }),
+    resolveMemberIdentity: ({ tenantId, externalUserId }) =>
+      catamorphic.core.memberships.identityForUser({
+        tenantId,
+        externalUserId,
+      }),
+    workerNode: machine.lease,
+    clientExecution: true,
     database: databaseConfig,
-    storage: {
-      projectsPath: path.join(data, "projects"),
-      remotesPath: path.join(data, "remotes"),
-    },
+    storage: objectStore
+      ? {
+          projectManager: new ProjectManager(
+            new FsBackend(path.join(data, "projects")),
+            new ObjectRemoteBackend({
+              store: objectStore,
+              keyPrefix: "origins/",
+            }),
+          ),
+        }
+      : {
+          projectsPath: path.join(data, "projects"),
+          remotesPath: path.join(data, "remotes"),
+        },
     sandboxProvider,
     environmentProvider,
-    credentialVault: new EncryptedFileCredentialVault(
-      path.join(data, "credentials"),
-    ),
-    connectionProviders: options.connectionProviders,
+    credentialVault: objectStore
+      ? new EncryptedCredentialVault({
+          store: objectStore,
+          key: stockVaultKey(authSecret),
+        })
+      : new EncryptedFileCredentialVault(path.join(data, "credentials")),
+    connectionProviders:
+      options.connectionProviders ??
+      loadStockConnectionProviders({
+        path: env.CATAMORPHIC_CONNECTION_PROVIDERS_CONFIG,
+      }),
     connectionMcpUrl: () => {
       const base = options.publicBases?.[0];
       return base ? `${base}/api/connection-mcp` : undefined;
     },
     ...(agents.registry ? { codingAgent: agents.registry } : {}),
-    appBundleStore: new FsBundleStore(path.join(data, "app-bundles")),
+    appBundleStore:
+      objectStore ?? new FsBundleStore(path.join(data, "app-bundles")),
+    documentBlobStore:
+      objectStore ?? new FsBundleStore(path.join(data, "document-blobs")),
     toolPermissions,
+    triggerKinds: [schedule],
+    projectSeeds: (defaults) => ({
+      ...defaults,
+      "agents/assistant.json": JSON.stringify({
+        version: 1,
+        name: "Assistant",
+        kind: "builtin",
+        description: "Work with your project",
+      }),
+    }),
+    pushNotifications: createPushTransport({
+      dataDir: data,
+      keys: stockPushKeys(authSecret),
+      subject: env.CATAMORPHIC_WEB_PUSH_SUBJECT,
+    }),
   });
+  disposers.push(() => catamorphic.close());
   await catamorphic.migrate();
+
+  // Better Auth is a stock-host concern. Its PGlite database is separate
+  // from Catamorphic's long-lived PGlite session; network Postgres uses the
+  // dedicated catamorphic_auth schema.
+  const stockAuthDatabase = await openStockAuthDatabase({
+    dataDir: data,
+    ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
+  });
+  disposers.push(() => stockAuthDatabase.close());
+  const stockAuth = createStockAuth({
+    database: stockAuthDatabase,
+    baseURL: options.publicBases?.[0] ?? "http://127.0.0.1:4700",
+    secret: authSecret,
+    config: stockAuthConfig,
+  });
+  await stockAuth.migrate();
+
   // PGlite is a single serialized connection: one worker lane there;
   // real Postgres gets a few.
   const worker = catamorphic.startExecutionWorker({
     name: "stock-server",
     concurrency: workerConcurrency,
   });
+  disposers.push(() => worker.stop());
   const core = catamorphic.core;
-
-  const auth = new AuthStore(path.join(data, "auth.json"));
-  const admin = auth.ensureAdmin();
+  catamorphic.startAgentWorker();
   const rootIdentity: Identity = {
     tenantId: SERVER_TENANT_ID,
-    externalUserId: ROOT_USER,
+    externalUserId: SETUP_AGENT_USER,
   };
+  const notificationWorkerId = `stock-notifications:${nodeId}`;
+  let notificationWork: Promise<void> | undefined;
+  const notificationTimer = setInterval(() => {
+    if (notificationWork) return;
+    notificationWork = core.notifications
+      .publishFailedAgentTurns({ authorityHostId: hostId })
+      .then(() =>
+        core.notifications.publishPausedSessions({ authorityHostId: hostId }),
+      )
+      .then(() => core.notifications.drain(notificationWorkerId))
+      .catch((error) => {
+        log(
+          `Notification delivery failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      })
+      .then(() => {})
+      .finally(() => {
+        notificationWork = undefined;
+      });
+  }, 15_000);
+  notificationTimer.unref();
+  disposers.push(async () => {
+    clearInterval(notificationTimer);
+    await notificationWork;
+  });
+  let scheduleWork: Promise<void> | undefined;
+  const scheduleTimer = setInterval(() => {
+    if (scheduleWork) return;
+    scheduleWork = core.projects
+      .list(rootIdentity, { limit: 1_000 })
+      .then(async ({ items }) => {
+        for (const project of items) {
+          await core.schedules.tick({
+            identity: rootIdentity,
+            projectId: project.id,
+          });
+        }
+      })
+      .catch((error) =>
+        log(
+          `Schedule dispatch failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        ),
+      )
+      .finally(() => {
+        scheduleWork = undefined;
+      });
+  }, 15_000);
+  scheduleTimer.unref();
+  disposers.push(async () => {
+    clearInterval(scheduleTimer);
+    await scheduleWork;
+  });
 
+  const operatorSecret = loadStockOperatorSecret({
+    dataDir: data,
+    ...(env.CATAMORPHIC_OPERATOR_SECRET
+      ? { configuredSecret: env.CATAMORPHIC_OPERATOR_SECRET }
+      : {}),
+  });
   // --- HTTP: the standard API app + the server's own routes -----------
   const app = createApp({
     core,
     identity: identityFromBearer(async (token) => {
-      const record = auth.findByToken(token);
-      if (!record) return null;
-      if (record.kind === "admin") return rootIdentity;
-      if (!record.projectId) return null;
-      // Access is the membership's, not the token's: revoking the
-      // membership (or its roles) cuts the member off instantly.
-      return core.memberships.identityFor({
+      const authenticated = await stockAuth.resolveAccessToken({
+        authorization: `Bearer ${token}`,
+      });
+      if (!authenticated) return null;
+      return core.memberships.identityForUser({
         tenantId: SERVER_TENANT_ID,
-        projectId: record.projectId,
-        externalUserId: record.externalUserId,
+        externalUserId: authenticated.userId,
       });
     }),
     features: { publications: "members" },
   });
-
-  const requireAdmin = (
-    request: FastifyRequest,
-    reply: FastifyReply,
-  ): boolean => {
-    const header = request.headers.authorization ?? "";
-    const match = /^Bearer\s+(\S+)$/i.exec(
-      Array.isArray(header) ? (header[0] ?? "") : header,
+  disposers.push(() => app.close());
+  app.addHook("onSend", (request, reply, payload, done) => {
+    if (
+      request.method === "GET" &&
+      request.url.startsWith("/api/connection-authorizations/callback?") &&
+      request.headers.accept?.includes("text/html")
+    ) {
+      reply
+        .type("text/html; charset=utf-8")
+        .header("cache-control", "no-store")
+        .header(
+          "content-security-policy",
+          "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+        );
+      done(
+        null,
+        connectionAuthorizationPage({ success: reply.statusCode < 400 }),
+      );
+    } else done(null, payload);
+  });
+  app.addHook("onSend", (request, reply, payload, done) => {
+    if (reply.statusCode !== 401 || !request.url.startsWith("/api/")) {
+      done(null, payload);
+      return;
+    }
+    const authorization = request.headers.authorization;
+    const hasBearer = /^Bearer\s+\S+/i.test(
+      Array.isArray(authorization)
+        ? (authorization[0] ?? "")
+        : (authorization ?? ""),
     );
-    const record = match?.[1] ? auth.findByToken(match[1]) : undefined;
-    if (record?.kind === "admin") return true;
-    void reply.status(401).send({ error: "Admin token required" });
-    return false;
-  };
+    const resourceMetadata = `${publicBase}/.well-known/oauth-protected-resource`;
+    reply.header(
+      "www-authenticate",
+      `Bearer resource_metadata="${resourceMetadata}"${
+        hasBearer ? ', error="invalid_token"' : ""
+      }`,
+    );
+    done(null, payload);
+  });
+  registerStockAuthRoutes(app, {
+    auth: stockAuth,
+    baseURL: publicBase,
+    methods: stockAuthConfig.publicMethods(),
+  });
+  const admission = new StockAdmissionService({
+    db: core.db,
+    membershipWriterIdentity: rootIdentity,
+    roles: core.roles,
+    memberships: core.memberships,
+  });
+  registerStockAdmissionRoutes(app, {
+    publicBases: options.publicBases ?? [],
+    auth: stockAuth,
+    identityForUser: ({ externalUserId }) =>
+      core.memberships.identityForUser({
+        tenantId: SERVER_TENANT_ID,
+        externalUserId,
+      }),
+    admission,
+  });
 
   app.get("/healthz", async () => ({
-    ok: true,
+    ok: machine.healthy(),
+    machine: {
+      id: nodeId,
+      label: env.CATAMORPHIC_MACHINE_NAME ?? "Catamorphic server",
+      capacity: execution.capacity,
+      defaults: execution.defaults,
+      isolation: execution.isolation,
+    },
     agentSessions: Boolean(core.agentSessions),
   }));
 
+  // Machine-local setup authority lives on a separate server, not merely a
+  // guarded route on the public app. Binding this app only to loopback keeps
+  // reverse proxies and other public ingress from reaching the operations.
+  // It is deliberately not an application user or role: a setup agent reads
+  // the owner-only credential from the mounted data directory and invokes it
+  // from the same machine or container.
+  const operatorApp = Fastify();
+  disposers.push(() => operatorApp.close());
+  registerMachineSetup({
+    app: operatorApp,
+    nodes: machine.nodes,
+    tenantId: SERVER_TENANT_ID,
+    authorityId: hostId,
+    operatorSecret,
+  });
+  operatorApp.post(
+    "/_catamorphic/operator/projects",
+    async (request, reply) => {
+      const authorization = Array.isArray(request.headers.authorization)
+        ? request.headers.authorization[0]
+        : request.headers.authorization;
+      if (!verifyStockOperatorSecret(authorization, operatorSecret)) {
+        return reply
+          .status(401)
+          .send({ error: "Operator credential required" });
+      }
+      const parsed = ProvisionStockProjectInputSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "Invalid project setup input",
+          issues: parsed.error.issues,
+        });
+      }
+      try {
+        const result = await provisionStockProject({
+          services: {
+            projects: core.projects,
+            deployment: core.deployment,
+            roles: core.roles,
+            admission,
+          },
+          operatorIdentity: rootIdentity,
+          input: parsed.data,
+        });
+        return reply.status(201).send(result);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Project setup failed";
+        return reply.status(400).send({ error: message });
+      }
+    },
+  );
+
+  operatorApp.post("/_catamorphic/operator/users", async (request, reply) => {
+    const authorization = Array.isArray(request.headers.authorization)
+      ? request.headers.authorization[0]
+      : request.headers.authorization;
+    if (!verifyStockOperatorSecret(authorization, operatorSecret)) {
+      return reply.status(401).send({ error: "Operator credential required" });
+    }
+    const parsed = ProvisionStockUserInputSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        error: "Invalid provisioning input",
+        issues: parsed.error.issues,
+      });
+    }
+    try {
+      const result = await provisionStockUser({
+        auth: stockAuth,
+        services: core,
+        operatorIdentity: rootIdentity,
+        input: parsed.data,
+      });
+      return reply.status(201).send(result);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Provision failed";
+      return reply.status(400).send({ error: message });
+    }
+  });
+
   // The mobile PWA, served from THIS origin (workspace sibling in dev,
   // CATAMORPHIC_PWA_DIST in the Docker image). Serving it here is what
-  // makes phones work AWAY from any LAN: invite links can point at
-  // `https://server/?server=…&token=…`, the app installs from a stable
+  // makes phones work away from any LAN: invitation links can point at
+  // `https://server/?server=…&project=…&invitation=…`, the app installs from a stable
   // (ideally https) origin, and its service worker caches the shell.
   // Without a bundle, a minimal landing page answers instead.
   const pwaDist =
@@ -223,231 +598,28 @@ export async function buildStockServer(
     (reply) => reply.type("text/html").send(LANDING_PAGE),
   );
 
-  app.post("/admin/projects", async (request, reply) => {
-    if (!requireAdmin(request, reply)) return;
-    const body = (request.body ?? {}) as { name?: string };
-    if (!body.name?.trim()) {
-      return reply.status(400).send({ error: "A project needs a name" });
-    }
-    const project = await core.projects.create(rootIdentity, {
-      name: body.name.trim(),
-    });
-    return reply.status(201).send(project);
-  });
-
-  /**
-   * Mint an invite: ensure the committed member role on the project's
-   * shared program, grant the membership, mint a bearer token. The
-   * response carries connect links for every address this server answers
-   * on — the caller forwards one to the invitee.
-   */
-  app.post("/admin/invites", async (request, reply) => {
-    if (!requireAdmin(request, reply)) return;
-    const body = (request.body ?? {}) as {
-      projectId?: string;
-      user?: string;
-      label?: string;
-    };
-    const projectId = body.projectId?.trim();
-    const user = body.user?.trim();
-    if (!projectId || !user) {
-      return reply
-        .status(400)
-        .send({ error: "projectId and user are required" });
-    }
-    const project = await core.projects
-      .get(rootIdentity, projectId)
-      .catch(() => null);
-    if (!project) {
-      return reply.status(404).send({ error: "No such project" });
-    }
-    await ensureMemberRole(projectId);
-    await core.memberships.grant({
-      identity: rootIdentity,
-      projectId,
-      externalUserId: user,
-      roles: ["member"],
-      grants: { user: [user] },
-    });
-    const record = auth.mintMember(user, projectId, body.label);
-    return reply.status(201).send({
-      token: record.token,
-      user,
-      projectId,
-      projectName: project.name,
-      connectLinks: (options.publicBases ?? []).map((base) =>
-        buildConnectLink(base, record, project.name),
-      ),
-      // The same credentials as a plain URL: opens the PWA this server
-      // serves at its root — the link to text someone.
-      webLinks: (options.publicBases ?? []).map(
-        (base) =>
-          `${base.replace(/\/+$/, "")}/?${connectParams(base, record, project.name)}`,
-      ),
-    });
-  });
-
-  /**
-   * Usage rollup for admins (ADR 0062): per member and project, summed
-   * from the usage each assistant turn carries in its metadata. Sessions
-   * run here AND sessions mirrored from desktops both count — incognito
-   * sessions never arrive, which is exactly their contract.
-   */
-  app.get("/admin/usage", async (request, reply) => {
-    if (!requireAdmin(request, reply)) return;
-    // Bounded by default: a server months into service holds far more
-    // history than an admin view needs, and every row carries its whole
-    // event log in `metadata`.
-    const days = Number((request.query as { days?: string }).days ?? 30);
-    const since = new Date(
-      Date.now() - (Number.isFinite(days) ? days : 30) * 86_400_000,
-    );
-    const rows = await core.db
-      .selectFrom("agent_messages")
-      .innerJoin(
-        "agent_sessions",
-        "agent_sessions.id",
-        "agent_messages.session_id",
-      )
-      .select([
-        "agent_sessions.external_user_id as user",
-        "agent_sessions.project_id as projectId",
-        "agent_sessions.id as sessionId",
-        "agent_messages.metadata as metadata",
-        "agent_messages.created_at as createdAt",
-      ])
-      .where("agent_messages.role", "=", "assistant")
-      .where("agent_messages.created_at", ">=", since)
-      .execute();
-    const byKey = new Map<
-      string,
-      {
-        user: string;
-        projectId: string;
-        sessions: Set<string>;
-        turns: number;
-        inputTokens: number;
-        cachedInputTokens: number;
-        outputTokens: number;
-        costUsd: number;
-        lastActivity: string;
-      }
-    >();
-    for (const row of rows) {
-      const key = `${row.user}:${row.projectId}`;
-      const entry = byKey.get(key) ?? {
-        user: row.user,
-        projectId: row.projectId,
-        sessions: new Set<string>(),
-        turns: 0,
-        inputTokens: 0,
-        cachedInputTokens: 0,
-        outputTokens: 0,
-        costUsd: 0,
-        lastActivity: new Date(0).toISOString(),
-      };
-      entry.sessions.add(row.sessionId);
-      entry.turns += 1;
-      const usage = (
-        row.metadata as {
-          usage?: {
-            inputTokens?: number;
-            cachedInputTokens?: number;
-            outputTokens?: number;
-            costUsd?: number;
-          };
-        } | null
-      )?.usage;
-      entry.inputTokens += usage?.inputTokens ?? 0;
-      entry.cachedInputTokens += usage?.cachedInputTokens ?? 0;
-      entry.outputTokens += usage?.outputTokens ?? 0;
-      entry.costUsd += usage?.costUsd ?? 0;
-      const at = new Date(row.createdAt).toISOString();
-      if (at > entry.lastActivity) entry.lastActivity = at;
-      byKey.set(key, entry);
-    }
-    return reply.send({
-      since: since.toISOString(),
-      items: [...byKey.values()]
-        .map(({ sessions, ...entry }) => ({
-          ...entry,
-          sessions: sessions.size,
-        }))
-        .sort((a, b) => b.lastActivity.localeCompare(a.lastActivity)),
-    });
-  });
-
-  app.delete("/admin/invites/:token", async (request, reply) => {
-    if (!requireAdmin(request, reply)) return;
-    const { token } = request.params as { token: string };
-    const record = auth.findByToken(token);
-    if (record?.kind !== "member") {
-      return reply.status(404).send({ error: "No such member token" });
-    }
-    auth.revoke(token);
-    return reply.send({ ok: true });
-  });
-
-  /** The committed member role, deployed to origin main exactly once. */
-  const ensuredRoles = new Set<string>();
-  async function ensureMemberRole(projectId: string): Promise<void> {
-    if (ensuredRoles.has(projectId)) return;
-    const existing = await core.documents
-      .read({ identity: rootIdentity, projectId, path: MEMBER_ROLE_PATH })
-      .catch(() => null);
-    if (!existing) {
-      await core.deployment.deploy(SERVER_TENANT_ID, projectId, ROOT_USER, {
-        message: "Add the member role",
-        files: {
-          [MEMBER_ROLE_PATH]: `${JSON.stringify(MEMBER_ROLE, null, 2)}\n`,
-        },
-      });
-      core.roles.invalidate(projectId);
-    }
-    ensuredRoles.add(projectId);
-  }
-
   log(`agents: ${agents.description}`);
-  log(`admin token: ${admin.token} (data: ${path.join(data, "auth.json")})`);
 
   return {
     app,
+    operatorApp,
     catamorphic,
-    auth,
+    stockAuth,
     agentsDescription: agents.description,
-    connectLink: buildConnectLink,
-    shutdown: async () => {
-      await worker.stop();
-      await app.close();
-      // For DATABASE_URL, close() also destroys the pool it created; the
-      // host-owned PGlite Kysely is ours to flush.
-      await catamorphic.close();
-      await ownDb?.destroy();
-    },
+    shutdown: close,
   };
 }
 
-function connectParams(
-  base: string,
-  record: TokenRecord,
-  projectName?: string,
-): string {
-  const server = `${base.replace(/\/+$/, "")}/api`;
-  const params = new URLSearchParams({
-    server,
-    token: record.token,
-    project: record.projectId ?? "",
-  });
-  if (projectName) params.set("name", projectName);
-  return params.toString();
-}
-
-function buildConnectLink(
-  base: string,
-  record: TokenRecord,
-  projectName?: string,
-): string {
-  return `catamorphic://connect?${connectParams(base, record, projectName)}`;
+function loadOrCreateHostId(file: string): string {
+  try {
+    const existing = fs.readFileSync(file, "utf8").trim();
+    if (existing) return existing;
+  } catch {
+    // First boot creates a stable identity below.
+  }
+  const hostId = `server:${randomUUID()}`;
+  fs.writeFileSync(file, `${hostId}\n`, { mode: 0o600 });
+  return hostId;
 }
 
 const LANDING_PAGE = `<!doctype html>
@@ -458,6 +630,6 @@ const LANDING_PAGE = `<!doctype html>
 <div style="text-align:center;padding:2rem">
 <svg width="72" height="72" viewBox="0 0 64 64" fill="none"><path d="M45 19.5 C41.7 17.2 37.6 15.8 33.5 15.8 C24 15.8 16.5 23 16.5 32 C16.5 41 24 48.2 33.5 48.2 C37.6 48.2 41.7 46.8 45 44.5" stroke="#f95225" stroke-width="5" stroke-linecap="round"/><line x1="27" y1="18.5" x2="27" y2="45.5" stroke="#f95225" stroke-width="5" stroke-linecap="round"/></svg>
 <h1 style="font-size:1.2rem;margin:.7rem 0 .3rem">Catamorphic server</h1>
-<p style="color:#9a9aa3;font-size:.9rem;margin:0">Running. API at <code>/api</code>, docs at <code>/docs</code>.<br>Connect with an invite link from your admin.</p>
+<p style="color:#9a9aa3;font-size:.9rem;margin:0">Running. Sign in here or connect from the desktop app or MCP client.</p>
 </div>
 `;

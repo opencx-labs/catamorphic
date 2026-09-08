@@ -1,5 +1,9 @@
 import { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
+import { useLayoutEffect } from "react";
+import { monacoTheme } from "./monaco-theme.js";
+import { useTheme } from "./theme.js";
+import "monaco-editor/languages/definitions/register.all";
 import editorWorker from "monaco-editor/editor/editor.worker?worker";
 import tsWorker from "monaco-editor/language/typescript/ts.worker?worker";
 
@@ -20,3 +24,15 @@ self.MonacoEnvironment = {
       : new editorWorker(),
 };
 loader.config({ monaco });
+
+// This bridge stays in the lazy editor bundle. Theme changes never load Monaco
+// in a workspace that has not opened an editor.
+export function useMonacoTheme() {
+  const theme = useTheme();
+  useLayoutEffect(() => {
+    if (!theme) return;
+    monaco.editor.defineTheme("catamorphic", monacoTheme(theme));
+    monaco.editor.setTheme("catamorphic");
+  }, [theme]);
+  return theme ? "catamorphic" : "vs-dark";
+}

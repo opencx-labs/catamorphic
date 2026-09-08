@@ -1,0 +1,14 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "todo-progress",
+  "type": "registry:component",
+  "description": "Read-only agent todo progress indicator with a circular completion meter and expandable item descriptions.",
+  "dependencies": ["lucide-react"],
+  "registryDependencies": [],
+  "files": [
+    {
+      "path": "components/catamorphic/todo-progress.tsx",
+      "type": "registry:component"
+    }
+  ]
+}

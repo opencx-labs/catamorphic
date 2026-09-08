@@ -1,4 +1,5 @@
-import type { AgentEvent } from "../types.js";
+import type { AgentCapabilityGateway } from "../agent-capabilities.js";
+import type { AgentEvent, SandboxProvider } from "../types.js";
 import type { McpToolPolicyLayers } from "./tool-policy.js";
 
 /**
@@ -33,6 +34,8 @@ export interface AttachedPluginForAgent {
 }
 
 export interface StartSessionOpts {
+  /** Host-only runtime selected by the Allocation. Never serialized on the wire. */
+  sandboxProvider?: SandboxProvider;
   projectId: string;
   userId: string;
   sandboxId: string;
@@ -120,12 +123,16 @@ export type AgentMcpServerConfig =
       url: string;
       /** Sent verbatim on every request (auth tokens ride here). */
       headers?: Record<string, string>;
+      /** Harness hint for servers whose tools are already host-authorized. */
+      defaultToolsApprovalMode?: "auto" | "prompt" | "writes" | "approve";
     }
   | {
       transport: "stdio";
       command: string;
       args?: string[];
       env?: Record<string, string>;
+      /** Harness hint for servers whose tools are already host-authorized. */
+      defaultToolsApprovalMode?: "auto" | "prompt" | "writes" | "approve";
     };
 
 /**
@@ -213,6 +220,10 @@ export type AgentAttachment = AgentMediaAttachment | AgentTextAttachment;
 
 /** Per-turn overrides; anything unset falls back to the provider's defaults. */
 export interface TurnOptions {
+  /** Fresh host facts, separate from user prose. */
+  context?: string;
+  /** Live session-scoped gateway; remote hosts supply their own transport. */
+  capabilities?: AgentCapabilityGateway;
   model?: string;
   effort?: AgentEffort;
   /** Media sent with this turn's user message. */

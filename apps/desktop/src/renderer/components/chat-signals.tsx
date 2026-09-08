@@ -8,13 +8,14 @@ import type { ReactNode } from "react";
  *
  * - working:       the icon cross-fades to a spinner (the agent is busy)
  * - awaitingInput: pulsing accent "?" badge (the agent asked and is waiting)
+ * - attention:     pulsing accent dot (a workflow asked the user to open it)
  * - unread:        filled accent dot (a reply landed while the surface was
  *                  hidden)
  * - draft:         pencil badge (unsent composer text — also used for
  *                  editor tabs with unsaved changes)
  *
- * One badge shows at a time, most-urgent first: awaitingInput > unread >
- * draft; all badges yield to the spinner. `SignalGlyph` renders the
+ * One badge shows at a time, most-urgent first: awaitingInput > attention >
+ * unread > draft; all badges yield to the spinner. `SignalGlyph` renders the
  * icon/spinner stack; `SignalBadge` renders the badge cluster — hosts
  * position it (bubbles pin it to the button corner, tabs to the icon).
  */
@@ -23,6 +24,7 @@ export interface ChatSignals {
   unread?: boolean;
   draft?: boolean;
   awaitingInput?: boolean;
+  attention?: boolean;
 }
 
 export const combineSignals = (list: ChatSignals[]): ChatSignals => ({
@@ -30,6 +32,7 @@ export const combineSignals = (list: ChatSignals[]): ChatSignals => ({
   unread: list.some((signals) => signals.unread),
   draft: list.some((signals) => signals.draft),
   awaitingInput: list.some((signals) => signals.awaitingInput),
+  attention: list.some((signals) => signals.attention),
 });
 
 /** Base icon that cross-fades to a spinner while the agent works. */
@@ -54,8 +57,8 @@ export function SignalGlyph({
         {children}
       </span>
       <LoaderCircle
-        className={`col-start-1 row-start-1 size-full animate-spin text-accent transition-[opacity] duration-200 ${
-          working ? "opacity-100" : "opacity-0"
+        className={`col-start-1 row-start-1 size-full text-accent transition-[opacity] duration-200 ${
+          working ? "animate-spin opacity-100" : "opacity-0"
         }`}
       />
     </span>
@@ -86,11 +89,13 @@ export function SignalBadge({
     ? null
     : signals.awaitingInput
       ? "question"
-      : signals.unread
-        ? "unread"
-        : signals.draft
-          ? "draft"
-          : null;
+      : signals.attention
+        ? "attention"
+        : signals.unread
+          ? "unread"
+          : signals.draft
+            ? "draft"
+            : null;
   const visibility = (kind: string) =>
     active === kind ? "scale-100 opacity-100" : "scale-0 opacity-0";
   const transition =
@@ -101,11 +106,15 @@ export function SignalBadge({
           (sanctioned loop: the turn is suspended, indeterminate until the
           user answers). */}
       <span
-        className={`${transition} ${visibility("question")} ${spec.badge} grid animate-pulse place-items-center rounded-full bg-accent font-bold leading-none text-accent-fg`}
+        className={`${transition} ${visibility("question")} ${spec.badge} ${active === "question" ? "animate-pulse" : ""} grid place-items-center rounded-full bg-accent font-bold leading-none text-accent-fg`}
         aria-hidden={active !== "question"}
       >
         ?
       </span>
+      <span
+        className={`${transition} ${visibility("attention")} ${spec.dot} ${active === "attention" ? "animate-pulse" : ""} rounded-full bg-accent`}
+        aria-hidden={active !== "attention"}
+      />
       <span
         className={`${transition} ${visibility("unread")} ${spec.dot} rounded-full bg-accent`}
         aria-hidden={active !== "unread"}

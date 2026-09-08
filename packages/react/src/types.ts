@@ -153,5 +153,14 @@ export type AgentSessionDetail =
 
 export type AgentMessage = AgentSessionDetail["messages"][number];
 
-export type SentAgentMessage =
-  paths["/api/projects/{projectId}/agent/sessions/{sessionId}/messages"]["post"]["responses"][201]["content"]["application/json"];
+export type SessionDeliveryReceipt =
+  paths["/api/projects/{projectId}/agent/sessions/{sessionId}/messages"]["post"]["responses"][202]["content"]["application/json"];
+
+export type Watcher =
+  paths["/api/projects/{projectId}/agent/sessions/{sessionId}/watchers"]["get"]["responses"][200]["content"]["application/json"]["items"][number];
+
+export type {
+  ParameterInfo,
+  StepArgument,
+  WorkflowNode,
+} from "@catamorphic/parser";

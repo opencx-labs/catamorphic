@@ -25,8 +25,9 @@ entry for how this rule was recovered.
 
 ## Principles
 
-1. **Dark-first.** `:root` *is* the dark theme. Light mode is an override behind
-   `[data-theme="light"]`, never the default.
+1. **System-first.** New profiles follow the operating system, resolving to
+   Catamorphic Light or Catamorphic Dark. An explicit theme selection stays
+   fixed until the user changes it.
 2. **Flat depth.** Hierarchy comes from surface steps and 1px borders, not drop
    shadows. Shadows are reserved for true overlays (menus, dialogs).
 3. **One accent.** A single Catamorphic orange. If something needs to stand
@@ -47,6 +48,11 @@ entry for how this rule was recovered.
 |---|---|---|
 | `--font-sans` | Inter, system-ui | UI chrome, body text |
 | `--font-mono` | JetBrains Mono, ui-monospace | code, logs, ids, timestamps |
+
+These are defaults. Each profile can override `fonts.sans` and `fonts.mono`
+in `theme.json` or Settings > Theme using installed CSS font stacks.
+Removing a key restores its default. Font choices survive color preset
+changes and apply live to the shell, editors, terminals, and themed apps.
 
 Type scale (px): 11 (labels/badges), 12 (secondary), 13 (base), 14 (emphasized),
 16 (panel titles), 20 (page titles). Base is 13px set on `body`.
@@ -95,6 +101,10 @@ Low-chroma so run states don't scream: `--color-success`, `--color-warning`,
   ("Cloning…"). Use `done` + `doneLabel` ("Installed") for the state after
   the action — never swap the button for a text span, that reflows the row.
   Never swap a button's child text on `pending ?` directly.
+- Fixed-height button labels never wrap or flex-shrink. The shell's stacked
+  label and `@catamorphic/app/ui`'s `.cat-btn-stack` reserve max-content width;
+  app-kit buttons are non-shrinking flex items by default. Containers must
+  wrap or choose shorter copy instead of crushing a control into two lines.
 - Pending (and done) buttons are disabled (PendingButton enforces this).
 - **Every icon-only button gets a `ShortcutHint` tooltip.** A button whose
   meaning isn't carried by visible text must be wrapped in
@@ -132,8 +142,8 @@ the animation is wrong, not the test.
 4. **Paired motion mirrors.** A surface's exit is its enter reversed: same
    duration (±50ms when an exit is deliberately snappier, like `tab-out`),
    same easing, and the exit's resting pose equals the enter's starting pose.
-   When open uses a keyframe and close uses a transition (the chat dock),
-   their durations must be equal — one system, two mechanisms.
+   When open and close use separate keyframes (the chat dock), their durations
+   must be equal.
 5. **Animate before unmount.** Nothing that animated in may vanish
    instantly. Exit pattern: keep the element mounted with an `animate-*-out`
    class (or a transition to the hidden pose), remove it on
@@ -147,7 +157,7 @@ the animation is wrong, not the test.
 
 | Animation | Duration | Pairs with |
 |---|---|---|
-| `dock-in` (chat dock open) | 250ms | dock collapse transition (250ms) |
+| `dock-in` / `dock-out` | 250ms | each other |
 | `bubble-in` / `bubble-out` | 200ms | each other |
 | `tab-in` / `tab-out` | 200ms / 180ms | each other (exit snappier) |
 | `fade-in` / `fade-out` (modal section swap; agent-control overlay) | 200ms | each other (exact mirror; `fade-out` holds its final frame for removal on animationend) |
@@ -156,7 +166,7 @@ the animation is wrong, not the test.
 | `question-in` (ask_user panel) | 260ms | — |
 | `pane-in-left` / `pane-in-right` (keyboard tab cycling) | 200ms | — (content-changed signal on a persistent wrapper; no exit to pair) |
 | `bubble-ask` (agent question arrival) | 280ms | — (one-shot nudge on a persistent bubble; no exit to pair) |
-| `input-recall` (composer ↑/↓ history) | 150ms | — (content-changed signal on the persistent textarea) |
+| `input-recall-{up,down}-{a,b}` (composer ↑/↓ history) | 150ms | — (transform-only directional content signal; paired names replay rapid same-direction recalls without a classless frame) |
 | `title-change` (rename flash) | 1200ms | **sanctioned exception** — the
   one decorative-adjacent signal (see design log 2026-07-31); allowlisted in
   the test's `DURATION_EXCEPTIONS` |
@@ -200,26 +210,82 @@ that friction is intentional.
   buttons themselves are not).
 - **Prefer small composable pieces over all-in-one shells.** The workflow
   surface is composed from `WorkflowCanvas` (graph + minimap + controls),
-  `DetailPanel`, and `WorkflowEditorScope` (shared atoms) — not the monolithic
+  a desktop-owned workflow inspector, and `WorkflowEditorScope` (shared atoms) — not the monolithic
   `WorkflowEditor`. Hosts own the toolbar, save button, and chat placement.
 
 ## Theming rules
 
 - New colors enter as a semantic token in **every preset** in
-  `src/main/theme.ts` (the source of truth for palettes), in the `:root` +
-  `[data-theme=light]` blocks in `styles.css` (the pre-JS first paint), and
+  `src/main/theme.ts` (the source of truth for palettes), in the paired
+  `light-dark()` values in `styles.css` (the pre-JS first paint), and
   documented here — then used via Tailwind (`bg-bg-raised`, `text-fg-muted`, …).
-- The active theme lives in `<userData>/theme.json`
-  (`{ preset, overrides }`) — user-global, file-watched, agent-editable.
+- The active theme lives in `<userData>/profiles/<id>/theme.json`
+  (`{ selection, overrides, fonts? }`) — profile-local, file-watched, agent-editable.
+  `selection: "system"` resolves to the Catamorphic Light or Dark preset and
+  follows operating-system changes live.
   ThemeProvider writes each resolved color as an inline CSS variable on
   `<html>`, sets `color-scheme`, and mirrors the appearance to
   `data-theme` for anything keyed on it.
-- The `dark` preset in `theme.ts` and the `:root` block in `styles.css`
-  must stay identical — `:root` is what paints before JS runs.
+- The Catamorphic Light and Dark presets in `theme.ts` and the paired
+  `light-dark()` values in `styles.css` must stay identical. `:root` follows
+  the operating system for the pre-JS first paint.
 - Tokens are mapped into Tailwind 4 via `@theme inline` so utilities and
   registry components pick them up without a config file.
 
 ## Design log
+
+### 2026-09-07: Native terminal shutdown must complete before exit
+
+Quit, SIGTERM, and SIGINT enter the same service shutdown. Terminal tabs can
+vanish before their native processes exit, so cleanup tracks native lifetimes
+separately and awaits their callbacks, escalating a stubborn shell within a
+bounded deadline. Electron must not free its Node environment while node-pty
+still has pending exit callbacks. Tests assert process exit status as well as
+UI behavior; a teardown crash is a failed test, never a successful run with a
+suppressed macOS alert. The embedded HTTP server closes remaining connections
+after the windows close, so unfinished renderer requests cannot block the
+subsequent database flush.
+
+### 2026-09-07: Workflow authoring belongs to the host
+
+The desktop owns the workflow inspector, including its Details, Code, Runs,
+and automation views. It does not ship as an embeddable sidebar. Reusable
+mechanics remain the canvas, scoped selection, source linking, parse status,
+and graph reconciliation (ADR 0097). Workflow overviews lead with purpose,
+starting information, triggers, and steps. Step details describe behavior and
+input provenance; raw expressions are under Technical details. Both views
+provide a deliberate path to source and to describing a change to an agent.
+
+The graph keeps its viewport while inspectors open and code changes. Layout,
+container size, and entry/exit opacity move together for 220ms on the standard
+easing; connected edges track the moving nodes. Reduced motion settles the
+layout immediately. Failed or superseded parses cannot silently replace the
+current preview. A last-valid preview is identified as such.
+
+Saving changes the draft. Runs use the published project version. Publishing
+explains its project-wide scope; unattended execution still requires the
+separate automation review. Unsaved workflow buffers survive tab switches,
+closing a dirty workflow asks whether to discard it, and external changes
+never silently replace a user's draft. Buffers and their disk baselines live
+in the existing per-project workspace snapshot, surviving project switches
+and app relaunch. Saving clears the draft snapshot; discarding also clears
+it from closed-tab history. Background reconciliation waits for restoration
+and cannot replace a saved workspace with an empty one.
+
+Canvas fills use host background tokens with subtle node-kind tints, keeping
+text readable in light and dark themes. Monaco registers TypeScript through
+its current language-feature entry point; authoring hints accept typed,
+heterogeneous steps without false errors.
+
+### 2026-09-06: Connection loss is not agent activity
+
+Keep the transcript visible when the host cannot be reached, but replace the
+live activity claim with explicit reconnect feedback. An interrupted provider
+turn keeps its partial output and offers a persisted retry. Unexpected failures
+request attention and a deduplicated mobile push; intentional Stop does not.
+Failed subsessions become visible instead of remaining hidden behind a parent.
+Mobile offers direct parent/child navigation using the same ordinary sessions.
+See ADR 0094.
 
 Big product/design decisions and their reasoning, newest last. Add an entry
 whenever a decision shapes how a surface works or feels — this file is the
@@ -231,7 +297,7 @@ memory of *why* the app is the way it is.
   `bg-accent text-accent-fg`.
 - Registry components ship **no buttons or action chrome**; hosts own
   toolbars/save/chat placement. Prefer small composable pieces
-  (WorkflowCanvas + DetailPanel + WorkflowEditorScope) over all-in-one shells.
+  (WorkflowCanvas + host inspector + WorkflowEditorScope) over all-in-one shells.
 - Animations stay simple and purposeful: 120–250ms, `--ease-standard`, no
   decorative motion.
 
@@ -376,8 +442,8 @@ memory of *why* the app is the way it is.
   (main + renderer mirror) and a label in the Settings map.
 
 ### 2026-07-31 — User-global keybindings + agent-configurable app settings
-- Keyboard shortcuts live in `<userData>/keybindings.json` — plain JSON,
-  user-global (not per project), file-watched: edits from the Settings
+- Keyboard shortcuts live in `<userData>/profiles/<id>/keybindings.json` — plain JSON,
+  profile-level (not per project), file-watched: edits from the Settings
   UI, a text editor, or an agent all apply live (menu rebuild + broadcast
   to renderers). Actions: new-chat, toggle-sidebar, close-tab. Binding
   format "Cmd+Shift+T"; invalid entries fall back to defaults.
@@ -463,7 +529,7 @@ memory of *why* the app is the way it is.
   crosses, over the guest's isolated IPC.
 
 ### 2026-08-01 — Customizable sidebar (sidebar.js) + bookmarks
-- The sidebar layout is user-owned: **`<userData>/sidebar.js`**, a real
+- The sidebar layout is user-owned: **`<userData>/profiles/<id>/sidebar.js`**, a real
   JS file (same philosophy as keybindings.json — plain, agent-editable,
   file-watched, applies live). It evaluates in an isolated `vm` context
   (no require/fs, 250ms timeout) and exports ordered sections. Types:
@@ -473,8 +539,8 @@ memory of *why* the app is the way it is.
   `"replace"` (default for bookmarks/links) = reuse the focused browser
   tab, **falling back to a new tab when the focused tab isn't a browser
   tab**. Verified both modes.
-- **Bookmarks are per project** (with one level of folders — deliberately
-  shallow), saved via the address-bar star. **Pinning is the one
+- **Bookmarks are per project** (the original one-level folder limit was
+  superseded by ADR 0081), saved via the address-bar star. **Pinning is the one
   cross-project mechanism**: pinning *moves* a bookmark from the project
   scope to a profile-wide pinned list shown at the top of the Bookmarks
   section. Considered making sections/items generally pinnable and
@@ -618,9 +684,9 @@ memory of *why* the app is the way it is.
   CDP target to see real pixels.
 
 ### 2026-08-01 — Themes: every color is a user decision
-- The palette became data: **`<userData>/theme.json`** holds
+- The palette became data: **`<userData>/profiles/<id>/theme.json`** holds
   `{ preset, overrides }`, following the keybindings/sidebar pattern —
-  plain JSON, user-global, file-watched, applies live, and staged as an
+  plain JSON, profile-local, file-watched, applies live, and staged as an
   agent mirror file (`.catamorphic/desktop/theme.json`) so "make the
   accent purple" is a chat request.
 - Four presets ship in `src/main/theme.ts`: **Catamorphic Dark**
@@ -768,7 +834,7 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   which is the point: work-me and home-me are different people. Legacy
   root-level config files migrate into the default profile once; the
   default profile is named "Default Profile" and is renameable like any
-  other (pencil in the profile menu).
+  other from its profile settings workspace.
 - **Switching follows workspace occupancy.** An empty workspace (no tabs,
   no browsers, no chats) switches the window in place under a full-window
   veil — `profile-veil-in`/`-out`, 200ms exact mirrors; the veil is opaque
@@ -824,8 +890,8 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   Chromium importer (Chrome, Edge, Brave, Arc, Chromium) reads Local
   State profiles + Bookmarks files; Settings lets each source profile
   import into the current profile or become a new Catamorphic profile.
-  Bookmarks land as pinned bookmarks (folders flatten — pinned is the
-  bookmarks-bar analog); re-import is idempotent by URL.
+  Bookmarks land as pinned bookmarks (the original flattened import was
+  superseded by ADR 0081); re-import is idempotent by URL.
 
 ### 2026-08-05 — Terminal and editor tabs (libghostty in the workspace)
 - Two new tab kinds join the workspace: **terminal** and **editor**. Both
@@ -1934,7 +2000,8 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   dock's collapse to the floating hidden pose while the entry is still
   mode "tab" (`presentsAsTab` drives the visual pose), then flips the
   mode — tab-out, bubble-in, and the tab switch land after the tween.
-  The floating dock keeps its direct flip; nothing competes with it.
+  Floating docks now stage the same way so every minimize path completes the
+  paired dock-out motion before the bubble appears.
 - **Retry is never a dead button.** After an auth failure + reconnect,
   the credential change rebuilds the provider, so the retry re-anchored
   a fresh harness session from the settled transcript — which excludes
@@ -2501,12 +2568,12 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   has no GitHub access connects a folder to the hosting backend and gets
   exactly what their role covers: company docs read-only, their store
   subtrees read/write. `Connect to a server…` lives beside `New project`
-  (empty state, project switcher, palette); it takes the invite's
-  `catamorphic://connect?server=…&token=…&project=…&name=…` link (deep
-  link or pasted — the fields fill themselves) plus a location. Connect =
-  create the local project, `.gitignore` `store/` and the sync manifest,
-  first sync. Tokens live in the profile's `remote-projects.json`,
-  safeStorage-encrypted like agent keys.
+  (empty state, project switcher, palette); it takes a credential-free
+  `catamorphic://connect?server=…&project=…&name=…` locator (deep link or
+  pasted, with its details resolved automatically) plus a location. OAuth discovery
+  and S256 PKCE authenticate the person before Connect creates the local
+  project, ignores `store/` and the sync manifest, and performs the first
+  sync. Refreshable credentials live in profile-local protected storage.
 - **Two verbs, no merge UI.** The sidebar's *Server* section (hidden for
   local projects) shows host + last sync, **Sync** (pull) and **Ship**
   (push, with the count of local store changes), the changed store files
@@ -2537,10 +2604,11 @@ Patterned on what best-in-class palettes converged on (Chrome omnibox
   proposals on/off and whether they open PRs) and gates the Server section
   on it: no link icon where publishing is off, no public radio on a
   members-only host, no Propose… when the host takes none, and honest
-  wording ("as a pull request" vs "as a branch"). Hosts without `/me` show
-  everything and the click discovers. A 401 becomes "Sign in again", which
-  opens the link's `renew=` URL — the host's own login hands back a fresh
-  connect link; the desktop never learns how the host authenticates.
+  wording ("as a pull request" vs "as a branch"). A 401 becomes "Sign in
+  again" and reruns OAuth discovery and S256 PKCE. Connect links contain only
+  the server and project locator; credentials stay in profile-local protected
+  storage. This supersedes the token-bearing renewal flow in the original
+  entry (ADRs 0072 and 0073).
 - Deferred: auto-sync on focus/interval (today: manual + the 15s status
   poll), a per-file "restore this version" button, revoking links from the
   desktop (today: the agent or HTTP), and MCP-served skills/agents in the
@@ -3056,6 +3124,10 @@ paths, deliberately independent:
 
 ### 2026-09-08: One palette entry per target
 
+The floating-shortcut behavior below is superseded by ADR 0108 and the
+2026-09-09 resource-opening entry. Option+Enter opens the selected target;
+there is no shortcut to float the current tab.
+
 - Open targets use their existing entry (browser, Terminal, Git terminal,
   Settings, editor, or app). The configurable "Open as floating" shortcut
   opens the selected palette target as an overlay. Outside the palette it
@@ -3098,3 +3170,565 @@ paths, deliberately independent:
   editor and a profile-specific macro editor. Navigation stays reachable
   while the settings body scrolls; narrow panels use a compact category
   picker. Whitespace groups controls without adding separator lines.
+### Remote projects stay recognizable and recoverable (2026-08-26)
+
+- **The project selector owns connection truth.** A compact cloud indicator
+  sits beside the selected project, checks the actual server, and distinguishes
+  connected, unreachable, sign-in-required, and access-removed states. Network
+  failure preserves local work and never pretends the project was disconnected.
+- **Reconnect starts from the project, not a blank form.** Every remote working
+  copy keeps a gitignored, credential-free locator in
+  `.catamorphic/remote.json`. The server and remote project remain visible even
+  if encrypted profile credentials or app data are unavailable, so the recovery
+  action can open browser sign-in in place.
+- **Sending while remote access is broken is explicit.** The local message is
+  retained, but the chat immediately explains that remote delivery and
+  mirroring are paused and offers the action appropriate to the failure.
+- **Builders receive source, members receive their scope.** A builder project
+  backed by GitHub reuses a validated `gh` credential when possible and clones
+  through the same GitHub and git services as every other checkout. Other
+  members keep the scoped document working copy. Missing repository access is
+  resolved inside the connect modal.
+- **Project administration belongs to ordinary roles.** A caller whose
+  committed role grants `memberships:manage` sees Members and invites in the
+  server section. Role assignment and invitation creation use project APIs;
+  there is no server-owner persona or privileged desktop mode.
+
+### Durable session inboxes and watcher attribution (2026-08-28)
+
+- The server owns the session inbox and its ordering. Queue controls mutate
+  durable turns directly; React renders that state and never maintains a
+  second authoritative queue.
+- Messages delivered by agents, workflows, watchers, and the system remain
+  visibly distinct from human messages. They use a quiet source label and the
+  incoming side of the timeline instead of the human message treatment.
+
+### Resource inspectors and agent failure semantics (2026-08-29)
+
+- Project and profile switchers share an interactive inspector foundation.
+  A 400ms pointer dwell or keyboard focus opens a portal beside the trigger;
+  it flips at viewport edges, tolerates the pointer crossing the gap, keeps
+  interactive content open, exits before unmount, and dismisses with Escape.
+- A project inspector is the extensible status surface for location,
+  worktrees, uncommitted changes, open pull requests, and remote health.
+  Inspecting another project also shows all ongoing session state; the current
+  project's sessions stay in the sidebar and are not duplicated. Destructive
+  project actions live behind the inspector's three-dot control, never inline
+  in the switcher.
+- Profile switcher rows expose only passive current/default markers. Their
+  inspector summarizes startup and project membership, and its three-dot
+  action opens a profile settings workspace for name, color, defaults, and
+  deletion. Inline hover pencils and mutable default-star actions are gone.
+- A completed harness diagnostic is not a failed turn. When a real failure
+  follows partial assistant prose, core stores the provider error as message
+  content and the prose as `metadata.partialContent`; timelines render the
+  prose normally before the actionable error card.
+
+### Explicit session movement and paused chats (2026-08-29)
+
+- The chat toolbar always carries a focusable **Move to server** action. It is
+  enabled only after the linked host is reachable, the session is settled,
+  and the privacy policy permits mirroring. Otherwise its standard hint names
+  the concrete blocker on hover or keyboard focus.
+- Movement is a deliberate authority transfer, never an automatic failover.
+  Local sending is fenced while the transcript is durably acknowledged by the
+  server; the server then claims the session through a revision check.
+- A phone uses the ordinary chats list as the action surface. Sessions whose
+  source host lease expired are marked **Paused · Tap to resume** in that one
+  list. Push opens the list directly; the PWA has no notification inbox.
+
+### Agent-owned progress lists (2026-08-29)
+
+- A todo list belongs to one chat and has one author: the agent. The user can
+  inspect progress and expand item detail, but cannot edit, reorder, or mark
+  items directly. This keeps the list an honest account of what the agent is
+  doing instead of a second task manager.
+- Every harness uses the same session-bound todo tools and persisted snapshot.
+  Harness-native plan surfaces are not product state because their semantics
+  and detail vary by provider.
+- Progress stays compact beside the chat control bar: a circular completion
+  ring and `done/total` counter. Clicking opens a calm popover with status
+  icons; descriptions are collapsed by default so the list scans quickly and
+  reveals important task detail on demand.
+
+### The public app wears the canonical mark (2026-08-29)
+
+- The installed app icon uses the banana-bracket C without adding a second
+  logo treatment. Catamorphic orange sits on the standard raised dark surface,
+  with the existing strong border as the only depth cue.
+- The macOS installer is the familiar drag-to-Applications DMG. Its job is to
+  make installation obvious, not to introduce a marketing surface that drifts
+  from the desktop or website.
+- Packaged identity is a product contract. The Catamorphic name, icon, bundle
+  id, and connect-link scheme stay consistent across the DMG, Applications,
+  Homebrew, Gatekeeper, and remote invitations.
+
+### Profile passwords and browser import (2026-08-29)
+
+- Passwords are profile resources. Profile settings owns their searchable list
+  and add, edit, reveal, copy, and delete actions alongside profile identity and
+  startup behavior. Reveal and copy are deliberate authenticated actions;
+  ordinary browsing keeps plaintext outside React.
+- Browser pages exchange credential secrets only with the main-process broker.
+  Save and fill bars receive usernames, origins, and opaque IDs. The broker
+  validates the owning window, profile, guest, current URL, and exact origin
+  before saving or filling.
+- Import is part of profile settings rather than a one-time onboarding modal.
+  Installed Chrome and Firefox profiles expose bookmark counts and import into
+  the current profile. Saved-password CSV exports from either browser import
+  into the same encrypted vault and normalize entries to HTTP origins.
+- Password search matches every typed term across website address, hostname,
+  and username. Results use the shared as-you-type list motion, while editor,
+  reveal, confirmation, and copy feedback use the standard curve and honor
+  reduced-motion preferences.
+
+### Dev replacement and mobile continuity (2026-08-29)
+
+- A manually launched root development command replaces the existing dev
+  process group for the same worktree instance. The instance lock is the scope:
+  focused E2E apps and agent tests are separate processes and stay alive.
+- The visible chat keeps a quiet refresh cadence when idle so messages written by a
+  paired phone appear on desktop without requiring a focus change or local
+  send. Active turns retain the faster refresh cadence.
+- Installing the PWA from a desktop pairing carries a short-lived, one-time
+  bootstrap in the manifest start URL. Standalone launch restores the same
+  paired-device record and chat context even when the browser does not transfer
+  its local storage into the installed app (ADR 0080).
+
+### Recursive sidebar trees and web identity (2026-08-31)
+
+- `sidebar.js` custom items are recursively composable. A node can be a link,
+  a folder, or a collapsible link with children, and every level retains icon,
+  open mode, preview, menu, and initial collapse controls. Agent-authored
+  sections use the same detailed row and disclosure behavior as built-ins.
+- Project and profile-wide bookmarks share one recursive folder model. Chrome
+  and Firefox import preserves full folder ancestry, including empty folders,
+  while existing flat profile bookmark data migrates without loss.
+- Web destinations identify themselves with the page favicon in the sidebar
+  and palette. A star at the palette row's right edge marks saved pages; the
+  star is state, not the page's primary icon.
+- Palette commands are contextual inventory, not disabled promises. Commands
+  that cannot change the current workspace are absent until their target or
+  required state exists.
+
+### Chat progress and browser navigation polish (2026-08-31)
+
+- Agent progress is temporary chat chrome. The agent may clear its list with
+  an empty update when it no longer helps; the compact progress control and
+  its popover both mirror their entrance on exit and remain mounted until the
+  exit finishes. The user still inspects but does not edit agent-owned items.
+- Desktop-owned tool calls narrate actions and results in plain language.
+  Todo updates show status-marked task rows and descriptions; other workspace
+  tools use readable field labels. Raw JSON remains a fallback for unknown or
+  connector-owned tools whose schema the desktop does not control.
+- Empty-chat copy is one stable pair per chat: a short invitation in the
+  timeline and a complementary, charismatic composer prompt. The two lines
+  should move the user forward without repeating each other.
+- Tab hover cards use the same paired fade lifecycle as other overlays and
+  animate before unmounting. Browser back and forward are configurable actions
+  with Cmd+Left and Cmd+Right defaults, and native browser mouse commands route
+  to the focused webview. Guest-focused Cmd+W can arrive through both the
+  application menu and the webview relay, so close dispatches coalesce within
+  one physical keypress and mutate exactly one surface.
+- Floating chat exit uses an explicit dock-out keyframe paired with dock-in.
+  Close and minimize stage their state change until it finishes, which keeps
+  Chromium from skipping the exit when an entrance animation is interrupted.
+- Tab exits remove on `animationend` in visible windows and keep a short clock
+  fallback after the animation duration. Occluded Chromium may pause CSS
+  animation events; it must not leave a closed tab's ghost in the strip.
+
+### Heavy tools cost nothing until first use (2026-09-04)
+
+- Monaco, Ghostty, and coding-harness runtimes load only when a user opens
+  the corresponding editor, terminal, or starts a turn with that harness.
+  Idle-time prefetch is not neutral in a long-lived desktop app: it converts
+  optional capability into permanent memory pressure for the rest of the
+  process lifetime.
+- After first use, workspace surfaces remain mounted where continuity requires
+  it. Editors keep drafts and undo history, terminals keep their PTY session,
+  and provider instances keep resumable conversations. Lazy initialization is
+  a startup and non-user optimization, not permission to discard live work.
+- Live discovery also follows demand. Provider catalogs and CLI metadata are
+  fetched only after a configured agent or picker needs them, not as ambient
+  launch work.
+- Claude Code and Codex platform executables are optional components, not base
+  app payload. First use installs the app-release-pinned npm artifact after
+  integrity verification, then reuses it offline. Catamorphic's adapters and
+  the SDK JavaScript remain inside the signed app; the main process never
+  imports remotely downloaded JavaScript (ADR 0091).
+
+### Updates wait for the user's work (2026-09-02)
+
+- Update checks are quiet until there is a useful action. An available release
+  appears as a compact card inside the workspace, not an operating-system
+  modal that interrupts the current task.
+- Download and restart are separate user decisions. Work can continue during
+  download, and restart stays unavailable while an agent or terminal is
+  active so an update never cuts through live work.
+- GitHub Releases owns the signed artifacts. The Homebrew tap carries the cask
+  and update-channel pointer, keeping direct and Homebrew installs on one
+  release line without duplicating binaries.
+- Before a new packaged version starts migrations, the desktop makes a bounded
+  local database copy. Upgrade convenience does not remove the recovery point.
+
+### Stable and Preview are a trust choice (2026-09-02)
+
+- Stable and Preview describe how much release risk a user wants to accept.
+  Stable receives only normal releases. Preview receives intentional alpha
+  releases and the next newer Stable release.
+- The choice lives in a native **Help > Update Channel** radio menu. Stable
+  builds default to Stable and alpha builds default to Preview, while the
+  user's later choice persists for the whole desktop installation.
+- A channel change checks immediately but never downgrades the application.
+  Someone leaving Preview may need to wait until Stable passes their installed
+  alpha version.
+- Nightly is reserved for a future unattended build of main. It should not be
+  used as a friendlier name for releases that are deliberately prepared,
+  signed, notarized, and published.
+
+### Profiles start profile-first (2026-09-02)
+
+- The desktop has no pre-profile configuration format. Theme, keybindings,
+  sidebar configuration, agents, and their credentials begin in the active
+  profile's directory.
+- Startup does not inspect or move root-level configuration from an earlier
+  development model. Catamorphic is greenfield, so obsolete local formats are
+  removed together with the tests that preserve them.
+
+### Chat archive and unread are one profile-local menu (2026-09-02)
+
+- A session's right-click menu is identical in the Chats sidebar and on its
+  dock bubble. It offers Mark as unread or Mark as read plus Archive or
+  Unarchive; both entry points use the existing viewport-safe menu portal.
+- The shared menu uses the app's pop-in/pop-out vocabulary. It stays mounted
+  with a frozen action snapshot through its reverse exit, and reduced-motion
+  profiles get the same fade without translate or scale.
+- Archive is presentation state, not execution state. It hides the session
+  from this profile's sidebar without closing the conversation or changing the
+  server-owned session, so an already-open chat keeps working and palette
+  search remains a path back to it.
+- Unread state is keyed by session rather than by an open dock instance and is
+  persisted with the profile. Automatic background replies and manual marks
+  use the same accent dot. A hidden-to-visible transition clears it; manually
+  marking the chat already on screen unread sticks until the user leaves and
+  opens it again.
+
+### Subsessions are quiet until they need the user (2026-09-04)
+
+- A subagent works in a real child session. While latent it appears as an
+  activity chip above its parent's composer, not as sidebar clutter. Sending it
+  a user message or receiving its explicit attention request promotes it into
+  the recursively collapsible Chats tree.
+- A child chip follows the workspace surface grammar: click opens it and
+  Command-click or its split affordance opens it to the right. A child chat's
+  back button returns to its immediate parent, focusing an already-open parent
+  pane when possible.
+- Session rows and nested groups use the standard 200ms structural motion and
+  remain mounted through reverse exit. Collapse changes presentation only; it
+  never pauses work.
+- Archive is now durable session state rather than a profile-local filter. It
+  recursively stops the selected session and every descendant, including live
+  turns and attached processes. The confirmation dialog appears only when work
+  would actually be interrupted. Archived sessions remain palette-searchable
+  and agent-readable, open with a visible Archived marker, and restore only by
+  an explicit user action.
+
+### Member workflow enablement (2026-09-03)
+
+- A deployed workflow's toolbar exposes one **Automate** surface. It reviews
+  the exact Environment, revision, connections, actions, and trigger count
+  before storing consent for unattended execution.
+- Enablements belong to the individual member by default. Missing connections
+  reuse the standard authentication card, suspended access can be checked
+  again, and a newer deployment remains opt-in through a fresh review.
+- Connection language stays provider-neutral. Enabled profile MCP servers are
+  adopted into the encrypted workflow connection broker under their existing
+  aliases, so the same authenticated MCP account can power agent tools and
+  workflow steps without exposing its credentials to renderer code.
+
+### Workflow-woken session attention (2026-09-03)
+
+- A workflow result returns as a real conversation, not a separate
+  notification object. A stable workflow key reuses the member's session so
+  recurring summaries keep their context and do not flood the Chats list.
+- A settled workflow-woken turn gives the session a server-owned attention
+  revision. Its pulsing dot is deliberately distinct from the solid,
+  profile-local unread dot. Opening the conversation acknowledges the latest
+  revision on every client.
+- The desktop adds an unacknowledged session to the dock as a minimized bubble
+  and to the ordinary sidebar list without moving focus. The PWA shows the
+  same pulse, and Web Push is only a delivery path back to that session.
+
+### One invitation, one connection input (2026-09-03)
+
+- Connecting a remote project asks for the invitation link once. The link is
+  the credential-free locator for the server and project, so exposing those
+  parsed values as editable inputs creates ambiguity without adding capability.
+- The desktop shows the resolved project and server as confirmation, derives
+  the local project name from the link, and only leaves the local folder
+  location as a separate choice. A deep link uses the exact same path as a
+  pasted invitation.
+
+### Authentication stays in the workspace (2026-09-04)
+
+- A web destination initiated by the desktop opens as a workspace browser tab,
+  including remote-server sign-in, agent OAuth, and GitHub authorization. The
+  system browser is no longer a second navigation surface for desktop work.
+- Authorization callbacks close their temporary workspace tab when the flow is
+  complete. Remote-project connection steps aside while authentication is in
+  progress and returns with an actionable error if the flow fails.
+- The stock server's sign-in and consent pages use the desktop's canonical dark
+  tokens, banana-bracket mark, compact typography, and orange focus and action
+  language. They remain semantic HTML forms with password-manager metadata,
+  visible keyboard focus, responsive layout, reduced-motion handling, and a
+  restrictive per-response content security policy.
+
+### System appearance is the theme default (2026-09-04)
+
+- A new profile stores `selection: "system"` and resolves it through Electron's
+  native appearance to Catamorphic Light or Catamorphic Dark. Operating-system
+  changes re-resolve every system-following profile and update all of its open
+  windows without changing the stored selection.
+- Settings presents System default as a first-class choice above the explicit
+  preset cards. Choosing Light, Dark, Midnight, or Paper pins that selection;
+  choosing System default resumes following the device.
+- The renderer declares both supported color schemes before JavaScript runs.
+  Its paired `light-dark()` fallback tokens keep the first paint aligned with
+  the operating system, while the resolved profile palette remains the source
+  of truth after startup.
+
+### Project-shaped navigation and one session inspector (2026-09-04)
+
+- **Projects ship their default sidebar.** The shared
+  `.catamorphic/sidebar.js` remains the project's authored navigation for its
+  members, including builder surfaces such as Changes and Pull Requests when
+  the project wants them. The renderer narrows that presentation to the
+  current caller's capabilities. A profile or per-project personal override
+  remains the user's layer above the shared default.
+- **The palette remains everyone's front door.** Connecting to a project lands
+  on the ordinary New Tab palette rather than silently starting an agent. A
+  project may contribute a very small set of resolved starting actions for the
+  current user segment. They sit inside the palette, use the project's agents,
+  and render no heading, placeholder, or empty state when none are configured.
+- **One top-right surface-control location.** Contextual actions live in the
+  compact top-right cluster used for workspace controls. Share gets a visible
+  slot whenever the active surface has a real sharing contract. Remote
+  documents and presentations use it now; customer-facing apps join it when
+  app publications land. Lower-frequency actions live in the relevant
+  inspector or overflow rather than a permanent button row.
+- **Every chat has one always-present session inspector.** It sits beside the
+  temporary todo control and opens on hover, keyboard focus, or click. It
+  contains the title, agent, source surface, run state, environment, checkout,
+  privacy and sync state, lineage, recent activity, and contextual actions
+  such as fork, archive, and move.
+- **The inspector is one component.** Sidebar session hover uses the same
+  inspector content. The palette's `Status` command and composer `/status`
+  open and pin that control. Todos remain an independent temporary progress
+  surface; the session inspector is stable chrome.
+- **External surfaces create ordinary sessions.** Slack, Claude MCP, mobile,
+  API, and desktop conversations share the durable session model and normal
+  Chats list with source attribution. MCP installation and project choice
+  belong to invitation/onboarding outside the desktop.
+
+### Project capability targeting, not product personas (2026-09-04)
+
+- Member and builder remain useful checkout facts, not the desktop's complete
+  persona model. Project role permissions are namespaced and flow through
+  identity introspection; embedders may add their own without changing the
+  shell.
+- Shared sidebar sections and custom items, plus project New Tab actions, may
+  use `when: { builder?, permissions? }`. Every condition must match. Missing
+  targeting leaves the item universal; malformed targeting removes it rather
+  than exposing it broadly.
+- Configuration names authority, never role slugs. A Brain Maintainer can be
+  assembled from several roles and still receive one coherent project-owned
+  experience. Root users can preview every experience while ordinary builders
+  receive only permissions their role actually grants.
+
+### GitHub authorization steps aside (2026-09-05)
+
+- Starting GitHub authorization from project setup replaces the blocking
+  project dialog with a compact bottom tray. The GitHub workspace tab stays
+  visible and fully interactive while the tray keeps the device code, copy,
+  reopen, and cancel actions within reach. Success or failure restores the
+  project dialog in place instead of discarding its setup context.
+- Keychain access is ordinary app infrastructure, not a recurring consent
+  surface. Consistently signed production builds own the Catamorphic
+  `safeStorage` identity; development and isolated test builds use a separate
+  application name, and concurrent vault unlocks coalesce into one request.
+  We do not weaken the Keychain item or make it accessible to other apps.
+
+### Session runtime controls and an app-owned Bun (2026-09-05)
+
+- The session inspector shows the selected model and effective reasoning effort beside
+  the agent. Both values open the existing harness-backed pickers and changes
+  apply only to that conversation. Switching agents clears a model override
+  that may be invalid for the next harness.
+- The last reported model is labeled separately when it differs from the
+  selection. Supported effort levels follow the shipped adapter; a clamped
+  setting displays its effective value. Editing uses quiet, full-row controls
+  with a small chevron and a visible keyboard focus ring.
+- The inspector enters from and exits toward its trigger on a mirrored,
+  side-aware motion. Its portal remains mounted until the exit completes.
+- Bun is an integrity-pinned optional desktop component, installed on first
+  use beside the native Claude Code and Codex executables. Native harnesses
+  and all agent-owned terminals receive that app-owned Bun on PATH, independent
+  of Finder's restricted launch environment or the user's shell setup.
+- Agents check PATH with bounded commands and never recursively search the
+  home directory or system volume for runtimes. macOS privacy prompts caused
+  by probing protected personal folders are product bugs, not permissions the
+  app should request or explain away with extra entitlements.
+- Bounded discovery is agent guidance, not filesystem isolation. We do not
+  override `find` or claim to prevent all native macOS privacy prompts.
+
+### Resource links and inspectable controls (2026-09-07)
+
+- Agent replies use ordinary Markdown links with the workspace's existing
+  `file:`, `workflow:`, and `app:` targets. The destination chooses the viewer:
+  code in Monaco, Markdown in Tiptap, and PDFs, HTML, images, and media in browser
+  tabs. Workflow source links open code; `workflow:<exportName>` opens the graph.
+  Absolute paths preserve the actual native checkout or external artifact.
+- Reply links, file chips, sidebar files, and `open_surface` share routing.
+  Click opens, Command-click opens a tab, and Command-Shift-click opens to the
+  right. Agent opens continue to respect whether the user is watching that chat.
+- Sidebar session previews use the same inspector portal, dimensions, motion,
+  runtime settings, and actions as the top-right chat control. Hover cards keep
+  keyboard focus and pointer interest while the user moves into their actions.
+- Every disabled control explains the actual disabling condition on hover.
+  Put `data-disabled-reason` beside the condition; `DisabledControlHints` handles
+  native disabled controls that do not reliably emit React mouse events.
+  PendingButton supplies its in-progress/completed reason. Hints clear all
+  workspace inspectors and modal layers. Icon-only controls still use ShortcutHint.
+- Every sidebar nesting level uses the shared 200ms Collapsible. Closed content
+  stays mounted for reverse motion but is inert and hidden from assistive tools.
+  File folders and nested chats follow the same rule as sections and bookmarks.
+- Session activity crossfades within a fixed icon footprint. Update cards have
+  paired entry/exit, smoothly changing progress, explicit restart blockers, and
+  stay dismissed through download progress events until the phase changes.
+- Update preparation is bounded and does not arm a future quit. A late native
+  preparation callback only records readiness. A failed preparation requires a
+  fresh restart click, and main checks active work both before and after it.
+  Final shutdown attempts every service cleanup and reports storage failures.
+### Project-authorized execution choices (2026-09-07)
+
+- A connected project's **Run on** selector lists its permitted execution
+  Environments, including **This machine** when the member's role allows it and
+  the device can run the chosen agent. Project policy declares the choices;
+  host policy supplies and limits the runtime bindings.
+- The connected brain remains the authority for membership, shared configuration,
+  and canonical history. Running locally must retain the member's project
+  permissions and must not substitute the desktop's local root identity.
+- The selected target governs the actual process, workspace, tools, and recovery.
+  Unavailable targets explain the blocker and never silently fall back elsewhere.
+  Moving existing work remains an explicit operation with fenced ownership.
+- Independent server authorities are not another picker layer. See ADR 0098.
+- Managed targets are enrolled server instances of one shared-Postgres authority
+  (ADR 0099). The member's desktop remains an authenticated execution client;
+  it does not need direct database credentials.
+- Incognito is available only in local projects. Remote conversations retain
+  server-owned history even when sandbox commands run on **This machine**.
+  Older incognito tabs are blocked from opening against the remote authority.
+
+### 2026-09-07: Cold motion and idle rendering
+
+Floating panels use opaque theme surfaces and box shadows. Background blur on
+the installed app's first chat opening caused 146-615 ms frame gaps; removing
+that filter in the same installed binary reduced the measured cold gap to about
+15 ms. Avoid backdrop filters on animated docks, palettes, and popovers.
+
+Inactive status icons have no looping animation class. Closed modals unmount
+contents after their exit animation, so hidden loading indicators and child
+effects cannot continue indefinitely. Browser agent ownership keeps a hidden
+tab awake only while agents in its project are working. Inactive guests use
+`display: none` while remaining mounted, allowing Chromium to throttle work.
+Do not overwrite Electron's bridged document visibility properties. Guest
+recovery makes at most two automatic attempts before showing a Reload action.
+
+### Tabbed sidebars and compact app widgets (2026-09-08)
+
+Both sidebars share one configurable tab/section model (ADR 0102). Bare Lucide
+icons identify tabs: accent when selected, muted otherwise, no text or button
+fill. Tooltips and keyboard tab semantics supply labels. Width and selection
+persist per profile/project. Right defaults: Activity, Project note and
+nonempty Changes; Pull requests has its own builder tab. Left keeps project
+navigation and a Files tab. The session inspector remains the sole detailed
+session surface.
+
+Tab content uses paired 200ms opacity/6px translate transitions, including
+exit before display:none. Config reload snapshots crossfade both sidebars at
+200ms on the standard curve without reloading widgets. Reduced motion skips
+these transitions. Invalid saves retain the previous layout and show an error.
+Custom widgets mount ordinary project apps with compact presentation, host
+tokens and existing isolation. Hidden apps retain drafts and receive visibility
+updates so optional refresh work can pause.
+
+### 2026-09-08: Open existing work, save and share explicitly
+
+Opening a repository uses its checkout in place and leaves Git state and files
+unchanged. Saving locally, recording project history, and uploading selected
+documents are separate actions. Attached repositories use explicit commits;
+private document drafts stay on this device until selected for upload. Use
+plain action labels and show the destination and any conflicting server version.
+The local folder, document tools, terminals, and the selected agent checkout
+must agree about where work lives. See ADR 0104.
+
+### 2026-09-08: Worktree-aware Git review
+
+Changes keeps one collapsible subsection per checkout, including clean linked
+worktrees, with the actual branch, folder, and current-checkout identity. Each
+section separates conflicts, staged, unstaged, untracked, and committed branch
+changes. Comparisons name the discovered base branch and compare committed
+versions only. Renames preserve the original path; binary, oversized, mode-only,
+and unavailable files get explicit explanations. Git failures must never appear
+as a clean checkout. Focus, Git notifications, and polling refresh the sidebar
+and open local diffs. Worktree paths form part of tab and editor-model identities.
+
+Workflow run setup lists saved files and offers an explicit **Record changes in
+Git** action before **Publish project version**. Recording preserves unrelated
+staged files; publication retains the recorded revision without moving the
+checkout. Private store documents are excluded from this path.
+
+
+### 2026-09-08: Browser sidebar integration and floating controls
+
+PR 43 supplies the sidebar's default visual design. One left Project tab
+contains navigation, bookmarks, open workspace tabs when configured, and
+collapsible files. Hide a single tab's icon strip and center multiple tabs.
+Keep profile selection, customization and Settings together in the fixed
+left footer across sidebar tab changes. The right sidebar has no customization
+icon; an empty side has a centered Add tab action opening customization chat.
+
+Floating panels have compact corner controls, no extra title bar, and mirrored
+200ms entrance/exit motion. Contents survive hiding, expanding and tiling.
+Reduced motion settles immediately. Monaco uses the active resolved palette
+and fonts across code, workflows and diffs without joining the startup bundle.
+See ADR 0107; this refines the earlier tabbed sidebar and browser layout entries.
+
+### 2026-09-09: One resource-opening language and reliable file paste
+
+See ADR 0108. Resource rows in either sidebar, palette results, message links,
+attachment cards, and web links share these gestures:
+
+| Intent | Pointer | Keyboard |
+| --- | --- | --- |
+| Open here | Click | Enter |
+| Open in new tab | Cmd+Click | Cmd+Enter |
+| Open to the side | Cmd+Shift+Click | Cmd+Shift+Enter |
+| Open floating | Option+Click | Option+Enter |
+
+Use Ctrl instead of Cmd on Windows/Linux. Explicit gestures override configured
+defaults. Context menus expose these same four labels. Existing tab entries keep
+their instance when activated, tiled, or floated. Folder disclosure and commands
+are not resource navigation. Open here may reuse a compatible clean editor/browser;
+it must preserve dirty edits and running sessions. There is no convert-current-tab
+shortcut: Cmd+Option+F and its action have been removed.
+
+All file paste/drop/picker paths must produce a visible attachment or an actionable
+error. Unsupported media and files over the model's input budget still reach the
+agent as file paths. A clipboard bitmap has no original path: persist its bytes
+under the current project before attaching a path. Never silently discard it.
+Keep plain text, rich-text flattening, selection pills, native undo, and insertion
+at the caret. Do not send or erase the draft while file preparation is pending.
+
+Future resource-opening and composer changes must preserve these contracts and
+their Electron interaction tests.

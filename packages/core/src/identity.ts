@@ -5,8 +5,9 @@
  * - `tenantId` — the host's org / workspace id. Becomes the UUID stored in
  *   `catamorphic.tenants.id` + referenced by `catamorphic.projects.tenant_id`.
  *   Auto-upserted on first use.
- * - `externalUserId` — the host's user id. Not persisted in any catamorphic
- *   table; used only for per-user git working directories and commit authorship.
+ * - `externalUserId`: the host's stable user id. Persisted where Catamorphic
+ *   needs durable ownership, membership, or audit attribution, but never joined
+ *   to or constrained by a host user table.
  *
  * Services defined in this package accept {@link Identity} explicitly. They
  * intentionally do NOT fall back to any default — catamorphic is embed-only,
@@ -15,6 +16,8 @@
 export interface Identity {
   tenantId: string;
   externalUserId: string;
+  /** Untrusted placement hint. Client execution verifies owner and lease. */
+  clientRunnerId?: string;
   /**
    * The artifacts this identity may touch. Absent = the ROOT identity: every
    * project of the tenant, every surface, the whole store — the desktop's
@@ -44,6 +47,33 @@ export interface Identity {
   connectionScope?: readonly ConnectionUseRef[];
   /** Host-issued administrative permissions, never sourced from project code. */
   controlPlanePermissions?: readonly ControlPlanePermission[];
+  /**
+   * Project capabilities granted by committed project roles. Catamorphic
+   * services reserve and enforce their documented names; embedders may use
+   * additional namespaced capabilities in their own services and UI.
+   */
+  projectPermissions?: readonly ProjectPermissionRef[];
+}
+
+/**
+ * A namespaced project capability, for example `memberships:manage` or an
+ * embedder-owned `acme:approve_deals`. The open string surface is deliberate:
+ * roles are project-owned and embedders may add enforcement outside core.
+ */
+export type ProjectPermission = string;
+
+/** Shared syntax for project capabilities at every public boundary. */
+export const PROJECT_PERMISSION_PATTERN =
+  /^[a-z][a-z0-9._-]*:[a-z][a-z0-9._-]*$/;
+
+export const CORE_PROJECT_PERMISSIONS = [
+  "memberships:manage",
+  "roles:manage",
+] as const satisfies readonly ProjectPermission[];
+
+export interface ProjectPermissionRef {
+  projectId: string;
+  permission: ProjectPermission;
 }
 
 export interface ExecutionEnvironmentRef {
@@ -90,6 +120,19 @@ export function hasControlPlanePermission(
   return (
     (identity.scope === undefined && identity.executionScope === undefined) ||
     identity.controlPlanePermissions?.includes(permission) === true
+  );
+}
+
+export function hasProjectPermission(
+  identity: Identity,
+  projectId: string,
+  permission: ProjectPermission,
+): boolean {
+  if (identity.scope === undefined) return true;
+  return (
+    identity.projectPermissions?.some(
+      (ref) => ref.projectId === projectId && ref.permission === permission,
+    ) ?? false
   );
 }
 

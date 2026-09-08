@@ -1,14 +1,31 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { DB } from "@catamorphic/db";
 import type {
   GitCredentials,
   ProjectManager,
   ProjectRepo,
 } from "@catamorphic/git";
+import { discoverCheckout } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely, Selectable, Transaction } from "kysely";
-import { authorFor, type Identity, SYSTEM_AUTHOR } from "../identity.js";
+import {
+  authorFor,
+  type Identity,
+  mayUseProject,
+  SYSTEM_AUTHOR,
+} from "../identity.js";
 import { SEED_SKILLS } from "../seeds.js";
-import { assertBuilder, assertRootIdentity } from "./artifact-scope.js";
+import {
+  AccessDeniedError,
+  assertBuilder,
+  assertMayManageRolePolicy,
+  assertRootIdentity,
+} from "./artifact-scope.js";
+import {
+  listLocalDocuments,
+  protectLocalDocuments,
+} from "./local-document-files.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -26,6 +43,8 @@ export interface Project {
 }
 
 export interface CreateProjectInput {
+  /** Host-reserved id for atomic local registration. Never exposed over HTTP. */
+  id?: string;
   name: string;
   /**
    * Absolute directory the working copy should live in. Library-direct only —
@@ -65,6 +84,7 @@ export interface ListProjectsResult {
 
 export interface WriteFileInput {
   content: string;
+  expectedContent?: string;
   commitMessage?: string;
 }
 
@@ -159,6 +179,23 @@ export class ProjectFileNotFoundError extends Error {
   }
 }
 
+export class ProjectFileConflictError extends Error {
+  constructor() {
+    super(
+      "This file changed outside this editor. Reopen it and review the newer version before saving.",
+    );
+    this.name = "ProjectFileConflictError";
+  }
+}
+export class ProjectFileNotTextError extends Error {
+  constructor() {
+    super(
+      "Open this file from its folder to use the right application. The text editor supports UTF-8 files up to 2 MB.",
+    );
+    this.name = "ProjectFileNotTextError";
+  }
+}
+
 /**
  * CRUD + file I/O for catamorphic projects. Each mutating method upserts
  * `tenants(tenant_id)` on first use so embedders don't have to pre-register
@@ -209,8 +246,12 @@ export class ProjectsService {
       throw new Error("rootPath must be an absolute path");
     }
 
-    const projectId = crypto.randomUUID();
+    const projectId = input.id ?? crypto.randomUUID();
 
+    const checkout =
+      input.importExisting && input.rootPath
+        ? await discoverCheckout({ path: input.rootPath })
+        : null;
     await this.ensureTenant(tenantId);
 
     await this.db
@@ -220,6 +261,14 @@ export class ProjectsService {
         tenant_id: tenantId,
         name: input.name,
         storage_type: "managed",
+        ...(checkout
+          ? {
+              remote_url: checkout.remoteUrl,
+              remote_branch: checkout.remoteBranch ?? checkout.branch ?? "main",
+              default_branch:
+                checkout.defaultBranch ?? checkout.branch ?? "main",
+            }
+          : {}),
       })
       .execute();
 
@@ -316,6 +365,23 @@ export class ProjectsService {
     return mapProject(row);
   }
 
+  /** Project metadata for an admitted member; grants no source-file access. */
+  async getOverview(args: {
+    identity: Identity;
+    projectId: string;
+  }): Promise<Project> {
+    if (!mayUseProject(args.identity, args.projectId))
+      throw new AccessDeniedError();
+    const row = await this.db
+      .selectFrom("projects")
+      .selectAll()
+      .where("id", "=", args.projectId)
+      .where("tenant_id", "=", args.identity.tenantId)
+      .executeTakeFirst();
+    if (!row) throw new ProjectNotFoundError(args.projectId);
+    return mapProject(row);
+  }
+
   async update(
     identity: Identity,
     projectId: string,
@@ -370,7 +436,16 @@ export class ProjectsService {
   ): Promise<ProjectFileEntry[]> {
     await this.requireExists(identity, projectId);
     return this.withDev(identity, projectId, async (repo) => {
-      const filePaths = await repo.listFiles();
+      const root = await this.projectManager.localPath({
+        tenantId: identity.tenantId,
+        projectId,
+      });
+      const filePaths = [
+        ...new Set([
+          ...(await repo.listFiles()),
+          ...(root ? await listLocalDocuments(root) : []),
+        ]),
+      ];
       return filePaths.map((p) => ({ path: p, size: 0 }));
     });
   }
@@ -383,8 +458,27 @@ export class ProjectsService {
     await this.requireExists(identity, projectId);
     return this.withDev(identity, projectId, async (repo) => {
       try {
-        return await repo.readFile(filePath);
-      } catch {
+        if (
+          await this.projectManager.localPath({
+            tenantId: identity.tenantId,
+            projectId,
+          })
+        ) {
+          const stat = await fs.stat(path.join(repo.repoPath, filePath));
+          if (!stat.isFile() || stat.size > 2 * 1024 * 1024)
+            throw new ProjectFileNotTextError();
+        }
+        const bytes = await repo.readFileBytes(filePath);
+        if (!bytes) throw new ProjectFileNotFoundError(projectId, filePath);
+        if (bytes.length > 2 * 1024 * 1024 || bytes.includes(0))
+          throw new ProjectFileNotTextError();
+        try {
+          return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+        } catch {
+          throw new ProjectFileNotTextError();
+        }
+      } catch (error) {
+        if (error instanceof ProjectFileNotTextError) throw error;
         throw new ProjectFileNotFoundError(projectId, filePath);
       }
     });
@@ -433,12 +527,27 @@ export class ProjectsService {
     input: WriteFileInput,
   ): Promise<string> {
     await this.requireExists(identity, projectId);
+    assertMayManageRolePolicy(identity, projectId, [filePath]);
     return this.withDev(identity, projectId, async (repo) => {
+      if (
+        input.expectedContent !== undefined &&
+        (await repo.readFile(filePath)) !== input.expectedContent
+      )
+        throw new ProjectFileConflictError();
+      if (
+        filePath.startsWith("store/") &&
+        (await this.projectManager.localPath({
+          tenantId: identity.tenantId,
+          projectId,
+        }))
+      )
+        await protectLocalDocuments(repo.repoPath);
       await repo.writeFile(filePath, input.content);
       if (input.commitMessage) {
         await repo.commit(
           input.commitMessage,
           authorFor(identity.externalUserId),
+          { paths: [filePath] },
         );
       }
       return input.content;

@@ -39,7 +39,7 @@ const MIRROR_PATHS = [
 
 export const DESKTOP_CONFIG_SKILL = `---
 name: configuring-catamorphic-desktop
-description: Change Catamorphic desktop app settings (keyboard shortcuts, sidebar sections, tab placement, bookmark presentation, and colors) when the user asks to customize the app itself, e.g. "move tabs to the sidebar", "show pinned bookmarks as tiles", "switch to the light theme".
+description: Change Catamorphic desktop app settings (keyboard shortcuts, both sidebars' icon tabs and widgets, workspace tab placement, bookmarks, theme colors, and fonts) when the user asks to customize the app itself, e.g. "rebind new chat to Cmd+N", "hide the workflows section", "switch to the light theme", "make the accent purple", "change the interface font", "use Menlo for code".
 ---
 
 # Configuring the Catamorphic desktop app
@@ -79,10 +79,12 @@ Punctuation keys such as \`Cmd+[\` and \`Ctrl+;\` are supported.
 Warn the user if they pick a binding that collides with a common OS or
 app shortcut (Cmd+Q, Cmd+C/V/X/A/Z, Cmd+N).
 
-## Left sidebar
+## Sidebars
 
 The sidebar is fully user-defined by a JS config file exporting an
-ordered list of sections: the list IS the sidebar. Edit it to reorder,
+object with left and right arrays of tabs. Each tab has id, title, icon and
+sections. Each section has a stable id, unique across the layout, and type.
+Edit it to reorder,
 retitle, **hide** (delete the entry), or invent sections.
 
 The config is LAYERED — the app uses the first of these that exists, so
@@ -105,18 +107,32 @@ layer that is in effect. A change meant for teammates too belongs in the
 shared \`.catamorphic/sidebar.js\`; "just for me" / "just in this
 project" belongs in \`sidebar.local.js\`.
 
-Built-in section types: \`workflows\`, \`apps\`, \`chats\`, \`bookmarks\`,
-\`tabs\` (open workspace tabs when tab placement is sidebar),
-\`git\` (uncommitted changes per git worktree; clicking a file opens its
-diff), \`prs\` (the project's open pull requests).
+Built-in section types: \`workflows\`, \`apps\`, \`chats\`, \`files\`,
+\`bookmarks\`, \`tabs\` (open workspace tabs in sidebar mode), \`git\` (uncommitted changes per git worktree; clicking a
+file opens its diff), \`prs\` (the project's open pull requests), and the
+legacy manual \`remote\` controls. Views without a builder checkout omit
+\`git\`, \`prs\`, and \`remote\`; builder views retain them.
 Bookmarks are real browser bookmarks: the user creates them with the
 star in the address bar; you never hand-write bookmark data here, you
 only control how the section is presented.
+
+Each side contains icon tabs: \`{ id: "project", title: "Project", icon: "House", sections: [...] }\`.
+Preserve stable tab and section ids during edits; moving or reordering must not invent ids.
+Either side may be empty. Move a tab or section by moving its definition between arrays.
+Built-ins also include \`activity\` (running/attention sessions and workflow runs),
+\`note\` (\`path: "docs/brief.md"\`, optional personal pin when omitted), and
+\`app\` (\`app: "renewals", height: 320\`). App widgets are ordinary built project apps,
+not inline JavaScript in this file. Build responsive compact content using host tokens.
+Apps can import \`subscribeDisplay\` from \`@catamorphic/app\` to observe
+\`{ mode: "compact" | "full", visible: boolean }\` and pause refreshes while hidden.
+The sidebar mounts the same app with the same sandbox, storage and authorization;
+expanding opens its full view. It grants no filesystem or active-chat access.
 
 Your own section:
 
 \`\`\`js
 {
+  id: "docs",
   type: "custom",
   title: "Docs",
   open: "replace",
@@ -134,8 +150,12 @@ Your own section:
   \`preview: false\` to explicitly disable it.
 - \`collapsed: true\` starts a section collapsed.
 - \`hideEmpty\`: hide the whole section (header included) while it has
-  nothing to list. Defaults to true for \`workflows\` and \`apps\`, false
-  for every other section; set it explicitly to override either way.
+  nothing to list. Defaults to true for \`workflows\`, \`apps\`, \`git\` and \`remote\`, false
+  for other sections; set it explicitly to override either way.
+- \`when\`: on a section or custom item, target resolved project authority
+  with optional \`builder: true|false\` and/or
+  \`permissions: ["namespace:capability"]\`. Every condition must match;
+  omit it to show the entry to everyone. Invalid targeting fails closed.
 
 Hover menu (the ⋯ button on an item): set on a section (applies to all
 its items) or on a single item:
@@ -152,33 +172,74 @@ Actions: \`open\`, \`open-tab\`, \`open-here\`, \`copy-url\`, \`pin\`,
 \`unpin\`, \`rename\`, \`edit\` (bookmark address and folder), \`remove\`. \`menu: []\` removes the ⋯ button.
 \`pin\`/\`unpin\`/\`rename\`/\`remove\` only do anything on bookmarks.
 
-Rules: keep it valid JavaScript with a \`module.exports = { sections: [...] }\`.
+Rules: keep it valid JavaScript with a \`module.exports = { left: [...], right: [...] }\`.
 It is evaluated in a sandbox: no \`require\`, no I/O, no async. An invalid
-file falls back to the default sidebar, so verify your edit is syntactically
-correct. Preserve the user's existing sections unless they asked otherwise,
+file retains the last valid layout and shows an error. Preserve the user's existing sections unless they asked otherwise,
 and keep the explanatory comments at the top intact.
 
-## Color theme
+## Project New Tab actions
 
-The app's colors: \`${DESKTOP_THEME_WORKSPACE_PATH}\` (refreshed every
+A project may add up to six small starting actions to the ordinary New Tab
+palette through \`.catamorphic/project.json\`. They are absent when the
+project does not configure them. Preserve the rest of the manifest:
+
+\`\`\`json
+{
+  "startingActions": [
+    {
+      "label": "Prepare customer briefing",
+      "prompt": "Prepare the customer briefing from the company context.",
+      "agent": "csm",
+      "when": {
+        "builder": false,
+        "permissions": ["briefings:prepare"]
+      }
+    }
+  ]
+}
+\`\`\`
+
+\`agent\` is an optional project-agent slug. \`when\` is optional; it may match
+\`builder: true|false\` and require a list of namespaced project role
+permissions. Every condition must match. Omitting it shows the action to
+everyone. Invalid targeting fails closed. Keep labels short and prompts
+complete enough to run without another setup step.
+
+## Theme colors and fonts
+
+The app's colors and fonts: \`${DESKTOP_THEME_WORKSPACE_PATH}\` (refreshed every
 turn). Format:
 
 \`\`\`json
 {
-  "preset": "dark",
-  "overrides": { "accent": "#7c5cff" }
+  "selection": "system",
+  "overrides": { "accent": "#7c5cff" },
+  "fonts": { "sans": "Arial, sans-serif", "mono": "Menlo, monospace" }
 }
 \`\`\`
 
-Presets: ${THEME_PRESETS.map((preset) => `\`${preset.id}\` (${preset.label})`).join(", ")}.
+Selections: \`system\` (follows the operating system with Catamorphic Light
+and Catamorphic Dark), ${THEME_PRESETS.map((preset) => `\`${preset.id}\` (${preset.label})`).join(", ")}.
 \`overrides\` replaces individual colors on top of the preset, and any CSS
 color works. Tokens:
 ${THEME_TOKENS.map((token) => `\`${token}\``).join(", ")}.
 
-Unknown presets, tokens, or invalid colors are ignored. Keep overrides
+Unknown selections, tokens, or invalid colors are ignored. Keep overrides
 minimal (prefer picking the closest preset); when changing surface colors,
 keep enough contrast with the text tokens.
 
+\`fonts.sans\` sets the interface and body font; \`fonts.mono\` sets code,
+logs, editors, diffs, and terminals. Embedded apps using the host's theme
+tokens inherit these choices live too. Use installed font family names,
+optionally quoted, with comma-separated fallbacks. End with a generic family
+such as \`sans-serif\` or \`monospace\`. Missing fonts fall back to the next
+family; this setting does not download or install fonts. URLs and CSS
+functions or declarations are not accepted.
+
+Omit or remove a font key to restore its default: Inter for \`sans\`,
+JetBrains Mono for \`mono\`, each with system fallbacks. Preserve the other
+font key and existing colors when changing one font; preserve \`fonts\` when
+changing only colors. Fonts are also editable in Settings under Theme.
 ## Workspace layout
 
 Edit \`${DESKTOP_LAYOUT_WORKSPACE_PATH}\` to set \`tabPlacement\` to

@@ -60,7 +60,7 @@ describe("workflow query keys", () => {
     ).toEqual(workflow);
   });
 
-  it("invalidates list and detail queries after a file write", async () => {
+  it("updates the saved file and invalidates workflow discovery after a write", async () => {
     server.use(
       http.put(
         apiUrl(`/api/projects/${PROJECT_ID}/files/workflows/sample.ts`),
@@ -91,6 +91,15 @@ describe("workflow query keys", () => {
       content: "export {}",
     });
 
+    expect(
+      queryClient.getQueryData([
+        "cat",
+        "project",
+        PROJECT_ID,
+        "file",
+        "workflows/sample.ts",
+      ]),
+    ).toEqual({ path: "workflows/sample.ts", content: "export {}" });
     expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(detailKey)?.isInvalidated).toBe(true);
   });

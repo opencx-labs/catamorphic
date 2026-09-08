@@ -15,14 +15,18 @@ import type { AgentSession } from "../types.js";
 
 export interface UpdateAgentSessionInput {
   sessionId: string;
+  /** Explicitly move a settled session to a new permitted Allocation. */
+  environment?: string;
   /** Switch the session to another registered agent. */
   agentId?: string;
+  /** Model override; `null` clears back to the agent harness's default. */
+  model?: string | null;
   /** Reasoning-effort override; `null` clears back to the agent's default. */
   effort?: "low" | "medium" | "high" | "xhigh" | "max" | null;
 }
 
 /**
- * Re-point a session at another agent and/or change its effort override.
+ * Re-point a session at another agent and/or change its model or effort overrides.
  * Rejected with 409 while a turn is running — callers should surface that
  * rather than retry blindly.
  */

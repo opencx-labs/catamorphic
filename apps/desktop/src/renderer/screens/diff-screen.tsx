@@ -1,8 +1,8 @@
 import { DiffEditor } from "@monaco-editor/react";
-import "../lib/monaco-setup.js";
 import { useEffect, useState } from "react";
 import type { DiffSource } from "../components/workspace-tabs.js";
 import { desktopApi, type GitFileDiff } from "../lib/desktop-api.js";
+import { useMonacoTheme } from "../lib/monaco-setup.js";
 import { useTheme } from "../lib/theme.js";
 
 /**
@@ -42,35 +42,67 @@ function LocalDiff({
   source: Extract<DiffSource, { type: "local" }>;
 }) {
   const theme = useTheme();
+  const editorTheme = useMonacoTheme();
   const [diff, setDiff] = useState<GitFileDiff | null>(null);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    let revision = 0;
     setDiff(null);
     setFailed(false);
-    desktopApi
-      .gitFileDiff(projectId, source.worktreePath, source.filePath, source.mode)
-      .then((loaded) => {
-        if (!cancelled) setDiff(loaded);
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
-      });
+    const load = () => {
+      const request = ++revision;
+      void desktopApi
+        .gitFileDiff({
+          projectId,
+          worktreePath: source.worktreePath,
+          filePath: source.filePath,
+          mode: source.mode,
+          previousPath: source.previousPath,
+          baseRef: source.baseRef,
+        })
+        .then((loaded) => {
+          if (!cancelled && request === revision) {
+            setDiff(loaded);
+            setFailed(false);
+          }
+        })
+        .catch(() => {
+          if (!cancelled && request === revision) setFailed(true);
+        });
+    };
+    load();
+    const timer = window.setInterval(load, 15_000);
+    window.addEventListener("focus", load);
+    const unsubscribe = desktopApi.onGitChanged((change) => {
+      if (change.projectId === projectId) load();
+    });
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", load);
+      unsubscribe();
     };
-  }, [projectId, source.worktreePath, source.filePath, source.mode]);
+  }, [
+    projectId,
+    source.worktreePath,
+    source.filePath,
+    source.mode,
+    source.previousPath,
+    source.baseRef,
+  ]);
 
   if (failed) return <Note>Couldn't load the diff for {source.filePath}</Note>;
   if (!diff) return <Note>Loading…</Note>;
+  if (diff.notice) return <Note>{diff.notice}</Note>;
   if (diff.binary) return <Note>Binary file</Note>;
   if (diff.before === diff.after) {
     // Two identical panes with no highlights read as a bug; say what
     // actually happened (usually: the change is already checkpointed).
     return (
       <Note>
-        No differences — this change is already in the project's history.
+        No differences between {diff.beforeLabel} and {diff.afterLabel}.
       </Note>
     );
   }
@@ -85,17 +117,18 @@ function LocalDiff({
             height="100%"
             // Distinct model paths per side so Monaco infers the language
             // from the file extension (the same mechanism as editor tabs).
-            originalModelPath={`file:///diff-original/${source.mode}/${source.filePath}`}
-            modifiedModelPath={`file:///diff-modified/${source.mode}/${source.filePath}`}
+            originalModelPath={`file:///diff-original/${encodeURIComponent(projectId)}/${encodeURIComponent(source.worktreePath)}/${source.mode}/${source.filePath.split("/").map(encodeURIComponent).join("/")}`}
+            modifiedModelPath={`file:///diff-modified/${encodeURIComponent(projectId)}/${encodeURIComponent(source.worktreePath)}/${source.mode}/${source.filePath.split("/").map(encodeURIComponent).join("/")}`}
             original={diff.before}
             modified={diff.after}
-            theme={theme?.appearance === "light" ? "light" : "vs-dark"}
+            theme={editorTheme}
             options={{
               readOnly: true,
               renderSideBySide: true,
               lineNumbers: "on",
               minimap: { enabled: false },
               fontSize: 13,
+              fontFamily: theme?.fonts.mono,
               scrollBeyondLastLine: false,
               automaticLayout: true,
               padding: { top: 12 },
@@ -106,7 +139,7 @@ function LocalDiff({
         <div className="flex h-7 shrink-0 items-center gap-2 border-t border-border bg-bg-raised/60 px-3 font-mono text-[11px] text-fg-faint">
           <span className="truncate">{source.filePath}</span>
           <span className="ml-auto shrink-0">
-            {source.mode === "uncommitted" ? "uncommitted" : "vs main"}
+            {diff.beforeLabel} → {diff.afterLabel}
           </span>
         </div>
       </div>

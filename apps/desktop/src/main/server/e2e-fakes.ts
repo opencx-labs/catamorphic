@@ -336,6 +336,65 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       return;
     }
 
+    if (prompt.includes("clear todo list")) {
+      const updateTodos = this.workspaceTools.find(
+        (candidate) => candidate.name === "update_todo_list",
+      );
+      if (!updateTodos) {
+        yield { type: "error", content: "todo tools unavailable" };
+        yield { type: "done" };
+        return;
+      }
+      const input = { items: [] };
+      const result = await updateTodos.execute(input, state.toolContext);
+      yield {
+        type: "tool_call",
+        toolName: "update_todo_list",
+        toolInput: input,
+        toolResult: result,
+      };
+      yield { type: "text", content: "I cleared the progress list." };
+      yield { type: "done" };
+      return;
+    }
+
+    if (prompt.includes("todo list")) {
+      const updateTodos = this.workspaceTools.find(
+        (candidate) => candidate.name === "update_todo_list",
+      );
+      if (!updateTodos) {
+        yield { type: "error", content: "todo tools unavailable" };
+        yield { type: "done" };
+        return;
+      }
+      const input = {
+        items: [
+          {
+            title: "Inspect the project",
+            description:
+              "Read the existing implementation and identify the right extension points.",
+            status: "completed",
+          },
+          {
+            title: "Verify the result",
+            description:
+              "Run the focused tests and confirm the user-facing behavior.",
+            status: "in_progress",
+          },
+        ],
+      };
+      const result = await updateTodos.execute(input, state.toolContext);
+      yield {
+        type: "tool_call",
+        toolName: "update_todo_list",
+        toolInput: input,
+        toolResult: result,
+      };
+      yield { type: "text", content: "I added a progress list to this chat." };
+      yield { type: "done" };
+      return;
+    }
+
     if (prompt.includes("ask me") && prompt.includes("question")) {
       state.askedQuestion = true;
       yield { type: "title", content: "Getting to know you" };
@@ -382,6 +441,8 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
         subagentType: "code-reviewer",
         content: "Review the changes",
       };
+      // Split the subagent's start and its later activity across preambles.
+      yield { type: "text", content: "The reviewer is checking the details." };
       yield {
         type: "tool_call",
         toolName: "Grep",
@@ -412,6 +473,35 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
         content: "npm run dev",
       };
       yield { type: "text", content: "It's running in the background." };
+      yield { type: "done" };
+      return;
+    }
+
+    if (prompt.includes("artifact links")) {
+      const files = {
+        "artifact.pdf":
+          "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n5 0 obj\n<< /Length 51 >>\nstream\nBT /F1 18 Tf 30 100 Td (Linked PDF artifact) Tj ET\nendstream\nendobj\nxref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000241 00000 n \n0000000311 00000 n \ntrailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n411\n%%EOF\n",
+        "linked-notes.md":
+          "# Linked notes\n\nAn artifact opened from an agent reply.\n",
+        "linked-source.ts":
+          "// Linked source\nexport const first = 1;\nexport const second = 2;\n",
+        "linked-workflow.ts":
+          'import { defineWorkflow } from "@catamorphic/workflow";\n/** @displayname Make greeting\n * @param name - @displayname Name\n */\nasync function greet({ name }: { name: string }) { "use step"; return { greeting: "Hello " + name }; }\n/** @displayname Linked workflow */\nexport const linkedWorkflow = defineWorkflow(({ defineBoundary }) => ({ steps: [defineBoundary({ run: async () => greet({ name: "World" }) })] }));\n',
+        "apps/linked-app/package.json":
+          '{"name":"linked-app","catamorphic":{"displayName":"Linked app"}}',
+      };
+      await this.sandboxProvider.uploadFiles(
+        state.sandboxId,
+        files,
+        state.workingDirectory,
+      );
+      for (const filePath of Object.keys(files))
+        yield { type: "file_edit" as const, content: "write", filePath };
+      yield {
+        type: "text",
+        content:
+          "[Read linked notes](file:linked-notes.md) [Inspect linked source](file:linked-source.ts:3) [Open linked graph](workflow:linkedWorkflow) [Open linked app](app:linked-app) [Read linked PDF](file:artifact.pdf)",
+      };
       yield { type: "done" };
       return;
     }
@@ -783,7 +873,11 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     if (prompt.includes("rate limit")) {
       if (!oneShotFailures.has(prompt)) {
         oneShotFailures.add(prompt);
-        yield { type: "error", content: "429 rate limit exceeded" };
+        yield {
+          type: "error",
+          content: "429 rate limit exceeded",
+          retrySafe: true,
+        };
         yield { type: "done" };
         return;
       }
@@ -818,6 +912,13 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
         state.workingDirectory,
       );
       yield { type: "text", content: "I created HELLO.md for you." };
+      yield { type: "done" };
+      return;
+    }
+
+    if (prompt.includes("session menu")) {
+      yield { type: "title", content: "Session menu" };
+      yield { type: "text", content: "The session menu is ready." };
       yield { type: "done" };
       return;
     }

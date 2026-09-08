@@ -1,4 +1,5 @@
 import {
+  DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -6,7 +7,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
-import { type ObjectStore, PreconditionFailedError } from "./object-store.js";
+import { type ObjectStore, PreconditionFailedError } from "@catamorphic/git";
 
 export interface S3ObjectStoreOpts {
   bucket: string;
@@ -134,6 +135,12 @@ export class S3ObjectStore implements ObjectStore {
         : undefined;
     } while (continuationToken);
     return keys;
+  }
+
+  async delete(key: string): Promise<void> {
+    await this.client.send(
+      new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),
+    );
   }
 
   async deletePrefix(prefix: string): Promise<void> {

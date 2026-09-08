@@ -10,8 +10,12 @@ import { instrumentSandboxProvider } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
 import type { Identity } from "./identity.js";
 import { HOST_SKILLS, SEED_SKILLS } from "./seeds.js";
+import type { AgentCapabilityOptions } from "./services/agent-capabilities-service.js";
+import { AgentCapabilitiesService } from "./services/agent-capabilities-service.js";
 import { AgentContextService } from "./services/agent-context-service.js";
 import { AgentDefinitionsService } from "./services/agent-definitions-service.js";
+import { AgentRuntimeEventsService } from "./services/agent-runtime-events-service.js";
+import { AgentRuntimeRequestsService } from "./services/agent-runtime-requests-service.js";
 import {
   AgentSessionsService,
   type AgentTurnSettledEvent,
@@ -21,12 +25,14 @@ import type { AppBundleStore } from "./services/app-bundle-store.js";
 import { AppPoliciesService } from "./services/app-policies-service.js";
 import { AppStorageService } from "./services/app-storage-service.js";
 import { AppsService } from "./services/apps-service.js";
+import { assertScopeAllowsWorkflow } from "./services/artifact-scope.js";
 import { BatchExecutionHandler } from "./services/batch-execution-handler.js";
 import { BoundaryExecutionHandler } from "./services/boundary-execution-handler.js";
 import {
   type CapabilityProviderRuntime,
   CapabilityRegistry,
 } from "./services/capability-providers.js";
+import { ClientRunnersService } from "./services/client-runners-service.js";
 import {
   type CodingAgentRegistry,
   isCodingAgentRegistry,
@@ -55,6 +61,7 @@ import { ExecutionAllocationsService } from "./services/execution-allocations-se
 import { ExecutionEnvironmentsService } from "./services/execution-environments-service.js";
 import { ExecutionJobsService } from "./services/execution-jobs-service.js";
 import { ExecutionWorkerService } from "./services/execution-worker-service.js";
+import { GithubProjectEventSource } from "./services/github-event-source.js";
 import {
   GithubService,
   type GithubServiceConfig,
@@ -63,6 +70,9 @@ import { executeHostCall } from "./services/host-calls.js";
 import { MembershipsService } from "./services/memberships-service.js";
 import { PluginsService } from "./services/plugins-service.js";
 import { ProjectEnvironmentsService } from "./services/project-environments-service.js";
+import type { ProjectEventSourceProvider } from "./services/project-event-monitors-service.js";
+import { ProjectEventMonitorsService } from "./services/project-event-monitors-service.js";
+import { ProjectEventsService } from "./services/project-events-service.js";
 import {
   type ProjectLifecycleHooks,
   ProjectsService,
@@ -80,18 +90,32 @@ import { RunCoordinator } from "./services/run-coordinator.js";
 import { RunPluginsLoader } from "./services/run-plugins-loader.js";
 import { RunsService } from "./services/runs-service.js";
 import { RuntimeEventsService } from "./services/runtime-events-service.js";
+import { SchedulesService } from "./services/schedules-service.js";
 import { SecretsService } from "./services/secrets-service.js";
+import type { SessionMailboxesService } from "./services/session-mailboxes-service.js";
+import { SessionSyncService } from "./services/session-sync-service.js";
 import { SkillsService } from "./services/skills-service.js";
 import { TenantPoliciesService } from "./services/tenant-policies-service.js";
-import type { ToolPermissionBroker } from "./services/tool-permission-broker.js";
+import type { ToolPermissionChannel } from "./services/tool-permission-broker.js";
 import type {
   McpToolKindSpec,
   TriggerKindRuntime,
 } from "./services/trigger-kinds.js";
 import { TriggersService } from "./services/triggers-service.js";
+import {
+  type PushNotificationTransport,
+  UserNotificationsService,
+} from "./services/user-notifications-service.js";
+import { WatchersService } from "./services/watchers-service.js";
+import { WorkflowEnablementsService } from "./services/workflow-enablements-service.js";
 import { WorkflowsService } from "./services/workflows-service.js";
 
 export interface CatamorphicCoreConfig {
+  agentCapabilities?: AgentCapabilityOptions;
+  /** Stable host identity. Required when `codingAgent` enables sessions. */
+  hostId?: string;
+  /** Distinct leased execution instance beneath the logical host authority. */
+  workerNode?: { id: string; token: string };
   /**
    * How long a project's parsed `roles/*.json` set is trusted before it is
    * re-read from the shared origin (ADR 0055). Role *definitions* may lag
@@ -124,10 +148,18 @@ export interface CatamorphicCoreConfig {
   sandboxProvider?: SandboxProvider;
   /** Host-owned realizations of project logical Environments. */
   environmentProvider: EnvironmentProvider;
+  /** Permit authenticated clients to supply explicitly granted local execution. */
+  clientExecution?: boolean;
   /** Opaque host-owned storage for external provider credentials. */
   credentialVault?: CredentialVault;
   /** Host-side external-system drivers. Requires `credentialVault`. */
   connectionProviders?: readonly ConnectionProvider[];
+  /** Re-resolve current member authority for workflow dispatch and agent capabilities. */
+  resolveMemberIdentity?: (args: {
+    tenantId: string;
+    projectId: string;
+    externalUserId: string;
+  }) => Promise<Identity | null>;
   /** Reachable control-plane endpoint for allocation-bound agent MCP grants. */
   connectionMcpUrl?: (args: {
     projectId: string;
@@ -150,7 +182,7 @@ export interface CatamorphicCoreConfig {
    * `onToolPermission`, and the plugin serves the pending list + answer
    * routes. Hosts with their own consent UI (the desktop bridge) omit it.
    */
-  toolPermissions?: ToolPermissionBroker;
+  toolPermissions?: ToolPermissionChannel;
   /**
    * Resolve a project's directory on the host filesystem, required for
    * registry agents with `topology: "native"` (Claude Code, Codex).
@@ -202,6 +234,8 @@ export interface CatamorphicCoreConfig {
    * `defineTriggerKind` from `@catamorphic/server-sdk`.
    */
   triggerKinds?: readonly TriggerKindRuntime[];
+  /** Generic external event sources that feed normalized Project Events. */
+  projectEventSources?: readonly ProjectEventSourceProvider[];
   /**
    * Which trigger kinds are AI-callable tools, and how to project a
    * binding's config into MCP tool metadata. Powers the per-project MCP
@@ -215,6 +249,8 @@ export interface CatamorphicCoreConfig {
    * kind. Exceptions are swallowed and never delay the turn.
    */
   onAgentTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
+  /** Optional host-owned Web Push transport. Events remain durable without it. */
+  pushNotifications?: PushNotificationTransport;
   /**
    * Host-side capability providers (ADR 0046): named fulfillers for plugin
    * `requires` declarations, resolved at run launch into env values that
@@ -278,16 +314,23 @@ export class CatamorphicCore {
   readonly pluginResolver?: PluginResolver;
 
   readonly projects: ProjectsService;
+  readonly projectEvents: ProjectEventsService;
+  readonly projectEventMonitors: ProjectEventMonitorsService;
+  readonly projectEventSources: readonly ProjectEventSourceProvider[];
   readonly workflows: WorkflowsService;
   readonly runs: RunsService;
   readonly triggers: TriggersService;
+  readonly workflowEnablements: WorkflowEnablementsService;
+  readonly schedules: SchedulesService;
   readonly deployment: DeploymentService;
   readonly deploymentArtifacts: DeploymentArtifactsService;
   readonly deploymentRuntime?: DeploymentRuntimeService;
   readonly skills: SkillsService;
   readonly agentDefinitions: AgentDefinitionsService;
+  readonly clientRunners?: ClientRunnersService;
   readonly projectEnvironments: ProjectEnvironmentsService;
   readonly executionEnvironments: ExecutionEnvironmentsService;
+  readonly agentCapabilities: AgentCapabilitiesService;
   readonly executionAllocations: ExecutionAllocationsService;
   readonly connections?: ConnectionsService;
   readonly connectionAdmission?: ConnectionAdmissionService;
@@ -313,11 +356,20 @@ export class CatamorphicCore {
   readonly devSandboxes?: DevSandboxService;
   readonly agentContext?: AgentContextService;
   readonly agentSessions?: AgentSessionsService;
-  readonly toolPermissions?: ToolPermissionBroker;
+  readonly sessionMailboxes?: SessionMailboxesService;
+  /** Durable transcript replication outbox, drained by the embedding host. */
+  readonly sessionSync?: SessionSyncService;
+  readonly watchers?: WatchersService;
+  /** Durable normalized provider events, independently replayable by cursor. */
+  readonly agentRuntimeEvents: AgentRuntimeEventsService;
+  /** Durable approval, question, and elicitation requests. */
+  readonly agentRuntimeRequests: AgentRuntimeRequestsService;
+  readonly toolPermissions?: ToolPermissionChannel;
   readonly apps?: AppsService;
   readonly appPolicies: AppPoliciesService;
   readonly github?: GithubService;
   readonly remoteSync: RemoteSyncService;
+  readonly notifications: UserNotificationsService;
   readonly appStorage: AppStorageService;
   /** Tool-kind declarations behind the per-project MCP endpoint. */
   readonly mcpToolKinds: readonly McpToolKindSpec[];
@@ -331,12 +383,27 @@ export class CatamorphicCore {
   constructor(config: CatamorphicCoreConfig) {
     this.toolPermissions = config.toolPermissions;
     this.db = config.db;
+    this.notifications = new UserNotificationsService(
+      this.db,
+      config.pushNotifications,
+    );
     this.projectManager = config.projectManager;
     // Doctrine resolves ONCE, at boot: every consumer below (project
     // creation, skill restore) sees the same host-final set (ADR 0049).
     this.seedFiles = config.projectSeeds?.({ ...SEED_SKILLS }) ?? SEED_SKILLS;
+    // Imported repositories stay untouched. Offer their missing framework
+    // skills through the existing host tier; project/user skills still win.
+    const skillPrefix = ".agents/skills/";
+    const defaultHostSkills = {
+      ...Object.fromEntries(
+        Object.entries(this.seedFiles)
+          .filter(([file]) => file.startsWith(skillPrefix))
+          .map(([file, content]) => [file.slice(skillPrefix.length), content]),
+      ),
+      ...HOST_SKILLS,
+    };
     this.hostSkillFiles =
-      config.hostSkills?.({ ...HOST_SKILLS }) ?? HOST_SKILLS;
+      config.hostSkills?.({ ...defaultHostSkills }) ?? defaultHostSkills;
     this.sandboxProvider = config.sandboxProvider
       ? instrumentSandboxProvider(config.sandboxProvider)
       : undefined;
@@ -362,22 +429,123 @@ export class CatamorphicCore {
           })
         : undefined;
 
-    this.capabilities = new CapabilityRegistry(config.capabilityProviders);
+    const sessionDeliveryCapability: CapabilityProviderRuntime = {
+      name: "catamorphic.sessions",
+      description:
+        "Deliver to an existing agent session or wake a stable member session",
+      calls: {
+        wake: async (context, args) => {
+          if (!this.agentSessions) {
+            throw new Error("Coding agents are not configured");
+          }
+          const input = sessionWakeArgs(args);
+          let enabledEnvironment: string | undefined;
+          const run = await this.db
+            .selectFrom("workflow_runs")
+            .select("workflow_enablement_id")
+            .where("id", "=", context.runId)
+            .executeTakeFirst();
+          if (run?.workflow_enablement_id) {
+            const enablement = await this.db
+              .selectFrom("workflow_enablements")
+              .select([
+                "owner_kind",
+                "owner_external_user_id",
+                "environment_name",
+              ])
+              .where("id", "=", run.workflow_enablement_id)
+              .executeTakeFirstOrThrow();
+            if (
+              enablement.owner_kind !== "member" ||
+              enablement.owner_external_user_id !==
+                context.caller.externalUserId
+            ) {
+              throw new Error(
+                "catamorphic.sessions.wake requires a member-owned workflow enablement",
+              );
+            }
+            enabledEnvironment = enablement.environment_name;
+          }
+          return this.agentSessions.wake(context.caller, context.projectId, {
+            ...input,
+            wakeKey: JSON.stringify([context.workflowName, input.key]),
+            environment: enabledEnvironment ?? input.environment,
+            workflowName: context.workflowName,
+            runId: context.runId,
+          });
+        },
+        deliver: async (context, args) => {
+          if (!this.agentSessions) {
+            throw new Error("Coding agents are not configured");
+          }
+          const input = sessionDeliveryArgs(args);
+          const watcher = await this.db
+            .selectFrom("watcher_runs")
+            .select("watcher_id")
+            .where("run_id", "=", context.runId)
+            .executeTakeFirst();
+          const run = watcher
+            ? null
+            : await this.db
+                .selectFrom("workflow_runs")
+                .select("correlation_key")
+                .where("id", "=", context.runId)
+                .executeTakeFirst();
+          const watcherId =
+            watcher?.watcher_id ??
+            run?.correlation_key?.match(/^watcher:([0-9a-f-]{36}):event:/)?.[1];
+          return this.agentSessions.deliver(
+            context.caller,
+            context.projectId,
+            input.sessionId,
+            {
+              content: input.content,
+              author: watcherId
+                ? {
+                    kind: "watcher",
+                    watcherId,
+                    runId: context.runId,
+                  }
+                : {
+                    kind: "workflow",
+                    runId: context.runId,
+                    workflowName: context.workflowName,
+                  },
+              mode: input.mode,
+              idempotencyKey: input.idempotencyKey,
+            },
+          );
+        },
+      },
+    };
+    this.capabilities = new CapabilityRegistry([
+      sessionDeliveryCapability,
+      ...(config.capabilityProviders ?? []),
+    ]);
     this.projects = new ProjectsService(
       this.db,
       this.projectManager,
       config.projectHooks,
       { seedFiles: this.seedFiles },
     );
+    this.projectEvents = new ProjectEventsService(this.db);
+    this.projectEventMonitors = new ProjectEventMonitorsService(this.db);
     this.appStorage = new AppStorageService(this.db);
+    this.agentRuntimeEvents = new AgentRuntimeEventsService(this.db);
+    this.agentRuntimeRequests = new AgentRuntimeRequestsService(this.db);
     this.github = config.github
       ? new GithubService(
           this.db,
           this.projectManager,
           this.projects,
           config.github,
+          this.projectEvents,
         )
       : undefined;
+    this.projectEventSources = [
+      ...(this.github ? [new GithubProjectEventSource(this.github)] : []),
+      ...(config.projectEventSources ?? []),
+    ];
     // Provider-agnostic remote sync (ADR 0044); code hosts contribute
     // credentials/capabilities through the CodeHost seam.
     this.remoteSync = new RemoteSyncService(
@@ -391,10 +559,29 @@ export class CatamorphicCore {
       this.projectManager,
     );
     this.executionAllocations = new ExecutionAllocationsService(this.db);
+    this.clientRunners = config.clientExecution
+      ? new ClientRunnersService(this.db, this.projectEnvironments)
+      : undefined;
     this.executionEnvironments = new ExecutionEnvironmentsService(
       this.projectEnvironments,
-      config.environmentProvider,
+      {
+        get: (args) =>
+          args.bindingId === "this-machine" && this.clientRunners
+            ? this.clientRunners.binding({
+                ...args,
+                workerNodeId: args.workerNodeId ?? config.workerNode?.id,
+              })
+            : config.environmentProvider.get(args),
+      },
     );
+    this.agentCapabilities = new AgentCapabilitiesService({
+      db: this.db,
+      hostId: config.workerNode?.id ?? config.hostId,
+      allocations: this.executionAllocations,
+      environments: this.executionEnvironments,
+      options: config.agentCapabilities,
+      resolveMemberIdentity: config.resolveMemberIdentity,
+    });
     const connectionProviders = config.connectionProviders ?? [];
     const credentialVault = config.credentialVault;
     if (connectionProviders.length > 0 && !credentialVault) {
@@ -408,6 +595,21 @@ export class CatamorphicCore {
         this.db,
         credentialVault,
         providers,
+        async (identity) => {
+          if (this.workflowEnablements) {
+            await this.workflowEnablements.reenableEligibleForMember({
+              identity,
+            });
+          }
+        },
+        async ({ identity, connectionId }) => {
+          if (this.workflowEnablements) {
+            await this.workflowEnablements.suspendForConnection({
+              identity,
+              connectionId,
+            });
+          }
+        },
       );
       this.connectionAdmission = new ConnectionAdmissionService(
         this.connections,
@@ -416,6 +618,7 @@ export class CatamorphicCore {
         this.connections,
         providers,
         this.executionAllocations,
+        () => this.workflowEnablements,
       );
       this.connectionGrants = new ConnectionCapabilityGrantsService(
         this.db,
@@ -435,7 +638,7 @@ export class CatamorphicCore {
           },
         )
       : undefined;
-    const executionJobs = new ExecutionJobsService(this.db);
+    const executionJobs = new ExecutionJobsService(this.db, config.workerNode);
     this.retention = new RetentionService(this.db, config.retention);
     const executionWorker = new ExecutionWorkerService(
       executionJobs,
@@ -492,6 +695,7 @@ export class CatamorphicCore {
       runtimeEvents,
       coordinator,
       tenantPolicies: this.tenantPolicies,
+      workflowEnablements: () => this.workflowEnablements,
     });
     new BoundaryExecutionHandler(this.db, {
       coordinator,
@@ -575,9 +779,33 @@ export class CatamorphicCore {
       mcpToolKinds: this.mcpToolKinds,
       projectManager: this.projectManager,
       runs: this.runs,
+      workflowEnablements: () => this.workflowEnablements,
+    });
+    this.workflowEnablements = new WorkflowEnablementsService(this.db, {
       executionEnvironments: this.executionEnvironments,
       connectionAdmission: this.connectionAdmission,
+      resolveTarget: (args) => this.runs.resolveEnablementTarget(args),
+      ensureTriggerDefinitions: async (args) => {
+        await this.triggers.listAtCommit({
+          identity: args.identity,
+          projectId: args.projectId,
+          workflowName: args.workflowName,
+          commitSha: args.commitSha,
+          remoteBranch: args.remoteBranch,
+          environment: args.environment,
+        });
+      },
+      assertWorkflowAccess: (args) =>
+        assertScopeAllowsWorkflow({
+          db: this.db,
+          policies: this.appPolicies,
+          ...args,
+        }),
+      resolveMemberIdentity:
+        config.resolveMemberIdentity ??
+        ((args) => this.memberships.identityFor(args)),
     });
+    this.schedules = new SchedulesService(this.db, this.triggers);
 
     this.skills = new SkillsService(this.db, this.projectManager, {
       hostSkills: this.hostSkillFiles,
@@ -612,13 +840,18 @@ export class CatamorphicCore {
       config.proposalBot,
     );
 
-    if (config.codingAgent && this.sandboxProvider && this.devSandboxes) {
+    if (config.codingAgent) {
+      if (!config.hostId) {
+        throw new Error("hostId is required when codingAgent is configured");
+      }
       const codingAgents = isCodingAgentRegistry(config.codingAgent)
         ? config.codingAgent
         : singleAgentRegistry(config.codingAgent);
       this.agentSessions = new AgentSessionsService(this.db, {
+        agentCapabilities: this.agentCapabilities,
+        hostId: config.hostId,
+        workerNode: config.workerNode,
         projectManager: this.projectManager,
-        sandboxProvider: this.sandboxProvider,
         codingAgents,
         nativeAgentCheckout: config.nativeAgentCheckout,
         executionEnvironments: this.executionEnvironments,
@@ -626,10 +859,52 @@ export class CatamorphicCore {
         connectionAdmission: this.connectionAdmission,
         connectionGrants: this.connectionGrants,
         connectionMcpUrl: config.connectionMcpUrl,
-        devSandboxes: this.devSandboxes,
         plugins: this.plugins,
         pluginResolver: this.pluginResolver,
-        onTurnSettled: config.onAgentTurnSettled,
+        onTurnSettled: async (event) => {
+          if (
+            event.status === "completed" ||
+            event.status === "awaiting_input" ||
+            (event.status === "failed" && !event.interrupted) ||
+            event.notification
+          ) {
+            await this.notifications
+              .publish({
+                identity: event.identity,
+                projectId: event.projectId,
+                sessionId: event.sessionId,
+                kind: event.retrying
+                  ? "agent_reconnecting"
+                  : event.status === "awaiting_input"
+                    ? "agent_question"
+                    : event.status === "failed"
+                      ? "agent_failed"
+                      : "agent_completed",
+                title: event.retrying
+                  ? "An agent lost its connection"
+                  : event.status === "awaiting_input"
+                    ? "An agent needs your input"
+                    : event.status === "failed"
+                      ? "An agent run failed"
+                      : (event.notification?.title ?? "An agent finished"),
+                body: event.retrying
+                  ? "Retrying automatically. Open the chat to check progress."
+                  : event.status === "awaiting_input"
+                    ? "Open the chat to answer the question."
+                    : event.status === "failed"
+                      ? "Open the chat to see what went wrong."
+                      : (event.notification?.body ??
+                        "Open the chat to see the result."),
+                route: `/?project=${encodeURIComponent(event.projectId)}&session=${encodeURIComponent(event.sessionId)}`,
+                collapseKey: `agent-turn:${event.turnId ?? event.messageId}:${event.retrying ? "reconnecting" : event.status}`,
+              })
+              .catch(() => {
+                // Notification delivery is additive. A transient failure must
+                // never suppress the host's existing settled-turn hook.
+              });
+          }
+          await config.onAgentTurnSettled?.(event);
+        },
         seedFiles: this.seedFiles,
         standingAgentPrompt: config.standingAgentPrompt,
         mcpToolNames: (identity, projectId) =>
@@ -638,6 +913,23 @@ export class CatamorphicCore {
         ...(config.storeSyncAroundTurns === false
           ? {}
           : { storeSync: { documents: this.documents } }),
+      });
+      this.sessionMailboxes = this.agentSessions.mailboxes;
+      this.sessionSync = new SessionSyncService(this.db);
+      this.watchers = new WatchersService(this.db, {
+        projectManager: this.projectManager,
+        runs: this.runs,
+        triggers: this.triggers,
+        workflowEnablements: this.workflowEnablements,
+        events: this.projectEvents,
+        monitors: this.projectEventMonitors,
+        sessions: this.agentSessions,
+        github: this.github,
+      });
+      this.agentSessions.setArchiveResourcesHandler({
+        impact: async () => ({ activeProcessCount: 0 }),
+        stop: (input) =>
+          this.watchers?.stopForSessions(input) ?? Promise.resolve(),
       });
     }
   }
@@ -654,4 +946,124 @@ function requireAllocationId(allocationId: string | null): string {
     throw new Error("Workflow execution requires an Environment Allocation");
   }
   return allocationId;
+}
+
+function sessionDeliveryArgs(value: unknown): {
+  sessionId: string;
+  content: string;
+  mode: "message_only" | "next_turn" | "interrupt";
+  idempotencyKey?: string;
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("catamorphic.sessions.deliver expects an object");
+  }
+  const input = value as Record<string, unknown>;
+  if (typeof input.sessionId !== "string" || !input.sessionId) {
+    throw new Error("sessionId must be a non-empty string");
+  }
+  if (typeof input.content !== "string" || !input.content.trim()) {
+    throw new Error("content must be a non-empty string");
+  }
+  if (
+    input.mode !== "message_only" &&
+    input.mode !== "next_turn" &&
+    input.mode !== "interrupt"
+  ) {
+    throw new Error("mode must be message_only, next_turn, or interrupt");
+  }
+  if (
+    input.idempotencyKey !== undefined &&
+    typeof input.idempotencyKey !== "string"
+  ) {
+    throw new Error("idempotencyKey must be a string");
+  }
+  return {
+    sessionId: input.sessionId,
+    content: input.content,
+    mode: input.mode,
+    ...(typeof input.idempotencyKey === "string"
+      ? { idempotencyKey: input.idempotencyKey }
+      : {}),
+  };
+}
+
+function sessionWakeArgs(value: unknown): {
+  key: string;
+  content: string;
+  agentSlug?: string;
+  environment?: string;
+  title?: string;
+  mode?: "next_turn" | "interrupt";
+  notification?: { title?: string; body?: string };
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("catamorphic.sessions.wake expects an object");
+  }
+  const input = value as Record<string, unknown>;
+  const requiredString = (name: "key" | "content") => {
+    const item = input[name];
+    if (typeof item !== "string" || !item.trim()) {
+      throw new Error(`${name} must be a non-empty string`);
+    }
+    return item.trim();
+  };
+  const optionalString = (name: string, max: number) => {
+    const item = input[name];
+    if (item === undefined) return undefined;
+    if (typeof item !== "string" || !item.trim() || item.length > max) {
+      throw new Error(
+        `${name} must be a non-empty string up to ${max} characters`,
+      );
+    }
+    return item.trim();
+  };
+  const key = requiredString("key");
+  if (key.length > 200) throw new Error("key must be 200 characters or fewer");
+  const mode = input.mode;
+  if (mode !== undefined && mode !== "next_turn" && mode !== "interrupt") {
+    throw new Error("mode must be next_turn or interrupt");
+  }
+  const notification = input.notification;
+  if (
+    notification !== undefined &&
+    (!notification ||
+      typeof notification !== "object" ||
+      Array.isArray(notification))
+  ) {
+    throw new Error("notification must be an object");
+  }
+  const notificationRecord = notification as
+    | Record<string, unknown>
+    | undefined;
+  const notificationString = (name: "title" | "body", max: number) => {
+    const item = notificationRecord?.[name];
+    if (item === undefined) return undefined;
+    if (typeof item !== "string" || !item.trim() || item.length > max) {
+      throw new Error(
+        `notification.${name} must be a non-empty string up to ${max} characters`,
+      );
+    }
+    return item.trim();
+  };
+  const notificationTitle = notificationString("title", 200);
+  const notificationBody = notificationString("body", 500);
+  const agentSlug = optionalString("agentSlug", 255);
+  const environment = optionalString("environment", 255);
+  const title = optionalString("title", 500);
+  return {
+    key,
+    content: requiredString("content"),
+    ...(agentSlug ? { agentSlug } : {}),
+    ...(environment ? { environment } : {}),
+    ...(title ? { title } : {}),
+    ...(mode ? { mode } : {}),
+    ...(notificationTitle || notificationBody
+      ? {
+          notification: {
+            ...(notificationTitle ? { title: notificationTitle } : {}),
+            ...(notificationBody ? { body: notificationBody } : {}),
+          },
+        }
+      : {}),
+  };
 }

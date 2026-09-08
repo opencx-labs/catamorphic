@@ -1,9 +1,9 @@
 /*
  * A zero-dep fake Catamorphic server for pwa development and e2e:
  * the agent-session + permission routes with a scripted agent, speaking
- * the same wire shapes as @catamorphic/fastify-plugin. Any bearer token is
- * accepted; "root-token" resolves a root identity (all projects), anything
- * else a scoped member of the one seeded project.
+ * the same wire shapes as @catamorphic/fastify-plugin. Its minimal OAuth
+ * server authorizes immediately for deterministic local development. Any
+ * issued bearer token resolves a scoped member of the seeded project.
  *
  *   node scripts/dev-server.mjs          # port 8788 (PORT= to change)
  *
@@ -49,14 +49,17 @@ function newSession(body) {
     sandboxId: null,
     agentId: body.agentId ?? null,
     modelEffort: body.effort ?? null,
-    title: null,
+    title: body.title ?? null,
     icon: null,
-    parentSessionId: null,
+    parentSessionId: body.parentSessionId ?? null,
+    visibility: body.parentSessionId ? "latent" : "promoted",
     status: "active",
     baseCommitSha: null,
     createdAt: now(),
     updatedAt: now(),
     messages: [],
+    execution: null,
+    pendingTurns: [],
   };
   sessions.set(id, session);
   return session;
@@ -80,6 +83,18 @@ function pushMessage(session, role, content, metadata) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function runTurn(session, text) {
+  session.execution = {
+    turnId: randomUUID(),
+    status: "running",
+    phase: "working",
+    activity: "Working",
+    activityAt: now(),
+    startedAt: now(),
+    retryAt: null,
+    attempt: 1,
+    executorHealthy: true,
+    cancellationRequested: false,
+  };
   const assistant = pushMessage(session, "assistant", "Thinking...", {
     status: "in_progress",
     events: [],
@@ -87,6 +102,13 @@ async function runTurn(session, text) {
   const update = (content, metadata) => {
     assistant.content = content;
     assistant.metadata = { ...assistant.metadata, ...metadata };
+    session.execution.activity = content;
+    session.execution.activityAt = now();
+    if (metadata?.status && metadata.status !== "in_progress") {
+      session.execution.status =
+        metadata.status === "failed" ? "failed" : "completed";
+      session.execution.executorHealthy = false;
+    }
     session.updatedAt = now();
   };
   await sleep(400);
@@ -214,27 +236,104 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://127.0.0.1:${PORT}`);
   const path = url.pathname;
   if (req.method === "OPTIONS") return json(res, 204, {});
+  const origin = `http://127.0.0.1:${PORT}`;
+  if (path === "/.well-known/oauth-protected-resource") {
+    return json(res, 200, {
+      resource: `${origin}/api`,
+      authorization_servers: [origin],
+    });
+  }
+  if (path === "/.well-known/oauth-authorization-server") {
+    return json(res, 200, {
+      authorization_endpoint: `${origin}/api/auth/mcp/authorize`,
+      token_endpoint: `${origin}/api/auth/mcp/token`,
+      registration_endpoint: `${origin}/api/auth/mcp/register`,
+      code_challenge_methods_supported: ["S256"],
+    });
+  }
+  if (path === "/api/auth/mcp/register" && req.method === "POST") {
+    return json(res, 201, { client_id: "fake-pwa-client" });
+  }
+  if (path === "/api/auth/mcp/authorize" && req.method === "GET") {
+    const callback = new URL(url.searchParams.get("redirect_uri"));
+    callback.searchParams.set("code", "fake-code");
+    callback.searchParams.set("state", url.searchParams.get("state") ?? "");
+    res.writeHead(302, { location: callback.toString() });
+    return res.end();
+  }
+  if (path === "/api/auth/mcp/token" && req.method === "POST") {
+    return json(res, 200, {
+      access_token: "fake-access-token",
+      refresh_token: "fake-refresh-token",
+      expires_in: 3600,
+      scope: "openid profile email offline_access",
+    });
+  }
   const auth = req.headers.authorization ?? "";
   if (!auth.startsWith("Bearer ")) return json(res, 401, { error: "No token" });
-  const root = auth === "Bearer root-token";
+
+  const environments = {
+    defaultEnvironment: "company",
+    items: [
+      {
+        name: "company",
+        label: "Company server",
+        allowed: true,
+        available: true,
+        compatible: true,
+        preferred: true,
+        reasons: [],
+        workloads: ["agent", "workflow"],
+      },
+    ],
+  };
+  if (
+    path === `/api/projects/${PROJECT.id}/agent-catalog` &&
+    req.method === "GET"
+  )
+    return json(res, 200, {
+      items: [
+        {
+          id: `project:${PROJECT.id}:helper`,
+          name: "Helper",
+          available: true,
+          reason: null,
+          environments,
+        },
+      ],
+      defaultAgentId: `project:${PROJECT.id}:helper`,
+      startingActions: [],
+    });
+  if (
+    path === `/api/projects/${PROJECT.id}/environments` &&
+    req.method === "GET"
+  )
+    return json(res, 200, environments);
+  if (path === `/api/projects/${PROJECT.id}/workflows` && req.method === "GET")
+    return json(res, 200, []);
+  if (
+    path === `/api/projects/${PROJECT.id}/workflow-enablements` &&
+    req.method === "GET"
+  )
+    return json(res, 200, []);
 
   // GET /api/me
   if (path === "/api/me" && req.method === "GET") {
     return json(res, 200, {
       version: 1,
-      identity: { externalUserId: root ? "root" : "member", root },
-      projects: root
-        ? []
-        : [
-            {
-              projectId: PROJECT.id,
-              builder: false,
-              agents: ["helper"],
-              workflows: [],
-              apps: [],
-              documents: [],
-            },
-          ],
+      identity: { externalUserId: "member", root: false },
+      projects: [
+        {
+          projectId: PROJECT.id,
+          builder: false,
+          source: null,
+          permissions: [],
+          agents: ["helper"],
+          workflows: [],
+          apps: [],
+          documents: [],
+        },
+      ],
       features: {
         publications: false,
         proposals: false,
@@ -272,10 +371,15 @@ const server = http.createServer(async (req, res) => {
 
   const sessionsBase = `/api/projects/${PROJECT.id}/agent/sessions`;
   if (path === sessionsBase && req.method === "GET") {
-    const items = [...sessions.values()].map(
-      ({ messages: _messages, ...session }) => session,
-    );
-    return json(res, 200, { items, total: items.length });
+    const all = [...sessions.values()]
+      .reverse()
+      .map(({ messages: _messages, ...session }) => session);
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    const limit = Number(url.searchParams.get("limit") ?? 50);
+    return json(res, 200, {
+      items: all.slice(offset, offset + limit),
+      total: all.length,
+    });
   }
   if (path === sessionsBase && req.method === "POST") {
     const body = await readBody(req);
@@ -291,6 +395,23 @@ const server = http.createServer(async (req, res) => {
     if (!session) return json(res, 404, { error: "No such session" });
     if (match.length === 1 && req.method === "GET") {
       return json(res, 200, session);
+    }
+    if (match[1] === "subsessions" && req.method === "GET") {
+      return json(
+        res,
+        200,
+        [...sessions.values()]
+          .filter((child) => child.parentSessionId === session.id)
+          .map(({ messages: _messages, ...child }) => ({
+            delegationId: child.id,
+            routeId: "fake",
+            task: child.title ?? "Review",
+            contextMode: "fresh",
+            allowFurtherDelegation: false,
+            status: child.running ? "running" : "completed",
+            session: child,
+          })),
+      );
     }
     if (match[1] === "messages" && req.method === "POST") {
       const body = await readBody(req);
@@ -346,7 +467,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "127.0.0.1", () => {
-  const link = `catamorphic://connect?server=${encodeURIComponent(`http://127.0.0.1:${PORT}/api`)}&token=invite-token&project=${PROJECT.id}&name=${encodeURIComponent(PROJECT.name)}`;
+  const link = `catamorphic://connect?server=${encodeURIComponent(`http://127.0.0.1:${PORT}/api`)}&project=${PROJECT.id}&name=${encodeURIComponent(PROJECT.name)}`;
   console.log(`Fake Catamorphic server on http://127.0.0.1:${PORT}/api`);
   console.log(`Connect link:\n${link}`);
 });

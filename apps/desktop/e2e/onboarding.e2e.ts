@@ -48,11 +48,22 @@ const until = async (
   label: string,
 ): Promise<void> => {
   const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
   while (Date.now() < deadline) {
-    if (fn()) return;
+    try {
+      if (fn()) return;
+      lastError = undefined;
+    } catch (error) {
+      // The app may be replacing the git index while this test observes it.
+      // Treat read failures like any other unsettled condition, but preserve
+      // the last error so a persistent failure remains actionable.
+      lastError = error;
+    }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  throw new Error(`Timed out (${timeoutMs}ms) waiting for ${label}`);
+  const detail =
+    lastError instanceof Error ? `; last error: ${lastError.message}` : "";
+  throw new Error(`Timed out (${timeoutMs}ms) waiting for ${label}${detail}`);
 };
 
 /** Drive the New-project modal to submission and wait for the workspace. */
@@ -93,19 +104,16 @@ describe("agent-first onboarding", () => {
     await app?.stop();
   });
 
-  it("creates a collision-safe Default project and opens the agent wizard", async () => {
+  it("creates a collision-safe Default Project and opens the agent wizard", async () => {
     const projectsDir = path.join(app.userDataDir, "Catamorphic");
     const occupiedDir = path.join(projectsDir, "default-project");
     fs.mkdirSync(occupiedDir, { recursive: true });
     fs.writeFileSync(path.join(occupiedDir, "KEEP.txt"), "leave me alone\n");
 
-    await runWait(
-      `return !!byText('button', 'New project') && !!$('[data-testid="empty-start-agent"]');`,
-      {
-        timeoutMs: 60_000,
-        label: "empty project state",
-      },
-    );
+    await runWait(`return !!$('[data-testid="empty-start-agent"]');`, {
+      timeoutMs: 60_000,
+      label: "empty project state",
+    });
     expect(await run(`return !!$('[data-testid="empty-start-agent"]');`)).toBe(
       true,
     );
@@ -114,7 +122,7 @@ describe("agent-first onboarding", () => {
       `const wizard = $$('[data-testid="agent-wizard"]')
          .find((el) => !el.closest('[inert]'));
        return !!wizard &&
-              !!byText('button', 'Default project') &&
+              !!byText('button', 'Default Project') &&
               !byText('[role="tab"], button', 'Set up agent');`,
       { timeoutMs: 60_000, label: "agent wizard over the default workspace" },
     );
@@ -126,7 +134,7 @@ describe("agent-first onboarding", () => {
         "utf-8",
       ),
     ) as { name: string };
-    expect(manifest.name).toBe("Default project");
+    expect(manifest.name).toBe("Default Project");
     expect(fs.readFileSync(path.join(occupiedDir, "KEEP.txt"), "utf-8")).toBe(
       "leave me alone\n",
     );
@@ -184,11 +192,11 @@ describe("agent-first onboarding", () => {
     await runWait(
       `return !$$('[data-testid="agent-wizard"]')
          .some((el) => !el.closest('[inert]')) &&
-              !!byText('button', 'Default project') &&
+              !!byText('button', 'Default Project') &&
               !visibleDock();`,
       {
         timeoutMs: 15_000,
-        label: "wizard closes into Default project without opening chat",
+        label: "wizard closes into Default Project without opening chat",
       },
     );
   });
@@ -317,6 +325,19 @@ describe("import an existing folder", () => {
     fs.mkdirSync(path.join(importDir, "nested"), { recursive: true });
     fs.writeFileSync(path.join(importDir, "notes.md"), NOTES);
     fs.writeFileSync(path.join(importDir, "nested", "data.txt"), DATA);
+    git(importDir, "init", "-b", "feature");
+    git(importDir, "add", ".");
+    git(
+      importDir,
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "Existing history",
+    );
+    fs.writeFileSync(path.join(importDir, "draft.txt"), "Private draft");
     app = await launchApp({
       env: { CATAMORPHIC_E2E_PICK_FOLDER: importDir },
     });
@@ -370,22 +391,12 @@ describe("import an existing folder", () => {
       fs.readFileSync(path.join(importDir, "nested", "data.txt"), "utf-8"),
     ).toBe(DATA);
 
-    // The manifest was added in place, named after the folder.
-    const manifest = JSON.parse(
-      fs.readFileSync(
-        path.join(importDir, ".catamorphic/project.json"),
-        "utf-8",
-      ),
-    ) as { name: string };
-    expect(manifest.name).toBe("imported-notes");
-
-    // Git initialized in place: one "Import project" commit, clean tree.
-    await until(
-      () => git(importDir, "status", "--porcelain") === "",
-      10_000,
-      "clean status after import",
-    );
-    expect(git(importDir, "log", "--format=%s")).toBe("Import project");
+    expect(
+      fs.existsSync(path.join(importDir, ".catamorphic/project.json")),
+    ).toBe(false);
+    expect(git(importDir, "log", "--format=%s")).toBe("Existing history");
+    expect(git(importDir, "branch", "--show-current")).toBe("feature");
+    expect(git(importDir, "status", "--porcelain")).toBe("?? draft.txt");
 
     // Import never scaffolds the workflow workspace either.
     for (const file of ["package.json", "workflows", "contracts"]) {

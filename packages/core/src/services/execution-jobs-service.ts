@@ -98,7 +98,10 @@ const EXHAUSTION_CLAIM_MS = 10 * 60 * 1_000;
 export const MAX_LEASE_EXPIRIES = 20;
 
 export class ExecutionJobsService {
-  constructor(private readonly db: Kysely<DB>) {}
+  constructor(
+    private readonly db: Kysely<DB>,
+    private readonly workerNode?: { id: string; token: string },
+  ) {}
 
   async enqueue(args: {
     tenantId: string;
@@ -250,6 +253,7 @@ export class ExecutionJobsService {
             trx,
             kinds: args.kinds,
             limit,
+            workerNode: this.workerNode,
           });
           if (ids.length === 0) {
             span.setAttribute("catamorphic.queue.claimed_count", 0);
@@ -307,6 +311,13 @@ export class ExecutionJobsService {
         updated_at: new Date(),
       }))
       .where("id", "=", args.jobId)
+      .where(
+        workerPlacement(
+          this.db,
+          this.workerNode,
+          "execution_jobs.workflow_run_id",
+        ),
+      )
       .where("status", "=", "pending")
       .where("available_at", "<=", sql<Date>`clock_timestamp()`)
       .returningAll()
@@ -350,6 +361,13 @@ export class ExecutionJobsService {
         updated_at: sql<Date>`clock_timestamp()`,
       })
       .where("id", "=", args.jobId)
+      .where(
+        workerPlacement(
+          this.db,
+          this.workerNode,
+          "execution_jobs.workflow_run_id",
+        ),
+      )
       .where("status", "=", "running")
       .where("leased_by", "=", args.workerId)
       .where("lease_token", "=", args.leaseToken)
@@ -463,7 +481,7 @@ export class ExecutionJobsService {
     parkedForConnectionRequirementId?: string;
   }): Promise<boolean> {
     return this.db.transaction().execute(async (trx) => {
-      let availableAt = args.availableAt;
+      let makeImmediatelyAvailable = false;
       if (args.parkedForPausedRunId) {
         const run = await trx
           .selectFrom("workflow_runs")
@@ -471,7 +489,7 @@ export class ExecutionJobsService {
           .select("status")
           .forShare()
           .executeTakeFirst();
-        if (run?.status !== "paused") availableAt = new Date();
+        if (run?.status !== "paused") makeImmediatelyAvailable = true;
       }
       if (args.parkedForConnectionRequirementId) {
         const requirement = await trx
@@ -479,8 +497,14 @@ export class ExecutionJobsService {
           .where("id", "=", args.parkedForConnectionRequirementId)
           .select("status")
           .executeTakeFirst();
-        if (requirement?.status === "resolved") availableAt = new Date();
+        if (requirement?.status === "resolved") makeImmediatelyAvailable = true;
       }
+      // Claims compare against database time. Using the host clock here can
+      // leave supposedly immediate work a few milliseconds in the future when
+      // Postgres runs in a container or on another machine.
+      const availableAt = makeImmediatelyAvailable
+        ? await databaseNow(trx)
+        : args.availableAt;
       const result = await trx
         .updateTable("execution_jobs")
         .set((eb) => ({
@@ -917,6 +941,7 @@ async function databaseNow(trx: Transaction<DB>): Promise<Date> {
  * serialize claims per tenant, which is the throughput problem being fixed.
  */
 async function selectClaimableJobs(args: {
+  workerNode?: { id: string; token: string };
   trx: Transaction<DB>;
   kinds: readonly ExecutionJobKind[];
   limit: number;
@@ -934,7 +959,7 @@ async function selectClaimableJobs(args: {
       -- tenants with a backlog, not to every tenant on the installation.
       (
         SELECT tenant_id
-        FROM execution_jobs
+        FROM (${args.trx.selectFrom("execution_jobs").selectAll()}) AS job
         WHERE status = 'pending'
         ORDER BY tenant_id
         LIMIT 1
@@ -942,7 +967,7 @@ async function selectClaimableJobs(args: {
       UNION ALL
       SELECT (
         SELECT job.tenant_id
-        FROM execution_jobs AS job
+        FROM (${args.trx.selectFrom("execution_jobs").selectAll()}) AS job
         WHERE job.status = 'pending'
           AND job.tenant_id > walk.tenant_id
         ORDER BY job.tenant_id
@@ -957,7 +982,7 @@ async function selectClaimableJobs(args: {
         max_concurrent_jobs,
         queue_weight,
         jobs_enabled
-      FROM tenant_execution_policies
+      FROM (${args.trx.selectFrom("tenant_execution_policies").selectAll()}) AS policy_rows
     ),
     candidate_tenants AS (
       SELECT
@@ -966,7 +991,7 @@ async function selectClaimableJobs(args: {
         policy.max_concurrent_jobs,
         COALESCE((
           SELECT count(*)
-          FROM execution_jobs AS leased
+          FROM (${args.trx.selectFrom("execution_jobs").selectAll()}) AS leased
           WHERE leased.status = 'running'
             AND leased.tenant_id = walk.tenant_id
         ), 0) AS running_count
@@ -985,11 +1010,12 @@ async function selectClaimableJobs(args: {
         -- Backfill depth scales with weight; the whole batch is still capped by
         -- the claim limit, so an idle system is fully usable by one tenant.
         SELECT job.id, row_number() OVER () AS tenant_rank
-        FROM execution_jobs AS job
+        FROM (${args.trx.selectFrom("execution_jobs").selectAll()}) AS job
         WHERE job.tenant_id = candidate.tenant_id
           AND job.status = 'pending'
           AND job.available_at <= clock_timestamp()
           AND job.kind IN (${sql.join(kinds)})
+          AND ${workerPlacement(args.trx, args.workerNode, "job.workflow_run_id")}
         ORDER BY job.priority DESC, job.created_at, job.id
         LIMIT GREATEST(1, ${args.limit} * candidate.queue_weight)
       ) AS top
@@ -1006,7 +1032,7 @@ async function selectClaimableJobs(args: {
       LIMIT ${args.limit * 4}
     )
     SELECT job.id
-    FROM execution_jobs AS job
+    FROM (${args.trx.selectFrom("execution_jobs").selectAll()}) AS job
     JOIN eligible ON eligible.id = job.id
     WHERE job.status = 'pending'
     ORDER BY eligible.tenant_rank, eligible.queue_weight DESC, job.id
@@ -1014,6 +1040,31 @@ async function selectClaimableJobs(args: {
     FOR UPDATE OF job SKIP LOCKED
   `.execute(args.trx);
   return rows.rows.map((row) => row.id);
+}
+
+function workerPlacement(
+  db: Kysely<DB>,
+  node: { id: string; token: string } | undefined,
+  runId: string,
+) {
+  const placement = db
+    .selectFrom("workflow_runs as placement_run")
+    .leftJoin(
+      "execution_allocations as placement",
+      "placement.id",
+      "placement_run.allocation_id",
+    )
+    .select("placement_run.id")
+    .where("placement_run.id", "=", sql<string>`${sql.ref(runId)}`);
+  if (!node)
+    return sql<boolean>`EXISTS (${placement.where("placement.worker_node_id", "is", null)})`;
+  return sql<boolean>`EXISTS (${placement
+    .innerJoin("worker_nodes as node", "node.id", "placement.worker_node_id")
+    .where("placement.status", "=", "active")
+    .where("node.id", "=", node.id)
+    .where("node.lease_token", "=", node.token)
+    .where("node.enabled", "=", true)
+    .where("node.lease_expires_at", ">", sql<Date>`clock_timestamp()`)})`;
 }
 
 function escapeLike(value: string): string {

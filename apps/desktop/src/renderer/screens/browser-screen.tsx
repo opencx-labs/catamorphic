@@ -11,13 +11,17 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import type { OpenMode } from "../../shared/open-mode.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
 import {
   type Bookmark,
   type BookmarksData,
+  type BrowserCredentialFillOffer,
+  type BrowserCredentialSaveOffer,
   desktopApi,
   type SavedCredential,
 } from "../lib/desktop-api.js";
+import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 
 /**
  * A browser page inside a workspace tab: address bar (with Chrome-style
@@ -83,12 +87,6 @@ interface Suggestion {
   target: string;
 }
 
-interface SaveOffer {
-  origin: string;
-  username: string;
-  password: string;
-}
-
 /** Matches the `tab-in` keyframe duration in styles.css. */
 const TAB_OPEN_ANIMATION_MS = 200;
 
@@ -125,6 +123,7 @@ export function BrowserScreen({
   onRevealToolbar,
   onStateChange,
   registerNavigate,
+  registerHistoryNavigate,
   registerGuest,
   registerCommands,
   onPreviewLink,
@@ -134,7 +133,8 @@ export function BrowserScreen({
   onUnsplit,
 }: {
   profileId: string;
-  projectId: string;
+  /** Null only for a temporary profile browser before its first project. */
+  projectId: string | null;
   initialUrl: string;
   /** This browser tab is the focused workspace tab. */
   active: boolean;
@@ -157,14 +157,19 @@ export function BrowserScreen({
   onUnsplit?: () => void;
   /** Hands the host a navigate(url) for "open in current tab" flows. */
   registerNavigate?: (navigate: (url: string) => void) => void;
+  /** Hands the host back/forward navigation for actions and mouse buttons. */
+  registerHistoryNavigate?: (
+    navigate: (direction: "back" | "forward") => void,
+  ) => void;
   /** Reports the webview guest's WebContents id (null when unmounted). */
   registerGuest?: (guestId: number | null) => void;
   registerCommands?: (commands: BrowserCommands | null) => void;
-  onPreviewLink?: (url: string) => void;
+  onPreviewLink?: (url: string, mode: OpenMode) => void;
   previewLinksWithAlt?: boolean;
   onDismissFloating?: () => void;
   floatingDismissShortcut: string;
 }) {
+  const keybindings = useKeybindings();
   const webviewRef = useRef<WebviewElement | null>(null);
   const dismissFloatingRef = useRef(onDismissFloating);
   dismissFloatingRef.current = onDismissFloating;
@@ -193,6 +198,7 @@ export function BrowserScreen({
   // navigation (src is load-time-only), address bar focused.
   const [firstUrl, setFirstUrl] = useState(initialUrl || null);
   const [pageUrl, setPageUrl] = useState(initialUrl);
+  const [faviconUrl, setFaviconUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   // A main-frame load failed (DNS, connection, TLS…): the pane shows an
   // error card with a retry instead of sitting silently white forever.
@@ -212,27 +218,19 @@ export function BrowserScreen({
   // pointing at a page that was never asked to load.
   const pendingUrlRef = useRef<string | null>(null);
   const guestReadyRef = useRef(false);
-  // What the guest should believe about its visibility right now.
   const hiddenForGuest = !visible && !keepAwake;
-  const hiddenForGuestRef = useRef(hiddenForGuest);
-  hiddenForGuestRef.current = hiddenForGuest;
-  useEffect(() => {
-    const view = webviewRef.current;
-    if (!view || !guestReadyRef.current) return;
-    try {
-      view.send("catamorphic:host-visibility", { hidden: hiddenForGuest });
-    } catch {
-      // Guest not ready; dom-ready sends the current state.
-    }
-  }, [hiddenForGuest]);
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
   const [editing, setEditing] = useState(false);
   const [inputValue, setInputValue] = useState(initialUrl);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [saveOffer, setSaveOffer] = useState<SaveOffer | null>(null);
-  const [fillOffer, setFillOffer] = useState<SavedCredential[] | null>(null);
+  const [saveOffer, setSaveOffer] = useState<BrowserCredentialSaveOffer | null>(
+    null,
+  );
+  const [fillOffer, setFillOffer] = useState<BrowserCredentialFillOffer | null>(
+    null,
+  );
   // Bookmarks for this project+profile, so the star reflects real state
   // (Chrome: filled = saved, click again removes) instead of firing a
   // one-way "add" that silently duplicates on every press.
@@ -300,7 +298,17 @@ export function BrowserScreen({
    * known URL. The only cure for a guest that never attached (silent
    * white tab) or whose renderer died.
    */
+  const recoveriesRef = useRef(0);
   const remountWebview = useCallback(() => {
+    if (++recoveriesRef.current > 2) {
+      setLoading(false);
+      setLoadError({
+        url: pageUrlRef.current,
+        description:
+          "This page repeatedly stopped responding. Reload to try again.",
+      });
+      return;
+    }
     guestReadyRef.current = false;
     const target = pendingUrlRef.current ?? pageUrlRef.current ?? null;
     pendingUrlRef.current = null;
@@ -312,8 +320,11 @@ export function BrowserScreen({
   }, []);
   const attachWatchdogRef = useRef<number | undefined>(undefined);
 
+  const guestListenersRef = useRef<AbortController | null>(null);
   const attachWebview = useCallback(
     (node: HTMLElement | null) => {
+      guestListenersRef.current?.abort();
+      guestListenersRef.current = null;
       const view = node as WebviewElement | null;
       webviewRef.current = view;
       if (!view) {
@@ -322,6 +333,10 @@ export function BrowserScreen({
         registerGuestRef.current?.(null);
         return;
       }
+      const listeners = new AbortController();
+      guestListenersRef.current = listeners;
+      const listen = (name: string, listener: EventListener) =>
+        view.addEventListener(name, listener, { signal: listeners.signal });
       // Watchdog: a webview that shows no sign of life (no attach, no
       // load start) within a beat never will — remount it. This is the
       // "type a URL, get a white tab, retry until it works" bug: the
@@ -331,15 +346,15 @@ export function BrowserScreen({
         alive = true;
         window.clearTimeout(attachWatchdogRef.current);
       };
-      view.addEventListener("did-attach", markAlive);
-      view.addEventListener("did-start-loading", markAlive);
+      listen("did-attach", markAlive);
+      listen("did-start-loading", markAlive);
       window.clearTimeout(attachWatchdogRef.current);
       attachWatchdogRef.current = window.setTimeout(() => {
         if (!alive) remountWebview();
       }, 1500);
       // A dead guest renderer leaves a frozen ghost — replace it.
-      view.addEventListener("render-process-gone", () => remountWebview());
-      view.addEventListener("did-fail-load", ((event: CustomEvent) => {
+      listen("render-process-gone", () => remountWebview());
+      listen("did-fail-load", ((event: CustomEvent) => {
         const { errorCode, errorDescription, validatedURL, isMainFrame } =
           event as unknown as {
             errorCode: number;
@@ -355,7 +370,8 @@ export function BrowserScreen({
           description: errorDescription || `Error ${errorCode}`,
         });
       }) as EventListener);
-      view.addEventListener("dom-ready", () => {
+      listen("dom-ready", () => {
+        markAlive();
         guestReadyRef.current = true;
         try {
           registerGuestRef.current?.(view.getWebContentsId());
@@ -371,9 +387,6 @@ export function BrowserScreen({
             previewLinksRef.current,
           );
           view.send("catamorphic:floating-preview", floatingBindingRef.current);
-          view.send("catamorphic:host-visibility", {
-            hidden: hiddenForGuestRef.current,
-          });
         } catch {
           // Guest gone mid-call; the next dom-ready re-sends.
         }
@@ -386,6 +399,40 @@ export function BrowserScreen({
           });
         }
       });
+      listen("ipc-message", ((event: CustomEvent) => {
+        const message = event as unknown as {
+          channel: string;
+          args: unknown[];
+        };
+        if (message.channel === "catamorphic:open-link") {
+          const link = message.args[0];
+          if (
+            link &&
+            typeof link === "object" &&
+            "url" in link &&
+            "mode" in link &&
+            typeof link.url === "string" &&
+            /^https?:\/\//i.test(link.url) &&
+            (link.mode === "tab" ||
+              link.mode === "side" ||
+              (link.mode === "floating" && previewLinksRef.current))
+          )
+            onPreviewLinkRef.current?.(link.url, link.mode);
+          return;
+        }
+        if (message.channel === "catamorphic:dismiss-floating") {
+          dismissFloatingRef.current?.();
+          return;
+        }
+        if (message.channel !== "catamorphic:browser-mouse-history") return;
+        const payload = message.args[0];
+        const direction =
+          payload && typeof payload === "object" && "direction" in payload
+            ? payload.direction
+            : undefined;
+        if (direction === "back" && view.canGoBack()) view.goBack();
+        if (direction === "forward" && view.canGoForward()) view.goForward();
+      }) as EventListener);
 
       const sync = () => {
         setCanGoBack(view.canGoBack());
@@ -400,12 +447,12 @@ export function BrowserScreen({
         });
       };
 
-      view.addEventListener("did-start-loading", () => {
+      listen("did-start-loading", () => {
         setLoading(true);
         setLoadError(null);
       });
-      view.addEventListener("did-stop-loading", () => setLoading(false));
-      view.addEventListener("did-navigate", ((event: CustomEvent) => {
+      listen("did-stop-loading", () => setLoading(false));
+      listen("did-navigate", ((event: CustomEvent) => {
         const { url } = event as unknown as { url: string };
         setPageUrl(url);
         setInputValue(url);
@@ -424,7 +471,7 @@ export function BrowserScreen({
           title: view.getTitle() || url,
         });
       }) as EventListener);
-      view.addEventListener("did-navigate-in-page", ((event: CustomEvent) => {
+      listen("did-navigate-in-page", ((event: CustomEvent) => {
         const { url, isMainFrame } = event as unknown as {
           url: string;
           isMainFrame: boolean;
@@ -440,7 +487,7 @@ export function BrowserScreen({
           title: view.getTitle() || url,
         });
       }) as EventListener);
-      view.addEventListener("page-title-updated", ((event: CustomEvent) => {
+      listen("page-title-updated", ((event: CustomEvent) => {
         const { title } = event as unknown as { title: string };
         pageTitleRef.current = title;
         report({ title });
@@ -450,47 +497,45 @@ export function BrowserScreen({
           title,
         });
       }) as EventListener);
-      view.addEventListener("page-favicon-updated", ((event: CustomEvent) => {
+      listen("page-favicon-updated", ((event: CustomEvent) => {
         const { favicons } = event as unknown as { favicons: string[] };
-        report({ faviconUrl: favicons[0] ?? null });
-      }) as EventListener);
-
-      // Guest preload messages (login form detection, submitted creds).
-      view.addEventListener("ipc-message", ((event: CustomEvent) => {
-        const { channel, args } = event as unknown as {
-          channel: string;
-          args: unknown[];
-        };
-        if (channel === "catamorphic:preview-link") {
-          const payload = args[0];
-          if (
-            typeof payload === "string" &&
-            /^https?:\/\//i.test(payload) &&
-            previewLinksRef.current
-          )
-            onPreviewLinkRef.current?.(payload);
-        } else if (channel === "catamorphic:credentials-submitted") {
-          const payload = args[0] as SaveOffer;
-          if (payload.password) setSaveOffer(payload);
-        } else if (channel === "catamorphic:dismiss-floating") {
-          dismissFloatingRef.current?.();
-        } else if (channel === "catamorphic:login-form-detected") {
-          const payload = args[0] as { origin: string };
-          void desktopApi
-            .vaultList({ profileId, origin: payload.origin })
-            .then((saved) => {
-              if (saved.length > 0) setFillOffer(saved);
-            });
+        const nextFavicon = favicons[0] ?? null;
+        setFaviconUrl(nextFavicon);
+        report({ faviconUrl: nextFavicon });
+        if (nextFavicon) {
+          void desktopApi.browserSetHistoryFavicon({
+            profileId,
+            url: view.getURL(),
+            faviconUrl: nextFavicon,
+          });
         }
       }) as EventListener);
     },
     [profileId, remountWebview],
   );
 
+  useEffect(() => {
+    const stopSave = desktopApi.onBrowserCredentialSaveOffer((offer) => {
+      if (webviewRef.current?.getWebContentsId() === offer.guestId) {
+        setSaveOffer(offer);
+      }
+    });
+    const stopFill = desktopApi.onBrowserCredentialFillOffer((offer) => {
+      if (webviewRef.current?.getWebContentsId() === offer.guestId) {
+        setFillOffer(offer);
+      }
+    });
+    return () => {
+      stopSave();
+      stopFill();
+    };
+  }, []);
+
   const navigate = useCallback(
     (raw: string) => {
       if (!raw.trim()) return;
       const url = resolveInput(raw);
+      recoveriesRef.current = 0;
       setEditing(false);
       setSuggestions([]);
       setPageUrl(url);
@@ -544,6 +589,7 @@ export function BrowserScreen({
 
   // Chrome reloads: Cmd+R, Cmd+Shift+R (hard, cache-ignoring).
   const reload = useCallback((hard: boolean) => {
+    recoveriesRef.current = 0;
     const view = webviewRef.current;
     if (!view) return;
     if (hard) view.reloadIgnoringCache();
@@ -552,6 +598,34 @@ export function BrowserScreen({
 
   const registerCommandsRef = useRef(registerCommands);
   registerCommandsRef.current = registerCommands;
+  const navigateHistory = useCallback((direction: "back" | "forward") => {
+    const view = webviewRef.current;
+    if (!view) return;
+    if (direction === "back" && view.canGoBack()) view.goBack();
+    if (direction === "forward" && view.canGoForward()) view.goForward();
+  }, []);
+
+  const registerHistoryNavigateRef = useRef(registerHistoryNavigate);
+  registerHistoryNavigateRef.current = registerHistoryNavigate;
+  useEffect(() => {
+    registerHistoryNavigateRef.current?.(navigateHistory);
+  }, [navigateHistory]);
+
+  useEffect(() => {
+    return desktopApi.onBrowserNavigate((command) => {
+      const view = webviewRef.current;
+      if (!view) return;
+      if (
+        command.webContentsId !== null &&
+        view.getWebContentsId() !== command.webContentsId
+      ) {
+        return;
+      }
+      if (command.webContentsId === null && !active) return;
+      navigateHistory(command.direction);
+    });
+  }, [active, navigateHistory]);
+
   useEffect(() => {
     registerCommandsRef.current?.({
       focusAddress,
@@ -579,6 +653,10 @@ export function BrowserScreen({
   // Follow bookmark changes from anywhere (this star, another tab's star,
   // the sidebar's delete/pin) so the star never drifts from the sidebar.
   useEffect(() => {
+    if (!projectId) {
+      setBookmarks(null);
+      return;
+    }
     let cancelled = false;
     void desktopApi.bookmarksGet({ projectId, profileId }).then((loaded) => {
       if (!cancelled) setBookmarks(loaded);
@@ -604,7 +682,7 @@ export function BrowserScreen({
   // too, so starring a pinned page doesn't create a project duplicate.
   const currentBookmark: (Bookmark & { pinned: boolean }) | undefined = (() => {
     if (!bookmarks) return undefined;
-    const pinned = bookmarks.pinned.find((entry) =>
+    const pinned = bookmarks.pinned.bookmarks.find((entry) =>
       sameUrl(entry.url, pageUrl),
     );
     if (pinned) return { ...pinned, pinned: true };
@@ -615,12 +693,14 @@ export function BrowserScreen({
   })();
 
   const toggleBookmark = () => {
+    if (!projectId) return;
     if (!currentBookmark) {
       void desktopApi.bookmarksAdd({
         projectId,
         profileId,
         label: pageTitleRef.current || pageUrl,
         url: pageUrl,
+        faviconUrl: faviconUrl ?? undefined,
       });
       return;
     }
@@ -701,21 +781,31 @@ export function BrowserScreen({
 
   const saveCredentials = async () => {
     if (!saveOffer) return;
-    await desktopApi.vaultSave({ profileId, ...saveOffer });
+    await desktopApi.browserCredentialAccept({
+      profileId,
+      pendingId: saveOffer.pendingId,
+    });
+    setSaveOffer(null);
+  };
+
+  const dismissSaveOffer = () => {
+    if (saveOffer) {
+      void desktopApi.browserCredentialDismiss({
+        pendingId: saveOffer.pendingId,
+      });
+    }
     setSaveOffer(null);
   };
 
   const fillCredential = async (credential: SavedCredential) => {
-    const revealed = await desktopApi.vaultReveal({
+    if (!fillOffer) return;
+    await desktopApi.browserCredentialFill({
       profileId,
-      id: credential.id,
+      guestId: fillOffer.guestId,
+      credentialId: credential.id,
+      formId: fillOffer.formId,
+      origin: fillOffer.origin,
     });
-    if (revealed) {
-      webviewRef.current?.send("catamorphic:fill-credentials", {
-        username: revealed.username,
-        password: revealed.password,
-      });
-    }
     setFillOffer(null);
   };
 
@@ -758,22 +848,30 @@ export function BrowserScreen({
 
   const navigation = (
     <>
-      <ShortcutHint label="Back">
+      <ShortcutHint
+        label="Back"
+        shortcut={formatBinding(keybindings["browser-back"])}
+      >
         <button
           type="button"
           onClick={() => webviewRef.current?.goBack()}
           disabled={!canGoBack}
+          data-disabled-reason="No previous page in this tab"
           className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
           aria-label="Back"
         >
           <ArrowLeft className="size-4" />
         </button>
       </ShortcutHint>
-      <ShortcutHint label="Forward">
+      <ShortcutHint
+        label="Forward"
+        shortcut={formatBinding(keybindings["browser-forward"])}
+      >
         <button
           type="button"
           onClick={() => webviewRef.current?.goForward()}
           disabled={!canGoForward}
+          data-disabled-reason="No next page in this tab"
           className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
           aria-label="Forward"
         >
@@ -926,7 +1024,7 @@ export function BrowserScreen({
               primary: true,
               onClick: () => void saveCredentials(),
             },
-            { label: "Never", onClick: () => setSaveOffer(null) },
+            { label: "Not now", onClick: dismissSaveOffer },
           ]}
         />
       )}
@@ -935,7 +1033,7 @@ export function BrowserScreen({
           icon={<KeyRound className="size-3.5 text-fg-muted" />}
           text="Fill saved password?"
           actions={[
-            ...fillOffer.slice(0, 2).map((credential) => ({
+            ...fillOffer.credentials.slice(0, 2).map((credential) => ({
               label: credential.username || "(no username)",
               primary: true,
               onClick: () => void fillCredential(credential),
@@ -973,7 +1071,11 @@ export function BrowserScreen({
             className="absolute inset-0"
             // Required: webview is display:inline-block by default and
             // collapses to 0×0 inside flex/absolute layouts without this.
-            style={{ width: "100%", height: "100%" }}
+            style={{
+              width: "100%",
+              height: "100%",
+              display: hiddenForGuest ? "none" : "flex",
+            }}
           />
         ) : firstUrl ? (
           <div className="h-full bg-bg" />
@@ -992,7 +1094,10 @@ export function BrowserScreen({
               </p>
               <button
                 type="button"
-                onClick={() => navigate(loadError.url)}
+                onClick={() => {
+                  recoveriesRef.current = 0;
+                  remountWebview();
+                }}
                 className="mt-4 inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md bg-accent px-3 text-[12px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90"
               >
                 <RotateCw className="size-3" />

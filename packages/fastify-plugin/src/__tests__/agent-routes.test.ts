@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { AgentNotConfiguredError } from "@catamorphic/core";
+import { describe, expect, it, vi } from "vitest";
 import { createTestApp } from "./test-app.js";
 
 const PROJECT_ID = "a1b2c3d4-e5f6-4890-abcd-ef1234567890";
@@ -36,6 +37,17 @@ describe("agent routes", () => {
       expect(res.statusCode).toBe(400);
       await app.close();
     });
+
+    it("rejects an unknown session source", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${PROJECT_ID}/agent/sessions`,
+        payload: { source: "untrusted-widget" },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
   });
 
   describe("GET /api/projects/:projectId/agent/sessions", () => {
@@ -59,6 +71,19 @@ describe("agent routes", () => {
         url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`,
       });
       expect(res.statusCode).toBe(503);
+      await app.close();
+    });
+  });
+
+  describe("POST /api/projects/:projectId/agent/sessions/:sessionId/attention/acknowledge", () => {
+    it("registers the acknowledgement route", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/attention/acknowledge`,
+      });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({ error: "Coding agent not configured" });
       await app.close();
     });
   });
@@ -90,6 +115,29 @@ describe("agent routes", () => {
       expect(response.statusCode).toBe(400);
       await app.close();
     });
+
+    it("reports an unavailable subsession agent as a client error", async () => {
+      const app = createTestApp({
+        core: {
+          agentSessions: {
+            createSubsession: vi.fn(async () => {
+              throw new AgentNotConfiguredError("retired-agent");
+            }),
+          },
+        } as never,
+      });
+      await app.ready();
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/subsessions`,
+        payload: { task: "Review the release" },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({
+        error: "Coding agent 'retired-agent' is not configured",
+      });
+      await app.close();
+    });
   });
 
   describe("POST /api/projects/:projectId/agent/sessions/:sessionId/messages", () => {
@@ -117,6 +165,41 @@ describe("agent routes", () => {
         },
       });
       expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+  });
+
+  describe("watcher lifecycle routes", () => {
+    it("registers list and stop routes", async () => {
+      const app = await buildApp();
+      const list = await app.inject({
+        method: "GET",
+        url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/watchers`,
+      });
+      const stop = await app.inject({
+        method: "DELETE",
+        url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/watchers/${SESSION_ID}`,
+      });
+      expect(list.statusCode).toBe(503);
+      expect(stop.statusCode).toBe(503);
+      await app.close();
+    });
+  });
+
+  describe("cross-host session mailbox routes", () => {
+    it("registers list and acknowledgement routes", async () => {
+      const app = await buildApp();
+      const list = await app.inject({
+        method: "GET",
+        url: `/api/projects/${PROJECT_ID}/session-mailboxes?destinationHostId=desktop:test`,
+      });
+      const acknowledge = await app.inject({
+        method: "POST",
+        url: `/api/projects/${PROJECT_ID}/session-mailboxes/${SESSION_ID}/acknowledge`,
+        payload: { destinationHostId: "desktop:test" },
+      });
+      expect(list.statusCode).toBe(503);
+      expect(acknowledge.statusCode).toBe(503);
       await app.close();
     });
   });

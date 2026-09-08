@@ -1,3 +1,4 @@
+import type { FileReadOptions } from "./file-reads.js";
 export interface CommitInfo {
   sha: string;
   message: string;
@@ -94,9 +95,18 @@ export interface ProjectRepo {
   readFile(filePath: string): Promise<string>;
   writeFile(filePath: string, content: string): Promise<void>;
   deleteFile(filePath: string): Promise<void>;
-  listFiles(): Promise<string[]>;
-  readAllFiles(): Promise<Record<string, string>>;
-  readAllFilesAtRef(ref: string): Promise<Record<string, string>>;
+  listFiles(opts?: { prefix?: string }): Promise<string[]>;
+  /** Optional accelerated literal search returning text file paths, without loading their bodies into the host. */
+  findFilesContaining?(input: {
+    text: string;
+    ref?: string;
+    globs: readonly string[];
+  }): Promise<string[]>;
+  readAllFiles(options?: FileReadOptions): Promise<Record<string, string>>;
+  readAllFilesAtRef(
+    ref: string,
+    options?: FileReadOptions,
+  ): Promise<Record<string, string>>;
   /**
    * The files under one directory prefix at a ref (e.g. `roles/`), without
    * materializing the whole tree. `prefix` is a directory path with its
@@ -109,7 +119,11 @@ export interface ProjectRepo {
   /** File paths at a ref, optionally under one directory prefix; no content. */
   listFilesAtRef(ref: string, opts?: { prefix?: string }): Promise<string[]>;
   /** One file's raw bytes at a ref, or null when absent (binaries intact). */
-  readBlobAtRef(ref: string, filePath: string): Promise<Uint8Array | null>;
+  readBlobAtRef(
+    ref: string,
+    filePath: string,
+    options?: { maxBytes?: number },
+  ): Promise<Uint8Array | null>;
   /** One working-tree file's raw bytes, or null when absent. */
   readFileBytes(filePath: string): Promise<Uint8Array | null>;
   /** File paths + blob ids at a ref (content-addressed digests, no content). */
@@ -218,6 +232,8 @@ export interface OriginRepo {
     sha: string;
     expected?: string | null;
   }): Promise<void>;
+  /** Remove one ref without deleting its immutable objects. Missing is a no-op. */
+  deleteRef(input: { ref: string }): Promise<void>;
   /** Whether the object is present locally. */
   hasObject(sha: string): Promise<boolean>;
   /** Read the raw git object (returns { type, data }). */

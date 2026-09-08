@@ -12,6 +12,7 @@ import {
   ConnectionUnavailableError,
 } from "./connections-service.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
+import type { WorkflowEnablementsService } from "./workflow-enablements-service.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -20,6 +21,7 @@ export class ConnectionBroker {
     private readonly connections: ConnectionsService,
     private readonly providers: ConnectionProviderRegistry,
     private readonly allocations: ExecutionAllocationsService,
+    private readonly workflowEnablements?: () => WorkflowEnablementsService,
   ) {}
 
   async listActions(args: {
@@ -142,6 +144,12 @@ export class ConnectionBroker {
         cause instanceof ConnectionUnavailableError ||
         isConnectionAuthorizationExpiredError(cause)
       ) {
+        if (allocation.policy.workflowEnablementId) {
+          await this.workflowEnablements?.().suspendForConnection({
+            identity: args.identity,
+            connectionId: binding.connectionId,
+          });
+        }
         throw new ConnectionUnavailableError(
           args.alias,
           isConnectionAuthorizationExpiredError(cause)
@@ -171,6 +179,20 @@ export class ConnectionBroker {
     );
     if (!binding) {
       throw new Error(`Connection alias '${args.alias}' is unavailable`);
+    }
+    if (allocation.policy.workflowEnablementId) {
+      try {
+        await this.workflowEnablements?.().revalidate({
+          identity: args.identity,
+          enablementId: allocation.policy.workflowEnablementId,
+        });
+      } catch {
+        throw new ConnectionUnavailableError(
+          args.alias,
+          "Workflow enablement authority is unavailable",
+          binding.connectionId,
+        );
+      }
     }
     if (
       !identityMayUseConnection(

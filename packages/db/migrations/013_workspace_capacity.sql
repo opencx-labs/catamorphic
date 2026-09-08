@@ -1,0 +1,10 @@
+ALTER TABLE worker_nodes ADD COLUMN capacity jsonb;
+ALTER TABLE worker_nodes ADD COLUMN default_resources jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE execution_allocations ADD COLUMN reserved_cpu_millis integer NOT NULL DEFAULT 0 CHECK (reserved_cpu_millis >= 0);
+ALTER TABLE execution_allocations ADD COLUMN reserved_memory_mb integer NOT NULL DEFAULT 0 CHECK (reserved_memory_mb >= 0);
+ALTER TABLE execution_allocations ADD COLUMN sandbox_provider_id text;
+ALTER TABLE execution_allocations ADD COLUMN capacity_released_at timestamptz;
+CREATE INDEX execution_allocations_capacity ON execution_allocations (worker_node_id) WHERE capacity_released_at IS NULL;
+ALTER TABLE execution_allocations ADD COLUMN sandbox_creation_started boolean NOT NULL DEFAULT false;
+ALTER TABLE client_runners ADD COLUMN resource_limits jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE client_runners ADD COLUMN isolation text NOT NULL DEFAULT 'none' CHECK (isolation IN ('none', 'process', 'sandbox'));

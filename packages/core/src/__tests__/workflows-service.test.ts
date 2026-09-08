@@ -42,6 +42,7 @@ describe("WorkflowsService", () => {
     } as unknown as ProjectManager;
     const projects = {
       get: vi.fn(async () => ({ id: "project-1" })),
+      getOverview: vi.fn(async () => ({ id: "project-1" })),
     } as unknown as ProjectsService;
     const service = new WorkflowsService(projectManager, projects);
 
@@ -54,7 +55,13 @@ describe("WorkflowsService", () => {
     expect(workflows.map((workflow) => workflow.name)).toEqual([
       "referencedWorkflow",
     ]);
-    expect(readAllFilesAtRef).toHaveBeenCalledWith("origin/main");
+    expect(readAllFilesAtRef).toHaveBeenCalledWith(
+      "origin/main",
+      expect.objectContaining({
+        excludeNestedRepositories: true,
+        filter: expect.any(Function),
+      }),
+    );
     expect(readAllFiles).not.toHaveBeenCalled();
     expect(dispose).toHaveBeenCalledOnce();
   });
@@ -82,6 +89,7 @@ describe("WorkflowsService.listDeclaredSecrets", () => {
     } as unknown as ProjectManager;
     const projects = {
       get: vi.fn(async () => ({ id: "project-1" })),
+      getOverview: vi.fn(async () => ({ id: "project-1" })),
     } as unknown as ProjectsService;
     return {
       service: new WorkflowsService(projectManager, projects),

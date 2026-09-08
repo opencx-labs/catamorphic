@@ -1,4 +1,5 @@
 import {
+  assertSandboxResources,
   CommandDeploymentRuntimeProvider,
   type CreateSandboxOpts,
   type DeploymentRuntimeProvider,
@@ -32,6 +33,7 @@ function mapDaytonaState(state: string | undefined): SandboxStatus {
 }
 
 export class DaytonaSandboxProvider implements SandboxProvider {
+  readonly isolation = "sandbox";
   readonly workspaceRoot = "/home/daytona";
   readonly deploymentRuntime: DeploymentRuntimeProvider;
   private client: Daytona;
@@ -44,6 +46,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   }
 
   async createSandbox(opts: CreateSandboxOpts): Promise<SandboxHandle> {
+    assertSandboxResources(opts.resources, []);
     const sandbox = await this.client.create({
       language: opts.language ?? "typescript",
       snapshot: opts.snapshotName,
@@ -68,11 +71,13 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   async stopSandbox(sandboxId: string): Promise<void> {
     const sandbox = await this.client.get(sandboxId);
     await sandbox.stop();
+    await this.deploymentRuntime.releaseSandbox?.({ sandboxId });
   }
 
   async destroySandbox(sandboxId: string): Promise<void> {
     const sandbox = await this.client.get(sandboxId);
     await this.client.delete(sandbox);
+    await this.deploymentRuntime.releaseSandbox?.({ sandboxId });
   }
 
   async getSandboxStatus(sandboxId: string): Promise<SandboxStatus> {

@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import { describe, expect, it } from "vitest";
 import {
   type McpToolPolicyLayers,
@@ -181,4 +182,38 @@ describe("ToolGate (the shared allow / ask / deny decision)", () => {
     expect(verdict.allowed).toBe(false);
     if (!verdict.allowed) expect(verdict.message).toContain("interrupted");
   });
+});
+
+it("releases abort listeners after answered and rejected permission requests", async () => {
+  const controller = new AbortController();
+  const gate = new ToolGate(async () => ({
+    decision: "allow",
+  }));
+  for (let i = 0; i < 100; i++) {
+    expect(
+      (
+        await gate.decide({
+          server: "test",
+          tool: "write",
+          input: {},
+          layers: [{ default: "ask" }],
+          abortSignal: controller.signal,
+        })
+      ).allowed,
+    ).toBe(true);
+  }
+  expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+  const failing = new ToolGate(async () => {
+    throw new Error("closed");
+  });
+  await expect(
+    failing.decide({
+      server: "test",
+      tool: "write",
+      input: {},
+      layers: [{ default: "ask" }],
+      abortSignal: controller.signal,
+    }),
+  ).resolves.toEqual({ allowed: false, message: "closed" });
+  expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
 });

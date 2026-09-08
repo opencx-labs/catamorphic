@@ -1,51 +1,52 @@
 import { describe, expect, it } from "vitest";
 import { parseConnectLink } from "./connect-link.js";
 
-describe("connect links (ADR 0055)", () => {
-  it("parses catamorphic://connect with server, token, project, optional name", () => {
+describe("remote project locator links", () => {
+  it("parses a credential-free server and project locator", () => {
     expect(
       parseConnectLink(
-        "catamorphic://connect?server=https%3A%2F%2Fbrain.acme.com%2Fapi%2F&token=t0k&project=p-1&name=Acme%20brain",
+        "catamorphic://connect?server=https%3A%2F%2Fbrain.acme.com%2Fapi%2F&project=p-1&name=Acme%20brain",
       ),
     ).toEqual({
       serverUrl: "https://brain.acme.com/api",
-      token: "t0k",
       remoteProjectId: "p-1",
       remoteProjectName: "Acme brain",
     });
   });
 
-  it("carries an optional renew URL for expired tokens", () => {
+  it("carries an invitation identifier without treating it as a credential", () => {
     expect(
       parseConnectLink(
-        "catamorphic://connect?server=https://x/api&token=t&project=p&renew=https%3A%2F%2Fx%2Fjoin",
+        "catamorphic://connect?server=https%3A%2F%2Fbrain.acme.com%2Fapi&project=p-1&invitation=invite-123",
       ),
-    ).toMatchObject({ renewUrl: "https://x/join" });
-    // Non-http renew targets are dropped, not fatal.
-    expect(
-      parseConnectLink(
-        "catamorphic://connect?server=https://x/api&token=t&project=p&renew=javascript:alert(1)",
-      )?.renewUrl,
-    ).toBeUndefined();
+    ).toMatchObject({ invitationId: "invite-123" });
   });
 
-  it("rejects anything else", () => {
+  it("rejects legacy credential-bearing and unsafe links", () => {
     expect(
       parseConnectLink(
-        "https://example.com/connect?server=x&token=y&project=z",
+        "catamorphic://connect?server=https://x/api&project=p&token=legacy",
       ),
     ).toBeNull();
     expect(
-      parseConnectLink("catamorphic://open?server=x&token=y&project=z"),
+      parseConnectLink("https://example.com/connect?server=x&project=z"),
+    ).toBeNull();
+    expect(
+      parseConnectLink("catamorphic://open?server=https://x&project=z"),
+    ).toBeNull();
+    expect(
+      parseConnectLink("catamorphic://connect?server=ftp://x&project=z"),
     ).toBeNull();
     expect(
       parseConnectLink(
-        "catamorphic://connect?server=ftp://x&token=y&project=z",
+        "catamorphic://connect?server=http://brain.acme.com/api&project=z",
       ),
     ).toBeNull();
     expect(
-      parseConnectLink("catamorphic://connect?server=https://x&project=z"),
-    ).toBeNull();
+      parseConnectLink(
+        "catamorphic://connect?server=http://127.0.0.1:4700/api&project=z",
+      ),
+    ).toMatchObject({ serverUrl: "http://127.0.0.1:4700/api" });
     expect(parseConnectLink("not a url")).toBeNull();
   });
 });

@@ -45,6 +45,17 @@ describe("AgentsStore — ADR 0056 fields", () => {
       memory: true,
       skills: { mode: "picked", names: ["publishing-to-github"] },
       coordination: "isolate-on-contention",
+      delegation: {
+        enabled: true,
+        maxConcurrentChildren: 4,
+        routes: [
+          {
+            id: "reviewer",
+            target: "project:reviewer",
+            allowFurtherDelegation: false,
+          },
+        ],
+      },
     });
     expect(agent.instructions).toBe("You are the reviewer.");
     expect(agent.mode).toBe("read-only");
@@ -54,6 +65,17 @@ describe("AgentsStore — ADR 0056 fields", () => {
       names: ["publishing-to-github"],
     });
     expect(agent.coordination).toBe("isolate-on-contention");
+    expect(agent.delegation).toEqual({
+      enabled: true,
+      maxConcurrentChildren: 4,
+      routes: [
+        {
+          id: "reviewer",
+          target: "project:reviewer",
+          allowFurtherDelegation: false,
+        },
+      ],
+    });
 
     // Defaults are absent on disk, not stored as literals: the file grows
     // only what deviates.
@@ -76,6 +98,11 @@ describe("AgentsStore — ADR 0056 fields", () => {
     expect(publicAgent.skills).toEqual({ mode: "all" });
     expect(publicAgent.instructions).toBe("");
     expect(publicAgent.coordination).toBe("shared-first");
+    expect(publicAgent.delegation).toMatchObject({
+      enabled: true,
+      maxConcurrentChildren: 10,
+      routes: [{ id: "same-agent", target: "self" }],
+    });
   });
 
   it("update clears back to defaults including shared-first coordination", () => {
@@ -87,6 +114,11 @@ describe("AgentsStore — ADR 0056 fields", () => {
       memory: true,
       skills: { mode: "picked", names: ["a"] },
       coordination: "isolation-required",
+      delegation: {
+        enabled: false,
+        maxConcurrentChildren: 2,
+        routes: [],
+      },
     });
     const updated = store.update(agent.id, {
       instructions: "",
@@ -94,12 +126,27 @@ describe("AgentsStore — ADR 0056 fields", () => {
       memory: false,
       skills: { mode: "all" },
       coordination: "shared-first",
+      delegation: {
+        enabled: true,
+        maxConcurrentChildren: 10,
+        routes: [
+          {
+            id: "same-agent",
+            target: "self",
+            allowFurtherDelegation: true,
+          },
+        ],
+      },
     });
     expect(updated?.instructions).toBeUndefined();
     expect(updated?.mode).toBeUndefined();
     expect(updated?.memory).toBeUndefined();
     expect(updated?.skills).toBeUndefined();
     expect(updated?.coordination).toBeUndefined();
+    expect(updated?.delegation).toMatchObject({
+      enabled: true,
+      maxConcurrentChildren: 10,
+    });
   });
 });
 

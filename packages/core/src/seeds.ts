@@ -1,6 +1,7 @@
 import { APP_THEME_COLOR_TOKENS } from "@catamorphic/app";
 import { PARSER_PACKAGE_VERSION } from "@catamorphic/parser";
 import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
+import { WORKFLOW_LIFECYCLE_SKILL } from "./workflow-lifecycle-skill.js";
 
 const SHARED_TSCONFIG = `{
   "compilerOptions": {
@@ -342,7 +343,7 @@ const appSupportFiles = (): Record<string, string> => ({
 export const SEED_SKILLS: Record<string, string> = {
   [`${SCAFFOLD_SKILL_DIR}/SKILL.md`]: `---
 name: catamorphic-projects
-description: What a Catamorphic project can hold — documents, code, automations, apps, committed agents and roles, the project store — and how to add the automations/apps workspace to a project that has none. Use when the user asks for their first workflow, automation, or app, asks what this project is, or asks about who may see or do what (roles, members, the store, sharing).
+description: What a Catamorphic project can hold, including documents, code, automations, apps, committed agents and roles, and the project store, and how to add the automations/apps workspace to a project that has none. Use when the user asks for their first workflow, automation, or app, asks what this project is, asks about who may see or do what (roles, members, the store, sharing), or wants to configure the project's shared sidebar or starting actions.
 ---
 
 # Catamorphic projects
@@ -372,6 +373,19 @@ Then:
 
 Do NOT install the workspace preemptively — only when automations or apps are actually wanted.
 
+## Saving, recording, and sharing files
+
+Call \`documents_storage\` when unsure where an MCP connection saves files.
+A desktop-local connection saves to the project folder on that device. A remote
+MCP connection saves on that server. Use the desktop-local connection or local
+file tools for private drafts. Saving does not mean uploading or committing.
+
+To share selected documents, use the desktop's Server section, choose the files,
+and Upload. Other drafts stay local. A conflict keeps both versions until the
+user chooses which to keep. Sharing a link uploads only the named document.
+To record a document in project history, put it outside \`store/\`, review it,
+and explicitly commit it. Explain where it will go before pushing or sharing.
+
 ## The program, the store, and who may reach what
 
 A project has one path namespace with two backings:
@@ -398,6 +412,8 @@ Access is enforced by the host from **roles you commit** as
   "description": "Customer success: their own customers, the handbook, the CSM assistant.",
   "agents": ["csm-assistant"],                 // or { "name": "…", "toolPolicies": { "slack": { "default": "ask" } } }
   "workflows": ["crm.lookup", "docs.search"],
+  "environments": ["local"],
+  "connections": ["gmail"],
   "apps": ["customer-tracker"],
   "documents": [
     "docs/**",                                                       // read the handbook
@@ -406,6 +422,8 @@ Access is enforced by the host from **roles you commit** as
 }
 // roles/admin.json
 { "version": 1, "name": "Admin", "builder": true, "documents": ["store/**"] }
+// roles/brain-maintainer.json
+{ "version": 1, "name": "Brain Maintainer", "permissions": ["brain:maintain"], "agents": ["brain-maintainer"] }
 \`\`\`
 
 Rules of thumb when authoring roles:
@@ -421,8 +439,87 @@ Rules of thumb when authoring roles:
   their exported name, apps by \`apps/<name>\`. A role may narrow an agent's
   tools with \`toolPolicies\` (allow / ask / deny per tool, per connector
   server key, or \`catamorphic\` for the project's own workflow tools).
+- \`permissions\` is an extensible namespaced capability list. Catamorphic
+  enforces its documented names (\`memberships:manage\` and \`roles:manage\`);
+  hosts may enforce their own names, such as \`brain:maintain\`. A custom
+  permission does not grant framework authority unless the host implements it.
+  The desktop may use these capabilities in project-authored \`when\` rules.
+- A member sees a workflow only when a role grants its exported name. An
+  unattended workflow also needs role grants for its chosen Environment and
+  every declared connection alias. Grant the project agent too when the
+  workflow wakes that agent.
 - Keep roles few and readable; membership (who has which role and grants)
   is the host's, not a file here.
+
+## Choose where agents run
+
+The project manifest declares logical Environments; roles grant them and an
+agent's \`environment.allowed\` / \`environment.preferred\` policy narrows and
+recommends the choices. A machine is usable only when the host has supplied a
+compatible, available binding. Do not invent a server id or treat adding a JSON
+entry as provisioning a machine.
+
+A remote project keeps one authority for membership, connections, and history.
+\`binding: "this-machine"\` offers an authenticated member device when the host
+supports client execution. It never requires the member to receive database
+credentials. A managed server is enrolled by the host operator. Moving a session
+is explicit and resumes its saved checkpoint; never retry an uncertain action
+just because a connection returned.
+
+## Shape the project experience from capabilities
+
+In the Catamorphic desktop reference host, a project may ship a shared
+\`.catamorphic/sidebar.js\` and up to six New Tab starters in the ordinary
+\`.catamorphic/project.json\` manifest. Both may target resolved authority with
+\`when: { builder?, permissions? }\`; never branch on a role slug. Every declared
+condition must match, invalid conditions fail closed, and omitted configuration
+leaves no empty UI behind.
+
+\`\`\`jsonc
+// .catamorphic/project.json
+{
+  "startingActions": [
+    {
+      "label": "Review onboarding",
+      "prompt": "Review our onboarding system and propose improvements.",
+      "agent": "brain-maintainer",
+      "when": { "permissions": ["brain:maintain"] }
+    }
+  ]
+}
+\`\`\`
+
+\`\`\`javascript
+// .catamorphic/sidebar.js
+module.exports = {
+  left: [{ id: "project", title: "Project", icon: "House", sections: [
+    { id: "chats", type: "chats" },
+    { id: "files", type: "files" },
+    {
+      id: "brain",
+      type: "custom",
+      title: "Company brain",
+      when: { permissions: ["brain:maintain"] },
+      items: [{ label: "Handbook", url: "https://handbook.example.com" }],
+    },
+    { id: "changes", type: "git", title: "Changes", when: { builder: true } },
+  ] }],
+  right: [],
+};
+\`\`\`
+
+These are project-owned presentation files, not a stock-server bootstrap
+format and not workflow logic. Embedders may provide a different presentation
+contract while using the same resolved permission vocabulary.
+
+Workflow code declares provider-neutral requirements in its top-level
+\`connections\` array. Roles decide who may use those aliases; the host decides
+which concrete providers satisfy them. Each member opens **Automate**, chooses
+**Enable for me**, reviews the pinned revision, Environment, actions, and
+triggers, then authenticates anything missing. When the member initiated that
+flow, the host may finish enabling automatically after the final required
+connection succeeds. Merely connecting an account never opts the member into
+every eligible workflow.
 
 Two more things members do without commit rights:
 
@@ -443,6 +540,15 @@ description: Writes and edits Catamorphic Workflows as exported defineWorkflow d
 ---
 
 # Writing Workflows
+
+## Choose lifetime and location first
+
+Load the host's \`workflow-lifecycle\` skill when offered. It explains temporary
+session watchers, reusable project files, member-owned enablements, private
+storage availability, and the distinction between checkpoint, share, deploy,
+and enable. For a reusable project workflow, use \`workflows/src/<name>.ts\`.
+For a temporary watcher, pass source to the watcher tool; do not first save it
+in the project's working tree. Uncommitted or unpushed files are not private.
 
 ## The one authoring model
 
@@ -559,8 +665,100 @@ The embedding host can define custom trigger kinds — "Ticket Created",
 "AI Tool Call", "Chat Turn" — and fire them with a payload; every
 workflow subscribed to that kind runs with the payload as input.
 
+Schedules use the built-in provider-neutral trigger kind:
+
 \`\`\`typescript
-import { defineWorkflow, trigger } from "@catamorphic/workflow";
+trigger("schedule", { cron: "0 8 * * 1-5", timezone: "Asia/Amman" })
+\`\`\`
+
+The schedule is inert until a member enables the workflow. It then runs as
+that member with the exact Environment and connections they reviewed.
+
+## Required connections and agent notifications
+
+Declare every account an unattended workflow needs, even when a woken agent
+rather than a direct workflow step will use it. Aliases are provider-neutral;
+an authenticated MCP server is sufficient when it supplies the required
+actions.
+
+\`\`\`typescript
+type SchedulePayload = {
+  bindingId: string;
+  scheduledFor: string;
+  firedAt: string;
+};
+
+export const inboxSummary = defineWorkflow(({ defineBoundary }) => ({
+  connections: [
+    { alias: "gmail", principal: "member", capabilities: ["search", "read"] },
+  ],
+  triggers: [
+    trigger("schedule", { cron: "0 8 * * 1-5", timezone: "Asia/Amman" }),
+  ],
+  steps: [
+    defineBoundary({
+      run: async ({ input, host }: BoundaryContext<SchedulePayload>) =>
+        host["catamorphic.sessions"].wake({
+          key: "daily-inbox-summary",
+          agentSlug: "inbox-assistant",
+          title: "Daily inbox summary",
+          content:
+            "Review my Gmail inbox since the previous summary. Summarize what matters, call out anything urgent, and include useful links.",
+          notification: {
+            title: "Your inbox summary is ready",
+            body: "Open the chat to review it.",
+          },
+        }),
+    }),
+  ],
+}));
+\`\`\`
+
+\`wake\` creates or reuses one member-owned session for the stable \`key\`
+scoped to this workflow, queues the agent turn, and returns immediately. When
+the turn settles, desktop and PWA show a pulsing attention dot and push can
+deep-link to the same conversation. Opening it acknowledges the attention.
+The role must grant the workflow, \`inbox-assistant\`, its Environment, and
+\`gmail\`. Service-owned enablements cannot call \`wake\`; use an explicit
+member enablement for personal notifications. Use \`deliver\` instead when a
+workflow already has the exact session id.
+
+## Temporary watchers
+
+For a periodic check, use \`create_watcher\` with an ordinary
+\`trigger("schedule", { cron, timezone })\` binding. Fetch or inspect the
+system inside a workflow boundary and notify only when the condition is met
+or changes. Do not invent a monitor DSL or keep an agent turn spinning.
+Choose an allowed Environment and an expiry. This enablement belongs to the
+current session; stop, expiry, and session close/archive end future invocations.
+A local monitor needs the app running; remote execution needs its server.
+Closing the chat tab alone does not stop the session's watcher.
+
+When the project MCP surface offers \`create_github_watcher\`, use it for
+session-scoped monitoring instead of adding permanent trigger configuration.
+The tool accepts ordinary TypeScript source exporting one \`defineWorkflow\`.
+Declare subscriptions in that workflow with the same inline \`trigger()\`
+calls as any committed workflow. The boundary input is the normalized Project
+Event envelope; inspect \`input.kind\` and \`input.payload\`, then optionally
+deliver to a session:
+
+\`\`\`typescript
+return context.host["catamorphic.sessions"].deliver({
+  sessionId: "the session to notify or wake",
+  content: "Checks failed on PR #42. Investigate and repair them.",
+  mode: "next_turn", // message_only | next_turn | interrupt
+  idempotencyKey: \`checks-failed:\${input.id}\`,
+});
+\`\`\`
+
+\`message_only\` records context without starting a turn. \`next_turn\` wakes
+an idle session or queues behind its active turn. Use \`interrupt\` only when
+letting the current turn finish would make the result wrong. Watcher source is
+pinned on an isolated git ref and expires automatically; it is never merged
+into the project's main branch.
+
+\`\`\`typescript
+import { type BoundaryContext, defineWorkflow, trigger } from "@catamorphic/workflow";
 
 export const escalateTicket = defineWorkflow(({ defineBoundary }) => ({
   triggers: [trigger("ticket.created", { onlyPriority: "high" })],
@@ -785,6 +983,12 @@ other users, agents, or workflows must see does NOT belong in storage —
 define a workflow and call it through the app contract.
 
 - One screen per app; no routing. The host controls where it renders.
+- Hosts may mount the same app in a compact sidebar slot. Use responsive layout
+  and host theme tokens. \`subscribeDisplay(listener)\` from \`@catamorphic/app\`
+  immediately reports \`{ mode: "full" | "compact", visible: boolean }\` and
+  subsequent changes; it returns an unsubscribe function. Pause optional polling
+  while invisible and resume on visibility. Hidden slots retain the app and its
+  drafts. Compact mode changes presentation only, never permissions.
 - \`getContext()\` from \`@catamorphic/app\` gives the mount snapshot
   (tenant, user, host extras). Anything richer is one workflow call away.
 - Verify with \`bun run build\` in the app directory: it must produce
@@ -1370,6 +1574,7 @@ documents — grep is faster and never lies.
 `;
 
 export const HOST_SKILLS: Record<string, string> = {
+  "workflow-lifecycle/SKILL.md": WORKFLOW_LIFECYCLE_SKILL,
   "searching-documents/SKILL.md": SEARCHING_DOCUMENTS_SKILL,
   "publishing-to-github/SKILL.md": `---
 name: publishing-to-github
@@ -1429,9 +1634,8 @@ visibility — default to private unless they say otherwise.
 
 ## 5. Wrap up
 
-Report the repository URL. Note for the user: the app's automatic sync
-applies to projects imported from GitHub; this project now pushes and pulls
-through its git \`origin\` remote — you can run those pushes for them on
-request.
+Report the repository URL. Imported repositories use explicit commits and
+pushes. Run those actions when the user asks; saving a file locally does
+not authorize sharing it.
 `,
 };

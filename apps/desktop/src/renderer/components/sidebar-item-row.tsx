@@ -1,7 +1,9 @@
 import * as icons from "lucide-react";
-import { MoreHorizontal } from "lucide-react";
+import { ChevronRight, MoreHorizontal } from "lucide-react";
 import {
+  type CSSProperties,
   type ReactNode,
+  type RefObject,
   useEffect,
   useId,
   useLayoutEffect,
@@ -9,6 +11,12 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import {
+  OPEN_ACTIONS,
+  type OpenMode,
+  openModeForAction,
+  openModeFromEvent,
+} from "../../shared/open-mode.js";
 import type { SidebarMenuEntry, SidebarPreview } from "../lib/desktop-api.js";
 import { ShortcutHint } from "./shortcut-hint";
 import {
@@ -16,6 +24,12 @@ import {
   type SidebarPreviewAnchor,
   SidebarPreviewPopover,
 } from "./sidebar-preview.js";
+
+export interface ContextMenuEntry {
+  label: string;
+  action: string;
+  danger?: boolean;
+}
 
 /** Optional hover hint (e.g. a bookmark's URL) in the app-standard style. */
 function TitleHint({
@@ -42,39 +56,52 @@ function TitleHint({
  * generic, so custom config-defined items and built-in bookmarks share
  * exactly the same interaction.
  */
-export function SidebarItemRow({
+export function SidebarItemRow<
+  TMenuEntry extends ContextMenuEntry = SidebarMenuEntry,
+>({
   presentation = "row",
   expanded,
+  resource = false,
+  defaultOpenMode = "replace",
   label,
   title,
   icon,
   menu,
   preview,
+  previewContent,
   active,
   labelContent,
   end,
+  disclosure,
   onOpen,
   onAction,
   renaming,
+  style,
   onRenameSubmit,
   onRenameCancel,
 }: {
   presentation?: "row" | "tile";
   expanded?: boolean;
+  resource?: boolean;
+  defaultOpenMode?: OpenMode;
   label: string;
   /** Tooltip; usually the URL. */
   title?: string;
   /** lucide-react icon name, or a node to render directly. */
   icon?: string | ReactNode;
-  menu?: SidebarMenuEntry[];
+  menu?: readonly TMenuEntry[];
   preview?: SidebarPreview | false;
+  /** Rich inspector body for built-in resources; uses the same hover shell. */
+  previewContent?: ReactNode;
   active?: boolean;
   labelContent?: ReactNode;
   end?: ReactNode;
-  onOpen: () => void;
-  onAction: (entry: SidebarMenuEntry) => void;
+  disclosure?: { open: boolean; onToggle: () => void };
+  onOpen: (mode: OpenMode) => void;
+  onAction: (entry: TMenuEntry) => void;
   /** Swap the label for an inline rename field. */
   renaming?: boolean;
+  style?: CSSProperties;
   onRenameSubmit?: (label: string) => void;
   onRenameCancel?: () => void;
 }) {
@@ -85,6 +112,18 @@ export function SidebarItemRow({
   const buttonRef = useRef<HTMLButtonElement>(null);
   const rowRef = useRef<HTMLDivElement>(null);
   const renameRef = useRef<HTMLInputElement>(null);
+  const pendingActionRef = useRef<
+    TMenuEntry | (typeof OPEN_ACTIONS)[number] | null
+  >(null);
+  const resolvedMenu = resource
+    ? [
+        ...OPEN_ACTIONS,
+        ...(menu ?? []).filter(
+          (entry) =>
+            !openModeForAction(entry.action) && entry.action !== "open",
+        ),
+      ]
+    : menu;
   const previewId = useId();
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
@@ -95,7 +134,9 @@ export function SidebarItemRow({
   const [previewAnchor, setPreviewAnchor] =
     useState<SidebarPreviewAnchor | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const previewEnabled = preview !== undefined && preview !== false;
+  const previewEnabled =
+    previewContent !== undefined ||
+    (preview !== undefined && preview !== false);
 
   const disarmPreview = () => {
     clearTimeout(previewTimerRef.current);
@@ -135,7 +176,16 @@ export function SidebarItemRow({
     if (!open) return;
     const dismiss = (event: Event) => {
       // Clicks inside the portal menu handle themselves.
-      if ((event.target as HTMLElement)?.closest?.("[data-sidebar-menu]")) {
+      if (
+        event.target instanceof Element &&
+        event.target.closest("[data-sidebar-menu]")
+      ) {
+        return;
+      }
+      if (
+        event.target instanceof Node &&
+        buttonRef.current?.contains(event.target)
+      ) {
         return;
       }
       setOpen(false);
@@ -162,6 +212,12 @@ export function SidebarItemRow({
   useEffect(() => {
     if (!previewOpen) return;
     const dismiss = (event: Event) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest("[data-resource-inspector]") &&
+        !(event instanceof KeyboardEvent)
+      )
+        return;
       if (event instanceof KeyboardEvent && event.key !== "Escape") return;
       if (event instanceof KeyboardEvent) event.preventDefault();
       clearTimeout(previewTimerRef.current);
@@ -201,6 +257,7 @@ export function SidebarItemRow({
     // biome-ignore lint/a11y/noStaticElementInteractions: right-click mirrors the row's ⋯ button, which stays keyboard-reachable
     <div
       ref={rowRef}
+      style={style}
       className={`group relative flex items-center rounded-md transition-colors duration-150 ${presentation === "tile" ? "h-9 border border-border bg-bg-raised" : "h-7"} ${
         active ? "bg-bg-overlay" : "hover:bg-bg-overlay/60"
       }`}
@@ -226,9 +283,10 @@ export function SidebarItemRow({
       // Right-click = the ⋯ menu, at the cursor. Same entries, same
       // portal — two paths into one menu, never two menus.
       onContextMenu={
-        menu && menu.length > 0 && !renaming
+        resolvedMenu && resolvedMenu.length > 0 && !renaming
           ? (event) => {
               event.preventDefault();
+              if (pendingActionRef.current) return;
               disarmPreview();
               setPosition({ x: event.clientX, y: event.clientY });
               setOpen(true);
@@ -254,19 +312,46 @@ export function SidebarItemRow({
         />
       ) : (
         <>
+          {disclosure && (
+            <button
+              type="button"
+              onClick={disclosure.onToggle}
+              className="ml-1 grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint hover:text-fg"
+              aria-label={`${disclosure.open ? "Collapse" : "Expand"} ${label}`}
+              aria-expanded={disclosure.open}
+            >
+              <ChevronRight
+                className={`size-3 transition-transform duration-150 ${disclosure.open ? "rotate-90" : ""}`}
+              />
+            </button>
+          )}
           <TitleHint title={previewEnabled ? undefined : title}>
             <button
               type="button"
-              onClick={() => {
-                disarmPreview();
-                onOpen();
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  if (pendingActionRef.current) return;
+                  disarmPreview();
+                  onOpen(openModeFromEvent(event, defaultOpenMode));
+                }
               }}
-              className={`flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-[13px] hover:text-fg ${presentation === "tile" ? "justify-center" : ""} ${
+              onClick={(event) => {
+                if (pendingActionRef.current) return;
+                disarmPreview();
+                onOpen(openModeFromEvent(event, defaultOpenMode));
+              }}
+              className={`flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 ${disclosure ? "pr-2" : "px-2"} text-left text-[13px] ${presentation === "tile" ? "justify-center" : ""} hover:text-fg ${
                 active ? "text-fg" : "text-fg-muted"
               }`}
-              aria-current={active || undefined}
               aria-expanded={expanded}
-              aria-describedby={previewEnabled ? previewId : undefined}
+              aria-current={active || undefined}
+              aria-describedby={
+                previewEnabled && !previewContent ? previewId : undefined
+              }
+              aria-details={
+                previewContent && previewOpen ? previewId : undefined
+              }
             >
               {IconComponent ? (
                 <IconComponent className="size-3.5 shrink-0 text-fg-faint" />
@@ -283,11 +368,12 @@ export function SidebarItemRow({
               {end}
             </button>
           </TitleHint>
-          {menu && menu.length > 0 && (
+          {resolvedMenu && resolvedMenu.length > 0 && (
             <button
               ref={buttonRef}
               type="button"
-              onClick={() => {
+              onClick={(_event) => {
+                if (pendingActionRef.current) return;
                 disarmPreview();
                 const rect = buttonRef.current?.getBoundingClientRect();
                 if (rect) {
@@ -310,13 +396,27 @@ export function SidebarItemRow({
         </>
       )}
 
-      {open && position && menu && (
+      {position && resolvedMenu && (
         <MenuPortal
+          open={open}
           position={position}
-          entries={menu}
+          entries={resolvedMenu}
           onPick={(entry) => {
+            pendingActionRef.current = entry;
             setOpen(false);
-            onAction(entry);
+          }}
+          onExited={() => {
+            setPosition(null);
+            const pendingAction = pendingActionRef.current;
+            pendingActionRef.current = null;
+            if (pendingAction) {
+              const mode = openModeForAction(pendingAction.action);
+              if (resource && mode) onOpen(mode);
+              else {
+                const original = menu?.find((entry) => entry === pendingAction);
+                if (original) onAction(original);
+              }
+            }
           }}
         />
       )}
@@ -325,7 +425,8 @@ export function SidebarItemRow({
           id={previewId}
           open={previewOpen}
           anchor={previewAnchor}
-          preview={preview}
+          preview={preview === false ? undefined : preview}
+          content={previewContent}
           fallbackTitle={label}
           onMouseEnter={() => {
             previewHoveredRef.current = true;
@@ -345,19 +446,46 @@ export function SidebarItemRow({
 /**
  * Portal-rendered so the sidebar's scroll container can't clip it — the
  * same lesson ShortcutHint learned (DOM checks pass while pixels clip).
- * Shared with other sidebar rows (PRs) that need the same ⋯ menu.
+ * Shared with other sidebar rows and dock bubbles that need the same menu.
  */
-export function MenuPortal({
+export function MenuPortal<TMenuEntry extends ContextMenuEntry>({
+  open,
   position,
   entries,
   onPick,
+  onExited,
 }: {
+  open: boolean;
   position: { x: number; y: number };
-  entries: SidebarMenuEntry[];
-  onPick: (entry: SidebarMenuEntry) => void;
+  entries: readonly TMenuEntry[];
+  onPick: (entry: TMenuEntry) => void;
+  onExited: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const frozenEntriesRef = useRef(entries);
   const [adjusted, setAdjusted] = useState(position);
+  if (open) frozenEntriesRef.current = entries;
+  const visibleEntries = open ? entries : frozenEntriesRef.current;
+
+  useEffect(() => {
+    if (open) {
+      menuButtons(ref)[0]?.focus();
+      return;
+    }
+    const activeElement = document.activeElement;
+    if (
+      activeElement instanceof HTMLElement &&
+      ref.current?.contains(activeElement)
+    ) {
+      activeElement.blur();
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (open) return;
+    const timer = window.setTimeout(onExited, 180);
+    return () => window.clearTimeout(timer);
+  }, [open, onExited]);
 
   // Flip above / pull inside the viewport when near an edge.
   useLayoutEffect(() => {
@@ -386,25 +514,65 @@ export function MenuPortal({
       ref={ref}
       data-sidebar-menu
       role="menu"
+      onKeyDown={(event) => {
+        const buttons = menuButtons(ref);
+        const activeElement = document.activeElement;
+        const current =
+          activeElement instanceof HTMLButtonElement
+            ? buttons.indexOf(activeElement)
+            : -1;
+        const moveTo = (index: number) => {
+          event.preventDefault();
+          buttons[index]?.focus();
+        };
+        if (event.key === "ArrowDown") {
+          moveTo((current + 1) % buttons.length);
+        } else if (event.key === "ArrowUp") {
+          moveTo((current - 1 + buttons.length) % buttons.length);
+        } else if (event.key === "Home") {
+          moveTo(0);
+        } else if (event.key === "End") {
+          moveTo(buttons.length - 1);
+        }
+      }}
       style={{ left: adjusted.x, top: adjusted.y }}
-      className="fixed z-[60] max-h-[calc(100dvh-16px)] min-w-44 max-w-[calc(100vw-16px)] overflow-y-auto rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl"
+      className={`fixed z-[140] max-h-[calc(100dvh-16px)] min-w-44 max-w-[calc(100vw-16px)] overflow-y-auto ${open ? "" : "pointer-events-none"}`}
     >
-      {entries.map((entry) => (
-        <button
-          key={`${entry.action}:${entry.label}`}
-          type="button"
-          role="menuitem"
-          onClick={() => onPick(entry)}
-          className={`flex h-7 w-full cursor-pointer items-center rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${
-            entry.danger
-              ? "text-danger hover:bg-danger/10"
-              : "text-fg-muted hover:bg-bg-raised hover:text-fg"
-          }`}
-        >
-          {entry.label}
-        </button>
-      ))}
+      <div
+        onAnimationEnd={(event) => {
+          if (event.animationName === "pop-out" && !open) onExited();
+        }}
+        className={`w-full origin-top-right rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl ${
+          open ? "animate-pop-in" : "animate-pop-out"
+        }`}
+      >
+        {visibleEntries.map((entry) => (
+          <button
+            key={`${entry.action}:${entry.label}`}
+            type="button"
+            role="menuitem"
+            tabIndex={open ? 0 : -1}
+            onClick={() => onPick(entry)}
+            className={`flex h-7 w-full cursor-pointer items-center rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${
+              entry.danger
+                ? "text-danger hover:bg-danger/10"
+                : "text-fg-muted hover:bg-bg-raised hover:text-fg"
+            }`}
+          >
+            {entry.label}
+          </button>
+        ))}
+      </div>
     </div>,
     document.body,
   );
+}
+
+function menuButtons(
+  ref: RefObject<HTMLDivElement | null>,
+): HTMLButtonElement[] {
+  return [
+    ...(ref.current?.querySelectorAll<HTMLButtonElement>("[role=menuitem]") ??
+      []),
+  ];
 }

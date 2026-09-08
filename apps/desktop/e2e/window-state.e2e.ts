@@ -18,6 +18,9 @@ const geometry = () =>
     width: number;
     height: number;
     maximized: boolean;
+    focused: boolean;
+    focusable: boolean;
+    opacity: number;
   }>(`window.catamorphicDesktop.devWindow('get')`);
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 700));
@@ -30,6 +33,19 @@ describe("window state", () => {
     );
     await settle();
     expect((await geometry()).maximized).toBe(true);
+    // In Linux CI the private display isolates physical input; windows must
+    // remain managed for native maximize/restore behavior to be testable.
+    if (
+      process.platform !== "linux" ||
+      process.env.CATAMORPHIC_E2E_VIRTUAL_DISPLAY !== "1"
+    ) {
+      expect(await geometry()).toMatchObject({
+        focused: false,
+        focusable: false,
+        opacity: process.env.CATAMORPHIC_E2E_REVEAL_WINDOWS === "1" ? 1 : 0,
+      });
+    }
+    expect(await app.eval("document.hasFocus()")).toBe(true);
     const { userDataDir } = app;
     await app.kill();
 

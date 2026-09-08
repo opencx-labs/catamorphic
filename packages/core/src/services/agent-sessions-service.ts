@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DB, JsonObject } from "@catamorphic/db";
+import type { DB, Json, JsonObject } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { PluginResolver } from "@catamorphic/plugins";
@@ -19,7 +19,8 @@ import {
   type ToolPermission,
   type TurnOptions,
 } from "@catamorphic/sandbox";
-import { type Kysely, type Selectable, sql } from "kysely";
+import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
+import { z } from "zod";
 import {
   type AgentRef,
   type Identity,
@@ -31,10 +32,24 @@ import {
   DURABLE_WORKFLOW_SKILL_PATH,
   SEED_SKILLS,
 } from "../seeds.js";
+import type { AgentCapabilitiesService } from "./agent-capabilities-service.js";
 import {
+  AgentDefinitionsService,
+  type AgentDelegationPolicy,
   formatProjectAgentId,
   parseProjectAgentId,
 } from "./agent-definitions-service.js";
+import { startAgentLeaseHeartbeat } from "./agent-lease-heartbeat.js";
+import { assertAgentSessionAccess } from "./agent-session-access.js";
+import {
+  type AgentExecution,
+  AgentTurnsService,
+  type PendingSessionTurn,
+  type SessionDeliveryMode,
+  type SessionDeliveryReceipt,
+  type SessionMessageAuthor,
+} from "./agent-turns-service.js";
+import { allocationSandboxProvider } from "./allocation-sandbox-provider.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 import { AccessDeniedError, resolveScope } from "./artifact-scope.js";
 import type {
@@ -44,49 +59,141 @@ import type {
 import type { ConnectionAdmissionService } from "./connection-admission.js";
 import type { ConnectionCapabilityGrantsService } from "./connection-capability-grants.js";
 import { connectionMcpServerName } from "./connection-types.js";
-import type { DevSandboxService } from "./dev-sandbox-service.js";
+import { DbSandboxStore } from "./db-sandbox-store.js";
+import { DevSandboxService } from "./dev-sandbox-service.js";
 import type { DocumentsService } from "./documents-service.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
 import type { ExecutionEnvironmentsService } from "./execution-environments-service.js";
 import type { PluginsService } from "./plugins-service.js";
-import { PROGRAM_READER } from "./program-reader.js";
+import {
+  PROGRAM_READER,
+  readProgramFile,
+  withProgram,
+} from "./program-reader.js";
 import { requireTenantProject } from "./projects-service.js";
 import { type SyncedFileChange, syncSandboxChanges } from "./sandbox-sync.js";
+import {
+  SessionMailboxesService,
+  type SessionMailboxItem,
+} from "./session-mailboxes-service.js";
 import {
   documentsClientFor,
   shipRemoteProject,
   syncRemoteProject,
 } from "./store-sync.js";
 
+interface AgentExecutionRuntime {
+  bindingId: string;
+  environmentName: string;
+  provider?: SandboxProvider;
+  devSandboxes?: DevSandboxService;
+}
+
 type SessionRow = Selectable<DB["agent_sessions"]>;
 type MessageRow = Selectable<DB["agent_messages"]>;
+type SessionVisibility = "latent" | "promoted" | "archived";
+
+export type AgentSessionSource =
+  | "desktop"
+  | "mobile"
+  | "slack"
+  | "claude"
+  | "mcp"
+  | "api";
+
+interface SessionPresentation {
+  visibility: SessionVisibility;
+  archivedAt: Date | null;
+}
+
+interface PreparedSessionCreate {
+  visibility: Exclude<SessionVisibility, "archived">;
+  insert(transaction: Transaction<DB>): Promise<SessionRow>;
+}
 
 export interface AgentSession {
   id: string;
   projectId: string;
   externalUserId: string;
   provider: string;
+  /** Surface that first created this conversation; informational, not auth. */
+  source: AgentSessionSource;
   providerSessionId: string | null;
   sandboxId: string | null;
   environment: string | null;
   allocationId: string | null;
   /** Host-registry key of the agent this session runs on; null = default. */
   agentId: string | null;
+  /** Per-session model override; null = the agent harness's configured default. */
+  model: string | null;
   /** Per-session reasoning-effort override; null = the agent's default. */
   modelEffort: AgentEffort | null;
   title: string | null;
   /** Agent-chosen conversation icon ("<name>:<color>"); null = default. */
   icon: string | null;
   /** Session this one was forked from, if any. */
+  forkedFromSessionId: string | null;
+  /** Immediate parent in the visible session hierarchy, if any. */
   parentSessionId: string | null;
+  /** Per-user navigation state. Archived sessions remain readable. */
+  visibility: SessionVisibility;
+  archivedAt: string | null;
   /** Short agent-published description used to coordinate project peers. */
   activity: string | null;
+  /** Current agent-owned progress list for this conversation. */
+  todos: AgentTodo[];
+  /** Host currently responsible for executing this session's turns. */
+  authorityHostId: string;
+  /** Monotonic fencing token for cross-host delivery. */
+  authorityRevision: number;
+  /** Last time this host observed the current authority's stable snapshot. */
+  authoritySeenAt: string;
+  /** Number of transcript messages imported with the current mirror. */
+  mirrorMessageCount: number;
+  /** A coordinated move blocks local sends while remote authority is claimed. */
+  handoffStatus: "none" | "pending";
+  handoffDestinationHostId: string | null;
+  /** True only on a non-authority host with an expired source lease. */
+  resumable: boolean;
+  /** When the source lease expired, or null while the session is not paused. */
+  pausedAt: string | null;
   /** Runtime state in this host process; never persisted. */
   running: boolean;
+  /** Monotonic server-owned request for the user to open this session. */
+  attentionRevision: number;
+  /** Latest attention request the user has acknowledged by opening it. */
+  attentionSeenRevision: number;
+  /** True when this session should pulse in the user's clients. */
+  attentionRequired: boolean;
   status: "active" | "closed";
   baseCommitSha: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AgentSessionWakeReceipt extends SessionDeliveryReceipt {
+  sessionId: string;
+  sessionCreated: boolean;
+}
+
+export type AgentTodoStatus = "pending" | "in_progress" | "completed";
+
+export interface AgentTodo {
+  /** Stable within this session, generated by the host for new items. */
+  id: string;
+  /** Short action phrase shown in the collapsed list. */
+  title: string;
+  /** Important task detail, collapsed by default in the UI. */
+  description: string;
+  status: AgentTodoStatus;
+}
+
+export interface AgentTodoInput {
+  /** Echo the returned id when editing an existing item; omit for new items. */
+  id?: string;
+  title: string;
+  description: string;
+  status: AgentTodoStatus;
 }
 
 export interface AgentMessage {
@@ -96,11 +203,16 @@ export interface AgentMessage {
   content: string;
   commitSha: string | null;
   metadata: Record<string, unknown> | null;
+  author: SessionMessageAuthor;
+  deliveryMode: SessionDeliveryMode;
+  idempotencyKey: string | null;
   createdAt: string;
 }
 
 export interface AgentSessionDetail extends AgentSession {
+  execution: AgentExecution | null;
   messages: AgentMessage[];
+  pendingTurns: PendingSessionTurn[];
 }
 
 export interface AgentSessionPeer {
@@ -108,10 +220,32 @@ export interface AgentSessionPeer {
   projectId: string;
   title: string | null;
   agentId: string | null;
+  parentSessionId: string | null;
+  forkedFromSessionId: string | null;
+  visibility: SessionVisibility;
+  status: "active" | "closed";
   running: boolean;
   task: string | null;
   activity: string | null;
   updatedAt: string;
+}
+
+export interface AgentSubsession {
+  delegationId: string;
+  routeId: string;
+  task: string;
+  contextMode: "fresh" | "inherit";
+  allowFurtherDelegation: boolean;
+  status: "running" | "completed" | "failed" | "interrupted" | "archived";
+  session: AgentSession;
+}
+
+export interface AgentSessionArchiveImpact {
+  sessionIds: string[];
+  runningSessionIds: string[];
+  activeWatcherCount: number;
+  activeProcessCount: number;
+  requiresConfirmation: boolean;
 }
 
 export class AgentSessionNotFoundError extends Error {
@@ -125,6 +259,38 @@ export class AgentSessionClosedError extends Error {
   constructor(readonly sessionId: string) {
     super(`Agent session '${sessionId}' is closed`);
     this.name = "AgentSessionClosedError";
+  }
+}
+
+export class AgentSessionAuthorityRequiredError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly authorityHostId: string,
+    readonly authorityRevision: number,
+  ) {
+    super(`Agent session '${sessionId}' must be resumed on this host first`);
+    this.name = "AgentSessionAuthorityRequiredError";
+  }
+}
+
+export class AgentSessionHandoffPendingError extends Error {
+  constructor(readonly sessionId: string) {
+    super(`Agent session '${sessionId}' is moving to another server`);
+    this.name = "AgentSessionHandoffPendingError";
+  }
+}
+
+export class AgentSessionArchiveConfirmationRequiredError extends Error {
+  constructor(readonly impact: AgentSessionArchiveImpact) {
+    super("Archiving this session would stop active work");
+    this.name = "AgentSessionArchiveConfirmationRequiredError";
+  }
+}
+
+export class AgentDelegationDeniedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentDelegationDeniedError";
   }
 }
 
@@ -173,6 +339,16 @@ export { parsePorcelain, type SyncedFileChange } from "./sandbox-sync.js";
 
 const tracer = getTracer("@catamorphic/core");
 
+/** Only transport failures, never arbitrary tool output, are retryable here. */
+function connectionFailureKind(message: string): "unavailable" | undefined {
+  if (message.startsWith("Tool ")) return undefined;
+  return /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|fetch failed|network error|socket hang up|stream disconnected|connection closed)\b/i.test(
+    message,
+  )
+    ? "unavailable"
+    : undefined;
+}
+
 /** Shown in place of a turn that died with the process. */
 export const INTERRUPTED_TURN_MESSAGE =
   "This response was interrupted before it finished. Send a new message to continue.";
@@ -187,7 +363,6 @@ const CHECKPOINT_AUTHOR = {
 };
 
 const SESSION_TASK_SUMMARY_LIMIT = 240;
-const PEER_RECENT_WINDOW_MS = 30 * 60 * 1000;
 
 /** Compact, bounded peer context derived from a session's latest request. */
 export function summarizeSessionTask(message: string): string | null {
@@ -210,7 +385,7 @@ function checkpointMessage(userMessage: string): string {
  * replace it (or drop it) with `CatamorphicCoreConfig.standingAgentPrompt`
  * (ADR 0049).
  */
-const WORKFLOW_AUTHORING_SYSTEM_PROMPT = `A Catamorphic project is a folder that can hold any kind of work — documents, notes, data, code, automations (workflows), and apps, in any mix. Read what is actually in the project before assuming what it is about; many projects contain no workflows at all. The rules below apply only when you create or edit workflows: Every workflow is an exported defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps })) value; runs execute ordered boundary and batch scopes against an immutable deployment, with continuation state persisted in Postgres. There is no "use workflow" directive — IO and business operations live in "use step" functions called from boundary run bodies. Cancellation is a host-issued terminal control declared with controls: { cancel: true }, never a BoundaryContext transition. A workflow may subscribe to host-defined trigger kinds with triggers: [trigger("kind", config)] — the kind name must be a string literal, the config a constant expression, both typed by the generated workflows/src/catamorphic-triggers.d.ts; the fired payload becomes the first step's input. Only exported defineBatchStep calls inside defineBatch.process are physically coalesced. For authoring primitives, use the project's established SaaS wrapper when present; otherwise use @catamorphic/workflow. Never create local copies. Consult .agents/skills/writing-workflows/SKILL.md, .agents/skills/durable-workflows/SKILL.md, and .agents/skills/batch-workflows/SKILL.md, when present, before creating or restructuring workflows.`;
+const WORKFLOW_AUTHORING_SYSTEM_PROMPT = `A Catamorphic project is a folder that can hold any kind of work — documents, notes, data, code, automations (workflows), and apps, in any mix. Read what is actually in the project before assuming what it is about; many projects contain no workflows at all. The rules below apply only when you create or edit workflows: Every workflow is an exported defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps })) value; runs execute ordered boundary and batch scopes against an immutable deployment, with continuation state persisted in Postgres. There is no "use workflow" directive — IO and business operations live in "use step" functions called from boundary run bodies. Cancellation is a host-issued terminal control declared with controls: { cancel: true }, never a BoundaryContext transition. A workflow may subscribe to host-defined trigger kinds with triggers: [trigger("kind", config)] — the kind name must be a string literal, the config a constant expression, both typed by the generated workflows/src/catamorphic-triggers.d.ts; the fired payload becomes the first step's input. Declare provider-neutral connections at workflow definition level; roles separately grant workflow, agent, Environment, and connection aliases, and each member explicitly enables unattended execution. Use context.host["catamorphic.sessions"].wake with a stable key and project-agent slug when a member-owned workflow should run an agent and surface its reusable session in desktop and PWA; service-owned enablements cannot create personal notifications. Only exported defineBatchStep calls inside defineBatch.process are physically coalesced. For authoring primitives, use the project's established SaaS wrapper when present; otherwise use @catamorphic/workflow. Never create local copies. Before authoring, load the host workflow-lifecycle skill when offered and choose session lifetime, source visibility, and execution Environment separately. Temporary checks use the available create_watcher/create_github_watcher tool with source passed directly, never files added to the shared working tree. Reusable project definitions belong under workflows/src/. Member-owned enablement does not make source private; use only a host-supported private artifact capability for private saved workflows. Project files may be checkpointed and automatically synced; neither an uncommitted file nor an unpushed branch is a privacy boundary. Saving, sharing, deploying, and enabling are separate outcomes; report only those confirmed by the host. Consult .agents/skills/writing-workflows/SKILL.md, .agents/skills/durable-workflows/SKILL.md, and .agents/skills/batch-workflows/SKILL.md, when present, before creating or restructuring workflows.`;
 
 export function buildAgentSystemPrompt({
   systemPrompt,
@@ -325,7 +500,12 @@ export interface AgentTurnSettledEvent {
   projectId: string;
   sessionId: string;
   messageId: string;
+  turnId?: string;
   status: "completed" | "failed" | "awaiting_input";
+  interrupted?: boolean;
+  retrying?: boolean;
+  /** Present only when a workflow asked the host to surface this turn. */
+  notification?: { title?: string; body?: string };
   changedFiles: string[];
   /** Checkout in which this turn ran. Host-local and never persisted. */
   workingDirectory: string;
@@ -333,6 +513,8 @@ export interface AgentTurnSettledEvent {
 
 export interface NativeAgentCheckout {
   resolve(input: {
+    bindingId?: string;
+    environmentName?: string;
     projectId: string;
     sessionId: string;
   }): Promise<string | undefined> | string | undefined;
@@ -345,10 +527,13 @@ export interface NativeAgentCheckout {
 }
 
 interface AgentSessionsDeps {
+  /** Stable, host-owned identity used to fence cross-host session delivery. */
+  hostId: string;
+  workerNode?: { id: string; token: string };
+  /** Source-host presence window before a mirrored session is shown paused. */
+  authorityLeaseMs?: number;
   projectManager: ProjectManager;
-  sandboxProvider: SandboxProvider;
   codingAgents: CodingAgentRegistry;
-  devSandboxes: DevSandboxService;
   /**
    * Resolve a project's directory on the WorkerNode filesystem, for `native`
    * topology agents (Claude Code, Codex, runtimes that operate on
@@ -381,6 +566,7 @@ interface AgentSessionsDeps {
    * The host's standing agent prompt: `undefined` = framework default,
    * string = replacement, `false` = none (ADR 0049).
    */
+  agentCapabilities?: AgentCapabilitiesService;
   standingAgentPrompt?: string | false;
   /**
    * The project's MCP tool roster (tool name → workflow name) at its
@@ -404,6 +590,19 @@ interface AgentSessionsDeps {
   storeSync?: { documents: DocumentsService };
 }
 
+export interface ArchiveSessionResourcesHandler {
+  impact(input: {
+    identity: Identity;
+    projectId: string;
+    sessionIds: readonly string[];
+  }): Promise<{ activeProcessCount: number }>;
+  stop(input: {
+    identity: Identity;
+    projectId: string;
+    sessionIds: readonly string[];
+  }): Promise<void>;
+}
+
 /**
  * Orchestrates coding-agent sessions across the host's registry of agents:
  *
@@ -418,8 +617,12 @@ interface AgentSessionsDeps {
  * 3. The conversation persists to `agent_sessions` / `agent_messages`.
  */
 export class AgentSessionsService {
+  readonly turns: AgentTurnsService;
+  readonly mailboxes: SessionMailboxesService;
+  readonly hostId: string;
+  private readonly workerNode?: { id: string; token: string };
+  readonly authorityLeaseMs: number;
   private readonly projectManager: ProjectManager;
-  private readonly sandboxProvider: SandboxProvider;
   private readonly codingAgents: CodingAgentRegistry;
   private readonly nativeAgentCheckout?: NativeAgentCheckout;
   private readonly executionEnvironments: ExecutionEnvironmentsService;
@@ -429,9 +632,9 @@ export class AgentSessionsService {
   private readonly connectionMcpUrl?: AgentSessionsDeps["connectionMcpUrl"];
   private readonly plugins?: PluginsService;
   private readonly pluginResolver?: PluginResolver;
-  private readonly devSandboxes: DevSandboxService;
   private readonly onTurnSettled?: AgentSessionsDeps["onTurnSettled"];
   private readonly seedFiles?: Record<string, string>;
+  private readonly agentCapabilities?: AgentCapabilitiesService;
   private readonly standingAgentPrompt?: string | false;
   private readonly mcpToolNames?: AgentSessionsDeps["mcpToolNames"];
   private readonly appPolicies?: AppPoliciesService;
@@ -445,18 +648,137 @@ export class AgentSessionsService {
   private readonly runningTurns = new Set<string>();
   /** Sessions whose in-flight turn was interrupted by the user. */
   private readonly interruptedTurns = new Set<string>();
-  /** Scheduled automatic retries (transient provider failures). */
-  private readonly autoRetries = new Map<
-    string,
-    { timer: ReturnType<typeof setTimeout>; attempt: number }
-  >();
+  private readonly drainers = new Map<string, Promise<void>>();
+  private readonly turnWorkerId = `agent-sessions:${randomUUID()}`;
+  private archiveResources?: ArchiveSessionResourcesHandler;
+
+  /** Hosts start this alongside their workflow worker, after migrations. */
+  startWorker(input: {
+    resolveIdentity: (args: {
+      tenantId: string;
+      projectId: string;
+      externalUserId: string;
+    }) => Promise<Identity | null>;
+    pollIntervalMs?: number;
+  }): { stop(): Promise<void> } {
+    let stopped = false;
+    let polling: Promise<void> | undefined;
+    const poll = async () => {
+      const candidates = await this.db
+        .selectFrom("agent_sessions")
+        .innerJoin("projects", "projects.id", "agent_sessions.project_id")
+        .select([
+          "agent_sessions.id",
+          "agent_sessions.project_id",
+          "agent_sessions.external_user_id",
+          "projects.tenant_id",
+        ])
+        .where("agent_sessions.authority_host_id", "=", this.hostId)
+        .$if(this.workerNode !== undefined, (query) =>
+          query.where(({ exists, selectFrom }) =>
+            exists(
+              selectFrom("execution_allocations")
+                .select("id")
+                .whereRef("id", "=", "agent_sessions.allocation_id")
+                .where("worker_node_id", "=", this.workerNode?.id ?? ""),
+            ),
+          ),
+        )
+        .where("agent_sessions.status", "=", "active")
+        .where(({ exists, selectFrom }) =>
+          exists(
+            selectFrom("agent_turns")
+              .select("agent_turns.id")
+              .whereRef("agent_turns.session_id", "=", "agent_sessions.id")
+              .where(({ or, and, eb }) =>
+                or([
+                  and([
+                    eb("agent_turns.status", "=", "queued"),
+                    eb("agent_turns.available_at", "<=", sql<Date>`now()`),
+                  ]),
+                  and([
+                    eb("agent_turns.status", "=", "running"),
+                    eb("agent_turns.lease_expires_at", "<=", sql<Date>`now()`),
+                  ]),
+                ]),
+              ),
+          ),
+        )
+        .execute();
+      for (const candidate of candidates) {
+        if (stopped) return;
+        try {
+          const identity = await input.resolveIdentity({
+            tenantId: candidate.tenant_id,
+            projectId: candidate.project_id,
+            externalUserId: candidate.external_user_id,
+          });
+          if (!identity) continue;
+          // Recovery belongs to the worker, never to a client's GET request.
+          const pending = await this.turns.listPending({
+            sessionId: candidate.id,
+          });
+          if (pending.some((turn) => turn.status === "running")) {
+            const messages = await this.db
+              .selectFrom("agent_messages")
+              .selectAll()
+              .where("session_id", "=", candidate.id)
+              .orderBy("seq", "asc")
+              .execute();
+            await this.settleOrphanedTurns(identity, candidate.id, messages);
+          }
+          // A provider can ignore interruption after losing its lease. Surface
+          // its durable failure even while that local iterator is still stuck,
+          // but never dispatch overlapping work through the same provider.
+          if (this.drainers.has(candidate.id)) continue;
+          void this.scheduleDrain(
+            identity,
+            candidate.project_id,
+            candidate.id,
+          ).catch((error) =>
+            console.warn("[catamorphic] Agent queue dispatch failed", error),
+          );
+        } catch (error) {
+          console.warn(
+            `[catamorphic] Agent recovery failed for ${candidate.id}`,
+            error,
+          );
+        }
+      }
+      if (!stopped) await this.reconcileDelegations(input.resolveIdentity);
+    };
+    const tick = () => {
+      if (stopped || polling) return;
+      polling = poll()
+        .catch((error) =>
+          console.warn("[catamorphic] Agent queue recovery failed", error),
+        )
+        .finally(() => {
+          polling = undefined;
+        });
+    };
+    const timer = setInterval(tick, input.pollIntervalMs ?? 1_000);
+    timer.unref();
+    tick();
+    return {
+      stop: async () => {
+        stopped = true;
+        clearInterval(timer);
+        await polling;
+      },
+    };
+  }
 
   constructor(
     private readonly db: Kysely<DB>,
     deps: AgentSessionsDeps,
   ) {
+    this.turns = new AgentTurnsService(db);
+    this.hostId = deps.hostId;
+    this.workerNode = deps.workerNode;
+    this.authorityLeaseMs = deps.authorityLeaseMs ?? 90_000;
+    this.mailboxes = new SessionMailboxesService(db, deps.hostId);
     this.projectManager = deps.projectManager;
-    this.sandboxProvider = deps.sandboxProvider;
     this.codingAgents = deps.codingAgents;
     this.nativeAgentCheckout = deps.nativeAgentCheckout;
     this.executionEnvironments = deps.executionEnvironments;
@@ -464,15 +786,20 @@ export class AgentSessionsService {
     this.connectionAdmission = deps.connectionAdmission;
     this.connectionGrants = deps.connectionGrants;
     this.connectionMcpUrl = deps.connectionMcpUrl;
-    this.devSandboxes = deps.devSandboxes;
     this.plugins = deps.plugins;
     this.pluginResolver = deps.pluginResolver;
     this.onTurnSettled = deps.onTurnSettled;
     this.seedFiles = deps.seedFiles;
     this.standingAgentPrompt = deps.standingAgentPrompt;
+    this.agentCapabilities = deps.agentCapabilities;
     this.mcpToolNames = deps.mcpToolNames;
     this.appPolicies = deps.appPolicies;
     this.storeSync = deps.storeSync;
+  }
+
+  /** Late-bound because WatchersService itself depends on this service. */
+  setArchiveResourcesHandler(handler: ArchiveSessionResourcesHandler): void {
+    this.archiveResources = handler;
   }
 
   async list(
@@ -509,8 +836,22 @@ export class AgentSessionsService {
       .executeTakeFirstOrThrow()
       .then((r) => Number(r.count));
 
+    const presentations = await this.presentations(
+      identity,
+      rows.map((row) => row.id),
+    );
+    const running = await this.runningSessionIds(rows.map((row) => row.id));
+
     return {
-      items: rows.map((row) => mapSession(row, this.runningTurns.has(row.id))),
+      items: rows.map((row) =>
+        mapSession(
+          row,
+          running.has(row.id),
+          this.hostId,
+          this.authorityLeaseMs,
+          presentations.get(row.id),
+        ),
+      ),
       total,
     };
   }
@@ -530,29 +871,22 @@ export class AgentSessionsService {
     let query = this.db
       .selectFrom("agent_sessions")
       .where("project_id", "=", projectId)
-      .where("id", "!=", ownSessionId)
-      .where("status", "=", "active");
+      .where("id", "!=", ownSessionId);
     if (!isBuilder(identity, projectId)) {
       const agentIds = this.coveredAgentIds(identity, projectId);
       if (agentIds.length === 0) return [];
       query = query.where("agent_id", "in", agentIds);
     }
-    const runningIds = [...this.runningTurns.keys()];
-    const recentSince = new Date(Date.now() - PEER_RECENT_WINDOW_MS);
-    query = query.where((expression) =>
-      runningIds.length > 0
-        ? expression.or([
-            expression("updated_at", ">=", recentSince),
-            expression("id", "in", runningIds),
-          ])
-        : expression("updated_at", ">=", recentSince),
-    );
     const rows = await query
       .selectAll()
       .orderBy("updated_at", "desc")
-      .limit(20)
+      .limit(50)
       .execute();
     if (rows.length === 0) return [];
+    const presentations = await this.presentations(
+      identity,
+      rows.map((row) => row.id),
+    );
 
     const latestRequests = await this.db
       .selectFrom("agent_messages")
@@ -568,6 +902,7 @@ export class AgentSessionsService {
       .orderBy("seq", "desc")
       .execute();
     const taskBySession = new Map<string, string | null>();
+    const running = await this.runningSessionIds(rows.map((row) => row.id));
     for (const message of latestRequests) {
       if (!taskBySession.has(message.session_id)) {
         taskBySession.set(
@@ -582,7 +917,11 @@ export class AgentSessionsService {
       projectId: row.project_id,
       title: row.title,
       agentId: row.agent_id,
-      running: this.runningTurns.has(row.id),
+      parentSessionId: row.parent_session_id,
+      forkedFromSessionId: row.forked_from_session_id,
+      visibility: presentations.get(row.id)?.visibility ?? "promoted",
+      status: row.status as "active" | "closed",
+      running: running.has(row.id),
       task: taskBySession.get(row.id) ?? null,
       activity: row.activity,
       updatedAt: row.updated_at.toISOString(),
@@ -607,23 +946,164 @@ export class AgentSessionsService {
       .execute();
   }
 
+  /**
+   * Atomically replace a session's agent-owned progress list. Deliberately
+   * absent from the public HTTP routes: hosts expose this only through a
+   * trusted, session-bound agent tool, while clients receive read-only state.
+   */
+  async replaceTodos(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: readonly AgentTodoInput[],
+  ): Promise<AgentTodo[]> {
+    const session = await this.requireSession(identity, projectId, sessionId);
+    if (input.length > 50) {
+      throw new Error("A todo list can contain at most 50 items");
+    }
+    const existing = agentTodos(session.todos);
+    const existingIds = new Set(existing.map((item) => item.id));
+    const usedIds = new Set<string>();
+    const todos = input.map((item) => {
+      const title = item.title.replace(/\s+/g, " ").trim();
+      const description = item.description.trim();
+      if (!title) throw new Error("Every todo needs a title");
+      if (title.length > 200) {
+        throw new Error("Todo titles must be 200 characters or fewer");
+      }
+      if (!description) throw new Error("Every todo needs a description");
+      if (description.length > 4_000) {
+        throw new Error("Todo descriptions must be 4,000 characters or fewer");
+      }
+      if (
+        item.status !== "pending" &&
+        item.status !== "in_progress" &&
+        item.status !== "completed"
+      ) {
+        throw new Error(`Unknown todo status: ${String(item.status)}`);
+      }
+      const requestedId = item.id?.trim();
+      if (requestedId && !existingIds.has(requestedId)) {
+        throw new Error(`Todo '${requestedId}' does not exist in this session`);
+      }
+      const id = requestedId || randomUUID();
+      if (usedIds.has(id)) throw new Error(`Duplicate todo id: ${id}`);
+      usedIds.add(id);
+      return { id, title, description, status: item.status };
+    });
+    await this.db
+      .updateTable("agent_sessions")
+      .set({
+        todos: agentTodosJson(todos),
+        updated_at: new Date(),
+      })
+      .where("id", "=", sessionId)
+      .execute();
+    return todos;
+  }
+
   async get(
     identity: Identity,
     projectId: string,
     sessionId: string,
   ): Promise<AgentSessionDetail> {
-    const row = await this.requireSession(identity, projectId, sessionId);
-    const messages = await this.db
-      .selectFrom("agent_messages")
-      .where("session_id", "=", sessionId)
-      .selectAll()
-      .orderBy("seq", "asc")
-      .execute();
-    const settled = await this.settleOrphanedTurns(sessionId, messages);
+    await this.requireSession(identity, projectId, sessionId);
+    // Progress and transcript must describe one database snapshot. Otherwise
+    // a settling turn can return an old placeholder with "completed" execution,
+    // causing clients to stop polling before they receive the final reply.
+    const { row, messages, execution, pendingTurns } = await this.db
+      .transaction()
+      .setIsolationLevel("repeatable read")
+      .execute(async (trx) => {
+        const row = await trx
+          .selectFrom("agent_sessions")
+          .selectAll()
+          .where("id", "=", sessionId)
+          .executeTakeFirstOrThrow();
+        const messages = await trx
+          .selectFrom("agent_messages")
+          .selectAll()
+          .where("session_id", "=", sessionId)
+          .orderBy("seq", "asc")
+          .execute();
+        const turns = new AgentTurnsService(trx);
+        return {
+          row,
+          messages,
+          execution: await turns.execution({ sessionId }),
+          pendingTurns: await turns.listPendingMessages({ sessionId }),
+        };
+      });
+    const presentation = (await this.presentations(identity, [sessionId])).get(
+      sessionId,
+    );
     return {
-      ...mapSession(row, this.runningTurns.has(row.id)),
-      messages: settled.map(mapMessage),
+      ...mapSession(
+        row,
+        execution?.status === "running",
+        this.hostId,
+        this.authorityLeaseMs,
+        presentation,
+      ),
+      messages: messages.map(mapMessage),
+      execution,
+      pendingTurns,
     };
+  }
+
+  private async runningSessionIds(sessionIds: string[]): Promise<Set<string>> {
+    if (!sessionIds.length) return new Set();
+    const rows = await this.db
+      .selectFrom("agent_turns")
+      .select("session_id")
+      .distinct()
+      .where("session_id", "in", sessionIds)
+      .where("status", "=", "running")
+      .execute();
+    return new Set(rows.map((row) => row.session_id));
+  }
+
+  async updateQueuedTurn(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    turnId: string,
+    input: { content?: string; metadata?: JsonObject; held?: boolean },
+  ): Promise<boolean> {
+    await this.requireSession(identity, projectId, sessionId);
+    const updated = await this.turns.updateQueued({
+      turnId,
+      sessionId,
+      ...input,
+    });
+    if (updated && input.held === false) {
+      void this.scheduleDrain(identity, projectId, sessionId).catch(() => {});
+    }
+    return updated;
+  }
+
+  async cancelQueuedTurn(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    turnId: string,
+  ): Promise<boolean> {
+    await this.requireSession(identity, projectId, sessionId);
+    return this.turns.cancelQueued({ turnId, sessionId });
+  }
+
+  async promoteQueuedTurn(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    turnId: string,
+  ): Promise<boolean> {
+    await this.requireSession(identity, projectId, sessionId);
+    const promoted = await this.turns.promoteQueued({ turnId, sessionId });
+    if (!promoted) return false;
+    await this.interrupt(identity, projectId, sessionId);
+    void this.scheduleDrain(identity, projectId, sessionId).catch(() => {});
+    return true;
   }
 
   /**
@@ -633,41 +1113,172 @@ export class AgentSessionsService {
    * that never stops.
    */
   private async settleOrphanedTurns(
+    identity: Identity,
     sessionId: string,
     messages: MessageRow[],
   ): Promise<MessageRow[]> {
-    if (this.runningTurns.has(sessionId)) return messages;
-    const orphaned = messages.filter(
-      (message) =>
-        message.role === "assistant" &&
-        (message.metadata as JsonObject | null)?.status === "in_progress",
-    );
-    if (orphaned.length === 0) return messages;
-
-    const updated = new Map<string, MessageRow>();
-    for (const message of orphaned) {
-      const row = await this.db
-        .updateTable("agent_messages")
-        .set({
-          content: INTERRUPTED_TURN_MESSAGE,
-          metadata: {
-            ...(message.metadata as JsonObject | null),
-            status: "failed",
-            interrupted: true,
-          },
-        })
-        .where("id", "=", message.id)
-        // The turn may have finished (or been settled by a concurrent read)
-        // between our select and this update — only settle a still-pending row.
+    const updated = await this.db.transaction().execute(async (trx) => {
+      const session = await trx
+        .selectFrom("agent_sessions")
+        .select(["authority_host_id", "project_id", "external_user_id"])
+        .where("id", "=", sessionId)
+        .forUpdate()
+        .executeTakeFirstOrThrow();
+      if (session.authority_host_id !== this.hostId) return [];
+      const active = await trx
+        .selectFrom("agent_turns")
+        .selectAll()
+        .select(sql<boolean>`lease_expires_at > now()`.as("lease_live"))
+        .where("session_id", "=", sessionId)
+        .where("status", "=", "running")
+        .forUpdate()
+        .execute();
+      if (active.some((turn) => turn.lease_live)) return [];
+      // A worker can die between claiming the inbox entry and creating its
+      // first reply. Give that failure the same visible recovery path.
+      for (const turn of active) {
+        if (turn.result_message_id) continue;
+        const reply = await trx
+          .insertInto("agent_messages")
+          .values({
+            session_id: sessionId,
+            role: "assistant",
+            content: "",
+            author_kind: "agent",
+            author_payload: { kind: "agent", sessionId, agentId: null },
+            delivery_mode: "message_only",
+            metadata: { status: "in_progress" },
+          })
+          .returning("id")
+          .executeTakeFirstOrThrow();
+        await trx
+          .updateTable("agent_turns")
+          .set({ result_message_id: reply.id })
+          .where("id", "=", turn.id)
+          .execute();
+      }
+      const orphaned = await trx
+        .selectFrom("agent_messages")
+        .selectAll()
+        .where("session_id", "=", sessionId)
+        .where("role", "=", "assistant")
         .where(sql`metadata ->> 'status'`, "=", "in_progress")
-        .returningAll()
+        .execute();
+      // A crash after the final reply committed but before queue settlement
+      // must not convert a known completion into an uncertain failed attempt.
+      for (const turn of active) {
+        if (!turn.result_message_id) continue;
+        const result = await trx
+          .selectFrom("agent_messages")
+          .select("metadata")
+          .where("id", "=", turn.result_message_id)
+          .executeTakeFirst();
+        const status = (result?.metadata as JsonObject | null)?.status;
+        if (status === "completed" || status === "awaiting_input") {
+          await trx
+            .updateTable("agent_turns")
+            .set({
+              status: "completed",
+              error: null,
+              completed_at: new Date(),
+              lease_owner: null,
+              lease_token: null,
+              lease_expires_at: null,
+            })
+            .where("id", "=", turn.id)
+            .execute();
+        }
+      }
+      const interrupted = active.some(
+        (turn) => turn.cancellation_requested_at !== null,
+      );
+      await trx
+        .updateTable("agent_turns")
+        .set({
+          status: "failed",
+          error: "The host stopped while this turn was running",
+          completed_at: new Date(),
+          lease_owner: null,
+          lease_token: null,
+          lease_expires_at: null,
+          updated_at: new Date(),
+        })
+        .where("session_id", "=", sessionId)
+        .where("status", "=", "running")
+        .execute();
+      const rows: MessageRow[] = [];
+      for (const message of orphaned) {
+        const row = await trx
+          .updateTable("agent_messages")
+          .set({
+            content: interrupted ? "Interrupted." : INTERRUPTED_TURN_MESSAGE,
+            metadata: {
+              ...(message.metadata as JsonObject | null),
+              status: "failed",
+              ...(interrupted
+                ? { interrupted: true }
+                : { unexpectedStop: true }),
+            },
+          })
+          .where("id", "=", message.id)
+          .where(sql`metadata ->> 'status'`, "=", "in_progress")
+          .returningAll()
+          .executeTakeFirst();
+        if (row) rows.push(row);
+      }
+      if (rows.length && !interrupted)
+        await trx
+          .updateTable("agent_sessions")
+          .set(({ ref }) => ({
+            attention_revision: sql`${ref("attention_revision")} + 1`,
+          }))
+          .where("id", "=", sessionId)
+          .execute();
+      return rows;
+    });
+    if (!updated.length) return messages;
+    const session = await this.db
+      .selectFrom("agent_sessions")
+      .innerJoin("projects", "projects.id", "agent_sessions.project_id")
+      .select([
+        "projects.tenant_id",
+        "agent_sessions.project_id",
+        "agent_sessions.external_user_id",
+      ])
+      .where("agent_sessions.id", "=", sessionId)
+      .executeTakeFirstOrThrow();
+    for (const row of updated) {
+      await this.settleDelegation({
+        identity,
+        projectId: session.project_id,
+        sessionId,
+        resultMessageId: row.id,
+        status: "failed",
+        content: row.content,
+      });
+      const turn = await this.db
+        .selectFrom("agent_turns")
+        .select("id")
+        .where("result_message_id", "=", row.id)
         .executeTakeFirst();
-      if (row) updated.set(row.id, row);
+      await this.onTurnSettled?.({
+        identity: {
+          tenantId: session.tenant_id,
+          externalUserId: session.external_user_id,
+        },
+        projectId: session.project_id,
+        sessionId,
+        messageId: row.id,
+        turnId: turn?.id,
+        status: "failed",
+        interrupted: (row.metadata as JsonObject | null)?.interrupted === true,
+        changedFiles: [],
+        workingDirectory: "",
+      });
     }
-    if (updated.size === 0) return messages;
-    return messages.map((message) => updated.get(message.id) ?? message);
+    const byId = new Map(updated.map((row) => [row.id, row]));
+    return messages.map((message) => byId.get(message.id) ?? message);
   }
-
   async create(
     identity: Identity,
     projectId: string,
@@ -676,6 +1287,9 @@ export class AgentSessionsService {
       agentId?: string;
       effort?: AgentEffort;
       environment?: string;
+      source?: AgentSessionSource;
+      parentSessionId?: string;
+      title?: string;
     } = {},
   ): Promise<AgentSession> {
     return withSpan(
@@ -700,13 +1314,105 @@ export class AgentSessionsService {
       agentId?: string;
       effort?: AgentEffort;
       environment?: string;
+      title?: string;
+      wakeKey?: string;
+      source?: AgentSessionSource;
+      parentSessionId?: string;
+      forkedFromSessionId?: string;
+      visibility?: Exclude<SessionVisibility, "archived">;
+      allowFurtherDelegation?: boolean;
+      transaction?: Transaction<DB>;
+      prepared?: PreparedSessionCreate;
     },
   ): Promise<AgentSession> {
+    const prepared =
+      input.prepared ??
+      (await this.prepareSessionCreate(identity, projectId, input));
+    const row = input.transaction
+      ? await prepared.insert(input.transaction)
+      : await this.db.transaction().execute(prepared.insert);
+
+    return mapSession(row, false, this.hostId, this.authorityLeaseMs, {
+      visibility: prepared.visibility,
+      archivedAt: null,
+    });
+  }
+
+  private async prepareSessionCreate(
+    identity: Identity,
+    projectId: string,
+    input: {
+      systemPrompt?: string;
+      agentId?: string;
+      effort?: AgentEffort;
+      environment?: string;
+      title?: string;
+      wakeKey?: string;
+      source?: AgentSessionSource;
+      parentSessionId?: string;
+      forkedFromSessionId?: string;
+      visibility?: Exclude<SessionVisibility, "archived">;
+      allowFurtherDelegation?: boolean;
+    },
+  ): Promise<PreparedSessionCreate> {
     await this.requireProject(identity, projectId);
-    this.assertAgentAccess(identity, projectId, input.agentId ?? null);
+    let parent: SessionRow | undefined;
+    if (input.parentSessionId) {
+      parent = await this.requireSession(
+        identity,
+        projectId,
+        input.parentSessionId,
+      );
+      if (parent.status !== "active") {
+        throw new AgentSessionClosedError(input.parentSessionId);
+      }
+    }
+    let inheritedAgentId: string | undefined;
+    if (parent) {
+      const parentAgentId = parent.agent_id;
+      if (
+        parentAgentId &&
+        (await this.resolveAgent(parentAgentId, projectId).catch(
+          () => undefined,
+        ))
+      ) {
+        try {
+          this.assertAgentAccess(identity, projectId, parentAgentId);
+          inheritedAgentId = parentAgentId;
+        } catch {
+          // A parent's former agent can become unavailable under a new host
+          // policy. Manual children then use the current project default.
+        }
+      }
+      inheritedAgentId ??= this.codingAgents.defaultAgentId(projectId);
+    }
+    const selectedAgentId =
+      input.agentId ??
+      inheritedAgentId ??
+      (await this.catalog({ identity, projectId })).defaultAgentId;
+    this.assertAgentAccess(identity, projectId, selectedAgentId ?? null);
     // Validate up front so a bad agent id fails at create, not first send.
-    const agent = this.resolveAgent(input.agentId ?? null, projectId);
+    const agent = await this.resolveAgent(selectedAgentId ?? null, projectId);
     const sessionId = randomUUID();
+    const relationshipPrompt = input.parentSessionId
+      ? [
+          `You are working in Catamorphic subsession ${sessionId}.`,
+          `Your immediate parent is session ${input.parentSessionId}.`,
+          "Use the ordinary project-session tools to list, read, and message related sessions.",
+        ].join("\n")
+      : null;
+    const systemPrompt = [
+      relationshipPrompt,
+      input.systemPrompt,
+      this.delegationPrompt(
+        identity,
+        projectId,
+        agent,
+        input.allowFurtherDelegation,
+      ),
+    ]
+      .filter((part): part is string => Boolean(part))
+      .join("\n\n");
     const admitted = await this.executionEnvironments.admit({
       identity,
       projectId,
@@ -733,42 +1439,174 @@ export class AgentSessionsService {
           })
         : [];
 
-    const row = await this.db.transaction().execute(async (transaction) => {
-      const allocation = await this.executionAllocations.create({
-        identity,
-        projectId,
-        environmentName: admitted.environmentName,
-        workloadKind: "agent",
-        rootWorkloadId: sessionId,
-        policy: {
-          binding: admitted.binding,
-          requirements: admitted.effectiveRequirements,
-          connections,
-        },
-        transaction,
-      });
-      return transaction
-        .insertInto("agent_sessions")
-        .values({
-          id: sessionId,
-          project_id: projectId,
-          external_user_id: identity.externalUserId,
-          provider: agent.provider.name,
-          provider_session_id: null,
-          agent_id: input.agentId ?? null,
-          model_effort: input.effort ?? null,
-          system_prompt: input.systemPrompt ?? null,
-          sandbox_id: null,
-          allocation_id: allocation.id,
-          environment_name: admitted.environmentName,
-          status: "active",
-          base_commit_sha: null,
-        })
-        .returningAll()
-        .executeTakeFirstOrThrow();
-    });
+    const visibility = input.visibility ?? "promoted";
+    return {
+      visibility,
+      insert: async (transaction: Transaction<DB>) => {
+        const allocation = await this.executionAllocations.create({
+          identity,
+          projectId,
+          environmentName: admitted.environmentName,
+          workloadKind: "agent",
+          rootWorkloadId: sessionId,
+          workerNodeId: admitted.runtime.workerNodeId,
+          policy: {
+            binding: admitted.binding,
+            requirements: admitted.effectiveRequirements,
+            connections,
+          },
+          transaction,
+        });
+        const session = await transaction
+          .insertInto("agent_sessions")
+          .values({
+            id: sessionId,
+            project_id: projectId,
+            external_user_id: identity.externalUserId,
+            provider: agent.provider.name,
+            source: input.source ?? "api",
+            provider_session_id: null,
+            agent_id: selectedAgentId ?? null,
+            model: null,
+            model_effort: input.effort ?? null,
+            system_prompt: systemPrompt || null,
+            sandbox_id: null,
+            allocation_id: allocation.id,
+            environment_name: admitted.environmentName,
+            status: "active",
+            title: input.title ?? null,
+            wake_key: input.wakeKey ?? null,
+            parent_session_id: input.parentSessionId ?? null,
+            forked_from_session_id: input.forkedFromSessionId ?? null,
+            base_commit_sha: null,
+            authority_host_id: this.hostId,
+            authority_revision: 1,
+          })
+          .returningAll()
+          .executeTakeFirstOrThrow();
+        await transaction
+          .insertInto("agent_session_views")
+          .values({
+            session_id: sessionId,
+            tenant_id: identity.tenantId,
+            external_user_id: identity.externalUserId,
+            visibility,
+            previous_visibility: visibility,
+          })
+          .execute();
+        return session;
+      },
+    };
+  }
 
-    return mapSession(row);
+  /**
+   * Create or reuse one stable session for a workflow and queue a turn in it.
+   * The queued message asks clients to surface the session only after the turn
+   * settles, so a scheduled agent never steals focus while it is working.
+   */
+  async wake(
+    identity: Identity,
+    projectId: string,
+    input: {
+      wakeKey: string;
+      content: string;
+      workflowName: string;
+      runId: string;
+      agentSlug?: string;
+      environment?: string;
+      title?: string;
+      mode?: "next_turn" | "interrupt";
+      notification?: { title?: string; body?: string };
+    },
+  ): Promise<AgentSessionWakeReceipt> {
+    await this.requireProject(identity, projectId);
+    const agentId = input.agentSlug
+      ? formatProjectAgentId(projectId, input.agentSlug)
+      : null;
+    const findExisting = () =>
+      this.db
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("project_id", "=", projectId)
+        .where("external_user_id", "=", identity.externalUserId)
+        .where("wake_key", "=", input.wakeKey)
+        .where("status", "=", "active")
+        .executeTakeFirst();
+
+    let row = await findExisting();
+    let sessionCreated = false;
+    if (!row) {
+      try {
+        const created = await this.createInner(identity, projectId, {
+          ...(agentId ? { agentId } : {}),
+          ...(input.environment ? { environment: input.environment } : {}),
+          ...(input.title ? { title: input.title } : {}),
+          wakeKey: input.wakeKey,
+        });
+        row = await this.db
+          .selectFrom("agent_sessions")
+          .selectAll()
+          .where("id", "=", created.id)
+          .executeTakeFirstOrThrow();
+        sessionCreated = true;
+      } catch (error) {
+        // Concurrent retries may race the partial unique wake-key index. The
+        // winning session is the one both calls must use; any other failure
+        // remains visible.
+        row = await findExisting();
+        if (!row) throw error;
+      }
+    }
+    await this.requireSession(identity, projectId, row.id);
+    if (agentId && row.agent_id !== agentId) {
+      throw new Error(
+        `Wake key '${input.wakeKey}' already belongs to a different agent`,
+      );
+    }
+    const receipt = await this.deliver(identity, projectId, row.id, {
+      content: input.content,
+      author: {
+        kind: "workflow",
+        runId: input.runId,
+        workflowName: input.workflowName,
+      },
+      mode: input.mode ?? "next_turn",
+      idempotencyKey: `workflow-wake:${input.runId}:${input.wakeKey}`,
+      metadata: {
+        workflowNotification: {
+          ...(input.notification?.title
+            ? { title: input.notification.title }
+            : {}),
+          ...(input.notification?.body
+            ? { body: input.notification.body }
+            : {}),
+        },
+      },
+    });
+    return { ...receipt, sessionId: row.id, sessionCreated };
+  }
+
+  /** Acknowledgement-by-interaction shared by desktop and PWA clients. */
+  async acknowledgeAttention(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+  ): Promise<AgentSession> {
+    await this.requireSession(identity, projectId, sessionId);
+    const row = await this.db
+      .updateTable("agent_sessions")
+      .set(({ ref }) => ({
+        attention_seen_revision: ref("attention_revision"),
+      }))
+      .where("id", "=", sessionId)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    return mapSession(
+      row,
+      this.runningTurns.has(sessionId),
+      this.hostId,
+      this.authorityLeaseMs,
+    );
   }
 
   /**
@@ -791,6 +1629,7 @@ export class AgentSessionsService {
       title?: string | null;
       icon?: string | null;
       provider?: string;
+      source?: AgentSessionSource;
       /**
        * The source session's PROJECT-agent slug, when it ran one: project
        * agent definitions are committed files that sync between backends,
@@ -798,11 +1637,16 @@ export class AgentSessionsService {
        * it), the fork continues on the SAME agent instead of the default.
        */
       agentSlug?: string;
+      todos: AgentTodo[];
+      authority: { hostId: string; revision: number };
       messages: Array<{
         id: string;
         role: "user" | "assistant" | "system";
         content: string;
         metadata: Record<string, unknown> | null;
+        author: SessionMessageAuthor;
+        deliveryMode: SessionDeliveryMode;
+        idempotencyKey: string | null;
         createdAt: string;
       }>;
     },
@@ -840,12 +1684,20 @@ export class AgentSessionsService {
         if (existing && this.runningTurns.has(sessionId)) {
           throw new AgentTurnInProgressError(sessionId);
         }
+        if (
+          existing &&
+          existing.authority_host_id !== "unassigned" &&
+          (existing.authority_host_id !== input.authority.hostId ||
+            Number(existing.authority_revision) > input.authority.revision)
+        ) {
+          throw new SessionMirrorDivergedError(sessionId);
+        }
         if (existing && !existing.allocation_id) {
           throw new Error("Agent session has no Environment Allocation");
         }
         const mirrorAgent = existing
           ? undefined
-          : this.resolveAgent(agentId, projectId);
+          : await this.resolveAgent(agentId, projectId);
         const mirrorAdmission = mirrorAgent
           ? await this.executionEnvironments.admit({
               identity,
@@ -878,6 +1730,30 @@ export class AgentSessionsService {
         // the appends must not interleave with a turn starting here (the
         // append order IS the transcript order, via `seq`).
         const row = await this.db.transaction().execute(async (trx) => {
+          const current = await trx
+            .selectFrom("agent_sessions")
+            .selectAll()
+            .where("id", "=", sessionId)
+            .forUpdate()
+            .executeTakeFirst();
+          if (
+            current &&
+            (current.project_id !== projectId ||
+              current.external_user_id !== identity.externalUserId)
+          ) {
+            throw new AccessDeniedError();
+          }
+          if (
+            current &&
+            current.authority_host_id !== "unassigned" &&
+            (current.authority_host_id !== input.authority.hostId ||
+              Number(current.authority_revision) > input.authority.revision)
+          ) {
+            throw new SessionMirrorDivergedError(sessionId);
+          }
+          if (current && !current.allocation_id) {
+            throw new Error("Agent session has no Environment Allocation");
+          }
           const held = await trx
             .selectFrom("agent_messages")
             .select(["id"])
@@ -889,28 +1765,35 @@ export class AgentSessionsService {
             throw new SessionMirrorDivergedError(sessionId);
           }
 
-          const allocation = mirrorAdmission
-            ? await this.executionAllocations.create({
-                identity,
-                projectId,
-                environmentName: mirrorAdmission.environmentName,
-                workloadKind: "agent",
-                rootWorkloadId: sessionId,
-                policy: {
-                  binding: mirrorAdmission.binding,
-                  requirements: mirrorAdmission.effectiveRequirements,
-                  connections: mirrorConnections,
-                },
-                transaction: trx,
-              })
-            : undefined;
-          const session = existing
+          const allocation =
+            !current && mirrorAdmission
+              ? await this.executionAllocations.create({
+                  identity,
+                  projectId,
+                  environmentName: mirrorAdmission.environmentName,
+                  workloadKind: "agent",
+                  rootWorkloadId: sessionId,
+                  workerNodeId: mirrorAdmission.runtime.workerNodeId,
+                  policy: {
+                    binding: mirrorAdmission.binding,
+                    requirements: mirrorAdmission.effectiveRequirements,
+                    connections: mirrorConnections,
+                  },
+                  transaction: trx,
+                })
+              : undefined;
+          const session = current
             ? await trx
                 .updateTable("agent_sessions")
                 .set({
-                  title: input.title ?? existing.title,
-                  icon: input.icon ?? existing.icon,
+                  title: input.title ?? current.title,
+                  icon: input.icon ?? current.icon,
+                  todos: agentTodosJson(input.todos),
                   updated_at: new Date(),
+                  authority_host_id: input.authority.hostId,
+                  authority_revision: input.authority.revision,
+                  authority_seen_at: new Date(),
+                  mirror_message_count: input.messages.length,
                 })
                 .where("id", "=", sessionId)
                 .returningAll()
@@ -922,8 +1805,10 @@ export class AgentSessionsService {
                   project_id: projectId,
                   external_user_id: identity.externalUserId,
                   provider: input.provider ?? "mirror",
+                  source: input.source ?? "api",
                   provider_session_id: null,
                   agent_id: agentId,
+                  model: null,
                   model_effort: null,
                   system_prompt: null,
                   sandbox_id: null,
@@ -933,6 +1818,11 @@ export class AgentSessionsService {
                   base_commit_sha: null,
                   title: input.title ?? null,
                   icon: input.icon ?? null,
+                  todos: agentTodosJson(input.todos),
+                  authority_host_id: input.authority.hostId,
+                  authority_revision: input.authority.revision,
+                  authority_seen_at: new Date(),
+                  mirror_message_count: input.messages.length,
                 })
                 .returningAll()
                 .executeTakeFirstOrThrow();
@@ -949,6 +1839,10 @@ export class AgentSessionsService {
               role: message.role,
               content: message.content,
               metadata: message.metadata as JsonObject | null,
+              author_kind: message.author.kind,
+              author_payload: JSON.parse(JSON.stringify(message.author)),
+              delivery_mode: message.deliveryMode,
+              idempotency_key: message.idempotencyKey,
               commit_sha: null,
               created_at: new Date(message.createdAt),
             }));
@@ -957,7 +1851,7 @@ export class AgentSessionsService {
           }
           return session;
         });
-        return mapSession(row);
+        return mapSession(row, false, this.hostId, this.authorityLeaseMs);
       },
     );
   }
@@ -1013,6 +1907,9 @@ export class AgentSessionsService {
         session_id: sessionId,
         role: "system",
         content: `Continued on ${host}. This copy is history now.`,
+        author_kind: "system",
+        author_payload: { kind: "system", code: "mirror_fork" },
+        delivery_mode: "message_only",
         metadata: {
           marker: {
             kind: "mirror_fork",
@@ -1027,8 +1924,8 @@ export class AgentSessionsService {
 
   /**
    * Re-point a session at another registered agent and/or change its
-   * reasoning-effort override (`effort: null` clears the override back to
-   * the agent's default). Switching agents drops the provider anchor; the
+   * model and reasoning-effort overrides (`null` clears an override back to
+   * the agent's default). Switching agents drops incompatible overrides and the provider anchor; the
    * next turn re-anchors against the new provider (same working state, but
    * the new provider starts from its own fresh context).
    */
@@ -1038,6 +1935,7 @@ export class AgentSessionsService {
     sessionId: string,
     patch: {
       agentId?: string;
+      model?: string | null;
       effort?: AgentEffort | null;
       environment?: string;
     },
@@ -1054,6 +1952,7 @@ export class AgentSessionsService {
       agent_id: string;
       provider: string;
       provider_session_id: null;
+      model: string | null;
       model_effort: string | null;
       allocation_id: string;
       environment_name: string;
@@ -1063,13 +1962,14 @@ export class AgentSessionsService {
 
     if (patch.agentId !== undefined && patch.agentId !== session.agent_id) {
       this.assertAgentAccess(identity, projectId, patch.agentId);
-      const agent = this.codingAgents.get(patch.agentId);
+      const agent = await this.resolveAgent(patch.agentId, projectId);
       if (!agent) throw new AgentNotConfiguredError(patch.agentId);
       // Let the outgoing provider release its in-memory state.
       if (session.provider_session_id) {
-        const previous = this.codingAgents.get(
-          session.agent_id ?? this.codingAgents.defaultAgentId(projectId) ?? "",
-        );
+        const previous = await this.resolveAgent(
+          session.agent_id,
+          projectId,
+        ).catch(() => undefined);
         await previous?.provider
           .dispose({
             providerSessionId: session.provider_session_id,
@@ -1083,6 +1983,10 @@ export class AgentSessionsService {
       updates.agent_id = patch.agentId;
       updates.provider = agent.provider.name;
       updates.provider_session_id = null;
+      updates.model = null;
+    }
+    if (patch.model !== undefined) {
+      updates.model = patch.model;
     }
     if (patch.effort !== undefined) {
       updates.model_effort = patch.effort;
@@ -1092,7 +1996,7 @@ export class AgentSessionsService {
       if (!previousAllocationId) {
         throw new Error("Agent session has no Environment Allocation");
       }
-      const nextAgent = this.resolveAgent(
+      const nextAgent = await this.resolveAgent(
         patch.agentId ?? session.agent_id,
         projectId,
       );
@@ -1135,6 +2039,7 @@ export class AgentSessionsService {
             environmentName: admission.environmentName,
             workloadKind: "agent",
             rootWorkloadId: sessionId,
+            workerNodeId: admission.runtime.workerNodeId,
             policy: {
               binding: admission.binding,
               requirements: admission.effectiveRequirements,
@@ -1158,7 +2063,8 @@ export class AgentSessionsService {
       });
     }
 
-    if (Object.keys(updates).length === 0) return mapSession(session);
+    if (Object.keys(updates).length === 0)
+      return mapSession(session, false, this.hostId, this.authorityLeaseMs);
 
     const row =
       reallocatedRow ??
@@ -1185,6 +2091,12 @@ export class AgentSessionsService {
         marker: { kind: "effort_change", effort: updates.model_effort },
       });
     }
+    if (updates.model !== undefined && updates.agent_id === undefined) {
+      markers.push({
+        content: `Model set to ${updates.model ?? "default"}`,
+        marker: { kind: "model_change", model: updates.model },
+      });
+    }
     for (const entry of markers) {
       await this.db
         .insertInto("agent_messages")
@@ -1192,11 +2104,14 @@ export class AgentSessionsService {
           session_id: sessionId,
           role: "system",
           content: entry.content,
+          author_kind: "system",
+          author_payload: { kind: "system", code: "session_configuration" },
+          delivery_mode: "message_only",
           metadata: { marker: entry.marker },
         })
         .execute();
     }
-    return mapSession(row);
+    return mapSession(row, false, this.hostId, this.authorityLeaseMs);
   }
 
   /**
@@ -1217,7 +2132,7 @@ export class AgentSessionsService {
       .where("id", "=", sessionId)
       .returningAll()
       .executeTakeFirstOrThrow();
-    return mapSession(row);
+    return mapSession(row, false, this.hostId, this.authorityLeaseMs);
   }
 
   /**
@@ -1267,7 +2182,7 @@ export class AgentSessionsService {
       session.title
         ? `the conversation "${session.title}"`
         : "another conversation"
-    }: it starts from a copy of that transcript up to the fork point. The user is exploring a tangent here — the original conversation continues separately, so don't refer to this one as if it were the original.`;
+    }: it starts from a copy of that transcript up to the fork point. Its immediate parent is Catamorphic session ${sessionId}; use the ordinary project-session tools to read or message it. The user is exploring a tangent here; the original conversation continues separately, so don't refer to this one as if it were the original.`;
     const forkSystemPrompt = [session.system_prompt, forkNote]
       .filter((part): part is string => Boolean(part))
       .join("\n\n");
@@ -1278,8 +2193,10 @@ export class AgentSessionsService {
           project_id: projectId,
           external_user_id: identity.externalUserId,
           provider: session.provider,
+          source: session.source,
           provider_session_id: null,
           agent_id: session.agent_id,
+          model: session.model,
           model_effort: session.model_effort,
           system_prompt: forkSystemPrompt,
           sandbox_id: null,
@@ -1287,10 +2204,23 @@ export class AgentSessionsService {
           base_commit_sha: session.base_commit_sha,
           icon: session.icon,
           parent_session_id: sessionId,
+          forked_from_session_id: sessionId,
           title: forkTitle,
+          authority_host_id: this.hostId,
+          authority_revision: 1,
         })
         .returningAll()
         .executeTakeFirstOrThrow();
+      await trx
+        .insertInto("agent_session_views")
+        .values({
+          session_id: fork.id,
+          tenant_id: identity.tenantId,
+          external_user_id: identity.externalUserId,
+          visibility: "promoted",
+          previous_visibility: "promoted",
+        })
+        .execute();
       for (const message of copied) {
         await trx
           .insertInto("agent_messages")
@@ -1300,6 +2230,10 @@ export class AgentSessionsService {
             content: message.content,
             commit_sha: message.commit_sha,
             metadata: message.metadata,
+            author_kind: message.author_kind,
+            author_payload: message.author_payload,
+            delivery_mode: message.delivery_mode,
+            idempotency_key: message.idempotency_key,
           })
           .execute();
       }
@@ -1313,6 +2247,9 @@ export class AgentSessionsService {
           content: session.title
             ? `Forked from "${session.title}"`
             : "Forked from another conversation",
+          author_kind: "system",
+          author_payload: { kind: "system", code: "session_fork" },
+          delivery_mode: "message_only",
           metadata: {
             marker: { kind: "fork", parentSessionId: sessionId },
           },
@@ -1320,7 +2257,309 @@ export class AgentSessionsService {
         .execute();
       return fork;
     });
-    return mapSession(row);
+    return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+  }
+
+  /** Create a durable child session through one of the source agent's grants. */
+  async createSubsession(
+    identity: Identity,
+    projectId: string,
+    sourceSessionId: string,
+    input: {
+      routeId?: string;
+      agentId?: string;
+      task: string;
+      contextMode?: "fresh" | "inherit";
+      title?: string;
+    },
+  ): Promise<AgentSubsession> {
+    const source = await this.requireSession(
+      identity,
+      projectId,
+      sourceSessionId,
+    );
+    if (source.status !== "active") {
+      throw new AgentSessionClosedError(sourceSessionId);
+    }
+    const sourceAgentId =
+      source.agent_id ?? this.codingAgents.defaultAgentId(projectId);
+    const sourceAgent = await this.resolveAgent(
+      sourceAgentId ?? null,
+      projectId,
+    );
+    const policy = delegationPolicy(sourceAgent.delegation);
+    if (!policy.enabled) {
+      throw new AgentDelegationDeniedError(
+        "This agent is not allowed to create subsessions",
+      );
+    }
+    const routeId = input.routeId ?? policy.routes[0]?.id;
+    const route = policy.routes.find((candidate) => candidate.id === routeId);
+    if (!route) {
+      throw new AgentDelegationDeniedError(
+        routeId
+          ? `Delegation route '${routeId}' is not allowed`
+          : "This agent has no delegation routes",
+      );
+    }
+    const targetAgentId = resolveDelegationTarget({
+      target: route.target,
+      requestedAgentId: input.agentId,
+      sourceAgentId,
+      projectId,
+    });
+    this.assertAgentAccess(identity, projectId, targetAgentId);
+    const targetAgent = await this.resolveAgent(targetAgentId, projectId);
+    if (
+      route.target === "*" &&
+      privilegeRank(targetAgent.privilege) >
+        privilegeRank(sourceAgent.privilege)
+    ) {
+      throw new AgentDelegationDeniedError(
+        "A wildcard delegation route cannot grant a more privileged agent",
+      );
+    }
+
+    const task = input.task.trim();
+    if (!task) throw new Error("A subsession task is required");
+    const contextMode = input.contextMode ?? "fresh";
+    const childInput = {
+      agentId: targetAgentId,
+      parentSessionId: sourceSessionId,
+      visibility: "latent" as const,
+      title: input.title ?? summarizeSessionTask(task) ?? "Subsession",
+      systemPrompt:
+        "Complete the delegated task independently. Your settled result is delivered to the parent automatically.",
+      allowFurtherDelegation: route.allowFurtherDelegation,
+    };
+    const preparedChild = await this.prepareSessionCreate(
+      identity,
+      projectId,
+      childInput,
+    );
+    const created = await this.db.transaction().execute(async (transaction) => {
+      const lockedSource = await transaction
+        .selectFrom("agent_sessions")
+        .select(["id", "status"])
+        .where("id", "=", sourceSessionId)
+        .where("project_id", "=", projectId)
+        .forUpdate()
+        .executeTakeFirstOrThrow();
+      if (lockedSource.status !== "active") {
+        throw new AgentSessionClosedError(sourceSessionId);
+      }
+      const incoming = await transaction
+        .selectFrom("agent_delegations")
+        .select("allow_further_delegation")
+        .where("target_session_id", "=", sourceSessionId)
+        .executeTakeFirst();
+      if (incoming && !incoming.allow_further_delegation) {
+        throw new AgentDelegationDeniedError(
+          "This subsession is not allowed to delegate further",
+        );
+      }
+      const active = await transaction
+        .selectFrom("agent_delegations")
+        .select(({ fn }) => fn.countAll<number>().as("count"))
+        .where("source_session_id", "=", sourceSessionId)
+        .where("status", "=", "running")
+        .executeTakeFirstOrThrow();
+      if (Number(active.count) >= policy.maxConcurrentChildren) {
+        throw new AgentDelegationDeniedError(
+          `This agent already has ${policy.maxConcurrentChildren} active subsessions`,
+        );
+      }
+
+      const child = await this.createInner(identity, projectId, {
+        ...childInput,
+        prepared: preparedChild,
+        transaction,
+      });
+      if (contextMode === "inherit") {
+        const history = await transaction
+          .selectFrom("agent_messages")
+          .selectAll()
+          .where("session_id", "=", sourceSessionId)
+          .where(sql`coalesce(metadata ->> 'status', '')`, "!=", "in_progress")
+          .orderBy("seq", "asc")
+          .execute();
+        for (const message of history) {
+          await transaction
+            .insertInto("agent_messages")
+            .values({
+              session_id: child.id,
+              role: message.role,
+              content: message.content,
+              commit_sha: message.commit_sha,
+              metadata: message.metadata,
+              author_kind: message.author_kind,
+              author_payload: message.author_payload,
+              delivery_mode: message.delivery_mode,
+              idempotency_key: null,
+            })
+            .execute();
+        }
+      }
+
+      const delegation = await transaction
+        .insertInto("agent_delegations")
+        .values({
+          tenant_id: identity.tenantId,
+          project_id: projectId,
+          source_session_id: sourceSessionId,
+          target_session_id: child.id,
+          route_id: route.id,
+          task,
+          context_mode: contextMode,
+          allow_further_delegation: route.allowFurtherDelegation,
+        })
+        .returningAll()
+        .executeTakeFirstOrThrow();
+      const receipt = await this.turns.deliver({
+        sessionId: child.id,
+        content: task,
+        author: {
+          kind: "agent",
+          sessionId: sourceSessionId,
+          agentId: sourceAgentId ?? null,
+        },
+        mode: "next_turn",
+        idempotencyKey: `delegation:${delegation.id}:task`,
+        transaction,
+      });
+      return { child, delegation, receipt };
+    });
+    if (created.receipt.turnId) {
+      void this.scheduleDrain(identity, projectId, created.child.id).catch(
+        () => {
+          // The durable child turn remains inspectable if execution fails.
+        },
+      );
+    }
+    const { child, delegation } = created;
+    return {
+      delegationId: delegation.id,
+      routeId: delegation.route_id,
+      task: delegation.task,
+      contextMode,
+      allowFurtherDelegation: delegation.allow_further_delegation,
+      status: "running",
+      session: child,
+    };
+  }
+
+  async listSubsessions(
+    identity: Identity,
+    projectId: string,
+    sourceSessionId: string,
+  ): Promise<AgentSubsession[]> {
+    await this.requireSession(identity, projectId, sourceSessionId);
+    const delegations = await this.db
+      .selectFrom("agent_delegations")
+      .selectAll()
+      .where("agent_delegations.source_session_id", "=", sourceSessionId)
+      .orderBy("agent_delegations.created_at", "desc")
+      .execute();
+    if (delegations.length === 0) return [];
+    const sessions = await this.db
+      .selectFrom("agent_sessions")
+      .selectAll()
+      .where(
+        "id",
+        "in",
+        delegations.map((delegation) => delegation.target_session_id),
+      )
+      .execute();
+    const sessionsById = new Map(
+      sessions.map((session) => [session.id, session]),
+    );
+    const presentations = await this.presentations(
+      identity,
+      sessions.map((session) => session.id),
+    );
+    const running = await this.runningSessionIds(
+      sessions.map((session) => session.id),
+    );
+    return delegations.flatMap((delegation) => {
+      const session = sessionsById.get(delegation.target_session_id);
+      if (!session) return [];
+      return [
+        {
+          delegationId: delegation.id,
+          routeId: delegation.route_id,
+          task: delegation.task,
+          contextMode: delegation.context_mode as "fresh" | "inherit",
+          allowFurtherDelegation: delegation.allow_further_delegation,
+          status: delegation.status as AgentSubsession["status"],
+          session: mapSession(
+            session,
+            running.has(session.id),
+            this.hostId,
+            this.authorityLeaseMs,
+            presentations.get(session.id),
+          ),
+        },
+      ];
+    });
+  }
+
+  async waitForSubsessions(
+    identity: Identity,
+    projectId: string,
+    sourceSessionId: string,
+    input: { sessionIds?: string[]; timeoutMs?: number } = {},
+  ): Promise<AgentSubsession[]> {
+    const timeoutMs = Math.min(Math.max(input.timeoutMs ?? 30_000, 0), 60_000);
+    const deadline = Date.now() + timeoutMs;
+    while (true) {
+      const children = await this.listSubsessions(
+        identity,
+        projectId,
+        sourceSessionId,
+      );
+      const selected = input.sessionIds?.length
+        ? children.filter((child) =>
+            input.sessionIds?.includes(child.session.id),
+          )
+        : children;
+      if (
+        selected.length === 0 ||
+        selected.some((child) => child.status !== "running") ||
+        Date.now() >= deadline
+      ) {
+        return selected;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+
+  async interruptSubsession(
+    identity: Identity,
+    projectId: string,
+    sourceSessionId: string,
+    targetSessionId: string,
+  ): Promise<void> {
+    await this.requireSession(identity, projectId, sourceSessionId);
+    const delegation = await this.db
+      .selectFrom("agent_delegations")
+      .select("id")
+      .where("source_session_id", "=", sourceSessionId)
+      .where("target_session_id", "=", targetSessionId)
+      .executeTakeFirst();
+    if (!delegation) {
+      throw new AgentDelegationDeniedError(
+        "That session is not a direct subsession of this session",
+      );
+    }
+    await this.interrupt(identity, projectId, targetSessionId, {
+      notifyParent: false,
+    });
+    await this.db
+      .updateTable("agent_delegations")
+      .set({ status: "interrupted", completed_at: new Date() })
+      .where("id", "=", delegation.id)
+      .where("status", "=", "running")
+      .execute();
   }
 
   async sendMessage(
@@ -1328,7 +2567,10 @@ export class AgentSessionsService {
     projectId: string,
     sessionId: string,
     message: string,
-    input: { attachments?: AgentAttachment[] } = {},
+    input: {
+      attachments?: AgentAttachment[];
+      deliveryMode?: Exclude<SessionDeliveryMode, "message_only">;
+    } = {},
   ): Promise<AgentMessage> {
     return withSpan(
       {
@@ -1349,24 +2591,554 @@ export class AgentSessionsService {
     projectId: string,
     sessionId: string,
     message: string,
-    input: { attachments?: AgentAttachment[] } = {},
+    input: {
+      attachments?: AgentAttachment[];
+      deliveryMode?: Exclude<SessionDeliveryMode, "message_only">;
+    } = {},
   ): Promise<AgentMessage> {
+    const receipt = await this.enqueueMessage(
+      identity,
+      projectId,
+      sessionId,
+      message,
+      input,
+    );
+    if (!receipt.turnId) throw new Error("A queued send must create a turn");
+    await this.scheduleDrain(identity, projectId, sessionId);
+    const turn = await this.db
+      .selectFrom("agent_turns")
+      .innerJoin(
+        "agent_messages",
+        "agent_messages.id",
+        "agent_turns.result_message_id",
+      )
+      .selectAll("agent_messages")
+      .where("agent_turns.id", "=", receipt.turnId)
+      .executeTakeFirstOrThrow();
+    return mapMessage(turn);
+  }
+
+  /**
+   * Accept a human message into the durable session inbox and return as soon
+   * as it is persisted. Execution is owned by the session drainer, not the
+   * HTTP request or renderer that submitted it.
+   */
+  async enqueueMessage(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    message: string,
+    input: {
+      attachments?: AgentAttachment[];
+      deliveryMode?: Exclude<SessionDeliveryMode, "message_only">;
+      idempotencyKey?: string;
+    } = {},
+  ): Promise<SessionDeliveryReceipt> {
     const session = await this.requireSession(identity, projectId, sessionId);
     if (session.status !== "active") {
       throw new AgentSessionClosedError(sessionId);
     }
-    // A fresh user message supersedes any scheduled automatic retry.
-    this.cancelAutoRetry(sessionId);
-    // Marked running BEFORE the placeholder row exists, so a concurrent
-    // get() can never mistake this turn's placeholder for an orphan.
-    this.runningTurns.add(sessionId);
-    try {
-      return await this.runTurn(identity, projectId, sessionId, message, {
-        session,
-        attachments: input.attachments,
+    if (session.handoff_status === "pending") {
+      throw new AgentSessionHandoffPendingError(sessionId);
+    }
+    if (
+      session.authority_host_id !== "unassigned" &&
+      session.authority_host_id !== this.hostId
+    ) {
+      throw new AgentSessionAuthorityRequiredError(
+        sessionId,
+        session.authority_host_id,
+        Number(session.authority_revision),
+      );
+    }
+    await this.claimLocalAuthority(session);
+    const activeTurn = (await this.turns.listPending({ sessionId })).find(
+      (turn) => turn.status === "running",
+    );
+    const deliveryMode =
+      input.deliveryMode ??
+      (session.parent_session_id && activeTurn ? "interrupt" : "next_turn");
+    const receipt = await this.db.transaction().execute(async (transaction) => {
+      const current = await transaction
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("id", "=", sessionId)
+        .forUpdate()
+        .executeTakeFirstOrThrow();
+      if (current.status !== "active") {
+        throw new AgentSessionClosedError(sessionId);
+      }
+      if (current.handoff_status === "pending") {
+        throw new AgentSessionHandoffPendingError(sessionId);
+      }
+      if (current.authority_host_id !== this.hostId) {
+        throw new AgentSessionAuthorityRequiredError(
+          sessionId,
+          current.authority_host_id,
+          Number(current.authority_revision),
+        );
+      }
+      return this.turns.deliver({
+        sessionId,
+        content: message,
+        author: { kind: "user", externalUserId: identity.externalUserId },
+        mode: deliveryMode,
+        idempotencyKey: input.idempotencyKey,
+        metadata: input.attachments?.length
+          ? {
+              attachments: JSON.parse(JSON.stringify(input.attachments)),
+            }
+          : undefined,
+        transaction,
       });
-    } finally {
-      this.runningTurns.delete(sessionId);
+    });
+    if (!receipt.turnId) throw new Error("A queued send must create a turn");
+    if (receipt.created) {
+      await this.cancelAutoRetry(sessionId);
+      if (session.parent_session_id)
+        await this.promoteSession(identity, sessionId);
+      if (deliveryMode === "interrupt" && activeTurn) {
+        await this.interrupt(identity, projectId, sessionId, {
+          byExternalUserId: identity.externalUserId,
+          expectedTurnId: activeTurn.id,
+        });
+      }
+    }
+    void this.scheduleDrain(identity, projectId, sessionId).catch(() => {
+      // The accepted turn remains durably failed or queued for inspection.
+    });
+    return receipt;
+  }
+
+  /** Deliver an attributed inbox message and optionally schedule an agent turn. */
+  async deliver(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: {
+      content: string;
+      author: SessionMessageAuthor;
+      mode: SessionDeliveryMode;
+      idempotencyKey?: string;
+      metadata?: JsonObject;
+    },
+  ): Promise<SessionDeliveryReceipt> {
+    const session = await this.requireSession(identity, projectId, sessionId);
+    if (session.status !== "active") {
+      throw new AgentSessionClosedError(sessionId);
+    }
+    if (
+      session.authority_host_id !== "unassigned" &&
+      session.authority_host_id !== this.hostId
+    ) {
+      return this.mailboxes.enqueue(identity, projectId, sessionId, {
+        destination: {
+          hostId: session.authority_host_id,
+          revision: Number(session.authority_revision),
+        },
+        ...input,
+      });
+    }
+    const activeTurn = (await this.turns.listPending({ sessionId })).find(
+      (turn) => turn.status === "running",
+    );
+    const receipt = await this.turns.deliver({ sessionId, ...input });
+    if (receipt.created && input.mode === "interrupt" && activeTurn) {
+      await this.interrupt(identity, projectId, sessionId, {
+        expectedTurnId: activeTurn.id,
+      });
+    }
+    if (receipt.turnId) {
+      void this.scheduleDrain(identity, projectId, sessionId).catch(() => {
+        // The durable row remains queued or failed and is visible to operators.
+      });
+    }
+    return receipt;
+  }
+
+  /** Import one item fetched by this authoritative host, idempotently. */
+  async importMailbox(
+    identity: Identity,
+    projectId: string,
+    item: SessionMailboxItem,
+  ): Promise<SessionDeliveryReceipt> {
+    const session = await this.requireSession(
+      identity,
+      projectId,
+      item.sessionId,
+    );
+    if (session.status !== "active") {
+      throw new AgentSessionClosedError(item.sessionId);
+    }
+    if (
+      session.authority_host_id !== this.hostId ||
+      Number(session.authority_revision) !== item.authorityRevision ||
+      item.destinationHostId !== this.hostId
+    ) {
+      throw new SessionMirrorDivergedError(item.sessionId);
+    }
+    const activeTurn = (
+      await this.turns.listPending({ sessionId: item.sessionId })
+    ).find((turn) => turn.status === "running");
+    const receipt = await this.turns.deliver({
+      sessionId: item.sessionId,
+      content: item.content,
+      author: item.author,
+      mode: item.mode,
+      idempotencyKey: `mailbox:${item.sourceHostId}:${item.id}`,
+      ...(item.metadata ? { metadata: item.metadata } : {}),
+    });
+    if (receipt.created && item.mode === "interrupt" && activeTurn) {
+      await this.interrupt(identity, projectId, item.sessionId, {
+        expectedTurnId: activeTurn.id,
+      });
+    }
+    if (receipt.turnId) {
+      void this.scheduleDrain(identity, projectId, item.sessionId).catch(
+        () => {},
+      );
+    }
+    return receipt;
+  }
+
+  /** Explicitly claim a mirrored session for this host with a fencing CAS. */
+  async resume(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: { expectedAuthorityRevision: number },
+  ): Promise<AgentSession> {
+    const session = await this.requireSession(identity, projectId, sessionId);
+    if (session.status !== "active") {
+      throw new AgentSessionClosedError(sessionId);
+    }
+    if (session.authority_host_id === this.hostId) {
+      return mapSession(session, false, this.hostId, this.authorityLeaseMs);
+    }
+    if (
+      Number(session.authority_revision) !== input.expectedAuthorityRevision
+    ) {
+      throw new SessionMirrorDivergedError(sessionId);
+    }
+    await this.claimLocalAuthority(session);
+    const claimed = await this.requireSession(identity, projectId, sessionId);
+    return mapSession(claimed, false, this.hostId, this.authorityLeaseMs);
+  }
+
+  /** Persist the local send barrier before a coordinated desktop handoff. */
+  async beginHandoff(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: { destinationHostId: string },
+  ): Promise<AgentSession> {
+    await this.requireSession(identity, projectId, sessionId);
+    const row = await this.db.transaction().execute(async (transaction) => {
+      const session = await transaction
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("id", "=", sessionId)
+        .forUpdate()
+        .executeTakeFirstOrThrow();
+      if (session.status !== "active") {
+        throw new AgentSessionClosedError(sessionId);
+      }
+      if (session.authority_host_id !== this.hostId) {
+        throw new AgentSessionAuthorityRequiredError(
+          sessionId,
+          session.authority_host_id,
+          Number(session.authority_revision),
+        );
+      }
+      if (this.runningTurns.has(sessionId)) {
+        throw new AgentTurnInProgressError(sessionId);
+      }
+      const pending = await transaction
+        .selectFrom("agent_turns")
+        .select("id")
+        .where("session_id", "=", sessionId)
+        .where("status", "in", ["queued", "held", "running"])
+        .executeTakeFirst();
+      if (pending) throw new AgentTurnInProgressError(sessionId);
+      return transaction
+        .updateTable("agent_sessions")
+        .set({
+          handoff_status: "pending",
+          handoff_destination_host_id: input.destinationHostId,
+          updated_at: new Date(),
+        })
+        .where("id", "=", sessionId)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+    });
+    return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+  }
+
+  async cancelHandoff(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+  ): Promise<AgentSession> {
+    const session = await this.requireSession(identity, projectId, sessionId);
+    if (session.handoff_status === "none") {
+      return mapSession(session, false, this.hostId, this.authorityLeaseMs);
+    }
+    if (session.authority_host_id !== this.hostId) {
+      throw new SessionMirrorDivergedError(sessionId);
+    }
+    const row = await this.db
+      .updateTable("agent_sessions")
+      .set({
+        handoff_status: "none",
+        handoff_destination_host_id: null,
+        updated_at: new Date(),
+      })
+      .where("id", "=", session.id)
+      .where("authority_host_id", "=", this.hostId)
+      .where("authority_revision", "=", session.authority_revision)
+      .where("handoff_status", "=", "pending")
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) throw new SessionMirrorDivergedError(sessionId);
+    return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+  }
+
+  /** Record a successful remote claim; replay is idempotent after a crash. */
+  async completeHandoff(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: { destinationHostId: string; authorityRevision: number },
+  ): Promise<AgentSession> {
+    const session = await this.requireSession(identity, projectId, sessionId);
+    if (
+      session.authority_host_id === input.destinationHostId &&
+      Number(session.authority_revision) === input.authorityRevision
+    ) {
+      return mapSession(session, false, this.hostId, this.authorityLeaseMs);
+    }
+    if (
+      session.handoff_status !== "pending" ||
+      session.authority_host_id !== this.hostId ||
+      input.authorityRevision <= Number(session.authority_revision)
+    ) {
+      throw new SessionMirrorDivergedError(sessionId);
+    }
+    const row = await this.db
+      .updateTable("agent_sessions")
+      .set({
+        authority_host_id: input.destinationHostId,
+        authority_revision: input.authorityRevision,
+        authority_seen_at: new Date(),
+        handoff_status: "none",
+        handoff_destination_host_id: null,
+        updated_at: new Date(),
+      })
+      .where("id", "=", session.id)
+      .where("authority_host_id", "=", this.hostId)
+      .where("authority_revision", "=", session.authority_revision)
+      .where("handoff_status", "=", "pending")
+      .returningAll()
+      .executeTakeFirst();
+    if (!row) throw new SessionMirrorDivergedError(sessionId);
+    return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+  }
+
+  private async claimLocalAuthority(session: SessionRow): Promise<void> {
+    if (session.authority_host_id === this.hostId) return;
+    const claimed = await this.db
+      .updateTable("agent_sessions")
+      .set({
+        authority_host_id: this.hostId,
+        authority_revision:
+          session.authority_host_id === "unassigned"
+            ? Number(session.authority_revision)
+            : Number(session.authority_revision) + 1,
+        authority_seen_at: new Date(),
+        handoff_status: "none",
+        handoff_destination_host_id: null,
+        updated_at: new Date(),
+      })
+      .where("id", "=", session.id)
+      .where("authority_host_id", "=", session.authority_host_id)
+      .where("authority_revision", "=", session.authority_revision)
+      .returning("id")
+      .executeTakeFirst();
+    if (claimed) return;
+    const current = await this.db
+      .selectFrom("agent_sessions")
+      .selectAll()
+      .where("id", "=", session.id)
+      .executeTakeFirstOrThrow();
+    if (current.authority_host_id === this.hostId) return;
+    throw new SessionMirrorDivergedError(session.id);
+  }
+
+  private scheduleDrain(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+  ): Promise<void> {
+    const previous = this.drainers.get(sessionId) ?? Promise.resolve();
+    const current = previous
+      .catch(() => {})
+      .then(() => this.drainSession(identity, projectId, sessionId));
+    this.drainers.set(sessionId, current);
+    const cleanup = () => {
+      if (this.drainers.get(sessionId) === current) {
+        this.drainers.delete(sessionId);
+      }
+    };
+    void current.then(cleanup, cleanup);
+    return current;
+  }
+
+  private async drainSession(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+  ): Promise<void> {
+    while (true) {
+      const session = await this.requireSession(identity, projectId, sessionId);
+      if (
+        session.status !== "active" ||
+        session.handoff_status !== "none" ||
+        session.authority_host_id !== this.hostId
+      )
+        return;
+      const presentation = (
+        await this.presentations(identity, [sessionId])
+      ).get(sessionId);
+      if (presentation?.visibility === "archived") return;
+      const allocation = session.allocation_id
+        ? await this.executionAllocations.get({
+            identity,
+            allocationId: session.allocation_id,
+          })
+        : undefined;
+      if (allocation?.workerNodeId !== (this.workerNode?.id ?? null)) return;
+      const turn = await this.turns.claimNextForSession({
+        workerId: this.turnWorkerId,
+        sessionId,
+        workerNode: this.workerNode,
+      });
+      if (!turn) return;
+      if (!turn.leaseToken) throw new Error("Claimed turn has no lease token");
+      const message = await this.turns.messageForTurn({ turnId: turn.id });
+      const attachments = message.metadata?.attachments as
+        | AgentAttachment[]
+        | undefined;
+      this.runningTurns.add(sessionId);
+      const leaseToken = turn.leaseToken;
+      let leaseLost = false;
+      const stopAfterLeaseLoss = () => {
+        if (leaseLost) return;
+        leaseLost = true;
+        try {
+          void this.resolveAgent(session.agent_id, projectId)
+            .then((agent) =>
+              agent.provider.interrupt?.(
+                session.provider_session_id ?? sessionId,
+              ),
+            )
+            .catch((error) =>
+              console.warn(
+                "Could not interrupt the lost execution lease",
+                error,
+              ),
+            );
+        } catch (error) {
+          console.warn(
+            "[catamorphic] Could not interrupt the lost execution lease",
+            error,
+          );
+        }
+      };
+      const heartbeat = startAgentLeaseHeartbeat({
+        renew: async () => {
+          if (this.workerNode) {
+            const owned = await this.db
+              .selectFrom("worker_nodes")
+              .select("id")
+              .where("id", "=", this.workerNode.id)
+              .where("lease_token", "=", this.workerNode.token)
+              .where("enabled", "=", true)
+              .where("lease_expires_at", ">", sql<Date>`now()`)
+              .executeTakeFirst();
+            if (!owned) return false;
+          }
+          const owned = await this.turns.renew({ turnId: turn.id, leaseToken });
+          if (owned) await this.honorCancellation({ session, turnId: turn.id });
+          return owned;
+        },
+        onLost: stopAfterLeaseLoss,
+        onError: (error) =>
+          console.warn("[catamorphic] Agent lease renewal failed", error),
+      });
+      try {
+        const previousResult = turn.resultMessageId
+          ? await this.db
+              .selectFrom("agent_messages")
+              .select("metadata")
+              .where("id", "=", turn.resultMessageId)
+              .executeTakeFirst()
+          : undefined;
+        const result = await this.runTurn(
+          identity,
+          projectId,
+          sessionId,
+          modelVisibleDelivery(message.content, message.author),
+          {
+            session,
+            turnId: turn.id,
+            leaseToken,
+            leaseLost: () => leaseLost,
+            attachments,
+            persistedUserMessageId: turn.messageId,
+            requestMetadata: message.metadata,
+            ...(turn.resultMessageId
+              ? { retryOfAssistantId: turn.resultMessageId }
+              : {}),
+            sanitizeReasoning:
+              (previousResult?.metadata as JsonObject | null)?.errorKind ===
+              "model_incompat",
+          },
+        );
+        const failed = result.metadata?.status === "failed";
+        const retryable =
+          failed &&
+          result.metadata?.retrySafe === true &&
+          result.metadata?.interrupted !== true &&
+          (result.metadata?.errorKind === "rate_limit" ||
+            result.metadata?.errorKind === "unavailable");
+        const delay =
+          [5_000, 15_000, 30_000, 60_000][Math.min(turn.attempt - 1, 3)] ??
+          60_000;
+        await this.turns.settle({
+          turnId: turn.id,
+          leaseToken,
+          resultMessageId: result.id,
+          attempt: turn.attempt,
+          ...(failed ? { error: result.content } : {}),
+          ...(retryable
+            ? {
+                retryAt: new Date(
+                  Date.now() + delay + Math.floor(Math.random() * delay * 0.2),
+                ),
+              }
+            : {}),
+        });
+      } catch (error) {
+        await this.turns.fail({
+          turnId: turn.id,
+          leaseToken: turn.leaseToken,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      } finally {
+        heartbeat.stop();
+        this.runningTurns.delete(sessionId);
+      }
     }
   }
 
@@ -1381,8 +3153,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     sessionId: string,
-    opts: { autoAttempt?: number } = {},
-  ): Promise<AgentMessage> {
+  ): Promise<SessionDeliveryReceipt> {
     const session = await this.requireSession(identity, projectId, sessionId);
     if (session.status !== "active") {
       throw new AgentSessionClosedError(sessionId);
@@ -1390,7 +3161,6 @@ export class AgentSessionsService {
     if (this.runningTurns.has(sessionId)) {
       throw new AgentTurnInProgressError(sessionId);
     }
-    this.cancelAutoRetry(sessionId);
 
     const messages = await this.db
       .selectFrom("agent_messages")
@@ -1404,29 +3174,36 @@ export class AgentSessionsService {
     if (!failed || failedMetadata?.status !== "failed") {
       throw new Error("The last turn did not fail; nothing to retry");
     }
-    const lastUser = messages.find((row) => row.role === "user");
-    if (!lastUser) throw new Error("No user message to retry");
-    const userMetadata = lastUser.metadata as JsonObject | null;
-
-    this.runningTurns.add(sessionId);
-    try {
-      return await this.runTurn(
-        identity,
-        projectId,
+    if (
+      session.handoff_status !== "none" ||
+      (session.authority_host_id !== this.hostId &&
+        session.authority_host_id !== "unassigned")
+    ) {
+      throw new AgentSessionAuthorityRequiredError(
         sessionId,
-        lastUser.content,
-        {
-          session,
-          attachments: (userMetadata?.attachments ??
-            undefined) as unknown as AgentAttachment[],
-          retryOfAssistantId: failed.id,
-          sanitizeReasoning: failedMetadata?.errorKind === "model_incompat",
-          autoAttempt: opts.autoAttempt,
-        },
+        session.authority_host_id,
+        Number(session.authority_revision),
       );
-    } finally {
-      this.runningTurns.delete(sessionId);
     }
+    await this.claimLocalAuthority(session);
+    if (!(await this.turns.retry({ sessionId, resultMessageId: failed.id }))) {
+      throw new Error("The failed turn is no longer retryable");
+    }
+    const turn = await this.db
+      .selectFrom("agent_turns")
+      .selectAll()
+      .where("session_id", "=", sessionId)
+      .where("result_message_id", "=", failed.id)
+      .executeTakeFirstOrThrow();
+    void this.scheduleDrain(identity, projectId, sessionId).catch((error) =>
+      console.warn("[catamorphic] Retried agent turn failed", error),
+    );
+    return {
+      messageId: turn.message_id,
+      turnId: turn.id,
+      mode: turn.delivery_mode === "interrupt" ? "interrupt" : "next_turn",
+      created: false,
+    };
   }
 
   /**
@@ -1438,63 +3215,100 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     sessionId: string,
+    opts: {
+      notifyParent?: boolean;
+      byExternalUserId?: string;
+      expectedTurnId?: string;
+    } = {},
   ): Promise<void> {
     const session = await this.requireSession(identity, projectId, sessionId);
-    this.cancelAutoRetry(sessionId);
-    if (!this.runningTurns.has(sessionId)) return;
-    this.interruptedTurns.add(sessionId);
-    if (session.provider_session_id) {
+    if (
+      session.authority_host_id !== this.hostId &&
+      session.authority_host_id !== "unassigned"
+    ) {
+      throw new AgentSessionAuthorityRequiredError(
+        sessionId,
+        session.authority_host_id,
+        Number(session.authority_revision),
+      );
+    }
+    const active = await this.db
+      .updateTable("agent_turns")
+      .set({ cancellation_requested_at: new Date() })
+      .where("session_id", "=", sessionId)
+      .where("status", "=", "running")
+      .$if(opts.expectedTurnId !== undefined, (query) =>
+        query.where("id", "=", opts.expectedTurnId ?? ""),
+      )
+      .returning("id")
+      .executeTakeFirst();
+    if (opts.expectedTurnId && !active) return;
+    await this.cancelAutoRetry(sessionId);
+    if (active && this.runningTurns.has(sessionId)) {
+      this.interruptedTurns.add(sessionId);
       try {
-        const agent = this.resolveAgent(session.agent_id, projectId);
-        agent.provider.interrupt?.(session.provider_session_id);
+        const agent = await this.resolveAgent(session.agent_id, projectId);
+        // Some harnesses only learn their native id after the stream starts.
+        // The stable Catamorphic id lets them cancel that first turn too.
+        agent.provider.interrupt?.(session.provider_session_id ?? session.id);
       } catch {
         // No resolvable agent — nothing to signal; the turn settles alone.
       }
     }
+    const delegation = await this.db
+      .selectFrom("agent_delegations")
+      .selectAll()
+      .where("target_session_id", "=", sessionId)
+      .where("status", "=", "running")
+      .executeTakeFirst();
+    if (delegation) {
+      await this.db
+        .updateTable("agent_delegations")
+        .set({
+          status: "interrupted",
+          interrupted_by_external_user_id: opts.byExternalUserId ?? null,
+          completed_at: new Date(),
+        })
+        .where("id", "=", delegation.id)
+        .execute();
+      if (opts.notifyParent !== false) {
+        await this.deliver(identity, projectId, delegation.source_session_id, {
+          content: opts.byExternalUserId
+            ? `Subsession ${sessionId} was interrupted because the user took over that conversation.`
+            : `Subsession ${sessionId} was interrupted.`,
+          author: { kind: "system", code: "subsession_interrupted" },
+          mode: "next_turn",
+          idempotencyKey: `delegation:${delegation.id}:interrupted`,
+        });
+      }
+    }
   }
 
-  private cancelAutoRetry(sessionId: string): void {
-    const scheduled = this.autoRetries.get(sessionId);
-    if (!scheduled) return;
-    clearTimeout(scheduled.timer);
-    this.autoRetries.delete(sessionId);
+  private cancelAutoRetry(sessionId: string): Promise<void> {
+    return this.turns.cancelRetries({ sessionId });
   }
 
-  /**
-   * Transient failures (rate limits, provider outages) retry on their own:
-   * 5s → 15s → 30s → then every 60s until the provider recovers, the user
-   * acts (new message, manual retry, interrupt), or the session closes.
-   * The failed row carries `autoRetry` metadata so clients can show the
-   * countdown.
-   */
-  private scheduleAutoRetry(
-    identity: Identity,
-    projectId: string,
-    sessionId: string,
-    assistantMessageId: string,
-    attempt: number,
-  ): void {
-    const delays = [5_000, 15_000, 30_000, 60_000];
-    const delay = delays[Math.min(attempt, delays.length - 1)] ?? 60_000;
-    void this.db
-      .updateTable("agent_messages")
-      .set(({ ref }) => ({
-        metadata: sql`${ref("metadata")} || ${JSON.stringify({
-          autoRetry: { attempt: attempt + 1, nextAtMs: Date.now() + delay },
-        })}::jsonb`,
-      }))
-      .where("id", "=", assistantMessageId)
-      .execute()
-      .catch(() => {});
-    const timer = setTimeout(() => {
-      this.autoRetries.delete(sessionId);
-      void this.retry(identity, projectId, sessionId, {
-        autoAttempt: attempt + 1,
-      }).catch(() => {
-        // A concurrent user action raced the retry — it owns the session.
-      });
-    }, delay);
-    this.autoRetries.set(sessionId, { timer, attempt });
+  private async honorCancellation(input: {
+    session: SessionRow;
+    turnId: string;
+  }): Promise<void> {
+    const row = await this.db
+      .selectFrom("agent_turns")
+      .select("cancellation_requested_at")
+      .where("id", "=", input.turnId)
+      .where("status", "=", "running")
+      .executeTakeFirst();
+    if (
+      !row?.cancellation_requested_at ||
+      this.interruptedTurns.has(input.session.id)
+    )
+      return;
+    this.interruptedTurns.add(input.session.id);
+    (
+      await this.resolveAgent(input.session.agent_id, input.session.project_id)
+    ).provider.interrupt?.(
+      input.session.provider_session_id ?? input.session.id,
+    );
   }
 
   private async runTurn(
@@ -1504,35 +3318,56 @@ export class AgentSessionsService {
     message: string,
     extras: {
       session: SessionRow;
+      turnId: string;
+      leaseLost: () => boolean;
+      leaseToken: string;
       attachments?: AgentAttachment[];
       /** Retry: reuse this failed assistant row instead of inserting. */
       retryOfAssistantId?: string;
       sanitizeReasoning?: boolean;
-      /** Set on automatic retries; drives the next backoff step. */
-      autoAttempt?: number;
+      /** Durable inbox message already persisted by AgentTurnsService. */
+      persistedUserMessageId?: string;
+      /** Metadata on the request that caused this turn. */
+      requestMetadata?: JsonObject | null;
     },
   ): Promise<AgentMessage> {
     // Note: no stale-flag clearing needed here — interrupt() only sets the
     // flag while a turn is marked running, and every turn consumes it on
     // the way out (success and error paths both delete).
     const { session } = extras;
-    const agent = this.resolveAgent(session.agent_id, projectId);
     const attachments = extras.attachments?.length
       ? extras.attachments
       : undefined;
-    const callerLayers = await this.callerToolPolicies(
-      identity,
-      projectId,
-      session.agent_id,
-    );
-    const turnOptions: TurnOptions = {
-      ...agent.defaults,
-      ...(session.model_effort
-        ? { effort: session.model_effort as AgentEffort }
-        : {}),
-      ...(attachments ? { attachments } : {}),
-      toolPolicies: callerLayers ?? {},
-    };
+
+    // Lock the execution row with every transcript write. An expired executor
+    // may return after recovery; it must not overwrite the recovered outcome.
+    const writeOwned = <T>(write: (trx: Transaction<DB>) => Promise<T>) =>
+      this.db.transaction().execute(async (trx) => {
+        // Match the recovery worker's session -> turn lock order, and fence
+        // a host whose authority was explicitly transferred in the meantime.
+        const authority = await trx
+          .selectFrom("agent_sessions")
+          .select("id")
+          .where("id", "=", sessionId)
+          .where("authority_host_id", "=", this.hostId)
+          .where("authority_revision", "=", session.authority_revision)
+          .forUpdate()
+          .executeTakeFirst();
+        const owned = await trx
+          .selectFrom("agent_turns")
+          .select("id")
+          .where("id", "=", extras.turnId)
+          .where("status", "=", "running")
+          .where("lease_token", "=", extras.leaseToken)
+          .where("lease_expires_at", ">", sql<Date>`clock_timestamp()`)
+          .forUpdate()
+          .executeTakeFirst();
+        if (!authority || !owned)
+          throw new Error(
+            "Execution ownership was lost. Check the last actions before retrying.",
+          );
+        return write(trx);
+      });
 
     // Persist the user message and the in-progress placeholder BEFORE the
     // (potentially slow) provider/sandbox anchoring: the turn is then
@@ -1543,40 +3378,62 @@ export class AgentSessionsService {
     let assistantMessageId: string;
     if (extras.retryOfAssistantId) {
       assistantMessageId = extras.retryOfAssistantId;
-      await this.db
-        .updateTable("agent_messages")
-        .set({ content: "Thinking...", metadata: progressMetadata([]) })
-        .where("id", "=", assistantMessageId)
-        .execute();
+      await writeOwned((trx) =>
+        trx
+          .updateTable("agent_messages")
+          .set({ content: "Thinking...", metadata: progressMetadata([]) })
+          .where("id", "=", assistantMessageId)
+          .execute(),
+      );
     } else {
-      assistantMessageId = await this.db.transaction().execute(async (trx) => {
-        await trx
-          .insertInto("agent_messages")
-          .values({
-            session_id: sessionId,
-            role: "user",
-            content: message,
-            ...(attachments
-              ? {
-                  metadata: {
-                    attachments: JSON.parse(
-                      JSON.stringify(attachments),
-                    ) as JsonObject[],
-                  },
-                }
-              : {}),
-          })
-          .execute();
+      assistantMessageId = await writeOwned(async (trx) => {
+        if (!extras.persistedUserMessageId) {
+          await trx
+            .insertInto("agent_messages")
+            .values({
+              session_id: sessionId,
+              role: "user",
+              content: message,
+              author_kind: "user",
+              author_payload: {
+                kind: "user",
+                externalUserId: identity.externalUserId,
+              },
+              delivery_mode: "next_turn",
+              ...(attachments
+                ? {
+                    metadata: {
+                      attachments: JSON.parse(
+                        JSON.stringify(attachments),
+                      ) as JsonObject[],
+                    },
+                  }
+                : {}),
+            })
+            .execute();
+        }
         const assistant = await trx
           .insertInto("agent_messages")
           .values({
             session_id: sessionId,
             role: "assistant",
             content: "Thinking...",
+            author_kind: "agent",
+            author_payload: {
+              kind: "agent",
+              sessionId,
+              agentId: session.agent_id,
+            },
+            delivery_mode: "message_only",
             metadata: progressMetadata([]),
           })
           .returning("id")
           .executeTakeFirstOrThrow();
+        await trx
+          .updateTable("agent_turns")
+          .set({ result_message_id: assistant.id })
+          .where("id", "=", extras.turnId)
+          .execute();
         return assistant.id;
       });
     }
@@ -1590,6 +3447,7 @@ export class AgentSessionsService {
     // more work following it makes it a preamble, pushed immediately as its
     // own completed message with a fresh in-progress placeholder after it.
     let heldText: string | undefined;
+    let providerFinished = false;
     let lastFlushed: { id: string; events: AgentEvent[] } | undefined;
     const flushHeldText = async () => {
       if (heldText === undefined) return;
@@ -1602,22 +3460,35 @@ export class AgentSessionsService {
       // preamble without its follow-up placeholder — that half-state
       // reads as "turn over" for a tick (activity line and working
       // indicators flicker off and back mid-turn).
-      const next = await this.db.transaction().execute(async (trx) => {
+      const next = await writeOwned(async (trx) => {
         await trx
           .updateTable("agent_messages")
           .set({ content: settledContent, metadata })
           .where("id", "=", assistantMessageId)
           .execute();
-        return trx
+        const next = await trx
           .insertInto("agent_messages")
           .values({
             session_id: sessionId,
             role: "assistant",
             content: "Thinking...",
+            author_kind: "agent",
+            author_payload: {
+              kind: "agent",
+              sessionId,
+              agentId: session.agent_id,
+            },
+            delivery_mode: "message_only",
             metadata: progressMetadata([]),
           })
           .returning("id")
           .executeTakeFirstOrThrow();
+        await trx
+          .updateTable("agent_turns")
+          .set({ result_message_id: next.id })
+          .where("id", "=", extras.turnId)
+          .execute();
+        return next;
       });
       lastFlushed = { id: assistantMessageId, events: segmentEvents };
       heldText = undefined;
@@ -1633,15 +3504,57 @@ export class AgentSessionsService {
       event.type === "background";
 
     try {
-      const anchor = await this.ensureAnchor(
+      const agent = await this.resolveAgent(session.agent_id, projectId);
+      const runtime = await this.resolveExecutionRuntime(
         identity,
         projectId,
         session,
         agent,
       );
+      const callerLayers = await this.callerToolPolicies(
+        identity,
+        projectId,
+        session.agent_id,
+      );
+      const turnOptions: TurnOptions = {
+        ...agent.defaults,
+        ...(session.model ? { model: session.model } : {}),
+        ...(session.model_effort
+          ? { effort: session.model_effort as AgentEffort }
+          : {}),
+        ...(attachments ? { attachments } : {}),
+        toolPolicies: callerLayers ?? {},
+      };
+      const anchor = await this.ensureAnchor(
+        identity,
+        projectId,
+        session,
+        agent,
+        runtime,
+      );
+      if (this.agentCapabilities) {
+        turnOptions.context = await this.agentCapabilities.prompt({
+          allocationId: session.allocation_id ?? undefined,
+          identity,
+          projectId,
+          sessionId,
+          workingDirectory: anchor.providerSession.workingDirectory,
+        });
+        turnOptions.capabilities = this.agentCapabilities.forSession({
+          identity,
+          projectId,
+          sessionId,
+          allocationId: session.allocation_id ?? undefined,
+        });
+      }
       // The caller's view of the store, in the folder the agent works in
       // (ADR 0055): pulled before the turn, shipped after it.
-      const storeDir = await this.storeSyncDir(identity, projectId, anchor);
+      const storeDir = await this.storeSyncDir(
+        identity,
+        projectId,
+        anchor,
+        sessionId,
+      );
       if (storeDir) {
         await syncRemoteProject(
           storeDir,
@@ -1657,16 +3570,16 @@ export class AgentSessionsService {
         });
       }
 
-      if (anchor.sandboxProviderId) {
-        const workingDirectory = this.projectDir();
+      if (anchor.sandboxProviderId && runtime.provider) {
+        const workingDirectory = this.projectDir(runtime.provider);
         const batchSkillStaged = await ensureBatchWorkflowSkill({
-          sandboxProvider: this.sandboxProvider,
+          sandboxProvider: runtime.provider,
           sandboxProviderId: anchor.sandboxProviderId,
           projectDir: workingDirectory,
           seedFiles: this.seedFiles,
         });
         const durableSkillStaged = await ensureDurableWorkflowSkill({
-          sandboxProvider: this.sandboxProvider,
+          sandboxProvider: runtime.provider,
           sandboxProviderId: anchor.sandboxProviderId,
           projectDir: workingDirectory,
           seedFiles: this.seedFiles,
@@ -1677,6 +3590,7 @@ export class AgentSessionsService {
         ];
         if (stagedSkillPaths.length > 0) {
           await this.commitWorkflowSkillBaseline(
+            runtime.provider,
             anchor.sandboxProviderId,
             stagedSkillPaths,
           );
@@ -1688,6 +3602,21 @@ export class AgentSessionsService {
       // latched flag catches it here: the turn settles as interrupted
       // without ever calling the provider. Checked with has() (not
       // delete()) so the finalization below still reads it as interrupted.
+      if (extras.leaseLost())
+        throw new Error(
+          "Execution ownership was lost. Check the last actions before retrying.",
+        );
+      const preparationOwned = await this.turns.progress({
+        turnId: extras.turnId,
+        leaseToken: extras.leaseToken,
+        phase: "working",
+        activity: "Waiting for agent",
+      });
+      if (!preparationOwned)
+        throw new Error(
+          "Execution ownership was lost. Check the last actions before retrying.",
+        );
+      await this.honorCancellation({ session, turnId: extras.turnId });
       const stream = this.interruptedTurns.has(sessionId)
         ? (async function* (): AsyncIterable<AgentEvent> {
             yield { type: "error", content: "Interrupted." };
@@ -1713,6 +3642,10 @@ export class AgentSessionsService {
               turnOptions,
             );
       for await (const event of stream) {
+        if (extras.leaseLost())
+          throw new Error(
+            "Execution ownership was lost. Check the last actions before retrying.",
+          );
         // A harness that only learns its native session id once the first
         // turn starts (Codex) reports it here; persist it so later turns
         // resume the same thread. Pure anchoring signal — never recorded
@@ -1720,50 +3653,97 @@ export class AgentSessionsService {
         if (event.type === "session") {
           if (event.providerSessionId) {
             anchor.providerSession.providerSessionId = event.providerSessionId;
-            await this.db
-              .updateTable("agent_sessions")
-              .set({ provider_session_id: event.providerSessionId })
-              .where("id", "=", sessionId)
-              .execute();
+            await writeOwned((trx) =>
+              trx
+                .updateTable("agent_sessions")
+                .set({ provider_session_id: event.providerSessionId })
+                .where("id", "=", sessionId)
+                .execute(),
+            );
           }
           continue;
         }
         if (continuesTurn(event)) await flushHeldText();
+        if (event.type === "error" && !event.errorKind && event.content) {
+          event.errorKind = connectionFailureKind(event.content);
+        }
         events.push(event);
         segmentEvents.push(event);
+        if (event.type !== "done" && event.type !== "usage") {
+          const owned = await this.turns.progress({
+            turnId: extras.turnId,
+            leaseToken: extras.leaseToken,
+            phase: event.type === "question" ? "waiting" : "working",
+            activity: activityLabel(event),
+          });
+          if (!owned)
+            throw new Error(
+              "Execution ownership was lost. Check the last actions before retrying.",
+            );
+        }
         if (event.type === "text" && event.content) {
           heldText = event.content;
         }
         // Usage is accounting that arrives right before done (ADR 0057) —
         // never a progress beat, so it must not overwrite the activity line.
         if (event.type !== "done" && event.type !== "usage") {
-          await this.db
-            .updateTable("agent_messages")
-            .set({
-              content: activityLabel(event),
-              metadata: progressMetadata(segmentEvents),
-            })
-            .where("id", "=", assistantMessageId)
-            .execute();
+          await writeOwned((trx) =>
+            trx
+              .updateTable("agent_messages")
+              .set({
+                content: activityLabel(event),
+                metadata: progressMetadata(segmentEvents),
+              })
+              .where("id", "=", assistantMessageId)
+              .execute(),
+          );
         }
       }
+
+      if (
+        !events.some(
+          (event) =>
+            event.type === "done" ||
+            event.type === "error" ||
+            event.type === "question",
+        )
+      ) {
+        throw new Error("Agent stream disconnected before the turn completed");
+      }
+      // A bookkeeping failure after completion must not replay agent actions.
+      providerFinished = true;
+      const savingOwned = await this.turns.progress({
+        turnId: extras.turnId,
+        leaseToken: extras.leaseToken,
+        phase: "saving",
+        activity: "Saving changes",
+      });
+      if (!savingOwned)
+        throw new Error(
+          "Execution ownership was lost. Check the last actions before retrying.",
+        );
 
       const settledWorkingDirectory =
         agent.topology === "native" && this.nativeAgentCheckout
           ? ((await this.nativeAgentCheckout.resolve({
               projectId,
               sessionId,
+              bindingId: runtime.bindingId,
+              environmentName: runtime.environmentName,
             })) ?? anchor.providerSession.workingDirectory)
           : anchor.providerSession.workingDirectory;
       anchor.providerSession.workingDirectory = settledWorkingDirectory;
 
-      const changedFiles = anchor.sandboxProviderId
-        ? await this.syncBackChanges(
-            identity,
-            projectId,
-            anchor.sandboxProviderId,
-          )
-        : hostChangedFiles(events, settledWorkingDirectory);
+      const changedFiles =
+        anchor.sandboxProviderId && runtime.provider
+          ? await this.syncBackChanges(
+              runtime.provider,
+              identity,
+              projectId,
+              anchor.sandboxProviderId,
+              this.workerNode ? sessionId : undefined,
+            )
+          : hostChangedFiles(events, settledWorkingDirectory);
 
       // Ship the turn's `store/` writes as the caller (ADR 0055) before the
       // checkpoint: store paths are gitignored, so they never enter git.
@@ -1809,7 +3789,9 @@ export class AgentSessionsService {
       const questionEvent = [...events]
         .reverse()
         .find((event) => event.type === "question");
-      const failed = events.some((event) => event.type === "error");
+      const interrupted = this.interruptedTurns.delete(sessionId);
+      const failed =
+        interrupted || events.some((event) => event.type === "error");
 
       // The turn ended right after a flushed preamble (no closing text,
       // error, or question): that preamble IS the final message. Drop the
@@ -1817,24 +3799,33 @@ export class AgentSessionsService {
       const settleFlushed =
         heldText === undefined && !failed && !questionEvent && lastFlushed;
       if (settleFlushed) {
-        await this.db
-          .deleteFrom("agent_messages")
-          .where("id", "=", assistantMessageId)
-          .execute();
+        await writeOwned(async (trx) => {
+          await trx
+            .updateTable("agent_turns")
+            .set({ result_message_id: settleFlushed.id })
+            .where("id", "=", extras.turnId)
+            .where("lease_token", "=", extras.leaseToken)
+            .execute();
+          await trx
+            .deleteFrom("agent_messages")
+            .where("id", "=", assistantMessageId)
+            .execute();
+        });
         assistantMessageId = settleFlushed.id;
         segmentEvents = [...settleFlushed.events, ...segmentEvents];
       }
 
+      const providerError = events
+        .filter((event) => event.type === "error")
+        .map((event) => event.content)
+        .filter((content): content is string => Boolean(content))
+        .join("\n");
       const content = settleFlushed
         ? undefined
-        : (heldText ??
-          (events
-            .filter((event) => event.type === "error")
-            .map((event) => event.content)
-            .join("\n") ||
-            (questionEvent ? "" : "(no response)")));
-
-      const interrupted = this.interruptedTurns.delete(sessionId);
+        : failed && !interrupted
+          ? providerError || "Agent failed"
+          : (heldText ??
+            (providerError || (questionEvent ? "" : "(no response)")));
       const errorKind = interrupted
         ? undefined
         : [...events]
@@ -1853,6 +3844,10 @@ export class AgentSessionsService {
           : questionEvent
             ? "awaiting_input"
             : "completed",
+        retrySafe:
+          events.some(
+            (event) => event.type === "error" && event.retrySafe === true,
+          ) && !events.some((event) => continuesTurn(event)),
         events: stepLogEvents(segmentEvents),
         changedFiles: changedFiles.map((change) => ({ ...change })),
         ...(usageEvent?.usage
@@ -1865,6 +3860,9 @@ export class AgentSessionsService {
         ...(storeSync ? { storeSync } : {}),
         ...(errorKind ? { errorKind } : {}),
         ...(interrupted && failed ? { interrupted: true } : {}),
+        ...(failed && !interrupted && heldText
+          ? { partialContent: heldText }
+          : {}),
         ...(questionEvent?.questions
           ? {
               questions: JSON.parse(
@@ -1874,16 +3872,59 @@ export class AgentSessionsService {
           : {}),
       };
 
-      const row = await this.db
-        .updateTable("agent_messages")
-        .set({
-          ...(content === undefined ? {} : { content }),
-          ...(commitSha ? { commit_sha: commitSha } : {}),
-          metadata,
-        })
-        .where("id", "=", assistantMessageId)
-        .returningAll()
-        .executeTakeFirstOrThrow();
+      const row = await writeOwned((trx) =>
+        trx
+          .updateTable("agent_messages")
+          .set({
+            ...(content === undefined ? {} : { content }),
+            ...(commitSha ? { commit_sha: commitSha } : {}),
+            metadata,
+          })
+          .where("id", "=", assistantMessageId)
+          .returningAll()
+          .executeTakeFirstOrThrow(),
+      );
+
+      const requestedNotification = workflowNotification(
+        extras.requestMetadata,
+      );
+      const shouldRequestAttention =
+        (failed && !interrupted) ||
+        (requestedNotification !== undefined &&
+          (metadata.status === "completed" ||
+            metadata.status === "awaiting_input" ||
+            (metadata.status === "failed" &&
+              errorKind !== "rate_limit" &&
+              errorKind !== "unavailable" &&
+              !interrupted)));
+      if (shouldRequestAttention) {
+        await writeOwned((trx) =>
+          trx
+            .updateTable("agent_sessions")
+            .set(({ ref }) => ({
+              attention_revision: sql`${ref("attention_revision")} + 1`,
+              updated_at: new Date(),
+            }))
+            .where("id", "=", sessionId)
+            .execute(),
+        );
+      }
+
+      const transientFailure =
+        failed &&
+        metadata.retrySafe === true &&
+        !interrupted &&
+        (errorKind === "rate_limit" || errorKind === "unavailable");
+      if (!transientFailure) {
+        await this.settleDelegation({
+          identity,
+          projectId,
+          sessionId,
+          resultMessageId: assistantMessageId,
+          status: metadata.status as AgentTurnSettledEvent["status"],
+          content: row.content,
+        });
+      }
 
       if (this.onTurnSettled) {
         const settled: AgentTurnSettledEvent = {
@@ -1891,7 +3932,13 @@ export class AgentSessionsService {
           projectId,
           sessionId,
           messageId: assistantMessageId,
+          turnId: extras.turnId,
           status: metadata.status as AgentTurnSettledEvent["status"],
+          interrupted,
+          retrying: transientFailure,
+          ...(shouldRequestAttention
+            ? { notification: requestedNotification }
+            : {}),
           changedFiles: changedFiles.map((change) => change.path),
           workingDirectory: settledWorkingDirectory,
         };
@@ -1906,59 +3953,95 @@ export class AgentSessionsService {
           });
       }
 
-      // Transient provider failures keep retrying on their own; the user
-      // sees the error and the countdown, and can retry now or move on.
-      if (
-        failed &&
-        (errorKind === "rate_limit" || errorKind === "unavailable")
-      ) {
-        this.scheduleAutoRetry(
-          identity,
-          projectId,
-          sessionId,
-          assistantMessageId,
-          extras.autoAttempt ?? 0,
-        );
-      }
-
       // The agent's set_title tool wins; otherwise the first user message
       // seeds a provisional title.
       const titleEvent = [...events]
         .reverse()
         .find((event) => event.type === "title" && event.content);
-      await this.db
-        .updateTable("agent_sessions")
-        .set({
-          updated_at: new Date(),
-          ...(titleEvent?.content
-            ? { title: truncate(titleEvent.content, 500) }
-            : session.title === null
-              ? {
-                  title: truncate(
-                    messageWithAttachmentNames(message, attachments),
-                    500,
-                  ),
-                }
-              : {}),
-        })
-        .where("id", "=", sessionId)
-        .execute();
+      await writeOwned((trx) =>
+        trx
+          .updateTable("agent_sessions")
+          .set({
+            updated_at: new Date(),
+            ...(titleEvent?.content
+              ? { title: truncate(titleEvent.content, 500) }
+              : session.title === null
+                ? {
+                    title: truncate(
+                      messageWithAttachmentNames(message, attachments),
+                      500,
+                    ),
+                  }
+                : {}),
+          })
+          .where("id", "=", sessionId)
+          .execute(),
+      );
 
       return mapMessage(row);
     } catch (error) {
-      this.interruptedTurns.delete(sessionId);
-      await this.db
-        .updateTable("agent_messages")
-        .set({
-          content: error instanceof Error ? error.message : String(error),
-          metadata: {
+      const interrupted = this.interruptedTurns.delete(sessionId);
+      const content = error instanceof Error ? error.message : String(error);
+      const errorKind =
+        extras.leaseLost() || providerFinished
+          ? undefined
+          : connectionFailureKind(content);
+      const row = await writeOwned((trx) =>
+        trx
+          .updateTable("agent_messages")
+          .set({
+            content,
+            metadata: {
+              status: "failed",
+              ...(interrupted ? { interrupted: true } : {}),
+              ...(errorKind ? { errorKind } : {}),
+              ...(heldText ? { partialContent: heldText } : {}),
+              events: JSON.parse(JSON.stringify(events)) as JsonObject[],
+            },
+          })
+          .where("id", "=", assistantMessageId)
+          .returningAll()
+          .executeTakeFirstOrThrow(),
+      );
+      // An exception cannot establish that the provider rejected the turn.
+      // Replaying an uncertain stream can duplicate commands or external writes.
+      await this.settleDelegation({
+        identity,
+        projectId,
+        sessionId,
+        resultMessageId: assistantMessageId,
+        status: "failed",
+        content,
+      });
+      if (!interrupted)
+        await writeOwned((trx) =>
+          trx
+            .updateTable("agent_sessions")
+            .set(({ ref }) => ({
+              attention_revision: sql`${ref("attention_revision")} + 1`,
+            }))
+            .where("id", "=", sessionId)
+            .execute(),
+        );
+      await Promise.resolve()
+        .then(() =>
+          this.onTurnSettled?.({
+            identity,
+            projectId,
+            sessionId,
+            messageId: assistantMessageId,
+            turnId: extras.turnId,
             status: "failed",
-            events: JSON.parse(JSON.stringify(events)) as JsonObject[],
-          },
-        })
-        .where("id", "=", assistantMessageId)
-        .execute();
-      throw error;
+            interrupted,
+            retrying: false,
+            changedFiles: [],
+            workingDirectory: "",
+          }),
+        )
+        .catch((hookError) =>
+          console.warn("[catamorphic] Failed-turn hook failed", hookError),
+        );
+      return mapMessage(row);
     }
   }
 
@@ -1968,11 +4051,17 @@ export class AgentSessionsService {
     sessionId: string,
   ): Promise<AgentSession> {
     const session = await this.requireSession(identity, projectId, sessionId);
-    this.cancelAutoRetry(sessionId);
+    await this.cancelAutoRetry(sessionId);
+
+    await this.archiveResources?.stop({
+      identity,
+      projectId,
+      sessionIds: [sessionId],
+    });
 
     if (session.provider_session_id) {
-      const agent = this.codingAgents.get(
-        session.agent_id ?? this.codingAgents.defaultAgentId(projectId) ?? "",
+      const agent = await this.resolveAgent(session.agent_id, projectId).catch(
+        () => undefined,
       );
       await agent?.provider
         .dispose({
@@ -2009,20 +4098,563 @@ export class AgentSessionsService {
       allocationId,
     });
 
-    return mapSession(row);
+    return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+  }
+
+  async archiveImpact(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+  ): Promise<AgentSessionArchiveImpact> {
+    await this.requireSession(identity, projectId, sessionId);
+    const sessionIds = await this.descendantSessionIds(projectId, sessionId);
+    const activeTurns = await this.db
+      .selectFrom("agent_turns")
+      .select("session_id")
+      .distinct()
+      .where("session_id", "in", sessionIds)
+      .where("status", "in", ["queued", "held", "running"])
+      .execute();
+    const runningSessionIds = [
+      ...new Set([
+        ...sessionIds.filter((id) => this.runningTurns.has(id)),
+        ...activeTurns.map((turn) => turn.session_id),
+      ]),
+    ];
+    const watchers = await this.db
+      .selectFrom("watchers")
+      .select(({ fn }) => fn.countAll<number>().as("count"))
+      .where("session_id", "in", sessionIds)
+      .where("status", "=", "active")
+      .executeTakeFirstOrThrow();
+    const activeWatcherCount = Number(watchers.count);
+    const { activeProcessCount } = (await this.archiveResources?.impact({
+      identity,
+      projectId,
+      sessionIds,
+    })) ?? { activeProcessCount: 0 };
+    return {
+      sessionIds,
+      runningSessionIds,
+      activeWatcherCount,
+      activeProcessCount,
+      requiresConfirmation:
+        runningSessionIds.length > 0 ||
+        activeWatcherCount > 0 ||
+        activeProcessCount > 0,
+    };
+  }
+
+  /** Stop and hide one session tree. The caller confirms only live work. */
+  async archive(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: { confirmStop?: boolean } = {},
+  ): Promise<{ impact: AgentSessionArchiveImpact; sessions: AgentSession[] }> {
+    const impact = await this.archiveImpact(identity, projectId, sessionId);
+    if (impact.requiresConfirmation && !input.confirmStop) {
+      throw new AgentSessionArchiveConfirmationRequiredError(impact);
+    }
+    const sourceDelegation = await this.db
+      .selectFrom("agent_delegations")
+      .select(["id", "source_session_id"])
+      .where("target_session_id", "=", sessionId)
+      .where("status", "=", "running")
+      .executeTakeFirst();
+
+    // Cancel waiting work before interrupting the current turns so a drainer
+    // cannot claim another queued turn during shutdown.
+    await this.db
+      .updateTable("agent_turns")
+      .set({
+        status: "cancelled",
+        error: "Session archived",
+        completed_at: new Date(),
+        lease_owner: null,
+        lease_token: null,
+        lease_expires_at: null,
+        updated_at: new Date(),
+      })
+      .where("session_id", "in", impact.sessionIds)
+      .where("status", "in", ["queued", "held"])
+      .execute();
+    for (const id of impact.sessionIds) {
+      await this.cancelAutoRetry(id);
+      await this.interrupt(identity, projectId, id, { notifyParent: false });
+    }
+    await this.archiveResources?.stop({
+      identity,
+      projectId,
+      sessionIds: impact.sessionIds,
+    });
+    await this.waitForTurnsToStop(impact.sessionIds);
+
+    const { archivedRows, resourceRows } = await this.db
+      .transaction()
+      .execute(async (transaction) => {
+        await transaction
+          .updateTable("agent_delegations")
+          .set({ status: "archived", completed_at: new Date() })
+          .where("target_session_id", "in", impact.sessionIds)
+          .where("status", "in", ["running", "interrupted"])
+          .execute();
+        const resources = await transaction
+          .selectFrom("agent_sessions")
+          .selectAll()
+          .where("id", "in", impact.sessionIds)
+          .execute();
+        const archived = await transaction
+          .updateTable("agent_sessions")
+          .set({
+            provider_session_id: null,
+            sandbox_id: null,
+            activity: null,
+            updated_at: new Date(),
+          })
+          .where("id", "in", impact.sessionIds)
+          .returningAll()
+          .execute();
+        const now = new Date();
+        for (const row of archived) {
+          if (row.allocation_id) {
+            const allocation = await transaction
+              .selectFrom("execution_allocations")
+              .select("worker_node_id")
+              .where("id", "=", row.allocation_id)
+              .executeTakeFirst();
+            if (allocation?.worker_node_id)
+              await this.executionAllocations.release({
+                identity,
+                allocationId: row.allocation_id,
+                transaction,
+              });
+          }
+          await transaction
+            .insertInto("agent_session_views")
+            .values({
+              session_id: row.id,
+              tenant_id: identity.tenantId,
+              external_user_id: identity.externalUserId,
+              visibility: "archived",
+              previous_visibility: row.id === sessionId ? "promoted" : "latent",
+              archived_at: now,
+            })
+            .onConflict((conflict) =>
+              conflict
+                .columns(["session_id", "tenant_id", "external_user_id"])
+                .doUpdateSet(({ ref }) => ({
+                  previous_visibility: sql`CASE WHEN ${ref("agent_session_views.visibility")} = 'archived' THEN ${ref("agent_session_views.previous_visibility")} ELSE ${ref("agent_session_views.visibility")} END`,
+                  visibility: "archived",
+                  archived_at: now,
+                  updated_at: now,
+                })),
+            )
+            .execute();
+        }
+        return { archivedRows: archived, resourceRows: resources };
+      });
+
+    for (const row of resourceRows) {
+      if (row.provider_session_id) {
+        const agent = await this.resolveAgent(row.agent_id, projectId).catch(
+          () => undefined,
+        );
+        await agent?.provider
+          .dispose({
+            providerSessionId: row.provider_session_id,
+            sessionId: row.id,
+            projectId,
+            sandboxId: row.sandbox_id ?? "",
+            workingDirectory: "",
+          })
+          .catch(() => {});
+      }
+      if (row.allocation_id) {
+        await this.connectionGrants
+          ?.revokeAllocation({ allocationId: row.allocation_id })
+          .catch(() => {});
+      }
+    }
+    if (
+      sourceDelegation &&
+      !impact.sessionIds.includes(sourceDelegation.source_session_id)
+    ) {
+      await this.deliver(
+        identity,
+        projectId,
+        sourceDelegation.source_session_id,
+        {
+          content: `Subsession ${sessionId} was archived by the user.`,
+          author: { kind: "system", code: "subsession_archived" },
+          mode: "next_turn",
+          idempotencyKey: `delegation:${sourceDelegation.id}:archived`,
+        },
+      );
+    }
+
+    return {
+      impact,
+      sessions: archivedRows.map((row) =>
+        mapSession(row, false, this.hostId, this.authorityLeaseMs, {
+          visibility: "archived",
+          archivedAt: new Date(),
+        }),
+      ),
+    };
+  }
+
+  private async waitForTurnsToStop(
+    sessionIds: readonly string[],
+  ): Promise<void> {
+    while (sessionIds.some((id) => this.runningTurns.has(id))) {
+      // Do not attach another reaction to each still-pending drainer on
+      // every tick. Polling the running set already supplies the wake-up.
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
+  async unarchive(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+  ): Promise<AgentSession[]> {
+    await this.requireSession(identity, projectId, sessionId);
+    const sessionIds = await this.descendantSessionIds(projectId, sessionId);
+    const retired = await this.db
+      .selectFrom("agent_sessions as session")
+      .innerJoin(
+        "execution_allocations as allocation",
+        "allocation.id",
+        "session.allocation_id",
+      )
+      .select(["session.id", "session.environment_name"])
+      .where("session.id", "in", sessionIds)
+      .where("allocation.status", "=", "released")
+      .where("session.status", "=", "active")
+      .execute();
+    for (const row of retired) {
+      await this.update(identity, projectId, row.id, {
+        environment: row.environment_name ?? undefined,
+      });
+    }
+    await this.db
+      .updateTable("agent_session_views")
+      .set(({ ref }) => ({
+        visibility: ref("previous_visibility"),
+        archived_at: null,
+        updated_at: new Date(),
+      }))
+      .where("tenant_id", "=", identity.tenantId)
+      .where("external_user_id", "=", identity.externalUserId)
+      .where("session_id", "in", sessionIds)
+      .execute();
+    const rows = await this.db
+      .selectFrom("agent_sessions")
+      .selectAll()
+      .where("id", "in", sessionIds)
+      .execute();
+    const presentations = await this.presentations(identity, sessionIds);
+    return rows.map((row) =>
+      mapSession(
+        row,
+        false,
+        this.hostId,
+        this.authorityLeaseMs,
+        presentations.get(row.id),
+      ),
+    );
+  }
+
+  private async descendantSessionIds(
+    projectId: string,
+    sessionId: string,
+  ): Promise<string[]> {
+    const rows = await this.db
+      .withRecursive("session_tree", (db) =>
+        db
+          .selectFrom("agent_sessions")
+          .select("id")
+          .where("id", "=", sessionId)
+          .where("project_id", "=", projectId)
+          .unionAll((union) =>
+            union
+              .selectFrom("agent_sessions as child")
+              .innerJoin(
+                "session_tree as parent",
+                "child.parent_session_id",
+                "parent.id",
+              )
+              .select("child.id")
+              .where("child.project_id", "=", projectId),
+          ),
+      )
+      .selectFrom("session_tree")
+      .select("id")
+      .execute();
+    return rows.map((row) => row.id);
   }
 
   // --- Agent resolution & anchoring ---
 
-  private resolveAgent(
+  /** Member-facing roster. Definitions and defaults come from the authority. */
+  async catalog(args: { identity: Identity; projectId: string }) {
+    await this.requireProject(args.identity, args.projectId);
+    const entries = await new AgentDefinitionsService(
+      this.db,
+      this.projectManager,
+    ).listCommitted({
+      tenantId: args.identity.tenantId,
+      projectId: args.projectId,
+    });
+    const candidates = new Map(
+      this.codingAgents.list().map((agent) => [
+        agent.id,
+        {
+          id: agent.id,
+          name: agent.id,
+          description: undefined as string | undefined,
+        },
+      ]),
+    );
+    for (const entry of entries)
+      candidates.set(formatProjectAgentId(args.projectId, entry.slug), {
+        id: formatProjectAgentId(args.projectId, entry.slug),
+        name: entry.definition?.name ?? entry.slug,
+        description: entry.definition?.description,
+      });
+    const items: Array<{
+      id: string;
+      name: string;
+      description?: string;
+      available: boolean;
+      reason: string | null;
+      environments: import("./execution-environments-service.js").EnvironmentDiscovery;
+    }> = [];
+    for (const candidate of candidates.values()) {
+      try {
+        this.assertAgentAccess(args.identity, args.projectId, candidate.id);
+      } catch {
+        continue;
+      }
+      try {
+        const agent = await this.resolveAgent(candidate.id, args.projectId);
+        const environments = await this.executionEnvironments.discover({
+          ...args,
+          requirements: {
+            ...agent.environment?.requirements,
+            workload: "agent",
+            topology: agent.topology,
+          },
+          allowed: agent.environment?.allowed,
+          preferred: agent.environment?.preferred,
+        });
+        items.push({
+          ...candidate,
+          available: environments.items.some(
+            (item) => item.allowed && item.available && item.compatible,
+          ),
+          environments,
+          reason: null,
+        });
+      } catch (error) {
+        items.push({
+          ...candidate,
+          available: false,
+          environments: { items: [] },
+          reason:
+            error instanceof Error ? error.message : "Agent is unavailable",
+        });
+      }
+    }
+    const manifest = await withProgram(
+      this.projectManager,
+      args.identity.tenantId,
+      args.projectId,
+      async (repo, ref) => {
+        const text = await readProgramFile(
+          repo,
+          ref,
+          ".catamorphic/project.json",
+        );
+        try {
+          return text ? JSON.parse(text) : {};
+        } catch {
+          return {};
+        }
+      },
+    );
+    const config = z
+      .object({
+        defaultAgent: z.string().optional(),
+        startingActions: z.array(z.unknown()).optional(),
+      })
+      .safeParse(manifest);
+    const startingActions = (
+      config.success ? (config.data.startingActions ?? []) : []
+    )
+      .flatMap((raw) => {
+        const action = z
+          .object({
+            label: z.string().min(1).max(80),
+            prompt: z.string().min(1).max(20000),
+            agent: z.string().optional(),
+            when: z
+              .object({
+                builder: z.boolean().optional(),
+                permissions: z.array(z.string()).optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .safeParse(raw);
+        if (!action.success) return [];
+        const { when, ...value } = action.data;
+        if (
+          when?.builder !== undefined &&
+          when.builder !== isBuilder(args.identity, args.projectId)
+        )
+          return [];
+        if (
+          when?.permissions?.some(
+            (permission) =>
+              args.identity.scope !== undefined &&
+              !args.identity.projectPermissions?.some(
+                (grant) =>
+                  grant.projectId === args.projectId &&
+                  grant.permission === permission,
+              ),
+          )
+        )
+          return [];
+        const agentId = value.agent
+          ? formatProjectAgentId(args.projectId, value.agent)
+          : undefined;
+        if (
+          agentId &&
+          !items.some((item) => item.id === agentId && item.available)
+        )
+          return [];
+        return [
+          {
+            label: value.label,
+            prompt: value.prompt,
+            ...(agentId ? { agentId } : {}),
+          },
+        ];
+      })
+      .slice(0, 6);
+    const configured =
+      config.success && config.data.defaultAgent
+        ? formatProjectAgentId(args.projectId, config.data.defaultAgent)
+        : undefined;
+    const preferred = [
+      configured,
+      startingActions[0]?.agentId,
+      this.codingAgents.defaultAgentId(args.projectId),
+    ];
+    const defaultAgentId =
+      preferred.find((id) =>
+        items.some((item) => item.id === id && item.available),
+      ) ?? items.find((item) => item.available)?.id;
+    return { items, startingActions, defaultAgentId };
+  }
+
+  async getAgent(args: {
+    identity: Identity;
+    projectId: string;
+    agentId: string;
+  }): Promise<RegisteredCodingAgent> {
+    await this.requireProject(args.identity, args.projectId);
+    const id =
+      this.codingAgents.get(args.agentId) || parseProjectAgentId(args.agentId)
+        ? args.agentId
+        : formatProjectAgentId(args.projectId, args.agentId);
+    this.assertAgentAccess(args.identity, args.projectId, id);
+    return this.resolveAgent(id, args.projectId);
+  }
+
+  private async resolveAgent(
     agentId: string | null,
     projectId?: string,
-  ): RegisteredCodingAgent {
+  ): Promise<RegisteredCodingAgent> {
     const id = agentId ?? this.codingAgents.defaultAgentId(projectId);
     if (!id) throw new AgentNotConfiguredError(undefined);
+    const projectAgent = parseProjectAgentId(id);
+    if (projectAgent && this.codingAgents.projectAgent) {
+      if (projectAgent.projectId !== projectId) throw new AccessDeniedError();
+      const project = await this.db
+        .selectFrom("projects")
+        .select("tenant_id")
+        .where("id", "=", projectAgent.projectId)
+        .executeTakeFirstOrThrow();
+      const definitions = new AgentDefinitionsService(
+        this.db,
+        this.projectManager,
+      );
+      const entry = (
+        await definitions.listCommitted({
+          tenantId: project.tenant_id,
+          projectId: projectAgent.projectId,
+        })
+      ).find((entry) => entry.slug === projectAgent.slug);
+      if (!entry?.definition) throw new AgentNotConfiguredError(id);
+      const resolved = await this.codingAgents.projectAgent({ id, entry });
+      if (!resolved) throw new AgentNotConfiguredError(id);
+      return resolved;
+    }
     const agent = this.codingAgents.get(id);
     if (!agent) throw new AgentNotConfiguredError(id);
     return agent;
+  }
+
+  private delegationPrompt(
+    identity: Identity,
+    projectId: string,
+    sourceAgent: RegisteredCodingAgent,
+    allowFurtherDelegation: boolean | undefined,
+  ): string {
+    if (allowFurtherDelegation === false) {
+      return "Delegation is disabled for this subsession. Do not call spawn_subsession.";
+    }
+    const policy = delegationPolicy(sourceAgent.delegation);
+    if (!policy.enabled || policy.routes.length === 0) {
+      return "Delegation is disabled for this agent. Do not call spawn_subsession.";
+    }
+    const accessibleAgents = this.codingAgents.list().filter((candidate) => {
+      try {
+        this.assertAgentAccess(identity, projectId, candidate.id);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    const routes = policy.routes.map((route) => {
+      let target: string;
+      if (route.target === "self") {
+        target = sourceAgent.id;
+      } else if (route.target === "*") {
+        const allowed = accessibleAgents
+          .filter(
+            (candidate) =>
+              privilegeRank(candidate.privilege) <=
+              privilegeRank(sourceAgent.privilege),
+          )
+          .map((candidate) => candidate.id);
+        target =
+          allowed.length > 0 ? allowed.join(", ") : "no accessible agents";
+      } else {
+        const relative = route.target.match(/^project:([^:]+)$/);
+        target = relative
+          ? formatProjectAgentId(projectId, relative[1] ?? "")
+          : route.target;
+      }
+      return `- ${route.id}: ${target}${route.description ? ` (${route.description})` : ""}; onward delegation ${route.allowFurtherDelegation ? "allowed" : "disabled"}`;
+    });
+    return [
+      `You may run at most ${policy.maxConcurrentChildren} active subsessions. Call spawn_subsession with one of these route ids and, for a route listing several agents, the exact agent_id:`,
+      ...routes,
+    ].join("\n");
   }
 
   /**
@@ -2031,11 +4663,88 @@ export class AgentSessionsService {
    * session is new, was switched to another agent, or the registry now maps
    * its agent to a different harness.
    */
+  private async resolveExecutionRuntime(
+    identity: Identity,
+    projectId: string,
+    session: SessionRow,
+    agent: RegisteredCodingAgent,
+  ): Promise<AgentExecutionRuntime> {
+    if (!session.allocation_id)
+      throw new Error("Session has no execution Allocation");
+    const allocation = await this.executionAllocations.get({
+      identity,
+      allocationId: session.allocation_id,
+    });
+    if (allocation?.status !== "active") {
+      throw new Error("The session's execution Allocation is no longer active");
+    }
+    const admitted = await this.executionEnvironments.admit({
+      identity,
+      projectId,
+      environment: allocation.environmentName,
+      workerNodeId: allocation.workerNodeId ?? undefined,
+      allocationBindingId: allocation.bindingId,
+      allowed: agent.environment?.allowed,
+      requirements: {
+        ...agent.environment?.requirements,
+        workload: "agent",
+        topology: agent.topology,
+      },
+    });
+    for (const key of ["cpuMillis", "memoryMb", "storageMb", "gpu"] as const) {
+      const required = admitted.effectiveRequirements.resources?.[key];
+      const reserved = allocation.policy.requirements.resources?.[key];
+      if (required !== undefined && required !== reserved) {
+        throw new Error(
+          "This agent's resource policy changed. Move the session to apply its new workspace limits.",
+        );
+      }
+    }
+    if (admitted.binding.id !== allocation.bindingId) {
+      throw new Error(
+        "This Environment's binding changed. Move the session explicitly before continuing.",
+      );
+    }
+    if (agent.topology === "native") {
+      return {
+        bindingId: allocation.bindingId,
+        environmentName: allocation.environmentName,
+      };
+    }
+    const selectedProvider = admitted.runtime.sandboxProvider;
+    const provider =
+      selectedProvider &&
+      allocation.workerNodeId &&
+      allocation.policy.binding.trust === "managed"
+        ? allocationSandboxProvider({
+            db: this.db,
+            allocation,
+            provider: selectedProvider,
+            workerLeaseToken: admitted.runtime.workerLeaseToken,
+          })
+        : selectedProvider;
+    if (!provider)
+      throw new Error("The selected Environment has no execution provider");
+    return {
+      provider,
+      bindingId: allocation.bindingId,
+      environmentName: allocation.environmentName,
+      devSandboxes: new DevSandboxService({
+        projectManager: this.projectManager,
+        provider,
+        store: new DbSandboxStore(this.db, allocation.id),
+        resources: allocation.policy.requirements.resources,
+        ...(this.workerNode ? { sessionId: session.id } : {}),
+      }),
+    };
+  }
+
   private async ensureAnchor(
     identity: Identity,
     projectId: string,
     session: SessionRow,
     agent: RegisteredCodingAgent,
+    runtime: AgentExecutionRuntime,
   ): Promise<{
     providerSession: ProviderSession;
     sandboxProviderId?: string;
@@ -2064,6 +4773,7 @@ export class AgentSessionsService {
       const workingDirectory = await this.resolveNativePath(
         projectId,
         session.id,
+        runtime,
       );
       if (anchored && session.provider_session_id) {
         return {
@@ -2084,7 +4794,10 @@ export class AgentSessionsService {
         workingDirectory,
         sessionId: session.id,
         systemPrompt: buildAgentSystemPrompt({
-          systemPrompt: session.system_prompt ?? undefined,
+          systemPrompt:
+            [agent.systemPrompt, session.system_prompt]
+              .filter(Boolean)
+              .join("\n\n") || undefined,
           standingPrompt: this.standingAgentPrompt,
         }),
         attachedPlugins: await this.loadAttachedPlugins(projectId),
@@ -2103,15 +4816,24 @@ export class AgentSessionsService {
       return { providerSession, reanchored: true };
     }
 
+    if (!runtime.provider || !runtime.devSandboxes) {
+      throw new Error(
+        "The selected Environment has no agent workspace provider",
+      );
+    }
+
     if (anchored && session.provider_session_id && session.sandbox_id) {
-      const sandboxProviderId = await this.resolveSandboxProviderId(session);
+      const sandboxProviderId = await this.resolveSandboxProviderId(
+        session,
+        runtime.provider,
+      );
       return {
         providerSession: {
           providerSessionId: session.provider_session_id,
           sessionId: session.id,
           projectId,
           sandboxId: sandboxProviderId,
-          workingDirectory: this.projectDir(),
+          workingDirectory: this.projectDir(runtime.provider),
         },
         sandboxProviderId,
         reanchored: false,
@@ -2119,17 +4841,22 @@ export class AgentSessionsService {
     }
 
     const { handle, baseCommitSha } = await this.prepareDevSandbox(
+      { provider: runtime.provider, devSandboxes: runtime.devSandboxes },
       identity,
       projectId,
     );
     const providerSession = await agent.provider.startSession({
+      sandboxProvider: runtime.provider,
       projectId,
       userId: identity.externalUserId,
       sandboxId: handle.providerId,
-      workingDirectory: this.projectDir(),
+      workingDirectory: this.projectDir(runtime.provider),
       sessionId: session.id,
       systemPrompt: buildAgentSystemPrompt({
-        systemPrompt: session.system_prompt ?? undefined,
+        systemPrompt:
+          [agent.systemPrompt, session.system_prompt]
+            .filter(Boolean)
+            .join("\n\n") || undefined,
         standingPrompt: this.standingAgentPrompt,
       }),
       attachedPlugins: await this.loadAttachedPlugins(projectId),
@@ -2253,10 +4980,13 @@ export class AgentSessionsService {
   private async resolveNativePath(
     projectId: string,
     sessionId: string,
+    runtime: AgentExecutionRuntime,
   ): Promise<string> {
     const path = await this.nativeAgentCheckout?.resolve({
       projectId,
       sessionId,
+      bindingId: runtime.bindingId,
+      environmentName: runtime.environmentName,
     });
     if (!path) {
       throw new Error(
@@ -2268,8 +4998,8 @@ export class AgentSessionsService {
 
   // --- Dev sandbox lifecycle ---
 
-  private projectDir(): string {
-    return `${this.sandboxProvider.workspaceRoot}/project`;
+  private projectDir(provider: SandboxProvider): string {
+    return `${provider.workspaceRoot}/project`;
   }
 
   /**
@@ -2280,30 +5010,31 @@ export class AgentSessionsService {
    * are refreshed by upload so the agent always sees the user's drafts.
    */
   private async prepareDevSandbox(
+    runtime: { provider: SandboxProvider; devSandboxes: DevSandboxService },
     identity: Identity,
     projectId: string,
   ): Promise<{
     handle: { id: string; providerId: string };
     baseCommitSha: string | null;
   }> {
-    const prepared = await this.devSandboxes.ensure({
+    const prepared = await runtime.devSandboxes.ensure({
       identity,
       projectId,
       refresh: true,
     });
     await ensureBatchWorkflowSkill({
-      sandboxProvider: this.sandboxProvider,
+      sandboxProvider: runtime.provider,
       sandboxProviderId: prepared.providerId,
-      projectDir: this.projectDir(),
+      projectDir: this.projectDir(runtime.provider),
       seedFiles: this.seedFiles,
     });
     await ensureDurableWorkflowSkill({
-      sandboxProvider: this.sandboxProvider,
+      sandboxProvider: runtime.provider,
       sandboxProviderId: prepared.providerId,
-      projectDir: this.projectDir(),
+      projectDir: this.projectDir(runtime.provider),
       seedFiles: this.seedFiles,
     });
-    await this.ensureGitBaseline(prepared.providerId);
+    await this.ensureGitBaseline(runtime.provider, prepared.providerId);
     return {
       handle: { id: prepared.id, providerId: prepared.providerId },
       baseCommitSha: prepared.baseCommitSha,
@@ -2311,6 +5042,7 @@ export class AgentSessionsService {
   }
 
   private async commitWorkflowSkillBaseline(
+    provider: SandboxProvider,
     sandboxProviderId: string,
     skillPaths: readonly string[],
   ): Promise<void> {
@@ -2321,11 +5053,9 @@ export class AgentSessionsService {
     ].join(" && ");
     // cwd via ExecOpts: see syncSandboxChanges — a `cd /workspace/...`
     // embedded in the command breaks providers without a mounted root.
-    const result = await this.sandboxProvider.executeCommand(
-      sandboxProviderId,
-      command,
-      { cwd: this.projectDir() },
-    );
+    const result = await provider.executeCommand(sandboxProviderId, command, {
+      cwd: this.projectDir(provider),
+    });
     if (result.exitCode !== 0) {
       throw new Error(`Failed to baseline workflow skills: ${result.result}`);
     }
@@ -2336,18 +5066,19 @@ export class AgentSessionsService {
    * baseline, so post-turn change detection (`git status --porcelain`) sees
    * exactly what the agent modified.
    */
-  private async ensureGitBaseline(sandboxProviderId: string): Promise<void> {
-    const dir = this.projectDir();
+  private async ensureGitBaseline(
+    provider: SandboxProvider,
+    sandboxProviderId: string,
+  ): Promise<void> {
+    const dir = this.projectDir(provider);
     const command = [
       "(git rev-parse --git-dir >/dev/null 2>&1 || git init -b main >/dev/null)",
       "git add -A",
       `(git -c user.name=catamorphic -c user.email=agent@catamorphic.dev commit -m baseline --quiet || true)`,
     ].join(" && ");
-    const result = await this.sandboxProvider.executeCommand(
-      sandboxProviderId,
-      command,
-      { cwd: dir },
-    );
+    const result = await provider.executeCommand(sandboxProviderId, command, {
+      cwd: dir,
+    });
     if (result.exitCode !== 0) {
       throw new Error(
         `Failed to prepare sandbox git baseline: ${result.result}`,
@@ -2355,7 +5086,10 @@ export class AgentSessionsService {
     }
   }
 
-  private async resolveSandboxProviderId(session: SessionRow): Promise<string> {
+  private async resolveSandboxProviderId(
+    session: SessionRow,
+    provider: SandboxProvider,
+  ): Promise<string> {
     if (!session.sandbox_id) {
       throw new AgentSessionNotFoundError(session.id);
     }
@@ -2366,9 +5100,9 @@ export class AgentSessionsService {
       .executeTakeFirst();
     if (!row) throw new AgentSessionNotFoundError(session.id);
 
-    const status = await this.sandboxProvider.getSandboxStatus(row.provider_id);
+    const status = await provider.getSandboxStatus(row.provider_id);
     if (status === "stopped" || status === "archived") {
-      await this.sandboxProvider.startSandbox(row.provider_id);
+      await provider.startSandbox(row.provider_id);
     }
     return row.provider_id;
   }
@@ -2381,17 +5115,20 @@ export class AgentSessionsService {
    * sandbox baseline is then advanced so the next turn diffs incrementally.
    */
   private async syncBackChanges(
+    provider: SandboxProvider,
     identity: Identity,
     projectId: string,
     sandboxProviderId: string,
+    sessionId?: string,
   ): Promise<SyncedFileChange[]> {
     return syncSandboxChanges({
-      provider: this.sandboxProvider,
+      provider: provider,
       projectManager: this.projectManager,
       identity,
       projectId,
       sandboxProviderId,
-      projectDir: this.projectDir(),
+      projectDir: this.projectDir(provider),
+      sessionId,
     });
   }
 
@@ -2413,14 +5150,21 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     anchor: { providerSession: ProviderSession; sandboxProviderId?: string },
+    sessionId: string,
   ): Promise<string | null> {
     if (!this.storeSync) return null;
     if (!anchor.sandboxProviderId) return null;
-    const repo = await this.projectManager.openDev(
-      identity.tenantId,
-      projectId,
-      identity.externalUserId,
-    );
+    const repo = this.workerNode
+      ? await this.projectManager.openSession({
+          tenantId: identity.tenantId,
+          projectId,
+          sessionId,
+        })
+      : await this.projectManager.openDev(
+          identity.tenantId,
+          projectId,
+          identity.externalUserId,
+        );
     try {
       return repo.repoPath;
     } finally {
@@ -2447,6 +5191,14 @@ export class AgentSessionsService {
           message: checkpointMessage(userMessage),
         });
       }
+      if (this.workerNode)
+        return await this.projectManager.checkpointSession({
+          tenantId: identity.tenantId,
+          projectId,
+          sessionId: execution.sessionId,
+          message: checkpointMessage(userMessage),
+          author: CHECKPOINT_AUTHOR,
+        });
       const repo = await this.projectManager.openDev(
         identity.tenantId,
         projectId,
@@ -2468,6 +5220,11 @@ export class AgentSessionsService {
           error instanceof Error ? error.message : String(error)
         }`,
       );
+      if (this.workerNode)
+        throw new Error(
+          "Session checkpoint could not be saved. Recover the workspace before retrying.",
+          { cause: error },
+        );
       return null;
     }
   }
@@ -2567,6 +5324,10 @@ export class AgentSessionsService {
     projectId: string,
     agentId: string | null,
   ): void {
+    const projectAgent = agentId ? parseProjectAgentId(agentId) : undefined;
+    if (projectAgent && projectAgent.projectId !== projectId) {
+      throw new AccessDeniedError();
+    }
     if (isBuilder(identity, projectId)) return;
     if (!this.coveringAgentRef(identity, projectId, agentId)) {
       throw new AccessDeniedError();
@@ -2667,6 +5428,245 @@ export class AgentSessionsService {
     await this.requireSession(identity, projectId, sessionId);
   }
 
+  /** Promote a latent session and create durable user attention. */
+  async requestAttention(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+  ): Promise<AgentSession> {
+    await this.requireSession(identity, projectId, sessionId);
+    await this.db.transaction().execute(async (transaction) => {
+      await transaction
+        .updateTable("agent_sessions")
+        .set(({ ref }) => ({
+          attention_revision: sql`${ref("attention_revision")} + 1`,
+          updated_at: new Date(),
+        }))
+        .where("id", "=", sessionId)
+        .execute();
+      await transaction
+        .insertInto("agent_session_views")
+        .values({
+          session_id: sessionId,
+          tenant_id: identity.tenantId,
+          external_user_id: identity.externalUserId,
+          visibility: "promoted",
+          previous_visibility: "promoted",
+        })
+        .onConflict((conflict) =>
+          conflict
+            .columns(["session_id", "tenant_id", "external_user_id"])
+            .doUpdateSet(({ ref }) => ({
+              visibility: sql`CASE WHEN ${ref("agent_session_views.visibility")} = 'archived' THEN 'archived' ELSE 'promoted' END`,
+              previous_visibility: "promoted",
+              updated_at: new Date(),
+            })),
+        )
+        .execute();
+    });
+    const row = await this.db
+      .selectFrom("agent_sessions")
+      .selectAll()
+      .where("id", "=", sessionId)
+      .executeTakeFirstOrThrow();
+    const presentation = (await this.presentations(identity, [sessionId])).get(
+      sessionId,
+    );
+    return mapSession(
+      row,
+      this.runningTurns.has(sessionId),
+      this.hostId,
+      this.authorityLeaseMs,
+      presentation,
+    );
+  }
+
+  private async reconcileDelegations(
+    resolveIdentity: (args: {
+      tenantId: string;
+      projectId: string;
+      externalUserId: string;
+    }) => Promise<Identity | null>,
+  ): Promise<void> {
+    const children = await this.db
+      .selectFrom("agent_delegations")
+      .innerJoin(
+        "agent_sessions",
+        "agent_sessions.id",
+        "agent_delegations.target_session_id",
+      )
+      .select([
+        "agent_delegations.tenant_id",
+        "agent_delegations.project_id",
+        "agent_sessions.id",
+        "agent_sessions.external_user_id",
+      ])
+      .where("agent_delegations.status", "=", "running")
+      .where("agent_sessions.authority_host_id", "=", this.hostId)
+      .where(({ not, exists, selectFrom }) =>
+        not(
+          exists(
+            selectFrom("agent_turns")
+              .select("id")
+              .whereRef("agent_turns.session_id", "=", "agent_sessions.id")
+              .where("status", "in", ["queued", "running", "held"]),
+          ),
+        ),
+      )
+      .execute();
+    for (const child of children) {
+      try {
+        const identity = await resolveIdentity({
+          tenantId: child.tenant_id,
+          projectId: child.project_id,
+          externalUserId: child.external_user_id,
+        });
+        if (!identity) continue;
+        const message = await this.db
+          .selectFrom("agent_messages")
+          .selectAll()
+          .where("session_id", "=", child.id)
+          .where("role", "=", "assistant")
+          .orderBy("seq", "desc")
+          .executeTakeFirst();
+        const status = (message?.metadata as JsonObject | null)?.status;
+        if (
+          message &&
+          (status === "completed" ||
+            status === "failed" ||
+            status === "awaiting_input")
+        )
+          await this.settleDelegation({
+            identity,
+            projectId: child.project_id,
+            sessionId: child.id,
+            resultMessageId: message.id,
+            status,
+            content: message.content,
+          });
+      } catch (error) {
+        console.warn(
+          `[catamorphic] Subsession result delivery failed for ${child.id}`,
+          error,
+        );
+      }
+    }
+  }
+
+  private async settleDelegation(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    resultMessageId: string;
+    status: AgentTurnSettledEvent["status"];
+    content: string;
+  }): Promise<void> {
+    try {
+      await this.publishDelegationResult(input);
+    } catch (error) {
+      // The running delegation is the durable outbox. The worker retries
+      // publication; never turn completed agent work into another attempt.
+      console.warn(
+        "[catamorphic] Subsession result publication deferred",
+        error,
+      );
+    }
+  }
+
+  private async publishDelegationResult(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    resultMessageId: string;
+    status: AgentTurnSettledEvent["status"];
+    content: string;
+  }): Promise<void> {
+    const delegation = await this.db
+      .selectFrom("agent_delegations")
+      .selectAll()
+      .where("target_session_id", "=", input.sessionId)
+      .where("status", "=", "running")
+      .executeTakeFirst();
+    if (!delegation) return;
+
+    if (input.status === "awaiting_input") {
+      const delivered = await this.db
+        .selectFrom("agent_messages")
+        .select("id")
+        .where("session_id", "=", delegation.source_session_id)
+        .where(
+          "idempotency_key",
+          "=",
+          `delegation:${delegation.id}:awaiting-input`,
+        )
+        .executeTakeFirst();
+      if (delivered) return;
+      await this.requestAttention(
+        input.identity,
+        input.projectId,
+        input.sessionId,
+      );
+      await this.deliver(
+        input.identity,
+        input.projectId,
+        delegation.source_session_id,
+        {
+          content: `Subsession ${input.sessionId} needs user input.`,
+          author: {
+            kind: "agent",
+            sessionId: input.sessionId,
+            agentId: null,
+          },
+          mode: "next_turn",
+          idempotencyKey: `delegation:${delegation.id}:awaiting-input`,
+        },
+      );
+      return;
+    }
+
+    const status = input.status === "completed" ? "completed" : "failed";
+    if (status === "failed")
+      await this.requestAttention(
+        input.identity,
+        input.projectId,
+        input.sessionId,
+      );
+    const result =
+      input.content.trim() || `Subsession ${input.sessionId} ${status}.`;
+    await this.deliver(
+      input.identity,
+      input.projectId,
+      delegation.source_session_id,
+      {
+        content: result,
+        author: {
+          kind: "agent",
+          sessionId: input.sessionId,
+          agentId: null,
+        },
+        mode: "next_turn",
+        idempotencyKey: `delegation:${delegation.id}:result`,
+        metadata: {
+          delegation: {
+            id: delegation.id,
+            childSessionId: input.sessionId,
+            status,
+          },
+        },
+      },
+    );
+    await this.db
+      .updateTable("agent_delegations")
+      .set({
+        status,
+        result_message_id: input.resultMessageId,
+        completed_at: new Date(),
+      })
+      .where("id", "=", delegation.id)
+      .where("status", "=", "running")
+      .executeTakeFirst();
+  }
+
   private async requireSession(
     identity: Identity,
     projectId: string,
@@ -2680,24 +5680,72 @@ export class AgentSessionsService {
       .selectAll()
       .executeTakeFirst();
     if (!row) throw new AgentSessionNotFoundError(sessionId);
-    if (!isBuilder(identity, projectId)) {
-      // Own conversations only, on an agent the scope still covers. One
-      // uniform denial: a viewer must not learn which session ids exist.
-      if (
-        row.external_user_id !== identity.externalUserId ||
-        !this.coveringAgentRef(identity, projectId, row.agent_id)
-      ) {
-        throw new AccessDeniedError();
-      }
-    }
+    assertAgentSessionAccess({
+      identity,
+      projectId,
+      externalUserId: row.external_user_id,
+      agentId: row.agent_id,
+    });
     return row;
+  }
+
+  private async presentations(
+    identity: Identity,
+    sessionIds: readonly string[],
+  ): Promise<Map<string, SessionPresentation>> {
+    if (sessionIds.length === 0) return new Map();
+    const rows = await this.db
+      .selectFrom("agent_session_views")
+      .select(["session_id", "visibility", "archived_at"])
+      .where("tenant_id", "=", identity.tenantId)
+      .where("external_user_id", "=", identity.externalUserId)
+      .where("session_id", "in", [...sessionIds])
+      .execute();
+    return new Map(
+      rows.map((row) => [
+        row.session_id,
+        {
+          visibility: sessionVisibility(row.visibility),
+          archivedAt: row.archived_at,
+        },
+      ]),
+    );
+  }
+
+  private async promoteSession(
+    identity: Identity,
+    sessionId: string,
+  ): Promise<void> {
+    await this.db
+      .insertInto("agent_session_views")
+      .values({
+        session_id: sessionId,
+        tenant_id: identity.tenantId,
+        external_user_id: identity.externalUserId,
+        visibility: "promoted",
+        previous_visibility: "promoted",
+      })
+      .onConflict((conflict) =>
+        conflict
+          .columns(["session_id", "tenant_id", "external_user_id"])
+          .doUpdateSet(({ ref }) => ({
+            visibility: sql`CASE WHEN ${ref("agent_session_views.visibility")} = 'archived' THEN 'archived' ELSE 'promoted' END`,
+            previous_visibility: "promoted",
+            updated_at: new Date(),
+          })),
+      )
+      .execute();
   }
 }
 
 function progressMetadata(events: AgentEvent[]): JsonObject {
+  const partialContent = [...events]
+    .reverse()
+    .find((event) => event.type === "text")?.content;
   return {
     status: "in_progress",
     events: stepLogEvents(events),
+    ...(partialContent ? { partialContent } : {}),
   };
 }
 
@@ -2707,9 +5755,26 @@ function progressMetadata(events: AgentEvent[]): JsonObject {
  * rendered as activity rows — so they are filtered out here.
  */
 function stepLogEvents(events: AgentEvent[]): JsonObject[] {
-  return JSON.parse(
-    JSON.stringify(events.filter((event) => event.type !== "usage")),
-  ) as JsonObject[];
+  const steps: AgentEvent[] = [];
+  const invocations = new Map<string, number>();
+  for (const event of events) {
+    if (event.type === "usage") continue;
+    // Providers send cumulative invocation updates. Keep the started action
+    // visible if it never finishes, and enrich that row when its result arrives.
+    const key =
+      event.toolUseId &&
+      (event.type === "command" || event.type === "tool_call")
+        ? `${event.type}:${event.toolUseId}`
+        : undefined;
+    const existing = key ? invocations.get(key) : undefined;
+    if (existing !== undefined)
+      steps[existing] = { ...steps[existing], ...event };
+    else {
+      if (key) invocations.set(key, steps.length);
+      steps.push(event);
+    }
+  }
+  return JSON.parse(JSON.stringify(steps)) as JsonObject[];
 }
 
 export function activityLabel(event: AgentEvent): string {
@@ -2850,28 +5915,210 @@ function hostOf(serverUrl: string): string {
   }
 }
 
-function mapSession(row: SessionRow, running = false): AgentSession {
+function mapSession(
+  row: SessionRow,
+  running = false,
+  hostId?: string,
+  authorityLeaseMs = 90_000,
+  presentation?: SessionPresentation,
+): AgentSession {
+  const leaseExpiresAt = new Date(
+    row.authority_seen_at.getTime() + authorityLeaseMs,
+  );
+  const resumable =
+    hostId !== undefined &&
+    row.status === "active" &&
+    row.handoff_status === "none" &&
+    row.authority_host_id !== "unassigned" &&
+    row.authority_host_id !== hostId &&
+    row.mirror_message_count > 0 &&
+    leaseExpiresAt.getTime() <= Date.now();
   return {
     id: row.id,
     projectId: row.project_id,
     externalUserId: row.external_user_id,
     provider: row.provider,
+    source: parseSessionSource(row.source),
     providerSessionId: row.provider_session_id,
     sandboxId: row.sandbox_id,
     environment: row.environment_name,
     allocationId: row.allocation_id,
     agentId: row.agent_id,
+    model: row.model,
     modelEffort: (row.model_effort as AgentEffort | null) ?? null,
     title: row.title,
     icon: row.icon,
+    forkedFromSessionId: row.forked_from_session_id,
     parentSessionId: row.parent_session_id,
+    visibility: presentation?.visibility ?? "promoted",
+    archivedAt: presentation?.archivedAt?.toISOString() ?? null,
     activity: row.activity,
+    todos: agentTodos(row.todos),
+    authorityHostId: row.authority_host_id,
+    authorityRevision: Number(row.authority_revision),
+    authoritySeenAt: row.authority_seen_at.toISOString(),
+    mirrorMessageCount: row.mirror_message_count,
+    handoffStatus: parseHandoffStatus(row.handoff_status),
+    handoffDestinationHostId: row.handoff_destination_host_id,
+    resumable,
+    pausedAt: resumable ? leaseExpiresAt.toISOString() : null,
     running,
+    attentionRevision: Number(row.attention_revision),
+    attentionSeenRevision: Number(row.attention_seen_revision),
+    attentionRequired:
+      Number(row.attention_revision) > Number(row.attention_seen_revision),
     status: row.status as "active" | "closed",
     baseCommitSha: row.base_commit_sha,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+function sessionVisibility(value: string): SessionVisibility {
+  if (value === "latent" || value === "promoted" || value === "archived") {
+    return value;
+  }
+  throw new Error(`Invalid session visibility '${value}'`);
+}
+
+const DEFAULT_DELEGATION_POLICY: AgentDelegationPolicy = {
+  enabled: true,
+  maxConcurrentChildren: 10,
+  routes: [
+    {
+      id: "same-agent",
+      target: "self",
+      allowFurtherDelegation: true,
+    },
+  ],
+};
+
+function delegationPolicy(
+  policy: AgentDelegationPolicy | undefined,
+): AgentDelegationPolicy {
+  return policy ?? DEFAULT_DELEGATION_POLICY;
+}
+
+function privilegeRank(
+  privilege: "read-only" | "edit" | "full-access" | undefined,
+): number {
+  if (privilege === "full-access") return 2;
+  if (privilege === "edit") return 1;
+  return 0;
+}
+
+function resolveDelegationTarget(input: {
+  target: string;
+  requestedAgentId?: string;
+  sourceAgentId: string | undefined;
+  projectId: string;
+}): string {
+  if (input.target === "self") {
+    if (!input.sourceAgentId) {
+      throw new AgentNotConfiguredError(undefined);
+    }
+    if (
+      input.requestedAgentId &&
+      input.requestedAgentId !== input.sourceAgentId
+    ) {
+      throw new AgentDelegationDeniedError(
+        "The selected route only permits the source agent",
+      );
+    }
+    return input.sourceAgentId;
+  }
+  if (input.target === "*") {
+    if (!input.requestedAgentId) {
+      throw new AgentDelegationDeniedError(
+        "This route requires an explicit target agent",
+      );
+    }
+    return input.requestedAgentId;
+  }
+  const relativeProject = input.target.match(/^project:([^:]+)$/);
+  const resolved = relativeProject
+    ? formatProjectAgentId(input.projectId, relativeProject[1] ?? "")
+    : input.target;
+  if (input.requestedAgentId && input.requestedAgentId !== resolved) {
+    throw new AgentDelegationDeniedError(
+      `The selected route only permits agent '${resolved}'`,
+    );
+  }
+  return resolved;
+}
+
+function workflowNotification(
+  metadata: JsonObject | null | undefined,
+): { title?: string; body?: string } | undefined {
+  const value = metadata?.workflowNotification;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const title =
+    typeof value.title === "string" && value.title.trim()
+      ? value.title.trim()
+      : undefined;
+  const body =
+    typeof value.body === "string" && value.body.trim()
+      ? value.body.trim()
+      : undefined;
+  return {
+    ...(title ? { title } : {}),
+    ...(body ? { body } : {}),
+  };
+}
+
+function parseSessionSource(value: string): AgentSessionSource {
+  switch (value) {
+    case "desktop":
+    case "mobile":
+    case "slack":
+    case "claude":
+    case "mcp":
+    case "api":
+      return value;
+    default:
+      return "api";
+  }
+}
+
+function parseHandoffStatus(value: string): AgentSession["handoffStatus"] {
+  if (value === "none" || value === "pending") return value;
+  throw new Error(`Invalid agent session handoff status '${value}'`);
+}
+
+function agentTodos(value: unknown): AgentTodo[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!isRecord(entry)) return [];
+    const item = entry;
+    if (
+      typeof item.id !== "string" ||
+      typeof item.title !== "string" ||
+      typeof item.description !== "string" ||
+      (item.status !== "pending" &&
+        item.status !== "in_progress" &&
+        item.status !== "completed")
+    ) {
+      return [];
+    }
+    return [
+      {
+        id: item.id,
+        title: item.title,
+        description: item.description,
+        status: item.status,
+      },
+    ];
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function agentTodosJson(value: readonly AgentTodoInput[]) {
+  return sql<Json>`${JSON.stringify(value)}::jsonb`;
 }
 
 function mapMessage(row: MessageRow): AgentMessage {
@@ -2882,6 +6129,88 @@ function mapMessage(row: MessageRow): AgentMessage {
     content: row.content,
     commitSha: row.commit_sha,
     metadata: row.metadata as Record<string, unknown> | null,
+    author: parseMessageAuthor(row),
+    deliveryMode: parseMessageDeliveryMode(row.delivery_mode),
+    idempotencyKey: row.idempotency_key,
     createdAt: row.created_at.toISOString(),
   };
+}
+
+export function modelVisibleDelivery(
+  content: string,
+  author: SessionMessageAuthor,
+): string {
+  switch (author.kind) {
+    case "user":
+      return content;
+    case "agent":
+      return `[Catamorphic agent message from session ${author.sessionId}${author.agentId ? ` using ${author.agentId}` : ""}. This message was not written by the user.]\n\n${content}`;
+    case "workflow":
+      return `[Catamorphic workflow message from ${author.workflowName}, run ${author.runId}. This message was not written by the user.]\n\n${content}`;
+    case "watcher":
+      return `[Catamorphic watcher message from ${author.watcherId}${author.runId ? `, run ${author.runId}` : ""}. This message was not written by the user.]\n\n${content}`;
+    case "system":
+      return `[Catamorphic system message: ${author.code}. This message was not written by the user.]\n\n${content}`;
+  }
+}
+
+function parseMessageDeliveryMode(value: string): SessionDeliveryMode {
+  if (
+    value !== "message_only" &&
+    value !== "next_turn" &&
+    value !== "interrupt"
+  ) {
+    throw new Error(`Invalid agent message delivery mode '${value}'`);
+  }
+  return value;
+}
+
+function parseMessageAuthor(row: MessageRow): SessionMessageAuthor {
+  const payload = row.author_payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error(`Agent message '${row.id}' has an invalid author payload`);
+  }
+  if (
+    row.author_kind === "user" &&
+    typeof payload.externalUserId === "string"
+  ) {
+    return { kind: "user", externalUserId: payload.externalUserId };
+  }
+  if (
+    row.author_kind === "agent" &&
+    typeof payload.sessionId === "string" &&
+    (typeof payload.agentId === "string" || payload.agentId === null)
+  ) {
+    return {
+      kind: "agent",
+      sessionId: payload.sessionId,
+      agentId: payload.agentId,
+    };
+  }
+  if (
+    row.author_kind === "workflow" &&
+    typeof payload.runId === "string" &&
+    typeof payload.workflowName === "string"
+  ) {
+    return {
+      kind: "workflow",
+      runId: payload.runId,
+      workflowName: payload.workflowName,
+    };
+  }
+  if (
+    row.author_kind === "watcher" &&
+    typeof payload.watcherId === "string" &&
+    (payload.runId === undefined || typeof payload.runId === "string")
+  ) {
+    return {
+      kind: "watcher",
+      watcherId: payload.watcherId,
+      ...(typeof payload.runId === "string" ? { runId: payload.runId } : {}),
+    };
+  }
+  if (row.author_kind === "system" && typeof payload.code === "string") {
+    return { kind: "system", code: payload.code };
+  }
+  throw new Error(`Agent message '${row.id}' has an invalid author payload`);
 }

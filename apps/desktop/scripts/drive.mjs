@@ -1,6 +1,7 @@
 // CDP driver for UI automation of the desktop app in dev mode. Zero deps
-// (uses Node's built-in WebSocket). Start the app with:
-//   env -u ELECTRON_RUN_AS_NODE bunx electron-vite dev -- --remote-debugging-port=9333
+// (uses Node's built-in WebSocket). From the repository root, start the app
+// with `bun run dev:desktop`, then set CDP_PORT to the port in the
+// development orchestrator's printed `CDP:` URL before invoking this script.
 //
 // Usage: node scripts/drive.mjs <command> [args...]
 //   shot <path>                - screenshot the page to a png

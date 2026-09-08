@@ -1,5 +1,8 @@
 # 0063 - Agent coordination and optional worktree isolation
 
+> Local-checkout import, checkpoint, and publication behavior is refined by [ADR 0104](0104-local-checkouts-and-explicit-file-sharing.md).
+
+
 - **Status:** Accepted
 - **Date:** 2026-08-23
 - **Builds on:** 0044 (whole-checkout checkpoints), 0045 (desktop worktrees), 0050/0056 (agent definitions and configuration)

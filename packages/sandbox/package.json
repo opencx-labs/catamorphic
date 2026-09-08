@@ -15,19 +15,26 @@
       "bun": "./src/coding-agent/text-attachments.ts",
       "import": "./dist/attachments.js",
       "types": "./dist/coding-agent/text-attachments.d.ts"
+    },
+    "./testing": {
+      "development": "./src/coding-agent/runtime-conformance.ts",
+      "bun": "./src/coding-agent/runtime-conformance.ts",
+      "import": "./dist/testing.js",
+      "types": "./dist/coding-agent/runtime-conformance.d.ts"
     }
   },
   "scripts": {
     "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
     "dev": "tsup --watch --no-clean",
-    "test": "vitest run --config ../../vitest.config.ts",
+    "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/sandbox --config ../../vitest.config.ts",
     "typecheck": "tsgo --project ./tsconfig.json"
   },
   "dependencies": {
     "@catamorphic/otel": "workspace:*",
     "@catamorphic/runtime": "workspace:*",
     "@catamorphic/workflow": "workspace:*",
-    "@catamorphic/app": "workspace:*"
+    "@catamorphic/app": "workspace:*",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "^26.1.1"

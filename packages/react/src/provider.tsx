@@ -12,6 +12,8 @@ export interface CatamorphicContextValue {
   apiClient: CatamorphicApiClient;
   /** API origin used for browser-return OAuth callbacks, when known. */
   baseUrl?: string;
+  /** Full browser return URL when the host mounts a custom API prefix. */
+  authorizationRedirectUri?: string;
 }
 
 const CatamorphicContext = createContext<CatamorphicContextValue | null>(null);
@@ -20,6 +22,8 @@ export interface CatamorphicProviderProps {
   apiClient: CatamorphicApiClient;
   /** API origin used for browser-return OAuth callbacks. */
   baseUrl?: string;
+  /** Full browser return URL when the host mounts a custom API prefix. */
+  authorizationRedirectUri?: string;
   /**
    * TanStack Query client. Hosts that already have one pass it; if omitted
    * we create an internal one so the provider works standalone.
@@ -31,6 +35,7 @@ export interface CatamorphicProviderProps {
 export function CatamorphicProvider({
   apiClient,
   baseUrl,
+  authorizationRedirectUri,
   queryClient,
   children,
 }: CatamorphicProviderProps) {
@@ -40,8 +45,12 @@ export function CatamorphicProvider({
   );
 
   const value = useMemo<CatamorphicContextValue>(
-    () => ({ apiClient, ...(baseUrl ? { baseUrl } : {}) }),
-    [apiClient, baseUrl],
+    () => ({
+      apiClient,
+      ...(baseUrl ? { baseUrl } : {}),
+      ...(authorizationRedirectUri ? { authorizationRedirectUri } : {}),
+    }),
+    [apiClient, baseUrl, authorizationRedirectUri],
   );
 
   return (

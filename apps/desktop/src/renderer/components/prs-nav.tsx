@@ -1,11 +1,14 @@
 import { ChevronRight, GitPullRequest, MoreHorizontal } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import type { OpenMode } from "../../shared/open-mode.js";
 import {
   desktopApi,
   type PullRequestFile,
   type PullRequestSummary,
   type SidebarMenuEntry,
 } from "../lib/desktop-api.js";
+import { Collapsible } from "./collapsible.js";
+import { OpenResourceButton } from "./open-resource-button.js";
 import { ShortcutHint } from "./shortcut-hint.js";
 import { MenuPortal } from "./sidebar-item-row.js";
 import type { WorkspaceTab } from "./workspace-tabs.js";
@@ -39,13 +42,14 @@ export function PrsNav({
   onEmptyChange,
 }: {
   projectId: string;
-  onOpenDiff: (tab: WorkspaceTab) => void;
-  onOpenUrl: (url: string, mode: "tab" | "replace") => void;
+  onOpenDiff: (tab: WorkspaceTab, mode?: OpenMode) => void;
+  onOpenUrl: (url: string, mode: OpenMode) => void;
   /** Reports emptiness up so hide-when-empty sections can drop entirely. */
   onEmptyChange?: (empty: boolean) => void;
 }) {
   const [prs, setPrs] = useState<PullRequestSummary[] | null>(null);
-  const isEmpty = !prs || prs.length === 0;
+  const [error, setError] = useState<string | null>(null);
+  const isEmpty = !error && (!prs || prs.length === 0);
   useEffect(() => {
     onEmptyChange?.(isEmpty);
   }, [isEmpty, onEmptyChange]);
@@ -53,21 +57,47 @@ export function PrsNav({
   useEffect(() => {
     let cancelled = false;
     setPrs(null);
-    const load = () =>
+    setError(null);
+    let revision = 0;
+    const load = () => {
+      const request = ++revision;
       void desktopApi
         .prList(projectId)
         .then((next) => {
-          if (!cancelled) setPrs(next);
+          if (!cancelled && request === revision) {
+            setPrs(next);
+            setError(null);
+          }
         })
-        .catch(() => {});
+        .catch((reason) => {
+          if (!cancelled && request === revision)
+            setError(
+              reason instanceof Error
+                ? reason.message
+                : "Could not load pull requests.",
+            );
+        });
+    };
     load();
     const timer = window.setInterval(load, REFRESH_MS);
+    window.addEventListener("focus", load);
+    const unsubscribe = desktopApi.onGitChanged((change) => {
+      if (change.projectId === projectId) load();
+    });
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      window.removeEventListener("focus", load);
+      unsubscribe();
     };
   }, [projectId]);
 
+  if (error)
+    return (
+      <p role="alert" className="break-words px-2 py-1 text-xs text-danger">
+        {error}
+      </p>
+    );
   if (!prs) return null;
   if (prs.length === 0) {
     return (
@@ -78,7 +108,7 @@ export function PrsNav({
     <ul className="flex flex-col gap-0.5">
       {prs.map((pr) => (
         <PrRow
-          key={pr.number}
+          key={`${projectId}:${pr.number}`}
           pr={pr}
           projectId={projectId}
           onOpenDiff={onOpenDiff}
@@ -97,28 +127,38 @@ function PrRow({
 }: {
   pr: PullRequestSummary;
   projectId: string;
-  onOpenDiff: (tab: WorkspaceTab) => void;
-  onOpenUrl: (url: string, mode: "tab" | "replace") => void;
+  onOpenDiff: (tab: WorkspaceTab, mode?: OpenMode) => void;
+  onOpenUrl: (url: string, mode: OpenMode) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  // Fetched once per mount, on first expand; a PR's file list changes
-  // far slower than the expand/collapse toggle.
+  // Refresh patches when the PR changes or its disclosure reopens.
+  const [fileError, setFileError] = useState<string | null>(null);
   const [files, setFiles] = useState<PullRequestFile[] | null>(null);
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    if (!menuAt) return;
+    if (!menuOpen) return;
     const dismiss = (event: Event) => {
-      if ((event.target as HTMLElement)?.closest?.("[data-sidebar-menu]")) {
+      if (
+        event.target instanceof Element &&
+        event.target.closest("[data-sidebar-menu]")
+      ) {
         return;
       }
-      setMenuAt(null);
+      if (
+        event.target instanceof Node &&
+        menuButtonRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+      setMenuOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        setMenuAt(null);
+        setMenuOpen(false);
       }
     };
     window.addEventListener("pointerdown", dismiss);
@@ -129,17 +169,32 @@ function PrRow({
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("scroll", dismiss, true);
     };
-  }, [menuAt]);
+  }, [menuOpen]);
 
-  const toggle = () => {
-    setExpanded((value) => !value);
-    if (files === null) {
-      void desktopApi
-        .prFiles(projectId, pr.number)
-        .then(setFiles)
-        .catch(() => setFiles([]));
-    }
-  };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: A PR update invalidates its cached file patches.
+  useEffect(() => {
+    if (!expanded) return;
+    let cancelled = false;
+    setFileError(null);
+    setFiles(null);
+    void desktopApi
+      .prFiles(projectId, pr.number)
+      .then((next) => {
+        if (!cancelled) setFiles(next);
+      })
+      .catch((reason) => {
+        if (!cancelled)
+          setFileError(
+            reason instanceof Error
+              ? reason.message
+              : "Could not load changed files.",
+          );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [expanded, projectId, pr.number, pr.updatedAt]);
+  const toggle = () => setExpanded((value) => !value);
 
   const fileDiffTab = (file: PullRequestFile): WorkspaceTab => ({
     kind: "diff",
@@ -164,6 +219,7 @@ function PrRow({
         onContextMenu={(event) => {
           event.preventDefault();
           setMenuAt({ x: event.clientX, y: event.clientY });
+          setMenuOpen(true);
         }}
       >
         <ShortcutHint label={`${pr.author} · ${pr.head} → ${pr.base}`}>
@@ -188,32 +244,45 @@ function PrRow({
           ref={menuButtonRef}
           type="button"
           onClick={() => {
+            if (menuOpen) {
+              setMenuOpen(false);
+              return;
+            }
             const rect = menuButtonRef.current?.getBoundingClientRect();
-            if (rect) setMenuAt({ x: rect.right, y: rect.bottom + 4 });
+            if (rect) {
+              setMenuAt({ x: rect.right, y: rect.bottom + 4 });
+              setMenuOpen(true);
+            }
           }}
           className={`mr-1 grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg ${
-            menuAt ? "" : "opacity-0 group-hover:opacity-100"
+            menuOpen ? "" : "opacity-0 group-hover:opacity-100"
           }`}
           aria-label={`More actions for #${pr.number}`}
           aria-haspopup="menu"
-          aria-expanded={menuAt !== null}
+          aria-expanded={menuOpen}
         >
           <MoreHorizontal className="size-3.5" />
         </button>
         {menuAt && (
           <MenuPortal
+            open={menuOpen}
             position={menuAt}
             entries={PR_MENU}
             onPick={() => {
-              setMenuAt(null);
+              setMenuOpen(false);
               onOpenUrl(pr.url, "tab");
             }}
+            onExited={() => setMenuAt(null)}
           />
         )}
       </div>
-      {expanded && (
+      <Collapsible open={expanded}>
         <ul className="ml-5 flex flex-col gap-0.5">
-          {files === null ? (
+          {fileError ? (
+            <li role="alert" className="px-2 py-1 text-xs text-danger">
+              {fileError}
+            </li>
+          ) : files === null ? (
             <li className="px-2 py-1 text-xs text-fg-faint">Loading…</li>
           ) : files.length === 0 ? (
             <li className="px-2 py-1 text-xs text-fg-faint">No files.</li>
@@ -227,9 +296,9 @@ function PrRow({
                 separator >= 0 ? file.path.slice(separator + 1) : file.path;
               return (
                 <li key={file.path}>
-                  <button
+                  <OpenResourceButton
                     type="button"
-                    onClick={() => onOpenDiff(fileDiffTab(file))}
+                    onOpen={(mode) => onOpenDiff(fileDiffTab(file), mode)}
                     className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left font-mono text-xs transition-colors duration-150 hover:bg-bg-overlay/60"
                   >
                     <span className="min-w-0 flex-1 truncate">
@@ -244,13 +313,13 @@ function PrRow({
                     <span className="shrink-0 text-[11px] text-fg-muted">
                       +{file.additions} −{file.deletions}
                     </span>
-                  </button>
+                  </OpenResourceButton>
                 </li>
               );
             })
           )}
         </ul>
-      )}
+      </Collapsible>
     </li>
   );
 }

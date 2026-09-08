@@ -5,6 +5,7 @@ import type {
   GithubTokenStore,
   StoredGithubConnection,
 } from "@catamorphic/github";
+import { GithubApiError } from "@catamorphic/github";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
@@ -69,25 +70,20 @@ function fakeGithub(state: { refreshed?: boolean } = {}) {
         name: "Octo",
       });
     }
-    if (u.pathname === "/user/installations") {
-      return Response.json({ installations: [{ id: 1 }] });
-    }
-    if (u.pathname === "/user/installations/1/repositories") {
-      return Response.json({
-        repositories: [
-          {
-            id: 42,
-            full_name: "octo/hello",
-            name: "hello",
-            owner: { login: "octo" },
-            private: true,
-            default_branch: "master",
-            clone_url: "https://github.com/octo/hello.git",
-            description: null,
-            pushed_at: "2026-07-01T00:00:00Z",
-          },
-        ],
-      });
+    if (u.pathname === "/user/repos") {
+      return Response.json([
+        {
+          id: 42,
+          full_name: "octo/hello",
+          name: "hello",
+          owner: { login: "octo" },
+          private: true,
+          default_branch: "master",
+          clone_url: "https://github.com/octo/hello.git",
+          description: null,
+          pushed_at: "2026-07-01T00:00:00Z",
+        },
+      ]);
     }
     if (u.pathname === "/repos/octo/hello") {
       return Response.json({
@@ -184,6 +180,33 @@ describe("GithubService", () => {
     const repos = await svc.listRepos(identity);
     expect(repos).toHaveLength(1);
     expect(repos[0]?.fullName).toBe("octo/hello");
+  });
+
+  it("validates an exact repository before storing supplied credentials", async () => {
+    const store = new MemoryTokenStore();
+    const svc = service({ store });
+
+    const result = await svc.connectForRepository(
+      identity,
+      FRESH_TOKENS,
+      "octo/hello",
+    );
+
+    expect(result.repository.fullName).toBe("octo/hello");
+    expect(result.connection).toEqual({ connected: true, login: "octo" });
+    expect(await svc.repository(identity, "octo/hello")).toMatchObject({
+      defaultBranch: "master",
+    });
+  });
+
+  it("does not store supplied credentials that cannot access the repository", async () => {
+    const store = new MemoryTokenStore();
+    const svc = service({ store });
+
+    await expect(
+      svc.connectForRepository(identity, FRESH_TOKENS, "octo/missing"),
+    ).rejects.toThrow(GithubApiError);
+    expect(await svc.status(identity)).toEqual({ connected: false });
   });
 
   it("refreshes a stale token and persists the new set to the store", async () => {

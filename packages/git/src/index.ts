@@ -1,3 +1,5 @@
+export { CheckoutRemoteBackend } from "./checkout-remote-backend.js";
+export { type FileReadOptions, readFileSnapshot } from "./file-reads.js";
 export { FsBackend } from "./fs-backend.js";
 export { FsOriginRepo, FsRemoteBackend } from "./fs-remote-backend.js";
 export {
@@ -6,7 +8,15 @@ export {
   pull,
   push,
 } from "./git-sync.js";
+export { InMemoryObjectStore } from "./in-memory-object-store.js";
 export { migrateWorkflowToProject } from "./migrate-workflow.js";
+export {
+  discoverCheckout,
+  INTERNAL_REMOTE_PREFIX,
+  type LocalCheckout,
+  nativeGit,
+} from "./native-git.js";
+export { NativeProjectRepo } from "./native-project-repo.js";
 export {
   type CloneFromRemoteOptions,
   cloneFromRemote,
@@ -18,6 +28,18 @@ export {
   type NetworkSyncStatus,
   syncWithNetworkRemote,
 } from "./network-sync.js";
+export {
+  ObjectOriginRepo,
+  ObjectRemoteBackend,
+  type ObjectRemoteBackendOpts,
+} from "./object-remote-backend.js";
+export type { ObjectStore } from "./object-store.js";
+export { PreconditionFailedError } from "./object-store.js";
+export {
+  ensurePersonalFilesExcluded,
+  isPersonalFile,
+  PERSONAL_FILES_ROOT,
+} from "./personal-files.js";
 export {
   generateWorkBranchName,
   PROJECT_MANIFEST_PATH,

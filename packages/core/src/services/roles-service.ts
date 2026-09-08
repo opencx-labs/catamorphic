@@ -2,11 +2,13 @@ import type { DB } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import type { Kysely } from "kysely";
 import { z } from "zod";
-import type {
-  ArtifactRef,
-  ConnectionUseRef,
-  ExecutionEnvironmentRef,
-  Identity,
+import {
+  type ArtifactRef,
+  type ConnectionUseRef,
+  type ExecutionEnvironmentRef,
+  type Identity,
+  PROJECT_PERMISSION_PATTERN,
+  type ProjectPermissionRef,
 } from "../identity.js";
 import { assertBuilder } from "./artifact-scope.js";
 import {
@@ -62,6 +64,17 @@ const ConnectionEntrySchema = z.object({
   capabilities: z.array(z.string().min(1)).optional(),
 });
 
+/**
+ * Core reserves the names it enforces, while embedders and projects may add
+ * namespaced capabilities for their own services and presentation rules.
+ */
+const ProjectPermissionSchema = z
+  .string()
+  .regex(
+    PROJECT_PERMISSION_PATTERN,
+    "Expected a namespaced capability such as memberships:manage",
+  );
+
 /** The committed `roles/<name>.json` schema, version 1. */
 export const RoleDefinitionSchema = z.object({
   version: z.literal(1),
@@ -70,6 +83,8 @@ export const RoleDefinitionSchema = z.object({
   description: z.string().optional(),
   /** Full program access to the project (a `project` ref). */
   builder: z.boolean().optional(),
+  /** Namespaced project capabilities, independent from builder access. */
+  permissions: z.array(ProjectPermissionSchema).optional(),
   agents: z.array(AgentEntrySchema).optional(),
   workflows: z.array(z.string().min(1)).optional(),
   apps: z.array(z.string().min(1)).optional(),
@@ -226,6 +241,16 @@ export function expandRoleConnections(
   return dedupeConnectionRefs(refs);
 }
 
+export function expandRolePermissions(
+  definition: RoleDefinition,
+  projectId: string,
+): ProjectPermissionRef[] {
+  return [...new Set(definition.permissions ?? [])].map((permission) => ({
+    projectId,
+    permission,
+  }));
+}
+
 function dedupeRefs(refs: ArtifactRef[]): ArtifactRef[] {
   const seen = new Set<string>();
   const out: ArtifactRef[] = [];
@@ -258,6 +283,18 @@ function dedupeConnectionRefs(refs: ConnectionUseRef[]): ConnectionUseRef[] {
     ]
       .sort()
       .join(",")}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function dedupeProjectPermissionRefs(
+  refs: ProjectPermissionRef[],
+): ProjectPermissionRef[] {
+  const seen = new Set<string>();
+  return refs.filter((ref) => {
+    const key = `${ref.projectId}:${ref.permission}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -328,7 +365,11 @@ export class RolesService {
     for (const key of this.cache.keys()) {
       if (key.endsWith(`:${projectId}`)) {
         this.cache.delete(key);
-        forgetProgramFetch(key.slice(0, -projectId.length - 1), projectId);
+        forgetProgramFetch(
+          this.projectManager,
+          key.slice(0, -projectId.length - 1),
+          projectId,
+        );
       }
     }
   }
@@ -347,6 +388,7 @@ export class RolesService {
     const scope: ArtifactRef[] = [];
     const executionScope: ExecutionEnvironmentRef[] = [];
     const connectionScope: ConnectionUseRef[] = [];
+    const projectPermissions: ProjectPermissionRef[] = [];
     for (const slug of input.roles) {
       const entry = entries.find((e) => e.slug === slug);
       if (!entry?.definition) continue;
@@ -357,6 +399,9 @@ export class RolesService {
       connectionScope.push(
         ...expandRoleConnections(entry.definition, input.projectId, grants),
       );
+      projectPermissions.push(
+        ...expandRolePermissions(entry.definition, input.projectId),
+      );
     }
     return {
       tenantId: input.tenantId,
@@ -364,7 +409,23 @@ export class RolesService {
       scope: dedupeRefs(scope),
       executionScope: dedupeEnvironmentRefs(executionScope),
       connectionScope: dedupeConnectionRefs(connectionScope),
+      projectPermissions: dedupeProjectPermissionRefs(projectPermissions),
     };
+  }
+
+  async assignedRolesRequireManagement(input: {
+    tenantId: string;
+    projectId: string;
+    roles: readonly string[];
+  }): Promise<boolean> {
+    await this.requireProject(input.tenantId, input.projectId);
+    const entries = await this.load(input.tenantId, input.projectId);
+    return input.roles.some((slug) => {
+      const definition = entries.find(
+        (entry) => entry.slug === slug,
+      )?.definition;
+      return (definition?.permissions?.length ?? 0) > 0;
+    });
   }
 
   private async load(

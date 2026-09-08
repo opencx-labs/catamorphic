@@ -101,6 +101,10 @@ export function MarkdownEditor({
   // The markdown we last emitted; external `value` changes that differ from
   // it are real (file switch, reload) and reset the document.
   const lastEmittedRef = useRef<string | null>(null);
+  // An unrelated parent render can land between Tiptap's update and React
+  // committing the matching controlled value. Remember the last value prop
+  // we observed so that stale, unchanged props never roll back fresh typing.
+  const lastValueRef = useRef(value);
   // The doc's canonical serialization differs textually from the file
   // (table padding, list markers), so opening a file must not read as an
   // edit: while the doc still serializes to its initial form, emit the
@@ -305,7 +309,9 @@ export function MarkdownEditor({
   // save) reset the document; our own edits round-trip through onUpdate and
   // are recognized by lastEmittedRef.
   useEffect(() => {
-    if (!editor || value === lastEmittedRef.current) return;
+    if (!editor || value === lastValueRef.current) return;
+    lastValueRef.current = value;
+    if (value === lastEmittedRef.current) return;
     const next = splitFrontmatter(value);
     if (
       next.body === editor.getMarkdown() &&

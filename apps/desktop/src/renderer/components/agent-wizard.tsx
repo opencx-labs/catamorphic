@@ -240,19 +240,24 @@ export function AgentWizard({
     setBusyFlow(flow);
     try {
       const id = await ensureAgent(flow);
+      waitingRef.current = { agentId: id, flow };
+      setWaitingFlow(flow);
       const result = await desktopApi.agentLogin(id);
-      if (result.started) {
-        waitingRef.current = { agentId: id, flow };
-        setWaitingFlow(flow);
-      } else if (result.error) {
+      if (!result.started && result.error) {
+        waitingRef.current = null;
+        setWaitingFlow(null);
         setBusy(false);
         setBusyFlow(null);
         setError(result.error);
-      } else {
+      } else if (!result.started) {
         // Nothing to start: the harness is already signed in.
+        waitingRef.current = null;
+        setWaitingFlow(null);
         onDone();
       }
     } catch (cause) {
+      waitingRef.current = null;
+      setWaitingFlow(null);
       setBusy(false);
       setBusyFlow(null);
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -387,6 +392,7 @@ export function AgentWizard({
                   <button
                     type="button"
                     disabled={busy}
+                    data-disabled-reason="Wait for the current action to finish"
                     onClick={() => {
                       if (option.id === "free") void startBrowserSignIn("free");
                       else goto(option.id);
@@ -473,6 +479,7 @@ export function AgentWizard({
                       pending={busy && busyFlow === "claude-code"}
                       pendingLabel="Adding…"
                       disabled={busy}
+                      data-disabled-reason="Wait for the current action to finish"
                       onClick={() => void addExistingSetup("claude-code")}
                       className={primaryActionClass}
                     >
@@ -483,6 +490,7 @@ export function AgentWizard({
                       pending={busy && busyFlow === "claude-code-account"}
                       pendingLabel="Starting…"
                       disabled={busy}
+                      data-disabled-reason="Wait for the current action to finish"
                       onClick={() =>
                         void startTerminalSignIn("claude-code-account")
                       }
@@ -555,6 +563,7 @@ export function AgentWizard({
                     pending={busy && busyFlow === "codex"}
                     pendingLabel="Adding…"
                     disabled={busy}
+                    data-disabled-reason="Wait for the current action to finish"
                     onClick={() => void addExistingSetup("codex")}
                     className={primaryActionClass}
                   >
@@ -565,6 +574,7 @@ export function AgentWizard({
                     pending={busy && busyFlow === "codex-account"}
                     pendingLabel="Opening…"
                     disabled={busy}
+                    data-disabled-reason="Wait for the current action to finish"
                     onClick={() => void startBrowserSignIn("codex-account")}
                     className={secondaryActionClass}
                   >
@@ -664,6 +674,7 @@ export function AgentWizard({
                 pending={busy}
                 pendingLabel="Adding…"
                 disabled={!apiKey.trim()}
+                data-disabled-reason="Enter an API key first"
                 data-testid="agent-wizard-key-submit"
                 className={primaryActionClass}
               >
@@ -684,7 +695,7 @@ export function AgentWizard({
 
   if (variant === "modal") {
     return (
-      <Modal open={open === true} onClose={onClose}>
+      <Modal open={open === true && waitingFlow === null} onClose={onClose}>
         <div
           data-testid="agent-wizard"
           className="max-h-[calc(100dvh-3rem)] overflow-y-auto p-5"

@@ -13,11 +13,11 @@ import type {
  */
 export class FakeEchoAgent implements CodingAgentProvider {
   readonly name = "fake-echo";
-  private readonly sessions = new Set<string>();
+  private readonly sessions = new Map<string, StartSessionOpts>();
 
   async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
     const providerSessionId = randomUUID();
-    this.sessions.add(providerSessionId);
+    this.sessions.set(providerSessionId, opts);
     return {
       providerSessionId,
       sessionId: opts.sessionId,
@@ -28,10 +28,21 @@ export class FakeEchoAgent implements CodingAgentProvider {
   }
 
   async *sendMessage(
-    _session: ProviderSession,
+    session: ProviderSession,
     message: string,
   ): AsyncIterable<AgentEvent> {
-    yield { type: "text", content: `Echo: ${message}` };
+    if (message === "execution-location") {
+      const opts = this.sessions.get(session.providerSessionId ?? "");
+      if (!opts?.sandboxProvider) throw new Error("Allocated provider missing");
+      const result = await opts.sandboxProvider.executeCommand(
+        session.sandboxId,
+        "pwd",
+        { cwd: session.workingDirectory },
+      );
+      yield { type: "text", content: result.result.trim() };
+    } else {
+      yield { type: "text", content: `Echo: ${message}` };
+    }
     yield { type: "done" };
   }
 

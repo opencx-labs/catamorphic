@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,9 +14,75 @@ import { buildStockServer, type StockServer } from "./server.js";
 
 let dataDir: string;
 let server: StockServer;
-let adminToken: string;
 
 let pwaDist: string;
+
+async function oauthAccessToken(options: {
+  username: string;
+  password: string;
+}): Promise<string> {
+  const login = await server.app.inject({
+    method: "POST",
+    url: "/api/auth/sign-in/username",
+    payload: options,
+  });
+  expect(login.statusCode).toBe(200);
+  const cookie = login.headers["set-cookie"];
+  expect(cookie).toBeTruthy();
+
+  const redirectUri = "http://127.0.0.1:49152/callback";
+  const registered = await server.app.inject({
+    method: "POST",
+    url: "/api/auth/mcp/register",
+    payload: {
+      redirect_uris: [redirectUri],
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      client_name: "Stock server test",
+    },
+  });
+  expect(registered.statusCode).toBe(201);
+  const clientId = registered.json().client_id as string;
+  const verifier = randomBytes(32).toString("base64url");
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  const authorize = new URL(
+    "/api/auth/mcp/authorize",
+    "http://catamorphic.local:4700",
+  );
+  authorize.searchParams.set("client_id", clientId);
+  authorize.searchParams.set("redirect_uri", redirectUri);
+  authorize.searchParams.set("response_type", "code");
+  authorize.searchParams.set("scope", "openid profile email offline_access");
+  authorize.searchParams.set("state", "stock-server-state");
+  authorize.searchParams.set("code_challenge", challenge);
+  authorize.searchParams.set("code_challenge_method", "S256");
+  const authorized = await server.app.inject({
+    method: "GET",
+    url: `${authorize.pathname}${authorize.search}`,
+    headers: { cookie: Array.isArray(cookie) ? cookie[0] : cookie },
+  });
+  expect(authorized.statusCode).toBe(302);
+  const code = new URL(authorized.headers.location ?? "").searchParams.get(
+    "code",
+  );
+  expect(code).toBeTruthy();
+
+  const token = await server.app.inject({
+    method: "POST",
+    url: "/api/auth/mcp/token",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    payload: new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      code: code ?? "",
+      code_verifier: verifier,
+    }).toString(),
+  });
+  expect(token.statusCode).toBe(200);
+  return token.json().access_token as string;
+}
 
 beforeAll(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "stock-server-"));
@@ -23,6 +90,10 @@ beforeAll(async () => {
   fs.writeFileSync(
     path.join(pwaDist, "index.html"),
     "<!doctype html><title>pwa-stub</title>",
+  );
+  fs.writeFileSync(
+    path.join(pwaDist, "manifest.webmanifest"),
+    JSON.stringify({ name: "Catamorphic", start_url: "/" }),
   );
   server = await buildStockServer({
     dataDir,
@@ -33,7 +104,6 @@ beforeAll(async () => {
       PATH: process.env.PATH,
     },
   });
-  adminToken = server.auth.ensureAdmin().token;
 }, 120_000);
 
 afterAll(async () => {
@@ -58,13 +128,100 @@ const inject = (
     ...(body !== undefined ? { payload: JSON.stringify(body) } : {}),
   });
 
+async function waitForSessionContents({
+  sessionId,
+  token,
+  includes,
+}: {
+  sessionId: string;
+  token: string;
+  includes: string;
+}): Promise<string[]> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const detail = await inject(
+      "GET",
+      `/api/projects/${projectId}/agent/sessions/${sessionId}`,
+      token,
+    );
+    expect(detail.statusCode).toBe(200);
+    const contents = detail
+      .json()
+      .messages.map((message: { content: string }) => message.content);
+    if (contents.includes(includes)) return contents;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for session message: ${includes}`);
+}
+
+const operatorInject = (url: string, token?: string, body?: unknown) =>
+  server.operatorApp.inject({
+    method: "POST",
+    url,
+    headers: {
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(body !== undefined ? { "content-type": "application/json" } : {}),
+    },
+    ...(body !== undefined ? { payload: JSON.stringify(body) } : {}),
+  });
+
 let projectId: string;
 let memberToken: string;
+let memberUserId: string;
+let memberInvitationId: string;
+let managerToken: string;
+
+const MEMBER_ROLE = {
+  version: 1,
+  name: "Member",
+  agents: ["assistant"],
+  environments: ["local"],
+  documents: [{ path: "store/users/{user}/**", access: "write" }],
+};
+
+const MANAGER_ROLE = {
+  version: 1,
+  name: "Manager",
+  builder: true,
+  permissions: ["memberships:manage", "roles:manage"],
+  agents: ["assistant"],
+  environments: ["local"],
+  documents: [{ path: "store/**", access: "write" }],
+};
 
 describe("stock server", () => {
+  it("publishes OAuth authorization and protected-resource discovery", async () => {
+    const authorization = await server.app.inject({
+      method: "GET",
+      url: "/.well-known/oauth-authorization-server",
+    });
+    expect(authorization.statusCode).toBe(200);
+    expect(authorization.json()).toMatchObject({
+      authorization_endpoint: expect.stringContaining(
+        "/api/auth/mcp/authorize",
+      ),
+      token_endpoint: expect.stringContaining("/api/auth/mcp/token"),
+    });
+    const resource = await server.app.inject({
+      method: "GET",
+      url: "/.well-known/oauth-protected-resource",
+    });
+    expect(resource.statusCode).toBe(200);
+    expect(resource.json()).toMatchObject({
+      resource: "http://catamorphic.local:4700/api",
+      authorization_servers: expect.any(Array),
+    });
+  });
   it("reports health and chat availability", async () => {
     const response = await inject("GET", "/healthz");
-    expect(response.json()).toEqual({ ok: true, agentSessions: true });
+    expect(response.json()).toMatchObject({
+      ok: true,
+      agentSessions: true,
+      machine: {
+        id: expect.stringMatching(/^node\./),
+        label: "Catamorphic server",
+      },
+    });
   });
 
   it("serves the PWA at its root, SPA-falling back on unknown paths", async () => {
@@ -73,50 +230,173 @@ describe("stock server", () => {
     expect(root.body).toContain("pwa-stub");
     const deep = await inject("GET", "/anything/else");
     expect(deep.body).toContain("pwa-stub");
+    const launch = "/?server=https%3A%2F%2Fexample.test%2Fapi&project=p-1";
+    const manifest = await inject(
+      "GET",
+      `/manifest.webmanifest?launch=${encodeURIComponent(launch)}`,
+    );
+    expect(manifest.json()).toMatchObject({ start_url: launch });
+    const externalManifest = await inject(
+      "GET",
+      "/manifest.webmanifest?launch=https%3A%2F%2Fevil.example%2F",
+    );
+    expect(externalManifest.json()).toMatchObject({ start_url: "/" });
   });
 
   it("rejects unauthenticated and unknown-token API calls", async () => {
-    expect((await inject("GET", "/api/me")).statusCode).toBe(401);
-    expect((await inject("GET", "/api/me", "nope")).statusCode).toBe(401);
+    const missing = await inject("GET", "/api/me");
+    expect(missing.statusCode).toBe(401);
+    expect(missing.headers["www-authenticate"]).toContain(
+      'resource_metadata="http://catamorphic.local:4700/.well-known/oauth-protected-resource"',
+    );
+    const invalid = await inject("GET", "/api/me", "nope");
+    expect(invalid.statusCode).toBe(401);
+    expect(invalid.headers["www-authenticate"]).toContain(
+      'error="invalid_token"',
+    );
   });
 
-  it("admin creates a project (admin token = root identity)", async () => {
-    const denied = await inject("POST", "/admin/projects", undefined, {
-      name: "brain",
+  it("resolves an OAuth access token to the current authenticated user", async () => {
+    const user = await server.stockAuth.createLocalUser({
+      username: "oauthuser",
+      name: "OAuth User",
+      password: "correct horse battery staple",
     });
-    expect(denied.statusCode).toBe(401);
-    const response = await inject("POST", "/admin/projects", adminToken, {
-      name: "brain",
+    const accessToken = await oauthAccessToken({
+      username: "oauthuser",
+      password: "correct horse battery staple",
     });
-    expect(response.statusCode).toBe(201);
-    projectId = response.json().id;
-    expect(projectId).toBeTruthy();
+
+    const response = await inject("GET", "/api/me", accessToken);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      identity: { externalUserId: user.id, root: false },
+      projects: [],
+    });
+  });
+
+  it("a setup agent establishes the project and first ordinary manager", async () => {
+    const operatorSecret = fs
+      .readFileSync(path.join(dataDir, "operator-secret"), "utf8")
+      .trim();
+    const publicIngress = await inject(
+      "POST",
+      "/_catamorphic/operator/projects",
+      operatorSecret,
+      {
+        name: "brain",
+        roles: [
+          { slug: "member", definition: MEMBER_ROLE },
+          { slug: "manager", definition: MANAGER_ROLE },
+        ],
+        admission: {
+          mode: "invitation_only",
+          defaultRole: "member",
+          approvedDomains: [],
+        },
+      },
+    );
+    expect(publicIngress.statusCode).toBe(404);
+
+    const projectResponse = await operatorInject(
+      "/_catamorphic/operator/projects",
+      operatorSecret,
+      {
+        name: "brain",
+        roles: [
+          { slug: "member", definition: MEMBER_ROLE },
+          { slug: "manager", definition: MANAGER_ROLE },
+        ],
+        admission: {
+          mode: "invitation_only",
+          defaultRole: "member",
+          approvedDomains: [],
+        },
+      },
+    );
+    expect(projectResponse.statusCode).toBe(201);
+    projectId = projectResponse.json().project.id;
+    const managerResponse = await operatorInject(
+      "/_catamorphic/operator/users",
+      operatorSecret,
+      {
+        username: "manager",
+        name: "Project Manager",
+        password: "correct horse battery staple",
+        memberships: [{ projectId, roles: ["manager"] }],
+      },
+    );
+    expect(managerResponse.statusCode).toBe(201);
+    expect(managerResponse.json().memberships).toHaveLength(1);
+    const manager = managerResponse.json().user as { id: string };
+    expect(manager.id).toBeTruthy();
+    managerToken = await oauthAccessToken({
+      username: "manager",
+      password: "correct horse battery staple",
+    });
+
+    expect((await inject("GET", "/api/me", managerToken)).statusCode).toBe(200);
+    expect((await inject("POST", "/admin/projects")).statusCode).toBe(404);
   }, 30_000);
 
-  it("mints an invite: role file, membership, token, connect links", async () => {
-    const response = await inject("POST", "/admin/invites", adminToken, {
-      projectId,
-      user: "sam",
-    });
+  it("a manager configures admission and creates a credential-free invitation", async () => {
+    const policy = await inject(
+      "PUT",
+      `/api/projects/${projectId}/admission/policy`,
+      managerToken,
+      {
+        mode: "invitation_only",
+        defaultRole: "member",
+        approvedDomains: [],
+      },
+    );
+    expect(policy.statusCode).toBe(200);
+    const response = await inject(
+      "POST",
+      `/api/projects/${projectId}/admission/invitations`,
+      managerToken,
+      {},
+    );
     expect(response.statusCode).toBe(201);
     const invite = response.json();
-    memberToken = invite.token;
-    expect(invite.projectName).toBe("brain");
+    memberInvitationId = invite.id;
     expect(invite.connectLinks[0]).toContain(
       "catamorphic://connect?server=http%3A%2F%2Fcatamorphic.local%3A4700%2Fapi",
     );
     expect(invite.connectLinks[0]).toContain(`project=${projectId}`);
-    // The plain-URL variant opens the PWA this server serves.
+    expect(invite.connectLinks[0]).toContain(`invitation=${invite.id}`);
+    expect(invite.connectLinks[0]).not.toContain("token=");
     expect(invite.webLinks[0]).toMatch(
       /^http:\/\/catamorphic\.local:4700\/\?server=/,
     );
+
+    const member = await server.stockAuth.createLocalUser({
+      username: "memberuser",
+      name: "Sam Member",
+      password: "correct horse battery staple",
+    });
+    memberUserId = member.id;
+    memberToken = await oauthAccessToken({
+      username: "memberuser",
+      password: "correct horse battery staple",
+    });
+    const redeemed = await inject(
+      "POST",
+      `/api/projects/${projectId}/admission/invitations/${invite.id}/redeem`,
+      memberToken,
+    );
+    expect(redeemed.statusCode).toBe(200);
   }, 60_000);
 
   it("the member's /me shows the assistant and nothing more", async () => {
     const response = await inject("GET", "/api/me", memberToken);
     expect(response.statusCode).toBe(200);
     const me = response.json();
-    expect(me.identity).toEqual({ externalUserId: "sam", root: false });
+    expect(me.identity).toEqual({
+      externalUserId: memberUserId,
+      root: false,
+    });
     expect(me.projects).toHaveLength(1);
     expect(me.projects[0].projectId).toBe(projectId);
     expect(me.projects[0].builder).toBe(false);
@@ -124,7 +404,7 @@ describe("stock server", () => {
     expect(me.features.agentSessions).toBe(true);
   });
 
-  it("the member sees the project in the list but not its builder record", async () => {
+  it("the member sees project metadata without builder files", async () => {
     const list = await inject("GET", "/api/projects", memberToken);
     expect(list.statusCode).toBe(200);
     expect(list.json().items.map((p: { id: string }) => p.id)).toEqual([
@@ -135,17 +415,23 @@ describe("stock server", () => {
       `/api/projects/${projectId}`,
       memberToken,
     );
-    expect(record.statusCode).toBe(403);
+    expect(record.statusCode).toBe(200);
+    expect(record.json().files).toEqual([]);
+    expect(
+      (await inject("GET", `/api/projects/${projectId}/files`, memberToken))
+        .statusCode,
+    ).toBe(403);
   });
 
-  it("a scoped member must address the project assistant explicitly", async () => {
+  it("a scoped member starts with the permitted project default", async () => {
     const bare = await inject(
       "POST",
       `/api/projects/${projectId}/agent/sessions`,
       memberToken,
       {},
     );
-    expect(bare.statusCode).toBe(403);
+    expect(bare.statusCode).toBe(201);
+    expect(bare.json().agentId).toBe(projectAssistantId(projectId));
   });
 
   it("the member chats with the assistant end to end", async () => {
@@ -163,15 +449,12 @@ describe("stock server", () => {
       memberToken,
       { message: "hello server" },
     );
-    expect(sent.statusCode).toBe(201);
-    const detail = await inject(
-      "GET",
-      `/api/projects/${projectId}/agent/sessions/${sessionId}`,
-      memberToken,
-    );
-    const contents = detail
-      .json()
-      .messages.map((message: { content: string }) => message.content);
+    expect(sent.statusCode).toBe(202);
+    const contents = await waitForSessionContents({
+      sessionId,
+      token: memberToken,
+      includes: "Echo: hello server",
+    });
     expect(contents).toContain("hello server");
     expect(contents).toContain("Echo: hello server");
   }, 60_000);
@@ -184,6 +467,9 @@ describe("stock server", () => {
         role: "user",
         content: "hello from the desktop",
         metadata: null,
+        author: { kind: "user", externalUserId: memberUserId },
+        deliveryMode: "next_turn",
+        idempotencyKey: null,
         createdAt: new Date().toISOString(),
       },
       {
@@ -201,20 +487,44 @@ describe("stock server", () => {
             model: "claude-opus-5",
           },
         },
+        author: {
+          kind: "agent",
+          sessionId,
+          agentId: projectAssistantId(projectId),
+        },
+        deliveryMode: "message_only",
+        idempotencyKey: null,
         createdAt: new Date().toISOString(),
+      },
+    ];
+    const todos = [
+      {
+        id: "33333333-cccc-4ccc-8ccc-cccccccccccc",
+        title: "Continue on the server",
+        description:
+          "Verify that the mirrored task can continue on another host.",
+        status: "in_progress" as const,
       },
     ];
     const mirrorUrl = `/api/projects/${projectId}/agent/sessions/${sessionId}/mirror`;
     const first = await inject("PUT", mirrorUrl, memberToken, {
+      authority: { hostId: "desktop:test-host", revision: 1 },
       title: "Desktop chat",
       icon: "sparkles:orange",
       provider: "ai-sdk",
+      todos,
       messages,
     });
     expect(first.statusCode).toBe(200);
     // Idempotent re-push: same payload, no duplicates.
     expect(
-      (await inject("PUT", mirrorUrl, memberToken, { messages })).statusCode,
+      (
+        await inject("PUT", mirrorUrl, memberToken, {
+          authority: { hostId: "desktop:test-host", revision: 1 },
+          todos,
+          messages,
+        })
+      ).statusCode,
     ).toBe(200);
 
     const list = await inject(
@@ -222,26 +532,33 @@ describe("stock server", () => {
       `/api/projects/${projectId}/agent/sessions`,
       memberToken,
     );
-    expect(list.json().items.map((s: { id: string }) => s.id)).toContain(
-      sessionId,
-    );
+    const mirroredSession = list
+      .json()
+      .items.find((session: { id: string }) => session.id === sessionId);
+    expect(mirroredSession?.todos).toEqual(todos);
 
-    // Continue ON THE SERVER: the mirrored transcript seeds the anchor.
+    // Continuing is explicit: claim authority first, then send. The mirrored
+    // transcript seeds the server-side anchor.
+    const resumed = await inject(
+      "POST",
+      `/api/projects/${projectId}/agent/sessions/${sessionId}/resume`,
+      memberToken,
+      { expectedAuthorityRevision: 1 },
+    );
+    expect(resumed.statusCode).toBe(200);
+    expect(resumed.json().authorityRevision).toBe(2);
     const sent = await inject(
       "POST",
       `/api/projects/${projectId}/agent/sessions/${sessionId}/messages`,
       memberToken,
       { message: "continue here" },
     );
-    expect(sent.statusCode).toBe(201);
-    const detail = await inject(
-      "GET",
-      `/api/projects/${projectId}/agent/sessions/${sessionId}`,
-      memberToken,
-    );
-    const contents = detail
-      .json()
-      .messages.map((m: { content: string }) => m.content);
+    expect(sent.statusCode).toBe(202);
+    const contents = await waitForSessionContents({
+      sessionId,
+      token: memberToken,
+      includes: "Echo: continue here",
+    });
     expect(contents).toEqual([
       "hello from the desktop",
       "desktop assistant reply",
@@ -250,38 +567,56 @@ describe("stock server", () => {
     ]);
 
     // The desktop pushes again without the server-side turns → diverged.
-    const stale = await inject("PUT", mirrorUrl, memberToken, { messages });
+    const stale = await inject("PUT", mirrorUrl, memberToken, {
+      authority: { hostId: "desktop:test-host", revision: 1 },
+      todos,
+      messages,
+    });
     expect(stale.statusCode).toBe(409);
     expect(stale.json().diverged).toBe(true);
   }, 60_000);
 
-  it("admins see per-member usage, mirrored turns included (ADR 0062)", async () => {
-    const denied = await inject("GET", "/admin/usage", memberToken);
-    expect(denied.statusCode).toBe(401);
-    const response = await inject("GET", "/admin/usage", adminToken);
-    expect(response.statusCode).toBe(200);
-    const sam = response
-      .json()
-      .items.find(
-        (entry: { user: string; projectId: string }) =>
-          entry.user === "sam" && entry.projectId === projectId,
-      );
-    expect(sam).toBeTruthy();
-    expect(sam.inputTokens).toBe(100);
-    expect(sam.cachedInputTokens).toBe(40);
-    expect(sam.outputTokens).toBe(25);
-    expect(sam.costUsd).toBeCloseTo(0.012);
-    expect(sam.sessions).toBeGreaterThanOrEqual(2);
-    expect(sam.turns).toBeGreaterThanOrEqual(3);
+  it("project administration belongs to the manager role", async () => {
+    const denied = await inject(
+      "GET",
+      `/api/projects/${projectId}/memberships`,
+      memberToken,
+    );
+    expect(denied.statusCode).toBe(403);
+    const listed = await inject(
+      "GET",
+      `/api/projects/${projectId}/memberships`,
+      managerToken,
+    );
+    expect(listed.statusCode).toBe(200);
+    expect(
+      listed
+        .json()
+        .map(
+          (membership: { externalUserId: string }) => membership.externalUserId,
+        ),
+    ).toEqual(expect.arrayContaining([memberUserId]));
   });
 
-  it("revoking the invite cuts the member off instantly", async () => {
+  it("revoking membership cuts project access without invalidating sign-in", async () => {
     const revoked = await inject(
       "DELETE",
-      `/admin/invites/${memberToken}`,
-      adminToken,
+      `/api/projects/${projectId}/memberships/${encodeURIComponent(memberUserId)}`,
+      managerToken,
     );
-    expect(revoked.statusCode).toBe(200);
-    expect((await inject("GET", "/api/me", memberToken)).statusCode).toBe(401);
+    expect(revoked.statusCode).toBe(204);
+    const me = await inject("GET", "/api/me", memberToken);
+    expect(me.statusCode).toBe(200);
+    expect(me.json().projects).toEqual([]);
+    const replay = await inject(
+      "POST",
+      `/api/projects/${projectId}/admission/invitations/${memberInvitationId}/redeem`,
+      memberToken,
+    );
+    expect(replay.statusCode).toBe(404);
+    expect(replay.json().error).toBe("This invitation is no longer available");
+    expect(
+      (await inject("GET", "/api/me", memberToken)).json().projects,
+    ).toEqual([]);
   });
 });

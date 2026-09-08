@@ -7,6 +7,7 @@ import type {
   ImportableProfile,
   ImportedBookmark,
   ImportedBookmarks,
+  ImportedFolder,
 } from "./types.js";
 
 /**
@@ -108,22 +109,26 @@ function isHttpUrl(url: string): boolean {
 }
 
 /**
- * Walk one bookmark tree node. Nesting is flattened to a single level: a
- * bookmark's `folder` is the name of its NEAREST ancestor folder, and items
- * directly under a root container (bookmark bar, other, synced) have none —
- * the containers themselves are not folders.
+ * Walk one bookmark tree node while retaining the complete folder path.
+ * Root containers (bookmark bar, other, synced) are browser chrome and are
+ * deliberately excluded from the imported hierarchy.
  */
 function walkNode(
   node: unknown,
-  nearestFolder: string | undefined,
-  out: ImportedBookmark[],
+  folderPath: string[],
+  bookmarks: ImportedBookmark[],
+  folders: ImportedFolder[],
 ): void {
   if (!isRecord(node)) return;
   if (node.type === "url") {
     const url = node.url;
     if (typeof url !== "string" || !isHttpUrl(url)) return;
     const name = typeof node.name === "string" ? node.name.trim() : "";
-    out.push({ label: name || url, url, folder: nearestFolder });
+    bookmarks.push({
+      label: name || url,
+      url,
+      ...(folderPath.length > 0 ? { folderPath } : {}),
+    });
     return;
   }
   const children = node.children;
@@ -131,35 +136,44 @@ function walkNode(
   const folderName =
     node.type === "folder" && typeof node.name === "string" && node.name.trim()
       ? node.name.trim()
-      : nearestFolder;
-  for (const child of children) walkNode(child, folderName, out);
+      : undefined;
+  const nextPath = folderName ? [...folderPath, folderName] : folderPath;
+  if (folderName) folders.push({ path: nextPath });
+  for (const child of children) {
+    walkNode(child, nextPath, bookmarks, folders);
+  }
 }
 
 function readBookmarksFile(file: string): ImportedBookmarks {
   const parsed = readJson(file);
   if (!isRecord(parsed) || !isRecord(parsed.roots)) return EMPTY;
   const collected: ImportedBookmark[] = [];
+  const collectedFolders: ImportedFolder[] = [];
   for (const rootKey of ["bookmark_bar", "other", "synced"]) {
     const root = parsed.roots[rootKey];
     if (!isRecord(root) || !Array.isArray(root.children)) continue;
     // Iterate the container's children directly so the container's own name
     // ("Bookmarks Bar", "Other Bookmarks") never becomes a folder label.
-    for (const child of root.children) walkNode(child, undefined, collected);
+    for (const child of root.children) {
+      walkNode(child, [], collected, collectedFolders);
+    }
   }
-  // Dedupe exact (url, label, folder) triples, preserving first-seen order.
+  // Dedupe exact (url, label, path) triples, preserving first-seen order.
   const seen = new Set<string>();
-  const folders: string[] = [];
+  const folders: ImportedFolder[] = [];
   const folderSeen = new Set<string>();
   const bookmarks: ImportedBookmark[] = [];
   for (const bookmark of collected) {
-    const key = `${bookmark.url}\n${bookmark.label}\n${bookmark.folder ?? ""}`;
+    const key = `${bookmark.url}\n${bookmark.label}\n${JSON.stringify(bookmark.folderPath ?? [])}`;
     if (seen.has(key)) continue;
     seen.add(key);
     bookmarks.push(bookmark);
-    if (bookmark.folder && !folderSeen.has(bookmark.folder)) {
-      folderSeen.add(bookmark.folder);
-      folders.push(bookmark.folder);
-    }
+  }
+  for (const folder of collectedFolders) {
+    const key = JSON.stringify(folder.path);
+    if (folderSeen.has(key)) continue;
+    folderSeen.add(key);
+    folders.push(folder);
   }
   return { folders, bookmarks };
 }

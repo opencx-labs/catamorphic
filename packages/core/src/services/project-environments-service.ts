@@ -55,6 +55,19 @@ export interface ProjectEnvironmentPolicy {
   invalid?: { error: string };
 }
 
+function defaultLocalEnvironmentPolicy(): ProjectEnvironmentPolicy {
+  const definition: ProjectEnvironmentDefinition = {
+    binding: "local",
+    description: "Run on this machine",
+    workloads: ["agent", "workflow"],
+  };
+  return {
+    environments: { local: definition },
+    defaultEnvironment: "local",
+    entries: [{ name: "local", definition }],
+  };
+}
+
 export function parseProjectEnvironmentPolicy(
   raw: unknown,
 ): ProjectEnvironmentPolicy {
@@ -67,6 +80,9 @@ export function parseProjectEnvironmentPolicy(
   }
   const manifest = raw as Record<string, unknown>;
   const rawEnvironments = manifest.environments;
+  if (rawEnvironments === undefined) {
+    return defaultLocalEnvironmentPolicy();
+  }
   if (
     typeof rawEnvironments !== "object" ||
     rawEnvironments === null ||
@@ -146,11 +162,7 @@ export class ProjectEnvironmentsService {
       (repo, ref) => readProgramFile(repo, ref, PROJECT_MANIFEST_PATH),
     );
     if (!content) {
-      return {
-        environments: {},
-        entries: [],
-        invalid: { error: "Project manifest is missing" },
-      };
+      return defaultLocalEnvironmentPolicy();
     }
     try {
       return parseProjectEnvironmentPolicy(JSON.parse(content));

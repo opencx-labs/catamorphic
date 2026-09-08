@@ -279,7 +279,7 @@ export function RunTriggerDialog({
           <h3 className="catamorphic-run-dialog-title">Run Workflow</h3>
           <button
             type="button"
-            className="catamorphic-detail-close"
+            className="catamorphic-run-close"
             onClick={onClose}
             aria-label="Close"
           >

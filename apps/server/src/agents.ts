@@ -4,7 +4,7 @@ import { AiSdkCodingAgent } from "@catamorphic/ai-sdk";
 import type {
   CodingAgentRegistry,
   RegisteredCodingAgent,
-  ToolPermissionBroker,
+  ToolPermissionChannel,
 } from "@catamorphic/core";
 import type { SandboxProvider } from "@catamorphic/sandbox";
 import { FakeEchoAgent } from "./fake-agent.js";
@@ -28,7 +28,7 @@ export interface AgentSetup {
 
 export function buildAgentRegistry(deps: {
   sandboxProvider: SandboxProvider;
-  toolPermissions: ToolPermissionBroker;
+  toolPermissions: ToolPermissionChannel;
   env?: Record<string, string | undefined>;
 }): AgentSetup {
   const env = deps.env ?? process.env;
@@ -134,6 +134,27 @@ function assistantRegistry(config: {
       return undefined;
     },
     list: () => [assistant],
+    projectAgent: ({ id, entry }) => {
+      const definition = entry.definition;
+      if (definition?.kind !== "builtin") return undefined;
+      // The stock host supplies a service-owned model. Personal CLI/profile
+      // credentials remain an explicit capability of a different host factory.
+      if (definition.credentials) return undefined;
+      return {
+        ...assistant,
+        id,
+        privilege: definition.mode ?? "edit",
+        environment: definition.environment,
+        connectionRequirements: definition.connections,
+        delegation: definition.delegation,
+        systemPrompt: entry.promptFile,
+        defaults: {
+          ...defaults,
+          ...(definition.model ? { model: definition.model } : {}),
+          ...(definition.effort ? { effort: definition.effort } : {}),
+        },
+      };
+    },
   };
 }
 

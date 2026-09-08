@@ -1,0 +1,41 @@
+name: Idea or capability
+description: Propose a problem to solve or an outcome to support
+title: "Idea: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Catamorphic is issue-first. Focus on the problem, use case, constraints, and desired outcome. Maintainers own the implementation after an idea is accepted.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem should Catamorphic solve?
+      description: Describe the need before describing an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: use-case
+    attributes:
+      label: What is the concrete use case?
+      description: Who needs this, in what kind of project or host, and what are they trying to accomplish?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What outcome would be useful?
+      description: Describe observable behavior or acceptance criteria without expanding the idea into a full patch.
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and tradeoffs
+      description: Include relevant compatibility, security, local-first, embedding, or operational considerations.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add small examples, screenshots, research, or links that make the intent easier to evaluate.

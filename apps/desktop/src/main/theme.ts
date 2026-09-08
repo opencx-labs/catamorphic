@@ -1,14 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  DEFAULT_THEME_FONTS,
+  isValidFontStack,
+  type ThemeFonts,
+} from "../shared/theme-fonts.js";
 
 /**
- * User-level theme, stored as plain JSON at `<userData>/theme.json` so the
+ * Per-profile theme, stored at `<userData>/profiles/<id>/theme.json` so the
  * Settings UI, outside agents, and the user in a text editor can all edit
  * it. The file is watched and changes apply live — no restart.
  *
- * Format: `{ "preset": "dark", "overrides": { "accent": "#ff5500" } }`.
- * The resolved theme is the preset's colors with overrides on top, so a
- * fully custom theme is just a preset with every token overridden.
+ * Format: `{ "selection": "system", "overrides": { "accent": "#ff5500" } }`.
+ * `system` follows the operating system with the two Catamorphic presets.
+ * The resolved theme is the selected preset's colors with overrides on top,
+ * so a fully custom theme is just a selection with every token overridden.
+ * Optional `fonts.sans` and `fonts.mono` override the desktop font stacks.
  */
 export const THEME_TOKENS = [
   "bg",
@@ -41,14 +48,20 @@ export interface ThemePreset {
 }
 
 export interface ThemeConfig {
-  preset: string;
+  selection: string;
   overrides: Partial<ThemeColors>;
+  fonts?: Partial<ThemeFonts>;
 }
 
 export interface ResolvedTheme extends ThemeConfig {
+  fonts: ThemeFonts;
+  /** Concrete preset after resolving the system selection. */
+  preset: string;
   colors: ThemeColors;
-  appearance: "dark" | "light";
+  appearance: ThemeAppearance;
 }
+
+export type ThemeAppearance = "dark" | "light";
 
 export const THEME_PRESETS: ThemePreset[] = [
   {
@@ -320,7 +333,10 @@ export const THEME_PRESETS: ThemePreset[] = [
   },
 ];
 
-export const DEFAULT_THEME: ThemeConfig = { preset: "dark", overrides: {} };
+export const DEFAULT_THEME: ThemeConfig = {
+  selection: "system",
+  overrides: {},
+};
 
 function presetById(id: string): ThemePreset {
   return (
@@ -337,15 +353,25 @@ export function isValidColor(value: unknown): value is string {
   return typeof value === "string" && COLOR_PATTERN.test(value.trim());
 }
 
-/** Keep a known preset and valid color overrides; drop everything else. */
+/** Keep a known preset and valid color/font overrides; drop everything else. */
 export function normalizeTheme(raw: unknown): ThemeConfig {
   const record =
     typeof raw === "object" && raw !== null
       ? (raw as Record<string, unknown>)
       : {};
-  const preset = presetById(
-    typeof record.preset === "string" ? record.preset : DEFAULT_THEME.preset,
-  ).id;
+  // `preset` was the pre-system-preference field. Reading it as an explicit
+  // selection preserves an existing user's choice; newly absent files use
+  // the system default.
+  const requestedSelection =
+    typeof record.selection === "string"
+      ? record.selection
+      : typeof record.preset === "string"
+        ? record.preset
+        : DEFAULT_THEME.selection;
+  const selection =
+    requestedSelection === "system"
+      ? "system"
+      : presetById(requestedSelection).id;
   const overrides: Partial<ThemeColors> = {};
   const rawOverrides =
     typeof record.overrides === "object" && record.overrides !== null
@@ -355,7 +381,18 @@ export function normalizeTheme(raw: unknown): ThemeConfig {
     const value = rawOverrides[token];
     if (isValidColor(value)) overrides[token] = value.trim();
   }
-  return { preset, overrides };
+  const fonts: Partial<ThemeFonts> = {};
+  if (typeof record.fonts === "object" && record.fonts !== null) {
+    for (const token of ["sans", "mono"] as const) {
+      const value = Reflect.get(record.fonts, token);
+      if (isValidFontStack(value)) fonts[token] = value.trim();
+    }
+  }
+  return {
+    selection,
+    overrides,
+    ...(Object.keys(fonts).length > 0 ? { fonts } : {}),
+  };
 }
 
 /** Perceived luminance of a hex color, or null for non-hex values. */
@@ -374,16 +411,23 @@ function hexLuminance(color: string): number | null {
   return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
 }
 
-export function resolveTheme(config: ThemeConfig): ResolvedTheme {
-  const preset = presetById(config.preset);
+export function resolveTheme(
+  config: ThemeConfig,
+  systemAppearance: ThemeAppearance = "dark",
+): ResolvedTheme {
+  const preset = presetById(
+    config.selection === "system" ? systemAppearance : config.selection,
+  );
   const colors = { ...preset.colors, ...config.overrides };
   // Appearance follows the actual background, not the preset: a dark preset
   // with the bg overridden to white must still get light scrollbars etc.
   const luminance = hexLuminance(colors.bg) ?? hexLuminance(preset.colors.bg);
   return {
+    selection: config.selection,
     preset: preset.id,
     overrides: config.overrides,
     colors,
+    fonts: { ...DEFAULT_THEME_FONTS, ...config.fonts },
     appearance: luminance !== null && luminance >= 0.5 ? "light" : "dark",
   };
 }
@@ -399,7 +443,10 @@ export class ThemeStore {
   private watcher: fs.FSWatcher | undefined;
   private debounce: ReturnType<typeof setTimeout> | undefined;
 
-  constructor(readonly file: string) {}
+  constructor(
+    readonly file: string,
+    private readonly systemAppearance: () => ThemeAppearance = () => "dark",
+  ) {}
 
   load(): ThemeConfig {
     try {
@@ -417,7 +464,7 @@ export class ThemeStore {
   }
 
   resolved(): ResolvedTheme {
-    return resolveTheme(this.load());
+    return resolveTheme(this.load(), this.systemAppearance());
   }
 
   /** Watch the containing directory (same rationale as KeybindingsStore). */

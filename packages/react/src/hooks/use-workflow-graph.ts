@@ -5,17 +5,21 @@ import {
   layoutGraph,
 } from "@catamorphic/parser/layout";
 import type { Edge, Node } from "@xyflow/react";
-import { useAtom, useAtomValue } from "jotai";
+import { useAtom, useAtomValue, useStore } from "jotai";
 import { useCallback, useEffect, useRef } from "react";
 import {
   codeAtom,
   collapsedNodeIdsAtom,
   executionStateAtom,
   graphAtom,
+  graphParseStateAtom,
   reactFlowEdgesAtom,
   reactFlowNodesAtom,
+  selectedNodeIdAtom,
 } from "../atoms.js";
 import type { WorkflowGraph } from "../lib/api-types.js";
+
+import { matchWorkflowNodes } from "../lib/match-workflow-nodes.js";
 
 export interface ParseResult {
   graph: WorkflowGraph;
@@ -42,6 +46,7 @@ function getDepth(nodeId: string, nodeMap: Map<string, WorkflowNode>): number {
 }
 
 export function useWorkflowGraph({ onParse }: { onParse?: OnParseCallback }) {
+  const store = useStore();
   const [code] = useAtom(codeAtom);
   const [graph, setGraph] = useAtom(graphAtom);
   const [, setNodes] = useAtom(reactFlowNodesAtom);
@@ -49,6 +54,8 @@ export function useWorkflowGraph({ onParse }: { onParse?: OnParseCallback }) {
   const executionState = useAtomValue(executionStateAtom);
   const collapsedNodeIds = useAtomValue(collapsedNodeIdsAtom);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestRef = useRef(0);
+  const [, setParseState] = useAtom(graphParseStateAtom);
 
   const applyGraph = useCallback(
     (currentGraph: WorkflowGraph) => {
@@ -100,6 +107,7 @@ export function useWorkflowGraph({ onParse }: { onParse?: OnParseCallback }) {
         const collapsed = collapsedNodeIds.has(node.id);
         return {
           id: node.id,
+          selected: node.id === store.get(selectedNodeIdAtom),
           type: node.type,
           position: node.position,
           draggable: false,
@@ -143,30 +151,70 @@ export function useWorkflowGraph({ onParse }: { onParse?: OnParseCallback }) {
       setNodes(rfNodes);
       setEdges(rfEdges);
     },
-    [collapsedNodeIds, executionState, setEdges, setNodes],
+    [collapsedNodeIds, executionState, setEdges, setNodes, store],
   );
 
   const buildGraph = useCallback(
     async (source: string) => {
+      const request = ++requestRef.current;
       if (!source.trim()) {
-        setGraph(null);
-        setNodes([]);
-        setEdges([]);
+        setParseState({
+          status: "error",
+          error: "Add a workflow definition to show its preview.",
+        });
         return;
       }
 
       if (!onParse) return;
 
+      setParseState({ status: "updating" });
       try {
         const result = await onParse(source);
-        if (!result) return;
+        if (request !== requestRef.current) return;
+        if (!result) {
+          setParseState({
+            status: "error",
+            error:
+              "The workflow could not be previewed. Check the code and try again.",
+          });
+          return;
+        }
 
+        const previousGraph = store.get(graphAtom);
+        if (previousGraph) {
+          const matches = matchWorkflowNodes({
+            previous: previousGraph.nodes,
+            next: result.graph.nodes,
+          });
+          const selected = store.get(selectedNodeIdAtom);
+          store.set(
+            selectedNodeIdAtom,
+            [...matches].find(([, previous]) => previous === selected)?.[0] ??
+              null,
+          );
+          const collapsed = store.get(collapsedNodeIdsAtom);
+          const nextCollapsed = new Set(
+            [...matches]
+              .filter(([, previous]) => collapsed.has(previous))
+              .map(([next]) => next),
+          );
+          if (collapsed.size > 0)
+            store.set(collapsedNodeIdsAtom, nextCollapsed);
+        }
         setGraph(result.graph);
-      } catch {
-        // parse errors are expected while editing
+        setParseState({ status: "ready" });
+      } catch (error) {
+        if (request !== requestRef.current) return;
+        setParseState({
+          status: "error",
+          error:
+            error instanceof Error
+              ? error.message
+              : "The workflow could not be previewed.",
+        });
       }
     },
-    [onParse, setEdges, setGraph, setNodes],
+    [onParse, setGraph, setParseState, store],
   );
 
   useEffect(() => {
@@ -174,14 +222,18 @@ export function useWorkflowGraph({ onParse }: { onParse?: OnParseCallback }) {
   }, [graph, applyGraph]);
 
   useEffect(() => {
+    if (!onParse) return;
+    ++requestRef.current;
+    setParseState({ status: "updating" });
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       buildGraph(code);
     }, 300);
     return () => {
+      ++requestRef.current;
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [code, buildGraph]);
+  }, [code, buildGraph, onParse, setParseState]);
 
   return { buildGraph };
 }

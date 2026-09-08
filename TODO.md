@@ -34,11 +34,6 @@
   `git-panel`/`useCommitChanges` in packages/registry still assume the
   dirty-tree model. Rework them (and discardDraft semantics) onto the
   checkpoint model.
-- **Claude Code persona parity.** The claude-code harness passes a
-  raw-string systemPrompt (replacing the SDK preset), so those sessions
-  get the core paragraph + workspace playbook but none of the desktop
-  persona (tone, task guidance) the built-in agent has. Decide: preset
-  + append, or share the desktop INSTRUCTIONS across harnesses.
 - **Chat: git-changes tree view.** The per-turn "touched files" chips were
   removed from chat replies (most users don't care; the app chip already
   jumps to the result). Replace them with a proper git-style changed-files
@@ -74,6 +69,18 @@
   a self-scoped store subtree (`store/users/{user}/**` via a role grant,
   0055 machinery) — the stock server's member role (ADR 0059) already
   grants exactly that subtree.
+- **Cross-project agent messaging.** Durable attributed delivery within a
+  project is shipped: message-only, next-turn, and interrupt modes use the
+  persisted mailbox and follow cross-host session authority. First-class
+  subsessions use the same path. What remains is an explicit policy for a
+  personal agent to address sessions in another project, including source and
+  destination scope, incognito boundaries, and auditable cross-project grants.
+- **Profile-scoped agent workflows.** After per-agent, per-project workflows
+  are established, add private workflows owned by a profile-scoped personal
+  agent and usable across projects without entering project git history.
+  Define their local source storage, project access boundaries, lifecycle,
+  and optional profile sync before implementation. This is intentionally
+  deferred from temporary project Watchers.
 - **Agent channel integrations: Slack, code review.** The per-agent
   schema (capabilities + tool policies + mode) is the substrate; what's
   missing is the *binding* of an agent to a channel. Slack: a
@@ -87,6 +94,17 @@
   seam, ADR 0045) invoking a read-only-mode agent whose persona is the
   review doctrine, posting via the PR-review surface. Both are
   consumers of ADR 0056; neither needs new agent-side schema.
+- **Claude plugin for Catamorphic project connections.** Ship a general
+  Catamorphic plugin for Claude so someone invited to a project can use the
+  project without installing Catamorphic Desktop. During installation or
+  first authorization, ask for the credential-free project or invitation
+  link, complete the server's ordinary OAuth flow, and configure that
+  project's MCP endpoint automatically. Project choice and authentication
+  belong to the invitation/onboarding path outside the desktop; the desktop
+  should not permanently advertise "Use in Claude" to someone already using
+  Catamorphic. Preserve the same scoped identity and durable session model so
+  agent conversations begun through Claude appear in the project's ordinary
+  session history with their source attributed.
 - **TS `defineAgent` layer over project agent JSON.** The committed
   `agents/<slug>.json` files are the substrate (ADR 0050); add the
   authoring layer: `defineAgent({...})` in project code, discovered by
@@ -95,26 +113,20 @@
   consent hashing, and HTTP surface stay unchanged. Gives authors types,
   autocomplete, and refactors; the check script should flag drift between
   source and generated JSON.
-- **Stock self-hostable server: SHIPPED 2026-08-21 (ADR 0059,
-  `apps/server`)** — docker-run-able, zero external services (PGlite +
-  bare git origins + local-process execution + `auth.json` tokens),
-  invites over `POST /admin/invites` (deploys `roles/member.json`,
-  grants membership, returns connect links), unique mDNS hostname for
-  LAN reach, `DATABASE_URL` opt-in for real Postgres. The mobile PWA
-  (`apps/pwa`, ADR 0058) is its first-class client, and desktop QR
-  pairing (ADR 0060) covers the personal-server case. Remaining
-  follow-ups: **passkeys** for self-serve token renewal (the `renew=`
-  slot on connect links is still empty), **OIDC + email-domain
-  auto-membership** (the company-brain door), an **admin/membership UI**
-  (today: curl + the printed admin token), and remote MCP for the desktop (calling a remote
-  server's workflow tools instead of local ones — the original
-  motivating case: per-customer apps with customers as scoped viewers).
+- **Stock-server administration UI.** The stock host now ships Better Auth,
+  OAuth/OIDC and local sign-in, credential-free invitations, all four admission
+  modes, membership-derived scope, and agent-driven machine-local setup. The
+  remaining product surface is calm role, membership, admission, access-request,
+  and publication management for authorized project managers. Keep it on the
+  ordinary project-permission APIs; do not revive printed admin tokens,
+  token-bearing links, or a server-owner account. Passkeys remain an optional
+  future login method, not an authorization model.
 - **ADR 0055 follow-ups (company brain).** The six steps landed (scope kinds
   + scoped agent sessions; roles/memberships/`identityFromBearer`; project
   store + documents surface + `context.caller/documents/host`; project MCP
   endpoint; desktop remote projects; proposals + publications). Left for
-  later, in rough priority: (a) desktop remote projects — auto-sync on focus
-  / interval, a per-version "restore" button in the history modal, revoking
+  later, in rough priority: (a) desktop remote projects — periodic auto-sync,
+  a per-version "restore" button in the history modal, revoking
   publications from the desktop, and surfacing the project MCP endpoint's
   skills/agents in the connect flow;
   (b) `context.host` typed through the generated projections (ADR 0041) so

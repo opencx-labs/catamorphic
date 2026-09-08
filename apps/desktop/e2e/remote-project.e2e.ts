@@ -6,10 +6,11 @@ import { type AppHandle, launchApp } from "./harness.js";
 
 /**
  * Remote projects end to end (ADR 0055): a member pastes a connect link,
- * picks a folder, and the app materializes what the server lets them see;
- * a local edit under store/ ships back with a version check. The "server"
+ * and the app materializes what the server lets them see. The member shell
+ * syncs local work without exposing repository controls, and Share publishes
+ * from the universal surface bar. The "server"
  * is a tiny in-test HTTP server speaking the plugin's documents routes and
- * requiring the invite's bearer token.
+ * the same OAuth discovery, PKCE, and bearer-token contract as the stock host.
  */
 
 let app: AppHandle;
@@ -25,6 +26,7 @@ const program = new Map<string, string>([
 const writes: Array<{ path: string; ifVersion?: number; text: string }> = [];
 const publications: Array<Record<string, unknown>> = [];
 let revoked = false;
+let introspectionUnavailable = false;
 const proposals: Array<Record<string, unknown>> = [];
 
 const helpers = `
@@ -50,11 +52,6 @@ const runWait = <T>(
 function startFakeServer(): Promise<void> {
   server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
-    if (revoked || req.headers.authorization !== `Bearer ${TOKEN}`) {
-      res.writeHead(401, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: "Unauthorized" }));
-      return;
-    }
     const send = (
       status: number,
       body: unknown,
@@ -71,7 +68,85 @@ function startFakeServer(): Promise<void> {
         });
         req.on("end", () => resolve(raw ? JSON.parse(raw) : {}));
       });
+    const origin = `http://${req.headers.host}`;
+    if (
+      req.method === "GET" &&
+      url.pathname === "/.well-known/oauth-protected-resource"
+    ) {
+      return send(200, {
+        resource: `${origin}/api`,
+        authorization_servers: [origin],
+      });
+    }
+    if (
+      req.method === "GET" &&
+      url.pathname === "/.well-known/oauth-authorization-server"
+    ) {
+      return send(200, {
+        issuer: origin,
+        authorization_endpoint: `${origin}/api/auth/mcp/authorize`,
+        token_endpoint: `${origin}/api/auth/mcp/token`,
+        registration_endpoint: `${origin}/api/auth/mcp/register`,
+        code_challenge_methods_supported: ["S256"],
+      });
+    }
+    if (req.method === "POST" && url.pathname === "/api/auth/mcp/register") {
+      return send(201, { client_id: "desktop-e2e" });
+    }
+    if (req.method === "GET" && url.pathname === "/api/auth/mcp/authorize") {
+      const redirect = new URL(url.searchParams.get("redirect_uri") ?? "");
+      redirect.searchParams.set("code", "desktop-e2e-code");
+      redirect.searchParams.set("state", url.searchParams.get("state") ?? "");
+      // Leave the authorization URL visible long enough to prove that the
+      // desktop opened its own browser tab before completing the callback.
+      setTimeout(() => {
+        res.writeHead(302, { location: redirect.toString() });
+        res.end();
+      }, 500);
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/auth/mcp/token") {
+      return send(200, {
+        access_token: TOKEN,
+        refresh_token: "desktop-refresh-token",
+        expires_in: 3600,
+        scope: "openid profile email offline_access",
+        token_type: "Bearer",
+      });
+    }
+    if (revoked || req.headers.authorization !== `Bearer ${TOKEN}`) {
+      return send(401, { error: "Unauthorized" });
+    }
+    // Connected project reads now go to the remote member authority too.
+    if (req.method === "GET" && url.pathname === "/api/projects/remote-1") {
+      return send(200, {
+        id: "remote-1",
+        name: "Acme brain",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        workflows: [],
+        files: [],
+      });
+    }
+    if (
+      req.method === "GET" &&
+      [
+        "/api/projects/remote-1/workflows",
+        "/api/projects/remote-1/apps",
+        "/api/projects/remote-1/skills",
+        "/api/projects/remote-1/workflow-enablements",
+      ].includes(url.pathname)
+    )
+      return send(200, []);
+    if (
+      req.method === "GET" &&
+      url.pathname === "/api/projects/remote-1/agent/sessions"
+    )
+      return send(200, { items: [], total: 0 });
     if (req.method === "GET" && url.pathname === "/api/me") {
+      if (introspectionUnavailable) {
+        return send(503, { error: "Capability introspection unavailable" });
+      }
       return send(200, {
         version: 1,
         identity: { externalUserId: "member", root: false },
@@ -79,6 +154,8 @@ function startFakeServer(): Promise<void> {
           {
             projectId: "remote-1",
             builder: false,
+            source: null,
+            permissions: [],
             agents: ["csm"],
             workflows: [],
             apps: [],
@@ -264,14 +341,14 @@ describe("remote projects (ADR 0055)", () => {
       label: "connect modal",
     });
 
-    const link = `catamorphic://connect?server=${encodeURIComponent(serverUrl)}&token=${TOKEN}&project=remote-1&name=Acme%20brain&renew=${encodeURIComponent("https://example.test/join")}`;
+    const link = `catamorphic://connect?server=${encodeURIComponent(serverUrl)}&project=remote-1&name=Acme%20brain`;
     await run(
       `setReactValue($('[data-testid="remote-link-input"]'), ${JSON.stringify(link)}); return true;`,
     );
     await runWait(
-      `return $('[data-testid="remote-server-input"]').value.length > 0 && $('[data-testid="remote-name-input"]').value === 'Acme brain';`,
+      `return $('[data-testid="remote-link-summary"]')?.innerText.includes('Acme brain') && !document.querySelector('[data-testid="remote-server-input"]') && !document.querySelector('[data-testid="remote-project-input"]');`,
       {
-        label: "link parsed into fields",
+        label: "link parsed without duplicate fields",
       },
     );
     await runWait(
@@ -280,11 +357,23 @@ describe("remote projects (ADR 0055)", () => {
         label: "connect submit",
       },
     );
+    await runWait(
+      `return $$('webview').some((view) => (view.src ?? '').includes('/api/auth/mcp/authorize'));`,
+      { timeoutMs: 30_000, label: "remote sign-in in workspace browser tab" },
+    );
 
-    // The Server section shows for the connected project.
+    // Member documents and sharing live in the default Project sidebar.
+    // Files is a collapsible section, without builder-only Git controls.
+    await runWait(
+      `$('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]')?.click();
+       return $('[data-testid="files-nav"]')?.textContent.includes('store');`,
+      {
+        timeoutMs: 60_000,
+        label: "member files",
+      },
+    );
     await runWait(`return !!$('[data-testid="remote-sync"]');`, {
-      timeoutMs: 60_000,
-      label: "Server section",
+      label: "member download control",
     });
     projectDir = path.join(app.userDataDir, "Catamorphic", "acme-brain");
     expect(
@@ -314,7 +403,22 @@ describe("remote projects (ADR 0055)", () => {
       path.join(projectDir, "store/customers/acme/brief.md"),
       "# Brief\n",
     );
-    // Ship becomes enabled once the poll notices local changes.
+    fs.writeFileSync(
+      path.join(projectDir, "store/private.txt"),
+      "Private local draft",
+    );
+    await run(`window.dispatchEvent(new Event('focus')); return true;`);
+    await runWait(
+      `return !!$('input[aria-label="Upload notes.md"]') && !!$('input[aria-label="Upload brief.md"]');`,
+      { timeoutMs: 30_000, label: "local files available for selection" },
+    );
+    expect(writes).toHaveLength(0);
+    expect(await run(`return $('[data-testid="remote-ship"]').disabled;`)).toBe(
+      true,
+    );
+    await run(
+      `$('input[aria-label="Upload notes.md"]').click(); $('input[aria-label="Upload brief.md"]').click(); return true;`,
+    );
     await runWait(
       `const btn = $('[data-testid="remote-ship"]'); return !!btn && !btn.disabled;`,
       {
@@ -324,7 +428,7 @@ describe("remote projects (ADR 0055)", () => {
     );
     await run(`$('[data-testid="remote-ship"]').click(); return true;`);
     await runWait(
-      `const m = $('[data-testid="remote-message"]'); return !!m && m.textContent.includes('shipped');`,
+      `const m = $('[data-testid="remote-message"]'); return !!m && m.textContent.includes('uploaded');`,
       {
         timeoutMs: 30_000,
         label: "ship message",
@@ -341,17 +445,40 @@ describe("remote projects (ADR 0055)", () => {
   });
 
   it("Publish ships a dirty store file first, then hands back the link", async () => {
-    fs.writeFileSync(
-      path.join(projectDir, "store/customers/acme/brief.md"),
-      "# Brief v2\n",
-    );
-    await runWait(`const row = byText('li', 'brief.md'); return !!row;`, {
-      timeoutMs: 30_000,
-      label: "brief.md listed as changed",
-    });
     await run(
-      `const row = byText('li', 'brief.md'); row.querySelector('[data-testid="remote-publish"]').click(); return true;`,
+      `$('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]')?.click(); return true;`,
     );
+    await run(
+      `byText('[data-testid="files-nav"] button', 'customers').click(); return true;`,
+    );
+    await runWait(
+      `const folder = byText('[data-testid="files-nav"] button', 'acme');
+       if (!folder) return false; folder.click(); return true;`,
+      { label: "open customer folder" },
+    );
+    await runWait(
+      `const row = $('[data-testid="files-nav"] button[title="store/customers/acme/brief.md"]');
+       if (!row) return false; row.click(); return true;`,
+      {
+        timeoutMs: 30_000,
+        label: "open brief from member files",
+      },
+    );
+    await runWait(
+      `return !!$('.cat-mdedit .ProseMirror') && !!$('[data-testid="surface-share"]');`,
+      { timeoutMs: 60_000, label: "brief editor and top-bar Share" },
+    );
+    await run(
+      `const editor = window.__catMarkdownEditor.editor;
+       editor.commands.focus('end');
+       editor.commands.insertContent(' v2');
+       return true;`,
+    );
+    await runWait(
+      `return $$('button').some((button) => button.textContent === 'Save');`,
+      { label: "brief marked dirty" },
+    );
+    await run(`$('[data-testid="surface-share"]').click(); return true;`);
     await runWait(`return !!$('[data-testid="publish-submit"]');`, {
       label: "publish modal",
     });
@@ -368,56 +495,47 @@ describe("remote projects (ADR 0055)", () => {
     expect(writes.at(-1)).toMatchObject({
       path: "store/customers/acme/brief.md",
       ifVersion: 1,
-      text: "# Brief v2\n",
     });
+    expect(writes.at(-1)?.text).toContain("v2");
     expect(publications).toEqual([
       { path: "store/customers/acme/brief.md", audience: "members" },
     ]);
     await run(`pressKey('Escape'); return true;`);
   });
 
-  it("Propose turns program edits into a pull request on the member's behalf", async () => {
-    fs.writeFileSync(
-      path.join(projectDir, "docs/handbook.md"),
-      "# Handbook\n\nRefunds take 3 days.\n",
-    );
-    await runWait(`return !!$('[data-testid="remote-propose"]');`, {
-      timeoutMs: 30_000,
-      label: "propose button",
-    });
-    await run(`$('[data-testid="remote-propose"]').click(); return true;`);
-    await runWait(`return !!$('[data-testid="propose-title"]');`, {
-      label: "propose modal",
-    });
+  it("keeps Git controls scoped while making document downloads available", async () => {
+    expect(
+      await run(
+        `return {
+          handbook: !!$('[data-testid="files-nav"] button[title="docs/handbook.md"]'),
+          sync: !!$('[data-testid="remote-sync"]'),
+          propose: !!$('[data-testid="remote-propose"]'),
+        };`,
+      ),
+    ).toEqual({ handbook: false, sync: true, propose: false });
+    expect(proposals).toHaveLength(0);
+  });
+
+  it("stops sync when capability introspection is unavailable", async () => {
+    introspectionUnavailable = true;
     await run(
-      `setReactValue($('[data-testid="propose-title"]'), 'Refunds now take 3 days'); return true;`,
+      `$('[data-testid="remote-connection-status"]').click(); return true;`,
     );
     await runWait(
-      `const btn = $('[data-testid="propose-submit"]'); if (btn && !btn.disabled) { btn.click(); return true; } return false;`,
-      { label: "propose submit" },
+      `return $('[data-testid="remote-connection-status"]')?.getAttribute('aria-label')?.includes('Cannot reach');`,
+      { timeoutMs: 30_000, label: "unreachable connection status" },
     );
-    await runWait(
-      `const r = $('[data-testid="propose-result"]'); return !!r && r.textContent.includes('#7');`,
-      { timeoutMs: 30_000, label: "propose result" },
-    );
-    expect(proposals).toHaveLength(1);
-    expect(proposals[0]).toMatchObject({
-      title: "Refunds now take 3 days",
-      changes: [
-        {
-          path: "docs/handbook.md",
-          content: "# Handbook\n\nRefunds take 3 days.\n",
-        },
-      ],
-    });
+    introspectionUnavailable = false;
   });
 
   it("a revoked token turns Sync into a 'Sign in again' prompt", async () => {
     revoked = true;
-    await run(`$('[data-testid="remote-sync"]').click(); return true;`);
+    await run(
+      `$('[data-testid="remote-connection-status"]').click(); return true;`,
+    );
     await runWait(
-      `const m = $('[data-testid="remote-message"]'); return !!m && m.textContent.includes('expired or was revoked') && !!$('[data-testid="remote-renew"]');`,
-      { timeoutMs: 30_000, label: "renew prompt" },
+      `return $('[data-testid="remote-connection-status"]')?.getAttribute('aria-label')?.includes('Sign in again');`,
+      { timeoutMs: 30_000, label: "renew status" },
     );
     revoked = false;
   });

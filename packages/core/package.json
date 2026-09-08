@@ -15,7 +15,7 @@
   "scripts": {
     "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
     "dev": "tsup --watch --no-clean",
-    "test": "vitest run --config ../../vitest.config.ts",
+    "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/core --config ../../vitest.config.ts",
     "typecheck": "tsgo --project ./tsconfig.json"
   },
   "dependencies": {
@@ -28,12 +28,15 @@
     "@catamorphic/plugins": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
     "@catamorphic/workflow": "workspace:*",
+    "croner": "^10.0.1",
     "kysely": "^0.29.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@catamorphic/cloudflare": "workspace:*",
     "@electric-sql/pglite": "^0.5.4",
-    "@types/node": "^26.1.1"
+    "@types/node": "^26.1.1",
+    "@types/pg": "^8.20.0",
+    "pg": "^8.22.0"
   }
 }

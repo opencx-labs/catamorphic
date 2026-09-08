@@ -39,13 +39,14 @@ export function useAuthorizeConnection(args: {
   CatamorphicError,
   { redirectUri?: string }
 > {
-  const { apiClient, baseUrl } = useCatamorphic();
+  const { apiClient, baseUrl, authorizationRedirectUri } = useCatamorphic();
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input) =>
       runWithCatamorphicError(async () => {
         const redirectUri =
           input?.redirectUri ??
+          authorizationRedirectUri ??
           (baseUrl
             ? new URL(
                 "/api/connection-authorizations/callback",

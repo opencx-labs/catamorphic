@@ -196,3 +196,78 @@ describe.skipIf(!chromeBinary())("pwa installation", () => {
     expect(appearedAgain).toBe(false);
   });
 });
+
+describe.skipIf(!chromeBinary())("mobile subsessions", () => {
+  let app: PwaHandle;
+  beforeAll(async () => {
+    app = await launchPwa();
+  }, 90_000);
+  afterAll(async () => {
+    await app?.stop();
+  });
+  it("opens an older child beyond project pagination and offers a direct path back", async () => {
+    const base = `${app.apiBase}/projects/11111111-1111-4111-8111-111111111111/agent/sessions`;
+    const create = async (body: {
+      title: string;
+      parentSessionId?: string;
+    }) => {
+      const response = await fetch(base, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer fake-access-token",
+        },
+        body: JSON.stringify(body),
+      });
+      const session: unknown = await response.json();
+      if (
+        !response.ok ||
+        typeof session !== "object" ||
+        session === null ||
+        !("id" in session) ||
+        typeof session.id !== "string"
+      ) {
+        throw new Error("Failed to create the subsession fixture");
+      }
+      return { id: session.id };
+    };
+    const parent = await create({ title: "Release readiness" });
+    await create({ title: "Review installation", parentSessionId: parent.id });
+    // The child is deliberately outside even a 100-item project-list page.
+    for (let index = 0; index < 101; index += 1) {
+      await create({ title: `Unrelated chat ${index}` });
+    }
+    await app.waitFor(
+      "!!document.querySelector('[data-testid=connect-input]')",
+    );
+    await app.eval(
+      TYPE(
+        "[data-testid=connect-input]",
+        `${app.connectLink}&session=${parent.id}`,
+      ),
+    );
+    await app.waitFor(
+      "!document.querySelector('[data-testid=connect-submit]').disabled",
+    );
+    await app.eval(CLICK("[data-testid=connect-submit]"));
+    await app.waitFor(
+      "!!document.querySelector('nav[aria-label=Subsessions]')",
+      { timeoutMs: 20_000 },
+    );
+    if (process.env.CATAMORPHIC_MOBILE_SUBSESSIONS_SCREENSHOT)
+      await app.screenshot(
+        process.env.CATAMORPHIC_MOBILE_SUBSESSIONS_SCREENSHOT,
+      );
+    await app.eval(
+      CLICK_BY_TEXT(
+        "nav[aria-label=Subsessions] button",
+        "Review installation",
+      ),
+    );
+    await app.waitFor("!!document.querySelector('[data-testid=parent-chat]')");
+    await app.eval(CLICK("[data-testid=parent-chat]"));
+    await app.waitFor(
+      "!!document.querySelector('nav[aria-label=Subsessions]')",
+    );
+  });
+});

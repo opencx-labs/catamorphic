@@ -29,6 +29,13 @@ export interface ActionDefinition {
 
 export const BUILTIN_ACTIONS = [
   {
+    id: "check-for-updates",
+    label: "Check for updates",
+    description: "check for a newer Catamorphic desktop version",
+    defaultBinding: null,
+    keywords: ["update", "upgrade", "version", "release"],
+  },
+  {
     id: "new-tab",
     label: "New tab",
     description: "open a new tab (the command palette)",
@@ -57,6 +64,20 @@ export const BUILTIN_ACTIONS = [
     description: "open a new browser tab",
     defaultBinding: "Cmd+Alt+T",
     keywords: ["browser", "web", "page", "open"],
+  },
+  {
+    id: "browser-back",
+    label: "Go back",
+    description: "go back in the focused browser tab",
+    defaultBinding: "Cmd+ArrowLeft",
+    keywords: ["browser", "history", "previous", "page", "left"],
+  },
+  {
+    id: "browser-forward",
+    label: "Go forward",
+    description: "go forward in the focused browser tab",
+    defaultBinding: "Cmd+ArrowRight",
+    keywords: ["browser", "history", "next", "page", "right"],
   },
   {
     id: "reopen-tab",
@@ -157,15 +178,6 @@ export const BUILTIN_ACTIONS = [
     keywords: ["settings", "preferences", "float"],
   },
   {
-    id: "float-current-tab",
-    hiddenInPalette: true,
-    label: "Open as floating",
-    description:
-      "open the selected palette item as floating, or float the current tab",
-    defaultBinding: "Cmd+Alt+F",
-    keywords: ["float", "overlay", "settings", "terminal", "preview"],
-  },
-  {
     id: "dismiss-floating",
     hiddenInPalette: true,
     label: "Dismiss floating panel",
@@ -212,20 +224,6 @@ export const BUILTIN_ACTIONS = [
     keywords: ["reload", "refresh", "cache", "browser"],
   },
   {
-    id: "browser-back",
-    label: "Browser back",
-    description: "go to the previous page",
-    defaultBinding: "Cmd+ArrowLeft",
-    keywords: ["back", "history", "browser"],
-  },
-  {
-    id: "browser-forward",
-    label: "Browser forward",
-    description: "go to the next page",
-    defaultBinding: "Cmd+ArrowRight",
-    keywords: ["forward", "history", "browser"],
-  },
-  {
     id: "new-editor-tab",
     label: "New editor",
     description: "open a code editor tab (pick a project file)",
@@ -233,8 +231,15 @@ export const BUILTIN_ACTIONS = [
     keywords: ["editor", "code", "file", "open", "monaco", "edit"],
   },
   {
+    id: "toggle-right-sidebar",
+    label: "Toggle right sidebar",
+    description: "show or hide the right sidebar",
+    defaultBinding: "Cmd+Shift+B",
+    keywords: ["sidebar", "right", "widgets", "hide", "show"],
+  },
+  {
     id: "toggle-sidebar",
-    label: "Toggle sidebar",
+    label: "Toggle left sidebar",
     description: "show/hide the sidebar",
     defaultBinding: "Cmd+B",
     keywords: ["sidebar", "hide", "show", "collapse", "expand", "panel"],
@@ -299,6 +304,22 @@ export const BUILTIN_ACTIONS = [
       "skills",
       "capabilities",
       "tools",
+    ],
+  },
+  {
+    id: "session-status",
+    label: "Status",
+    description:
+      "open the focused chat's session details and contextual actions",
+    defaultBinding: null,
+    keywords: [
+      "status",
+      "session",
+      "source",
+      "agent",
+      "archive",
+      "fork",
+      "environment",
     ],
   },
   {

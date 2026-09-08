@@ -15,12 +15,12 @@
   "scripts": {
     "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
     "dev": "tsup --watch --no-clean",
-    "test": "vitest run --config ../../vitest.config.ts",
+    "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/codex --config ../../vitest.config.ts",
     "typecheck": "tsgo --project ./tsconfig.json"
   },
   "dependencies": {
     "@catamorphic/sandbox": "workspace:*",
-    "@openai/codex-sdk": "^0.144.1"
+    "@openai/codex-sdk": "0.153.4"
   },
   "devDependencies": {
     "@types/node": "^26.1.1"

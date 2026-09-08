@@ -3,7 +3,7 @@ import { type DB, DEFAULT_SCHEMA, migrateToLatest } from "@catamorphic/db";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
 import { ConnectionBroker } from "../services/connection-broker.js";
 import { ConnectionCapabilityGrantsService } from "../services/connection-capability-grants.js";
@@ -17,6 +17,7 @@ import {
 } from "../services/connections-service.js";
 import { MemoryCredentialVault } from "../services/credential-vault.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
+import type { WorkflowEnablementsService } from "../services/workflow-enablements-service.js";
 
 const pglite = new PGlite({ extensions: { pgcrypto } });
 const db = new Kysely<DB>({
@@ -24,7 +25,9 @@ const db = new Kysely<DB>({
   plugins: [new WithSchemaPlugin(DEFAULT_SCHEMA)],
 });
 const tenantId = crypto.randomUUID();
-const projectId = crypto.randomUUID();
+// Deliberately contains the sensitive fixture value so assertions cannot scan
+// unrelated identifiers for that substring.
+const projectId = "a1b2c3d4-e5f6-4890-abcd-ef1234567890";
 const otherTenantId = crypto.randomUUID();
 
 const admin: Identity = { tenantId, externalUserId: "admin" };
@@ -246,6 +249,8 @@ describe("credential connections", () => {
   });
 
   it("brokers by immutable allocation and stores only grant hashes", async () => {
+    const deniedInput = { userId: "123" };
+    const allowedInput = { page: 1 };
     const [resolved] = await connections.resolve({
       identity: member,
       projectId,
@@ -281,7 +286,7 @@ describe("credential connections", () => {
         allocationId: allocation.id,
         alias: "directory",
         action: "users.disable",
-        input: { userId: "123" },
+        input: deniedInput,
       }),
     ).rejects.toThrow("not permitted");
     await expect(
@@ -290,7 +295,7 @@ describe("credential connections", () => {
         allocationId: allocation.id,
         alias: "directory",
         action: "users.list",
-        input: { page: 1 },
+        input: allowedInput,
       }),
     ).resolves.toEqual({ action: "users.list", ok: true });
     expect(decodedMaterials.at(-1)).toBe("service-token");
@@ -317,20 +322,92 @@ describe("credential connections", () => {
       identity: admin,
       projectId,
     });
-    const invocation = audit.find(
+    const allowedInvocation = audit.find(
       (event) =>
         event.eventType === "connection.invoked" &&
         event.action === "users.list",
     );
-    expect(invocation?.argumentsDigest).toMatch(/^[a-f0-9]{64}$/);
-    expect(JSON.stringify(invocation)).not.toContain("123");
-    expect(audit).toContainEqual(
-      expect.objectContaining({
-        eventType: "connection.invoked",
-        outcome: "denied",
-        action: "users.disable",
-      }),
+    const deniedInvocation = audit.find(
+      (event) =>
+        event.eventType === "connection.invoked" &&
+        event.action === "users.disable",
     );
+    expect(allowedInvocation).toMatchObject({
+      outcome: "allowed",
+      argumentsDigest: crypto
+        .createHash("sha256")
+        .update(JSON.stringify(allowedInput))
+        .digest("hex"),
+    });
+    expect(deniedInvocation).toMatchObject({
+      outcome: "denied",
+      argumentsDigest: crypto
+        .createHash("sha256")
+        .update(JSON.stringify(deniedInput))
+        .digest("hex"),
+    });
+    expect(allowedInvocation?.metadata).toEqual({});
+    expect(deniedInvocation?.metadata).toEqual({});
+    expect(deniedInvocation?.argumentsDigest).not.toBe(deniedInput.userId);
+    expect(allowedInvocation).not.toHaveProperty("input");
+    expect(deniedInvocation).not.toHaveProperty("input");
+    expect(allowedInvocation).not.toHaveProperty("arguments");
+    expect(deniedInvocation).not.toHaveProperty("arguments");
+  });
+
+  it("revalidates an enablement before every brokered action", async () => {
+    const [resolved] = await connections.resolve({
+      identity: member,
+      projectId,
+      environment: "company",
+      aliases: ["directory"],
+      principalsByAlias: { directory: "service" },
+    });
+    const enablementId = crypto.randomUUID();
+    const allocation = await allocations.create({
+      identity: member,
+      projectId,
+      environmentName: "company",
+      workloadKind: "workflow",
+      rootWorkloadId: crypto.randomUUID(),
+      policy: {
+        binding: {
+          id: "managed",
+          label: "Managed",
+          trust: "managed",
+          isolation: "sandbox",
+          workloads: ["workflow"],
+          agentTopologies: [],
+          capabilities: ["network.egress"],
+          resources: {},
+        },
+        requirements: { workload: "workflow" },
+        connections: [resolved!],
+        workflowEnablementId: enablementId,
+      },
+    });
+    const revalidate = vi.fn(async () => {
+      throw new Error("connection revoked");
+    });
+    const guardedBroker = new ConnectionBroker(
+      connections,
+      providers,
+      allocations,
+      () => ({ revalidate }) as unknown as WorkflowEnablementsService,
+    );
+    const invocationsBefore = decodedMaterials.length;
+
+    await expect(
+      guardedBroker.invoke({
+        identity: member,
+        allocationId: allocation.id,
+        alias: "directory",
+        action: "users.list",
+        input: {},
+      }),
+    ).rejects.toThrow("Workflow enablement authority is unavailable");
+    expect(revalidate).toHaveBeenCalledWith({ identity: member, enablementId });
+    expect(decodedMaterials).toHaveLength(invocationsBefore);
   });
 
   it("refreshes with compare-and-swap and revokes locally when upstream fails", async () => {

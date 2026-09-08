@@ -6,6 +6,7 @@ import type {
   ProjectRepo,
   RepoStatus,
 } from "@catamorphic/git";
+import { type FileReadOptions, readFileSnapshot } from "@catamorphic/git";
 import { Daytona } from "@daytonaio/sdk";
 
 interface DaytonaProjectRepoOpts {
@@ -68,16 +69,31 @@ export class DaytonaProjectRepo implements ProjectRepo {
       .filter(Boolean);
   }
 
-  async readAllFiles(): Promise<Record<string, string>> {
-    const files = await this.listFiles();
-    const entries = await Promise.all(
-      files.map(async (f) => [f, await this.readFile(f)] as const),
-    );
-    return Object.fromEntries(entries);
+  async readAllFiles(
+    options?: FileReadOptions,
+  ): Promise<Record<string, string>> {
+    return readFileSnapshot({
+      paths: await this.listFiles(),
+      options,
+      read: async (file, maxBytes) => {
+        const sandbox = await this.getSandbox();
+        const details = await sandbox.fs.getFileDetails(
+          `${this.repoPath}/${file}`,
+        );
+        if (details.size > maxBytes)
+          throw new Error(
+            `Project file '${file}' exceeds the ${maxBytes}-byte snapshot limit`,
+          );
+        return this.readFile(file);
+      },
+    });
   }
 
-  async readAllFilesAtRef(ref: string): Promise<Record<string, string>> {
-    return this.readTreeAtRef(ref);
+  async readAllFilesAtRef(
+    ref: string,
+    options?: FileReadOptions,
+  ): Promise<Record<string, string>> {
+    return this.readTreeAtRef(ref, undefined, options);
   }
 
   async readFilesAtRef(
@@ -143,6 +159,7 @@ export class DaytonaProjectRepo implements ProjectRepo {
   private async readTreeAtRef(
     ref: string,
     prefix?: string,
+    options?: FileReadOptions,
   ): Promise<Record<string, string>> {
     const sandbox = await this.getSandbox();
     const result = await sandbox.process.executeCommand(
@@ -150,16 +167,25 @@ export class DaytonaProjectRepo implements ProjectRepo {
       this.repoPath,
     );
     const paths = result.result.split("\n").filter(Boolean);
-    const entries = await Promise.all(
-      paths.map(async (p) => {
-        const content = await sandbox.process.executeCommand(
-          `git show ${ref}:${shellQuote(p)}`,
+    return readFileSnapshot({
+      paths,
+      options,
+      read: async (p, maxBytes) => {
+        const size = await sandbox.process.executeCommand(
+          `git cat-file -s ${shellQuote(`${ref}:${p}`)}`,
           this.repoPath,
         );
-        return [p, content.result] as const;
-      }),
-    );
-    return Object.fromEntries(entries);
+        if (Number(size.result.trim()) > maxBytes)
+          throw new Error(
+            `Project file '${p}' exceeds the ${maxBytes}-byte snapshot limit`,
+          );
+        const content = await sandbox.process.executeCommand(
+          `git show ${shellQuote(`${ref}:${p}`)}`,
+          this.repoPath,
+        );
+        return content.result;
+      },
+    });
   }
 
   async commit(

@@ -43,7 +43,11 @@ describe("configurable browser workspace", () => {
     expect(
       await run("return $('[data-workspace-title]').textContent.trim()"),
     ).toBe("");
-    expect(await run("return !!$('.workspace-chrome button')")).toBe(false);
+    expect(
+      await run(
+        "return !!$('.workspace-chrome button[aria-label=\"Collapse sidebar\"]')",
+      ),
+    ).toBe(false);
     expect(
       await run("return !!$('aside button[aria-label=\"Collapse sidebar\"]')"),
     ).toBe(true);
@@ -312,7 +316,11 @@ describe("configurable browser workspace", () => {
       await run(
         "const r = $('.workspace-content').getBoundingClientRect(); return [r.x, r.y, r.width, r.height]",
       ),
-    ).toEqual(await app.eval("[0, 0, innerWidth, innerHeight]"));
+    ).toEqual(
+      await app.eval(
+        "[0, 0, innerWidth - document.querySelector('[data-sidebar=right]').getBoundingClientRect().width, innerHeight]",
+      ),
+    );
     expect(
       await run(
         "return getComputedStyle($('.workspace-content')).borderRadius",
@@ -341,7 +349,11 @@ describe("configurable browser workspace", () => {
       await run(
         "const r = $('.workspace-content').getBoundingClientRect(); return [r.x, r.y, r.width, r.height]",
       ),
-    ).toEqual(await app.eval("[0, 0, innerWidth, innerHeight]"));
+    ).toEqual(
+      await app.eval(
+        "[0, 0, innerWidth - document.querySelector('[data-sidebar=right]').getBoundingClientRect().width, innerHeight]",
+      ),
+    );
     expect(
       await app.eval(
         "window.catamorphicDesktop.getPrefs().then(p => p.sidebarOpen)",
@@ -402,24 +414,15 @@ describe("configurable browser workspace", () => {
     expect(Math.abs(centers[0] - centers[1])).toBeLessThanOrEqual(1);
   });
 
-  it("applies an agent's layout mirror without changing unrelated preferences", async () => {
-    await app.eval(
-      "window.catamorphicDesktop.setPrefs({tabPlacement:'top', pinnedBookmarks:'tiles', notificationSounds:false})",
-    );
-    await run("$('button[aria-label=\"New chat\"]').click()");
+  it("opens a customization chat with the live configuration path", async () => {
+    await run("$('button[aria-label=\"Customize sidebar\"]').click()");
     await app.waitFor("!!document.querySelector('[data-composer-input]')");
-    await run(
-      "const input = $('[data-composer-input]'); setReactValue(input, 'desktop layout: sidebar'); input.focus()",
-    );
-    await app.press("Enter");
     await app.waitFor(
-      "window.catamorphicDesktop.getPrefs().then(p => p.tabPlacement === 'sidebar' && p.pinnedBookmarks === 'list')",
-      { timeoutMs: 60_000 },
+      "document.body.innerText.includes('The live sidebar configuration file on this machine is')",
     );
-    expect(
-      await app.eval(
-        "window.catamorphicDesktop.getPrefs().then(p => p.notificationSounds)",
-      ),
-    ).toBe(false);
+    const file = await app.eval<string>(
+      "window.catamorphicDesktop.sidebarConfigFile()",
+    );
+    expect(await app.eval("document.body.innerText")).toContain(file);
   });
 });

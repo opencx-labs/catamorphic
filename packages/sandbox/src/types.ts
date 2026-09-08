@@ -25,7 +25,34 @@ export interface SandboxHandle {
   status: SandboxStatus;
 }
 
+/** Hard sandbox limits. A provider must reject limits it cannot enforce. */
+export interface SandboxResources {
+  cpuMillis?: number;
+  memoryMb?: number;
+  storageMb?: number;
+  gpu?: boolean;
+}
+
+export function assertSandboxResources(
+  resources: SandboxResources | undefined,
+  supported: readonly (keyof SandboxResources)[],
+): void {
+  for (const [key, value] of Object.entries(resources ?? {})) {
+    if (value === undefined || value === false) continue;
+    if (!supported.some((item) => item === key)) {
+      throw new Error(`Sandbox provider cannot enforce '${key}'`);
+    }
+    if (
+      typeof value === "number" &&
+      (!Number.isSafeInteger(value) || value <= 0)
+    ) {
+      throw new Error(`Sandbox limit '${key}' must be a positive integer`);
+    }
+  }
+}
+
 export interface CreateSandboxOpts {
+  resources?: SandboxResources;
   snapshotName?: string;
   language?: string;
   envVars?: Record<string, string>;
@@ -58,6 +85,8 @@ export interface SandboxProvider {
    * image convention wins (Daytona: `/home/daytona`, Cloudflare: `/workspace`).
    */
   readonly workspaceRoot: string;
+  readonly isolation?: "none" | "process" | "sandbox";
+  readonly resourceLimits?: readonly (keyof SandboxResources)[];
 
   createSandbox(opts: CreateSandboxOpts): Promise<SandboxHandle>;
   startSandbox(sandboxId: string): Promise<void>;
@@ -177,6 +206,8 @@ export interface RuntimeHealth extends RuntimeSupervisorHealth {
 }
 
 export interface DeploymentRuntimeProvider {
+  /** Release host-side runtime resources after a sandbox stops or is destroyed. */
+  releaseSandbox?(args: { sandboxId: string }): Promise<void>;
   ensureRuntime(args: EnsureDeploymentRuntimeArgs): Promise<DeploymentRuntime>;
   /**
    * Uses invocationId for supervisor deduplication. A caller that cannot
@@ -284,8 +315,8 @@ export interface AgentQuestion {
 
 /**
  * Classified failure category on "error" events. Drives recovery UX:
- * `auth` offers a re-connect path, `rate_limit`/`unavailable` auto-retry
- * with backoff, `model_incompat` (e.g. reasoning blocks signed by another
+ * `auth` offers a re-connect path, `rate_limit`/`unavailable` explain a
+ * provider outage (retry requires a separate safety signal), `model_incompat` (e.g. reasoning blocks signed by another
  * model after a mid-conversation switch) retries with sanitized history.
  * Unclassified errors just offer a manual retry.
  */
@@ -339,6 +370,7 @@ export interface AgentEvent {
     | "session"
     | "subagent"
     | "background"
+    | "diagnostic"
     | "usage"
     | "error"
     | "done";
@@ -365,6 +397,8 @@ export interface AgentEvent {
   providerSessionId?: string;
   /** Set on classified "error" events (see {@link AgentErrorKind}). */
   errorKind?: AgentErrorKind;
+  /** True only when the provider confirms rejection before any work started. */
+  retrySafe?: boolean;
   /**
    * On "subagent" events: the harness's id for the delegated agent (Claude
    * Code uses the Task tool-use id). Also set on nested activity events

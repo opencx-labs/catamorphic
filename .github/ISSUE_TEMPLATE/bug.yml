@@ -1,0 +1,36 @@
+name: Bug report
+description: Report a reproducible problem in Catamorphic
+title: "Bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Catamorphic. Describe the problem and expected outcome. You do not need to prepare a patch.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Tell us what you observed and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: How can we reproduce it?
+      description: Include the smallest reliable sequence, project shape, or example that demonstrates the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the Catamorphic version or commit, operating system, host, and relevant providers.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Additional evidence
+      description: Add logs, screenshots, traces, or links. Remove credentials and private data first.

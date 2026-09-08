@@ -1,14 +1,37 @@
 appId: dev.catamorphic.desktop
 productName: Catamorphic
+copyright: Copyright © 2026 The Catamorphic Authors
+artifactName: "${productName}-${version}-${arch}.${ext}"
 directories:
+  buildResources: build
   output: release
 files:
   - out/**
   - package.json
   - THEME-NOTICES.md
+  # The small SDK adapters stay in the app. Their platform executables are
+  # integrity-pinned optional components downloaded on first harness use.
+  - "!**/node_modules/@anthropic-ai/claude-agent-sdk-darwin-*/**"
+  - "!**/node_modules/@anthropic-ai/claude-agent-sdk-linux-*/**"
+  - "!**/node_modules/@anthropic-ai/claude-agent-sdk-win32-*/**"
+  - "!**/node_modules/@openai/codex-darwin-*/**"
+  - "!**/node_modules/@openai/codex-linux-*/**"
+  - "!**/node_modules/@openai/codex-win32-*/**"
 extraResources:
   - from: ../pwa/dist
     to: pwa
+  - from: ../../LICENSE
+    to: LICENSE.txt
+  - from: ../../NOTICE
+    to: NOTICE.txt
+protocols:
+  - name: Catamorphic connect link
+    schemes:
+      - catamorphic
+publish:
+  provider: generic
+  url: https://raw.githubusercontent.com/opencx-labs/homebrew-tap/main/updates
+  publishAutoUpdate: true
 # Packages that load assets or native code from disk at runtime must escape
 # the asar archive: pglite (wasm), microsandbox (NAPI addon + platform
 # binaries), catamorphic db migrations (.sql read via fs), and the runtime
@@ -22,11 +45,34 @@ asarUnpack:
   - "**/node_modules/@catamorphic/runtime/dist/**"
 mac:
   category: public.app-category.developer-tools
+  icon: build/icon.icns
+  minimumSystemVersion: "12.0"
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  notarize: true
   extendInfo:
     NSLocalNetworkUsageDescription: Catamorphic uses your local network so your phone can continue this workspace.
   target:
-    - dmg
-    - zip
+    - target: dmg
+      arch:
+        - arm64
+    - target: zip
+      arch:
+        - arm64
+dmg:
+  title: "Catamorphic ${version}"
+  iconSize: 128
+  window:
+    width: 540
+    height: 380
+  contents:
+    - x: 140
+      y: 190
+    - x: 400
+      y: 190
+      type: link
+      path: /Applications
 linux:
   target:
     - AppImage

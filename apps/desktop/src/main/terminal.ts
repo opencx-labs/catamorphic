@@ -7,6 +7,7 @@ import { BrowserWindow, ipcMain, type WebContents } from "electron";
 import type { ServerState } from "./ipc.js";
 import { shellBinShimDir, shellIntegrationEnv } from "./shell-integration.js";
 import { readGhosttyAppearance } from "./terminal-appearance.js";
+import { TerminalLifecycle } from "./terminal-lifecycle.js";
 import { scanOsc133 } from "./terminal-text.js";
 
 /**
@@ -28,6 +29,7 @@ const BUFFER_CAP = 200_000;
 
 interface TerminalSession {
   pty: IPty;
+  releaseSender?: () => void;
   /** User sessions stream to their window; agent sessions broadcast. */
   sender: WebContents | null;
   /**
@@ -46,7 +48,7 @@ interface TerminalSession {
   /** The project this terminal belongs to; home terminals have none. */
   projectId?: string;
   /** Set for agent-owned sessions. */
-  agent?: { projectId: string };
+  agent?: { projectId: string; sessionId: string };
   /**
    * OSC 133 semantic-prompt state (agent sessions spawn with shell
    * integration; see shell-integration.ts). Once markers are `seen`,
@@ -92,6 +94,7 @@ function defaultShell(): string {
 export interface AgentTerminals {
   create(
     projectId: string,
+    ownerSessionId: string,
     workingDirectory?: string,
   ): Promise<{ sessionId: string; cwd: string }>;
   /** Write to an agent-owned session only (the default input path). */
@@ -118,6 +121,8 @@ export interface AgentTerminals {
   commandTracking(sessionId: string): CommandTracking | null;
   /** Whether the session is agent-owned (vs. a user's terminal tab). */
   isAgentOwned(sessionId: string): boolean;
+  countForOwners(projectId: string, ownerSessionIds: readonly string[]): number;
+  killForOwners(projectId: string, ownerSessionIds: readonly string[]): number;
   kill(sessionId: string): boolean;
 }
 
@@ -131,12 +136,16 @@ export function registerTerminalSupport(
    * agent bridge that provides it registers after terminal support).
    * Today: the `open`-shim hook URL + shim bin dir.
    */
-  agentEnv?: (projectId: string) => Record<string, string>,
+  agentEnv?: (
+    projectId: string,
+  ) => Record<string, string> | Promise<Record<string, string>>,
 ): {
-  dispose(): void;
+  dispose(): Promise<void>;
+  hasActiveWork(): boolean;
   agentTerminals: AgentTerminals;
 } {
   const sessions = new Map<string, TerminalSession>();
+  const lifecycle = new TerminalLifecycle();
 
   const appendBuffer = (session: TerminalSession, data: string) => {
     session.chunks.push(data);
@@ -204,6 +213,7 @@ export function registerTerminalSupport(
     for (const [id, session] of sessions) {
       if (session.sender === sender) {
         sessions.delete(id);
+        session.releaseSender?.();
         session.pty.kill();
       }
     }
@@ -215,7 +225,7 @@ export function registerTerminalSupport(
     cols?: number;
     rows?: number;
     sender: WebContents | null;
-    agent?: { projectId: string };
+    agent?: { projectId: string; sessionId: string };
   }): Promise<{ sessionId: string; cwd: string }> => {
     const rootPath = input.projectId
       ? await state.current?.projectRoots.get(input.projectId)
@@ -240,8 +250,10 @@ export function registerTerminalSupport(
     // PATH after the user's profiles ran.
     const shimBin = input.agent ? await shellBinShimDir() : null;
     const agentExtraEnv = input.agent
-      ? (agentEnv?.(input.agent.projectId) ?? {})
+      ? ((await agentEnv?.(input.agent.projectId)) ?? {})
       : {};
+    if (lifecycle.disposed)
+      throw new Error("Terminal support is shutting down");
     const pty = spawnPty(
       shell,
       // A login shell, like Terminal.app — the user's PATH and prompt
@@ -262,6 +274,7 @@ export function registerTerminalSupport(
         },
       },
     );
+    lifecycle.track(pty);
     const sessionId = crypto.randomUUID();
     const session: TerminalSession = {
       pty,
@@ -310,6 +323,7 @@ export function registerTerminalSupport(
     });
     pty.onExit(({ exitCode }) => {
       session.running = false;
+      session.releaseSender?.();
       if (!sessions.has(sessionId)) return;
       emit(session, "catamorphic:terminal-exit", { sessionId, exitCode });
       // Agent sessions stay readable (buffer) until explicitly killed or
@@ -322,9 +336,13 @@ export function registerTerminalSupport(
     });
     if (input.sender) {
       // A closed window can't kill its tabs' sessions itself.
-      input.sender.once("destroyed", () =>
-        reapFor(input.sender as WebContents),
-      );
+      const sender = input.sender;
+      const onDestroyed = () => reapFor(sender);
+      sender.once("destroyed", onDestroyed);
+      session.releaseSender = () => {
+        sender.removeListener("destroyed", onDestroyed);
+        session.releaseSender = undefined;
+      };
     }
     return { sessionId, cwd };
   };
@@ -362,6 +380,7 @@ export function registerTerminalSupport(
     if (!session) return;
     bury(sessionId, session);
     sessions.delete(sessionId);
+    session.releaseSender?.();
     if (session.running) session.pty.kill();
     // The pty exit callback skips deleted sessions — announce the death
     // ourselves so a kill triggered by a live tab (Cmd+D) still closes
@@ -431,14 +450,14 @@ export function registerTerminalSupport(
   }, 500);
 
   const agentTerminals: AgentTerminals = {
-    create: (projectId, workingDirectory) =>
+    create: (projectId, ownerSessionId, workingDirectory) =>
       spawnSession({
         projectId,
         workingDirectory,
         cols: 100,
         rows: 30,
         sender: null,
-        agent: { projectId },
+        agent: { projectId, sessionId: ownerSessionId },
       }),
     write: (sessionId, data) => {
       const session = sessions.get(sessionId);
@@ -488,6 +507,29 @@ export function registerTerminalSupport(
       };
     },
     isAgentOwned: (sessionId) => Boolean(sessions.get(sessionId)?.agent),
+    countForOwners: (projectId, ownerSessionIds) => {
+      const owners = new Set(ownerSessionIds);
+      return [...sessions.values()].filter(
+        (session) =>
+          session.running &&
+          session.agent?.projectId === projectId &&
+          owners.has(session.agent.sessionId),
+      ).length;
+    },
+    killForOwners: (projectId, ownerSessionIds) => {
+      const owners = new Set(ownerSessionIds);
+      const matches = [...sessions.entries()].filter(
+        ([, session]) =>
+          session.agent?.projectId === projectId &&
+          owners.has(session.agent.sessionId),
+      );
+      for (const [sessionId, session] of matches) {
+        sessions.delete(sessionId);
+        if (session.running) session.pty.kill();
+        broadcast("catamorphic:terminal-exit", { sessionId, exitCode: 0 });
+      }
+      return matches.length;
+    },
     kill: (sessionId) => {
       const session = sessions.get(sessionId);
       if (!session?.agent) return false;
@@ -499,12 +541,17 @@ export function registerTerminalSupport(
   };
 
   return {
+    hasActiveWork: () =>
+      [...sessions.values()].some(
+        (session) =>
+          session.running && (Boolean(session.agent) || computeBusy(session)),
+      ),
     dispose() {
       clearInterval(busyPoll);
-      for (const session of sessions.values()) {
-        if (session.running) session.pty.kill();
-      }
+      for (const session of sessions.values()) session.releaseSender?.();
       sessions.clear();
+      morgue.clear();
+      return lifecycle.dispose();
     },
     agentTerminals,
   };

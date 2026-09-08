@@ -2,7 +2,7 @@
 
 The core SDK for embedding Catamorphic inside a host application's Node/Bun backend.
 
-The host hands it a Postgres connection (or `pg.Pool`) and a storage location; catamorphic manages its own tables inside a dedicated schema (default `catamorphic`) and exposes projects, workflows, files, and execution. All identity (host org id, host user id) is scoped per request via `catamorphic.forTenant({ tenantId }).forUser({ externalUserId })` — no sidecar HTTP server required.
+The host hands it a Postgres connection (or `pg.Pool`) and a storage location; Catamorphic manages its own tables inside a dedicated schema (default `catamorphic`) and exposes projects, files, git, agents, apps, workflows, connections, and execution. Identity is bound per request via `catamorphic.forTenant({ tenantId }).forUser({ externalUserId, scope? })`; no sidecar HTTP server is required.
 
 ## Usage
 
@@ -10,7 +10,30 @@ The host hands it a Postgres connection (or `pg.Pool`) and a storage location; c
 
 ```ts
 import { CloudflareSandboxProvider } from "@catamorphic/cloudflare";
-import { createCatamorphic } from "@catamorphic/server-sdk";
+import {
+  createCatamorphic,
+  defineStaticEnvironments,
+} from "@catamorphic/server-sdk";
+
+const sandboxProvider = new CloudflareSandboxProvider({
+  apiUrl: process.env.CLOUDFLARE_SANDBOX_API_URL!,
+  apiKey: process.env.CLOUDFLARE_SANDBOX_API_KEY,
+});
+const environmentProvider = defineStaticEnvironments([
+  {
+    descriptor: {
+      id: "local",
+      label: "Managed execution",
+      trust: "managed",
+      isolation: "sandbox",
+      workloads: ["agent", "workflow"],
+      agentTopologies: ["controller"],
+      capabilities: ["network.egress"],
+      resources: {},
+    },
+    sandboxProvider,
+  },
+]);
 
 export const catamorphic = createCatamorphic({
   // One of:
@@ -29,10 +52,8 @@ export const catamorphic = createCatamorphic({
 
   // Backends are vendor plugin packages: @catamorphic/cloudflare (default)
   // or @catamorphic/daytona. Omit for read-only embeds.
-  sandboxProvider: new CloudflareSandboxProvider({
-    apiUrl: process.env.CLOUDFLARE_SANDBOX_API_URL!,
-    apiKey: process.env.CLOUDFLARE_SANDBOX_API_KEY,
-  }),
+  sandboxProvider,
+  environmentProvider,
 });
 
 // Apply pending migrations — idempotent, schema-scoped, never touches host
@@ -48,6 +69,23 @@ export const executionWorker = catamorphic.startExecutionWorker({
 await executionWorker.stop();
 await catamorphic.close();
 ```
+
+`codingAgent` accepts either one `CodingAgentProvider` or a dynamic
+`CodingAgentRegistry`. Agent sessions require `hostId` and `sandboxProvider`;
+registry entries with `topology: "native"` also require
+`nativeAgentCheckout`. Keep provider behavior behind the registry so project
+agents, per-session selection, delegation routes, and provider replacement use
+one orchestration path.
+
+`environmentProvider` is always explicit. The `local` binding above matches
+the default project environment; hosts with schedulers or multiple execution
+pools can provide a dynamic `EnvironmentProvider` instead.
+
+The static binding is not machine enrollment. Managed multi-instance deployments
+must implement shared authority, storage access, and fenced execution placement
+under [ADR 0099](../../docs/decisions/0099-shared-postgres-server-environments.md).
+The stock host has not completed that cutover; sharing a Postgres connection
+does not by itself make its replicas interchangeable.
 
 ### Per request - bind identity, then call resources
 
@@ -150,7 +188,11 @@ Plugins, secrets, and git ops (deploy/pull/diff) remain available through `catam
 ## Identity model
 
 - `tenantId` = host's org id. Auto-upserts `catamorphic.tenants(id)` on first project create, so hosts never need to pre-register orgs.
-- `externalUserId` = host's user id. Never persisted in catamorphic's DB; used only for per-user git working directories and commit authorship.
+- `externalUserId` = host's stable user id. Catamorphic stores it where durable ownership, membership, or audit attribution requires it, but never references the host's user table.
+- Omitting `scope` creates a host-root identity across the tenant. Ordinary
+  builders receive `{ kind: "project", projectId }`; members receive exact
+  artifact refs plus separate Environment, connection, and project-permission
+  grants. Do not use root as a builder shortcut.
 
 Host can safely `JOIN host.orgs.id = catamorphic.projects.tenant_id` from its own side. Catamorphic never references host tables.
 
@@ -162,6 +204,8 @@ Every service call and sandbox operation is instrumented with `@opentelemetry/ap
 
 - `catamorphic.migrate()` - apply pending schema-scoped migrations.
 - `catamorphic.startExecutionWorker(options)` - explicitly start run processing when the host is ready. The returned handle exposes `done` and `stop()`; no worker starts implicitly.
+- `catamorphic.startAgentWorker({ resolveIdentity? })` - recover queued agent turns and persisted safe retries on this authoritative host. The default resolves current project memberships. Inject your host's identity resolver when using external authorization. Returns a `stop()` handle; `catamorphic.close()` also stops it. This does not yet reconnect an ambiguous native provider attempt (ADR 0067).
+- `createPushTransport({ dataDir, subject? })` from `@catamorphic/server-sdk/web-push` - optional host-owned Web Push transport with persistent, owner-only VAPID keys. Pass it as `pushNotifications`, and periodically call `core.notifications.publishFailedAgentTurns({ authorityHostId })` followed by `core.notifications.drain(workerId)`. Mobile push requires user permission and a supported secure installation.
 - `catamorphic.redriveExecutionJob({ tenantId, jobId, availableAt? })` - explicitly redrive a failed run job.
 - `catamorphic.close()` - stop workers started through this SDK instance and release resources catamorphic created (the pool, when booted from a connection string). Host-owned pools/Kysely instances are never touched.
 

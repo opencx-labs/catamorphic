@@ -1,8 +1,11 @@
 import type { BookmarkPlacement } from "../../shared/bookmark-target.js";
+import type { OpenMode } from "../../shared/open-mode.js";
 import type { TerminalAppearanceResult } from "../../shared/terminal-appearance.js";
+import type { ThemeFonts } from "../../shared/theme-fonts.js";
+import type { DesktopUpdateState } from "../../shared/update.js";
 import type { UsageSummary } from "../../shared/usage.js";
 
-export type { UsageSummary };
+export type { DesktopUpdateState, UsageSummary };
 
 export interface ServerInfo {
   url: string | null;
@@ -43,6 +46,19 @@ export type AgentSkillsSetting =
   | { mode: "all" }
   | { mode: "picked"; names: string[] };
 
+export interface AgentDelegationRoute {
+  id: string;
+  target: string;
+  description?: string;
+  allowFurtherDelegation: boolean;
+}
+
+export interface AgentDelegationPolicy {
+  enabled: boolean;
+  maxConcurrentChildren: number;
+  routes: AgentDelegationRoute[];
+}
+
 export interface AgentInfo {
   id: string;
   name: string;
@@ -65,6 +81,7 @@ export interface AgentInfo {
   skills: AgentSkillsSetting;
   /** Per-connection tool policies layered on the profile's (by id). */
   toolPolicies: Record<string, McpToolPolicy>;
+  delegation: AgentDelegationPolicy;
 }
 
 export interface AgentsData {
@@ -101,6 +118,7 @@ export interface ProjectAgentInfo {
   connections: string[];
   /** Picked skill names; null = every skill. */
   skills: string[] | null;
+  delegation: AgentDelegationPolicy | null;
   promptPreview: string | null;
   consent: "not-required" | "none" | "stale" | "ok";
   invalid: string | null;
@@ -144,6 +162,17 @@ export function projectAgentAsInfo(agent: ProjectAgentInfo): AgentInfo {
       ? { mode: "picked", names: agent.skills }
       : { mode: "all" },
     toolPolicies: {},
+    delegation: agent.delegation ?? {
+      enabled: true,
+      maxConcurrentChildren: 10,
+      routes: [
+        {
+          id: "same-agent",
+          target: "self",
+          allowFurtherDelegation: true,
+        },
+      ],
+    },
   };
 }
 
@@ -161,6 +190,7 @@ export interface CreateAgentInput {
   memory?: boolean;
   connections?: AgentConnectionsSetting;
   skills?: AgentSkillsSetting;
+  delegation?: AgentDelegationPolicy;
 }
 
 export interface UpdateAgentInput {
@@ -180,6 +210,7 @@ export interface UpdateAgentInput {
   skills?: AgentSkillsSetting;
   /** Per-connection tool policies (null clears). */
   toolPolicies?: Record<string, McpToolPolicy> | null;
+  delegation?: AgentDelegationPolicy;
 }
 
 /** A profile MCP connection as the renderer sees it (no secret values). */
@@ -324,6 +355,8 @@ export interface HarnessModelInfo {
   description?: string;
   /** Versioned model id an alias resolves to (e.g. "sonnet" → "claude-sonnet-5"). */
   resolvedId?: string;
+  supportsEffort?: boolean;
+  supportedEffortLevels?: AgentEffort[];
 }
 
 export interface OpenRouterModelInfo {
@@ -369,13 +402,14 @@ export interface BrowserImportResult {
 // --- Remote projects (ADR 0055) ---
 export interface ConnectLink {
   serverUrl: string;
-  token: string;
   remoteProjectId: string;
   remoteProjectName?: string;
-  renewUrl?: string;
+  invitationId?: string;
 }
 export interface RemoteCapabilities {
   builder: boolean;
+  source: { remoteUrl: string; defaultBranch: string } | null;
+  permissions: string[];
   agents: string[];
   documents: Array<{ path: string; access: "read" | "write" }>;
   features: {
@@ -409,9 +443,22 @@ export interface RemoteProjectStatus {
   remoteProjectId: string;
   remoteProjectName: string;
   lastSyncAt: string | null;
-  renewUrl?: string;
   capabilities?: RemoteCapabilities;
-  local: { modified: string[]; deleted: string[]; programEdits: string[] };
+  connection: {
+    state: "connected" | "sign_in_required" | "access_removed" | "unreachable";
+    checkedAt: string;
+    message: string;
+  };
+  local: {
+    modified: string[];
+    deleted: string[];
+    programEdits: string[];
+    conflicts?: Array<{
+      path: string;
+      serverCopy: string;
+      serverVersion: number;
+    }>;
+  };
 }
 export interface RemoteDocumentVersion {
   version: number;
@@ -420,6 +467,27 @@ export interface RemoteDocumentVersion {
   size: number;
   writtenBy: string;
   writtenAt: string;
+}
+
+export interface RemoteProjectRole {
+  slug: string;
+  definition?: { name: string };
+}
+
+export interface RemoteProjectMember {
+  externalUserId: string;
+  name: string | null;
+  email: string | null;
+  roles: string[];
+}
+
+export interface RemoteProjectAccessRequest {
+  id: string;
+  externalUserId: string;
+  email: string;
+  emailVerified: boolean;
+  status: string;
+  requestedAt: string;
 }
 
 export type GithubConnectResult =
@@ -450,6 +518,20 @@ export interface CredentialWithSecret extends SavedCredential {
   password: string;
 }
 
+export interface BrowserCredentialSaveOffer {
+  pendingId: string;
+  guestId: number;
+  origin: string;
+  username: string;
+}
+
+export interface BrowserCredentialFillOffer {
+  guestId: number;
+  formId?: string;
+  origin: string;
+  credentials: SavedCredential[];
+}
+
 export interface BrowserSuggestions {
   matches: { url: string; title: string }[];
   inline: string | null;
@@ -460,11 +542,13 @@ export interface Bookmark {
   label: string;
   url: string;
   folderId?: string;
+  faviconUrl?: string;
 }
 
 export interface BookmarkFolder {
   id: string;
   label: string;
+  parentId?: string;
 }
 
 export interface ProjectBookmarks {
@@ -474,7 +558,7 @@ export interface ProjectBookmarks {
 
 export interface BookmarksData {
   project: ProjectBookmarks;
-  pinned: Bookmark[];
+  pinned: ProjectBookmarks;
 }
 
 export interface BookmarksChange {
@@ -482,40 +566,25 @@ export interface BookmarksChange {
   projectId: string | null;
   project: ProjectBookmarks | null;
   profileId: string;
-  pinned: Bookmark[];
+  pinned: ProjectBookmarks;
 }
 
-/** Mirror of main/git-view.ts shapes (the renderer never imports main). */
-export interface GitChangedFile {
-  path: string;
-  kind: "added" | "modified" | "deleted" | "renamed";
-  /** Set when kind is "renamed". */
-  previousPath?: string;
-}
+export type {
+  GitChangedFile,
+  GitDiffInput,
+  GitDiffMode,
+  GitFileDiff,
+  GitOverview,
+  GitRecordInput,
+  GitWorktree,
+} from "../../shared/git.js";
 
-export interface GitWorktree {
-  path: string;
-  branch: string | null;
-  isMain: boolean;
-  /** Uncommitted changes in this worktree (staged + unstaged + untracked). */
-  changes: GitChangedFile[];
-  /** For non-main worktrees: files changed on this branch vs main (3-dot). */
-  vsMain?: GitChangedFile[];
-}
-
-export interface GitOverview {
-  available: boolean;
-  worktrees: GitWorktree[];
-}
-
-export type GitDiffMode = "uncommitted" | "vs-main";
-
-export interface GitFileDiff {
-  path: string;
-  before: string;
-  after: string;
-  binary: boolean;
-}
+import type {
+  GitDiffInput,
+  GitFileDiff,
+  GitOverview,
+  GitRecordInput,
+} from "../../shared/git.js";
 
 /** Mirror of core's host-neutral PR shapes. */
 export interface PullRequestSummary {
@@ -540,69 +609,19 @@ export interface PullRequestFile {
   previousPath?: string;
 }
 
-export type SidebarAction =
-  | "open"
-  | "open-tab"
-  | "open-here"
-  | "copy-url"
-  | "pin"
-  | "unpin"
-  | "rename"
-  | "edit"
-  | "remove";
+export type {
+  SidebarAction,
+  SidebarConfig,
+  SidebarItem,
+  SidebarMenuEntry,
+  SidebarPreview,
+  SidebarPreviewMetadata,
+  SidebarSectionConfig,
+  SidebarSide,
+  SidebarTabConfig,
+} from "../../shared/sidebar.js";
 
-export interface SidebarMenuEntry {
-  label: string;
-  action: SidebarAction;
-  danger?: boolean;
-}
-
-export interface SidebarPreviewMetadata {
-  label: string;
-  value: string;
-}
-
-export interface SidebarPreview {
-  title?: string;
-  description?: string;
-  metadata?: SidebarPreviewMetadata[];
-}
-
-export interface SidebarItem {
-  label: string;
-  url: string;
-  icon?: string;
-  open?: "tab" | "replace";
-  menu?: SidebarMenuEntry[];
-  preview?: SidebarPreview | false;
-}
-
-export interface SidebarSectionConfig {
-  type:
-    | "workflows"
-    | "apps"
-    | "chats"
-    | "bookmarks"
-    | "tabs"
-    | "git"
-    | "prs"
-    | "remote"
-    | "custom";
-  title?: string;
-  collapsed?: boolean;
-  /**
-   * Hide the whole section while it has nothing to list. Absent = the
-   * per-type default (true for workflows and apps, false elsewhere).
-   */
-  hideEmpty?: boolean;
-  items?: SidebarItem[];
-  open?: "tab" | "replace";
-  menu?: SidebarMenuEntry[];
-}
-
-export interface SidebarConfig {
-  sections: SidebarSectionConfig[];
-}
+import type { SidebarConfig } from "../../shared/sidebar.js";
 
 /**
  * Which layer of the layered resolution produced the config: this user's
@@ -613,6 +632,7 @@ export type SidebarLayer = "project-local" | "project" | "profile" | "default";
 
 export interface ResolvedSidebarConfig {
   config: SidebarConfig;
+  error?: string;
   layer: SidebarLayer;
 }
 
@@ -645,8 +665,9 @@ export interface ThemePreset {
 }
 
 export interface ThemeConfig {
-  preset: string;
+  selection: string;
   overrides: Partial<ThemeColors>;
+  fonts?: Partial<ThemeFonts>;
 }
 
 /** Per-profile app preferences (profiles/<id>/prefs.json). */
@@ -661,10 +682,14 @@ export interface AppPrefs {
   previewLinksWithAlt: boolean;
   terminalMacros: import("../../shared/terminal-macros.js").TerminalMacro[];
   terminalAppearance: "app" | "ghostty";
+  rightSidebarOpen: boolean;
   lastProjectId?: string;
+  unreadSessionIds: string[];
 }
 
 export interface ResolvedTheme extends ThemeConfig {
+  fonts: ThemeFonts;
+  preset: string;
   colors: ThemeColors;
   appearance: "dark" | "light";
 }
@@ -672,10 +697,16 @@ export interface ResolvedTheme extends ThemeConfig {
 export interface CatamorphicDesktopApi {
   /** Absolute path of a pasted/dropped File; "" when it has none. */
   pathForFile: (file: File) => string;
+  composerFileSave: (input: {
+    projectId: string;
+    name: string;
+    bytes: Uint8Array;
+  }) => Promise<{ path: string; name: string }>;
   githubConnectStart: () => Promise<{
     userCode: string;
     verificationUri: string;
   }>;
+  githubConnectCancel: () => Promise<void>;
   githubDisconnect: () => Promise<void>;
   githubManageRepos: () => Promise<void>;
   githubImport: (input: {
@@ -698,9 +729,22 @@ export interface CatamorphicDesktopApi {
     remote?: { url: string; host: string };
   }>;
   /** Mark a just-created session incognito (desktop-local, ADR 0062). */
+  sessionIsIncognito: (sessionId: string) => Promise<boolean>;
   sessionSetIncognito: (sessionId: string, incognito: boolean) => Promise<void>;
   /** Project policy (ADR 0062): may members open incognito chats here? */
   projectAllowIncognito: (projectId: string) => Promise<boolean>;
+  /** Caller-resolved project starters; absent config returns an empty list. */
+  projectStartingActions: (
+    projectId: string,
+  ) => Promise<Array<{ label: string; prompt: string; agentId?: string }>>;
+  sessionMoveEligibility: (
+    projectId: string,
+    sessionId: string,
+  ) => Promise<{ canMove: boolean; reason: string | null }>;
+  sessionMoveToServer: (
+    projectId: string,
+    sessionId: string,
+  ) => Promise<{ ok: true; serverUrl: string; remoteProjectId: string }>;
   /** This profile's paired phones (for the management list). */
   mobilePairingDevices: () => Promise<
     Array<{
@@ -715,15 +759,53 @@ export interface CatamorphicDesktopApi {
   remoteParseLink: (link: string) => Promise<ConnectLink | null>;
   remoteConnect: (input: {
     serverUrl: string;
-    token: string;
     remoteProjectId: string;
+    invitationId?: string;
     name: string;
     rootPath: string;
-    renewUrl?: string;
   }) => Promise<{ id: string; name: string; report: RemoteSyncReport }>;
+  remoteEnableLocalExecution: (input: {
+    projectId: string;
+    environment: string;
+  }) => Promise<{ id: string }>;
+  remoteAuthority: (projectId: string) => Promise<{
+    serverUrl: string;
+    remoteProjectId: string;
+    connectionId: string;
+    credentialEpoch: string;
+  } | null>;
   remoteStatus: (projectId: string) => Promise<RemoteProjectStatus | null>;
+  remoteMembers: (projectId: string) => Promise<{
+    roles: RemoteProjectRole[];
+    members: RemoteProjectMember[];
+    requests: RemoteProjectAccessRequest[];
+  }>;
+  remoteAdmissionDecide: (input: {
+    projectId: string;
+    requestId: string;
+    decision: "approved" | "denied";
+  }) => Promise<void>;
+  remoteMemberSetRoles: (input: {
+    projectId: string;
+    externalUserId: string;
+    roles: string[];
+  }) => Promise<void>;
+  remoteMemberInvite: (input: {
+    projectId: string;
+    email?: string;
+    roles: string[];
+  }) => Promise<{
+    id: string;
+    expiresAt: string;
+    connectLinks: string[];
+    webLinks: string[];
+  }>;
   remoteSync: (projectId: string) => Promise<RemoteSyncReport>;
-  remoteShip: (projectId: string) => Promise<RemoteShipReport>;
+  remoteShip: (input: {
+    projectId: string;
+    paths: string[];
+    resolveConflicts?: string[];
+  }) => Promise<RemoteShipReport>;
   remoteHistory: (input: {
     projectId: string;
     path: string;
@@ -754,12 +836,19 @@ export interface CatamorphicDesktopApi {
     branch: string;
     pullRequest?: { url: string; number: number };
   }>;
-  remoteRenew: (projectId: string) => Promise<void>;
+  remoteReconnect: (projectId: string) => Promise<{ ok: true }>;
   remoteDisconnect: (projectId: string) => Promise<void>;
   remoteTakePendingLink: () => Promise<string | null>;
   onConnectLink: (listener: (link: string) => void) => () => void;
   getServerState: () => Promise<ServerInfo>;
   onServerChanged: (listener: (info: ServerInfo) => void) => () => void;
+  updateState: () => Promise<DesktopUpdateState>;
+  updateCheck: () => Promise<void>;
+  updateDownload: () => Promise<void>;
+  updateInstall: () => Promise<void>;
+  onUpdateStateChanged: (
+    listener: (state: DesktopUpdateState) => void,
+  ) => () => void;
 
   windowProfile: () => Promise<string>;
   windowSetProfile: (profileId: string) => Promise<string>;
@@ -783,7 +872,9 @@ export interface CatamorphicDesktopApi {
     projectId: string,
     slug: string | null,
   ) => Promise<void>;
-  agentModels: (id: string) => Promise<{ models: HarnessModelInfo[] }>;
+  agentModels: (
+    id: string,
+  ) => Promise<{ models: HarnessModelInfo[]; error?: string }>;
   projectAgentsList: (projectId: string) => Promise<ProjectAgentsData>;
   projectAgentApprove: (
     projectId: string,
@@ -876,6 +967,10 @@ export interface CatamorphicDesktopApi {
   browserImportRun: (
     input: BrowserImportRequest,
   ) => Promise<BrowserImportResult>;
+  browserImportPasswords: () => Promise<{
+    imported: number;
+    cancelled: boolean;
+  }>;
   onCloseSurface: (listener: () => void) => () => void;
   getPrefs: () => Promise<AppPrefs>;
   setPrefs: (patch: Partial<AppPrefs>) => Promise<AppPrefs>;
@@ -911,6 +1006,14 @@ export interface CatamorphicDesktopApi {
   }) => Promise<void>;
   projectRoot: (projectId: string) => Promise<string | null>;
   revealFolder: (folderPath: string) => Promise<void>;
+  editorFileRead: (input: { filePath: string }) => Promise<{ content: string }>;
+  projectLocalFiles: (projectId: string) => Promise<Array<{ path: string }>>;
+  editorFileWrite: (input: {
+    filePath: string;
+    content: string;
+    expectedContent: string;
+  }) => Promise<void>;
+  projectOpenFile: (projectId: string, filePath: string) => Promise<void>;
 
   terminalGhosttyAppearance: () => Promise<TerminalAppearanceResult>;
   terminalCreate: (input: {
@@ -963,15 +1066,22 @@ export interface CatamorphicDesktopApi {
     url: string;
     title: string;
   }) => Promise<void>;
+  browserSetHistoryFavicon: (input: {
+    profileId: string;
+    url: string;
+    faviconUrl: string;
+  }) => Promise<void>;
   browserRecentHistory: (input: {
     profileId: string;
     limit?: number;
-  }) => Promise<{ url: string; title: string }[]>;
+  }) => Promise<{ url: string; title: string; faviconUrl?: string }[]>;
   browserSuggest: (input: {
     profileId: string;
     query: string;
   }) => Promise<BrowserSuggestions>;
-  onBrowserOpenUrl: (listener: (url: string) => void) => () => void;
+  onBrowserOpenUrl: (
+    listener: (url: string, mode?: OpenMode) => void,
+  ) => () => void;
   /** Close browser tabs whose URL starts with `prefix` (OAuth callback). */
   onBrowserCloseUrl: (listener: (prefix: string) => void) => () => void;
   onBrowserFocusAddress: (
@@ -988,6 +1098,30 @@ export interface CatamorphicDesktopApi {
       shift: boolean;
     }) => void,
   ) => () => void;
+  onBrowserNavigate: (
+    listener: (command: {
+      webContentsId: number | null;
+      direction: "back" | "forward";
+    }) => void,
+  ) => () => void;
+  onBrowserCredentialSaveOffer: (
+    listener: (offer: BrowserCredentialSaveOffer) => void,
+  ) => () => void;
+  onBrowserCredentialFillOffer: (
+    listener: (offer: BrowserCredentialFillOffer) => void,
+  ) => () => void;
+  browserCredentialAccept: (input: {
+    profileId: string;
+    pendingId: string;
+  }) => Promise<boolean>;
+  browserCredentialDismiss: (input: { pendingId: string }) => Promise<void>;
+  browserCredentialFill: (input: {
+    profileId: string;
+    guestId: number;
+    credentialId: string;
+    formId?: string;
+    origin: string;
+  }) => Promise<"filled" | "cancelled" | "origin-changed">;
 
   profilesList: () => Promise<ProfilesData>;
   profilesCreate: (name: string) => Promise<Profile>;
@@ -1016,7 +1150,19 @@ export interface CatamorphicDesktopApi {
     username: string;
     password: string;
   }) => Promise<SavedCredential>;
+  vaultUpdate: (input: {
+    profileId: string;
+    id: string;
+    origin: string;
+    username: string;
+    password?: string;
+  }) => Promise<SavedCredential | null>;
   vaultRemove: (input: { profileId: string; id: string }) => Promise<void>;
+  vaultCopyPassword: (input: {
+    profileId: string;
+    id: string;
+  }) => Promise<boolean>;
+  onVaultChanged: (listener: (profileId: string) => void) => () => void;
   deviceAuthAvailable: () => Promise<boolean>;
 
   bookmarksGet: (input: {
@@ -1029,12 +1175,14 @@ export interface CatamorphicDesktopApi {
     label: string;
     url: string;
     folderId?: string;
+    faviconUrl?: string;
   }) => Promise<Bookmark>;
   bookmarksPlace: (input: BookmarkPlacement) => Promise<Bookmark>;
   bookmarksAddFolder: (input: {
     projectId: string;
     profileId: string;
     label: string;
+    parentId?: string;
   }) => Promise<BookmarkFolder>;
   bookmarksUpdate: (input: {
     projectId: string;
@@ -1078,14 +1226,10 @@ export interface CatamorphicDesktopApi {
   themeFile: () => Promise<string>;
   onThemeChanged: (listener: (theme: ResolvedTheme) => void) => () => void;
 
+  gitRecord: (input: GitRecordInput) => Promise<string>;
   gitOverview: (projectId: string) => Promise<GitOverview>;
   sessionCheckouts: (projectId: string) => Promise<SessionCheckoutInfo[]>;
-  gitFileDiff: (
-    projectId: string,
-    worktreePath: string,
-    filePath: string,
-    mode: GitDiffMode,
-  ) => Promise<GitFileDiff>;
+  gitFileDiff: (input: GitDiffInput) => Promise<GitFileDiff>;
   prList: (projectId: string) => Promise<PullRequestSummary[]>;
   prFiles: (projectId: string, number: number) => Promise<PullRequestFile[]>;
 

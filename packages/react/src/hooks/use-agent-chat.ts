@@ -2,8 +2,13 @@
 
 import { ATTACHMENT_MARKER } from "@catamorphic/sandbox/attachments";
 import { useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
-import { CatamorphicError } from "../lib/errors.js";
+import { useEffect, useRef, useState } from "react";
+import {
+  assertApiOk,
+  CatamorphicError,
+  runWithCatamorphicError,
+  toCatamorphicError,
+} from "../lib/errors.js";
 import { randomId } from "../lib/random-id.js";
 import { useCatamorphic } from "../provider.js";
 import type { AgentMessage, AgentSessionDetail } from "../types.js";
@@ -32,10 +37,17 @@ export interface UseAgentChatOptions {
   agentId?: string;
   /** Logical Environment for a lazily created session. */
   environment?: string;
+  /** Surface creating a lazy session. Informational provenance only. */
+  source?: AgentSessionDetail["source"];
+  /**
+   * Optional quiet polling cadence while the session is idle. Hosts should
+   * enable this only for a visible chat that can be changed by another client.
+   */
+  idleRefetchIntervalMs?: number | false;
 }
 
 /** A message waiting behind the in-flight turn. */
-export interface QueuedAgentMessage {
+export interface PendingAgentTurn {
   id: string;
   content: string;
   attachments: AgentChatAttachment[];
@@ -48,17 +60,19 @@ export interface UseAgentChatResult {
   messages: AgentMessage[];
   optimisticMessages: OptimisticAgentMessage[];
   /** Messages waiting behind the in-flight turn, in send order. */
-  queue: QueuedAgentMessage[];
+  queue: PendingAgentTurn[];
   queuedMessageCount: number;
   isLoading: boolean;
   isSending: boolean;
   /**
-   * The agent is working on this chat: a send is in flight from this client
-   * OR the server reports an in-progress assistant turn. Prefer this over
-   * {@link isSending} for activity indicators — it stays accurate when the
-   * request and the turn don't line up (reloads, other clients).
+   * The server's durable execution record reports a running turn.
+   * A pending HTTP request is sending, not proof of agent execution.
    */
   isWorking: boolean;
+  /** Honest, compact activity from execution state; absent while disconnected. */
+  activity: string | undefined;
+  /** The host cannot currently confirm the agent's status. */
+  connectionLost: boolean;
   error: CatamorphicError | null;
   /** Missing member credentials that blocked admission before execution. */
   authenticationRequired: AgentAuthenticationRequired | null;
@@ -105,9 +119,8 @@ export interface OptimisticAgentMessage {
 
 /**
  * Headless agent-chat orchestration. Hosts own the visual presentation while
- * this hook owns lazy session creation, message sending, the outgoing queue
- * (messages sent while a turn runs wait their turn, editable until
- * dispatched), and cache refreshes.
+ * this hook owns lazy session creation, message sending, and cache refreshes.
+ * The server-owned session inbox is the only queue authority (ADR 0074).
  */
 export function useAgentChat(
   projectId: string | undefined,
@@ -119,22 +132,23 @@ export function useAgentChat(
     controlledSessionId: string | null;
     sessionId: string | null;
   }>({ projectId, controlledSessionId, sessionId: controlledSessionId });
-  const [sendInProgress, setSendInProgress] = useState(false);
+  const [sendInProgress, setSendInProgress] = useState(0);
   const [optimisticMessages, setOptimisticMessages] = useState<
     OptimisticAgentMessage[]
   >([]);
-  const [queue, setQueue] = useState<QueuedAgentMessage[]>([]);
   const activeSessionRef = useRef<{
     projectId: string | undefined;
     controlledSessionId: string | null;
     sessionId: string | null;
   }>({ projectId, controlledSessionId, sessionId: controlledSessionId });
-  const queueRef = useRef<QueuedAgentMessage[]>([]);
-  const holdRef = useRef<string | null>(null);
-  const processingRef = useRef(false);
-  const authenticationBlockedRef = useRef(false);
+  const blockedSendRef = useRef<{
+    content: string;
+    attachments: AgentChatAttachment[];
+    deliveryMode: "next_turn" | "interrupt";
+  } | null>(null);
+  const sessionCreationRef = useRef<Promise<string> | null>(null);
+  const heldTurnIdRef = useRef<string | null>(null);
   const { apiClient } = useCatamorphic();
-  const syncQueue = () => setQueue([...queueRef.current]);
   // A controlled-id change normally means the host switched sessions, so chat
   // state resets. But when the host echoes back the id this hook just created
   // (via onSessionCreated), it is the SAME conversation — resetting would
@@ -154,7 +168,7 @@ export function useAgentChat(
     });
     if (!adoptedOwnSession) {
       setOptimisticMessages([]);
-      setQueue([]);
+      blockedSendRef.current = null;
     }
   }
   if (
@@ -170,11 +184,8 @@ export function useAgentChat(
       controlledSessionId,
       sessionId: controlledSessionId,
     };
-    if (!refAdoptedOwnSession) {
-      // Real session switch: drop the stale queue.
-      queueRef.current = [];
-      authenticationBlockedRef.current = false;
-    }
+    if (!refAdoptedOwnSession) blockedSendRef.current = null;
+    if (!refAdoptedOwnSession) sessionCreationRef.current = null;
   }
   const sessionId =
     activeSession.projectId === projectId ? activeSession.sessionId : null;
@@ -184,154 +195,187 @@ export function useAgentChat(
   // Read at send time so the host's latest default applies to lazy creation.
   const agentIdRef = useRef(options.agentId);
   agentIdRef.current = options.agentId;
-  // Poll while a send is in flight OR the server still reports an
-  // in-progress assistant turn. The latter covers sends that end in an HTTP
-  // error: the server persists the terminal (failed) message, and without a
-  // final refetch the cached snapshot would show a spinning placeholder
-  // forever. Auto-retries also need the poll: their countdown and re-run
-  // happen entirely server-side.
+  // Poll quickly while a turn is active. Hosts may keep a quieter cadence for
+  // the one visible chat when another client can write to the same session;
+  // hidden mounted chats stay dormant.
   const session = useAgentSession(projectId, sessionId ?? undefined, {
     refetchInterval: (data) =>
-      sendInProgress ||
-      hasPendingAssistant(data?.messages) ||
-      hasScheduledAutoRetry(data?.messages)
+      sendInProgress > 0 ||
+      data?.execution?.status === "running" ||
+      data?.execution?.status === "queued"
         ? 500
-        : false,
+        : (options.idleRefetchIntervalMs ?? false),
   });
+  const sessionListSnapshotRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!projectId || !session.data) return;
+    const snapshot = JSON.stringify({
+      sessionId: session.data.id,
+      title: session.data.title,
+      running: session.data.running,
+    });
+    const previous = sessionListSnapshotRef.current;
+    sessionListSnapshotRef.current = snapshot;
+    if (previous === null || previous === snapshot) return;
+    void queryClient.invalidateQueries({
+      queryKey: ["cat", "project", projectId, "agent", "sessions"],
+    });
+  }, [projectId, queryClient, session.data]);
 
   const isSending =
-    sendInProgress || createSession.isPending || sendMessage.isPending;
+    sendInProgress > 0 || createSession.isPending || sendMessage.isPending;
   const persistedMessages = session.data?.messages ?? [];
+  const queuedTurns =
+    session.data?.pendingTurns?.filter((turn) => turn.status !== "running") ??
+    [];
+  const queuedMessageIds = new Set(queuedTurns.map((turn) => turn.messageId));
+  const visibleMessages = persistedMessages.filter(
+    (message) => !queuedMessageIds.has(message.id),
+  );
+  const queue: PendingAgentTurn[] = queuedTurns.map((turn) => ({
+    id: turn.id,
+    content: turn.content,
+    attachments: attachmentsFromMetadata(turn.metadata),
+  }));
   const reconciledOptimistic = reconcileOptimisticMessages(
     persistedMessages,
     optimisticMessages,
   );
-  // Server truth beats local request state: the turn runs inside the send
-  // request, and if that response stalls after the turn's messages are
-  // already persisted, `isSending` would spin forever. Once the server
-  // shows the turn settled — last message is a completed assistant reply,
-  // nothing optimistic or queued left — the indicator stops.
-  const turnSettled =
-    persistedMessages.at(-1)?.role === "assistant" &&
-    !hasPendingAssistant(persistedMessages) &&
-    reconciledOptimistic.length === 0 &&
-    queueRef.current.length === 0;
-  const isWorking =
-    hasPendingAssistant(persistedMessages) || (isSending && !turnSettled);
+  useEffect(() => {
+    if (optimisticMessages.length === 0 || persistedMessages.length === 0) {
+      return;
+    }
+    const persistedIds = new Set(
+      persistedMessages.map((message) => message.id),
+    );
+    setOptimisticMessages((messages) => {
+      const pending = messages.filter(
+        (message) => !persistedIds.has(message.id),
+      );
+      return pending.length === messages.length ? messages : pending;
+    });
+  }, [optimisticMessages, persistedMessages]);
+  const isWorking = session.data?.execution?.status === "running";
 
   const ensureSessionId = async (): Promise<string | null> => {
     if (!projectId) return null;
     const existingSessionId = activeSessionRef.current.sessionId;
     if (existingSessionId) return existingSessionId;
-    const created = await createSession.mutateAsync({
-      ...(agentIdRef.current ? { agentId: agentIdRef.current } : {}),
-      ...(options.environment ? { environment: options.environment } : {}),
-    });
-    activeSessionRef.current = {
-      projectId,
-      controlledSessionId,
-      sessionId: created.id,
-    };
-    setActiveSession({
-      projectId,
-      controlledSessionId,
-      sessionId: created.id,
-    });
-    options.onSessionCreated?.(created.id);
-    return created.id;
+    if (!sessionCreationRef.current) {
+      sessionCreationRef.current = createSession
+        .mutateAsync({
+          ...(agentIdRef.current ? { agentId: agentIdRef.current } : {}),
+          ...(options.environment ? { environment: options.environment } : {}),
+          ...(options.source ? { source: options.source } : {}),
+        })
+        .then((created) => {
+          activeSessionRef.current = {
+            projectId,
+            controlledSessionId,
+            sessionId: created.id,
+          };
+          setActiveSession({
+            projectId,
+            controlledSessionId,
+            sessionId: created.id,
+          });
+          options.onSessionCreated?.(created.id);
+          return created.id;
+        })
+        .finally(() => {
+          sessionCreationRef.current = null;
+        });
+    }
+    return sessionCreationRef.current;
   };
 
-  const performSend = async (queued: QueuedAgentMessage) => {
+  const performSend = async (input: {
+    content: string;
+    attachments: AgentChatAttachment[];
+    deliveryMode: "next_turn" | "interrupt";
+  }) => {
     if (!projectId) return;
-    const targetSessionId = await ensureSessionId();
-    if (!targetSessionId) return;
-    await sendMessage.mutateAsync({
-      sessionId: targetSessionId,
-      message: queued.content,
-      attachments: queued.attachments,
-    });
-    await queryClient.invalidateQueries({
-      queryKey: ["cat", "project", projectId],
-    });
-  };
-
-  const processQueue = async () => {
-    if (processingRef.current || authenticationBlockedRef.current) return;
-    processingRef.current = true;
-    setSendInProgress(true);
+    let accepted = false;
+    const optimistic: OptimisticAgentMessage = {
+      id: randomId(),
+      role: "user",
+      content: input.content,
+      ...(input.attachments.length > 0
+        ? { attachments: input.attachments }
+        : {}),
+    };
+    setOptimisticMessages((messages) => [...messages, optimistic]);
+    setSendInProgress((count) => count + 1);
     try {
-      while (queueRef.current.length > 0) {
-        const head = queueRef.current[0];
-        if (!head) continue;
-        // The head is being edited: its turn WAITS for the edit — the user
-        // finishes, the message sends. Nothing skips ahead of it.
-        if (holdRef.current === head.id) {
-          await new Promise((resolve) => setTimeout(resolve, 200));
-          continue;
-        }
-        queueRef.current.shift();
-        syncQueue();
-        const optimistic: OptimisticAgentMessage = {
-          id: head.id,
-          role: "user",
-          content: head.content,
-          ...(head.attachments.length > 0
-            ? { attachments: head.attachments }
-            : {}),
-        };
-        setOptimisticMessages((messages) => [...messages, optimistic]);
-        try {
-          await performSend(head);
-        } catch (error) {
-          if (
-            error instanceof CatamorphicError &&
-            error.code === "authentication_required"
-          ) {
-            // Admission happens before a session, run, or sandbox exists. Keep
-            // the exact message at the head so authorization can resume the
-            // user's original intent instead of asking them to send it again.
-            queueRef.current.unshift(head);
-            authenticationBlockedRef.current = true;
-            syncQueue();
-            break;
-          }
-          // Mutation state exposes other errors to consumers; continue.
-        } finally {
-          setOptimisticMessages((messages) =>
-            messages.filter((message) => message.id !== head.id),
-          );
-        }
+      const targetSessionId = await ensureSessionId();
+      if (!targetSessionId) return;
+      const receipt = await sendMessage.mutateAsync({
+        idempotencyKey: optimistic.id,
+        sessionId: targetSessionId,
+        message: input.content,
+        attachments: input.attachments,
+        deliveryMode: input.deliveryMode,
+      });
+      accepted = true;
+      setOptimisticMessages((messages) =>
+        messages.map((message) =>
+          message.id === optimistic.id
+            ? { ...message, id: receipt.messageId }
+            : message,
+        ),
+      );
+      blockedSendRef.current = null;
+    } catch (error) {
+      if (
+        error instanceof CatamorphicError &&
+        error.code === "authentication_required"
+      ) {
+        // This request was rejected before the server accepted it. Retain one
+        // retryable intent; accepted messages always live in the server inbox.
+        blockedSendRef.current = input;
       }
     } finally {
-      processingRef.current = false;
-      setSendInProgress(false);
+      setSendInProgress((count) => Math.max(0, count - 1));
+      if (!accepted) {
+        setOptimisticMessages((messages) =>
+          messages.filter((message) => message.id !== optimistic.id),
+        );
+      }
+      await queryClient.invalidateQueries({
+        queryKey: ["cat", "project", projectId],
+      });
     }
   };
 
-  const enqueue = (
-    message: string,
-    attachments: AgentChatAttachment[],
-    position: "back" | "front",
-  ) => {
-    const queued: QueuedAgentMessage = {
-      id: randomId(),
-      content: message,
-      attachments,
-    };
-    if (position === "front") queueRef.current.unshift(queued);
-    else queueRef.current.push(queued);
-    syncQueue();
-    void processQueue();
-  };
-
+  const [actionError, setActionError] = useState<CatamorphicError | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a different active chat must not inherit this action's error.
+  useEffect(() => {
+    setActionError(null);
+  }, [projectId, sessionId]);
   const interrupt = async () => {
     const target = activeSessionRef.current.sessionId;
     if (!projectId || !target) return;
-    await apiClient
-      .POST("/api/projects/{projectId}/agent/sessions/{sessionId}/interrupt", {
-        params: { path: { projectId, sessionId: target } },
-      })
-      .catch(() => {});
+    setActionError(null);
+    try {
+      await runWithCatamorphicError(async () =>
+        assertApiOk(
+          await apiClient.POST(
+            "/api/projects/{projectId}/agent/sessions/{sessionId}/interrupt",
+            {
+              params: { path: { projectId, sessionId: target } },
+              signal: AbortSignal.timeout(15_000),
+            },
+          ),
+          "Stop was not confirmed",
+        ),
+      );
+    } catch (error) {
+      setActionError(
+        error instanceof CatamorphicError
+          ? error
+          : toCatamorphicError({ cause: error }),
+      );
+    }
     await queryClient.invalidateQueries({
       queryKey: ["cat", "project", projectId, "agent", "session", target],
     });
@@ -342,10 +386,22 @@ export function useAgentChat(
     const target = activeSessionRef.current.sessionId;
     if (!projectId || !target || retryInProgress) return;
     setRetryInProgress(true);
+    setActionError(null);
     try {
-      await apiClient.POST(
-        "/api/projects/{projectId}/agent/sessions/{sessionId}/retry",
-        { params: { path: { projectId, sessionId: target } } },
+      await runWithCatamorphicError(async () =>
+        assertApiOk(
+          await apiClient.POST(
+            "/api/projects/{projectId}/agent/sessions/{sessionId}/retry",
+            { params: { path: { projectId, sessionId: target } } },
+          ),
+          "Retry was not confirmed",
+        ),
+      );
+    } catch (error) {
+      setActionError(
+        error instanceof CatamorphicError
+          ? error
+          : toCatamorphicError({ cause: error }),
       );
     } finally {
       setRetryInProgress(false);
@@ -360,78 +416,146 @@ export function useAgentChat(
     if (!content && (attachments?.length ?? 0) === 0) {
       return Promise.resolve();
     }
-    enqueue(content, attachments ?? [], "back");
-    return Promise.resolve();
+    return performSend({
+      content,
+      attachments: attachments ?? [],
+      // Taking over a live child is an interruption, not another item for
+      // the delegated queue. Core records the takeover and notifies its
+      // parent, which may have been waiting on the original assignment.
+      deliveryMode:
+        session.data?.parentSessionId && isWorking ? "interrupt" : "next_turn",
+    });
   };
 
   const error =
-    createSession.error ?? sendMessage.error ?? session.error ?? null;
+    actionError ??
+    createSession.error ??
+    sendMessage.error ??
+    session.error ??
+    null;
 
   return {
     sessionId,
     session: session.data ?? null,
-    messages: session.data?.messages ?? [],
+    messages: visibleMessages,
     optimisticMessages: reconciledOptimistic,
     queue,
     queuedMessageCount: queue.length,
     isLoading: session.isLoading,
     isSending: isSending || retryInProgress,
-    isWorking: isWorking || retryInProgress,
+    isWorking,
+    activity:
+      session.error?.code === "network"
+        ? undefined
+        : isWorking
+          ? !session.data?.execution?.executorHealthy
+            ? "Checking agent status"
+            : session.data.execution.cancellationRequested
+              ? "Stopping agent"
+              : (session.data.execution.activity ?? "Waiting for agent")
+          : isSending
+            ? "Sending message"
+            : undefined,
+    connectionLost: session.error?.code === "network",
     error,
     authenticationRequired: authenticationRequiredFrom(error),
     send,
     sendNow: async (message, attachments) => {
       const content = message.trim();
       if (!content && (attachments?.length ?? 0) === 0) return;
-      enqueue(content, attachments ?? [], "front");
-      await interrupt();
+      await performSend({
+        content,
+        attachments: attachments ?? [],
+        deliveryMode: "interrupt",
+      });
     },
     updateQueued: (id, content) => {
-      queueRef.current = queueRef.current.map((queued) => {
-        if (queued.id !== id) return queued;
-        // Invariant: marker count equals attachments length (the n-th
-        // marker is the n-th attachment). A plain-text edit can delete or
-        // duplicate markers; when the counts diverge, reflow every pill to
-        // the end of the prose instead of silently remapping positions.
-        const withoutMarkers = content.split(ATTACHMENT_MARKER).join("");
-        const markerCount =
-          (content.length - withoutMarkers.length) / ATTACHMENT_MARKER.length;
-        const next =
-          markerCount === queued.attachments.length
-            ? content
-            : withoutMarkers +
-              ATTACHMENT_MARKER.repeat(queued.attachments.length);
-        return { ...queued, content: next };
-      });
-      syncQueue();
+      const queued = queue.find((message) => message.id === id);
+      const target = activeSessionRef.current.sessionId;
+      if (!projectId || !target || !queued) return;
+      if (heldTurnIdRef.current === id) heldTurnIdRef.current = null;
+      const withoutMarkers = content.split(ATTACHMENT_MARKER).join("");
+      const markerCount =
+        (content.length - withoutMarkers.length) / ATTACHMENT_MARKER.length;
+      const next =
+        markerCount === queued.attachments.length
+          ? content
+          : withoutMarkers +
+            ATTACHMENT_MARKER.repeat(queued.attachments.length);
+      void apiClient
+        .PATCH(
+          "/api/projects/{projectId}/agent/sessions/{sessionId}/turns/{turnId}",
+          {
+            params: { path: { projectId, sessionId: target, turnId: id } },
+            body: {
+              content: next,
+              metadata: { attachments: queued.attachments },
+              held: false,
+            },
+          },
+        )
+        .then(() =>
+          queryClient.invalidateQueries({
+            queryKey: ["cat", "project", projectId, "agent", "session", target],
+          }),
+        );
     },
     removeQueued: (id) => {
-      queueRef.current = queueRef.current.filter((queued) => queued.id !== id);
-      if (holdRef.current === id) holdRef.current = null;
-      syncQueue();
+      const target = activeSessionRef.current.sessionId;
+      if (!projectId || !target) return;
+      void apiClient
+        .DELETE(
+          "/api/projects/{projectId}/agent/sessions/{sessionId}/turns/{turnId}",
+          { params: { path: { projectId, sessionId: target, turnId: id } } },
+        )
+        .then(() =>
+          queryClient.invalidateQueries({
+            queryKey: ["cat", "project", projectId, "agent", "session", target],
+          }),
+        );
     },
     sendQueuedNow: (id) => {
-      const index = queueRef.current.findIndex((queued) => queued.id === id);
-      if (index < 0) return;
-      const [queued] = queueRef.current.splice(index, 1);
-      if (!queued) return;
-      if (holdRef.current === id) holdRef.current = null;
-      queueRef.current.unshift(queued);
-      syncQueue();
-      void interrupt();
-      void processQueue();
+      const target = activeSessionRef.current.sessionId;
+      if (!projectId || !target) return;
+      void apiClient
+        .POST(
+          "/api/projects/{projectId}/agent/sessions/{sessionId}/turns/{turnId}/send-now",
+          { params: { path: { projectId, sessionId: target, turnId: id } } },
+        )
+        .then(() =>
+          queryClient.invalidateQueries({
+            queryKey: ["cat", "project", projectId, "agent", "session", target],
+          }),
+        );
     },
     holdQueued: (id) => {
-      holdRef.current = id;
+      const target = activeSessionRef.current.sessionId;
+      if (!projectId || !target) return;
+      const turnId = id ?? heldTurnIdRef.current;
+      if (!turnId) return;
+      heldTurnIdRef.current = id;
+      void apiClient
+        .PATCH(
+          "/api/projects/{projectId}/agent/sessions/{sessionId}/turns/{turnId}",
+          {
+            params: { path: { projectId, sessionId: target, turnId } },
+            body: { held: id !== null },
+          },
+        )
+        .then(() =>
+          queryClient.invalidateQueries({
+            queryKey: ["cat", "project", projectId, "agent", "session", target],
+          }),
+        );
     },
     retry,
     resumeAfterAuthentication: () => {
-      authenticationBlockedRef.current = false;
-      void processQueue();
+      const blocked = blockedSendRef.current;
+      if (blocked) void performSend(blocked);
     },
     interrupt,
     startNewSession: () => {
-      if (!processingRef.current) {
+      if (sendInProgress === 0) {
         activeSessionRef.current = {
           projectId,
           controlledSessionId,
@@ -439,18 +563,21 @@ export function useAgentChat(
         };
         setActiveSession({ projectId, controlledSessionId, sessionId: null });
         setOptimisticMessages([]);
-        queueRef.current = [];
-        authenticationBlockedRef.current = false;
-        setQueue([]);
+        blockedSendRef.current = null;
+        sessionCreationRef.current = null;
       }
     },
   };
 }
 
-function authenticationRequiredFrom(
-  error: CatamorphicError | null,
+export function authenticationRequiredFrom(
+  error: unknown,
 ): AgentAuthenticationRequired | null {
-  if (error?.code !== "authentication_required") return null;
+  if (
+    !(error instanceof CatamorphicError) ||
+    error.code !== "authentication_required"
+  )
+    return null;
   const details = error.details;
   if (details === null || typeof details !== "object") return null;
   const record = details as Record<string, unknown>;
@@ -484,40 +611,36 @@ function authenticationRequiredFrom(
   return { environment: record.environment, requirements };
 }
 
-function hasPendingAssistant(messages: AgentMessage[] | undefined): boolean {
-  const last = messages?.at(-1);
-  if (last?.role !== "assistant") return false;
-  const metadata = last.metadata as Record<string, unknown> | null;
-  return metadata?.status === "in_progress";
-}
-
-/** A failed turn with a scheduled auto-retry still needs the poll. */
-function hasScheduledAutoRetry(messages: AgentMessage[] | undefined): boolean {
-  const last = messages?.at(-1);
-  if (last?.role !== "assistant") return false;
-  const metadata = last.metadata as Record<string, unknown> | null;
-  if (metadata?.status !== "failed") return false;
-  const autoRetry = metadata?.autoRetry as { nextAtMs?: number } | undefined;
-  // Poll through the scheduled window (plus slack for the retry itself).
-  return (
-    typeof autoRetry?.nextAtMs === "number" &&
-    Date.now() < autoRetry.nextAtMs + 30_000
-  );
+function attachmentsFromMetadata(
+  metadata: Record<string, unknown> | null,
+): AgentChatAttachment[] {
+  const value = metadata?.attachments;
+  if (!Array.isArray(value)) return [];
+  return value.filter((attachment): attachment is AgentChatAttachment => {
+    if (!attachment || typeof attachment !== "object") return false;
+    const record = attachment as Record<string, unknown>;
+    if (
+      (record.kind === "image" || record.kind === "document") &&
+      typeof record.name === "string" &&
+      typeof record.mediaType === "string" &&
+      typeof record.dataBase64 === "string"
+    ) {
+      return true;
+    }
+    return (
+      record.kind === "text" &&
+      typeof record.name === "string" &&
+      typeof record.text === "string" &&
+      record.source !== null &&
+      typeof record.source === "object"
+    );
+  });
 }
 
 function reconcileOptimisticMessages(
   persisted: AgentMessage[],
   optimistic: OptimisticAgentMessage[],
 ): OptimisticAgentMessage[] {
-  const counts = new Map<string, number>();
-  for (const message of persisted) {
-    if (message.role !== "user") continue;
-    counts.set(message.content, (counts.get(message.content) ?? 0) + 1);
-  }
-  return optimistic.filter((message) => {
-    const count = counts.get(message.content) ?? 0;
-    if (count === 0) return true;
-    counts.set(message.content, count - 1);
-    return false;
-  });
+  const persistedIds = new Set(persisted.map((message) => message.id));
+  return optimistic.filter((message) => !persistedIds.has(message.id));
 }

@@ -60,12 +60,17 @@ beforeAll(async () => {
   await app.waitFor(
     "!!document.querySelector('textarea[placeholder*=\"Search or ask\"]')",
   );
-  await app.eval(
-    "window.catamorphicDesktop.setPrefs({tabPlacement:'sidebar',headerPlacement:'sidebar'})",
+  await prefs({ tabPlacement: "sidebar", headerPlacement: "sidebar" });
+  await app.waitFor(
+    "!!document.querySelector('aside [data-tab-orientation=vertical]') && !document.querySelector('.workspace-chrome')",
   );
   await run(
     `setReactValue($('textarea[placeholder*="Search or ask"]'),${JSON.stringify(`${origin}/anchor`)})`,
   );
+  await app.waitFor(
+    "document.querySelector('[data-item-id=web]')?.getAttribute('aria-selected') === 'true'",
+  );
+  await run("$('textarea[placeholder*=\"Search or ask\"]').focus()");
   await app.press("Enter");
   await app.waitFor(
     "[...document.querySelectorAll('webview')].some(v=>{try{return v.getTitle()==='Anchor page'}catch{return false}})",
@@ -286,13 +291,15 @@ describe("floating surfaces", () => {
     expect(await app.eval(`!!${floating}`)).toBe(false);
     guest.close();
   });
-  it("floats the current browser with its shortcut and preserves the page when expanded", async () => {
+  it("opens an existing browser floating with Option-click and preserves the page when expanded", async () => {
     await run(
       "[...document.querySelectorAll('aside [data-point-key^=\"browser:\"]')].find(e=>e.textContent.includes('Anchor page')).querySelector('button').click()",
     );
     const guest = await app.connectToFrame(`${origin}/anchor`);
     const identity = await guest.eval<string>("window.pageIdentity");
-    await key("f", { metaKey: true, altKey: true });
+    await run(
+      "[...document.querySelectorAll('aside [data-point-key^=\"browser:\"]')].find(e=>e.textContent.includes('Anchor page')).querySelector('button').dispatchEvent(new MouseEvent('click',{bubbles:true,altKey:true}))",
+    );
     await app.waitFor(`!!${floating}?.querySelector('webview')`);
     expect(
       await run("return $('[data-floating-surface] webview').getTitle()"),
@@ -302,8 +309,12 @@ describe("floating surfaces", () => {
     expect(await guest.eval("window.pageIdentity")).toBe(identity);
     guest.close();
   });
-  it("opens regular palette entries as floating with the remapped shortcut, without duplicate commands", async () => {
-    await bindings({ "float-current-tab": "Alt+Enter" });
+  it("opens regular palette entries as floating with Option+Enter, without duplicate commands", async () => {
+    expect(
+      await app.eval(
+        "window.catamorphicDesktop.getKeybindings().then(b=>b['float-current-tab'])",
+      ),
+    ).toBeUndefined();
     const choose = async (query: string, item: string) => {
       await key("p", { metaKey: true });
       await app.waitFor(
@@ -394,11 +405,12 @@ describe("floating surfaces", () => {
     );
   });
   it("Escape in a floating page returns to the anchor and preserves the page draft", async () => {
-    await bindings({ "float-current-tab": "Cmd+Alt+F" });
     await run(
       "[...document.querySelectorAll('aside [data-point-key^=\"browser:\"]')].find(e=>e.textContent.includes('Anchor page')).querySelector('button').click()",
     );
-    await key("f", { metaKey: true, altKey: true });
+    await run(
+      "[...document.querySelectorAll('aside [data-point-key^=\"browser:\"]')].find(e=>e.textContent.includes('Anchor page')).querySelector('button').dispatchEvent(new MouseEvent('click',{bubbles:true,altKey:true}))",
+    );
     await app.waitFor(`!!${floating}?.querySelector('webview')`);
     const guest = await app.connectToFrame(`${origin}/anchor`);
     const identity = await guest.eval<string>("window.pageIdentity");
@@ -421,7 +433,9 @@ describe("floating surfaces", () => {
       "[...document.querySelectorAll('aside [data-point-key^=\"browser:\"]')].find(e=>e.textContent.includes('Anchor page')).querySelector('button').click()",
     );
     await bindings({ "dismiss-floating": "Ctrl+Alt+H" });
-    await key("f", { metaKey: true, altKey: true });
+    await run(
+      "[...document.querySelectorAll('aside [data-point-key^=\"browser:\"]')].find(e=>e.textContent.includes('Anchor page')).querySelector('button').dispatchEvent(new MouseEvent('click',{bubbles:true,altKey:true}))",
+    );
     await app.waitFor(`!!${floating}?.querySelector('webview')`);
     const send = (keyCode: string, modifiers: string[] = []) =>
       run(
@@ -435,7 +449,9 @@ describe("floating surfaces", () => {
       "[...document.querySelectorAll('aside [data-point-key^=\"browser:\"]')].find(e=>e.textContent.includes('Anchor page')).querySelector('button').click()",
     );
     await bindings({ "dismiss-floating": "" });
-    await key("f", { metaKey: true, altKey: true });
+    await run(
+      "[...document.querySelectorAll('aside [data-point-key^=\"browser:\"]')].find(e=>e.textContent.includes('Anchor page')).querySelector('button').dispatchEvent(new MouseEvent('click',{bubbles:true,altKey:true}))",
+    );
     await app.waitFor(`!!${floating}?.querySelector('webview')`);
     await send("Escape");
     await send("H", ["control", "alt"]);
@@ -444,5 +460,56 @@ describe("floating surfaces", () => {
     await click("Hide floating panel");
     await app.waitFor(`!${floating}`);
     await bindings({ "dismiss-floating": "Escape" });
+  });
+  it("shares resource menu labels and keeps Cmd-click distinct from Cmd+Shift-click", async () => {
+    await run(
+      "[...document.querySelectorAll('aside [data-point-key^=\"browser:\"]')].find(e=>e.textContent.includes('Anchor page')).querySelector('button').click()",
+    );
+    await key("f", { metaKey: true, altKey: true });
+    expect(await app.eval(`!!${floating}`)).toBe(false);
+    await run(
+      "[...document.querySelectorAll('aside [data-point-key^=\"browser:\"]')].find(e=>e.textContent.includes('Anchor page')).querySelector('button').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:100,clientY:200}))",
+    );
+    await app.waitFor(
+      "document.querySelectorAll('[data-sidebar-menu] [role=menuitem]').length===4",
+    );
+    expect(
+      await run(
+        "return [...document.querySelectorAll('[data-sidebar-menu] [role=menuitem]')].map(el=>el.textContent.trim())",
+      ),
+    ).toEqual([
+      "Open here",
+      "Open in new tab",
+      "Open to the side",
+      "Open floating",
+    ]);
+    await run(
+      "[...document.querySelectorAll('[data-sidebar-menu] [role=menuitem]')].find(el=>el.textContent.trim()==='Open floating').click()",
+    );
+    await app.waitFor(`!!${floating}?.querySelector('webview')`);
+    await click("Open as full tab");
+    await app.waitFor(`!${floating}`);
+    const guest = await app.connectToFrame(`${origin}/anchor`);
+    const count = await run<number>(
+      "return document.querySelectorAll('webview').length",
+    );
+    await guest.eval(
+      "document.querySelector('#preview').dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,metaKey:true}))",
+    );
+    await app.waitFor(
+      `document.querySelectorAll('webview').length===${count + 1}`,
+    );
+    expect(
+      await app.eval("!!document.querySelector('[data-split-divider]')"),
+    ).toBe(false);
+    await run(
+      "[...document.querySelectorAll('aside [data-point-key^=\"browser:\"]')].find(e=>e.textContent.includes('Anchor page')).querySelector('button').click()",
+    );
+    await guest.eval(
+      "document.querySelector('#preview').dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,metaKey:true,shiftKey:true}))",
+    );
+    await app.waitFor("!!document.querySelector('[data-split-divider]')");
+    expect(await guest.eval("location.href")).toBe(`${origin}/anchor`);
+    guest.close();
   });
 });

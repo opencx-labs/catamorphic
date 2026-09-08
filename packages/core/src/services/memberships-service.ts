@@ -1,7 +1,11 @@
 import type { DB } from "@catamorphic/db";
 import type { Kysely } from "kysely";
-import type { Identity } from "../identity.js";
-import { assertBuilder } from "./artifact-scope.js";
+import {
+  hasProjectPermission,
+  type Identity,
+  type ProjectPermissionRef,
+} from "../identity.js";
+import { AccessDeniedError } from "./artifact-scope.js";
 import { requireTenantProject } from "./projects-service.js";
 import type { RoleGrants, RolesService } from "./roles-service.js";
 
@@ -41,9 +45,22 @@ export class MembershipsService {
 
   /** Create or replace a member's roles and grants. */
   async grant(input: GrantMembershipInput): Promise<Membership> {
-    assertBuilder(input.identity, input.projectId);
+    assertProjectPermission(
+      input.identity,
+      input.projectId,
+      "memberships:manage",
+    );
     await this.requireProject(input.identity.tenantId, input.projectId);
     const roles = [...new Set(input.roles)];
+    if (
+      await this.roles.assignedRolesRequireManagement({
+        tenantId: input.identity.tenantId,
+        projectId: input.projectId,
+        roles,
+      })
+    ) {
+      assertProjectPermission(input.identity, input.projectId, "roles:manage");
+    }
     const grants = normalizeGrants(input.grants);
     const row = await this.db
       .insertInto("memberships")
@@ -71,7 +88,11 @@ export class MembershipsService {
     projectId: string;
     externalUserId: string;
   }): Promise<boolean> {
-    assertBuilder(input.identity, input.projectId);
+    assertProjectPermission(
+      input.identity,
+      input.projectId,
+      "memberships:manage",
+    );
     await this.requireProject(input.identity.tenantId, input.projectId);
     const result = await this.db
       .deleteFrom("memberships")
@@ -85,7 +106,11 @@ export class MembershipsService {
     identity: Identity;
     projectId: string;
   }): Promise<Membership[]> {
-    assertBuilder(input.identity, input.projectId);
+    assertProjectPermission(
+      input.identity,
+      input.projectId,
+      "memberships:manage",
+    );
     await this.requireProject(input.identity.tenantId, input.projectId);
     const rows = await this.db
       .selectFrom("memberships")
@@ -103,7 +128,11 @@ export class MembershipsService {
     externalUserId: string;
   }): Promise<Membership | null> {
     if (input.identity.externalUserId !== input.externalUserId) {
-      assertBuilder(input.identity, input.projectId);
+      assertProjectPermission(
+        input.identity,
+        input.projectId,
+        "memberships:manage",
+      );
     }
     await this.requireProject(input.identity.tenantId, input.projectId);
     const row = await this.db
@@ -146,9 +175,82 @@ export class MembershipsService {
     });
   }
 
+  /** Expand every current project membership for one verified host user. */
+  async identityForUser(input: {
+    tenantId: string;
+    externalUserId: string;
+  }): Promise<Identity> {
+    const rows = await this.db
+      .selectFrom("memberships")
+      .innerJoin("projects", "projects.id", "memberships.project_id")
+      .where("memberships.external_user_id", "=", input.externalUserId)
+      .where("projects.tenant_id", "=", input.tenantId)
+      .selectAll("memberships")
+      .orderBy("memberships.project_id", "asc")
+      .execute();
+    const identities = await Promise.all(
+      rows.map((row) => {
+        const membership = mapMembership(row);
+        return this.roles.resolve({
+          tenantId: input.tenantId,
+          projectId: membership.projectId,
+          externalUserId: input.externalUserId,
+          roles: membership.roles,
+          grants: membership.grants,
+        });
+      }),
+    );
+    return {
+      tenantId: input.tenantId,
+      externalUserId: input.externalUserId,
+      scope: dedupe(identities.flatMap((identity) => identity.scope ?? [])),
+      executionScope: dedupe(
+        identities.flatMap((identity) => identity.executionScope ?? []),
+      ),
+      connectionScope: dedupe(
+        identities.flatMap((identity) => identity.connectionScope ?? []),
+      ),
+      projectPermissions: dedupeProjectPermissions(
+        identities.flatMap((identity) => identity.projectPermissions ?? []),
+      ),
+    };
+  }
+
   private requireProject(tenantId: string, projectId: string) {
     return requireTenantProject(this.db, tenantId, projectId);
   }
+}
+
+function assertProjectPermission(
+  identity: Identity,
+  projectId: string,
+  permission: "memberships:manage" | "roles:manage",
+): void {
+  if (!hasProjectPermission(identity, projectId, permission)) {
+    throw new AccessDeniedError();
+  }
+}
+
+function dedupe<T>(values: readonly T[]): T[] {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const key = JSON.stringify(value);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function dedupeProjectPermissions(
+  values: readonly ProjectPermissionRef[],
+): ProjectPermissionRef[] {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const key = `${value.projectId}:${value.permission}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function normalizeGrants(

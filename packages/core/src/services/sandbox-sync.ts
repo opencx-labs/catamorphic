@@ -25,6 +25,7 @@ export async function syncSandboxChanges(opts: {
   projectManager: ProjectManager;
   identity: Identity;
   projectId: string;
+  sessionId?: string;
   sandboxProviderId: string;
   /** The sandbox path holding the project checkout. */
   projectDir: string;
@@ -47,11 +48,17 @@ export async function syncSandboxChanges(opts: {
   );
   if (changes.length === 0) return [];
 
-  const repo = await opts.projectManager.openDev(
-    opts.identity.tenantId,
-    opts.projectId,
-    opts.identity.externalUserId,
-  );
+  const repo = opts.sessionId
+    ? await opts.projectManager.openSession({
+        tenantId: opts.identity.tenantId,
+        projectId: opts.projectId,
+        sessionId: opts.sessionId,
+      })
+    : await opts.projectManager.openDev(
+        opts.identity.tenantId,
+        opts.projectId,
+        opts.identity.externalUserId,
+      );
   try {
     for (const change of changes) {
       if (change.kind === "deleted") {

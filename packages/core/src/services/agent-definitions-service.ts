@@ -4,11 +4,13 @@ import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
 import type { EnvironmentRequirements } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
 import { z } from "zod";
-import type { Identity } from "../identity.js";
+import { type Identity, isBuilder } from "../identity.js";
+import { AccessDeniedError } from "./artifact-scope.js";
 import {
   CONNECTION_ALIAS_PATTERN,
   type ConnectionRequirement,
 } from "./connection-types.js";
+import { readProgramFiles, withProgram } from "./program-reader.js";
 import { requireTenantProject } from "./projects-service.js";
 
 /**
@@ -203,6 +205,47 @@ export interface AgentEnvironmentPolicy {
   requirements?: Omit<EnvironmentRequirements, "workload" | "topology">;
 }
 
+export const AgentDelegationRouteSchema = z.object({
+  /** Stable name exposed to the model when it chooses a route. */
+  id: z.string().min(1).max(100),
+  /** `self`, `*`, an exact agent id, or `project:<slug>` in project files. */
+  target: z.string().min(1),
+  description: z.string().max(500).optional(),
+  /** This edge may explicitly remove onward delegation from the child. */
+  allowFurtherDelegation: z.boolean().default(true),
+});
+
+export const AgentDelegationPolicySchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    maxConcurrentChildren: z.number().int().min(1).max(100).default(10),
+    routes: z
+      .array(AgentDelegationRouteSchema)
+      .max(100)
+      .default([
+        {
+          id: "same-agent",
+          target: "self",
+          allowFurtherDelegation: true,
+        },
+      ]),
+  })
+  .superRefine((policy, context) => {
+    const ids = new Set<string>();
+    for (const [index, route] of policy.routes.entries()) {
+      if (ids.has(route.id)) {
+        context.addIssue({
+          code: "custom",
+          message: `Duplicate delegation route id '${route.id}'`,
+          path: ["routes", index, "id"],
+        });
+      }
+      ids.add(route.id);
+    }
+  });
+
+export type AgentDelegationPolicy = z.infer<typeof AgentDelegationPolicySchema>;
+
 /**
  * The committed `agents/<slug>.json` schema, version 1. Unknown top-level
  * keys are stripped (forward compatibility inside a version); a bumped
@@ -277,6 +320,8 @@ export function agentDefinitionSchema(opts?: { allowE2eFake?: boolean }) {
         }),
       )
       .optional(),
+    /** Which agents this agent may create as first-class subsessions. */
+    delegation: AgentDelegationPolicySchema.optional(),
     /** Reserved for kind "acp": how to reach the agent. */
     acp: z
       .object({
@@ -310,6 +355,7 @@ export interface AgentDefinition {
       tools?: Record<string, "allow" | "ask" | "deny">;
     }
   >;
+  delegation?: AgentDelegationPolicy;
   acp?: { endpoint?: string; command?: string[] };
 }
 
@@ -380,6 +426,7 @@ export function definitionHash(
     connections: (definition.connections ?? []).map((connection) =>
       typeof connection === "string" ? { alias: connection } : connection,
     ),
+    delegation: definition.delegation ?? null,
     acp: definition.acp
       ? {
           endpoint: definition.acp.endpoint ?? null,
@@ -418,7 +465,9 @@ export class AgentDefinitionsService {
   ): Promise<ProjectAgentEntry[]> {
     await this.requireProject(identity, projectId);
     return this.withDev(identity, projectId, async (repo) => {
-      const files = await repo.listFiles();
+      const files = await repo.listFiles({
+        prefix: `${AGENT_DEFINITIONS_DIR}/`,
+      });
       const prefix = `${AGENT_DEFINITIONS_DIR}/`;
       const definitionFiles = files.filter(
         (file) =>
@@ -482,7 +531,54 @@ export class AgentDefinitionsService {
     });
   }
 
+  /** The authority's committed roster. Does not expose draft definitions. */
+  async listCommitted(args: {
+    tenantId: string;
+    projectId: string;
+  }): Promise<ProjectAgentEntry[]> {
+    await requireTenantProject(this.db, args.tenantId, args.projectId);
+    return withProgram(
+      this.projectManager,
+      args.tenantId,
+      args.projectId,
+      async (repo, ref) => {
+        const files = await readProgramFiles(
+          repo,
+          ref,
+          `${AGENT_DEFINITIONS_DIR}/`,
+        );
+        return Object.entries(files)
+          .filter(([path]) => /^agents\/[^/]+\.json$/.test(path))
+          .map(([path, content]) => {
+            const slug = path.slice(7, -5);
+            if (!SLUG_PATTERN.test(slug))
+              return { slug, invalid: { error: "Invalid agent file name" } };
+            try {
+              const result = validateAgentDefinition(
+                JSON.parse(content),
+                this.opts,
+              );
+              return "error" in result
+                ? { slug, invalid: result }
+                : {
+                    slug,
+                    definition: result.definition,
+                    promptFile: files[`agents/${slug}.md`],
+                  };
+            } catch {
+              return {
+                slug,
+                invalid: { error: "Agent definition is not valid JSON" },
+              };
+            }
+          })
+          .sort((a, b) => a.slug.localeCompare(b.slug));
+      },
+    );
+  }
+
   private requireProject(identity: Identity, projectId: string) {
+    if (!isBuilder(identity, projectId)) throw new AccessDeniedError();
     return requireTenantProject(this.db, identity.tenantId, projectId);
   }
 

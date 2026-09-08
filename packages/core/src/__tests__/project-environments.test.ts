@@ -2,6 +2,29 @@ import { describe, expect, it } from "vitest";
 import { parseProjectEnvironmentPolicy } from "../services/project-environments-service.js";
 
 describe("project Environment policy", () => {
+  it("defaults a legacy manifest without Environments to local", () => {
+    expect(parseProjectEnvironmentPolicy({ name: "legacy-project" })).toEqual({
+      defaultEnvironment: "local",
+      environments: {
+        local: {
+          binding: "local",
+          description: "Run on this machine",
+          workloads: ["agent", "workflow"],
+        },
+      },
+      entries: [
+        {
+          name: "local",
+          definition: {
+            binding: "local",
+            description: "Run on this machine",
+            workloads: ["agent", "workflow"],
+          },
+        },
+      ],
+    });
+  });
+
   it("parses a default and preserves per-Environment policy", () => {
     expect(
       parseProjectEnvironmentPolicy({
@@ -67,6 +90,11 @@ describe("project Environment policy", () => {
   ])("reports %s without hiding other entries", (_name, manifest, message) => {
     const parsed = parseProjectEnvironmentPolicy(manifest);
     expect(parsed.entries[0]?.invalid?.error).toContain(message);
+  });
+
+  it("rejects a malformed Environments container", () => {
+    const parsed = parseProjectEnvironmentPolicy({ environments: null });
+    expect(parsed.invalid?.error).toContain("must declare environments");
   });
 
   it("rejects an unknown default Environment", () => {

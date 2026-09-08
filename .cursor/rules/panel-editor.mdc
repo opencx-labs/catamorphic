@@ -1,34 +1,26 @@
 ---
 description: Detail panel and code editor behavior conventions
-globs: ["packages/ui/src/detail-panel.tsx", "packages/registry/src/**/monaco-editor.tsx", "packages/ui/src/canvas.tsx", "packages/react/src/atoms.ts", "packages/react/src/hooks/use-code-editor-link.ts", "packages/react/src/lib/find-node-at-position.ts"]
+globs: ["apps/desktop/src/renderer/components/workflow-details.tsx", "packages/registry/src/**/monaco-editor.tsx", "packages/ui/src/canvas.tsx", "packages/react/src/atoms.ts", "packages/react/src/hooks/use-code-editor-link.ts", "packages/react/src/lib/find-node-at-position.ts"]
 alwaysApply: false
 ---
 
 # Detail Panel & Code Editor
 
-## Right Panel Structure
+## Host-owned inspector
 
-The right panel has two tabs: **Details** and **Code**. It opens when a node is clicked.
+Workflow inspectors belong to the host (ADR 0097). `@catamorphic/ui` exports
+no Details/Code sidebar. The desktop owns Details, Code, Runs, and automation
+views in `apps/desktop/src/renderer/screens/workflow-screen.tsx` and its
+`workflow-*` components. Other hosts compose their own views inside
+`WorkflowEditorScope` or provide `WorkflowEditor.renderInspector`.
 
-### Details Tab
-
-Shows human-readable information about the selected node.
-
-- **No "Function" section** — don't show the raw function name for steps.
-- **No "Source" section** — don't show source range info on any node type.
-- **Single "Parameters" section** — "Inputs" and "Parameters" are merged. Show argument values with provenance alongside parameter definitions.
-- **Argument provenance**: For each argument, show where the value comes from (e.g., "from Validate Order" or "from trigger parameter").
-- **Friendly types**: `string` → "Text", `boolean` → "True or False", `number` → "Number", `string[]` → "Text List", etc. Non-technical users read this.
-- **Default values**: Show when a parameter has a TypeScript default.
-- Boundary details explain atomic retry behavior and show retry/backoff
-  policy. Pause details show timeout/resume behavior and persisted state. Child
-  calls show their target Workflow and input expression. Batch details show
-  paged source, per-item processing, failure policy, sink, and progress without
-  presenting a separate Workflow category.
-
-### Code Tab
-
-Renders the host's editor via the `renderCodeEditor` slot, falling back to a plain `<textarea>`. The real editor is the `monaco-editor` registry item (`packages/registry/src/monaco-editor/monaco-editor.tsx`, ADR 0011) — core packages never depend on Monaco. Clicking the Code tab (or selecting a node while already on Code) scrolls to and highlights the node's source.
+Details lead with a human label, description, behavior, and information used.
+Combine parameters and arguments; explain provenance and friendly types.
+Put raw expressions, policies, and trigger configuration behind Technical
+details. Source and agent-edit actions must be easy to find. Empty canvas
+selection returns to the workflow overview. Code uses the registry Monaco
+editor and the existing headless linking hook. No core package depends on
+Monaco or imposes sidebar dimensions or action chrome.
 
 ## Bidirectional Code ↔ Canvas Linking
 

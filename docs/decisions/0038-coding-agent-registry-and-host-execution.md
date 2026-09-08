@@ -3,6 +3,7 @@
 - **Status**: accepted
 - **Date**: 2026-08-04
 - **Topology model refined by**: 0064
+- **Runtime contract and topology model refined by**: 0067
 
 ## Context
 

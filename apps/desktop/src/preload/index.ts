@@ -1,5 +1,8 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { BookmarkPlacement } from "../shared/bookmark-target.js";
+import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
+import type { OpenMode } from "../shared/open-mode.js";
+import type { DesktopUpdateState } from "../shared/update.js";
 
 export interface ServerInfo {
   url: string | null;
@@ -9,6 +12,23 @@ export interface ServerInfo {
 const api = {
   getServerState: (): Promise<ServerInfo> =>
     ipcRenderer.invoke("catamorphic:server-state"),
+  updateState: (): Promise<DesktopUpdateState> =>
+    ipcRenderer.invoke("catamorphic:update-state"),
+  updateCheck: (): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:update-check"),
+  updateDownload: (): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:update-download"),
+  updateInstall: (): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:update-install"),
+  onUpdateStateChanged: (
+    listener: (state: DesktopUpdateState) => void,
+  ): (() => void) => {
+    const handler = (_event: unknown, state: DesktopUpdateState) =>
+      listener(state);
+    ipcRenderer.on("catamorphic:update-state-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:update-state-changed", handler);
+  },
 
   /**
    * Absolute filesystem path of a pasted/dropped File, "" when it has none
@@ -22,6 +42,13 @@ const api = {
       return "";
     }
   },
+
+  composerFileSave: (input: {
+    projectId: string;
+    name: string;
+    bytes: Uint8Array;
+  }): Promise<{ path: string; name: string }> =>
+    ipcRenderer.invoke("catamorphic:composer-file-save", input),
 
   // --- window ↔ profile ---
   windowProfile: (): Promise<string> =>
@@ -210,6 +237,8 @@ const api = {
     ipcRenderer.invoke("catamorphic:browser-import-list"),
   browserImportRun: (input: unknown): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:browser-import-run", input),
+  browserImportPasswords: (): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:browser-import-passwords"),
 
   devWindow: (action: string, width?: number, height?: number) =>
     ipcRenderer.invoke("catamorphic:dev-window", action, width, height),
@@ -236,10 +265,24 @@ const api = {
     ipcRenderer.invoke("catamorphic:project-root", projectId),
   revealFolder: (folderPath: string): Promise<void> =>
     ipcRenderer.invoke("catamorphic:reveal-folder", folderPath),
+  editorFileRead: (input: { filePath: string }): Promise<{ content: string }> =>
+    ipcRenderer.invoke("catamorphic:editor-file-read", input),
+  projectLocalFiles: (projectId: string): Promise<Array<{ path: string }>> =>
+    ipcRenderer.invoke("catamorphic:project-local-files", projectId),
+  editorFileWrite: (input: {
+    filePath: string;
+    content: string;
+    expectedContent: string;
+  }): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:editor-file-write", input),
+  projectOpenFile: (projectId: string, filePath: string): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:project-open-file", projectId, filePath),
   githubConnectStart: (): Promise<{
     userCode: string;
     verificationUri: string;
   }> => ipcRenderer.invoke("catamorphic:github-connect-start"),
+  githubConnectCancel: (): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:github-connect-cancel"),
   githubDisconnect: (): Promise<void> =>
     ipcRenderer.invoke("catamorphic:github-disconnect"),
   githubManageRepos: (): Promise<void> =>
@@ -259,6 +302,8 @@ const api = {
   // Continue on mobile (QR pairing).
   mobilePairingStart: (context?: unknown): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:mobile-pairing-start", context),
+  sessionIsIncognito: (sessionId: string): Promise<boolean> =>
+    ipcRenderer.invoke("catamorphic:session-is-incognito", sessionId),
   sessionSetIncognito: (
     sessionId: string,
     incognito: boolean,
@@ -270,6 +315,26 @@ const api = {
     ),
   projectAllowIncognito: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:project-allow-incognito", projectId),
+  projectStartingActions: (projectId: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:project-starting-actions", projectId),
+  sessionMoveEligibility: (
+    projectId: string,
+    sessionId: string,
+  ): Promise<unknown> =>
+    ipcRenderer.invoke(
+      "catamorphic:session-move-eligibility",
+      projectId,
+      sessionId,
+    ),
+  sessionMoveToServer: (
+    projectId: string,
+    sessionId: string,
+  ): Promise<unknown> =>
+    ipcRenderer.invoke(
+      "catamorphic:session-move-to-server",
+      projectId,
+      sessionId,
+    ),
   mobilePairingDevices: (): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:mobile-pairing-devices"),
   mobilePairingRevoke: (deviceId: string): Promise<unknown> =>
@@ -279,12 +344,21 @@ const api = {
     ipcRenderer.invoke("catamorphic:remote-parse-link", link),
   remoteConnect: (input: unknown): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:remote-connect", input),
+  remoteEnableLocalExecution: (input: {
+    projectId: string;
+    environment: string;
+  }) => ipcRenderer.invoke("catamorphic:remote-enable-local-execution", input),
+  remoteAuthority: (projectId: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:remote-authority", projectId),
   remoteStatus: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:remote-status", projectId),
   remoteSync: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:remote-sync", projectId),
-  remoteShip: (projectId: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:remote-ship", projectId),
+  remoteShip: (input: {
+    projectId: string;
+    paths: string[];
+    resolveConflicts?: string[];
+  }): Promise<unknown> => ipcRenderer.invoke("catamorphic:remote-ship", input),
   remoteHistory: (input: unknown): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:remote-history", input),
   remoteReadVersion: (input: unknown): Promise<unknown> =>
@@ -293,8 +367,16 @@ const api = {
     ipcRenderer.invoke("catamorphic:remote-publish", input),
   remotePropose: (input: unknown): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:remote-propose", input),
-  remoteRenew: (projectId: string): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:remote-renew", projectId),
+  remoteReconnect: (projectId: string): Promise<{ ok: true }> =>
+    ipcRenderer.invoke("catamorphic:remote-reconnect", projectId),
+  remoteMembers: (projectId: string): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:remote-members", projectId),
+  remoteAdmissionDecide: (input: unknown): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:remote-admission-decide", input),
+  remoteMemberSetRoles: (input: unknown): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:remote-member-set-roles", input),
+  remoteMemberInvite: (input: unknown): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:remote-member-invite", input),
   remoteDisconnect: (projectId: string): Promise<void> =>
     ipcRenderer.invoke("catamorphic:remote-disconnect", projectId),
   remoteTakePendingLink: (): Promise<string | null> =>
@@ -391,10 +473,16 @@ const api = {
     title: string;
   }): Promise<void> =>
     ipcRenderer.invoke("catamorphic:browser-history-retitle", input),
+  browserSetHistoryFavicon: (input: {
+    profileId: string;
+    url: string;
+    faviconUrl: string;
+  }): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:browser-history-favicon", input),
   browserRecentHistory: (input: {
     profileId: string;
     limit?: number;
-  }): Promise<{ url: string; title: string }[]> =>
+  }): Promise<{ url: string; title: string; faviconUrl?: string }[]> =>
     ipcRenderer.invoke("catamorphic:browser-history-recent", input),
   browserSuggest: (input: {
     profileId: string;
@@ -403,9 +491,13 @@ const api = {
     matches: { url: string; title: string }[];
     inline: string | null;
   }> => ipcRenderer.invoke("catamorphic:browser-suggest", input),
-  onBrowserOpenUrl: (listener: (url: string) => void): (() => void) => {
-    const handler = (_event: unknown, payload: { url: string }) =>
-      listener(payload.url);
+  onBrowserOpenUrl: (
+    listener: (url: string, mode?: OpenMode) => void,
+  ): (() => void) => {
+    const handler = (
+      _event: unknown,
+      payload: { url: string; mode?: OpenMode },
+    ) => listener(payload.url, payload.mode);
     ipcRenderer.on("catamorphic:browser-open-url", handler);
     return () =>
       ipcRenderer.removeListener("catamorphic:browser-open-url", handler);
@@ -445,6 +537,44 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:browser-guest-key", handler);
   },
+  onBrowserNavigate: (
+    listener: (command: {
+      webContentsId: number | null;
+      direction: "back" | "forward";
+    }) => void,
+  ): (() => void) => {
+    const handler = (
+      _event: unknown,
+      payload: Parameters<typeof listener>[0],
+    ) => listener(payload);
+    ipcRenderer.on("catamorphic:browser-navigate", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:browser-navigate", handler);
+  },
+  onBrowserCredentialSaveOffer: (listener: (offer: unknown) => void) => {
+    const handler = (_event: unknown, offer: unknown) => listener(offer);
+    ipcRenderer.on("catamorphic:browser-credential-save-offer", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:browser-credential-save-offer",
+        handler,
+      );
+  },
+  onBrowserCredentialFillOffer: (listener: (offer: unknown) => void) => {
+    const handler = (_event: unknown, offer: unknown) => listener(offer);
+    ipcRenderer.on("catamorphic:browser-credential-fill-offer", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:browser-credential-fill-offer",
+        handler,
+      );
+  },
+  browserCredentialAccept: (input: unknown): Promise<boolean> =>
+    ipcRenderer.invoke("catamorphic:browser-credential-accept", input),
+  browserCredentialDismiss: (input: unknown): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:browser-credential-dismiss", input),
+  browserCredentialFill: (input: unknown): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:browser-credential-fill", input),
 
   // --- terminal tabs (PTY sessions live in main; see main/terminal.ts) ---
   terminalGhosttyAppearance: () =>
@@ -572,8 +702,27 @@ const api = {
     username: string;
     password: string;
   }): Promise<unknown> => ipcRenderer.invoke("catamorphic:vault-save", input),
+  vaultUpdate: (input: {
+    profileId: string;
+    id: string;
+    origin: string;
+    username: string;
+    password?: string;
+  }): Promise<unknown> => ipcRenderer.invoke("catamorphic:vault-update", input),
   vaultRemove: (input: { profileId: string; id: string }): Promise<void> =>
     ipcRenderer.invoke("catamorphic:vault-remove", input),
+  vaultCopyPassword: (input: {
+    profileId: string;
+    id: string;
+  }): Promise<boolean> =>
+    ipcRenderer.invoke("catamorphic:vault-copy-password", input),
+  onVaultChanged: (listener: (profileId: string) => void): (() => void) => {
+    const handler = (_event: unknown, payload: { profileId: string }) =>
+      listener(payload.profileId);
+    ipcRenderer.on("catamorphic:vault-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:vault-changed", handler);
+  },
   deviceAuthAvailable: (): Promise<boolean> =>
     ipcRenderer.invoke("catamorphic:device-auth-available"),
 
@@ -589,6 +738,7 @@ const api = {
     label: string;
     url: string;
     folderId?: string;
+    faviconUrl?: string;
   }): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:bookmarks-add", input),
   bookmarksPlace: (input: BookmarkPlacement): Promise<unknown> =>
@@ -597,6 +747,7 @@ const api = {
     projectId: string;
     profileId: string;
     label: string;
+    parentId?: string;
   }): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:bookmarks-add-folder", input),
   bookmarksUpdate: (input: {
@@ -645,23 +796,14 @@ const api = {
   },
 
   // --- git + pull requests (dev surfaces) ---
+  gitRecord: (input: GitRecordInput): Promise<string> =>
+    ipcRenderer.invoke("catamorphic:git-record", input),
   gitOverview: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:git-overview", projectId),
   sessionCheckouts: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:session-checkouts", projectId),
-  gitFileDiff: (
-    projectId: string,
-    worktreePath: string,
-    filePath: string,
-    mode: "uncommitted" | "vs-main",
-  ): Promise<unknown> =>
-    ipcRenderer.invoke(
-      "catamorphic:git-file-diff",
-      projectId,
-      worktreePath,
-      filePath,
-      mode,
-    ),
+  gitFileDiff: (input: GitDiffInput) =>
+    ipcRenderer.invoke("catamorphic:git-file-diff", input),
   prList: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:pr-list", projectId),
   prFiles: (projectId: string, number: number): Promise<unknown> =>

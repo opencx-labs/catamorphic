@@ -32,6 +32,7 @@ import type {
   TurnOptions,
 } from "@catamorphic/sandbox";
 import {
+  agentCapabilityTools,
   buildPluginsPreamble,
   isMediaAttachment,
   mergePolicyLayers,
@@ -40,6 +41,7 @@ import {
   resolveMcpServers,
   stagePluginDocs,
   ToolGate,
+  withAgentContext,
 } from "@catamorphic/sandbox";
 import type { ZodRawShape } from "zod";
 
@@ -75,7 +77,7 @@ export interface ClaudeCodeAgentOpts {
   extraTools?: ExtraTool[];
   /**
    * Swap the built-in shell-execution tools (Bash, and its siblings
-   * PowerShell and Monitor) for the host's terminal tools. Claude Code's
+   * PowerShell) for the host's terminal tools. Claude Code's
    * own shell runs inside the CLI process where the host can't see or
    * manage it; hosts that provide terminal tools via {@link extraTools}
    * disable the built-ins so every command runs through terminals the
@@ -89,6 +91,8 @@ export interface ClaudeCodeAgentOpts {
    * with Bash disabled they still manage background subagents.
    */
   disableBash?: boolean;
+  /** Use host session watchers instead of private native Monitor tasks. */
+  disableNativeMonitors?: boolean;
   /**
    * External MCP servers for this agent (the host's resolved connection
    * set). Passed to the CLI as native `mcpServers` config and allowlisted
@@ -159,10 +163,7 @@ export interface ClaudeCodeAgentOpts {
  */
 const ALLOWED_TOOLS = [
   "Bash",
-  // Bash's shell-execution siblings: PowerShell (native on Windows,
-  // opt-in elsewhere) and Monitor (watch a command/WebSocket and feed
-  // lines back as events). They ride the same interception switch as
-  // Bash — see SHELL_EXECUTION_TOOLS.
+  // Native shell and background monitoring have separate host controls.
   "PowerShell",
   "Monitor",
   "Read",
@@ -201,7 +202,10 @@ const ALLOWED_TOOLS = [
  * model reaches for the workspace terminals instead of a tool it can see
  * but never use.
  */
-const SHELL_EXECUTION_TOOLS = new Set(["Bash", "PowerShell", "Monitor"]);
+const SHELL_EXECUTION_TOOLS = new Set(["Bash", "PowerShell"]);
+
+/** The shared host list replaces Claude Code's private plan when mounted. */
+const NATIVE_TODO_TOOL = "TodoWrite";
 
 /** Tool names whose invocations are surfaced as `file_edit` events. */
 const FILE_EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
@@ -286,7 +290,8 @@ interface LiveTurn {
     resolve: (result: PermissionResult) => void;
   };
   /** Settles when an AskUserQuestion call parks; re-armed per ask. */
-  askRaised: Promise<void>;
+  askRaised: boolean;
+  askWake?: () => void;
   raiseAsk: () => void;
 }
 
@@ -303,9 +308,11 @@ function createLiveTurn(state: SessionState | undefined): LiveTurn {
 
 /** Fresh one-shot signal for the next AskUserQuestion park. */
 function armAskSignal(live: LiveTurn): void {
-  live.askRaised = new Promise<void>((resolve) => {
-    live.raiseAsk = resolve;
-  });
+  live.askRaised = false;
+  live.raiseAsk = () => {
+    live.askRaised = true;
+    live.askWake?.();
+  };
 }
 
 /**
@@ -475,7 +482,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         options: {
           ...this.buildOptions(
             cwd,
-            state?.systemPrompt,
+            withAgentContext(state?.systemPrompt, opts?.context),
             state?.toolContext,
             opts,
             live,
@@ -514,10 +521,16 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     try {
       while (live.iterator) {
         live.nextPending ??= live.iterator.next();
-        const winner = await Promise.race([
-          live.nextPending.then(() => "message" as const),
-          live.askRaised.then(() => "ask" as const),
-        ]);
+        const nextPending = live.nextPending;
+        const winner = await new Promise<"message" | "ask">(
+          (resolve, reject) => {
+            live.askWake = () => resolve("ask");
+            void nextPending.then(() => resolve("message"), reject);
+            if (live.askRaised) resolve("ask");
+          },
+        ).finally(() => {
+          live.askWake = undefined;
+        });
         if (winner === "ask") {
           yield* live.hookEvents.splice(0);
           yield {
@@ -657,7 +670,12 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
   ): Options {
     // Resumed sessions reconstruct this context from ProviderSession before
     // reaching here, so the host's workspace tools survive app restarts.
-    const extraTools = toolContext ? (this.opts.extraTools ?? []) : [];
+    const extraTools = [
+      ...(toolContext ? (this.opts.extraTools ?? []) : []),
+      ...(turn?.capabilities
+        ? agentCapabilityTools(turn.capabilities, live.abort.signal)
+        : []),
+    ];
     const workspaceServer =
       extraTools.length > 0 && toolContext
         ? createSdkMcpServer({
@@ -705,6 +723,20 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     // agent with no way to run commands at all is broken, not safe.
     const shellToolsDisabled =
       Boolean(this.opts.disableBash) && workspaceServer !== undefined;
+    const hostOwnsTodos =
+      workspaceServer !== undefined &&
+      extraTools.some((tool) => tool.name === "update_todo_list");
+    const hostOwnsSubagents =
+      workspaceServer !== undefined &&
+      extraTools.some((tool) => tool.name === "spawn_subsession");
+    const readOnly = this.opts.permissionMode === "plan";
+    const disallowedTools = [
+      ...(shellToolsDisabled || readOnly ? SHELL_EXECUTION_TOOLS : []),
+      ...(readOnly ? FILE_EDIT_TOOLS : []),
+      ...(this.opts.disableNativeMonitors || readOnly ? ["Monitor"] : []),
+      ...(hostOwnsTodos ? [NATIVE_TODO_TOOL] : []),
+      ...(hostOwnsSubagents ? SUBAGENT_TOOLS : []),
+    ];
 
     // Session-scoped servers win a name clash with the agent-wide set:
     // the host owns both maps and picks the session keys, so a collision
@@ -761,9 +793,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
           }
         : {}),
       allowedTools: [
-        ...ALLOWED_TOOLS.filter(
-          (name) => !(shellToolsDisabled && SHELL_EXECUTION_TOOLS.has(name)),
-        ),
+        ...ALLOWED_TOOLS.filter((name) => !disallowedTools.includes(name)),
         ...(workspaceServer
           ? extraTools.map((def) => `mcp__workspace__${def.name}`)
           : []),
@@ -774,12 +804,10 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
           .filter((name) => !this.currentPolicies(providerSessionId)?.[name])
           .map((name) => `mcp__${name}`),
       ],
-      // Removing (not merely denying) the built-in shell tools takes them
-      // out of the model's context — otherwise the CLI's own system prompt
-      // keeps steering the model toward a Bash it can see but never use.
-      ...(shellToolsDisabled
-        ? { disallowedTools: [...SHELL_EXECUTION_TOOLS] }
-        : {}),
+      // Removing (not merely denying) replaced built-ins takes them out of
+      // model context, so the CLI prompt cannot steer toward a private shell
+      // or todo surface when the host owns the shared replacement.
+      ...(disallowedTools.length > 0 ? { disallowedTools } : {}),
       // AskUserQuestion is the CLI's native ask_user: the tool's own
       // permission check always routes through here, and the permission
       // result's updatedInput is how the answers reach it (the tool reads

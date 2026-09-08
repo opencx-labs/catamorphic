@@ -23,6 +23,7 @@ export {
   type GithubPullRequest,
   type GithubPullRequestFile,
   type GithubRepo,
+  type GithubRepositoryEvent,
   type GithubTokenSet,
   type GithubTokenStore,
   type GithubUser,

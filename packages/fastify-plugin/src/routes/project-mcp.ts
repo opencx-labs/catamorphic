@@ -5,7 +5,9 @@ import type {
   TriggerBindingInfo,
   TriggerFireOutcome,
 } from "@catamorphic/core";
+import { agentCapabilityTools } from "@catamorphic/sandbox";
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
 import {
@@ -80,8 +82,31 @@ export function registerProjectMcpRoutes(
         .send({ error: "MCP is turned off on this server" });
     }
     const { projectId } = request.params as { projectId: string };
+    const { sessionId, allocationId } = request.query as {
+      sessionId?: string;
+      allocationId?: string;
+    };
     const identity = resolveIdentity(request);
-    const surface = surfaceTools(core, identity, projectId, ctx.features);
+    const abort = new AbortController();
+    reply.raw.once("close", () => abort.abort());
+    const gatewayTools = sessionId
+      ? agentCapabilityTools(
+          core.agentCapabilities.forSession({
+            identity,
+            projectId,
+            sessionId,
+            allocationId,
+          }),
+          abort.signal,
+        )
+      : [];
+    const surface = surfaceTools(
+      core,
+      identity,
+      projectId,
+      ctx.features,
+      sessionId,
+    );
 
     return handleMcpPost(reply, request.body, async (method, params) => {
       switch (method) {
@@ -104,7 +129,17 @@ export function registerProjectMcpRoutes(
           const taken = new Set(tools.map((tool) => tool.name));
           return {
             tools: [
-              ...tools.map(toolDefinition),
+              ...gatewayTools.map((tool) => ({
+                name: tool.name,
+                description: tool.description,
+                inputSchema: z.toJSONSchema(z.object(tool.parameters)),
+              })),
+              ...tools
+                .filter(
+                  (tool) =>
+                    !gatewayTools.some((gateway) => gateway.name === tool.name),
+                )
+                .map(toolDefinition),
               ...(tools.length > 0 || core.mcpToolKinds.length > 0
                 ? [POLL_RUN_TOOL_DEFINITION]
                 : []),
@@ -126,6 +161,18 @@ export function registerProjectMcpRoutes(
             typeof params.arguments === "object" && params.arguments !== null
               ? (params.arguments as Record<string, unknown>)
               : {};
+          const gatewayTool = gatewayTools.find((tool) => tool.name === name);
+          if (gatewayTool) {
+            try {
+              return toolValue(
+                await gatewayTool.execute(args, { projectId, sessionId }),
+              );
+            } catch (error) {
+              return toolError(
+                error instanceof Error ? error.message : "Capability failed",
+              );
+            }
+          }
           const workflowTools = await loadProjectTools(
             core,
             identity,
@@ -247,6 +294,7 @@ async function callTool(
       // Always sync: a tool call wants its answer inline. A kind that
       // disallows sync fails loudly here rather than silently degrading.
       mode: "sync",
+      interactive: true,
       workflows: [tool.binding.workflowName],
       budgetMs: TOOL_SYNC_BUDGET_MS,
     });

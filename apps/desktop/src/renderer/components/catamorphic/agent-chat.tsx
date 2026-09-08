@@ -33,7 +33,11 @@ export function AgentChat({
   onSessionCreated,
   variant = "dock",
 }: AgentChatProps) {
-  const chat = useAgentChat(projectId, { sessionId, onSessionCreated });
+  const chat = useAgentChat(projectId, {
+    sessionId,
+    onSessionCreated,
+    source: "desktop",
+  });
   const isFull = variant === "full";
   const [dockExpanded, setDockExpanded] = useState(false);
   const expanded = isFull || dockExpanded;
@@ -44,7 +48,7 @@ export function AgentChat({
   const { messages, activity } = toTimeline(
     chat.messages,
     chat.optimisticMessages,
-    chat.isSending,
+    chat.activity,
   );
 
   const submit = (event?: FormEvent) => {
@@ -70,7 +74,7 @@ export function AgentChat({
   return (
     <section
       className={`relative flex w-full flex-col text-fg ${
-        isFull ? "h-full min-h-0" : "max-w-3xl drop-shadow-2xl"
+        isFull ? "h-full min-h-0" : "max-w-3xl shadow-2xl"
       } ${className}`}
       aria-label={title}
     >
@@ -78,7 +82,7 @@ export function AgentChat({
         {activity ?? messages.at(-1)?.content}
       </span>
       <div
-        className={`origin-bottom overflow-hidden rounded-t-2xl border-border bg-bg-raised/95 backdrop-blur-xl transition-[height,opacity,translate,scale,margin,border-width] duration-200 ease-out ${
+        className={`origin-bottom overflow-hidden rounded-t-2xl border-border bg-bg-raised transition-[height,opacity,translate,scale,margin,border-width] duration-200 ease-out ${
           isFull
             ? "mb-[-1px] min-h-0 flex-1 border"
             : expanded
@@ -102,6 +106,7 @@ export function AgentChat({
                 className="grid size-8 place-items-center rounded-lg text-fg-muted hover:bg-bg-overlay hover:text-fg disabled:opacity-40"
                 onClick={chat.startNewSession}
                 disabled={chat.isSending}
+                data-disabled-reason="Wait for the current reply to finish"
                 aria-label="Start new agent session"
                 title="New session"
               >
@@ -129,7 +134,7 @@ export function AgentChat({
         />
       </div>
       <form
-        className={`flex min-h-16 items-center gap-2 border border-border bg-bg-raised/95 p-2 backdrop-blur-xl ${expanded ? "rounded-b-2xl" : "rounded-2xl"}`}
+        className={`flex min-h-16 items-center gap-2 border border-border bg-bg-raised p-2 ${expanded ? "rounded-b-2xl" : "rounded-2xl"}`}
         onSubmit={submit}
       >
         <textarea
@@ -163,6 +168,7 @@ export function AgentChat({
           type="submit"
           className="grid size-8 place-items-center rounded-lg bg-accent text-accent-fg disabled:opacity-35"
           disabled={!draft.trim()}
+          data-disabled-reason="Write a message first"
           aria-label="Send message"
         >
           <ArrowUp className="size-4" />

@@ -1,4 +1,5 @@
 import type {
+  AgentCapabilityOptions,
   AgentTurnSettledEvent,
   AppBundleStore,
   CapabilityProviderRuntime,
@@ -16,7 +17,9 @@ import type {
   Identity,
   McpToolKindSpec,
   NativeAgentCheckout,
+  ProjectEventSourceProvider,
   ProjectLifecycleHooks,
+  PushNotificationTransport,
   RetentionConfig,
   TriggerKindRuntime,
 } from "@catamorphic/core";
@@ -31,7 +34,12 @@ import {
   migrateToLatest,
 } from "@catamorphic/db";
 import type { ProjectPathResolver } from "@catamorphic/git";
-import { FsBackend, FsRemoteBackend, ProjectManager } from "@catamorphic/git";
+import {
+  CheckoutRemoteBackend,
+  FsBackend,
+  FsRemoteBackend,
+  ProjectManager,
+} from "@catamorphic/git";
 import type { PluginResolver } from "@catamorphic/plugins";
 import type {
   CodingAgentProvider,
@@ -82,11 +90,18 @@ export type StorageConfig =
        * paths.
        */
       projectPathResolver?: ProjectPathResolver;
+      /** Existing local checkouts use native Git and retain published commits in place. */
+      localCheckouts?: boolean;
     }
   /** Custom `ProjectManager` wiring (e.g. Artifacts remote backend). */
   | { projectManager: ProjectManager };
 
 export interface CreateCatamorphicConfig {
+  agentCapabilities?: AgentCapabilityOptions;
+  /** Stable host identity. Required when `codingAgent` enables sessions. */
+  hostId?: string;
+  /** Optional leased execution instance. The host owns registration/heartbeat. */
+  workerNode?: CatamorphicCoreConfig["workerNode"];
   database: DatabaseConfig;
   storage: StorageConfig;
   /**
@@ -96,8 +111,12 @@ export interface CreateCatamorphicConfig {
   sandboxProvider?: SandboxProvider;
   /** Host-owned realizations of project logical Environments. */
   environmentProvider: EnvironmentProvider;
+  /** Permit authenticated clients to supply explicitly granted local execution. */
+  clientExecution?: boolean;
   credentialVault?: CredentialVault;
   connectionProviders?: readonly ConnectionProvider[];
+  /** Re-resolve current member authority before unattended dispatch. */
+  resolveMemberIdentity?: CatamorphicCoreConfig["resolveMemberIdentity"];
   /** URL resolver for the Fastify plugin's brokered `/connection-mcp` route. */
   connectionMcpUrl?: (args: {
     projectId: string;
@@ -154,6 +173,8 @@ export interface CreateCatamorphicConfig {
    * kind through `scoped.triggers.fire` runs every subscribed workflow.
    */
   triggerKinds?: readonly TriggerKindRuntime[];
+  /** Generic host-owned event sources that feed normalized project events. */
+  projectEventSources?: readonly ProjectEventSourceProvider[];
   /**
    * Which trigger kinds are AI-callable tools, built with `mcpToolKind`.
    * Powers the per-project MCP endpoint: one tool per binding of each
@@ -165,6 +186,8 @@ export interface CreateCatamorphicConfig {
    * a chat trigger kind. Exceptions are swallowed and never delay the turn.
    */
   onAgentTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
+  /** Optional host-owned delivery transport for durable user notifications. */
+  pushNotifications?: PushNotificationTransport;
   /**
    * Boot-registered plugin host halves (ADR 0046), built with
    * `definePlugin`. Each contributes capability providers, project
@@ -264,9 +287,12 @@ function resolveStorage(config: StorageConfig): ProjectManager {
   if ("projectManager" in config) {
     return config.projectManager;
   }
+  const shared = new FsRemoteBackend(config.remotesPath);
+  const roots = config.localCheckouts ? config.projectPathResolver : undefined;
   return new ProjectManager(
     new FsBackend(config.projectsPath, config.projectPathResolver),
-    new FsRemoteBackend(config.remotesPath),
+    roots ? new CheckoutRemoteBackend(roots, shared) : shared,
+    roots,
   );
 }
 
@@ -277,6 +303,7 @@ function resolveStorage(config: StorageConfig): ProjectManager {
  */
 export class Catamorphic {
   private readonly workerHandles = new Set<ExecutionWorkerHandle>();
+  private readonly agentWorkerHandles = new Set<{ stop(): Promise<void> }>();
   readonly core: CatamorphicCore;
 
   private readonly schema: string;
@@ -301,12 +328,17 @@ export class Catamorphic {
       connectionProviders: config.connectionProviders ?? [],
     });
     this.core = createCatamorphicCore({
+      hostId: config.hostId,
+      agentCapabilities: config.agentCapabilities,
+      workerNode: config.workerNode,
       db,
       projectManager: resolveStorage(config.storage),
       sandboxProvider: config.sandboxProvider,
       environmentProvider: config.environmentProvider,
+      clientExecution: config.clientExecution,
       credentialVault: config.credentialVault,
       connectionProviders: contributions.connectionProviders,
+      resolveMemberIdentity: config.resolveMemberIdentity,
       connectionMcpUrl: config.connectionMcpUrl,
       pluginResolver: config.pluginResolver,
       codingAgent: config.codingAgent,
@@ -321,8 +353,10 @@ export class Catamorphic {
       maxAppBundleBytes: config.maxAppBundleBytes,
       github: config.github,
       triggerKinds: contributions.triggerKinds,
+      projectEventSources: config.projectEventSources,
       mcpToolKinds: contributions.mcpToolKinds,
       onAgentTurnSettled: config.onAgentTurnSettled,
+      pushNotifications: config.pushNotifications,
       capabilityProviders: contributions.capabilityProviders,
       projectHooks: contributions.projectHooks,
       projectSeeds: config.projectSeeds,
@@ -368,6 +402,35 @@ export class Catamorphic {
     this.workerHandles.add(handle);
     void handle.done.finally(() => this.workerHandles.delete(handle));
     return handle;
+  }
+
+  /** Recover queued agent work with freshly resolved host identity. */
+  startAgentWorker(
+    options: {
+      resolveIdentity?: (args: {
+        tenantId: string;
+        projectId: string;
+        externalUserId: string;
+      }) => Promise<Identity | null>;
+      pollIntervalMs?: number;
+    } = {},
+  ): { stop(): Promise<void> } {
+    if (!this.core.agentSessions)
+      throw new Error("Coding agent required to start an agent worker");
+    const handle = this.core.agentSessions.startWorker({
+      ...options,
+      resolveIdentity:
+        options.resolveIdentity ??
+        ((args) => this.core.memberships.identityFor(args)),
+    });
+    const owned = {
+      stop: async () => {
+        await handle.stop();
+        this.agentWorkerHandles.delete(owned);
+      },
+    };
+    this.agentWorkerHandles.add(owned);
+    return owned;
   }
 
   redriveExecutionJob(args: {
@@ -443,6 +506,9 @@ export class Catamorphic {
    * are left untouched.
    */
   async close(): Promise<void> {
+    await Promise.allSettled(
+      [...this.agentWorkerHandles].map((handle) => handle.stop()),
+    );
     await Promise.allSettled(
       [...this.workerHandles].map((handle) => handle.stop()),
     );

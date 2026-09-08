@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-24
+- **Service-only unattended rule superseded by:** 0068
 
 ## Context
 

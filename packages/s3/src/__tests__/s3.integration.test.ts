@@ -15,19 +15,30 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { FsBackend, ProjectManager, push } from "@catamorphic/git";
+import {
+  FsBackend,
+  ObjectRemoteBackend,
+  PreconditionFailedError,
+  ProjectManager,
+  push,
+} from "@catamorphic/git";
 import { afterAll, describe, expect, it } from "vitest";
-import { PreconditionFailedError } from "../object-store.js";
 import { S3ObjectStore } from "../s3-object-store.js";
-import { S3RemoteBackend } from "../s3-remote-backend.js";
 
 const BUCKET = process.env.S3_BUCKET ?? "";
 const ACCESS_KEY_ID = process.env.S3_ACCESS_KEY_ID ?? "";
 const SECRET_ACCESS_KEY = process.env.S3_SECRET_ACCESS_KEY ?? "";
 const ENDPOINT = process.env.S3_ENDPOINT || undefined;
 const REGION = process.env.S3_REGION || undefined;
+const EXTERNAL_INTEGRATIONS =
+  process.env.CATAMORPHIC_EXTERNAL_INTEGRATIONS === "1";
 
-const configured = !!(BUCKET && ACCESS_KEY_ID && SECRET_ACCESS_KEY);
+const configured = !!(
+  EXTERNAL_INTEGRATIONS &&
+  BUCKET &&
+  ACCESS_KEY_ID &&
+  SECRET_ACCESS_KEY
+);
 
 async function s3Accessible(): Promise<boolean> {
   if (!configured) return false;
@@ -63,7 +74,7 @@ const PROJECT = crypto.randomUUID();
 const KEY_PREFIX = `catamorphic-test/${crypto.randomUUID()}/`;
 const AUTHOR = { name: "Alice", email: "alice@test.dev" };
 
-describeIf("S3RemoteBackend (integration)", () => {
+describeIf("ObjectRemoteBackend (integration)", () => {
   const store = new S3ObjectStore({
     bucket: BUCKET,
     endpoint: ENDPOINT,
@@ -74,7 +85,7 @@ describeIf("S3RemoteBackend (integration)", () => {
       secretAccessKey: SECRET_ACCESS_KEY,
     },
   });
-  const backend = new S3RemoteBackend({ store, keyPrefix: KEY_PREFIX });
+  const backend = new ObjectRemoteBackend({ store, keyPrefix: KEY_PREFIX });
 
   const tmpDirs: string[] = [];
   async function tmp(prefix: string): Promise<string> {

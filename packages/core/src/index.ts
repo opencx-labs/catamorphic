@@ -13,6 +13,7 @@ export {
   type AppRef,
   type ArtifactRef,
   authorFor,
+  CORE_PROJECT_PERMISSIONS,
   type ConnectionUseRef,
   type ControlPlanePermission,
   type DocumentRef,
@@ -20,6 +21,7 @@ export {
   type ExecutionEnvironmentRef,
   type ExternalUserId,
   hasControlPlanePermission,
+  hasProjectPermission,
   type Identity,
   identityCovers,
   identityMayUseConnection,
@@ -28,6 +30,9 @@ export {
   isScoped,
   mayUseProject,
   narrowIdentity,
+  PROJECT_PERMISSION_PATTERN,
+  type ProjectPermission,
+  type ProjectPermissionRef,
   type ProjectRef,
   SYSTEM_AUTHOR,
   sameArtifact,
@@ -43,6 +48,16 @@ export {
   SEED_SKILLS,
   workspaceFiles,
 } from "./seeds.js";
+export type {
+  AgentCapability,
+  AgentCapabilityContext,
+  AgentCapabilityInvocation,
+  AgentCapabilityOptions,
+} from "./services/agent-capabilities-service.js";
+export {
+  AgentCapabilitiesService,
+  defineAgentCapability,
+} from "./services/agent-capabilities-service.js";
 export { AgentContextService } from "./services/agent-context-service.js";
 export {
   AGENT_COORDINATION_STRATEGIES,
@@ -55,6 +70,9 @@ export {
   type AgentDefinitionKind,
   AgentDefinitionSchema,
   AgentDefinitionsService,
+  type AgentDelegationPolicy,
+  AgentDelegationPolicySchema,
+  AgentDelegationRouteSchema,
   type AgentEnvironmentPolicy,
   agentDefinitionSchema,
   definitionHash,
@@ -66,21 +84,55 @@ export {
   validateAgentDefinition,
 } from "./services/agent-definitions-service.js";
 export {
+  AgentRuntimeEventSequenceConflictError,
+  AgentRuntimeEventsService,
+  AgentRuntimeSessionNotFoundError,
+} from "./services/agent-runtime-events-service.js";
+export {
+  AgentRequestAlreadyResolvedError,
+  AgentRuntimeRequestConflictError,
+  AgentRuntimeRequestNotFoundError,
+  AgentRuntimeRequestsService,
+} from "./services/agent-runtime-requests-service.js";
+export {
+  AgentDelegationDeniedError,
   type AgentMessage,
   AgentNotConfiguredError,
   type AgentSession,
+  AgentSessionArchiveConfirmationRequiredError,
+  type AgentSessionArchiveImpact,
+  AgentSessionAuthorityRequiredError,
   AgentSessionClosedError,
   type AgentSessionDetail,
+  AgentSessionHandoffPendingError,
   AgentSessionNotFoundError,
   type AgentSessionPeer,
+  type AgentSessionSource,
   AgentSessionsService,
+  type AgentSessionWakeReceipt,
+  type AgentSubsession,
+  type AgentTodo,
+  type AgentTodoInput,
+  type AgentTodoStatus,
   AgentTurnInProgressError,
   type AgentTurnSettledEvent,
+  type ArchiveSessionResourcesHandler,
   type NativeAgentCheckout,
   SessionMirrorDivergedError,
   type SyncedFileChange,
   UnsupportedAgentTopologyError,
 } from "./services/agent-sessions-service.js";
+export {
+  type AgentTurn,
+  type AgentTurnStatus,
+  AgentTurnsService,
+  type PendingSessionTurn,
+  parseSessionMessageAuthor,
+  type SessionDeliveryMode,
+  type SessionDeliveryReceipt,
+  type SessionMessageAuthor,
+} from "./services/agent-turns-service.js";
+export { cleanupWorkerAllocations } from "./services/allocation-sandbox-provider.js";
 export type { AppBundleStore } from "./services/app-bundle-store.js";
 export { appBundleKey, appVersionPrefix } from "./services/app-bundle-store.js";
 export {
@@ -111,8 +163,10 @@ export {
 export {
   AccessDeniedError,
   assertBuilder,
+  assertMayManageRolePolicy,
   assertRootIdentity,
   assertScopeAllowsWorkflow,
+  isRolePolicyPath,
   type ResolvedScope,
   resolveScope,
 } from "./services/artifact-scope.js";
@@ -128,6 +182,12 @@ export {
   ReservedCapabilityEnvError,
   UnfulfilledCapabilityError,
 } from "./services/capability-providers.js";
+export {
+  type ClientRunnerOperation,
+  ClientRunnerOperationSchema,
+  ClientRunnerResultSchema,
+  ClientRunnersService,
+} from "./services/client-runners-service.js";
 export type {
   CodeHost,
   PullRequestFile,
@@ -202,6 +262,7 @@ export {
 export {
   contentTypeFor,
   type DocumentBlobStore,
+  DocumentBlobUnavailableError,
   DocumentConflictError,
   type DocumentContent,
   type DocumentEntry,
@@ -217,6 +278,8 @@ export {
   normalizeDocumentPath,
   STORE_ROOT,
 } from "./services/documents-service.js";
+export { DurableToolPermissionBroker } from "./services/durable-tool-permission-broker.js";
+export { EncryptedCredentialVault } from "./services/encrypted-credential-vault.js";
 export {
   type EnvironmentAllocationPolicy,
   type ExecutionAllocation,
@@ -245,12 +308,14 @@ export {
   type ExecutionWorkerOptions,
   ExecutionWorkerService,
 } from "./services/execution-worker-service.js";
+export { GithubProjectEventSource } from "./services/github-event-source.js";
 export {
   type GithubConnectionStatus,
   GithubNotConnectedError,
   GithubService,
   type GithubServiceConfig,
   GithubTokenExpiredError,
+  githubEventKind,
   type ImportGithubRepoInput,
   ProjectNotLinkedToGithubError,
 } from "./services/github-service.js";
@@ -276,13 +341,26 @@ export {
   parseProjectEnvironmentPolicy,
 } from "./services/project-environments-service.js";
 export {
+  type EventSourcePlacement,
+  type ProjectEventMonitor,
+  ProjectEventMonitorsService,
+  type ProjectEventSourceProvider,
+  startProjectEventMonitorWorker,
+} from "./services/project-event-monitors-service.js";
+export {
+  type ProjectEvent,
+  ProjectEventsService,
+} from "./services/project-events-service.js";
+export {
   type CreateProjectInput,
   type ListProjectsInput,
   type ListProjectsResult,
   type Project,
   ProjectDeprovisioningError,
+  ProjectFileConflictError,
   type ProjectFileEntry,
   ProjectFileNotFoundError,
+  ProjectFileNotTextError,
   type ProjectLifecycleHooks,
   ProjectNotFoundError,
   ProjectProvisioningError,
@@ -389,15 +467,31 @@ export {
   RunsService,
   SandboxProviderNotConfiguredError,
   type StepStatus,
+  type TriggerPinnedRunInput,
   type TriggerProductionRunInput,
   type WorkflowStepAttempt,
   type WorkflowStepAttemptStatus,
 } from "./services/runs-service.js";
+export { SchedulesService } from "./services/schedules-service.js";
 export {
   type RunStage,
   type SecretStatus,
   SecretsService,
 } from "./services/secrets-service.js";
+export {
+  type SessionAuthority,
+  SessionAuthorityMismatchError,
+  SessionMailboxesService,
+  type SessionMailboxItem,
+  SessionMailboxNotFoundError,
+} from "./services/session-mailboxes-service.js";
+export {
+  type SessionSyncIntent,
+  SessionSyncLeaseError,
+  SessionSyncService,
+  type SessionSyncStatus,
+  SessionSyncWatermarkError,
+} from "./services/session-sync-service.js";
 export {
   humanizeSkillName,
   type ProjectSkill,
@@ -430,6 +524,7 @@ export {
 export {
   type PendingToolPermission,
   ToolPermissionBroker,
+  type ToolPermissionChannel,
 } from "./services/tool-permission-broker.js";
 export {
   renderTriggerTypesModule,
@@ -448,16 +543,57 @@ export {
   triggerKindInfo,
 } from "./services/trigger-kinds.js";
 export {
+  type StoredTriggerBinding,
   type TriggerBindingInfo,
   TriggerBindingsInvalidError,
   type TriggerFireOutcome,
   type TriggerFireResult,
   TriggerKindNotRegisteredError,
   TriggerModeNotAllowedError,
+  TriggerNotEnabledError,
   TriggerPayloadInvalidError,
   type TriggerSuspensionReason,
   TriggersService,
 } from "./services/triggers-service.js";
+export {
+  type NotificationDelivery,
+  type PushNotificationTransport,
+  type PushSubscriptionInput,
+  UserNotificationsService,
+} from "./services/user-notifications-service.js";
+export {
+  startWatcherDispatcher,
+  type Watcher,
+  WatchersService,
+} from "./services/watchers-service.js";
+export type { WorkerCapacity } from "./services/worker-capacity.js";
+export {
+  capacityFits,
+  EnvironmentCapacityError,
+} from "./services/worker-capacity.js";
+export {
+  type WorkerNode,
+  type WorkerNodeLease,
+  WorkerNodesService,
+} from "./services/worker-nodes-service.js";
+export { workflowEnablementConsentDigest } from "./services/workflow-enablement-consent.js";
+export type {
+  RevalidatedWorkflowEnablement,
+  WorkflowEnablement,
+  WorkflowEnablementConnection,
+  WorkflowEnablementOwner,
+  WorkflowEnablementPreview,
+  WorkflowEnablementStatus,
+  WorkflowEnablementSuspensionReason,
+  WorkflowEnablementTrigger,
+} from "./services/workflow-enablement-types.js";
+export {
+  WorkflowEnablementConflictError,
+  WorkflowEnablementConsentRequiredError,
+  WorkflowEnablementNotFoundError,
+  WorkflowEnablementSuspendedError,
+  WorkflowEnablementsService,
+} from "./services/workflow-enablements-service.js";
 export {
   type WorkflowDetail,
   WorkflowNotFoundError,

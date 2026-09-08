@@ -89,7 +89,7 @@ describe("interrupted turn recovery", () => {
       },
     );
     const sessionId = await runWait<string>(
-      `return $('[data-chat-session]')?.dataset.chatSession;`,
+      `return $('[data-session-id]')?.dataset.sessionId;`,
       { label: "persisted session before the kill" },
     );
     const { userDataDir } = app;
@@ -103,16 +103,21 @@ describe("interrupted turn recovery", () => {
       { timeoutMs: 60_000, label: "embedded server ready after relaunch" },
     );
     await runWait(
-      `const chat = document.querySelector('[data-chat-session="${sessionId}"] button');
+      `const chat = document.querySelector('[data-session-id="${sessionId}"] button');
        if (!chat) return false; chat.click(); return true;`,
       { timeoutMs: 30_000, label: "orphaned session in the sidebar" },
     );
 
     // The dead turn reads as a finished, interrupted message — not an
     // eternal "Thinking..." spinner.
+    // Durable turns keep a 60-second worker lease across process death.
+    // Recovery must wait for that lease to expire before declaring it orphaned.
     await runWait(
       `return timelineMessages().some((m) => m.includes('interrupted before it finished'));`,
-      { timeoutMs: 30_000, label: "interrupted message in the timeline" },
+      {
+        timeoutMs: 90_000,
+        label: "interrupted message after the worker lease expires",
+      },
     );
     expect(await run<string[]>(`return activityLines();`)).toEqual([]);
     expect(await run<number>(`return spinnersOn();`)).toBe(0);

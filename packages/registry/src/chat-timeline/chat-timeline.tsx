@@ -8,11 +8,12 @@ import {
   LoaderCircle,
   Pencil,
   Radio,
+  RotateCcw,
   SquareTerminal,
   Wrench,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import Markdown from "react-markdown";
+import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
@@ -44,6 +45,8 @@ export interface ChatTimelineProps {
   activity?: string;
   /** Number of queued messages beyond the in-flight one. */
   queuedCount?: number;
+  /** Re-run the last failed turn in place. */
+  onRetry?: () => void;
   error?: string | null;
   emptyState?: string;
   className?: string;
@@ -60,13 +63,26 @@ export interface ChatTimelineProps {
    */
   onLinkClick?: (
     url: string,
-    modifiers: { metaKey: boolean; shiftKey: boolean },
+    modifiers: {
+      metaKey: boolean;
+      ctrlKey: boolean;
+      altKey: boolean;
+      shiftKey: boolean;
+    },
   ) => void;
   /**
    * A changed-file chip was clicked. Hosts open the file (e.g. in an
    * editor surface). Without it the chips stay inert.
    */
-  onFileClick?: (path: string) => void;
+  onFileClick?: (
+    path: string,
+    modifiers?: {
+      metaKey: boolean;
+      ctrlKey: boolean;
+      shiftKey: boolean;
+      altKey: boolean;
+    },
+  ) => void;
   /**
    * Icon URL for a tool name (MCP tools are `server/tool`; the host maps
    * the server key to its connector icon). Undefined → generic glyph.
@@ -84,6 +100,7 @@ export function ChatTimeline({
   messages,
   activity,
   queuedCount = 0,
+  onRetry,
   error,
   emptyState = "Ask the agent to build or change your project.",
   className = "",
@@ -92,6 +109,10 @@ export function ChatTimeline({
   onFileClick,
   resolveToolIcon,
 }: ChatTimelineProps) {
+  const lastConversationId = [...messages]
+    .reverse()
+    .find((message) => message.role !== "system")?.id;
+  const hasRetryableTurn = messages.some((message) => message.role === "user");
   return (
     <StickToBottom
       className={`relative overflow-hidden ${className}`}
@@ -114,6 +135,8 @@ export function ChatTimeline({
             onLinkClick={onLinkClick}
             onFileClick={onFileClick}
             resolveToolIcon={resolveToolIcon}
+            actionable={message.id === lastConversationId}
+            onRetry={hasRetryableTurn ? onRetry : undefined}
           />
         ))}
         {activity && (
@@ -164,16 +187,34 @@ function Message({
   onLinkClick,
   onFileClick,
   resolveToolIcon,
+  actionable,
+  onRetry,
 }: {
   message: ChatTimelineMessage;
   onLinkClick?: (
     url: string,
-    modifiers: { metaKey: boolean; shiftKey: boolean },
+    modifiers: {
+      metaKey: boolean;
+      ctrlKey: boolean;
+      altKey: boolean;
+      shiftKey: boolean;
+    },
   ) => void;
-  onFileClick?: (path: string) => void;
+  onFileClick?: (
+    path: string,
+    modifiers?: {
+      metaKey: boolean;
+      ctrlKey: boolean;
+      shiftKey: boolean;
+      altKey: boolean;
+    },
+  ) => void;
   resolveToolIcon?: (toolName: string) => string | undefined;
+  actionable: boolean;
+  onRetry?: () => void;
 }) {
   const files = changedFiles(message);
+  const metadata = asRecord(message.metadata);
   const [entered, setEntered] = useState(false);
 
   // Double rAF: the first frame aligns with the commit, the second
@@ -192,6 +233,47 @@ function Message({
       if (second !== undefined) cancelAnimationFrame(second);
     };
   }, []);
+
+  if (message.role === "assistant" && metadata?.status === "failed") {
+    const partialContent =
+      typeof metadata.partialContent === "string"
+        ? metadata.partialContent.trim()
+        : "";
+    return (
+      <div className="flex flex-col gap-2">
+        {partialContent && (
+          <article
+            className="mr-auto max-w-[85%] text-sm"
+            data-testid="chat-partial-response"
+          >
+            <div className="cat-markdown min-w-0 break-words leading-6">
+              <Markdown remarkPlugins={REMARK_PLUGINS}>
+                {partialContent}
+              </Markdown>
+            </div>
+          </article>
+        )}
+        <article
+          className="mr-auto max-w-[85%] rounded-xl border border-danger/40 bg-danger/5 px-3 py-2.5 text-sm"
+          data-testid="chat-error-card"
+        >
+          <div className="whitespace-pre-wrap break-words leading-6 text-fg">
+            {message.content}
+          </div>
+          {actionable && onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="mt-2 flex cursor-pointer items-center gap-1.5 rounded-md border border-border bg-bg-raised px-2.5 py-1 text-xs font-medium text-fg"
+              data-testid="chat-retry"
+            >
+              <RotateCcw className="size-3" /> Retry
+            </button>
+          )}
+        </article>
+      </div>
+    );
+  }
 
   return (
     <article
@@ -218,6 +300,15 @@ function Message({
         <div className="cat-markdown min-w-0 break-words leading-6">
           <Markdown
             remarkPlugins={REMARK_PLUGINS}
+            urlTransform={(url, key) =>
+              onLinkClick &&
+              key === "href" &&
+              /^(?:file|workflow|app|chat|browser|terminal|editor|diff|mcpapp):/i.test(
+                url,
+              )
+                ? url
+                : defaultUrlTransform(url)
+            }
             components={
               onLinkClick
                 ? {
@@ -229,6 +320,8 @@ function Message({
                           if (href) {
                             onLinkClick(href, {
                               metaKey: event.metaKey,
+                              ctrlKey: event.ctrlKey,
+                              altKey: event.altKey,
                               shiftKey: event.shiftKey,
                             });
                           }
@@ -252,7 +345,15 @@ function Message({
               <button
                 key={file}
                 type="button"
-                onClick={() => onFileClick(file)}
+                data-file-path={file}
+                onClick={(event) =>
+                  onFileClick(file, {
+                    metaKey: event.metaKey,
+                    ctrlKey: event.ctrlKey,
+                    shiftKey: event.shiftKey,
+                    altKey: event.altKey,
+                  })
+                }
                 className="cursor-pointer rounded border border-success/50 bg-success/10 px-1.5 py-0.5 font-mono text-[11px] text-success transition-colors duration-100 hover:bg-success/20"
               >
                 {file}
@@ -283,6 +384,8 @@ interface TurnStep {
   toolName?: string;
   /** Preformatted expandable body (tool input/result, full command). */
   detail?: string;
+  /** Technical payloads use mono; host-tool summaries read as normal prose. */
+  detailMono?: boolean;
 }
 
 const STEP_ICONS = {
@@ -305,6 +408,8 @@ const TOOL_STEP_LABELS: Record<string, string> = {
   AskUserQuestion: "Asked you a question",
   ask_user: "Asked you a question",
   TodoWrite: "Updated the plan",
+  read_todo_list: "Read the todo list",
+  update_todo_list: "Updated the todo list",
   // Reading and searching the project.
   Read: "Read files",
   read: "Read files",
@@ -340,7 +445,58 @@ const TOOL_STEP_LABELS: Record<string, string> = {
   build_app: "Built an app",
   sync_project: "Synced the project",
   create_pull_request: "Opened a pull request",
+  list_project_sessions: "Listed project chats",
+  read_project_session: "Read a project chat",
+  send_project_session_message: "Messaged a project chat",
+  spawn_subsession: "Started a subsession",
+  list_subsessions: "Listed subsessions",
+  wait_for_subsessions: "Waited for subsessions",
+  interrupt_subsession: "Stopped a subsession",
+  request_user_attention: "Requested your attention",
+  set_session_activity: "Updated activity",
+  list_worktrees: "Listed worktrees",
+  create_worktree: "Created a worktree",
+  use_worktree: "Switched worktrees",
+  use_project_checkout: "Switched to the project checkout",
+  request_connection: "Requested a connection",
+  read_skill: "Read a skill",
 };
+
+const DESKTOP_STEP_TOOLS = new Set([
+  "TodoWrite",
+  "list_project_sessions",
+  "read_project_session",
+  "send_project_session_message",
+  "spawn_subsession",
+  "list_subsessions",
+  "wait_for_subsessions",
+  "interrupt_subsession",
+  "request_user_attention",
+  "set_session_activity",
+  "read_todo_list",
+  "update_todo_list",
+  "list_worktrees",
+  "create_worktree",
+  "use_worktree",
+  "use_project_checkout",
+  "build_app",
+  "open_surface",
+  "point_at",
+  "clear_pointers",
+  "workspace_overview",
+  "read_tab",
+  "open_browser",
+  "browser_snapshot",
+  "browser_act",
+  "run_terminal",
+  "read_terminal",
+  "write_terminal",
+  "sync_project",
+  "create_pull_request",
+  "request_connection",
+  "read_skill",
+  "surface_control",
+]);
 
 /**
  * Bookkeeping calls, not work the reader cares about — the title/icon
@@ -375,6 +531,155 @@ function stepDetailText(value: unknown): string | undefined {
     : text;
 }
 
+function friendlyFieldLabel(field: string): string {
+  const spaced = field
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replaceAll("_", " ");
+  return `${spaced.charAt(0).toUpperCase()}${spaced.slice(1)}`;
+}
+
+function friendlyScalar(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return String(value);
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  return undefined;
+}
+
+function friendlyStatus(value: string): string {
+  return value === "in_progress"
+    ? "In progress"
+    : `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+}
+
+/** Plain-language field list for desktop-owned tools, never a JSON dump. */
+function friendlyDetailLines(value: unknown, indent = "", depth = 0): string[] {
+  const scalar = friendlyScalar(value);
+  if (scalar !== undefined) return [`${indent}${scalar}`];
+  if (value === null || value === undefined) return [];
+  if (depth > 3) return [`${indent}More details available`];
+  if (Array.isArray(value)) {
+    if (value.length === 0) return [`${indent}None`];
+    return value.flatMap((item, index) => {
+      const record = asRecord(item);
+      if (!record) {
+        return friendlyDetailLines(item, `${indent}• `, depth + 1);
+      }
+      const headlineEntry = ["title", "label", "name", "key", "path", "url"]
+        .map((key) => [key, friendlyScalar(record[key])] as const)
+        .find((entry) => entry[1] !== undefined);
+      const lines = [`${indent}• ${headlineEntry?.[1] ?? `Item ${index + 1}`}`];
+      for (const [key, child] of Object.entries(record)) {
+        if (key === headlineEntry?.[0] || key === "id") continue;
+        const childScalar = friendlyScalar(child);
+        if (childScalar !== undefined) {
+          lines.push(
+            `${indent}  ${friendlyFieldLabel(key)}: ${key === "status" ? friendlyStatus(childScalar) : childScalar}`,
+          );
+          continue;
+        }
+        const nested = friendlyDetailLines(child, `${indent}    `, depth + 1);
+        if (nested.length > 0) {
+          lines.push(`${indent}  ${friendlyFieldLabel(key)}:`);
+          lines.push(...nested);
+        }
+      }
+      return lines;
+    });
+  }
+  const record = asRecord(value);
+  if (!record) return [];
+  if (Object.keys(record).length === 1 && record.ok === true) return ["Done"];
+  const lines: string[] = [];
+  for (const [key, child] of Object.entries(record)) {
+    if (key === "id") continue;
+    const childScalar = friendlyScalar(child);
+    if (childScalar !== undefined) {
+      lines.push(
+        `${indent}${friendlyFieldLabel(key)}: ${key === "status" ? friendlyStatus(childScalar) : childScalar}`,
+      );
+      continue;
+    }
+    const nested = friendlyDetailLines(child, `${indent}  `, depth + 1);
+    if (nested.length > 0) {
+      lines.push(`${indent}${friendlyFieldLabel(key)}:`);
+      lines.push(...nested);
+    }
+  }
+  return lines;
+}
+
+function friendlyStepDetail(value: unknown): string | undefined {
+  const text = friendlyDetailLines(value).join("\n").trim();
+  if (!text) return undefined;
+  return text.length > STEP_DETAIL_MAX
+    ? `${text.slice(0, STEP_DETAIL_MAX)}\n… truncated`
+    : text;
+}
+
+function todoStepDetail(input: unknown, result: unknown): string | undefined {
+  const inputRecord = asRecord(input);
+  const inputItems = inputRecord?.items ?? inputRecord?.todos;
+  const resultRecord = asRecord(result);
+  const items = Array.isArray(inputItems)
+    ? inputItems
+    : Array.isArray(resultRecord?.items)
+      ? resultRecord.items
+      : undefined;
+  if (!items) return friendlyStepDetail(result);
+  if (items.length === 0) return "Cleared the todo list.";
+  const lines = items.flatMap((item) => {
+    const todo = asRecord(item);
+    if (!todo) return [];
+    const title =
+      friendlyScalar(todo.title) ??
+      friendlyScalar(todo.content) ??
+      "Untitled task";
+    const description =
+      friendlyScalar(todo.description) ?? friendlyScalar(todo.activeForm);
+    const status = friendlyScalar(todo.status);
+    const marker =
+      status === "completed" ? "✓" : status === "in_progress" ? "●" : "○";
+    return [`${marker} ${title}`, ...(description ? [`  ${description}`] : [])];
+  });
+  const completed = friendlyScalar(resultRecord?.completed);
+  const total = friendlyScalar(resultRecord?.total);
+  if (completed && total) lines.push("", `${completed} of ${total} complete`);
+  return lines.join("\n");
+}
+
+function toolStepDetail(
+  toolName: string,
+  input: unknown,
+  result: unknown,
+): string | undefined {
+  if (
+    toolName === "TodoWrite" ||
+    toolName === "update_todo_list" ||
+    toolName === "read_todo_list"
+  ) {
+    return todoStepDetail(input, result);
+  }
+  if (!DESKTOP_STEP_TOOLS.has(toolName)) {
+    const rawInput = stepDetailText(input);
+    const rawResult = stepDetailText(result);
+    return stepDetailText(
+      [rawInput && `Input:\n${rawInput}`, rawResult && `Result:\n${rawResult}`]
+        .filter(Boolean)
+        .join("\n\n"),
+    );
+  }
+  const friendlyInput = friendlyStepDetail(input);
+  const friendlyResult = friendlyStepDetail(result);
+  return stepDetailText(
+    [
+      friendlyInput && `Input\n${friendlyInput}`,
+      friendlyResult && `Result\n${friendlyResult}`,
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+  );
+}
+
 /**
  * The turn's steps, from the persisted per-message event log
  * (`metadata.events`). The chat keeps its prose calm — this is where the
@@ -402,6 +707,7 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
             .filter(Boolean)
             .join("\n\n"),
         ),
+        detailMono: true,
       });
     } else if (event.type === "file_edit") {
       const path = typeof event.filePath === "string" ? event.filePath : "";
@@ -415,18 +721,13 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
         typeof event.toolName === "string" ? event.toolName : "tool";
       if (HIDDEN_STEP_TOOLS.has(toolName)) continue;
       const pretty = toolStepLabel(toolName);
-      const input = stepDetailText(event.toolInput);
-      const result = stepDetailText(event.toolResult);
       steps.push({
         kind: "tool",
         label: pretty.label,
         mono: pretty.mono,
         toolName,
-        detail: stepDetailText(
-          [input && `Input:\n${input}`, result && `Result:\n${result}`]
-            .filter(Boolean)
-            .join("\n\n"),
-        ),
+        detail: toolStepDetail(toolName, event.toolInput, event.toolResult),
+        detailMono: !DESKTOP_STEP_TOOLS.has(toolName),
       });
     } else if (event.type === "subagent" && event.status !== "ended") {
       steps.push({
@@ -541,7 +842,7 @@ function StepRow({ step, iconUrl }: { step: TurnStep; iconUrl?: string }) {
         >
           <div className="overflow-hidden">
             <pre
-              className="mb-1 ml-6 mt-0.5 max-h-56 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-bg-inset p-2 font-mono text-[11px] leading-4 text-fg-muted"
+              className={`mb-1 ml-6 mt-0.5 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-bg-inset p-2 text-[11px] leading-4 text-fg-muted ${step.detailMono ? "font-mono" : "font-sans"}`}
               data-testid="chat-step-detail"
             >
               {step.detail}
@@ -555,42 +856,21 @@ function StepRow({ step, iconUrl }: { step: TurnStep; iconUrl?: string }) {
 
 /**
  * Derive the visible timeline from raw agent-session messages: hides
- * in-progress assistant placeholders and surfaces them as an activity line.
+ * in-progress assistant placeholders. Activity comes from execution state.
  * When the latest assistant message is awaiting user input, its parsed
  * questions are exposed so hosts can render an answer UI.
  */
 export function toTimeline(
   persisted: AgentMessage[],
   optimistic: ChatTimelineMessage[],
-  isSending: boolean,
+  activity: string | undefined,
 ): {
   messages: ChatTimelineMessage[];
   activity: string | undefined;
   questions: AgentQuestion[] | undefined;
 } {
   const messages = [...persisted, ...optimistic].filter(isConversationMessage);
-  const pending = latestPendingAssistant(persisted);
-  const activity =
-    pending !== undefined
-      ? calmActivity(pending.content)
-      : isSending && optimistic.length > 0
-        ? "Thinking..."
-        : undefined;
   return { messages, activity, questions: pendingQuestions(persisted) };
-}
-
-/**
- * The live activity line shows only calm verbs ("Working...", "Editing
- * files..."). If a host streams the upcoming message's body into the
- * in-progress row, echoing it here would show the same words twice — once
- * faded beside the spinner, then again as the message itself — so
- * message-shaped content falls back to a generic verb.
- */
-function calmActivity(content: string | null | undefined): string {
-  const text = (content ?? "").trim();
-  if (!text) return "Thinking...";
-  if (text.includes("\n") || text.length > 80) return "Working...";
-  return text;
 }
 
 /**
@@ -638,20 +918,6 @@ function pendingQuestions(
     ];
   });
   return questions.length > 0 ? questions : undefined;
-}
-
-function latestPendingAssistant(
-  messages: AgentMessage[],
-): AgentMessage | undefined {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role === "assistant") {
-      return asRecord(message.metadata)?.status === "in_progress"
-        ? message
-        : undefined;
-    }
-  }
-  return undefined;
 }
 
 function isConversationMessage(message: ChatTimelineMessage): boolean {

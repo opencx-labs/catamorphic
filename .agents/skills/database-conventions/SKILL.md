@@ -15,6 +15,15 @@ Catamorphic always lives in its own `catamorphic` schema (hosts mount it inside 
 
 ## Connection
 
+[ADR 0099](../../../docs/decisions/0099-shared-postgres-server-environments.md)
+requires network Postgres for managed multi-instance deployments. PGlite remains
+standalone, never concurrently opened as a shared cluster database. Durable
+coordination belongs in the same schema-scoped Postgres using claims, leases,
+and fencing. Distinguish shared authority from individual instance identity.
+Database configuration alone does not coordinate files, vaults, or live runtimes;
+see the [cluster setup reference](../../../skills/setup-catamorphic-server/references/cluster-deployment.md)
+for current gaps. Verify migration coordination before concurrent replica boot.
+
 Two supported shapes (see `docs/decisions/0003`):
 
 ```typescript
@@ -60,8 +69,16 @@ bun run db:codegen
 
 ## Current table groups
 
-- Project/host integration: `tenants`, `projects`, `project_plugins`,
-  `project_secrets`, `project_sandboxes`, `agent_sessions`, `agent_messages`.
+- Project/host integration: `tenants`, `projects`, `memberships`, project
+  plugins/secrets/sandboxes, store documents/versions, apps/versions/storage,
+  publications, and stock admission policy/invitation/request tables.
+- Agent sessions: `agent_sessions`, `agent_turns`, `agent_messages`,
+  `agent_session_views`, `agent_delegations`, `session_mailbox_items`, runtime
+  events/requests, sync intents, notification events/deliveries, and push
+  subscriptions.
+- Workflow enablement and host activity: `workflow_enablements` plus its
+  connection/trigger/event tables, `watchers`, `watcher_runs`, schedule
+  bindings/occurrences, and project events/monitors.
 - Deployment/runtime: `deployment_artifacts`, `deployment_runtimes`,
   `execution_jobs`, `rate_reservation_buckets`.
 - Canonical Runs: `workflow_runs`, `workflow_run_states`,
@@ -76,6 +93,20 @@ and identified by `(projectId, workflowName)`. Every invocation uses
 `workflow_runs`; capability-specific state is keyed by Run and workflow-step
 attempt rather than a separate Run table.
 
+Workflow-woken conversations use `agent_sessions.wake_key` with one partial
+unique index over active `(project_id, external_user_id, wake_key)` rows.
+Attention is a monotonic revision pair on that same session, not a notification
+inbox table: settlement increments `attention_revision`; opening copies it to
+`attention_seen_revision`. Preserve the check that seen never exceeds current
+and do both mutations atomically in SQL.
+
+Session hierarchy (`parent_session_id`), fork lineage
+(`forked_from_session_id`), and delegation (`agent_delegations`) are separate
+relationships. Archive is durable recursive presentation/lifecycle state, not
+a client preference. Cross-host and cross-session delivery goes through the
+persisted mailbox and authority fencing; do not bypass it with direct callbacks
+or transcript mirroring.
+
 ## Querying
 
 ```typescript
@@ -89,3 +120,10 @@ const runs = await db
   .execute();
 // row type: Selectable<DB["workflow_runs"]>
 ```
+
+Managed workspace budgets live on `worker_nodes`; durable reservations and
+sandbox ownership live on `execution_allocations` (ADR 0100). Lock the node row
+before checking aggregate reservations and inserting an allocation in the same
+transaction. `status = released` retires work, while `capacity_released_at` means
+physical teardown was confirmed. Do not collapse those two states or reclaim
+capacity from expired leases alone.

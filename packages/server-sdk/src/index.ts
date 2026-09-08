@@ -106,6 +106,7 @@ export type {
   CapabilityProviderRuntime,
   DocumentRef,
   Identity,
+  ProjectEventSourceProvider,
   ProjectLifecycleHooks,
   RunCallOutcome,
   RunSuspensionReason,
@@ -117,11 +118,20 @@ export type {
   TriggerKindRuntime,
   TriggerMode,
   TriggerSuspensionReason,
+  WorkerCapacity,
+  WorkerNode,
+  WorkerNodeLease,
+  WorkflowEnablement,
+  WorkflowEnablementOwner,
+  WorkflowEnablementPreview,
   WorkflowRef,
 } from "@catamorphic/core";
 export {
   CapabilityResolutionError,
+  cleanupWorkerAllocations,
   DuplicateCapabilityProviderError,
+  EncryptedCredentialVault,
+  EnvironmentCapacityError,
   ProjectDeprovisioningError,
   ProjectProvisioningError,
   ReservedCapabilityEnvError,
@@ -130,6 +140,7 @@ export {
   TriggerModeNotAllowedError,
   TriggerPayloadInvalidError,
   UnfulfilledCapabilityError,
+  WorkerNodesService,
 } from "@catamorphic/core";
 export type { DB } from "@catamorphic/db";
 export { createDatabase, migrateToLatest } from "@catamorphic/db";
@@ -137,6 +148,7 @@ export type { ProjectPathResolver } from "@catamorphic/git";
 export {
   FsBackend,
   FsRemoteBackend,
+  ObjectRemoteBackend,
   ProjectManager,
 } from "@catamorphic/git";
 export type { PluginResolver } from "@catamorphic/plugins";
@@ -149,12 +161,17 @@ export type {
   EnvironmentRuntimeBinding,
   SandboxProvider,
 } from "@catamorphic/sandbox";
+export { connectionAuthorizationPage } from "./authorization-page.js";
 export type {
   CreateCatamorphicConfig,
   DatabaseConfig,
   StorageConfig,
 } from "./catamorphic.js";
 export { Catamorphic, createCatamorphic } from "./catamorphic.js";
+export {
+  type ClientRunnerTransport,
+  startClientRunner,
+} from "./client-runner.js";
 export type { HostPluginDefinition } from "./define-plugin.js";
 export {
   DuplicatePluginContributionError,
@@ -168,6 +185,16 @@ export {
   mcpToolKind,
 } from "./define-trigger-kind.js";
 export { FsBundleStore } from "./fs-bundle-store.js";
+export {
+  GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
+  githubCheckRun,
+  githubCheckSuite,
+  githubPullRequest,
+  githubPullRequestReview,
+  githubWorkflowRun,
+} from "./github-trigger-kinds.js";
+export { PostgresObjectStore } from "./postgres-object-store.js";
+export { schedule } from "./schedule-trigger-kind.js";
 export type {
   FilesResource,
   GithubResource,
@@ -176,6 +203,7 @@ export type {
   TriggerKindRef,
   TriggersResource,
   WorkflowDetail,
+  WorkflowEnablementsResource,
   WorkflowSummary,
   WorkflowsResource,
 } from "./scoped-client.js";

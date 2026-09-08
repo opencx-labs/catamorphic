@@ -267,9 +267,16 @@ site-nav .nav-links a[aria-current] {
   font-size: 15px;
 }
 
+.download-status {
+  min-height: 21px;
+  margin: 16px 0 0;
+  color: var(--fg-faint);
+  font-size: 13px;
+}
+
 /* install line */
 .install {
-  margin-top: 20px;
+  margin-top: 12px;
   display: inline-flex;
   align-items: center;
   gap: 10px;

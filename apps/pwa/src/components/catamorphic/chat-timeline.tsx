@@ -12,7 +12,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import Markdown from "react-markdown";
+import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
@@ -22,6 +22,7 @@ export interface ChatTimelineMessage {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
+  author?: AgentMessage["author"];
   metadata?: unknown;
 }
 
@@ -60,13 +61,26 @@ export interface ChatTimelineProps {
    */
   onLinkClick?: (
     url: string,
-    modifiers: { metaKey: boolean; shiftKey: boolean },
+    modifiers: {
+      metaKey: boolean;
+      ctrlKey: boolean;
+      altKey: boolean;
+      shiftKey: boolean;
+    },
   ) => void;
   /**
    * A changed-file chip was clicked. Hosts open the file (e.g. in an
    * editor surface). Without it the chips stay inert.
    */
-  onFileClick?: (path: string) => void;
+  onFileClick?: (
+    path: string,
+    modifiers?: {
+      metaKey: boolean;
+      ctrlKey: boolean;
+      shiftKey: boolean;
+      altKey: boolean;
+    },
+  ) => void;
   /**
    * Icon URL for a tool name (MCP tools are `server/tool`; the host maps
    * the server key to its connector icon). Undefined → generic glyph.
@@ -168,9 +182,22 @@ function Message({
   message: ChatTimelineMessage;
   onLinkClick?: (
     url: string,
-    modifiers: { metaKey: boolean; shiftKey: boolean },
+    modifiers: {
+      metaKey: boolean;
+      ctrlKey: boolean;
+      altKey: boolean;
+      shiftKey: boolean;
+    },
   ) => void;
-  onFileClick?: (path: string) => void;
+  onFileClick?: (
+    path: string,
+    modifiers?: {
+      metaKey: boolean;
+      ctrlKey: boolean;
+      shiftKey: boolean;
+      altKey: boolean;
+    },
+  ) => void;
   resolveToolIcon?: (toolName: string) => string | undefined;
 }) {
   const files = changedFiles(message);
@@ -193,16 +220,20 @@ function Message({
     };
   }, []);
 
+  const humanUserMessage =
+    message.role === "user" &&
+    (!message.author || message.author.kind === "user");
+
   return (
     <article
       // transition-[opacity,translate], not transform: Tailwind v4's
       // translate-y-* sets the individual `translate` property, which a
       // `transform` transition does not cover — the slide half of the
       // entrance would snap while only opacity faded.
-      className={`max-w-[85%] text-sm motion-safe:transition-[opacity,translate] motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${entered ? "motion-safe:translate-y-0 motion-safe:opacity-100" : "motion-safe:translate-y-1 motion-safe:opacity-0"} ${message.role === "user" ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2" : "mr-auto"}`}
+      className={`max-w-[85%] text-sm motion-safe:transition-[opacity,translate] motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${entered ? "motion-safe:translate-y-0 motion-safe:opacity-100" : "motion-safe:translate-y-1 motion-safe:opacity-0"} ${humanUserMessage ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2" : message.role === "user" ? "mr-auto rounded-xl rounded-bl-sm border border-border bg-bg-raised px-3 py-2" : "mr-auto"}`}
     >
       <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-fg-faint">
-        {message.role === "user" ? "You" : "Agent"}
+        {deliveryAuthorLabel(message)}
       </div>
       {message.role === "assistant" && (
         <TurnSteps
@@ -218,6 +249,15 @@ function Message({
         <div className="cat-markdown min-w-0 break-words leading-6">
           <Markdown
             remarkPlugins={REMARK_PLUGINS}
+            urlTransform={(url, key) =>
+              onLinkClick &&
+              key === "href" &&
+              /^(?:file|workflow|app|chat|browser|terminal|editor|diff|mcpapp):/i.test(
+                url,
+              )
+                ? url
+                : defaultUrlTransform(url)
+            }
             components={
               onLinkClick
                 ? {
@@ -229,6 +269,8 @@ function Message({
                           if (href) {
                             onLinkClick(href, {
                               metaKey: event.metaKey,
+                              ctrlKey: event.ctrlKey,
+                              altKey: event.altKey,
                               shiftKey: event.shiftKey,
                             });
                           }
@@ -252,7 +294,15 @@ function Message({
               <button
                 key={file}
                 type="button"
-                onClick={() => onFileClick(file)}
+                data-file-path={file}
+                onClick={(event) =>
+                  onFileClick(file, {
+                    metaKey: event.metaKey,
+                    ctrlKey: event.ctrlKey,
+                    shiftKey: event.shiftKey,
+                    altKey: event.altKey,
+                  })
+                }
                 className="cursor-pointer rounded border border-success/50 bg-success/10 px-1.5 py-0.5 font-mono text-[11px] text-success transition-colors duration-100 hover:bg-success/20"
               >
                 {file}
@@ -555,42 +605,21 @@ function StepRow({ step, iconUrl }: { step: TurnStep; iconUrl?: string }) {
 
 /**
  * Derive the visible timeline from raw agent-session messages: hides
- * in-progress assistant placeholders and surfaces them as an activity line.
+ * in-progress assistant placeholders. Activity comes from execution state.
  * When the latest assistant message is awaiting user input, its parsed
  * questions are exposed so hosts can render an answer UI.
  */
 export function toTimeline(
   persisted: AgentMessage[],
   optimistic: ChatTimelineMessage[],
-  isSending: boolean,
+  activity: string | undefined,
 ): {
   messages: ChatTimelineMessage[];
   activity: string | undefined;
   questions: AgentQuestion[] | undefined;
 } {
   const messages = [...persisted, ...optimistic].filter(isConversationMessage);
-  const pending = latestPendingAssistant(persisted);
-  const activity =
-    pending !== undefined
-      ? calmActivity(pending.content)
-      : isSending && optimistic.length > 0
-        ? "Thinking..."
-        : undefined;
   return { messages, activity, questions: pendingQuestions(persisted) };
-}
-
-/**
- * The live activity line shows only calm verbs ("Working...", "Editing
- * files..."). If a host streams the upcoming message's body into the
- * in-progress row, echoing it here would show the same words twice — once
- * faded beside the spinner, then again as the message itself — so
- * message-shaped content falls back to a generic verb.
- */
-function calmActivity(content: string | null | undefined): string {
-  const text = (content ?? "").trim();
-  if (!text) return "Thinking...";
-  if (text.includes("\n") || text.length > 80) return "Working...";
-  return text;
 }
 
 /**
@@ -640,20 +669,6 @@ function pendingQuestions(
   return questions.length > 0 ? questions : undefined;
 }
 
-function latestPendingAssistant(
-  messages: AgentMessage[],
-): AgentMessage | undefined {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role === "assistant") {
-      return asRecord(message.metadata)?.status === "in_progress"
-        ? message
-        : undefined;
-    }
-  }
-  return undefined;
-}
-
 function isConversationMessage(message: ChatTimelineMessage): boolean {
   if (message.role !== "assistant") return true;
   if (asRecord(message.metadata)?.status === "in_progress") return false;
@@ -669,6 +684,23 @@ function changedFiles(message: ChatTimelineMessage): string[] {
     const entry = asRecord(change);
     return typeof entry?.path === "string" ? [entry.path] : [];
   });
+}
+
+function deliveryAuthorLabel(message: ChatTimelineMessage): string {
+  if (message.role === "assistant") return "Agent";
+  if (message.role === "system") return "System";
+  switch (message.author?.kind) {
+    case "agent":
+      return "Agent message";
+    case "workflow":
+      return `Workflow · ${message.author.workflowName}`;
+    case "watcher":
+      return "Watcher";
+    case "system":
+      return "System";
+    default:
+      return "You";
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

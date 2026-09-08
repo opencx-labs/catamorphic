@@ -23,13 +23,35 @@ import {
   CloudflareSandboxProvider,
 } from "@catamorphic/cloudflare";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
-import { createCatamorphic } from "@catamorphic/server-sdk";
+import {
+  createCatamorphic,
+  defineStaticEnvironments,
+} from "@catamorphic/server-sdk";
 
 const artifacts = new ArtifactsClient({
   accountId: process.env.CLOUDFLARE_ACCOUNT_ID!,
   apiToken: process.env.CLOUDFLARE_API_TOKEN!,
   namespace: process.env.CLOUDFLARE_ARTIFACTS_NAMESPACE!,
 });
+const sandboxProvider = new CloudflareSandboxProvider({
+  apiUrl: process.env.CLOUDFLARE_SANDBOX_API_URL!,
+  apiKey: process.env.CLOUDFLARE_SANDBOX_API_KEY,
+});
+const environmentProvider = defineStaticEnvironments([
+  {
+    descriptor: {
+      id: "local",
+      label: "Managed execution",
+      trust: "managed",
+      isolation: "sandbox",
+      workloads: ["agent", "workflow"],
+      agentTopologies: ["controller"],
+      capabilities: ["network.egress"],
+      resources: {},
+    },
+    sandboxProvider,
+  },
+]);
 
 const catamorphic = createCatamorphic({
   database: { connectionString: process.env.DATABASE_URL! },
@@ -42,10 +64,8 @@ const catamorphic = createCatamorphic({
       }),
     ),
   },
-  sandboxProvider: new CloudflareSandboxProvider({
-    apiUrl: process.env.CLOUDFLARE_SANDBOX_API_URL!,
-    apiKey: process.env.CLOUDFLARE_SANDBOX_API_KEY,
-  }),
+  sandboxProvider,
+  environmentProvider,
 });
 ```
 
@@ -64,17 +84,20 @@ const catamorphic = createCatamorphic({
 
 Artifacts is in closed beta. Accounts without access get REST error `10004`
 ("Access denied by feature gate") — `ArtifactsApiError.codes` exposes it so
-hosts can fall back. The playground prefers `S3RemoteBackend` when configured,
-then Artifacts, then `FsRemoteBackend`.
+hosts can select a configured fallback. Storage choice belongs in host boot
+code; Catamorphic libraries do not sniff environment variables or choose a
+backend implicitly.
 
 ## Testing
 
-- `bun run test` — unit tests (mocked fetch).
-- Integration tests (real services, keys from repo root `.env`):
+- `bun run test` from the repo root runs deterministic unit tests with mocked
+  fetch.
+- `bun run test:external` is the explicit authority for credentialed real
+  services. With the required settings present it includes:
   - `src/__tests__/artifacts.integration.test.ts` — full Artifacts round-trip
     (create repo → initial push → seed second working copy → external git
     clone → delete). Auto-skips with a warning while the account is
     feature-gated.
   - `src/__tests__/sandbox-provider.integration.test.ts` — real sandbox exec
-    via the bridge. Opt in with `CF_SANDBOX_INTEGRATION=1` and a running
-    bridge (`bun run dev` in `packages/cloudflare-sandbox-bridge`).
+    via the bridge, with `CF_SANDBOX_INTEGRATION=1` and a running bridge
+    (`bun run dev` in `packages/cloudflare-sandbox-bridge`).

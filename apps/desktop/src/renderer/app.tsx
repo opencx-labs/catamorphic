@@ -1,22 +1,31 @@
 import {
+  useAcknowledgeAgentSessionAttention,
   useAgentSessions,
+  useArchiveAgentSession,
+  useCreateAgentSession,
   useForkAgentSession,
   useProjects,
+  useUnarchiveAgentSession,
   useUpdateAgentSession,
   useWorkflows,
+  workflowKeys,
 } from "@catamorphic/react";
 import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ChevronRight,
   Columns2,
+  Folder,
   FolderPlus,
   GitBranch,
   LayoutGrid,
   Link2,
   MessageSquare,
   PanelLeft,
+  PanelRight,
   Plus,
   Settings as SettingsIcon,
+  Share2,
   Sparkles,
   Wand2,
   Workflow as WorkflowIcon,
@@ -28,14 +37,29 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
-import { type ActionId, KEYBINDING_ACTIONS } from "../shared/actions.js";
+import {
+  type ActionId,
+  BUILTIN_ACTIONS,
+  KEYBINDING_ACTIONS,
+} from "../shared/actions.js";
 import {
   chatBookmarkUrl,
   parseChatBookmarkUrl,
 } from "../shared/bookmark-target.js";
+import {
+  type OpenMode as CommitMode,
+  type OpenModifiers,
+  openModeFromEvent,
+} from "../shared/open-mode.js";
+import {
+  matchesProjectExperience,
+  type ProjectExperienceContext,
+} from "../shared/project-experience.js";
+import { sidebarSections, visibleSidebarConfig } from "../shared/sidebar.js";
 import type { TerminalMacro } from "../shared/terminal-macros.js";
 import {
   type AgentPointer,
@@ -51,10 +75,9 @@ import {
   type ChatSurface,
 } from "./components/chat-dock.js";
 import { ChatGlyph } from "./components/chat-icon.js";
-import {
-  CommandPalette,
-  type CommitMode,
-} from "./components/command-palette.js";
+import { SignalBadge } from "./components/chat-signals.js";
+import { Collapsible } from "./components/collapsible.js";
+import { CommandPalette } from "./components/command-palette.js";
 import { ConfigureAgentModal } from "./components/configure-agent-modal.js";
 import { ConnectorsModal } from "./components/connectors-modal.js";
 import { DeleteProjectModal } from "./components/delete-project-modal.js";
@@ -62,9 +85,12 @@ import {
   ElicitationModal,
   type PendingElicitation,
 } from "./components/elicitation-modal.js";
+import { FilesNav } from "./components/files-nav.js";
 import { FloatingPanelBar } from "./components/floating-panel-bar.js";
 import { GitNav } from "./components/git-nav.js";
 import { MobilePairingModal } from "./components/mobile-pairing-modal.js";
+import { Modal } from "./components/modal.js";
+import { OpenResourceButton } from "./components/open-resource-button.js";
 import { PendingButton } from "./components/pending-button.js";
 import { ProfileBar } from "./components/profile-bar.js";
 import { ProjectAgentConsentDialog } from "./components/project-agent-consent.js";
@@ -76,19 +102,40 @@ import {
   RemotePublishModal,
 } from "./components/remote-actions-modals.js";
 import { RemoteConnectModal } from "./components/remote-connect-modal.js";
+import { RemoteConnectionIndicator } from "./components/remote-connection-indicator.js";
 import { RemoteHistoryModal } from "./components/remote-history-modal.js";
 import { type RemoteFeatures, RemoteNav } from "./components/remote-nav.js";
-import { ShortcutHint } from "./components/shortcut-hint.js";
+import {
+  ArchiveSessionDialog,
+  CreateSubsessionDialog,
+} from "./components/session-lifecycle-dialogs.js";
+import {
+  DisabledControlHints,
+  ShortcutHint,
+} from "./components/shortcut-hint.js";
 import { SidebarItemRow } from "./components/sidebar-item-row.js";
+import {
+  type SessionCommand,
+  SidebarSessionInspector,
+} from "./components/sidebar-session-inspector.js";
+import { SidebarActivity, SidebarNote } from "./components/sidebar-widgets.js";
+import { SiteFavicon } from "./components/site-favicon.js";
+import { TabbedSidebar } from "./components/tabbed-sidebar.js";
 import {
   type PendingToolPermission,
   ToolPermissionModal,
 } from "./components/tool-permission-modal";
+import { UpdateBanner } from "./components/update-banner.js";
 import {
   tabKey,
   type WorkspaceTab,
   WorkspaceTabBar,
 } from "./components/workspace-tabs.js";
+import {
+  type ChatSessionAction,
+  type ChatSessionMenuEntry,
+  chatSessionMenu,
+} from "./lib/chat-session-actions.js";
 import {
   type AgentEffort,
   type AgentsData,
@@ -98,8 +145,10 @@ import {
   type Profile,
   type ProfilesData,
   type ProjectAgentInfo,
+  type RemoteProjectStatus,
   type SessionCheckoutInfo,
   type SidebarConfig,
+  type SidebarItem,
   type SidebarMenuEntry,
   type SidebarSectionConfig,
 } from "./lib/desktop-api.js";
@@ -111,9 +160,17 @@ import {
   useKeybindings,
 } from "./lib/keybindings.js";
 import { notifyDesktop, playChime } from "./lib/notify.js";
+import { transitionSidebarUpdate } from "./lib/sidebar-transition.js";
 import { skillInvocation } from "./lib/skills.js";
+import {
+  isBrowserFile,
+  localFileUrl,
+  parseSurfaceLink,
+  resolveProjectFileLocation,
+} from "./lib/surface-link.js";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "./lib/tab-drag.js";
 import { useSidebarReveal } from "./lib/use-sidebar-reveal.js";
+import { NEW_WORKFLOW_PROMPT } from "./lib/workflow-authoring.js";
 import { AppScreen, useApps } from "./screens/app-screen.js";
 import {
   type BrowserCommands,
@@ -121,11 +178,18 @@ import {
   BrowserScreen,
 } from "./screens/browser-screen.js";
 import { McpAppScreen } from "./screens/mcp-app-screen.js";
+import { ProfileSettingsScreen } from "./screens/profile-settings-screen.js";
 import { SettingsScreen } from "./screens/settings-screen.js";
-import { TerminalScreen } from "./screens/terminal-screen.js";
 
-// Monaco rides in these two screens (~half the renderer bundle); lazy
-// chunks keep it off the startup parse path entirely.
+// Heavy workspace surfaces stay out of the startup parse path. They remain
+// mounted after first use so editor state and terminal sessions survive tab
+// switches, but a session that never opens them never initializes their
+// workers/WASM runtimes.
+const TerminalScreen = lazy(() =>
+  import("./screens/terminal-screen.js").then((module) => ({
+    default: module.TerminalScreen,
+  })),
+);
 const EditorScreen = lazy(() =>
   import("./screens/editor-screen.js").then((module) => ({
     default: module.EditorScreen,
@@ -201,6 +265,9 @@ interface TerminalEntry {
 }
 
 interface EditorEntry {
+  line?: number;
+  column?: number;
+  navigation?: string;
   localId: string;
   /** Open file (project-relative), or null while the picker shows. */
   filePath: string | null;
@@ -311,41 +378,29 @@ const emptyWorkspace = (): Workspace => {
   };
 };
 
+/**
+ * Profile-local, non-persisted browser surface used before a first project
+ * exists. Remote sign-in still belongs in the app, even though there is not
+ * yet a project workspace to own its temporary tab.
+ */
+const emptyUtilityWorkspace = (): Workspace => ({
+  tabs: [],
+  chats: [],
+  browsers: [],
+  terminals: [],
+  editors: [],
+  split: null,
+  tabOrder: [],
+  closedTabs: [],
+});
+
 const chatTabKey = (localId: string) => `chat:${localId}`;
 const browserTabKey = (localId: string) => `browser:${localId}`;
 const terminalTabKey = (localId: string) => `terminal:${localId}`;
 const editorTabKey = (localId: string) => `editor:${localId}`;
 
-const isPdfPath = (filePath: string) => /\.pdf$/i.test(filePath);
-
 const fileNameFromPath = (filePath: string) =>
   filePath.split(/[\\/]/).at(-1) || filePath;
-
-/** Resolve either an absolute agent path or a project-relative file path. */
-const resolveProjectFileLocation = (
-  projectRoot: string,
-  filePath: string,
-): { absolutePath: string; relativePath: string } => {
-  const slashPath = filePath.replaceAll("\\", "/");
-  const slashRoot = projectRoot.replaceAll("\\", "/").replace(/\/$/, "");
-  const absolute =
-    slashPath.startsWith("/") || /^[A-Za-z]:\//.test(slashPath)
-      ? slashPath
-      : `${slashRoot}/${slashPath}`;
-  return {
-    absolutePath: absolute,
-    relativePath: absolute.startsWith(`${slashRoot}/`)
-      ? absolute.slice(slashRoot.length + 1)
-      : slashPath,
-  };
-};
-
-/** A safely encoded local URL for Chromium's built-in PDF viewer. */
-const localFileUrl = (absolutePath: string): string => {
-  const url = new URL("file:///");
-  url.pathname = absolutePath;
-  return url.href;
-};
 
 /**
  * The restart-surviving projection of a workspace, persisted per project
@@ -354,7 +409,8 @@ const localFileUrl = (absolutePath: string): string => {
  * app), sessionless chats (nothing to reopen), unsent composer state,
  * agent-setup tabs (they re-open themselves), and mcpapp tabs (their tool
  * results are runtime data). Editor tabs lose unsaved buffers; browser
- * tabs reopen on their last URL.
+ * tabs reopen on their last URL. Workflow tabs retain their draft source and
+ * baseline so returning to a project can detect external conflicts.
  */
 const serializeWorkspace = (ws: Workspace): Workspace => {
   const chats = ws.chats
@@ -424,7 +480,11 @@ const hydrateWorkspace = (raw: unknown): Workspace | null => {
   if (typeof raw !== "object" || raw === null) return null;
   const snapshot = raw as Partial<Workspace>;
   const ws: Workspace = {
-    tabs: Array.isArray(snapshot.tabs) ? snapshot.tabs : [],
+    tabs: Array.isArray(snapshot.tabs)
+      ? snapshot.tabs.filter(
+          (tab) => tab.kind !== "agent-setup" && tab.kind !== "mcpapp",
+        )
+      : [],
     chats: Array.isArray(snapshot.chats) ? snapshot.chats : [],
     browsers: Array.isArray(snapshot.browsers) ? snapshot.browsers : [],
     terminals: [],
@@ -473,6 +533,7 @@ const chatVisible = (ws: Workspace, chat: ChatDockEntry) =>
 
 /** Tab keys attached to a chat, in per-kind order. */
 const attachedTabKeys = (ws: Workspace, chatLocalId: string) => [
+  ...ws.tabs.filter((tab) => tab.chatLocalId === chatLocalId).map(tabKey),
   ...tabbedBrowsers(ws)
     .filter((browser) => browser.chatLocalId === chatLocalId)
     .map((browser) => browserTabKey(browser.localId)),
@@ -598,7 +659,7 @@ function AgentControlOverlay({
         />
       )}
       <div
-        className={`${exiting ? "" : "pointer-events-auto"} z-10 flex ${anim} items-center gap-2.5 rounded-full border border-border bg-bg-raised/95 py-1.5 pl-3 pr-1.5 text-xs text-fg shadow-2xl backdrop-blur-xl`}
+        className={`${exiting ? "" : "pointer-events-auto"} z-10 flex ${anim} items-center gap-2.5 rounded-full border border-border bg-bg-raised py-1.5 pl-3 pr-1.5 text-xs text-fg shadow-2xl`}
       >
         <span className="relative flex size-2">
           <span className="absolute inline-flex h-full w-full animate-pulse rounded-full bg-accent opacity-75" />
@@ -640,7 +701,7 @@ function PaneUnsplitButton({ onClick }: { onClick: () => void }) {
         <button
           type="button"
           onClick={onClick}
-          className="grid size-7 cursor-pointer place-items-center rounded-lg border border-border bg-bg-raised/95 text-fg-muted backdrop-blur-sm transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+          className="grid size-7 cursor-pointer place-items-center rounded-lg border border-border bg-bg-raised text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
           aria-label="Full width"
         >
           <Columns2 className="size-3.5" />
@@ -650,29 +711,57 @@ function PaneUnsplitButton({ onClick }: { onClick: () => void }) {
   );
 }
 
-/** Whether the floating chat dock is where the user is working right now. */
-let lastPointerDownInFloatingChat = false;
+/** The floating chat dock where the user's last pointer interaction landed. */
+let lastPointerDownInFloatingChatId: string | undefined;
 if (typeof window !== "undefined") {
   window.addEventListener(
     "pointerdown",
     (event) => {
-      lastPointerDownInFloatingChat =
-        event.target instanceof Element &&
-        event.target.closest("[data-floating-chat]") !== null;
+      const floating =
+        event.target instanceof Element
+          ? event.target.closest<HTMLElement>("[data-floating-chat]")
+          : null;
+      lastPointerDownInFloatingChatId =
+        floating?.dataset.chatLocalId || undefined;
     },
     { capture: true },
   );
 }
-function floatingChatHasFocus(): boolean {
+function focusedChatSurfaceId(): string | undefined {
   const active = document.activeElement;
   if (active && active !== document.body) {
-    return active.closest("[data-floating-chat]") !== null;
+    return (
+      active.closest<HTMLElement>("[data-chat-local-id]")?.dataset
+        .chatLocalId || undefined
+    );
   }
-  return lastPointerDownInFloatingChat;
+  return lastPointerDownInFloatingChatId;
 }
 
 export function App() {
+  const queryClient = useQueryClient();
+  useEffect(
+    () =>
+      desktopApi.onGitChanged(({ projectId }) => {
+        void queryClient.invalidateQueries({
+          queryKey: workflowKeys.project({ projectId }),
+        });
+        void queryClient.invalidateQueries({
+          queryKey: ["cat", "project", projectId, "apps"],
+        });
+      }),
+    [queryClient],
+  );
   const projectsQuery = useProjects();
+  // Subscribe to loading/error changes even while the workspace branch is
+  // rendered. Query observers track property reads; recovery cannot depend
+  // on whether the empty-state branch happened to read them last render.
+  const {
+    // A background retry can pause fetching without settling the first load.
+    isPending: projectsLoading,
+    isError: projectsLoadError,
+    isFetching: projectsFetching,
+  } = projectsQuery;
 
   // Boot veil: the window shows nothing but the themed backdrop until the
   // workspace's first paint is complete — profiles, agents, sidebar, and
@@ -682,7 +771,7 @@ export function App() {
   const [activeProjectId, setActiveProjectId] = useState<string>();
   const [workspaces, setWorkspaces] = useState<Record<string, Workspace>>({});
   const [projectModalOpen, setProjectModalOpen] = useState(false);
-  // Remote projects (ADR 0055): connect from a link or by hand; per-file
+  // Remote projects (ADR 0055): connect from an invitation link; per-file
   // store history for the current project.
   const [remoteConnect, setRemoteConnect] = useState<{
     open: boolean;
@@ -704,6 +793,11 @@ export function App() {
     files: string[];
     features: RemoteFeatures | undefined;
   } | null>(null);
+  const [remoteSurfaceState, setRemoteSurfaceState] = useState<{
+    projectId: string;
+    status: RemoteProjectStatus | null;
+  } | null>(null);
+  const syncingRemoteProjectsRef = useRef(new Set<string>());
   useEffect(() => {
     // Pull the pending link on mount (cold launch from an invite) and
     // whenever main nudges; main clears it once taken.
@@ -722,13 +816,15 @@ export function App() {
     null,
   );
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [rightSidebarOpen, setRightSidebarOpen] = useState(true);
+  const [sidebarError, setSidebarError] = useState<string>();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [closingWorkflow, setClosingWorkflow] = useState<string | null>(null);
   // Live per-chat signals reported by each ChatDock (working / draft /
   // awaiting-input); unread is host-derived (needs surface visibility).
   const [signalsByChat, setSignalsByChat] = useState<
     Record<string, ChatLiveSignals>
   >({});
-  const [unreadByChat, setUnreadByChat] = useState<Record<string, boolean>>({});
   // Surfaces an agent opened in the BACKGROUND (open_surface while the
   // user was on another tab): chat localId → surface keys whose chip
   // carries the attention indicator. Cleared when the user opens that
@@ -750,14 +846,44 @@ export function App() {
     void desktopApi.getPrefs().then((loaded) => {
       setPrefs(loaded);
       setSidebarOpen(loaded.sidebarOpen);
+      setRightSidebarOpen(loaded.rightSidebarOpen);
     });
-    return desktopApi.onPrefsChanged((loaded) => {
-      setPrefs(loaded);
-      setSidebarOpen(loaded.sidebarOpen);
+    return desktopApi.onPrefsChanged((next) => {
+      setPrefs(next);
+      setSidebarOpen(next.sidebarOpen);
+      setRightSidebarOpen(next.rightSidebarOpen);
     });
   }, []);
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
+
+  const setSessionListPreference = useCallback(
+    (
+      key: "unreadSessionIds",
+      sessionIds: readonly string[],
+      included: boolean,
+    ) => {
+      const current = prefsRef.current;
+      if (!current || sessionIds.length === 0) return;
+      const changedIds = new Set(sessionIds);
+      const currentIds = current[key];
+      const nextIds = included
+        ? [...new Set([...currentIds, ...sessionIds])]
+        : currentIds.filter((id) => !changedIds.has(id));
+      if (
+        nextIds.length === currentIds.length &&
+        nextIds.every((id, index) => id === currentIds[index])
+      ) {
+        return;
+      }
+      const patch: Partial<AppPrefs> = { unreadSessionIds: nextIds };
+      const next = { ...current, ...patch };
+      prefsRef.current = next;
+      setPrefs(next);
+      void desktopApi.setPrefs(patch);
+    },
+    [],
+  );
 
   // Profiles own the whole environment: session partition, projects,
   // theme/keys/sidebar, and the AI agent roster. Each window is born on a
@@ -779,6 +905,30 @@ export function App() {
   const activeProfile: Profile | undefined =
     profilesData?.profiles.find((profile) => profile.id === activeProfileId) ??
     profilesData?.profiles[0];
+
+  // Profile settings tabs are live views. Keep their strip labels in sync
+  // with renames broadcast from this or another window.
+  useEffect(() => {
+    if (!profilesData) return;
+    const names = new Map(
+      profilesData.profiles.map((profile) => [profile.id, profile.name]),
+    );
+    setWorkspaces((current) =>
+      Object.fromEntries(
+        Object.entries(current).map(([id, workspace]) => [
+          id,
+          {
+            ...workspace,
+            tabs: workspace.tabs.map((tab) =>
+              tab.kind === "profile-settings" && names.has(tab.name)
+                ? { ...tab, label: names.get(tab.name) }
+                : tab,
+            ),
+          },
+        ]),
+      ),
+    );
+  }, [profilesData]);
 
   // The active profile's AI agents (per-profile agents.json).
   const [agentsData, setAgentsData] = useState<AgentsData | null>(null);
@@ -848,6 +998,73 @@ export function App() {
     ) ??
     projects[0];
   const projectId = activeProject?.id;
+  const remoteSurfaceResolved = Boolean(
+    projectId && remoteSurfaceState?.projectId === projectId,
+  );
+  const remoteSurfaceStatus = remoteSurfaceResolved
+    ? (remoteSurfaceState?.status ?? null)
+    : null;
+  const memberShell = !remoteSurfaceResolved
+    ? true
+    : remoteSurfaceStatus !== null &&
+      remoteSurfaceStatus.capabilities?.builder !== true;
+  const projectExperienceContext: ProjectExperienceContext = {
+    root: remoteSurfaceResolved && remoteSurfaceStatus === null,
+    builder: !memberShell,
+    permissions: remoteSurfaceStatus?.capabilities?.permissions ?? [],
+  };
+  const visibleSidebars = visibleSidebarConfig({
+    config: sidebarConfig,
+    context: projectExperienceContext,
+  });
+
+  useEffect(() => {
+    if (!projectId) {
+      setRemoteSurfaceState(null);
+      return;
+    }
+    let cancelled = false;
+    const refresh = (sync = false) => {
+      void desktopApi
+        .remoteStatus(projectId)
+        .then((status) => {
+          if (cancelled) return;
+          setRemoteSurfaceState({ projectId, status });
+          if (
+            sync &&
+            status?.connection.state === "connected" &&
+            !syncingRemoteProjectsRef.current.has(projectId)
+          ) {
+            syncingRemoteProjectsRef.current.add(projectId);
+            void (async () => {
+              await desktopApi.remoteSync(projectId);
+              const nextStatus = await desktopApi.remoteStatus(projectId);
+              if (!cancelled) {
+                setRemoteSurfaceState({ projectId, status: nextStatus });
+              }
+            })()
+              .catch(() => undefined)
+              .finally(() => {
+                syncingRemoteProjectsRef.current.delete(projectId);
+              });
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setRemoteSurfaceState({ projectId, status: null });
+        });
+    };
+    refresh(true);
+    const unsubscribe = desktopApi.onGitChanged((event) => {
+      if (event.projectId === projectId) refresh(true);
+    });
+    const syncOnFocus = () => refresh(true);
+    window.addEventListener("focus", syncOnFocus);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+      window.removeEventListener("focus", syncOnFocus);
+    };
+  }, [projectId]);
 
   const startWithAgent = async (): Promise<void> => {
     const project = await desktopApi.createDefaultProject();
@@ -863,16 +1080,28 @@ export function App() {
 
   // Project policy (ADR 0062): the committed manifest may disable
   // incognito sessions for this project's members.
-  const [incognitoAllowed, setIncognitoAllowed] = useState(true);
+  const [incognitoAllowed, setIncognitoAllowed] = useState(false);
+  const [startingActions, setStartingActions] = useState<
+    Array<{ label: string; prompt: string; agentId?: string }>
+  >([]);
   useEffect(() => {
-    if (!projectId) return;
+    if (!projectId) {
+      setStartingActions([]);
+      return;
+    }
+    setStartingActions([]);
+    setIncognitoAllowed(false);
     let cancelled = false;
-    void desktopApi
-      .projectAllowIncognito(projectId)
-      .then((allowed) => {
-        if (!cancelled) setIncognitoAllowed(allowed);
-      })
-      .catch(() => {});
+    void Promise.allSettled([
+      desktopApi.projectAllowIncognito(projectId),
+      desktopApi.projectStartingActions(projectId),
+    ]).then(([allowed, actions]) => {
+      if (cancelled) return;
+      setIncognitoAllowed(
+        allowed.status === "fulfilled" ? allowed.value : false,
+      );
+      setStartingActions(actions.status === "fulfilled" ? actions.value : []);
+    });
     return () => {
       cancelled = true;
     };
@@ -883,13 +1112,26 @@ export function App() {
   // changes, and on every main-process change signal.
   useEffect(() => {
     let stale = false;
-    const refetch = () => {
+    let request = 0;
+    let signature: string | undefined;
+    const refetch = (animate = false) => {
+      const currentRequest = ++request;
       void desktopApi.sidebarConfigGet(projectId).then((resolved) => {
-        if (!stale) setSidebarConfig(resolved.config);
+        if (stale || currentRequest !== request) return;
+        setSidebarError(resolved.error);
+        const next = JSON.stringify(resolved.config);
+        if (signature === next) return;
+        const apply = () => {
+          if (stale || currentRequest !== request) return;
+          signature = next;
+          setSidebarConfig(resolved.config);
+        };
+        if (animate) transitionSidebarUpdate(apply);
+        else apply();
       });
     };
     refetch();
-    const unsubscribe = desktopApi.onSidebarConfigChanged(refetch);
+    const unsubscribe = desktopApi.onSidebarConfigChanged(() => refetch(true));
     return () => {
       stale = true;
       unsubscribe();
@@ -948,6 +1190,7 @@ export function App() {
       setAgentsData(agents);
       setPrefs(nextPrefs);
       setSidebarOpen(nextPrefs.sidebarOpen);
+      setRightSidebarOpen(nextPrefs.rightSidebarOpen);
       setProfileVeil({ stage: "out" });
     } finally {
       completingSwitchRef.current = false;
@@ -974,10 +1217,199 @@ export function App() {
   }, [profileVeil]);
 
   // Shared with SessionsNav via the query cache; titles feed tab labels.
-  const sessionsQuery = useAgentSessions(projectId);
+  const sessionsQuery = useAgentSessions(projectId, { limit: 100 });
+  const acknowledgeSessionAttention =
+    useAcknowledgeAgentSessionAttention(projectId);
   const sessionsById = new Map(
     (sessionsQuery.data?.items ?? []).map((session) => [session.id, session]),
   );
+  const archiveSession = useArchiveAgentSession(projectId);
+  const unarchiveSession = useUnarchiveAgentSession(projectId);
+  const createSubsession = useCreateAgentSession(projectId);
+  const [subsessionParent, setSubsessionParent] = useState<AgentSession | null>(
+    null,
+  );
+  const [subsessionError, setSubsessionError] = useState<string | null>(null);
+  const [archiveRequest, setArchiveRequest] = useState<{
+    session: AgentSession;
+    sessionIds: string[];
+    terminalSessionIds: string[];
+    processCount: number;
+    runningCount: number;
+    watcherCount: number;
+  } | null>(null);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+
+  const descendantIds = (rootId: string): string[] => {
+    const found = new Set([rootId]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const session of sessionsById.values()) {
+        if (
+          session.parentSessionId &&
+          found.has(session.parentSessionId) &&
+          !found.has(session.id)
+        ) {
+          found.add(session.id);
+          changed = true;
+        }
+      }
+    }
+    return [...found];
+  };
+
+  const terminalSessionsFor = (sessionIds: readonly string[]): string[] => {
+    const ids = new Set(sessionIds);
+    const chatIds = new Set(
+      workspace.chats
+        .filter((chat) => chat.sessionId && ids.has(chat.sessionId))
+        .map((chat) => chat.localId),
+    );
+    return [
+      ...new Set(
+        workspace.terminals
+          .filter((terminal) =>
+            terminal.chatLocalId ? chatIds.has(terminal.chatLocalId) : false,
+          )
+          .flatMap((terminal) =>
+            terminal.ptySessionId ? [terminal.ptySessionId] : [],
+          ),
+      ),
+    ];
+  };
+
+  const removeArchivedWorkspace = (sessionIds: readonly string[]) => {
+    const ids = new Set(sessionIds);
+    updateWorkspace((current) => {
+      const removedChats = new Set(
+        current.chats
+          .filter((chat) => chat.sessionId && ids.has(chat.sessionId))
+          .map((chat) => chat.localId),
+      );
+      const chats = current.chats.filter(
+        (chat) => !removedChats.has(chat.localId),
+      );
+      const browsers = current.browsers.filter(
+        (browser) =>
+          !browser.chatLocalId || !removedChats.has(browser.chatLocalId),
+      );
+      const terminals = current.terminals.filter(
+        (terminal) =>
+          !terminal.chatLocalId || !removedChats.has(terminal.chatLocalId),
+      );
+      const editors = current.editors.filter(
+        (editor) =>
+          !editor.chatLocalId || !removedChats.has(editor.chatLocalId),
+      );
+      const candidate = { ...current, chats, browsers, terminals, editors };
+      return {
+        ...candidate,
+        activeChatId: chats.some(
+          (chat) => chat.localId === current.activeChatId,
+        )
+          ? current.activeChatId
+          : chats.at(-1)?.localId,
+        activeTabKey: orderedTabKeys(candidate).includes(
+          current.activeTabKey ?? "",
+        )
+          ? current.activeTabKey
+          : orderedTabKeys(candidate).at(-1),
+      };
+    });
+  };
+
+  const finishArchive = async (request: NonNullable<typeof archiveRequest>) => {
+    setArchiveError(null);
+    try {
+      await Promise.all(
+        request.terminalSessionIds.map((sessionId) =>
+          desktopApi.terminalKill(sessionId),
+        ),
+      );
+      const result = await archiveSession.mutateAsync({
+        sessionId: request.session.id,
+        confirmStop: true,
+      });
+      removeArchivedWorkspace(result.impact.sessionIds);
+      setArchiveRequest(null);
+    } catch (cause) {
+      setArchiveError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const beginArchive = async (session: AgentSession) => {
+    const sessionIds = descendantIds(session.id);
+    const terminalSessionIds = terminalSessionsFor(sessionIds);
+    if (terminalSessionIds.length > 0) {
+      setArchiveError(null);
+      setArchiveRequest({
+        session,
+        sessionIds,
+        terminalSessionIds,
+        processCount: terminalSessionIds.length,
+        runningCount: sessionIds.filter((id) => sessionsById.get(id)?.running)
+          .length,
+        watcherCount: 0,
+      });
+      return;
+    }
+    try {
+      const result = await archiveSession.mutateAsync({
+        sessionId: session.id,
+      });
+      removeArchivedWorkspace(result.impact.sessionIds);
+    } catch (cause) {
+      const details =
+        cause && typeof cause === "object" && "details" in cause
+          ? (cause.details as {
+              impact?: {
+                sessionIds?: string[];
+                runningSessionIds?: string[];
+                activeWatcherCount?: number;
+                activeProcessCount?: number;
+              };
+            })
+          : undefined;
+      if (details?.impact) {
+        setArchiveError(null);
+        setArchiveRequest({
+          session,
+          sessionIds: details.impact.sessionIds ?? sessionIds,
+          terminalSessionIds,
+          processCount: details.impact.activeProcessCount ?? 0,
+          runningCount: details.impact.runningSessionIds?.length ?? 0,
+          watcherCount: details.impact.activeWatcherCount ?? 0,
+        });
+        return;
+      }
+      setArchiveError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const applySessionAction = (sessionId: string, action: ChatSessionAction) => {
+    const session = sessionsById.get(sessionId);
+    switch (action) {
+      case "new-subsession":
+        if (session) {
+          setSubsessionError(null);
+          setSubsessionParent(session);
+        }
+        break;
+      case "mark-read":
+        setSessionListPreference("unreadSessionIds", [sessionId], false);
+        break;
+      case "mark-unread":
+        setSessionListPreference("unreadSessionIds", [sessionId], true);
+        break;
+      case "archive":
+        if (session) void beginArchive(session);
+        break;
+      case "unarchive":
+        void unarchiveSession.mutateAsync(sessionId);
+        break;
+    }
+  };
 
   // Stable per-project default so pre-first-write renders and the first
   // state update agree on the initial chat's localId.
@@ -991,29 +1423,77 @@ export function App() {
     return created;
   }, []);
 
+  const utilityWorkspaceKey = activeProfile
+    ? `profile:${activeProfile.id}:utility`
+    : null;
+  const workspaceKey = projectId ?? utilityWorkspaceKey;
   const workspace: Workspace = projectId
     ? (workspaces[projectId] ?? defaultWorkspaceFor(projectId))
-    : emptyWorkspace();
+    : utilityWorkspaceKey
+      ? (workspaces[utilityWorkspaceKey] ?? emptyUtilityWorkspace())
+      : emptyUtilityWorkspace();
+  const archivedSessionIds = new Set(
+    [...sessionsById.values()]
+      .filter((session) => session.visibility === "archived")
+      .map((session) => session.id),
+  );
+  const unreadSessionIds = new Set(prefs?.unreadSessionIds ?? []);
+  const unreadByChat: Record<string, boolean> = Object.fromEntries(
+    workspace.chats.map((chat) => [
+      chat.localId,
+      Boolean(chat.sessionId && unreadSessionIds.has(chat.sessionId)),
+    ]),
+  );
+  const attentionByChat: Record<string, boolean> = Object.fromEntries(
+    workspace.chats.map((chat) => [
+      chat.localId,
+      Boolean(
+        chat.sessionId && sessionsById.get(chat.sessionId)?.attentionRequired,
+      ),
+    ]),
+  );
+  const chatMenus: Record<string, ChatSessionMenuEntry[]> = Object.fromEntries(
+    workspace.chats.flatMap((chat) =>
+      chat.sessionId
+        ? [
+            [
+              chat.localId,
+              chatSessionMenu({
+                unread: unreadSessionIds.has(chat.sessionId),
+                archived: archivedSessionIds.has(chat.sessionId),
+              }),
+            ],
+          ]
+        : [],
+    ),
+  );
 
   const updateWorkspace = useCallback(
     (updater: (workspace: Workspace) => Workspace) => {
-      if (!projectId) return;
-      setWorkspaces((current) => ({
-        ...current,
-        [projectId]: (() => {
-          const previous = current[projectId] ?? defaultWorkspaceFor(projectId);
-          const next = updater(previous);
-          return next.floatingKey &&
-            (next.floatingKey === next.activeTabKey ||
-              !orderedTabKeys(next).includes(next.floatingKey) ||
-              (next.activeTabKey !== previous.activeTabKey &&
-                next.floatingKey === previous.floatingKey))
-            ? { ...next, floatingKey: undefined }
-            : next;
-        })(),
-      }));
+      if (!workspaceKey) return;
+      setWorkspaces((current) => {
+        const previous =
+          current[workspaceKey] ??
+          (projectId
+            ? defaultWorkspaceFor(projectId)
+            : emptyUtilityWorkspace());
+        const updated = updater(previous);
+        const next =
+          updated.floatingKey &&
+          (updated.floatingKey === updated.activeTabKey ||
+            !orderedTabKeys(updated).includes(updated.floatingKey) ||
+            (updated.activeTabKey !== previous.activeTabKey &&
+              updated.floatingKey === previous.floatingKey))
+            ? { ...updated, floatingKey: undefined }
+            : updated;
+        // Background reconciliation must not materialize a default workspace
+        // before the persisted snapshot has had a chance to restore.
+        return next === previous
+          ? current
+          : { ...current, [workspaceKey]: next };
+      });
     },
-    [projectId, defaultWorkspaceFor],
+    [projectId, workspaceKey, defaultWorkspaceFor],
   );
 
   const floatingMotion = useFloatingMotion(
@@ -1038,7 +1518,12 @@ export function App() {
   // are debounced and gated until that restore attempt settles, so the
   // boot-time empty workspace can never clobber the saved one.
   const workspaceRestoreRef = useRef(new Set<string>());
-  const workspacePersistReadyRef = useRef(new Set<string>());
+  const [workspaceReadyProjectIds, setWorkspaceReadyProjectIds] = useState(
+    new Set<string>(),
+  );
+  const workspaceReady = Boolean(
+    projectId && workspaceReadyProjectIds.has(projectId),
+  );
   useEffect(() => {
     if (!projectId || workspaceRestoreRef.current.has(projectId)) return;
     workspaceRestoreRef.current.add(projectId);
@@ -1056,11 +1541,13 @@ export function App() {
       })
       .catch(() => {})
       .finally(() => {
-        workspacePersistReadyRef.current.add(projectId);
+        setWorkspaceReadyProjectIds(
+          (current) => new Set([...current, projectId]),
+        );
       });
   }, [projectId]);
   useEffect(() => {
-    if (!projectId || !workspacePersistReadyRef.current.has(projectId)) return;
+    if (!projectId || !workspaceReady) return;
     const snapshot = workspaces[projectId];
     if (!snapshot) return;
     const timer = window.setTimeout(() => {
@@ -1069,7 +1556,40 @@ export function App() {
         .catch(() => {});
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [workspaces, projectId]);
+  }, [workspaces, projectId, workspaceReady]);
+
+  // A workflow-created session is a notification surface in its own right.
+  // Once its turn settles, materialize it as a minimized dock bubble without
+  // stealing focus. One bubble is created per attention revision; closing it
+  // does not hide the matching pulsing row in the sidebar.
+  const surfacedAttentionRef = useRef(new Map<string, number>());
+  useEffect(() => {
+    if (!projectId || !workspaceReady) return;
+    const attentionSessions = (sessionsQuery.data?.items ?? []).filter(
+      (session) => session.attentionRequired,
+    );
+    if (attentionSessions.length === 0) return;
+    updateWorkspace((ws) => {
+      const additions: ChatDockEntry[] = [];
+      for (const session of attentionSessions) {
+        const key = `${projectId}:${session.id}`;
+        const surfaced = surfacedAttentionRef.current.get(key) ?? 0;
+        if (ws.chats.some((chat) => chat.sessionId === session.id)) {
+          surfacedAttentionRef.current.set(key, session.attentionRevision);
+          continue;
+        }
+        if (surfaced >= session.attentionRevision) continue;
+        surfacedAttentionRef.current.set(key, session.attentionRevision);
+        additions.push({
+          ...newChatEntry("min"),
+          sessionId: session.id,
+        });
+      }
+      return additions.length > 0
+        ? { ...ws, chats: [...ws.chats, ...additions] }
+        : ws;
+    });
+  }, [projectId, sessionsQuery.data, updateWorkspace, workspaceReady]);
 
   const openTab = (tab: WorkspaceTab, mode?: CommitMode) =>
     updateWorkspace((ws) => {
@@ -1081,7 +1601,11 @@ export function App() {
           : null;
       return {
         ...ws,
-        tabs: exists ? ws.tabs : [...ws.tabs, tab],
+        tabs: exists
+          ? ws.tabs.map((existing) =>
+              tab.kind === "diff" && tabKey(existing) === key ? tab : existing,
+            )
+          : [...ws.tabs, tab],
         activeTabKey:
           mode === "floating"
             ? ws.activeTabKey === key
@@ -1136,6 +1660,7 @@ export function App() {
           // pencil for an unsent draft, "?" for a waiting question.
           working: signalsByChat[chat.localId]?.working ?? false,
           unread: unreadByChat[chat.localId] ?? false,
+          attention: attentionByChat[chat.localId] ?? false,
           draft: signalsByChat[chat.localId]?.draft ?? false,
           awaitingInput: signalsByChat[chat.localId]?.awaitingInput ?? false,
         }),
@@ -1326,6 +1851,194 @@ export function App() {
     });
   };
 
+  const [linkError, setLinkError] = useState<string | null>(null);
+  /** One resolver for clicked links, file chips, sidebar files, and agent tools. */
+  const openLinkedSurface = async (
+    value: string,
+    opts: {
+      chatLocalId?: string;
+      side?: boolean;
+      background?: boolean;
+      newTab?: boolean;
+      mode?: CommitMode;
+    } = {},
+  ): Promise<string> => {
+    const intent =
+      opts.mode ?? (opts.side ? "side" : opts.newTab ? "tab" : "replace");
+    const target = parseSurfaceLink(value);
+    if (!target)
+      throw new Error("This link is not a supported workspace target");
+    const originProject = projectIdRef.current;
+    const root =
+      target.kind === "file" && originProject
+        ? await desktopApi.projectRoot(originProject)
+        : null;
+    if (projectIdRef.current !== originProject)
+      throw new Error(
+        "The project changed. Open this link from its original chat.",
+      );
+    if (target.kind === "workflow") {
+      void queryClient.invalidateQueries({
+        queryKey: workflowKeys.project({ projectId: originProject }),
+      });
+    }
+    const localId = crypto.randomUUID();
+    const location =
+      target.kind === "file"
+        ? resolveProjectFileLocation(root ?? "", target.path)
+        : null;
+    const browserUrl =
+      target.kind === "browser"
+        ? target.url
+        : target.kind === "file" && location && isBrowserFile(target.path)
+          ? localFileUrl(location.absolutePath)
+          : null;
+    if (browserUrl && !activeProfileRef.current)
+      throw new Error("Choose a profile before opening this link");
+    const focusedKey =
+      workspaceRef.current.floatingKey ?? workspaceRef.current.activeTabKey;
+    if (
+      browserUrl &&
+      intent === "replace" &&
+      !opts.background &&
+      focusedKey?.startsWith("browser:")
+    ) {
+      const navigate = browserNavigatorsRef.current.get(focusedKey.slice(8));
+      if (navigate) {
+        navigate(browserUrl);
+        return focusedKey;
+      }
+    }
+    const existingEditor =
+      target.kind === "file" && !browserUrl && intent !== "tab"
+        ? (workspaceRef.current.editors.find(
+            (editor) => editor.filePath === location?.relativePath,
+          ) ??
+          (intent === "replace" && !opts.background
+            ? workspaceRef.current.editors.find(
+                (editor) =>
+                  editorTabKey(editor.localId) === focusedKey && !editor.dirty,
+              )
+            : undefined))
+        : undefined;
+    const key = browserUrl
+      ? browserTabKey(localId)
+      : target.kind === "file"
+        ? editorTabKey(existingEditor?.localId ?? localId)
+        : target.kind === "tab"
+          ? target.key
+          : target.kind === "workflow" || target.kind === "app"
+            ? `${target.kind}:${target.name}`
+            : browserTabKey(localId);
+    if (
+      target.kind === "tab" &&
+      !orderedTabKeys(workspaceRef.current, {
+        includeCollapsed: true,
+      }).includes(key)
+    )
+      throw new Error("This tab is no longer open");
+    updateWorkspace((ws) => ({
+      ...ws,
+      ...(browserUrl
+        ? {
+            browsers: [
+              ...ws.browsers,
+              {
+                localId,
+                profileId: activeProfileRef.current?.id ?? "",
+                initialUrl: browserUrl,
+                url: browserUrl,
+                title:
+                  target.kind === "file"
+                    ? fileNameFromPath(target.path)
+                    : browserUrl,
+                faviconUrl: null,
+                chatLocalId: opts.chatLocalId,
+              },
+            ],
+          }
+        : target.kind === "file" && location
+          ? {
+              editors: existingEditor
+                ? ws.editors.map((editor) =>
+                    editor.localId === existingEditor.localId
+                      ? {
+                          ...editor,
+                          filePath: location.relativePath,
+                          background: false,
+                          line: target.line,
+                          column: target.column,
+                          navigation: localId,
+                        }
+                      : editor,
+                  )
+                : [
+                    ...ws.editors,
+                    {
+                      localId,
+                      filePath: location.relativePath,
+                      dirty: false,
+                      chatLocalId: opts.chatLocalId,
+                      line: target.line,
+                      column: target.column,
+                      navigation: localId,
+                    },
+                  ],
+            }
+          : target.kind === "workflow" || target.kind === "app"
+            ? {
+                tabs: ws.tabs.some((tab) => tabKey(tab) === key)
+                  ? ws.tabs
+                  : [
+                      ...ws.tabs,
+                      {
+                        kind: target.kind,
+                        name: target.name,
+                        chatLocalId: opts.chatLocalId,
+                      },
+                    ],
+              }
+            : {}),
+      activeTabKey:
+        opts.background || intent === "floating"
+          ? ws.activeTabKey === key
+            ? nextActiveTabKey(ws, key, ws.chats)
+            : ws.activeTabKey
+          : key,
+      floatingKey:
+        intent === "floating"
+          ? key
+          : opts.background
+            ? ws.floatingKey
+            : undefined,
+      split: opts.background
+        ? ws.split
+        : intent === "side" && ws.activeTabKey && ws.activeTabKey !== key
+          ? { leftKey: ws.activeTabKey, rightKey: key, ratio: 0.5 }
+          : null,
+    }));
+    return key;
+  };
+  const openLinkedSurfaceRef = useRef(openLinkedSurface);
+  openLinkedSurfaceRef.current = openLinkedSurface;
+  const openMessageLink = (
+    value: string,
+    entry: ChatDockEntry,
+    modifiers: OpenModifiers | CommitMode,
+  ) => {
+    void openLinkedSurface(value, {
+      chatLocalId: entry.localId,
+      mode:
+        typeof modifiers === "string"
+          ? modifiers
+          : openModeFromEvent(modifiers),
+    }).catch((cause: unknown) =>
+      setLinkError(
+        cause instanceof Error ? cause.message : "Could not open this link",
+      ),
+    );
+  };
+
   const onTerminalTitle = useCallback(
     (localId: string, title: string) =>
       updateWorkspace((ws) => {
@@ -1377,9 +2090,12 @@ export function App() {
   const openBrowserTabRef = useRef(openBrowserTab);
   openBrowserTabRef.current = openBrowserTab;
   useEffect(() => {
-    return desktopApi.onBrowserOpenUrl((url) =>
+    return desktopApi.onBrowserOpenUrl((url, mode) =>
       openBrowserTabRef.current(url, {
-        floating: prefsRef.current?.linkOpenMode === "floating",
+        floating: mode
+          ? mode === "floating"
+          : prefsRef.current?.linkOpenMode === "floating",
+        side: mode === "side",
       }),
     );
   }, []);
@@ -1389,6 +2105,9 @@ export function App() {
   const browserShortcutTargetRef = useRef<string | undefined>(undefined);
   const browserCommandsRef = useRef(new Map<string, BrowserCommands>());
   const browserNavigatorsRef = useRef(new Map<string, (url: string) => void>());
+  const browserHistoryNavigatorsRef = useRef(
+    new Map<string, (direction: "back" | "forward") => void>(),
+  );
 
   // Animated close per chat dock — external closers (Cmd+W) must play the
   // same 250ms collapse Escape does, not unmount the dock mid-frame.
@@ -1407,6 +2126,7 @@ export function App() {
   // (skill palette rows, post-auth continuations) speaks into an already
   // open chat. Sends queue behind an in-flight turn like composer sends.
   const chatSendersRef = useRef(new Map<string, (message: string) => void>());
+  const editorShareHandlersRef = useRef(new Map<string, () => Promise<void>>());
 
   // Webview guest WebContents ids per browser tab — the agent bridge
   // drives pages from the main process by guest id.
@@ -1458,7 +2178,16 @@ export function App() {
                   : targetWorkspace.activeTabKey
                 : chatTabKey(entry.localId),
             floatingKey: undefined,
-            split: null,
+            split:
+              mode === "side" &&
+              targetWorkspace.activeTabKey &&
+              targetWorkspace.activeTabKey !== chatTabKey(entry.localId)
+                ? {
+                    leftKey: targetWorkspace.activeTabKey,
+                    rightKey: chatTabKey(entry.localId),
+                    ratio: 0.5,
+                  }
+                : null,
           },
         };
       });
@@ -1466,8 +2195,9 @@ export function App() {
       return;
     }
     const ws = workspaceRef.current;
-    const focusedBrowserId = ws.activeTabKey?.startsWith("browser:")
-      ? ws.activeTabKey.slice("browser:".length)
+    const focusedKey = ws.floatingKey ?? ws.activeTabKey;
+    const focusedBrowserId = focusedKey?.startsWith("browser:")
+      ? focusedKey.slice("browser:".length)
       : undefined;
     const navigate = focusedBrowserId
       ? browserNavigatorsRef.current.get(focusedBrowserId)
@@ -1482,7 +2212,19 @@ export function App() {
     });
   };
 
-  const closeTabImmediately = (key: string, opts?: { force?: boolean }) =>
+  const closeTabImmediately = (
+    key: string,
+    opts?: { force?: boolean; discardDraft?: boolean },
+  ) => {
+    if (
+      !opts?.discardDraft &&
+      workspace.tabs.some(
+        (tab) => tab.kind === "workflow" && tabKey(tab) === key && tab.draft,
+      )
+    ) {
+      setClosingWorkflow(key);
+      return;
+    }
     updateWorkspace((ws) => {
       // Snapshot enough to bring the tab back with Cmd+Shift+T — plus its
       // split context so a reopened pane re-tiles with its partner.
@@ -1520,6 +2262,7 @@ export function App() {
           };
         }
         browserNavigatorsRef.current.delete(localId);
+        browserHistoryNavigatorsRef.current.delete(localId);
         browserGuestIdsRef.current.delete(localId);
         const browsers = ws.browsers.filter(
           (browser) => browser.localId !== localId,
@@ -1680,7 +2423,14 @@ export function App() {
           closingTab &&
             closingTab.kind !== "palette" &&
             closingTab.kind !== "agent-setup"
-            ? { kind: "screen", tab: closingTab, ...splitContext }
+            ? {
+                kind: "screen",
+                tab:
+                  closingTab.kind === "workflow" && opts?.discardDraft
+                    ? { ...closingTab, draft: false, workflowDraft: undefined }
+                    : closingTab,
+                ...splitContext,
+              }
             : null,
         ),
         activeTabKey:
@@ -1689,8 +2439,12 @@ export function App() {
             : ws.activeTabKey,
       };
     });
+  };
 
-  const closeTab = (key: string, opts?: { force?: boolean }) => {
+  const closeTab = (
+    key: string,
+    opts?: { force?: boolean; discardDraft?: boolean },
+  ) => {
     if (workspaceRef.current.floatingKey === key)
       floatingMotion.dismiss(() => closeTabImmediately(key, opts));
     else closeTabImmediately(key, opts);
@@ -1893,7 +2647,7 @@ export function App() {
   };
 
   // Cmd+T and the tab-strip + always open a full chat tab (Chrome muscle
-  // memory); the sidebar +, bubble +, and Cmd+E open the floating aside.
+  // memory); the sidebar +, bubble +, and Cmd+N open the floating aside.
   const addChat = (forceMode?: "tab", opts?: { incognito?: boolean }) => {
     if (!requireAgents()) return;
     updateWorkspace((ws) => {
@@ -1952,12 +2706,17 @@ export function App() {
 
   // Palette "Send to agent": a new chat born with its first message
   // attached; ChatDock auto-sends it on mount.
-  const sendToAgent = (message: string, mode: "float" | "tab") => {
+  const sendToAgent = (
+    message: string,
+    mode: "float" | "tab",
+    agentId?: string,
+  ) => {
     if (!requireAgents()) return;
     updateWorkspace((ws) => {
       const entry: ChatDockEntry = {
         ...newChatEntry(mode === "tab" ? "tab" : "partial"),
         pendingMessage: message,
+        ...(agentId ? { agentId } : {}),
       };
       return {
         ...ws,
@@ -1977,7 +2736,8 @@ export function App() {
   // Agent-less profiles greet the user with the setup wizard as a real,
   // closable tab: close it to skip; it returns as a modal on chat attempts.
   useEffect(() => {
-    if (!projectId || agentsData === null || hasAgents) return;
+    if (!projectId || !workspaceReady || agentsData === null || hasAgents)
+      return;
     if (!activeProfileId || setupDismissedRef.current.has(activeProfileId)) {
       return;
     }
@@ -1991,7 +2751,33 @@ export function App() {
       };
       return { ...ws, tabs: [...ws.tabs, tab], activeTabKey: key };
     });
-  }, [projectId, agentsData, hasAgents, activeProfileId, updateWorkspace]);
+  }, [
+    projectId,
+    workspaceReady,
+    agentsData,
+    hasAgents,
+    activeProfileId,
+    updateWorkspace,
+  ]);
+
+  // Agent discovery is asynchronous at launch. If a persisted setup tab is
+  // restored, or the first empty response races the real agents payload,
+  // reconcile it away as soon as an existing agent is known.
+  useEffect(() => {
+    if (!hasAgents) return;
+    setWizardModalOpen(false);
+    updateWorkspace((ws) => {
+      const tabs = ws.tabs.filter((tab) => tab.kind !== "agent-setup");
+      if (tabs.length === ws.tabs.length) return ws;
+      const lastTab = tabs.at(-1);
+      const activeTabKey = tabs.some((tab) => tabKey(tab) === ws.activeTabKey)
+        ? ws.activeTabKey
+        : lastTab
+          ? tabKey(lastTab)
+          : undefined;
+      return { ...ws, tabs, activeTabKey };
+    });
+  }, [hasAgents, updateWorkspace]);
 
   const minimizeFloatingChats = () =>
     updateWorkspace((ws) => ({
@@ -2001,7 +2787,10 @@ export function App() {
       ),
     }));
 
-  const openSession = (session: AgentSession, openMode?: CommitMode) =>
+  const openSession = (
+    session: AgentSession,
+    placement?: CommitMode | "split",
+  ) =>
     updateWorkspace((ws) => {
       const existing = ws.chats.find((chat) => chat.sessionId === session.id);
       // Already-tabbed chats stay tabs; everything else opens as the
@@ -2014,15 +2803,36 @@ export function App() {
         ws.editors.length === 0 &&
         ws.chats.every((chat) => chat.mode !== "tab");
       const mode =
-        openMode === "floating"
+        placement === "floating"
           ? "partial"
-          : existing?.mode === "tab" || noTabsOpen
+          : placement === "replace" ||
+              placement === "tab" ||
+              placement === "side" ||
+              placement === "split" ||
+              existing?.mode === "tab" ||
+              noTabsOpen
             ? ("tab" as const)
             : ("partial" as const);
+      const parentLocalId = session.parentSessionId
+        ? ws.chats.find((chat) => chat.sessionId === session.parentSessionId)
+            ?.localId
+        : undefined;
       const entry = existing ?? {
         ...newChatEntry(mode),
         sessionId: session.id,
+        parentLocalId,
       };
+      const key = chatTabKey(entry.localId);
+      const split =
+        (placement === "split" || placement === "side") &&
+        ws.activeTabKey &&
+        ws.activeTabKey !== key
+          ? { leftKey: ws.activeTabKey, rightKey: key, ratio: 0.5 }
+          : placement === "tab" ||
+              (mode === "partial" &&
+                (ws.split?.leftKey === key || ws.split?.rightKey === key))
+            ? null
+            : ws.split;
       return {
         ...ws,
         chats: [
@@ -2039,10 +2849,11 @@ export function App() {
         floatingKey: undefined,
         activeTabKey:
           mode === "tab"
-            ? chatTabKey(entry.localId)
-            : ws.activeTabKey === chatTabKey(entry.localId)
-              ? orderedTabKeys(ws).find((key) => key !== ws.activeTabKey)
+            ? key
+            : ws.activeTabKey === key
+              ? nextActiveTabKey(ws, key, ws.chats)
               : ws.activeTabKey,
+        split,
       };
     });
 
@@ -2117,7 +2928,9 @@ export function App() {
       // Response landed while the chat was hidden (minimized bubble or a
       // background tab) → unread dot.
       if (before.working && !next.working && chat && !chatVisible(ws, chat)) {
-        setUnreadByChat((unread) => ({ ...unread, [localId]: true }));
+        if (chat.sessionId) {
+          setSessionListPreference("unreadSessionIds", [chat.sessionId], true);
+        }
       }
       // Notify only on live transitions — the first report for a chat is
       // its mount snapshot (a reopened session with an old question must
@@ -2128,22 +2941,47 @@ export function App() {
         notifySettled(localId, "question");
       }
     },
-    [notifySettled],
+    [notifySettled, setSessionListPreference],
   );
 
-  // Bringing a chat's surface on screen marks it read.
+  // A hidden -> visible transition marks a session read. A manual "Mark as
+  // unread" while the chat is already visible therefore sticks until the
+  // user leaves and opens it again.
+  const visibleSessionIdsRef = useRef(new Set<string>());
   useEffect(() => {
-    const readIds = workspace.chats
-      .filter((chat) => chatVisible(workspace, chat))
-      .map((chat) => chat.localId);
-    if (readIds.some((id) => unreadByChat[id])) {
-      setUnreadByChat((current) => {
-        const next = { ...current };
-        for (const id of readIds) delete next[id];
-        return next;
+    const visibleIds = new Set(
+      workspace.chats
+        .filter((chat) => chatVisible(workspace, chat))
+        .flatMap((chat) => (chat.sessionId ? [chat.sessionId] : [])),
+    );
+    const newlyVisible = [...visibleIds].filter(
+      (id) => !visibleSessionIdsRef.current.has(id),
+    );
+    visibleSessionIdsRef.current = visibleIds;
+    setSessionListPreference("unreadSessionIds", newlyVisible, false);
+  }, [workspace, setSessionListPreference]);
+
+  const acknowledgingAttentionRef = useRef(new Set<string>());
+  useEffect(() => {
+    for (const chat of workspace.chats.filter((candidate) =>
+      chatVisible(workspace, candidate),
+    )) {
+      const sessionId = chat.sessionId;
+      if (
+        !sessionId ||
+        !sessionsById.get(sessionId)?.attentionRequired ||
+        acknowledgingAttentionRef.current.has(sessionId)
+      ) {
+        continue;
+      }
+      acknowledgingAttentionRef.current.add(sessionId);
+      acknowledgeSessionAttention.mutate(sessionId, {
+        onSettled: () => {
+          acknowledgingAttentionRef.current.delete(sessionId);
+        },
       });
     }
-  }, [workspace, unreadByChat]);
+  }, [workspace, sessionsById, acknowledgeSessionAttention]);
 
   // Cmd+W (via the app menu) closes the most specific surface in focus:
   // the floating chat if one is open, else the active workspace tab.
@@ -2151,6 +2989,35 @@ export function App() {
   closeChatRef.current = closeChat;
   const closeTabRef = useRef(closeTab);
   closeTabRef.current = closeTab;
+  const closeDispatchPendingRef = useRef(false);
+  const lastChatStepDownRef = useRef<
+    | {
+        localId: string;
+        at: number;
+      }
+    | undefined
+  >(undefined);
+  useEffect(() => {
+    const cancelStepDownHandoff = (event: PointerEvent) => {
+      const pending = lastChatStepDownRef.current;
+      if (!pending) return;
+      const targetChatId =
+        event.target instanceof Element
+          ? event.target.closest<HTMLElement>("[data-chat-local-id]")?.dataset
+              .chatLocalId
+          : undefined;
+      if (targetChatId !== pending.localId) {
+        lastChatStepDownRef.current = undefined;
+      }
+    };
+    window.addEventListener("pointerdown", cancelStepDownHandoff, {
+      capture: true,
+    });
+    return () =>
+      window.removeEventListener("pointerdown", cancelStepDownHandoff, {
+        capture: true,
+      });
+  }, []);
   // An OAuth consent tab has done its job once the loopback callback was
   // served: close it (with the tab's exit motion) instead of leaving a
   // "you can close this tab" page behind. The tab may still be mid-redirect
@@ -2176,26 +3043,50 @@ export function App() {
     });
   }, []);
   const closeActiveSurface = useCallback(() => {
-    const ws = workspaceRef.current;
-    if (ws.floatingKey) {
-      closeTabRef.current(ws.floatingKey);
-      return;
-    }
-    const floating = ws.chats.find((chat) => chat.mode === "partial");
-    // The floating chat only owns Cmd+W while the user is IN it. Focus is
-    // the tell (its composer takes focus on open); when nothing focusable
-    // holds focus (a click on a pane's blank chrome, a webview whose guest
-    // swallowed the click), the last pointer-down decides. Clicking into
-    // the tab behind the dock and pressing Cmd+W closes the tab.
-    if (floating && (!ws.activeTabKey || floatingChatHasFocus())) {
-      // Through the dock's animated close (same collapse as Escape);
-      // straight removal only if the dock never registered one.
-      const animated = chatClosersRef.current.get(floating.localId);
-      if (animated) animated();
-      else closeChatRef.current(floating.localId);
-      return;
-    }
-    if (ws.activeTabKey) closeTabRef.current(ws.activeTabKey);
+    // A guest-focused key can arrive through both Electron's menu and the
+    // webview relay. Decide once after those deliveries and any preceding
+    // surface transition (for example Escape: tab → floating) have settled.
+    if (closeDispatchPendingRef.current) return;
+    closeDispatchPendingRef.current = true;
+    const steppedDown = lastChatStepDownRef.current;
+    const requestedChatId =
+      steppedDown && performance.now() - steppedDown.at < 500
+        ? steppedDown.localId
+        : focusedChatSurfaceId();
+    lastChatStepDownRef.current = undefined;
+    window.setTimeout(() => {
+      closeDispatchPendingRef.current = false;
+      const ws = workspaceRef.current;
+      if (ws.floatingKey) {
+        closeTabRef.current(ws.floatingKey);
+        return;
+      }
+      const focusedChat = ws.chats.find(
+        (chat) => chat.localId === requestedChatId,
+      );
+      const floating =
+        (focusedChat?.mode === "partial" ? focusedChat : undefined) ??
+        ws.chats.find((chat) => chat.mode === "partial");
+      // The floating chat only owns Cmd+W while the user is IN it. Focus is
+      // the tell (its composer takes focus on open); when nothing focusable
+      // holds focus (a click on a pane's blank chrome, a webview whose guest
+      // swallowed the click), the last pointer-down decides. Clicking into
+      // the tab behind the dock and pressing Cmd+W closes the tab.
+      if (
+        floating &&
+        (!ws.activeTabKey ||
+          focusedChat?.mode === "partial" ||
+          focusedChat?.mode === "min")
+      ) {
+        // Through the dock's animated close (same collapse as Escape);
+        // straight removal only if the dock never registered one.
+        const animated = chatClosersRef.current.get(floating.localId);
+        if (animated) animated();
+        else closeChatRef.current(floating.localId);
+        return;
+      }
+      if (ws.activeTabKey) closeTabRef.current(ws.activeTabKey);
+    }, 25);
   }, []);
   useEffect(() => {
     return desktopApi.onCloseSurface(closeActiveSurface);
@@ -2230,13 +3121,16 @@ export function App() {
 
   const updateSession = useUpdateAgentSession(projectId);
   const forkSession = useForkAgentSession(projectId);
+  const [sessionInspectRequests, setSessionInspectRequests] = useState<
+    Record<string, number>
+  >({});
 
   /**
    * Fork a chat from one of its assistant messages: the server copies the
    * transcript into a new session (same agent, parent recorded); the fork
    * opens tiled beside the current view and chips onto the parent's rail.
    */
-  const forkChat = (parent: ChatDockEntry, messageId: string) => {
+  const forkChat = (parent: ChatDockEntry, messageId?: string) => {
     if (!parent.sessionId || forkSession.isPending) return;
     forkSession.mutate(
       { sessionId: parent.sessionId, messageId },
@@ -2422,8 +3316,15 @@ export function App() {
     }));
   };
 
-  /** Change the model on the focused chat's agent (or the default one). */
+  /** Change the focused session's model override, or the default agent config. */
   const pickModel = (agentId: string, model: string) => {
+    const chat = workspaceRef.current.chats.find(
+      (candidate) => candidate.localId === workspaceRef.current.activeChatId,
+    );
+    if (chat?.sessionId) {
+      updateSession.mutate({ sessionId: chat.sessionId, model: model || null });
+      return;
+    }
     void desktopApi.agentsUpdate(agentId, { model });
   };
 
@@ -2454,7 +3355,7 @@ export function App() {
     setConsentRequest({ agent, target });
   };
 
-  const pickEffort = (effort: AgentEffort) => {
+  const pickEffort = (effort: AgentEffort | null) => {
     const chat = workspaceRef.current.chats.find(
       (candidate) => candidate.localId === workspaceRef.current.activeChatId,
     );
@@ -2466,7 +3367,11 @@ export function App() {
     // agent (the one the picker showed as current). A committed project
     // agent's effort lives in its definition file — not editable here.
     const targetId = effectiveDefaultAgentId;
-    if (targetId && agentsData?.agents.some((agent) => agent.id === targetId)) {
+    if (
+      effort &&
+      targetId &&
+      agentsData?.agents.some((agent) => agent.id === targetId)
+    ) {
       void desktopApi.agentsUpdate(targetId, { effort });
     }
   };
@@ -2755,8 +3660,15 @@ export function App() {
     closeTab(key, { force: true });
   };
 
-  const openSurface = (key: string, mode: "tab" | "split") => {
-    updateWorkspace((ws) => ({ ...ws, floatingKey: undefined }));
+  const openSurface = (key: string, requestedMode: CommitMode | "split") => {
+    const mode =
+      requestedMode === "side"
+        ? "split"
+        : requestedMode === "replace"
+          ? "tab"
+          : requestedMode;
+    if (requestedMode !== "floating")
+      updateWorkspace((ws) => ({ ...ws, floatingKey: undefined }));
     // Opening a surface answers any attention its chip was holding
     // (open_surface-in-background) — dismissal-by-interaction.
     setChipAttention((current) => {
@@ -2770,6 +3682,11 @@ export function App() {
         ]),
       );
     });
+    if (key.startsWith("session:")) {
+      const session = sessionsById.get(key.slice("session:".length));
+      if (session) openSession(session, requestedMode);
+      return;
+    }
     // App chips point at the app by name — materialize its tab if the
     // user hasn't opened it yet (the key doubles as the tab key).
     if (key.startsWith("app:")) {
@@ -2816,6 +3733,10 @@ export function App() {
             : terminal,
         ),
       }));
+    }
+    if (requestedMode === "floating") {
+      if (workspaceRef.current.floatingKey !== key) floatSurface(key);
+      return;
     }
     // Chat surfaces (fork chips) may be minimized bubbles — a chat only
     // occupies a view slot in tab mode, so promote it first.
@@ -3032,6 +3953,7 @@ export function App() {
     "browser-forward": () => runBrowserCommand("forward"),
     "new-tab": openPaletteTab,
     "command-palette": () => setPaletteOpen((value) => !value),
+    "check-for-updates": () => void desktopApi.updateCheck(),
     "new-floating-chat": () => addChat(),
     "toggle-floating-terminal": () => toggleFloatingTerminal(),
     "new-floating-browser": () => openBrowserTab("", { floating: true }),
@@ -3048,11 +3970,6 @@ export function App() {
             },
       );
       floatSurface("settings:settings");
-    },
-    "float-current-tab": () => {
-      const ws = workspaceRef.current;
-      const key = ws.floatingKey ?? ws.activeTabKey;
-      if (key) floatSurface(key);
     },
     "dismiss-floating": dismissFloating,
     "floating-to-tab": () => {
@@ -3085,6 +4002,11 @@ export function App() {
       openTerminalTab({ side: mode === "side", floating: mode === "floating" }),
     "new-editor-tab": (mode) =>
       openEditorTab({ side: mode === "side", floating: mode === "floating" }),
+    "toggle-right-sidebar": () =>
+      setRightSidebarOpen((value) => {
+        void desktopApi.setPrefs({ rightSidebarOpen: !value });
+        return !value;
+      }),
     "toggle-sidebar": () =>
       setSidebarOpen((value) => {
         void desktopApi.setPrefs({ sidebarOpen: !value });
@@ -3093,6 +4015,15 @@ export function App() {
     "close-tab": closeActiveSurface,
     "setup-agent": () => setWizardModalOpen(true),
     "default-agent": () => openPalettePicker("default-agent"),
+    "session-status": () => {
+      const chat = actionChat(workspaceRef.current);
+      if (!chat) return;
+      revealChat(chat.localId);
+      setSessionInspectRequests((current) => ({
+        ...current,
+        [chat.localId]: (current[chat.localId] ?? 0) + 1,
+      }));
+    },
     "switch-agent": () => openPalettePicker("switch-agent"),
     "configure-agent": () => openPalettePicker("configure-agent"),
     "change-effort": () => openPalettePicker("effort"),
@@ -3245,7 +4176,7 @@ export function App() {
     profilesData !== null &&
     agentsData !== null &&
     sidebarConfig !== null &&
-    !projectsQuery.isLoading;
+    !projectsLoading;
   useEffect(() => {
     if (bootRevealed) return;
     if (bootReady) {
@@ -3258,18 +4189,6 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [bootReady, bootRevealed]);
 
-  // Warm the Monaco chunk (half the renderer bundle) while idle after
-  // boot — the FIRST diff or editor open should not pay a multi-hundred-
-  // millisecond parse in front of the user.
-  useEffect(() => {
-    if (!bootReady) return;
-    const timer = window.setTimeout(() => {
-      void import("./screens/diff-screen.js");
-      void import("./screens/editor-screen.js");
-    }, 1_500);
-    return () => window.clearTimeout(timer);
-  }, [bootReady]);
-
   // --- agent workspace bridge -------------------------------------------
   // Agents' workspace tools land here from main: discovery (overview /
   // readTab), agent-spawned surfaces (browser tabs, terminals), and the
@@ -3279,7 +4198,7 @@ export function App() {
   const projectIdRef = useRef(projectId);
   projectIdRef.current = projectId;
   const sidebarConfigRef = useRef<SidebarConfig | null>(sidebarConfig);
-  sidebarConfigRef.current = sidebarConfig;
+  sidebarConfigRef.current = visibleSidebars;
   const activeProfileRef = useRef(activeProfile);
   activeProfileRef.current = activeProfile;
   useEffect(() => {
@@ -3432,7 +4351,7 @@ export function App() {
             // Lets the context snapshot mark the asking agent's own chat.
             sessionId: chat.sessionId ?? null,
           }));
-          const sidebar = (sidebarConfigRef.current?.sections ?? []).map(
+          const sidebar = sidebarSections(sidebarConfigRef.current).map(
             (section) => ({
               type: section.type,
               title: section.title,
@@ -3614,134 +4533,29 @@ export function App() {
               ),
             }));
           };
-          if (target.startsWith("app:")) {
-            const name = target.slice("app:".length);
-            const key = `app:${name}`;
-            if (openInBackground(key)) {
-              updateWorkspace((current) => ({
-                ...current,
-                tabs: current.tabs.some((tab) => tabKey(tab) === key)
-                  ? current.tabs
-                  : [...current.tabs, { kind: "app", name }],
-              }));
-              return background(key);
-            }
-            updateWorkspace((current) => {
-              const exists = current.tabs.some((tab) => tabKey(tab) === key);
-              return {
-                ...current,
-                tabs: exists
-                  ? current.tabs
-                  : [...current.tabs, { kind: "app", name }],
-                activeTabKey: key,
-                split: null,
-              };
-            });
-            stepChatAside();
-            return { key, opened: "focused" };
-          }
-          if (target.startsWith("file:")) {
-            const filePath = target.slice("file:".length);
-            const localId = crypto.randomUUID();
-            const root = projectIdRef.current
-              ? await desktopApi.projectRoot(projectIdRef.current)
-              : null;
-            const location = root
-              ? resolveProjectFileLocation(root, filePath)
-              : null;
-            if (location && isPdfPath(location.relativePath)) {
-              if (!activeProfileRef.current) return { error: "No profile" };
-              const entry: BrowserEntry = {
-                localId,
-                profileId: activeProfileRef.current.id,
-                initialUrl: localFileUrl(location.absolutePath),
-                url: localFileUrl(location.absolutePath),
-                title: fileNameFromPath(location.relativePath),
-                faviconUrl: null,
-                chatLocalId: requester?.localId,
-              };
-              if (openInBackground(browserTabKey(localId)) && requester) {
-                updateWorkspace((current) => ({
-                  ...current,
-                  browsers: [...current.browsers, entry],
-                }));
-                return background(browserTabKey(localId));
-              }
-              updateWorkspace((current) => ({
-                ...current,
-                browsers: [...current.browsers, entry],
-                activeTabKey: browserTabKey(localId),
-                split: null,
-              }));
+          const linked = parseSurfaceLink(target);
+          if (linked && linked.kind !== "tab") {
+            const backgroundOpen = openInBackground(
+              linked.kind === "app" || linked.kind === "workflow"
+                ? `${linked.kind}:${linked.name}`
+                : "",
+            );
+            try {
+              const key = await openLinkedSurfaceRef.current(target, {
+                chatLocalId: requesterId,
+                background: backgroundOpen,
+              });
+              if (backgroundOpen) return background(key);
               stepChatAside();
-              return { key: browserTabKey(localId), opened: "focused" };
+              return { key, opened: "focused" };
+            } catch (cause) {
+              return {
+                error:
+                  cause instanceof Error
+                    ? cause.message
+                    : "Could not open the target",
+              };
             }
-            const relativePath = location?.relativePath ?? filePath;
-            if (openInBackground(editorTabKey(localId)) && requester) {
-              updateWorkspace((current) => ({
-                ...current,
-                editors: [
-                  ...current.editors,
-                  // Attached to the asking chat, so the chip carrying
-                  // the attention dot has a rail to ride.
-                  {
-                    localId,
-                    filePath: relativePath,
-                    dirty: false,
-                    chatLocalId: requester.localId,
-                  },
-                ],
-              }));
-              return background(editorTabKey(localId));
-            }
-            updateWorkspace((current) => ({
-              ...current,
-              editors: [
-                ...current.editors,
-                // Attached to the asking chat even when focused, so "show
-                // the user this file" always leaves a chip on the rail.
-                {
-                  localId,
-                  filePath: relativePath,
-                  dirty: false,
-                  chatLocalId: requester?.localId,
-                },
-              ],
-              activeTabKey: editorTabKey(localId),
-              split: null,
-            }));
-            stepChatAside();
-            return { key: editorTabKey(localId), opened: "focused" };
-          }
-          if (/^https?:\/\//.test(target)) {
-            if (!activeProfileRef.current) return { error: "No profile" };
-            const localId = crypto.randomUUID();
-            const entry: BrowserEntry = {
-              localId,
-              profileId: activeProfileRef.current?.id ?? "",
-              initialUrl: target,
-              url: target,
-              title: target,
-              faviconUrl: null,
-              chatLocalId: requesterId,
-            };
-            if (openInBackground(browserTabKey(localId))) {
-              // The hidden pane keeps webviews alive, so the page
-              // loads while the user finishes what they're doing.
-              updateWorkspace((current) => ({
-                ...current,
-                browsers: [...current.browsers, entry],
-              }));
-              return background(browserTabKey(localId));
-            }
-            updateWorkspace((current) => ({
-              ...current,
-              browsers: [...current.browsers, entry],
-              activeTabKey: browserTabKey(localId),
-              split: null,
-            }));
-            stepChatAside();
-            return { key: browserTabKey(localId), opened: "focused" };
           }
           // A background agent terminal: open_surface is the agent
           // explicitly SHOWING it — materialize the tab (focused only
@@ -4213,15 +5027,38 @@ export function App() {
   const surfacesFor = (chat: ChatDockEntry): ChatSurface[] => {
     const attentionKeys = chipAttention[chat.localId] ?? [];
     const surfaces: ChatSurface[] = [
-      // Conversations forked from this one ride the rail as chips too.
-      ...workspace.chats
-        .filter((candidate) => candidate.parentLocalId === chat.localId)
-        .map((candidate) => ({
-          key: chatTabKey(candidate.localId),
-          kind: "chat" as const,
-          label: chatLabels[candidate.localId] ?? "Fork",
-          active: Boolean(signalsByChat[candidate.localId]?.working),
-          removable: true,
+      // Every first-class child lives on the parent's rail. Latent children
+      // stay here until the user messages them or they request attention.
+      ...[...sessionsById.values()]
+        .filter(
+          (session) =>
+            session.parentSessionId === chat.sessionId &&
+            session.visibility !== "archived",
+        )
+        .map((session) => {
+          const open = workspace.chats.find(
+            (candidate) => candidate.sessionId === session.id,
+          );
+          return {
+            key: open ? chatTabKey(open.localId) : `session:${session.id}`,
+            kind: session.forkedFromSessionId
+              ? ("chat" as const)
+              : ("subagent" as const),
+            label: sessionLabel(session),
+            active: open
+              ? Boolean(signalsByChat[open.localId]?.working)
+              : session.running,
+            attention: session.attentionRequired,
+          };
+        }),
+      ...workspace.tabs
+        .filter((tab) => tab.chatLocalId === chat.localId)
+        .map((tab) => ({
+          key: tabKey(tab),
+          kind:
+            tab.kind === "workflow" ? ("workflow" as const) : ("app" as const),
+          label: tab.label ?? tab.name,
+          attention: attentionKeys.includes(tabKey(tab)),
         })),
       ...workspace.browsers
         .filter((browser) => browser.chatLocalId === chat.localId)
@@ -4271,48 +5108,249 @@ export function App() {
 
   // Everything the palette searches and acts on, shared by both hosts
   // (the Cmd+P overlay and palette "New Tab" tabs).
-  const paletteProps = projectId
-    ? {
-        projectId,
-        profileId: activeProfile?.id,
-        projects,
-        activeProjectId: projectId,
-        profiles: profilesData?.profiles ?? [],
-        activeProfileId: activeProfile?.id,
-        sidebarConfig,
-        onOpenUrl: openUrl,
-        onOpenTab: openTab,
-        onOpenSession: openSession,
-        onSelectProject: selectProject,
-        onSwitchProfile: switchProfile,
-        onSendToAgent: sendToAgent,
-        onRunSkill: runSkill,
-        actionHandlers,
-        terminalMacros: prefs?.terminalMacros ?? [],
-        onRunTerminalMacro: runTerminalMacro,
-        agents: agentsData?.agents ?? [],
-        defaultAgentId: effectiveDefaultAgentId,
-        focusedChat: focusedChat
-          ? {
-              agentId: focusedSession?.agentId ?? focusedChat.agentId ?? null,
-              effort: focusedSession?.modelEffort ?? null,
-            }
-          : null,
-        onPickDefaultAgent: pickDefaultAgent,
-        onPickSessionAgent: pickSessionAgent,
-        onPickProjectAgent: pickProjectAgent,
-        onConfigureAgent: openConfigureAgent,
-        defaultAgentOverridden: projectOverrideAgentId !== null,
-        onClearDefaultOverride: () => {
-          if (projectId) {
-            void desktopApi.agentsSetProjectDefault(projectId, null);
-          }
-        },
-        onPickEffort: pickEffort,
-        onPickModel: pickModel,
-        onHighlightTarget: setPaletteTarget,
+  const paletteTargetChat = actionChat(workspace);
+  const paletteTabKeys = orderedTabKeys(workspace);
+  const paletteFloatingChats = workspace.chats.filter(
+    (chat) => chat.mode !== "tab",
+  );
+  const paletteTargetAgentId =
+    focusedSession?.agentId ?? focusedChat?.agentId ?? effectiveDefaultAgentId;
+  const paletteSwitchableAgentIds = new Set([
+    ...(agentsData?.agents.map((agent) => agent.id) ?? []),
+    ...Object.keys(projectAgentNames),
+  ]);
+  if (paletteTargetAgentId) {
+    paletteSwitchableAgentIds.delete(paletteTargetAgentId);
+  }
+  const paletteActionAvailability: Partial<Record<ActionId, boolean>> = {
+    "reopen-tab": workspace.closedTabs.length > 0,
+    "toggle-chat-minimized": paletteTargetChat !== undefined,
+    "chat-to-tab":
+      paletteTargetChat !== undefined &&
+      (paletteTargetChat.mode !== "tab" ||
+        workspace.activeTabKey !== chatTabKey(paletteTargetChat.localId)),
+    "prev-chat":
+      paletteFloatingChats.length > 1 ||
+      (paletteFloatingChats.length === 1 &&
+        paletteFloatingChats[0]?.mode !== "partial"),
+    "next-chat":
+      paletteFloatingChats.length > 1 ||
+      (paletteFloatingChats.length === 1 &&
+        paletteFloatingChats[0]?.mode !== "partial"),
+    "prev-tab": paletteTabKeys.length > 1,
+    "next-tab": paletteTabKeys.length > 1,
+    "browser-back": workspace.activeTabKey?.startsWith("browser:") === true,
+    "browser-forward": workspace.activeTabKey?.startsWith("browser:") === true,
+    "split-view": workspace.split !== null || paletteTabKeys.length > 1,
+    "close-tab":
+      workspace.activeTabKey !== null ||
+      workspace.chats.some((chat) => chat.mode === "partial"),
+    "default-agent":
+      (agentsData?.agents.length ?? 0) > 0 ||
+      Object.keys(projectAgentNames).length > 0,
+    "configure-agent":
+      (agentsData?.agents.length ?? 0) > 0 ||
+      Object.keys(projectAgentNames).length > 0,
+    "switch-agent":
+      focusedChat !== undefined && paletteSwitchableAgentIds.size > 0,
+    "session-status": focusedChat !== undefined,
+    // Project-agent models are committed in their project definition, so
+    // the mutable model picker only applies to configured profile agents.
+    "switch-model":
+      agentsData?.agents.some((agent) => agent.id === paletteTargetAgentId) ===
+      true,
+    "change-effort": paletteTargetAgentId != null,
+  };
+  const paletteProps = {
+    projectId,
+    profileId: activeProfile?.id,
+    projects,
+    activeProjectId: projectId,
+    profiles: profilesData?.profiles ?? [],
+    activeProfileId: activeProfile?.id,
+    sidebarConfig: visibleSidebars,
+    onOpenUrl: openUrl,
+    onOpenTab: openTab,
+    onOpenSession: openSession,
+    onSelectProject: selectProject,
+    onSwitchProfile: switchProfile,
+    onSendToAgent: sendToAgent,
+    startingActions,
+    canCreateWorkflows: Boolean(projectId) && !memberShell,
+    onRunSkill: runSkill,
+    actionHandlers,
+    terminalMacros: prefs?.terminalMacros ?? [],
+    onRunTerminalMacro: runTerminalMacro,
+    actionAvailability: projectId
+      ? paletteActionAvailability
+      : Object.fromEntries(
+          BUILTIN_ACTIONS.map((action) => [
+            action.id,
+            [
+              "check-for-updates",
+              "setup-agent",
+              "manage-connectors",
+              "connect-remote-project",
+              "new-browser-tab",
+              "toggle-sidebar",
+            ].includes(action.id),
+          ]),
+        ),
+    agents: agentsData?.agents ?? [],
+    defaultAgentId: effectiveDefaultAgentId,
+    focusedChat: focusedChat
+      ? {
+          agentId: focusedSession?.agentId ?? focusedChat.agentId ?? null,
+          model: focusedSession?.model ?? null,
+          effort: focusedSession?.modelEffort ?? null,
+        }
+      : null,
+    onPickDefaultAgent: pickDefaultAgent,
+    onPickSessionAgent: pickSessionAgent,
+    onPickProjectAgent: pickProjectAgent,
+    onConfigureAgent: openConfigureAgent,
+    defaultAgentOverridden: projectOverrideAgentId !== null,
+    onClearDefaultOverride: () => {
+      if (projectId) {
+        void desktopApi.agentsSetProjectDefault(projectId, null);
       }
-    : null;
+    },
+    onPickEffort: pickEffort,
+    onPickModel: pickModel,
+    onHighlightTarget: setPaletteTarget,
+  };
+
+  const customizeSidebar = (side: "left" | "right") => {
+    void Promise.all([
+      desktopApi.sidebarConfigGet(projectId),
+      desktopApi.sidebarConfigFile(),
+      projectId ? desktopApi.projectRoot(projectId) : Promise.resolve(null),
+    ])
+      .then(([resolved, profileFile, root]) => {
+        const file =
+          resolved.layer === "project" && root
+            ? `${root}/.catamorphic/sidebar.js`
+            : resolved.layer === "project-local" && projectId
+              ? `${profileFile.slice(0, profileFile.lastIndexOf("/"))}/sidebar-projects/${projectId}.js`
+              : profileFile;
+        sendToAgent(
+          [
+            `Help me customize my ${side} sidebar. Walk me through the available tabs and widgets, then make the changes I ask for.`,
+            `The live sidebar configuration file on this machine is ${JSON.stringify(file)}. Read it first, or create it from the current layout below if it does not exist. Edits apply live.`,
+            "The file exports module.exports = { left: [...], right: [...] }. Each tab has a stable id, title, Lucide icon and sections. Each section has a stable id and type (bookmarks, tabs, workflows, apps, chats, files, remote, git, prs, activity, note, custom or app). Preserve existing ids and the other sidebar. Profile selection and Settings are fixed in the left footer. A single tab hides its icon strip. Do not commit these local settings.",
+            `Current layout: ${JSON.stringify(resolved.config)}`,
+          ].join("\n\n"),
+          "float",
+        );
+      })
+      .catch((cause: unknown) =>
+        setLinkError(
+          cause instanceof Error
+            ? cause.message
+            : "Could not open sidebar customization",
+        ),
+      );
+  };
+
+  const sidebarTabs = (side: "left" | "right") => {
+    const tabs = visibleSidebars?.[side] ?? [];
+    if (
+      side !== "left" ||
+      !tabsInSidebar ||
+      tabs.some((tab) =>
+        tab.sections.some((section) => section.type === "tabs"),
+      )
+    )
+      return tabs;
+    // Older customized layouts still need a home for their open workspace tabs.
+    return tabs.map((tab, index) =>
+      index === 0
+        ? {
+            ...tab,
+            sections: [
+              ...tab.sections,
+              { id: "workspace-tabs", type: "tabs" as const },
+            ],
+          }
+        : tab,
+    );
+  };
+  const renderSidebarSection = (
+    section: SidebarSectionConfig,
+    visible: boolean,
+  ) =>
+    projectId ? (
+      <ConfiguredSection
+        key={section.id}
+        visible={visible}
+        onCustomize={() => customizeSidebar("left")}
+        section={section}
+        pinnedStyle={prefs?.pinnedBookmarks ?? "tiles"}
+        tabs={tabsInSidebar ? workspaceTabBar : null}
+        experienceContext={projectExperienceContext}
+        memberShell={memberShell}
+        projectId={projectId}
+        profileId={activeProfile?.id}
+        activeTab={activeTab}
+        activeFilePath={
+          workspace.editors.find(
+            (editor) => editorTabKey(editor.localId) === workspace.activeTabKey,
+          )?.filePath ?? undefined
+        }
+        activeChatSessionId={
+          workspace.chats.find(
+            (chat) => chat.localId === workspace.activeChatId,
+          )?.sessionId
+        }
+        keybindingLabel={formatBinding(keybindings["new-floating-chat"])}
+        agentsData={agentsData}
+        defaultAgentId={effectiveDefaultAgentId}
+        projectAgentNames={projectAgentNames}
+        unreadSessionIds={unreadSessionIds}
+        onOpenTab={openTab}
+        onNewWorkflow={() => sendToAgent(NEW_WORKFLOW_PROMPT, "float")}
+        onNewChat={() => addChat()}
+        onSessionCommand={(session, command) => {
+          const entry = workspace.chats.find(
+            (chat) => chat.sessionId === session.id,
+          ) ?? { ...newChatEntry("tab"), sessionId: session.id };
+          if (command === "fork") {
+            void desktopApi
+              .sessionIsIncognito(session.id)
+              .then((incognito) => forkChat({ ...entry, incognito }));
+            return;
+          }
+          if (command === "parent") {
+            openParentChat(entry);
+            return;
+          }
+          openSession(session);
+          openPalettePicker(command);
+        }}
+        onOpenSession={openSession}
+        onSessionAction={applySessionAction}
+        onOpenUrl={openUrl}
+        onOpenFile={(filePath, mode) => {
+          void openLinkedSurface(`file:${filePath}`, { mode }).catch(
+            (cause: unknown) =>
+              setLinkError(
+                cause instanceof Error
+                  ? cause.message
+                  : "Could not open this file",
+              ),
+          );
+        }}
+        onOpenHistory={setRemoteHistoryPath}
+        onPublish={(path, features) => setRemotePublish({ path, features })}
+        onPropose={(files, features) => setRemotePropose({ files, features })}
+      />
+    ) : null;
+
+  const hasActiveWork =
+    Object.values(signalsByChat).some((signals) => signals.working) ||
+    Object.values(workspaces).some((candidate) =>
+      candidate.terminals.some((terminal) => terminal.busy),
+    );
 
   const tabsInSidebar = prefs?.tabPlacement === "sidebar";
   const headerInSidebar = tabsInSidebar && prefs?.headerPlacement === "sidebar";
@@ -4375,7 +5413,11 @@ export function App() {
       secondaryKey={splitCompanionKey}
       highlightKey={targetedTabKey}
       groups={tabGroups}
-      onSelect={selectTab}
+      onSelect={(key, mode) =>
+        mode === "side" || mode === "floating"
+          ? openSurface(key, mode)
+          : selectTab(key)
+      }
       onClose={closeTab}
       onNew={openPaletteTab}
       onToggleGroup={toggleChatGroup}
@@ -4407,6 +5449,26 @@ export function App() {
         pending={toolPermissions[0] ?? null}
         queued={Math.max(0, toolPermissions.length - 1)}
       />
+      <UpdateBanner
+        hasActiveWork={hasActiveWork}
+        onOpenRelease={(url) => openBrowserTab(url)}
+      />
+      {linkError && (
+        <div
+          role="alert"
+          className="fixed right-4 top-12 z-[250] flex max-w-sm items-center gap-3 rounded-lg border border-border bg-bg-overlay p-3 text-xs text-fg shadow-lg"
+        >
+          <span>{linkError}</span>
+          <button
+            type="button"
+            onClick={() => setLinkError(null)}
+            className="text-accent"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+      <DisabledControlHints />
       <MobilePairingModal
         open={mobilePairing.open}
         context={mobilePairing.context}
@@ -4423,116 +5485,124 @@ export function App() {
           applyProjectAgent(agent, target);
         }}
       />
-      <aside
-        ref={sidebarRef}
-        data-sidebar-revealed={revealed}
-        className={`desktop-sidebar flex shrink-0 flex-col overflow-hidden bg-sidebar transition-[width] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${compactWindow ? `absolute inset-y-0 left-0 z-40 rounded-r-xl ${revealed ? "shadow-xl" : ""}` : ""} ${sidebarVisible ? "w-[260px]" : "w-0"}`}
-        aria-hidden={!sidebarVisible}
-        inert={!sidebarVisible ? true : undefined}
-      >
-        <div className="flex w-[260px] flex-1 flex-col overflow-hidden">
-          <div className="app-drag flex h-10 shrink-0 items-center justify-end gap-1 pl-[86px] pr-3">
-            {sidebarVisible && sidebarToggle}
+      <CreateSubsessionDialog
+        parent={subsessionParent}
+        agents={[
+          ...(agentsData?.agents.map((agent) => ({
+            id: agent.id,
+            name: agent.name,
+          })) ?? []),
+          ...Object.entries(projectAgentNames).map(([id, name]) => ({
+            id,
+            name,
+          })),
+        ]}
+        defaultAgentId={effectiveDefaultAgentId}
+        pending={createSubsession.isPending}
+        error={subsessionError}
+        onClose={() => setSubsessionParent(null)}
+        onCreate={(input) => {
+          if (!subsessionParent) return;
+          setSubsessionError(null);
+          void createSubsession
+            .mutateAsync({
+              parentSessionId: subsessionParent.id,
+              ...input,
+            })
+            .then((session) => {
+              setSubsessionParent(null);
+              openSession(session);
+            })
+            .catch((cause) => {
+              setSubsessionError(
+                cause instanceof Error ? cause.message : String(cause),
+              );
+            });
+        }}
+      />
+      <ArchiveSessionDialog
+        session={archiveRequest?.session ?? null}
+        sessionCount={archiveRequest?.sessionIds.length ?? 0}
+        runningCount={archiveRequest?.runningCount ?? 0}
+        watcherCount={archiveRequest?.watcherCount ?? 0}
+        processCount={archiveRequest?.processCount ?? 0}
+        pending={archiveSession.isPending}
+        error={archiveError}
+        onClose={() => setArchiveRequest(null)}
+        onConfirm={() => {
+          if (archiveRequest) void finishArchive(archiveRequest);
+        }}
+      />
+      <TabbedSidebar
+        key={`left:${activeProfile?.id}:${projectId}`}
+        side="left"
+        scope={`${activeProfile?.id}:${projectId}`}
+        tabs={sidebarTabs("left")}
+        open={sidebarVisible}
+        sidebarRef={sidebarRef}
+        overlay={compactWindow}
+        revealed={revealed}
+        error={sidebarError}
+        onCustomize={() => customizeSidebar("left")}
+        header={
+          <>
+            <div className="app-drag flex h-10 shrink-0 items-center justify-end gap-1 pl-[86px] pr-3">
+              {sidebarVisible && sidebarToggle}
+              {headerInSidebar && (
+                <div
+                  ref={setBrowserNavigationHost}
+                  className="app-no-drag flex items-center gap-1"
+                  data-sidebar-navigation
+                />
+              )}
+            </div>
             {headerInSidebar && (
               <div
-                ref={setBrowserNavigationHost}
-                className="app-no-drag flex items-center gap-1"
-                data-sidebar-navigation
-              />
+                className={`relative z-30 mx-3 mb-2 h-8 ${activeHeaderTitle || chromeBrowserId ? "" : "hidden"}`}
+              >
+                {workspaceTitle}
+              </div>
             )}
-          </div>
-          {headerInSidebar && (
-            <div
-              className={`relative z-30 mx-3 mb-2 h-8 ${activeHeaderTitle || chromeBrowserId ? "" : "hidden"}`}
-            >
-              {workspaceTitle}
+
+            <div className="flex items-center gap-1 px-3 pb-3">
+              <ProjectSwitcher
+                projects={projects}
+                activeProjectId={projectId}
+                onSelect={selectProject}
+                onNewProject={() => setProjectModalOpen(true)}
+                onConnectRemote={() =>
+                  setRemoteConnect({ open: true, link: null })
+                }
+                onDeleteProject={setDeletingProject}
+              />
+              <RemoteConnectionIndicator projectId={projectId} />
             </div>
-          )}
-
-          <div className="flex items-center gap-1 px-3 pb-3">
-            <ProjectSwitcher
-              projects={projects}
-              activeProjectId={projectId}
-              onSelect={selectProject}
-              onNewProject={() => setProjectModalOpen(true)}
-              onConnectRemote={() =>
-                setRemoteConnect({ open: true, link: null })
-              }
-              onDeleteProject={setDeletingProject}
-            />
-          </div>
-
-          <div className="min-h-0 flex-1 overflow-y-auto px-2">
-            {projectId &&
-              (sidebarConfig?.sections ?? []).map((section, index) => (
-                <ConfiguredSection
-                  // biome-ignore lint/suspicious/noArrayIndexKey: sections have no id; the same type may appear twice, and order IS identity here
-                  key={`${section.type}:${index}`}
-                  section={section}
-                  projectId={projectId}
-                  profileId={activeProfile?.id}
-                  pinnedStyle={prefs?.pinnedBookmarks ?? "tiles"}
-                  tabs={tabsInSidebar ? workspaceTabBar : null}
-                  activeTab={activeTab}
-                  activeChatSessionId={
-                    workspace.chats.find(
-                      (chat) => chat.localId === workspace.activeChatId,
-                    )?.sessionId
-                  }
-                  keybindingLabel={formatBinding(
-                    keybindings["new-floating-chat"],
-                  )}
-                  agentsData={agentsData}
-                  defaultAgentId={effectiveDefaultAgentId}
-                  projectAgentNames={projectAgentNames}
-                  onOpenTab={openTab}
-                  onNewChat={() => addChat()}
-                  onOpenSession={openSession}
-                  onOpenUrl={openUrl}
-                  onOpenFile={(filePath) => openEditorTab({ filePath })}
-                  onOpenHistory={setRemoteHistoryPath}
-                  onPublish={(path, features) =>
-                    setRemotePublish({ path, features })
-                  }
-                  onPropose={(files, features) =>
-                    setRemotePropose({ files, features })
-                  }
-                />
-              ))}
-            {projectId &&
-              tabsInSidebar &&
-              !sidebarConfig?.sections.some(
-                (section) => section.type === "tabs",
-              ) && (
-                <section
-                  aria-label="Open tabs"
-                  className="sidebar-section pt-2 pb-3"
-                >
-                  <h2 className="px-2 py-1.5 text-xs font-medium text-fg-muted">
-                    Tabs
-                  </h2>
-                  {workspaceTabBar}
-                </section>
-              )}
-          </div>
-
+          </>
+        }
+        footer={
           <footer className="flex h-12 shrink-0 items-center gap-1 px-2">
             {profilesData && activeProfile && (
               <ProfileBar
                 data={profilesData}
+                projects={allProjects}
                 activeProfileId={activeProfile.id}
                 onSwitch={switchProfile}
+                onOpenSettings={(profileId) =>
+                  openTab({
+                    kind: "profile-settings",
+                    name: profileId,
+                    label:
+                      profilesData.profiles.find(
+                        (profile) => profile.id === profileId,
+                      )?.name ?? "Profile",
+                  })
+                }
               />
             )}
             <ShortcutHint label="Customize sidebar" side="top">
               <button
                 type="button"
-                onClick={() =>
-                  sendToAgent(
-                    "I want to customize my sidebar. Can you walk me through what's possible and make the changes I ask for?",
-                    "float",
-                  )
-                }
+                onClick={() => customizeSidebar("left")}
                 className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay/60 hover:text-fg"
                 aria-label="Customize sidebar"
               >
@@ -4557,8 +5627,9 @@ export function App() {
               </button>
             </ShortcutHint>
           </footer>
-        </div>
-      </aside>
+        }
+        renderSection={renderSidebarSection}
+      />
 
       {/* min-h-0/overflow-hidden: the content column must clip its panes
           (terminal canvases refit asynchronously and may overshoot for a
@@ -4567,6 +5638,22 @@ export function App() {
         data-tab-layout={tabsInSidebar ? "sidebar" : "top"}
         className={`workspace-surface relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${tabsInSidebar ? "bg-sidebar" : "bg-bg"}`}
       >
+        {headerInSidebar && (
+          <ShortcutHint label="Toggle right sidebar">
+            <button
+              type="button"
+              aria-label={
+                rightSidebarOpen
+                  ? "Collapse right sidebar"
+                  : "Expand right sidebar"
+              }
+              onClick={() => actionHandlers["toggle-right-sidebar"]()}
+              className="app-no-drag absolute right-2 top-2 z-20 grid size-7 place-items-center rounded-md bg-sidebar text-fg-muted hover:text-fg"
+            >
+              <PanelRight className="size-4" />
+            </button>
+          </ShortcutHint>
+        )}
         {compactWindow && (
           <button
             type="button"
@@ -4586,8 +5673,64 @@ export function App() {
                 {sidebarToggle}
               </span>
             )}
-            {projectId && !tabsInSidebar && workspaceTabBar}
+            {(projectId || workspace.browsers.length > 0) &&
+              !tabsInSidebar &&
+              workspaceTabBar}
             {projectId && tabsInSidebar && !headerInSidebar && workspaceTitle}
+            {(() => {
+              const editorId = workspace.activeTabKey?.startsWith("editor:")
+                ? workspace.activeTabKey.slice("editor:".length)
+                : undefined;
+              const editor = editorId
+                ? workspace.editors.find(
+                    (candidate) => candidate.localId === editorId,
+                  )
+                : undefined;
+              if (
+                !editor?.filePath?.startsWith("store/") ||
+                !remoteSurfaceStatus ||
+                remoteSurfaceStatus.capabilities?.features.publications ===
+                  false
+              ) {
+                return null;
+              }
+              return (
+                <ShortcutHint label="Share this file">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const share = editorShareHandlersRef.current.get(
+                        editor.localId,
+                      );
+                      if (share) void share().catch(() => undefined);
+                    }}
+                    className="app-no-drag grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors hover:bg-bg-overlay hover:text-fg"
+                    aria-label="Share this file"
+                    data-testid="surface-share"
+                  >
+                    <Share2 className="size-3.5" />
+                  </button>
+                </ShortcutHint>
+              );
+            })()}
+            <ShortcutHint
+              label="Toggle right sidebar"
+              shortcut={formatBinding(keybindings["toggle-right-sidebar"])}
+            >
+              <button
+                type="button"
+                aria-label={
+                  rightSidebarOpen
+                    ? "Collapse right sidebar"
+                    : "Expand right sidebar"
+                }
+                aria-expanded={rightSidebarOpen}
+                className="app-no-drag ml-auto grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:text-fg"
+                onClick={() => actionHandlers["toggle-right-sidebar"]?.()}
+              >
+                <PanelRight className="size-4" />
+              </button>
+            </ShortcutHint>
           </div>
         )}
 
@@ -4627,7 +5770,9 @@ export function App() {
               {/* Screen-style tabs render whenever they occupy a view
                     slot — in a split that can be two at once. */}
               {workspace.tabs
-                .filter((tab) => viewSlots[tabKey(tab)])
+                .filter(
+                  (tab) => tab.kind === "workflow" || viewSlots[tabKey(tab)],
+                )
                 .map((tab) => (
                   <div
                     key={tabKey(tab)}
@@ -4646,6 +5791,38 @@ export function App() {
                         <WorkflowScreen
                           projectId={projectId}
                           workflowName={tab.name}
+                          canEdit={!memberShell}
+                          active={Boolean(viewSlots[tabKey(tab)])}
+                          onAskAgent={(message) =>
+                            sendToAgent(message, "float")
+                          }
+                          onOpenSource={(path, line, column) => {
+                            void openLinkedSurface(
+                              `file:${path}${line ? `:${line}${column ? `:${column}` : ""}` : ""}`,
+                              { side: true, newTab: true },
+                            ).catch((cause: unknown) =>
+                              setLinkError(
+                                cause instanceof Error
+                                  ? cause.message
+                                  : "Could not open source",
+                              ),
+                            );
+                          }}
+                          initialDraft={tab.workflowDraft}
+                          onDraftChange={(workflowDraft) =>
+                            updateWorkspace((ws) => ({
+                              ...ws,
+                              tabs: ws.tabs.map((item) =>
+                                tabKey(item) === tabKey(tab)
+                                  ? {
+                                      ...item,
+                                      draft: Boolean(workflowDraft),
+                                      workflowDraft,
+                                    }
+                                  : item,
+                              ),
+                            }))
+                          }
                         />
                       </Suspense>
                     ) : tab.kind === "app" ? (
@@ -4663,6 +5840,16 @@ export function App() {
                         onAddAgent={() => setWizardModalOpen(true)}
                         onConfigureAgent={openConfigureAgent}
                         onManageConnectors={() => setConnectorsModalOpen(true)}
+                      />
+                    ) : tab.kind === "profile-settings" && profilesData ? (
+                      <ProfileSettingsScreen
+                        profileId={tab.name}
+                        activeProfileId={
+                          activeProfile?.id ?? profilesData.defaultProfileId
+                        }
+                        data={profilesData}
+                        projects={allProjects}
+                        onClose={() => closeTab(tabKey(tab))}
                       />
                     ) : tab.kind === "usage" ? (
                       <Suspense fallback={<div className="flex-1 bg-bg" />}>
@@ -4728,7 +5915,12 @@ export function App() {
                       }
                     }}
                     visible={Boolean(viewSlots[browserTabKey(browser.localId)])}
-                    keepAwake={Boolean(browser.agentControlled)}
+                    keepAwake={Boolean(
+                      browser.agentControlled &&
+                        Object.values(signalsByChat).some(
+                          (signal) => signal.working,
+                        ),
+                    )}
                     onStateChange={(state) =>
                       onBrowserState(browser.localId, state)
                     }
@@ -4739,8 +5931,11 @@ export function App() {
                         ? dismissFloating
                         : undefined
                     }
-                    onPreviewLink={(url) =>
-                      openBrowserTab(url, { floating: true })
+                    onPreviewLink={(url, mode) =>
+                      openBrowserTab(url, {
+                        floating: mode === "floating",
+                        side: mode === "side",
+                      })
                     }
                     registerCommands={(commands) => {
                       if (commands)
@@ -4752,6 +5947,12 @@ export function App() {
                     }}
                     registerNavigate={(navigate) =>
                       browserNavigatorsRef.current.set(
+                        browser.localId,
+                        navigate,
+                      )
+                    }
+                    registerHistoryNavigate={(navigate) =>
+                      browserHistoryNavigatorsRef.current.set(
                         browser.localId,
                         navigate,
                       )
@@ -4807,49 +6008,52 @@ export function App() {
                       }
                     />
                   )}
-                  <TerminalScreen
-                    projectId={projectId}
-                    active={terminal.localId === activeTerminalTabId}
-                    initialCommand={terminal.initialCommand}
-                    macroShortcuts={prefs?.terminalMacros.map(
-                      (macro) => macro.shortcut,
-                    )}
-                    floating={
-                      workspace.floatingKey === terminalTabKey(terminal.localId)
-                    }
-                    attachSessionId={terminal.attachSessionId}
-                    restoreSessionId={terminal.restoreSessionId}
-                    readOnly={Boolean(terminal.agentControlled)}
-                    onTitle={(title) =>
-                      onTerminalTitle(terminal.localId, title)
-                    }
-                    onSession={(ptySessionId) =>
-                      updateWorkspace((ws) => ({
-                        ...ws,
-                        terminals: ws.terminals.map((t) =>
-                          t.localId === terminal.localId
-                            ? { ...t, ptySessionId }
-                            : t,
-                        ),
-                      }))
-                    }
-                    onExit={() => {
-                      // Agent terminals stay open to read; the activity
-                      // indicator stops. User terminals close as before.
-                      if (terminal.attachSessionId) {
+                  <Suspense fallback={<div className="flex-1 bg-bg" />}>
+                    <TerminalScreen
+                      projectId={projectId}
+                      active={terminal.localId === activeTerminalTabId}
+                      initialCommand={terminal.initialCommand}
+                      macroShortcuts={prefs?.terminalMacros.map(
+                        (macro) => macro.shortcut,
+                      )}
+                      floating={
+                        workspace.floatingKey ===
+                        terminalTabKey(terminal.localId)
+                      }
+                      attachSessionId={terminal.attachSessionId}
+                      restoreSessionId={terminal.restoreSessionId}
+                      readOnly={Boolean(terminal.agentControlled)}
+                      onTitle={(title) =>
+                        onTerminalTitle(terminal.localId, title)
+                      }
+                      onSession={(ptySessionId) =>
                         updateWorkspace((ws) => ({
                           ...ws,
                           terminals: ws.terminals.map((t) =>
                             t.localId === terminal.localId
-                              ? { ...t, running: false }
+                              ? { ...t, ptySessionId }
                               : t,
                           ),
-                        }));
-                      } else {
-                        closeTab(terminalTabKey(terminal.localId));
+                        }))
                       }
-                    }}
-                  />
+                      onExit={() => {
+                        // Agent terminals stay open to read; the activity
+                        // indicator stops. User terminals close as before.
+                        if (terminal.attachSessionId) {
+                          updateWorkspace((ws) => ({
+                            ...ws,
+                            terminals: ws.terminals.map((t) =>
+                              t.localId === terminal.localId
+                                ? { ...t, running: false }
+                                : t,
+                            ),
+                          }));
+                        } else {
+                          closeTab(terminalTabKey(terminal.localId));
+                        }
+                      }}
+                    />
+                  </Suspense>
                   <AgentControlOverlay
                     kind="terminal"
                     active={Boolean(terminal.agentControlled)}
@@ -4882,6 +6086,9 @@ export function App() {
                   )}
                   <Suspense fallback={<div className="flex-1 bg-bg" />}>
                     <EditorScreen
+                      line={editor.line}
+                      column={editor.column}
+                      navigation={editor.navigation}
                       projectId={projectId}
                       filePath={editor.filePath}
                       onFileChange={(filePath) =>
@@ -4889,6 +6096,18 @@ export function App() {
                       }
                       onDirtyChange={(dirty) =>
                         onEditorState(editor.localId, { dirty })
+                      }
+                      registerShare={(share) => {
+                        editorShareHandlersRef.current.set(
+                          editor.localId,
+                          share,
+                        );
+                      }}
+                      onShare={(path) =>
+                        setRemotePublish({
+                          path,
+                          features: remoteSurfaceStatus?.capabilities?.features,
+                        })
                       }
                     />
                   </Suspense>
@@ -4969,6 +6188,10 @@ export function App() {
                 entry={entry}
                 title={chatLabels[entry.localId] ?? "AI assistant"}
                 tabActive={Boolean(viewSlots[chatTabKey(entry.localId)])}
+                refreshWhileIdle={
+                  entry.localId === workspace.activeChatId &&
+                  chatVisible(workspace, entry)
+                }
                 slot={
                   viewSlots[chatTabKey(entry.localId)] === "left"
                     ? "left"
@@ -4999,76 +6222,59 @@ export function App() {
                       toolInput: view.toolInput,
                       toolResult: view.toolResult,
                     },
-                    mode === "split" ? "side" : undefined,
+                    mode === "split" ? "side" : mode,
                   );
                 }}
-                onLinkClick={(url, modifiers) => {
-                  // The palette's grammar, applied to links: plain =
-                  // open (the page takes the view, a fullscreen chat
-                  // steps down to the floating dock), ⌘ = new tab (the
-                  // chat keeps its place), ⌘⇧ = open to the side.
-                  if (modifiers.metaKey && modifiers.shiftKey) {
-                    openBrowserTab(url, {
-                      side: true,
-                      chatLocalId: entry.localId,
-                    });
-                    return;
-                  }
-                  if (modifiers.metaKey) {
-                    openBrowserTab(url, { chatLocalId: entry.localId });
-                    return;
-                  }
-                  openBrowserTab(url, { chatLocalId: entry.localId });
-                  if (entry.mode === "tab") {
-                    updateWorkspace((ws) => ({
-                      ...ws,
-                      activeChatId: entry.localId,
-                      chats: ws.chats.map((chat) =>
-                        chat.localId === entry.localId
-                          ? { ...chat, mode: "partial" }
-                          : chat.mode === "partial"
-                            ? { ...chat, mode: "min" }
-                            : chat,
-                      ),
-                    }));
-                  }
-                }}
-                onFileClick={(path) => {
-                  if (!projectId) {
-                    openEditorTab({
-                      filePath: path,
-                      chatLocalId: entry.localId,
-                    });
-                    return;
-                  }
-                  void desktopApi.projectRoot(projectId).then((root) => {
-                    if (!root) {
-                      openEditorTab({
-                        filePath: path,
-                        chatLocalId: entry.localId,
-                      });
-                      return;
-                    }
-                    const location = resolveProjectFileLocation(root, path);
-                    if (isPdfPath(location.relativePath)) {
-                      openBrowserTab(localFileUrl(location.absolutePath), {
-                        chatLocalId: entry.localId,
-                        title: fileNameFromPath(location.relativePath),
-                      });
-                      return;
-                    }
-                    openEditorTab({
-                      filePath: location.relativePath,
-                      chatLocalId: entry.localId,
-                    });
-                  });
-                }}
+                onLinkClick={(url, modifiers) =>
+                  openMessageLink(url, entry, modifiers)
+                }
+                onFileClick={(path, modifiers) =>
+                  openMessageLink(
+                    `file:${path}`,
+                    entry,
+                    modifiers ?? {
+                      metaKey: false,
+                      ctrlKey: false,
+                      altKey: false,
+                      shiftKey: false,
+                    },
+                  )
+                }
                 onFork={(messageId) => forkChat(entry, messageId)}
+                onForkCurrent={() => forkChat(entry)}
+                archived={Boolean(
+                  entry.sessionId && archivedSessionIds.has(entry.sessionId),
+                )}
+                onArchive={
+                  entry.sessionId
+                    ? () =>
+                        applySessionAction(
+                          entry.sessionId!,
+                          archivedSessionIds.has(entry.sessionId!)
+                            ? "unarchive"
+                            : "archive",
+                        )
+                    : undefined
+                }
+                inspectRequestNonce={sessionInspectRequests[entry.localId]}
                 onOpenParent={
                   chatForks[entry.localId]
                     ? () => openParentChat(entry)
                     : undefined
                 }
+                onEditModel={() => {
+                  revealChat(entry.localId);
+                  openPalettePicker("model");
+                }}
+                runtimeSettingsError={
+                  updateSession.variables?.sessionId === entry.sessionId
+                    ? updateSession.error?.message
+                    : null
+                }
+                onEditEffort={() => {
+                  revealChat(entry.localId);
+                  openPalettePicker("effort");
+                }}
                 pullSelectionNonce={selectionPulls[entry.localId] ?? 0}
                 onFocusRequest={
                   split &&
@@ -5104,6 +6310,12 @@ export function App() {
                     ),
                   }))
                 }
+                onEscapeToFloating={(localId) => {
+                  lastChatStepDownRef.current = {
+                    localId,
+                    at: performance.now(),
+                  };
+                }}
                 onClose={closeChat}
                 registerClose={(close) =>
                   chatClosersRef.current.set(entry.localId, close)
@@ -5126,24 +6338,84 @@ export function App() {
               forks={chatForks}
               signals={signalsByChat}
               unread={unreadByChat}
+              attention={attentionByChat}
+              menus={chatMenus}
               activeLocalId={workspace.activeChatId}
               autoCollapse={activeChatTabId !== undefined}
               onCollapsedChange={setBubblesCollapsed}
               onToggle={toggleChat}
               onClose={closeChat}
+              onMenuAction={(localId, entry) => {
+                const sessionId = workspace.chats.find(
+                  (chat) => chat.localId === localId,
+                )?.sessionId;
+                if (sessionId) applySessionAction(sessionId, entry.action);
+              }}
               onNewChat={() => addChat()}
               onCollapse={minimizeFloatingChats}
             />
           </div>
+        ) : workspace.browsers.length > 0 ? (
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            {workspace.browsers.map((browser) => (
+              <div
+                key={browser.localId}
+                className={paneClass(browserTabKey(browser.localId))}
+                style={paneStyle(browserTabKey(browser.localId))}
+                {...paneFocusProps(browserTabKey(browser.localId))}
+              >
+                <BrowserScreen
+                  profileId={browser.profileId}
+                  projectId={null}
+                  floatingDismissShortcut={keybindings["dismiss-floating"]}
+                  initialUrl={browser.url || browser.initialUrl}
+                  active={browser.localId === activeBrowserTabId}
+                  visible={Boolean(viewSlots[browserTabKey(browser.localId)])}
+                  onStateChange={(state) =>
+                    onBrowserState(browser.localId, state)
+                  }
+                  registerNavigate={(navigate) =>
+                    browserNavigatorsRef.current.set(browser.localId, navigate)
+                  }
+                  registerHistoryNavigate={(navigate) =>
+                    browserHistoryNavigatorsRef.current.set(
+                      browser.localId,
+                      navigate,
+                    )
+                  }
+                  registerGuest={(guestId) => {
+                    if (guestId === null) {
+                      browserGuestIdsRef.current.delete(browser.localId);
+                    } else {
+                      browserGuestIdsRef.current.set(browser.localId, guestId);
+                    }
+                  }}
+                />
+              </div>
+            ))}
+          </div>
         ) : (
           <EmptyState
-            loading={projectsQuery.isLoading}
+            loading={projectsLoading}
+            loadError={projectsLoadError}
+            retrying={projectsFetching}
+            onRetry={() => void projectsQuery.refetch()}
             onNewProject={() => setProjectModalOpen(true)}
             onConnectRemote={() => setRemoteConnect({ open: true, link: null })}
             onStartWithAgent={startWithAgent}
           />
         )}
       </main>
+      <TabbedSidebar
+        key={`right:${activeProfile?.id}:${projectId}`}
+        side="right"
+        scope={`${activeProfile?.id}:${projectId}`}
+        tabs={sidebarTabs("right")}
+        open={rightSidebarOpen}
+        error={sidebarError}
+        onCustomize={() => customizeSidebar("right")}
+        renderSection={renderSidebarSection}
+      />
 
       {/* Stays mounted so the close transition can play out. */}
       {paletteProps && (
@@ -5233,15 +6505,46 @@ export function App() {
         />
       )}
 
+      <Modal
+        open={closingWorkflow !== null}
+        onClose={() => setClosingWorkflow(null)}
+        labelledBy="workflow-close-title"
+      >
+        <div className="p-5">
+          <h2 id="workflow-close-title" className="text-base font-semibold">
+            Discard workflow edits?
+          </h2>
+          <p className="mt-2 text-sm text-fg-muted">
+            This workflow has unsaved changes. Keep editing to save them, or
+            discard the draft and close the tab.
+          </p>
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              className="rounded-md border border-border px-3 py-1.5 text-xs"
+              onClick={() => setClosingWorkflow(null)}
+            >
+              Keep editing
+            </button>
+            <button
+              type="button"
+              className="rounded-md bg-danger px-3 py-1.5 text-xs text-white"
+              onClick={() => {
+                if (closingWorkflow)
+                  closeTab(closingWorkflow, { discardDraft: true });
+                setClosingWorkflow(null);
+              }}
+            >
+              Discard and close
+            </button>
+          </div>
+        </div>
+      </Modal>
       <ProjectModal
         open={projectModalOpen}
         onClose={() => setProjectModalOpen(false)}
         onCreated={(project) => {
           setProjectModalOpen(false);
-          // New projects belong to the profile they were created in.
-          if (activeProfile) {
-            void desktopApi.profilesClaimProject(activeProfile.id, project.id);
-          }
           selectProject(project.id);
         }}
       />
@@ -5291,19 +6594,28 @@ export function App() {
 /** One sidebar section, shaped by the user's sidebar.js config. */
 function ConfiguredSection({
   section,
+  visible,
+  onCustomize,
+  experienceContext,
+  memberShell,
   projectId,
   profileId,
   pinnedStyle,
   tabs,
   activeTab,
   activeChatSessionId,
+  activeFilePath,
   keybindingLabel,
   agentsData,
   defaultAgentId,
   projectAgentNames,
+  unreadSessionIds,
   onOpenTab,
   onNewChat,
+  onNewWorkflow,
   onOpenSession,
+  onSessionCommand,
+  onSessionAction,
   onOpenUrl,
   onOpenFile,
   onOpenHistory,
@@ -5311,21 +6623,30 @@ function ConfiguredSection({
   onPropose,
 }: {
   section: SidebarSectionConfig;
+  visible: boolean;
+  onCustomize: () => void;
+  experienceContext: ProjectExperienceContext;
+  memberShell: boolean;
   projectId: string;
   profileId?: string;
   pinnedStyle: "tiles" | "list";
   tabs: ReactNode;
   activeTab?: WorkspaceTab;
   activeChatSessionId?: string;
+  activeFilePath?: string;
   keybindingLabel: string;
   agentsData: AgentsData | null;
   defaultAgentId: string | null;
   projectAgentNames: Record<string, string>;
-  onOpenTab: (tab: WorkspaceTab) => void;
+  unreadSessionIds: ReadonlySet<string>;
+  onOpenTab: (tab: WorkspaceTab, mode?: CommitMode) => void;
   onNewChat: () => void;
-  onOpenSession: (session: AgentSession) => void;
-  onOpenUrl: (url: string, mode: "tab" | "replace") => void | Promise<void>;
-  onOpenFile: (filePath: string) => void;
+  onNewWorkflow: () => void;
+  onOpenSession: (session: AgentSession, mode?: CommitMode) => void;
+  onSessionCommand: (session: AgentSession, command: SessionCommand) => void;
+  onSessionAction: (sessionId: string, action: ChatSessionAction) => void;
+  onOpenUrl: (url: string, mode: CommitMode) => void;
+  onOpenFile: (filePath: string, mode?: CommitMode) => void;
   onOpenHistory: (filePath: string) => void;
   onPublish: (filePath: string, features: RemoteFeatures | undefined) => void;
   onPropose: (files: string[], features: RemoteFeatures | undefined) => void;
@@ -5338,17 +6659,103 @@ function ConfiguredSection({
   // (hidden, not unmounted) so its data fetch is what reveals the section.
   const hideEmpty =
     section.hideEmpty ??
-    (section.type === "workflows" ||
+    (section.type === "git" ||
+      section.type === "workflows" ||
       section.type === "apps" ||
       section.type === "remote");
   const [empty, setEmpty] = useState(true);
   const body = (() => {
     switch (section.type) {
+      case "activity":
+        return (
+          <SidebarSection
+            title={section.title ?? "Activity"}
+            defaultOpen={defaultOpen}
+          >
+            {(expanded) => (
+              <SidebarActivity
+                projectId={projectId}
+                visible={visible && expanded}
+                onOpenSession={onOpenSession}
+                onOpenTab={onOpenTab}
+              />
+            )}
+          </SidebarSection>
+        );
+      case "note":
+        return (
+          <SidebarSection
+            title={section.title ?? "Project note"}
+            defaultOpen={defaultOpen}
+          >
+            {(expanded) => (
+              <SidebarNote
+                key={`${profileId}:${projectId}:${section.id}`}
+                projectId={projectId}
+                scope={`${profileId}:${projectId}:${section.id}`}
+                path={section.path}
+                visible={visible && expanded}
+                onOpenFile={onOpenFile}
+              />
+            )}
+          </SidebarSection>
+        );
+      case "app":
+        return (
+          <SidebarSection
+            title={section.title ?? section.app ?? "App"}
+            defaultOpen={defaultOpen}
+            action={
+              <ShortcutHint label="Open app in tab">
+                <button
+                  type="button"
+                  aria-label="Open app in tab"
+                  className="sidebar-tab"
+                  onClick={() =>
+                    section.app && onOpenTab({ kind: "app", name: section.app })
+                  }
+                >
+                  <PanelRight className="size-3.5" />
+                </button>
+              </ShortcutHint>
+            }
+          >
+            {(expanded) =>
+              section.app ? (
+                <AppScreen
+                  projectId={projectId}
+                  appName={section.app}
+                  compact
+                  height={section.height}
+                  visible={visible && expanded}
+                />
+              ) : (
+                <button type="button" onClick={onCustomize}>
+                  Choose an app
+                </button>
+              )
+            }
+          </SidebarSection>
+        );
       case "workflows":
         return (
           <SidebarSection
             title={section.title ?? "Workflows"}
             defaultOpen={defaultOpen}
+            action={
+              !memberShell ? (
+                <ShortcutHint label="Create workflow">
+                  <button
+                    type="button"
+                    aria-label="Create workflow"
+                    onClick={onNewWorkflow}
+                    className="grid size-6 cursor-pointer place-items-center rounded text-fg-faint hover:bg-bg-overlay hover:text-fg"
+                  >
+                    <Plus className="size-3.5" />
+                  </button>
+                </ShortcutHint>
+              ) : undefined
+            }
           >
             <WorkflowsNav
               projectId={projectId}
@@ -5356,12 +6763,15 @@ function ConfiguredSection({
                 activeTab?.kind === "workflow" ? activeTab.name : undefined
               }
               onEmptyChange={setEmpty}
-              onSelect={(workflow) =>
-                onOpenTab({
-                  kind: "workflow",
-                  name: workflow.name,
-                  label: workflow.displayName ?? workflow.name,
-                })
+              onSelect={(workflow, mode) =>
+                onOpenTab(
+                  {
+                    kind: "workflow",
+                    name: workflow.name,
+                    label: workflow.displayName ?? workflow.name,
+                  },
+                  mode,
+                )
               }
             />
           </SidebarSection>
@@ -5376,7 +6786,24 @@ function ConfiguredSection({
               projectId={projectId}
               active={activeTab?.kind === "app" ? activeTab.name : undefined}
               onEmptyChange={setEmpty}
-              onSelect={(appName) => onOpenTab({ kind: "app", name: appName })}
+              onSelect={(appName, mode) =>
+                onOpenTab({ kind: "app", name: appName }, mode)
+              }
+            />
+          </SidebarSection>
+        );
+      case "files":
+        return (
+          <SidebarSection
+            title={section.title ?? "Files"}
+            defaultOpen={defaultOpen}
+          >
+            <FilesNav
+              projectId={projectId}
+              contentOnly={memberShell}
+              activePath={activeFilePath}
+              onEmptyChange={setEmpty}
+              onOpen={onOpenFile}
             />
           </SidebarSection>
         );
@@ -5404,8 +6831,11 @@ function ConfiguredSection({
               agentsData={agentsData}
               defaultAgentId={defaultAgentId}
               projectAgentNames={projectAgentNames}
+              unreadSessionIds={unreadSessionIds}
               onEmptyChange={setEmpty}
+              onCommand={onSessionCommand}
               onSelect={onOpenSession}
+              onSessionAction={onSessionAction}
             />
           </SidebarSection>
         );
@@ -5429,6 +6859,7 @@ function ConfiguredSection({
               projectId={projectId}
               profileId={profileId}
               pinnedStyle={pinnedStyle}
+              defaultOpenMode={section.open}
               menuOverride={section.menu}
               onEmptyChange={setEmpty}
               onOpen={(url, mode) =>
@@ -5488,6 +6919,7 @@ function ConfiguredSection({
           >
             <CustomItems
               section={section}
+              experienceContext={experienceContext}
               onOpenUrl={onOpenUrl}
               onEmptyChange={setEmpty}
             />
@@ -5509,14 +6941,18 @@ function ConfiguredSection({
  */
 function CustomItems({
   section,
+  experienceContext,
   onOpenUrl,
   onEmptyChange,
 }: {
   section: SidebarSectionConfig;
-  onOpenUrl: (url: string, mode: "tab" | "replace") => void;
+  experienceContext: ProjectExperienceContext;
+  onOpenUrl: (url: string, mode: CommitMode) => void;
   onEmptyChange?: (empty: boolean) => void;
 }) {
-  const items = section.items ?? [];
+  const items = (section.items ?? []).filter((item) =>
+    sidebarItemVisible(item, experienceContext),
+  );
   const isEmpty = items.length === 0;
   useEffect(() => {
     onEmptyChange?.(isEmpty);
@@ -5530,43 +6966,112 @@ function CustomItems({
   }
   return (
     <ul className="flex flex-col gap-0.5">
-      {items.map((item) => {
-        const mode = item.open ?? section.open ?? "replace";
-        return (
-          <li key={`${item.label}:${item.url}`}>
-            <SidebarItemRow
-              label={item.label}
-              title={item.url}
-              icon={item.icon ?? "Globe"}
-              menu={item.menu ?? section.menu ?? DEFAULT_CUSTOM_MENU}
-              preview={item.preview}
-              onOpen={() => onOpenUrl(item.url, mode)}
-              onAction={(entry) => {
-                switch (entry.action) {
-                  case "open":
-                    onOpenUrl(item.url, mode);
-                    break;
-                  case "open-tab":
-                    onOpenUrl(item.url, "tab");
-                    break;
-                  case "open-here":
-                    onOpenUrl(item.url, "replace");
-                    break;
-                  case "copy-url":
-                    void navigator.clipboard.writeText(item.url);
-                    break;
-                  // pin/unpin/rename/remove are bookmark-only; a config
-                  // may list them, but there's nothing to act on here.
-                  default:
-                    break;
-                }
-              }}
-            />
-          </li>
-        );
-      })}
+      {items.map((item) => (
+        <CustomItem
+          key={JSON.stringify(item)}
+          item={item}
+          section={section}
+          experienceContext={experienceContext}
+          onOpenUrl={onOpenUrl}
+        />
+      ))}
     </ul>
   );
+}
+
+function CustomItem({
+  item,
+  section,
+  experienceContext,
+  onOpenUrl,
+}: {
+  item: SidebarItem;
+  section: SidebarSectionConfig;
+  experienceContext: ProjectExperienceContext;
+  onOpenUrl: (url: string, mode: CommitMode) => void;
+}) {
+  const [open, setOpen] = useState(item.collapsed !== true);
+  const children = (item.items ?? []).filter((child) =>
+    sidebarItemVisible(child, experienceContext),
+  );
+  const mode = item.open ?? section.open ?? "replace";
+  const openItem = (intent: CommitMode = mode) => {
+    if (item.url) onOpenUrl(item.url, intent);
+    else if (children.length > 0) setOpen((value) => !value);
+  };
+  return (
+    <li>
+      <SidebarItemRow
+        label={item.label}
+        title={item.url}
+        icon={
+          item.icon ??
+          (item.url ? (
+            <SiteFavicon url={item.url} />
+          ) : (
+            <Folder className="size-3.5 shrink-0 text-fg-faint" />
+          ))
+        }
+        menu={
+          item.url
+            ? (item.menu ?? section.menu ?? DEFAULT_CUSTOM_MENU)
+            : (item.menu ?? [])
+        }
+        preview={item.preview}
+        disclosure={
+          children.length > 0
+            ? { open, onToggle: () => setOpen((value) => !value) }
+            : undefined
+        }
+        resource={Boolean(item.url)}
+        defaultOpenMode={mode}
+        onOpen={openItem}
+        onAction={(entry) => {
+          if (!item.url) return;
+          switch (entry.action) {
+            case "open":
+              onOpenUrl(item.url, mode);
+              break;
+            case "open-tab":
+              onOpenUrl(item.url, "tab");
+              break;
+            case "open-here":
+              onOpenUrl(item.url, "replace");
+              break;
+            case "copy-url":
+              void navigator.clipboard.writeText(item.url);
+              break;
+            default:
+              break;
+          }
+        }}
+      />
+      {children.length > 0 && (
+        <Collapsible open={open}>
+          <ul className="ml-5 flex flex-col gap-0.5">
+            {children.map((child) => (
+              <CustomItem
+                key={JSON.stringify(child)}
+                item={child}
+                section={section}
+                experienceContext={experienceContext}
+                onOpenUrl={onOpenUrl}
+              />
+            ))}
+          </ul>
+        </Collapsible>
+      )}
+    </li>
+  );
+}
+
+function sidebarItemVisible(
+  item: SidebarItem,
+  context: ProjectExperienceContext,
+): boolean {
+  if (!matchesProjectExperience(item.when, context)) return false;
+  if (item.url) return true;
+  return (item.items ?? []).some((child) => sidebarItemVisible(child, context));
 }
 
 function SidebarSection({
@@ -5578,15 +7083,23 @@ function SidebarSection({
   title: string;
   defaultOpen?: boolean;
   action?: ReactNode;
-  children: ReactNode;
+  children: ReactNode | ((expanded: boolean) => ReactNode);
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const [visited, setVisited] = useState(defaultOpen);
+  useEffect(() => {
+    setOpen(defaultOpen);
+    if (defaultOpen) setVisited(true);
+  }, [defaultOpen]);
   return (
     <section className="sidebar-section pb-2">
       <div className="flex items-center">
         <button
           type="button"
-          onClick={() => setOpen((value) => !value)}
+          onClick={() => {
+            setVisited(true);
+            setOpen((value) => !value);
+          }}
           className="flex h-7 min-w-0 flex-1 cursor-pointer items-center justify-between gap-2 rounded-md px-2 text-xs font-medium text-fg-muted hover:text-fg"
           aria-expanded={open}
         >
@@ -5599,13 +7112,11 @@ function SidebarSection({
         </button>
         {action}
       </div>
-      <div
-        className={`grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-          open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
-        }`}
-      >
-        <div className="overflow-hidden">{children}</div>
-      </div>
+      <Collapsible open={open}>
+        {typeof children === "function"
+          ? (visited || open) && children(open)
+          : children}
+      </Collapsible>
     </section>
   );
 }
@@ -5620,7 +7131,10 @@ function WorkflowsNav({
   active?: string;
   /** Reports emptiness up so hide-when-empty sections can drop entirely. */
   onEmptyChange?: (empty: boolean) => void;
-  onSelect: (workflow: { name: string; displayName?: string }) => void;
+  onSelect: (
+    workflow: { name: string; displayName?: string },
+    mode?: CommitMode,
+  ) => void;
 }) {
   const workflowsQuery = useWorkflows(projectId);
   const workflows = workflowsQuery.data ?? [];
@@ -5639,13 +7153,16 @@ function WorkflowsNav({
     <ul className="flex flex-col gap-0.5">
       {workflows.map((workflow) => (
         <li key={workflow.name}>
-          <button
+          <OpenResourceButton
             type="button"
-            onClick={() =>
-              onSelect({
-                name: workflow.name,
-                displayName: workflow.displayName ?? undefined,
-              })
+            onOpen={(mode) =>
+              onSelect(
+                {
+                  name: workflow.name,
+                  displayName: workflow.displayName ?? undefined,
+                },
+                mode,
+              )
             }
             className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${
               workflow.name === active
@@ -5657,7 +7174,7 @@ function WorkflowsNav({
             <span className="truncate">
               {workflow.displayName ?? workflow.name}
             </span>
-          </button>
+          </OpenResourceButton>
         </li>
       ))}
     </ul>
@@ -5673,7 +7190,7 @@ function AppsNav({
   projectId: string;
   active?: string;
   onEmptyChange?: (empty: boolean) => void;
-  onSelect: (appName: string) => void;
+  onSelect: (appName: string, mode?: CommitMode) => void;
 }) {
   const appsQuery = useApps(projectId);
   const apps = appsQuery.data ?? [];
@@ -5692,9 +7209,9 @@ function AppsNav({
     <ul className="flex flex-col gap-0.5">
       {apps.map((app) => (
         <li key={app.name} data-point-key={`app:${app.name}`}>
-          <button
+          <OpenResourceButton
             type="button"
-            onClick={() => onSelect(app.name)}
+            onOpen={(mode) => onSelect(app.name, mode)}
             className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${
               app.name === active
                 ? "bg-bg-overlay text-fg"
@@ -5703,7 +7220,7 @@ function AppsNav({
           >
             <LayoutGrid className="size-3.5 shrink-0" />
             <span className="truncate">{app.name}</span>
-          </button>
+          </OpenResourceButton>
         </li>
       ))}
     </ul>
@@ -5716,19 +7233,60 @@ function SessionsNav({
   agentsData,
   defaultAgentId,
   projectAgentNames,
+  unreadSessionIds,
   onEmptyChange,
+  onCommand,
   onSelect,
+  onSessionAction,
 }: {
   projectId: string;
   activeSessionId?: string;
   agentsData: AgentsData | null;
   defaultAgentId: string | null;
   projectAgentNames: Record<string, string>;
+  unreadSessionIds: ReadonlySet<string>;
   onEmptyChange?: (empty: boolean) => void;
-  onSelect: (session: AgentSession) => void;
+  onCommand: (session: AgentSession, command: SessionCommand) => void;
+  onSelect: (session: AgentSession, mode?: CommitMode) => void;
+  onSessionAction: (sessionId: string, action: ChatSessionAction) => void;
 }) {
-  const sessionsQuery = useAgentSessions(projectId);
-  const sessions = sessionsQuery.data?.items ?? [];
+  const sessionsQuery = useAgentSessions(projectId, { limit: 100 });
+  const sessions = useMemo(
+    () =>
+      (sessionsQuery.data?.items ?? []).filter(
+        (session) => session.visibility === "promoted",
+      ),
+    [sessionsQuery.data?.items],
+  );
+  const [renderedSessions, setRenderedSessions] = useState<
+    Array<{ session: AgentSession; exiting: boolean }>
+  >([]);
+  useEffect(() => {
+    const currentById = new Map(
+      sessions.map((session) => [session.id, session]),
+    );
+    setRenderedSessions((current) => {
+      const currentIds = new Set(current.map((entry) => entry.session.id));
+      return [
+        ...current.map((entry) => ({
+          session: currentById.get(entry.session.id) ?? entry.session,
+          exiting: !currentById.has(entry.session.id),
+        })),
+        ...sessions
+          .filter((session) => !currentIds.has(session.id))
+          .map((session) => ({ session, exiting: false })),
+      ];
+    });
+    const timer = window.setTimeout(() => {
+      setRenderedSessions((current) =>
+        current.filter((entry) => currentById.has(entry.session.id)),
+      );
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [sessions]);
+  const [collapsedParents, setCollapsedParents] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [checkouts, setCheckouts] = useState<SessionCheckoutInfo[]>([]);
   useEffect(() => {
     const load = () => {
@@ -5746,92 +7304,176 @@ function SessionsNav({
   useEffect(() => {
     onEmptyChange?.(isEmpty);
   }, [isEmpty, onEmptyChange]);
-  if (sessions.length === 0) {
+  if (sessions.length === 0 && renderedSessions.length === 0) {
     return <p className="px-2 py-1 text-xs text-fg-faint">No chats yet.</p>;
   }
-  return (
-    <ul className="flex flex-col gap-0.5">
-      {sessions.map((session) => {
-        const checkout = checkoutBySession.get(session.id);
-        const agentId = session.agentId ?? defaultAgentId;
-        const agentName =
-          agentsData?.agents.find((agent) => agent.id === agentId)?.name ??
-          (agentId ? projectAgentNames[agentId] : undefined) ??
-          "Default";
-        const checkoutLabel = checkout
-          ? checkout.kind === "external"
-            ? "External"
-            : (checkout.branch ?? "Worktree")
-          : undefined;
-        return (
-          <li
-            key={session.id}
-            data-chat-session={session.id}
-            draggable
-            onDragStart={(event) => {
-              const url = chatBookmarkUrl({ projectId, sessionId: session.id });
-              event.dataTransfer.setData(
-                TAB_DRAG_TYPE,
-                JSON.stringify({
-                  key: `session:${session.id}`,
-                  kind: "chat",
-                  title: sessionLabel(session),
-                  bookmarkUrl: url,
-                } satisfies TabDragPayload),
-              );
-              event.dataTransfer.setData("text/uri-list", url);
-              event.dataTransfer.effectAllowed = "copy";
-            }}
-          >
-            <SidebarItemRow
-              label={sessionLabel(session)}
-              icon={
-                <ChatGlyph
-                  icon={session.icon}
-                  fork={Boolean(session.parentSessionId)}
-                  className="size-3.5 shrink-0"
-                />
-              }
-              active={session.id === activeSessionId}
-              labelContent={<AnimatedTitle text={sessionLabel(session)} />}
-              preview={{
+  const renderedByParent = new Map<string | null, typeof renderedSessions>();
+  const renderedIds = new Set(
+    renderedSessions.map((entry) => entry.session.id),
+  );
+  for (const entry of renderedSessions) {
+    const parentId =
+      entry.session.parentSessionId &&
+      renderedIds.has(entry.session.parentSessionId)
+        ? entry.session.parentSessionId
+        : null;
+    const siblings = renderedByParent.get(parentId) ?? [];
+    siblings.push(entry);
+    renderedByParent.set(parentId, siblings);
+  }
+  const renderBranch = (parentId: string | null, depth: number): ReactNode =>
+    (renderedByParent.get(parentId) ?? []).map(({ session, exiting }) => {
+      const checkout = checkoutBySession.get(session.id);
+      const children = renderedByParent.get(session.id) ?? [];
+      const collapsed = collapsedParents.has(session.id);
+      const agentId = session.agentId ?? defaultAgentId;
+      const agentName =
+        agentsData?.agents.find((agent) => agent.id === agentId)?.name ??
+        (agentId ? projectAgentNames[agentId] : undefined) ??
+        "Default";
+      const checkoutLabel = checkout
+        ? checkout.kind === "external"
+          ? "External"
+          : (checkout.branch ?? "Worktree")
+        : undefined;
+      return (
+        <li
+          key={session.id}
+          data-session-id={session.id}
+          draggable
+          onDragStart={(event) => {
+            const url = chatBookmarkUrl({ projectId, sessionId: session.id });
+            event.dataTransfer.setData(
+              TAB_DRAG_TYPE,
+              JSON.stringify({
+                key: `session:${session.id}`,
+                kind: "chat",
                 title: sessionLabel(session),
-                description: session.activity ?? undefined,
-                metadata: [
-                  { label: "Agent", value: agentName },
-                  {
-                    label: "Environment",
-                    value: session.environment ?? "Default",
-                  },
-                  {
-                    label: "Status",
-                    value: session.running
-                      ? "Working"
-                      : session.status === "closed"
-                        ? "Closed"
-                        : "Ready",
-                  },
-                  ...(checkoutLabel
-                    ? [{ label: "Checkout", value: checkoutLabel }]
-                    : []),
-                ],
-              }}
-              end={
-                checkoutLabel ? (
+                bookmarkUrl: url,
+              } satisfies TabDragPayload),
+            );
+            event.dataTransfer.setData("text/uri-list", url);
+            event.dataTransfer.effectAllowed = "copy";
+          }}
+          className={
+            exiting ? "animate-session-row-out" : "animate-session-row-in"
+          }
+        >
+          <SidebarItemRow
+            style={{ marginLeft: depth * 14 }}
+            label={sessionLabel(session)}
+            disclosure={
+              children.length > 0
+                ? {
+                    open: !collapsed,
+                    onToggle: () =>
+                      setCollapsedParents((current) => {
+                        const next = new Set(current);
+                        if (next.has(session.id)) next.delete(session.id);
+                        else next.add(session.id);
+                        return next;
+                      }),
+                  }
+                : undefined
+            }
+            icon={
+              <ChatGlyph
+                icon={session.icon}
+                fork={Boolean(session.parentSessionId)}
+                className="size-3.5 shrink-0"
+              />
+            }
+            active={session.id === activeSessionId}
+            labelContent={
+              <>
+                <AnimatedTitle text={sessionLabel(session)} />
+                {session.attentionRequired ? (
+                  <span className="sr-only">Ready for you</span>
+                ) : unreadSessionIds.has(session.id) ? (
+                  <span className="sr-only">Unread</span>
+                ) : null}
+              </>
+            }
+            menu={chatSessionMenu({
+              unread: unreadSessionIds.has(session.id),
+              archived: false,
+            })}
+            preview={{
+              title: sessionLabel(session),
+              description: session.activity ?? undefined,
+              metadata: [
+                { label: "Agent", value: agentName },
+                {
+                  label: "Environment",
+                  value: session.environment ?? "Default",
+                },
+                {
+                  label: "Status",
+                  value: session.running
+                    ? "Working"
+                    : session.status === "closed"
+                      ? "Closed"
+                      : "Ready",
+                },
+                ...(checkoutLabel
+                  ? [{ label: "Checkout", value: checkoutLabel }]
+                  : []),
+              ],
+            }}
+            previewContent={
+              <SidebarSessionInspector
+                projectId={projectId}
+                session={session}
+                agent={agentsData?.agents.find((agent) => agent.id === agentId)}
+                agentName={agentName}
+                checkout={checkout ?? null}
+                onCommand={(command) => onCommand(session, command)}
+                onArchive={() => onSessionAction(session.id, "archive")}
+              />
+            }
+            end={
+              <>
+                {(session.attentionRequired ||
+                  unreadSessionIds.has(session.id)) && (
+                  <span
+                    data-testid={
+                      session.attentionRequired
+                        ? "session-attention"
+                        : "session-unread"
+                    }
+                    className="grid size-3 shrink-0 place-items-center"
+                    aria-hidden="true"
+                  >
+                    <SignalBadge
+                      signals={{
+                        attention: session.attentionRequired,
+                        unread: unreadSessionIds.has(session.id),
+                      }}
+                      size="sm"
+                    />
+                  </span>
+                )}
+                {checkoutLabel ? (
                   <span className="ml-auto flex max-w-28 shrink-0 items-center gap-1 truncate rounded bg-bg-inset px-1.5 py-0.5 text-[10px] text-fg-faint">
                     <GitBranch className="size-2.5 shrink-0" />
                     <span className="truncate">{checkoutLabel}</span>
                   </span>
-                ) : null
-              }
-              onOpen={() => onSelect(session)}
-              onAction={() => {}}
-            />
-          </li>
-        );
-      })}
-    </ul>
-  );
+                ) : null}
+              </>
+            }
+            resource
+            onOpen={(mode) => onSelect(session, mode)}
+            onAction={(entry) => onSessionAction(session.id, entry.action)}
+          />
+          {children.length > 0 && (
+            <Collapsible open={!collapsed}>
+              <ul>{renderBranch(session.id, depth + 1)}</ul>
+            </Collapsible>
+          )}
+        </li>
+      );
+    });
+  return <ul className="flex flex-col gap-0.5">{renderBranch(null, 0)}</ul>;
 }
 
 function sessionLabel(session: AgentSession): string {
@@ -5842,11 +7484,17 @@ function sessionLabel(session: AgentSession): string {
 
 function EmptyState({
   loading,
+  loadError,
+  retrying,
+  onRetry,
   onNewProject,
   onConnectRemote,
   onStartWithAgent,
 }: {
   loading: boolean;
+  loadError: boolean;
+  retrying: boolean;
+  onRetry: () => void;
   onNewProject: () => void;
   onConnectRemote: () => void;
   onStartWithAgent: () => Promise<void>;
@@ -5869,7 +7517,24 @@ function EmptyState({
   return (
     <div className="grid flex-1 place-items-center">
       <div className="max-w-sm text-center">
-        {loading ? (
+        {loadError ? (
+          <div role="alert" data-testid="project-load-error">
+            <h1 className="text-sm font-medium text-fg">
+              Could not load your projects
+            </h1>
+            <p className="mt-2 text-sm text-fg-muted">
+              Try again. If the problem continues, quit and reopen Catamorphic.
+            </p>
+            <PendingButton
+              type="button"
+              pending={retrying}
+              onClick={onRetry}
+              className="mt-4 h-8 cursor-pointer rounded-md border border-border px-3 text-[13px] text-fg transition-colors duration-150 hover:bg-bg-overlay disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Retry loading projects
+            </PendingButton>
+          </div>
+        ) : loading ? (
           <p className="animate-pulse text-sm text-fg-muted">Loading…</p>
         ) : (
           <>
@@ -5894,6 +7559,7 @@ function EmptyState({
                 type="button"
                 onClick={onNewProject}
                 disabled={startingAgent}
+                data-disabled-reason="Starting the agent"
                 className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border border-border px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <FolderPlus className="size-3.5" />
@@ -5903,6 +7569,7 @@ function EmptyState({
                 type="button"
                 onClick={onConnectRemote}
                 disabled={startingAgent}
+                data-disabled-reason="Starting the agent"
                 data-testid="empty-connect-remote"
                 className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border border-border px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
               >

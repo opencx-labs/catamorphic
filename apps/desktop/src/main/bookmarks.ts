@@ -4,11 +4,9 @@ import path from "node:path";
 import type { BookmarkPlacement } from "../shared/bookmark-target.js";
 
 /**
- * Browser bookmarks. Two scopes, Chrome-flavored but project-aware:
- *  - per-project bookmarks (folders supported, one level of nesting kept
- *    simple on purpose),
- *  - pinned bookmarks, which are profile-wide: pinning "promotes" a
- *    bookmark out of its project so it follows the user across projects.
+ * Browser bookmarks. Both project and profile-wide scopes support the same
+ * recursive folder model. Pinning promotes a bookmark out of its project so
+ * it follows the user across projects.
  * Stored as plain JSON at `<userData>/bookmarks.json`.
  */
 export interface Bookmark {
@@ -17,11 +15,15 @@ export interface Bookmark {
   url: string;
   /** Folder id within the same scope, or undefined for root. */
   folderId?: string;
+  /** Last observed page favicon. Imported entries may not have one yet. */
+  faviconUrl?: string;
 }
 
 export interface BookmarkFolder {
   id: string;
   label: string;
+  /** Parent folder id within the same scope, or undefined for root. */
+  parentId?: string;
 }
 
 export interface ProjectBookmarks {
@@ -31,8 +33,13 @@ export interface ProjectBookmarks {
 
 interface BookmarksFile {
   byProject: Record<string, ProjectBookmarks>;
-  /** Profile-wide pinned bookmarks, keyed by profile id. */
-  pinnedByProfile: Record<string, Bookmark[]>;
+  /** Profile-wide bookmark trees, keyed by profile id. */
+  pinnedByProfile: Record<string, ProjectBookmarks>;
+}
+
+interface SerializedBookmarksFile {
+  byProject?: Record<string, ProjectBookmarks>;
+  pinnedByProfile?: Record<string, ProjectBookmarks | Bookmark[]>;
 }
 
 const EMPTY: ProjectBookmarks = { folders: [], bookmarks: [] };
@@ -46,10 +53,18 @@ export class BookmarksStore {
 
   private load(): BookmarksFile {
     try {
-      const raw = JSON.parse(fs.readFileSync(this.file, "utf-8"));
+      const raw: SerializedBookmarksFile = JSON.parse(
+        fs.readFileSync(this.file, "utf-8"),
+      );
+      const pinnedByProfile = Object.fromEntries(
+        Object.entries(raw.pinnedByProfile ?? {}).map(([profileId, value]) => [
+          profileId,
+          Array.isArray(value) ? { folders: [], bookmarks: value } : value,
+        ]),
+      );
       return {
         byProject: raw.byProject ?? {},
-        pinnedByProfile: raw.pinnedByProfile ?? {},
+        pinnedByProfile,
       };
     } catch {
       return { byProject: {}, pinnedByProfile: {} };
@@ -65,13 +80,18 @@ export class BookmarksStore {
     return this.data.byProject[projectId] ?? EMPTY;
   }
 
-  pinned(profileId: string): Bookmark[] {
-    return this.data.pinnedByProfile[profileId] ?? [];
+  pinned(profileId: string): ProjectBookmarks {
+    return this.data.pinnedByProfile[profileId] ?? EMPTY;
   }
 
   addBookmark(
     projectId: string,
-    input: { label: string; url: string; folderId?: string },
+    input: {
+      label: string;
+      url: string;
+      folderId?: string;
+      faviconUrl?: string;
+    },
   ): Bookmark {
     this.data.byProject[projectId] ??= { folders: [], bookmarks: [] };
     const scope = this.data.byProject[projectId];
@@ -80,18 +100,24 @@ export class BookmarksStore {
       label: input.label.trim() || input.url,
       url: input.url,
       folderId: input.folderId,
+      faviconUrl: input.faviconUrl,
     };
     scope.bookmarks.push(bookmark);
     this.save();
     return bookmark;
   }
 
-  addFolder(projectId: string, label: string): BookmarkFolder {
+  addFolder(
+    projectId: string,
+    label: string,
+    parentId?: string,
+  ): BookmarkFolder {
     this.data.byProject[projectId] ??= { folders: [], bookmarks: [] };
     const scope = this.data.byProject[projectId];
     const folder: BookmarkFolder = {
       id: randomUUID(),
       label: label.trim() || "New folder",
+      parentId,
     };
     scope.folders.push(folder);
     this.save();
@@ -112,11 +138,11 @@ export class BookmarksStore {
     if (folderId && !project.folders.some((folder) => folder.id === folderId)) {
       throw new Error("This bookmark folder no longer exists.");
     }
-    this.data.pinnedByProfile[profileId] ??= [];
+    this.data.pinnedByProfile[profileId] ??= { folders: [], bookmarks: [] };
     const favorites = this.data.pinnedByProfile[profileId];
     const existing =
       project.bookmarks.find((bookmark) => bookmark.url === url) ??
-      favorites.find((bookmark) => bookmark.url === url);
+      favorites.bookmarks.find((bookmark) => bookmark.url === url);
     const bookmark: Bookmark = {
       id: existing?.id ?? randomUUID(),
       label: existing?.label ?? (label.trim() || url),
@@ -124,10 +150,10 @@ export class BookmarksStore {
       ...(!pinned && folderId ? { folderId } : {}),
     };
     project.bookmarks = project.bookmarks.filter((entry) => entry.url !== url);
-    this.data.pinnedByProfile[profileId] = favorites.filter(
+    favorites.bookmarks = favorites.bookmarks.filter(
       (entry) => entry.url !== url,
     );
-    if (pinned) this.data.pinnedByProfile[profileId].push(bookmark);
+    if (pinned) favorites.bookmarks.push(bookmark);
     else project.bookmarks.push(bookmark);
     this.save();
     return bookmark;
@@ -155,9 +181,12 @@ export class BookmarksStore {
     const folder = scope.folders.find((candidate) => candidate.id === id);
     if (folder) {
       scope.folders = scope.folders.filter((candidate) => candidate.id !== id);
-      // Orphaned children fall back to root rather than disappearing.
+      // Orphaned children move up one level rather than disappearing.
+      for (const child of scope.folders) {
+        if (child.parentId === id) child.parentId = folder.parentId;
+      }
       for (const bookmark of scope.bookmarks) {
-        if (bookmark.folderId === id) bookmark.folderId = undefined;
+        if (bookmark.folderId === id) bookmark.folderId = folder.parentId;
       }
     } else {
       scope.bookmarks = scope.bookmarks.filter(
@@ -174,23 +203,88 @@ export class BookmarksStore {
    */
   importPinned(
     profileId: string,
-    items: Array<{ label: string; url: string }>,
+    imported: {
+      folders: Array<{ path: string[] }>;
+      bookmarks: Array<{
+        label: string;
+        url: string;
+        folderPath?: string[];
+      }>;
+    },
   ): number {
-    const pinned = this.data.pinnedByProfile[profileId] ?? [];
+    const pinned = this.data.pinnedByProfile[profileId] ?? {
+      folders: [],
+      bookmarks: [],
+    };
     this.data.pinnedByProfile[profileId] = pinned;
-    const existing = new Set(pinned.map((bookmark) => bookmark.url));
+    const pathForFolder = (folder: BookmarkFolder): string[] => {
+      const labels: string[] = [folder.label];
+      const seen = new Set([folder.id]);
+      let parentId = folder.parentId;
+      while (parentId && !seen.has(parentId)) {
+        seen.add(parentId);
+        const parent = pinned.folders.find((entry) => entry.id === parentId);
+        if (!parent) break;
+        labels.unshift(parent.label);
+        parentId = parent.parentId;
+      }
+      return labels;
+    };
+    const folderIds = new Map(
+      pinned.folders.map((folder) => [
+        JSON.stringify(pathForFolder(folder)),
+        folder.id,
+      ]),
+    );
+    const ensureFolder = (folderPath: string[]): string | undefined => {
+      let parentId: string | undefined;
+      for (let depth = 1; depth <= folderPath.length; depth += 1) {
+        const path = folderPath.slice(0, depth);
+        const key = JSON.stringify(path);
+        const existingId = folderIds.get(key);
+        if (existingId) {
+          parentId = existingId;
+          continue;
+        }
+        const folder: BookmarkFolder = {
+          id: randomUUID(),
+          label: path.at(-1) ?? "Folder",
+          parentId,
+        };
+        pinned.folders.push(folder);
+        folderIds.set(key, folder.id);
+        parentId = folder.id;
+      }
+      return parentId;
+    };
+    for (const folder of imported.folders) ensureFolder(folder.path);
+    const existing = new Map(
+      pinned.bookmarks.map((bookmark) => [bookmark.url, bookmark]),
+    );
     let added = 0;
-    for (const item of items) {
-      if (!item.url || existing.has(item.url)) continue;
-      existing.add(item.url);
-      pinned.push({
+    for (const item of imported.bookmarks) {
+      if (!item.url) continue;
+      const folderId = ensureFolder(item.folderPath ?? []);
+      const existingBookmark = existing.get(item.url);
+      if (existingBookmark) {
+        // Repair imports made by the former flattening implementation on
+        // the next import without disturbing an already-organized entry.
+        if (!existingBookmark.folderId && folderId) {
+          existingBookmark.folderId = folderId;
+        }
+        continue;
+      }
+      const bookmark: Bookmark = {
         id: randomUUID(),
         label: item.label.trim() || item.url,
         url: item.url,
-      });
+        folderId,
+      };
+      pinned.bookmarks.push(bookmark);
+      existing.set(item.url, bookmark);
       added += 1;
     }
-    if (added > 0) this.save();
+    if (added > 0 || imported.folders.length > 0) this.save();
     return added;
   }
 
@@ -202,23 +296,26 @@ export class BookmarksStore {
     scope.bookmarks = scope.bookmarks.filter(
       (candidate) => candidate.id !== id,
     );
-    this.data.pinnedByProfile[profileId] ??= [];
+    this.data.pinnedByProfile[profileId] ??= {
+      folders: [],
+      bookmarks: [],
+    };
     const pinned = this.data.pinnedByProfile[profileId];
-    pinned.push({ ...bookmark, folderId: undefined });
+    pinned.bookmarks.push({ ...bookmark, folderId: undefined });
     this.save();
   }
 
   /** Unpin back into the current project's root. */
   unpin(profileId: string, projectId: string, id: string): void {
-    const pinned = this.data.pinnedByProfile[profileId] ?? [];
-    const bookmark = pinned.find((candidate) => candidate.id === id);
+    const pinned = this.data.pinnedByProfile[profileId] ?? EMPTY;
+    const bookmark = pinned.bookmarks.find((candidate) => candidate.id === id);
     if (!bookmark) return;
-    this.data.pinnedByProfile[profileId] = pinned.filter(
+    pinned.bookmarks = pinned.bookmarks.filter(
       (candidate) => candidate.id !== id,
     );
     this.data.byProject[projectId] ??= { folders: [], bookmarks: [] };
     const scope = this.data.byProject[projectId];
-    scope.bookmarks.push(bookmark);
+    scope.bookmarks.push({ ...bookmark, folderId: undefined });
     this.save();
   }
 
@@ -247,7 +344,7 @@ export class BookmarksStore {
       this.save();
       return;
     }
-    const pinned = this.data.pinnedByProfile[profileId]?.find(
+    const pinned = this.data.pinnedByProfile[profileId]?.bookmarks.find(
       (entry) => entry.id === id,
     );
     if (pinned) {
@@ -257,8 +354,9 @@ export class BookmarksStore {
   }
 
   removePinned(profileId: string, id: string): void {
-    const pinned = this.data.pinnedByProfile[profileId] ?? [];
-    this.data.pinnedByProfile[profileId] = pinned.filter(
+    const pinned = this.data.pinnedByProfile[profileId];
+    if (!pinned) return;
+    pinned.bookmarks = pinned.bookmarks.filter(
       (candidate) => candidate.id !== id,
     );
     this.save();

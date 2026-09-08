@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
 import {
+  CheckoutRemoteBackend,
   FsBackend,
   FsRemoteBackend,
+  nativeGit,
   ProjectManager,
   push,
 } from "@catamorphic/git";
@@ -14,6 +16,7 @@ import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
 import {
+  DocumentBlobUnavailableError,
   DocumentConflictError,
   DocumentNotFoundError,
   DocumentPathError,
@@ -183,6 +186,267 @@ describeIf("DocumentsService (ADR 0055)", () => {
     await sql.raw(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`).execute(db);
     await db.destroy();
     await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("local documents share the folder with MCP, preserve bytes and require fresh versions", async () => {
+    const directory = path.join(tmpDir, "local-documents");
+    await fs.mkdir(directory);
+    await nativeGit(directory, ["init", "-b", "feature"]);
+    const resolver = async () => directory;
+    const manager = new ProjectManager(
+      new FsBackend(path.join(tmpDir, "unused"), resolver),
+      new CheckoutRemoteBackend(
+        resolver,
+        new FsRemoteBackend(path.join(tmpDir, "unused-origin")),
+      ),
+      resolver,
+    );
+    const local = new CatamorphicCore({
+      db,
+      projectManager: manager,
+      environmentProvider: testEnvironmentProvider(),
+    });
+    const project = await local.projects.create(root, {
+      name: "Local",
+      rootPath: directory,
+      importExisting: true,
+    });
+    const identity = root;
+    const args = { identity, projectId: project.id, path: "store/report.pdf" };
+    const bytes = new Uint8Array([0, 255, 128, 37, 80, 68, 70]);
+    const first = await local.documents.write({
+      ...args,
+      content: bytes,
+      ifVersion: 0,
+    });
+    expect(await fs.readFile(path.join(directory, args.path))).toEqual(
+      Buffer.from(bytes),
+    );
+    expect((await local.documents.readBytes(args)).bytes).toEqual(bytes);
+    expect((await nativeGit(directory, ["status", "--porcelain"])).trim()).toBe(
+      "",
+    );
+    await fs.writeFile(
+      path.join(directory, args.path),
+      new Uint8Array([1, 2, 3]),
+    );
+    await expect(
+      local.documents.write({
+        ...args,
+        content: bytes,
+        ifVersion: first.version,
+      }),
+    ).rejects.toBeInstanceOf(DocumentConflictError);
+    expect((await local.documents.readBytes(args)).bytes).toEqual(
+      new Uint8Array([1, 2, 3]),
+    );
+    expect(
+      (await local.documents.readBytes({ ...args, version: first.version }))
+        .bytes,
+    ).toEqual(bytes);
+    await fs.writeFile(
+      path.join(directory, "store/notes.md"),
+      "Private research notes",
+    );
+    expect(
+      (
+        await local.documents.search({
+          identity,
+          projectId: project.id,
+          query: "research",
+          prefix: "store",
+        })
+      ).map((entry) => entry.path),
+    ).toEqual(["store/notes.md"]);
+    await fs.rm(path.join(directory, "store/notes.md"));
+    const history = await local.documents.history({
+      identity,
+      projectId: project.id,
+      path: "store/notes.md",
+    });
+    expect(history[0]).toMatchObject({
+      deleted: true,
+      writtenBy: "local-filesystem",
+    });
+    expect(
+      await local.documents.search({
+        identity,
+        projectId: project.id,
+        query: "research",
+        prefix: "store",
+      }),
+    ).toEqual([]);
+    expect(
+      await local.documents.storage({ identity, projectId: project.id }),
+    ).toMatchObject({ location: "device", uploadIsExplicit: true });
+    const restricted = {
+      ...root,
+      scope: [{ kind: "project" as const, projectId: project.id }],
+    };
+    expect(
+      await local.documents.list({
+        identity: restricted,
+        projectId: project.id,
+        source: "store",
+      }),
+    ).toEqual([]);
+    await fs.writeFile(path.join(directory, "notes.md"), "committed only here");
+    await fs.writeFile(
+      path.join(directory, "flow.ts"),
+      `
+      import { defineWorkflow } from "@catamorphic/workflow";
+      export const importedFlow = defineWorkflow(({ defineBoundary }) => ({
+        steps: [defineBoundary({ run: () => "published" })],
+      }));
+    `,
+    );
+    await nativeGit(directory, ["add", "notes.md", "flow.ts"]);
+    await nativeGit(directory, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "Local history",
+    ]);
+    expect(
+      (
+        await local.documents.read({
+          identity,
+          projectId: project.id,
+          path: "notes.md",
+        })
+      ).text,
+    ).toBe("committed only here");
+    await expect(
+      local.documents.read({
+        identity: restricted,
+        projectId: project.id,
+        path: "notes.md",
+      }),
+    ).rejects.toBeInstanceOf(DocumentNotFoundError);
+    const workflowMember: Identity = {
+      ...root,
+      scope: [
+        { kind: "workflow", projectId: project.id, name: "importedFlow" },
+      ],
+    };
+    expect(
+      await local.workflows.list({
+        identity: workflowMember,
+        projectId: project.id,
+      }),
+    ).toEqual([]);
+    await nativeGit(directory, [
+      "update-ref",
+      "refs/catamorphic/published/main",
+      "HEAD",
+    ]);
+    await fs.writeFile(
+      path.join(directory, "flow.ts"),
+      "private incomplete draft",
+    );
+    expect(
+      (
+        await local.workflows.list({
+          identity: workflowMember,
+          projectId: project.id,
+        })
+      ).map((w) => w.name),
+    ).toEqual(["importedFlow"]);
+
+    await fs.writeFile(
+      path.join(directory, "notes.md"),
+      "private working edit",
+    );
+    expect(
+      (
+        await local.documents.read({
+          identity: restricted,
+          projectId: project.id,
+          path: "notes.md",
+        })
+      ).text,
+    ).toBe("committed only here");
+    expect(
+      (
+        await local.documents.read({
+          identity,
+          projectId: project.id,
+          path: "notes.md",
+        })
+      ).text,
+    ).toBe("private working edit");
+    await fs.symlink(tmpDir, path.join(directory, "store/outside"));
+    await expect(
+      local.documents.write({
+        ...args,
+        path: "store/outside/escape.txt",
+        content: "no",
+      }),
+    ).rejects.toThrow("symbolic links");
+    expect(
+      await fs.access(path.join(tmpDir, "escape.txt")).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
+  });
+
+  it("concurrent first writes use the version precondition", async () => {
+    const args = {
+      identity: root,
+      projectId,
+      path: "store/concurrent.md",
+      ifVersion: 0,
+    };
+    const results = await Promise.allSettled([
+      core.documents.write({ ...args, content: "one" }),
+      core.documents.write({ ...args, content: "two" }),
+    ]);
+    expect(
+      results.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    const failed = results.find((result) => result.status === "rejected");
+    expect(failed?.status === "rejected" && failed.reason).toBeInstanceOf(
+      DocumentConflictError,
+    );
+  });
+
+  it("missing external blobs fail explicitly instead of becoming empty files", async () => {
+    const blobs = new Map<string, Uint8Array>();
+    const manager = new ProjectManager(
+      new FsBackend(path.join(tmpDir, "blob-dev")),
+      new FsRemoteBackend(path.join(tmpDir, "blob-origin")),
+    );
+    const withBlobs = new CatamorphicCore({
+      db,
+      projectManager: manager,
+      environmentProvider: testEnvironmentProvider(),
+      documentBlobStore: {
+        put: async (key, bytes) => {
+          blobs.set(key, bytes);
+        },
+        get: async (key) => {
+          const data = blobs.get(key);
+          return data ? { data, etag: key } : null;
+        },
+        deletePrefix: async (prefix) => {
+          for (const key of blobs.keys())
+            if (key.startsWith(prefix)) blobs.delete(key);
+        },
+      },
+    });
+    const args = { identity: root, projectId, path: "store/missing.pdf" };
+    await withBlobs.documents.write({
+      ...args,
+      content: new Uint8Array([0, 255]),
+    });
+    blobs.clear();
+    await expect(withBlobs.documents.readBytes(args)).rejects.toBeInstanceOf(
+      DocumentBlobUnavailableError,
+    );
   });
 
   it("builders read the program; viewers only their document refs", async () => {

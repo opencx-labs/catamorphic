@@ -1,6 +1,7 @@
 import {
   Check,
   Copy,
+  Monitor,
   Pencil,
   Plug,
   Plus,
@@ -15,6 +16,10 @@ import { useEffect, useRef, useState } from "react";
 import { ACTION_LABELS, KEYBINDING_ACTIONS } from "../../shared/actions.js";
 import { bindingFromEvent, parseBinding } from "../../shared/keybindings.js";
 import type { TerminalMacro } from "../../shared/terminal-macros.js";
+import {
+  DEFAULT_THEME_FONTS,
+  isValidFontStack,
+} from "../../shared/theme-fonts.js";
 import { PendingButton } from "../components/pending-button.js";
 import {
   type AgentHarness,
@@ -137,6 +142,7 @@ export function SettingsScreen({
     <div
       className="@container/settings flex min-h-0 min-w-0 flex-1 flex-col"
       data-settings
+      data-testid="settings-screen"
     >
       <header className="mx-auto flex w-full max-w-5xl shrink-0 flex-wrap items-center gap-3 px-6 pt-5 pb-4">
         <div className="min-w-0 flex-1">
@@ -1071,6 +1077,9 @@ function ThemeSection() {
   if (!theme) return null;
 
   const overridden = Object.keys(theme.overrides).length > 0;
+  const dark = presets.find((preset) => preset.id === "dark");
+  const light = presets.find((preset) => preset.id === "light");
+  const systemSelected = theme.selection === "system";
 
   return (
     <section className="mt-8">
@@ -1080,7 +1089,11 @@ function ThemeSection() {
           <button
             type="button"
             onClick={() =>
-              void desktopApi.setTheme({ preset: theme.preset, overrides: {} })
+              void desktopApi.setTheme({
+                fonts: theme.fonts,
+                selection: theme.selection,
+                overrides: {},
+              })
             }
             className="flex cursor-pointer items-center gap-1 text-xs text-fg-muted hover:text-fg"
           >
@@ -1090,9 +1103,46 @@ function ThemeSection() {
         )}
       </div>
 
+      <button
+        type="button"
+        onClick={() =>
+          void desktopApi.setTheme({
+            selection: "system",
+            overrides: {},
+            fonts: theme.fonts,
+          })
+        }
+        aria-pressed={systemSelected}
+        className={`mb-2 flex w-full cursor-pointer items-center gap-2.5 rounded-lg border p-2.5 text-left transition-colors duration-150 ${
+          systemSelected
+            ? "border-accent bg-accent/10"
+            : "border-border bg-bg-raised/40 hover:border-border-strong"
+        }`}
+      >
+        <span className="relative grid size-9 shrink-0 place-items-center overflow-hidden rounded-md border border-border">
+          <span
+            className="absolute inset-y-0 left-0 w-1/2"
+            style={{ background: dark?.colors.bg }}
+          />
+          <span
+            className="absolute inset-y-0 right-0 w-1/2"
+            style={{ background: light?.colors.bg }}
+          />
+          <Monitor className="relative size-4 text-fg" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[13px]">System default</span>
+          <span className="block text-[11px] text-fg-faint">
+            {systemSelected
+              ? `Following your device · ${theme.appearance === "dark" ? "Dark" : "Light"}`
+              : "Uses Catamorphic Light or Dark automatically"}
+          </span>
+        </span>
+      </button>
+
       <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,10rem),1fr))] gap-2">
         {presets.map((preset) => {
-          const active = preset.id === theme.preset;
+          const active = preset.id === theme.selection;
           return (
             <button
               key={preset.id}
@@ -1101,7 +1151,11 @@ function ThemeSection() {
               aria-pressed={active}
               data-theme-preset={preset.id}
               onClick={() =>
-                void desktopApi.setTheme({ preset: preset.id, overrides: {} })
+                void desktopApi.setTheme({
+                  fonts: theme.fonts,
+                  selection: preset.id,
+                  overrides: {},
+                })
               }
               className={`flex min-w-0 cursor-pointer flex-col gap-2 rounded-lg border p-2.5 text-left transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
                 active
@@ -1194,7 +1248,8 @@ function ThemeSection() {
                   value={toHex6(theme.colors[token])}
                   onChange={(event) =>
                     void desktopApi.setTheme({
-                      preset: theme.preset,
+                      fonts: theme.fonts,
+                      selection: theme.selection,
                       overrides: {
                         ...theme.overrides,
                         [token]: event.target.value,
@@ -1209,6 +1264,70 @@ function ThemeSection() {
           ))}
         </div>
       )}
+
+      <div className="mt-4 flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xs font-medium">Fonts</h3>
+          {(theme.fonts.sans !== DEFAULT_THEME_FONTS.sans ||
+            theme.fonts.mono !== DEFAULT_THEME_FONTS.mono) && (
+            <button
+              type="button"
+              className="cursor-pointer text-xs text-fg-muted hover:text-fg"
+              onClick={() =>
+                void desktopApi.setTheme({
+                  selection: theme.selection,
+                  overrides: theme.overrides,
+                })
+              }
+            >
+              Reset fonts
+            </button>
+          )}
+        </div>
+        {(["sans", "mono"] as const).map((token) => (
+          <label
+            key={token}
+            className="flex flex-col gap-1 text-xs text-fg-muted"
+          >
+            {token === "sans" ? "Interface font" : "Monospace font"}
+            <input
+              key={theme.fonts[token]}
+              type="text"
+              defaultValue={theme.fonts[token]}
+              placeholder={DEFAULT_THEME_FONTS[token]}
+              spellCheck={false}
+              maxLength={200}
+              className="field h-8 w-full px-2 text-xs text-fg"
+              onChange={(event) => event.currentTarget.setCustomValidity("")}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") event.currentTarget.blur();
+              }}
+              onBlur={(event) => {
+                const value = event.currentTarget.value.trim();
+                if (value && !isValidFontStack(value)) {
+                  event.currentTarget.setCustomValidity(
+                    "Enter font names separated by commas, such as Arial, sans-serif.",
+                  );
+                  event.currentTarget.reportValidity();
+                  return;
+                }
+                const font = value || DEFAULT_THEME_FONTS[token];
+                event.currentTarget.value = font;
+                if (font === theme.fonts[token]) return;
+                void desktopApi.setTheme({
+                  selection: theme.selection,
+                  overrides: theme.overrides,
+                  fonts: { ...theme.fonts, [token]: font },
+                });
+              }}
+            />
+          </label>
+        ))}
+        <p className="text-xs text-fg-faint">
+          Use installed font names with comma-separated fallbacks. Press Enter
+          or leave the field to apply. Clear a field to restore its default.
+        </p>
+      </div>
 
       <p className="mt-2 text-xs text-fg-faint">
         Changes apply immediately. Also editable as JSON at{" "}
@@ -1248,7 +1367,7 @@ function ImportSection() {
   }, []);
 
   const keyOf = (browserId: string, profileId: string) =>
-    `${browserId} ${profileId}`;
+    `${browserId}\0${profileId}`;
 
   const anySelected =
     browsers?.some((browser) =>
@@ -1327,7 +1446,7 @@ function ImportSection() {
                   return (
                     <div
                       key={profile.id}
-                      className="flex h-9 items-center gap-2.5 rounded-lg border border-border bg-bg-raised/40 px-3"
+                      className="flex min-h-9 flex-wrap items-center gap-2.5 rounded-lg border border-border bg-bg-raised/40 px-3 py-2"
                     >
                       <input
                         type="checkbox"
@@ -1383,6 +1502,7 @@ function ImportSection() {
             pending={importing}
             pendingLabel="Importing…"
             disabled={!anySelected}
+            data-disabled-reason="Select bookmarks to import"
             onClick={() => void run()}
             className="h-8 w-fit cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
           >

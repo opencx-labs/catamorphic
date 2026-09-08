@@ -2,12 +2,29 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { InstallPromotion } from "./components/install-promotion.js";
 import { connectLinkFromParams } from "./lib/connect-link.js";
+import {
+  connectedRemoteInstallRoute,
+  prepareRemoteInstall,
+} from "./lib/install.js";
 import { navigate, type Route, routeDepth, useRoute } from "./lib/nav.js";
-import { applyPairing, claimPairing } from "./lib/pairing.js";
+import {
+  beginRemoteAuthorization,
+  clearRemoteAuthorizationRetryTarget,
+  remoteAuthorizationRetryTarget,
+} from "./lib/oauth.js";
+import { completeRemoteConnection } from "./lib/oauth-callback.js";
+import {
+  applyPairing,
+  claimPairing,
+  claimPairingInstall,
+  preparePairingInstall,
+} from "./lib/pairing.js";
 import {
   activeProfile,
   connectionById,
   getState,
+  type PwaConnection,
+  subscribe,
   usePwaState,
 } from "./lib/store.js";
 import {
@@ -31,21 +48,105 @@ const queryClient = new QueryClient({
   },
 });
 
+const connectionQueries = new Map<
+  string,
+  { epoch?: string; client: QueryClient }
+>();
+subscribe(() => {
+  for (const [id, cached] of connectionQueries) {
+    const current = connectionById(getState(), id);
+    if (!current || current.authEpoch !== cached.epoch) {
+      cached.client.clear();
+      connectionQueries.delete(id);
+    }
+  }
+});
+function queryClientFor(connection: PwaConnection): QueryClient {
+  const previous = connectionQueries.get(connection.id);
+  if (previous && previous.epoch === connection.authEpoch)
+    return previous.client;
+  previous?.client.clear();
+  const client = new QueryClient({
+    defaultOptions: queryClient.getDefaultOptions(),
+  });
+  connectionQueries.set(connection.id, { epoch: connection.authEpoch, client });
+  return client;
+}
+
 export function App() {
   const state = usePwaState();
   const route = useRoute();
   const profile = activeProfile(state);
-  const [pairing, setPairing] = useState(false);
+  const [startupStatus, setStartupStatus] = useState<string | null>(null);
 
-  // Two ways a URL can carry credentials, both stripped immediately:
-  // a scanned desktop QR (?pair=<code>, redeemed against this origin's
-  // /pair/claim), or an invite link's params (?server=&token=&project=).
+  // A remote OAuth callback carries a short-lived code; a desktop QR carries
+  // a short-lived pairing code. Credential-free server/project locators are
+  // safe to retain as ordinary invitation links.
   useEffect(() => {
+    preparePairingInstall();
+    // OAuth is a full-page round trip. Restore the credential-free install
+    // locator before handling its callback so Add to Home Screen still lands
+    // in the connected project and chat after sign-in.
+    prepareRemoteInstall();
+    if (window.location.pathname === "/oauth/callback") {
+      const callbackUrl = window.location.href;
+      window.history.replaceState(null, "", "/");
+      setStartupStatus("Finishing sign-in…");
+      void completeRemoteConnection({
+        callbackUrl,
+        profileId: activeProfile(getState()).id,
+      })
+        .then((landing) => {
+          clearRemoteAuthorizationRetryTarget();
+          navigate(landing, { replace: true });
+        })
+        .catch((error: unknown) => {
+          const target = remoteAuthorizationRetryTarget();
+          if (target?.kind === "project") stashPendingLink(target.link);
+          stashConnectError(
+            error instanceof Error
+              ? error.message
+              : "Sign-in could not be completed.",
+          );
+          navigate({ kind: "connect" }, { replace: true });
+        })
+        .finally(() => setStartupStatus(null));
+      return;
+    }
     const params = new URLSearchParams(window.location.search);
+    const installCode = params.get("install");
+    if (installCode) {
+      window.history.replaceState(null, "", window.location.pathname);
+      const pairedHere = activeProfile(getState()).connections.some(
+        (connection) =>
+          connection.kind === "device" &&
+          new URL(connection.serverUrl).origin === window.location.origin,
+      );
+      // The installed manifest keeps its original start URL. After the first
+      // successful recovery, later launches already have the device token and
+      // must not try to redeem the consumed one-time bootstrap again.
+      if (pairedHere) return;
+      setStartupStatus("Restoring pairing…");
+      void claimPairingInstall(window.location.origin, installCode)
+        .then((claim) => {
+          const landing = applyPairing(getState(), claim);
+          navigate(landing, { replace: true });
+        })
+        .catch((error: unknown) => {
+          stashConnectError(
+            error instanceof Error
+              ? error.message
+              : "The installed app could not restore its pairing.",
+          );
+          navigate({ kind: "connect" }, { replace: true });
+        })
+        .finally(() => setStartupStatus(null));
+      return;
+    }
     const pairCode = params.get("pair");
     if (pairCode) {
       window.history.replaceState(null, "", window.location.pathname);
-      setPairing(true);
+      setStartupStatus("Pairing…");
       void claimPairing(window.location.origin, pairCode)
         .then((claim) => {
           const landing = applyPairing(getState(), claim);
@@ -57,11 +158,64 @@ export function App() {
           );
           navigate({ kind: "connect" }, { replace: true });
         })
-        .finally(() => setPairing(false));
+        .finally(() => setStartupStatus(null));
       return;
     }
     const link = connectLinkFromParams(params);
-    if (!link) return;
+    if (!link) {
+      const projectId = params.get("project");
+      if (!projectId) return;
+      const sessionId = params.get("session");
+      const connection = getState()
+        .profiles.flatMap((candidate) => candidate.connections)
+        .find((candidate) => candidate.projectId === projectId);
+      window.history.replaceState(null, "", window.location.pathname);
+      if (connection) {
+        navigate(
+          sessionId
+            ? {
+                kind: "chat",
+                connectionId: connection.id,
+                projectId,
+                sessionId,
+              }
+            : { kind: "sessions", connectionId: connection.id, projectId },
+          { replace: true },
+        );
+      }
+      return;
+    }
+    prepareRemoteInstall(link);
+    if (params.get("autoconnect") === "1") {
+      window.history.replaceState(null, "", window.location.pathname);
+      const connectedRoute = connectedRemoteInstallRoute(
+        link,
+        activeProfile(getState()).connections,
+      );
+      if (connectedRoute) {
+        navigate(connectedRoute, { replace: true });
+        return;
+      }
+      setStartupStatus("Opening sign-in…");
+      void beginRemoteAuthorization({
+        link,
+        redirectUri: `${window.location.origin}/oauth/callback`,
+      })
+        .then(({ authorizationUrl }) =>
+          window.location.assign(authorizationUrl),
+        )
+        .catch((error: unknown) => {
+          stashPendingLink(link);
+          stashConnectError(
+            error instanceof Error
+              ? error.message
+              : "Sign-in could not be started.",
+          );
+          navigate({ kind: "connect" }, { replace: true });
+          setStartupStatus(null);
+        });
+      return;
+    }
     stashPendingLink(link);
     window.history.replaceState(null, "", window.location.pathname);
     navigate({ kind: "connect" }, { replace: true });
@@ -105,10 +259,12 @@ export function App() {
     prevDepthRef.current = depth;
   }
 
-  if (pairing) {
+  if (startupStatus) {
     return (
       <div className="grid h-full place-items-center bg-bg">
-        <p className="animate-pulse text-sm text-fg-muted">Pairing…</p>
+        <p className="animate-pulse text-sm text-fg-muted" role="status">
+          {startupStatus}
+        </p>
       </div>
     );
   }
@@ -121,7 +277,9 @@ export function App() {
         animation={animation}
         hasConnections={profile.connections.length > 0}
       />
-      <InstallPromotion enabled={!pairing && profile.connections.length > 0} />
+      <InstallPromotion
+        enabled={!startupStatus && profile.connections.length > 0}
+      />
     </QueryClientProvider>
   );
 }
@@ -154,7 +312,7 @@ function ScreenFor({
             connection={connection}
             projectId={route.projectId}
             sessionId={route.sessionId}
-            queryClient={queryClient}
+            queryClient={queryClientFor(connection)}
             animation={animation}
           />
         );
@@ -168,7 +326,7 @@ function ScreenFor({
               ? (connection.projectName ?? "Project")
               : "Project"
           }
-          queryClient={queryClient}
+          queryClient={queryClientFor(connection)}
           animation={animation}
         />
       );

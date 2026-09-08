@@ -234,9 +234,12 @@ export class ToolGate {
       ...(call.annotations ? { annotations: call.annotations } : {}),
     });
     let answer: ToolPermissionDecision;
+    const cancellation = call.abortSignal
+      ? rejectOnAbort(call.abortSignal)
+      : undefined;
     try {
-      answer = call.abortSignal
-        ? await Promise.race([asked, rejectOnAbort(call.abortSignal)])
+      answer = cancellation
+        ? await Promise.race([asked, cancellation.promise])
         : await asked;
     } catch (error) {
       return {
@@ -246,6 +249,8 @@ export class ToolGate {
             ? error.message
             : "The permission request failed.",
       };
+    } finally {
+      cancellation?.dispose();
     }
     if (answer.decision !== "allow") {
       return {
@@ -258,11 +263,16 @@ export class ToolGate {
   }
 }
 
-function rejectOnAbort(signal: AbortSignal): Promise<never> {
-  return new Promise<never>((_resolve, reject) => {
-    const abort = () =>
+function rejectOnAbort(signal: AbortSignal): {
+  promise: Promise<never>;
+  dispose(): void;
+} {
+  let abort = () => {};
+  const promise = new Promise<never>((_resolve, reject) => {
+    abort = () =>
       reject(new Error("The turn was interrupted before the user answered."));
     if (signal.aborted) abort();
     else signal.addEventListener("abort", abort, { once: true });
   });
+  return { promise, dispose: () => signal.removeEventListener("abort", abort) };
 }

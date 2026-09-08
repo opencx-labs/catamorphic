@@ -297,7 +297,7 @@ describe("ClaudeCodeAgent", () => {
     expect(options.allowedTools).toContain("mcp__workspace__run_terminal");
     expect(options.allowedTools).not.toContain("Bash");
     expect(options.disallowedTools).toEqual(
-      expect.arrayContaining(["Bash", "PowerShell", "Monitor"]),
+      expect.arrayContaining(["Bash", "PowerShell"]),
     );
 
     // A session resurrected after a host restart reconstructs its workspace
@@ -308,7 +308,71 @@ describe("ClaudeCodeAgent", () => {
     expect(options.allowedTools).toContain("mcp__workspace__run_terminal");
     expect(options.allowedTools).not.toContain("Bash");
     expect(options.disallowedTools).toEqual(
-      expect.arrayContaining(["Bash", "PowerShell", "Monitor"]),
+      expect.arrayContaining(["Bash", "PowerShell"]),
+    );
+  });
+
+  it("keeps plan mode read-only despite native tool auto-approval", async () => {
+    const agent = new ClaudeCodeAgent({ permissionMode: "plan" });
+    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
+    await collect(agent, "Inspect the project");
+    const options = lastQueryOptions();
+    expect(options.allowedTools).toContain("Read");
+    for (const tool of [
+      "Bash",
+      "PowerShell",
+      "Monitor",
+      "Write",
+      "Edit",
+      "NotebookEdit",
+    ]) {
+      expect(options.disallowedTools).toContain(tool);
+      expect(options.allowedTools).not.toContain(tool);
+    }
+  });
+
+  it("replaces Claude Code's private todo tool with the shared host list", async () => {
+    const agent = new ClaudeCodeAgent({
+      extraTools: [
+        {
+          name: "update_todo_list",
+          description: "Replace the session todo list",
+          parameters: {},
+          execute: async () => "ok",
+        },
+      ],
+    });
+    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
+
+    await collect(agent, "Track this work");
+
+    const options = lastQueryOptions();
+    expect(options.allowedTools).toContain("mcp__workspace__update_todo_list");
+    expect(options.allowedTools).not.toContain("TodoWrite");
+    expect(options.disallowedTools).toContain("TodoWrite");
+  });
+
+  it("replaces Claude Code's private subagents with host subsessions", async () => {
+    const agent = new ClaudeCodeAgent({
+      extraTools: [
+        {
+          name: "spawn_subsession",
+          description: "Create a host-owned child session",
+          parameters: {},
+          execute: async () => "ok",
+        },
+      ],
+    });
+    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
+
+    await collect(agent, "Delegate this review");
+
+    const options = lastQueryOptions();
+    expect(options.allowedTools).toContain("mcp__workspace__spawn_subsession");
+    expect(options.allowedTools).not.toContain("Agent");
+    expect(options.allowedTools).not.toContain("Task");
+    expect(options.disallowedTools).toEqual(
+      expect.arrayContaining(["Agent", "Task"]),
     );
   });
 

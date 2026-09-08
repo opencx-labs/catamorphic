@@ -24,9 +24,16 @@ edit, and intuitive to render. User workflows run like **regular apps** —
 full IO, real npm dependencies, no restricted JS runtime — executed in
 sandboxes (or local processes, ADR 0047) using **Bun**.
 
+Catamorphic is a greenfield project. When starting a feature, first look for
+an existing primitive that already expresses it and simplify toward that
+single model. Prefer a clean breaking change over compatibility code, parallel
+abstractions, or legacy preservation. If a genuinely new abstraction or a
+non-obvious design choice is required, surface it for explicit approval and
+record the accepted decision in an ADR before implementing it.
+
 ### Embeddable framework positioning (READ THIS FIRST)
 
-**Catamorphic ships as libraries a host application mounts in-process.** There is no standalone product and no default identity. The host provides auth, user/org model, database, and the deployment surface. The root `bun run dev` is a dev convenience only: it boots the dev infra (docker-compose, sandbox bridge); libraries must never depend on that script. The in-repo reference host is the desktop app (`apps/desktop`, embedded server in `src/main/server/boot.ts`). The old web playground host was removed 2026-08 (severely out of date; will be rewritten from scratch if revisited).
+**Catamorphic ships as libraries a host application mounts in-process.** There is no standalone product and no default identity. The host provides auth, user/org model, database, and the deployment surface. The root `bun run dev` is a development convenience only: it starts the combined desktop and stock-server manual environment; libraries must never depend on that script. The in-repo reference host is the desktop app (`apps/desktop`, embedded server in `src/main/server/boot.ts`). The old web playground host was removed 2026-08 (severely out of date; will be rewritten from scratch if revisited).
 
 Concrete implications for any change you make:
 
@@ -41,6 +48,7 @@ Concrete implications for any change you make:
 
 - **Every dependency is an axis.** Postgres or pglite; cloud sandboxes (`@catamorphic/cloudflare` default cloud provider, `@catamorphic/daytona` alternate), local sandboxes (`@catamorphic/microsandbox`), or plain subprocesses (`@catamorphic/local-process`, trusted single-tenant only — ADR 0047); S3-compatible or filesystem code storage. Hosts construct backends explicitly at boot (ADRs 0008, 0012, 0047; see `apps/desktop/src/main/server/boot.ts` and `CLOUDFLARE.md`).
 - **Postgres for everything stateful.** Tables live in a dedicated schema (default `catamorphic`). When you need queues or scheduling, build them on the same Postgres (`SKIP LOCKED`) instead of adding infrastructure.
+- **Managed machines share one brain.** ADR 0099 accepts multiple Catamorphic server instances sharing network Postgres, accessible authoritative storage, and one logical authority. Each instance has its own identity and fenced execution ownership. PGlite remains standalone; the member's **This machine** execution does not receive database credentials (ADR 0098). Network Postgres deployments use shared object storage and leased machine dispatch. Keep [setup guidance](skills/setup-catamorphic-server/references/cluster-deployment.md) aligned with implemented enrollment and recovery capabilities.
 - **OpenTelemetry throughout.** Libraries instrument with `@opentelemetry/api` only (via `@catamorphic/otel`); the host owns the SDK/exporters. New service methods on hot paths (runs, deploys, sandbox ops, project mutations) should get spans with `catamorphic.*` attributes. For dev, the repo-root docker-compose ships an OTel collector (:4317/:4318) writing to ClickHouse (:8124 HTTP / :19001 native, db `otel`); hosts register the host-side SDK themselves (see `INTEGRATION.md`).
 - **Bun** for running, bundling, and inside sandboxes.
 
@@ -57,18 +65,18 @@ Big desktop design/philosophy choices are additionally logged in
 
 Public developer surface:
 
-- `packages/server-sdk` — **`@catamorphic/server-sdk`**: core backend SDK. `createCatamorphic({ database, storage, sandboxProvider?, github?, triggerKinds?, mcpToolKinds?, plugins?, projectSeeds?, standingAgentPrompt?, ... })`; identity binds per request via `forTenant({ tenantId }).forUser({ externalUserId })`.
+- `packages/server-sdk`: **`@catamorphic/server-sdk`**, the core backend SDK. `createCatamorphic({ database, storage, environmentProvider, sandboxProvider?, github?, triggerKinds?, mcpToolKinds?, plugins?, projectSeeds?, standingAgentPrompt?, ... })`; identity binds per request via `forTenant({ tenantId }).forUser({ externalUserId, scope? })`.
 - `packages/fastify-plugin` — **`@catamorphic/fastify-plugin`**: mountable Fastify plugin (`catamorphicPlugin`) + standalone `createApp` factory with Zod schemas and OpenAPI spec. Also serves the per-project MCP endpoints (`/projects/:id/mcp` — workflow tools + documents + skills + `ask_agent`, narrowed by identity (ADR 0055); `/projects/:id/apps-mcp` MCP Apps) and app guest documents.
 - `packages/react` — headless React bindings (provider, TanStack Query hooks, jotai atoms).
 - `packages/ui` — React Flow editor components (canvas, panels, AI bar) + `AppMount` (sandboxed app iframe host); all opt-in/composable.
-- `packages/registry` — shadcn-style copy-paste component registry (projects list, git panel, runs panel, agent chat, Monaco editor, …).
+- `packages/registry`: shadcn-style copy-paste component registry (project editor, file explorer, git panel, runs panel, agent chat, Monaco editor, and more).
 - `packages/api-client` — generated OpenAPI types + openapi-fetch client.
 - `packages/workflow` — **`@catamorphic/workflow`**: dependency-light `defineWorkflow`, boundary, batch-scope, pause, child-workflow, trigger-subscription, and physical batch-step authoring primitives; hosts may wrap and selectively re-export this surface.
 - `packages/app` — **`@catamorphic/app`**: the guest runtime bundled into every user-built app (typed workflow client, persistent app-local storage shim, dual-dialect MCP Apps probe, `buildAppGuestDocument`) plus the **`@catamorphic/app/ui`** component kit, styled entirely by host theme tokens (ADR 0048).
 
 Internal packages:
 
-- `packages/core` — framework-agnostic service layer (the kernel behind server-sdk and fastify-plugin). Services include projects, workflows, runs, deployments, triggers (+ codegen), apps, app policies, **app storage**, plugins, secrets, agent sessions, agent context, **agent definitions** (ADR 0050), the coding-agent registry, **remote sync**, the **CodeHost seam** + `GithubService`, skills/seeds, and tenant policies. Seeds/doctrine hooks resolve once in the core constructor (ADR 0049).
+- `packages/core`: framework-agnostic service layer (the kernel behind server-sdk and fastify-plugin). Services include projects, workflows, runs, deployments, triggers (+ codegen), apps, app policies, **app storage**, plugins, secrets, agent sessions, agent context, **agent definitions** (ADR 0050), the coding-agent registry, committed roles and memberships, workflow enablements, session attention/mailboxes/subsessions/archive, **remote sync**, the **CodeHost seam** + `GithubService`, skills/seeds, and tenant policies. Seeds/doctrine hooks resolve once in the core constructor (ADR 0049).
 - `packages/db` — Kysely instance, schema-scoped raw SQL migrations, programmatic `migrateToLatest`, codegen types.
 - `packages/git` — vendor-neutral git-backed project storage (isomorphic-git): `StorageBackend`/`RemoteBackend` contracts, `ProjectManager`, the remote sync engine (`syncWithNetworkRemote` — fetch/merge/push/rescue branches, ADR 0044), filesystem backends.
 - `packages/github` — **`@catamorphic/github`**: GitHub OAuth + device-flow helpers, REST API client, token stores. Consumed by core's `GithubService` (which implements `CodeHost`).
@@ -77,7 +85,7 @@ Internal packages:
 - `packages/microsandbox` — **`@catamorphic/microsandbox`**: local sandbox provider (the desktop's default execution).
 - `packages/local-process` — **`@catamorphic/local-process`**: sandboxless subprocess execution with an explicit env; trusted single-tenant hosts only (ADR 0047).
 - `packages/cloudflare` — **`@catamorphic/cloudflare`** backend plugin: `CloudflareSandboxProvider` (Bridge Worker client), `ArtifactsClient` + `ArtifactsRemoteBackend`.
-- `packages/s3` — **`@catamorphic/s3`** backend plugin: `S3RemoteBackend` + `S3ObjectStore` store project origins in any S3-compatible bucket (ADR 0012).
+- `packages/s3` — **`@catamorphic/s3`** backend plugin: `S3ObjectStore` with the generic `ObjectRemoteBackend` from `@catamorphic/git` store project origins in any S3-compatible bucket (ADR 0012).
 - `packages/daytona` — **`@catamorphic/daytona`** backend plugin: `DaytonaSandboxProvider`, experimental Daytona git storage.
 - `packages/ai-sdk` — **`@catamorphic/ai-sdk`** coding-agent harness: `AiSdkCodingAgent` (Vercel AI SDK tool loop, any API model) running in the host process; the desktop's built-in harness.
 - `packages/claude-code` — **`@catamorphic/claude-code`** coding-agent harness backed by the Claude Agent SDK / Claude Code CLI: preset system prompt + settings-source fidelity (ADR 0045), `ask_user`, background-task events, per-session MCP servers (`mcpServersForSession`).
@@ -91,25 +99,26 @@ Internal packages:
 Apps:
 
 - `apps/desktop` — the Catamorphic desktop app (Electron), the in-repo reference host: it embeds the server in-process (`src/main/server/boot.ts`) and consumes the same hooks as any embedder. It is also a **dev shell** (ADR 0045): Claude Code fidelity (CLAUDE.md/`.claude` honored), worktrees, Monaco diff tabs, sidebar Changes/PRs, ghostty/PTY terminals with OSC 133, embedded browser, command palette. See `apps/desktop/AGENTS.md` and `apps/desktop/DESIGN.md`. Catamorphic itself remains embed-only.
-- `apps/pwa` — the mobile PWA (ADR 0058): phone-sized client of any Catamorphic server — projects → sessions → chat (queue/send-now nudge, interrupt, agent questions, tool-permission cards), connect-link auth, local profiles. Reaches a server three ways: an invite connect link, a desktop QR pairing (ADR 0060), or the stock server. See `apps/pwa/AGENTS.md`.
-- `apps/server` — the stock self-hostable server (ADR 0059): `docker run`-able, zero external services (PGlite + bare git origins + local-process execution + `auth.json` bearer tokens), invites over `POST /admin/invites` (returns ready-to-send connect links), unique-per-install mDNS hostname for LAN reach, `DATABASE_URL` opt-in for real Postgres. **Single-tenant only** (ADR 0047). See `apps/server/AGENTS.md`.
+- `apps/pwa` — the mobile PWA (ADR 0058): phone-sized client of any Catamorphic server — projects → sessions → chat (queue/send-now nudge, interrupt, agent questions, tool-permission cards), OAuth server connections, and local profiles. Reaches a server through a credential-free invite, direct host sign-in, or desktop QR pairing (ADR 0060). See `apps/pwa/AGENTS.md`.
+- `apps/server` — the stock self-hostable server (ADR 0059): `docker run`-able, zero external services (PGlite + bare git origins + local-process execution), Better Auth with built-in local auth and optional OAuth/OIDC providers, agent-driven machine-local provisioning, credential-free project invitations, unique-per-install mDNS hostname for LAN reach, and `DATABASE_URL` opt-in for real Postgres. Microsandbox is selectable for isolated remote development with per-agent limits and managed workspace budgets (ADR 0100). **Single-tenant only** (ADR 0047). See `apps/server/AGENTS.md`.
 
 How the three connect (setting up / troubleshooting, read in this order):
 
-1. **Auth is always a bearer token resolved per request** (ADR 0055): desktop = fixed local identity on loopback; stock server = `auth.json` (admin token printed at boot; member tokens minted by invites, access lives in the *membership*); desktop-LAN = device tokens from QR pairing (hashes in `<userData>/mobile-pairing.json`).
-2. **Invites are connect links**: `catamorphic://connect?server=<api base incl. /api>&token=…&project=…` — redeemable by the desktop (creates a synced remote project, ADR 0044/0055) and by the PWA (direct chat access).
+1. **Auth is always a bearer token resolved per request** (ADR 0055): desktop = fixed local identity on loopback; stock server = OAuth authorization code with S256 PKCE, refresh tokens, and membership-derived scope; desktop-LAN = device tokens from QR pairing (hashes in `<userData>/mobile-pairing.json`).
+2. **Invites are credential-free locators**: `catamorphic://connect?server=<api base incl. /api>&project=…&invitation=…`. The desktop or PWA discovers the server's OAuth endpoints, signs in, and redeems admission. The desktop then creates a synced local project (ADR 0044/0055).
 3. **QR pairing** (ADR 0060, palette → "Continue on mobile"): the desktop's LAN listener serves the built `apps/pwa/dist` at its root, exchanges a single-use 2-minute code for a device token, and proxies `/api/*` to the loopback embedded server (bearer required). The claim also hands the phone the profile's remote-project links + mirror map, and the focused chat's project/session (deep-link). The QR ships the **built** PWA — rebuild `apps/pwa` after UI changes.
 4. **Scoped members address agents as `project:<projectId>:<slug>`** — a bare session create is builder/root-only; the PWA derives the id from `GET /me`.
 5. **Sessions mirror to the linked remote** (ADR 0061): after every settled turn on a remote-linked project the desktop pushes the transcript to `PUT …/agent/sessions/:id/mirror`; the server's copy is continuable there (history-seeded re-anchor), and a `409 diverged` means the server owns the fork — the desktop stops pushing and stamps its copy with a `mirror_fork` marker clients use to lock the stale copy and link the live one. When the focused project has a remote, the pairing QR defaults to the REMOTE origin with a `session` deep-link.
-6. **Session privacy & usage** (ADR 0062): incognito is a DESKTOP-LOCAL concept — a session-id set in `<userData>/incognito-sessions.json` the mirror pusher skips; it never touches core's schema or any wire (palette "New incognito chat", Ghost badge on the dock). `.catamorphic/project.json` `"allowIncognito": false` is the committed team policy hiding the affordance; the stock server's `GET /admin/usage` rolls up per-member usage from message `metadata.usage`, mirrored desktop turns included.
+6. **Session privacy** (ADR 0062): incognito is a DESKTOP-LOCAL concept — a session-id set in `<userData>/incognito-sessions.json` the mirror pusher skips; it never touches core's schema or any wire (palette "New incognito chat", Ghost badge on the dock). `.catamorphic/project.json` `"allowIncognito": false` is the committed team policy hiding the affordance. Connected projects always hide incognito, and restored incognito tabs never mount remote chats (ADR 0098).
 
 ## Skills
 
-- `skills/embed-catamorphic/SKILL.md` — the public skill for embedding Catamorphic in a host product
+- `skills/setup-catamorphic-server/SKILL.md` — the public adaptive entry for stock-server setup and embedding Catamorphic in an existing host
 - `.agents/skills/` — canonical repository-internal skills, following the
   [Agent Skills](https://agentskills.io) layout. `.cursor/skills` is a
   compatibility symlink to this directory.
 - `.agents/skills/plugin-e2e-integration/SKILL.md` — business-agnostic end-to-end plugin integration flow
+- `.agents/skills/desktop-release/SKILL.md`: prepare, dry-run, publish, recover, and verify Stable and Preview macOS desktop releases, including integrity-pinned on-demand harness components
 - `.agents/skills/using-catamorphic/SKILL.md` — embedding catamorphic in a host app (local dev linking)
 - `.agents/skills/embedding-guide/SKILL.md`, `.agents/skills/api-type-safety/SKILL.md`, `.agents/skills/code-first-architecture/SKILL.md`, `.agents/skills/database-conventions/SKILL.md`, `.agents/skills/sandbox-agent-integration/SKILL.md`, `.agents/skills/workflow-code-conventions/SKILL.md`
 
@@ -118,9 +127,49 @@ Per-project seed skills that ship to every user project live in
 `writing-workflows`, `batch-workflows`, `durable-workflows`,
 `building-apps` (mechanics), `designing-apps` (replaceable doctrine).
 
+Keep skills task-focused and route detailed procedures to linked references.
+When changing a public behavior or deployment contract, check the corresponding
+skills and guides for stale commands, contradictory rules, and unsupported
+claims. Record accepted architecture separately from shipped capability, link
+to the source of the contract, and update dated limitations as implementation
+lands. Validate changed skill frontmatter and local links; do not copy the same
+deployment manual into every skill.
+
+## Parallel development
+
+Engineering work happens in a dedicated git worktree. Install dependencies in
+that worktree with `bun install`; do not rely on another checkout's
+`node_modules`. Never run build, test, or watch commands in a checkout used by
+another active session. Never copy a credentialed `.env` wholesale between
+worktrees. Add only the individual credentials or settings a task explicitly
+needs.
+
+Run the public commands from the worktree root:
+
+```bash
+bun run dev          # Combined desktop and stock-server manual environment
+bun run dev:desktop  # Desktop-focused variant of the same orchestrator
+bun run dev:server   # Stock-server-focused variant of the same orchestrator
+bun run dev:infra    # Optional shared observability and sandbox-bridge services
+bun run test         # Deterministic root and Postgres-complete workspace tests
+bun run test:external # Explicit opt-in for credentialed external integrations
+bun run check        # 12-phase merge gate
+```
+
+The development orchestrator assigns each worktree its own data directories
+and loopback ports. Do not override those paths or select a stock-server data
+directory manually. `bun run test` creates one disposable Postgres database
+per invocation and is the default test command. External integrations run
+only when explicitly authorized with `bun run test:external`; credentials in
+the environment are not authority to contact external services. Run `bun run
+check` before completing engineering work. Its 12 phases include root and
+workspace typechecks and tests, plus the PWA and desktop checks. Docker must
+be running for `bun run test` and `bun run check` so they can create disposable
+Postgres databases.
+
 ## Verification Checklist
 
-After **every** change, run all applicable checks before considering it complete. Do not skip any step.
+After **every** change, run all applicable checks before considering it complete. `bun run check` is required before completion; use the focused checks below while iterating.
 
 ### 1. Lint
 
@@ -135,6 +184,7 @@ Zero errors and zero warnings. Use `bunx biome check --write --unsafe .` for uns
 
 ```bash
 bun run typecheck # all packages from root via Turbo
+bun run typecheck:scripts # root production and test orchestration scripts
 ```
 
 Every `.ts`/`.tsx` change must pass with zero errors.
@@ -151,11 +201,12 @@ desktop build or e2e run, or your changes silently don't ship.
 ### 4. Tests
 
 ```bash
-bun run test # all packages from root via Turbo
+bun run test # deterministic root and Postgres-complete workspace tests
 ```
 
-All existing tests must pass. Desktop changes additionally require the
-desktop checklist (`apps/desktop/AGENTS.md`), including `bun run test:e2e`.
+All existing tests must pass. `bun run check` runs the merge-gate E2E suites;
+desktop changes additionally require the desktop checklist
+(`apps/desktop/AGENTS.md`) while iterating.
 
 ### 5. Browser verification (after UI/integration changes)
 
@@ -170,8 +221,8 @@ bun run db:migrate && bun run db:codegen
 ### 7. API spec sync (after route/DTO changes)
 
 ```bash
-cd packages/fastify-plugin && bun run generate-spec
-cd packages/api-client && bun run generate
+(cd packages/fastify-plugin && bun run generate-spec)
+(cd packages/api-client && bun run generate)
 ```
 
 ### 8. Never commit
@@ -191,7 +242,7 @@ Settled decisions — do not deviate without explicit user approval. ADRs in `do
 
 - **Project model, git versioning, DB types** → `project-model.mdc`
 - **Sandbox execution, providers, run lifecycle, instrumentation** → `sandbox-execution.mdc`
-- **Editor UI: history sidebar, run panel, state management** → `playground-ui.mdc`
+- **Editor UI: Runs panel and state management** → `playground-ui.mdc`
 - **Canvas layout, nodes, edges, read-only behavior** → `graph-design.mdc`
 - **Parser node types, containers, source ranges, provenance** → `parser-conventions.mdc`
 - **Detail panel, code editor, bidirectional linking** → `panel-editor.mdc`
@@ -258,8 +309,8 @@ See `typescript-style.mdc`. Key points: object params over positional, no `any`,
 Define Zod schemas first, then register routes with `fastify-type-provider-zod`. Route URLs are prefix-relative (no hard-coded `/api`) — the plugin is mounted with `prefix: "/api"` by `createApp` and by hosts. After adding routes:
 
 ```bash
-cd packages/fastify-plugin && bun run generate-spec
-cd packages/api-client && bun run generate
+(cd packages/fastify-plugin && bun run generate-spec)
+(cd packages/api-client && bun run generate)
 ```
 
 ### Database Changes

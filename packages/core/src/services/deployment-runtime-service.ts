@@ -3,6 +3,7 @@ import {
   EXECUTION_TRANSFORM_VERSION,
   WORKFLOW_SOURCE_ROOT,
 } from "@catamorphic/parser";
+import type { SandboxResources } from "@catamorphic/sandbox";
 import {
   type CloneSource,
   DEPLOYMENT_RUNTIME_VERSION,
@@ -65,6 +66,7 @@ export class DeploymentRuntimeService {
     private readonly store: DeploymentRuntimeStore,
     private readonly deps: {
       provider: SandboxProvider;
+      resources?: SandboxResources;
       artifacts: Pick<DeploymentArtifactsService, "markStatus" | "verify">;
       maxConcurrency?: number;
       autoStopMinutes?: number;
@@ -119,6 +121,7 @@ export class DeploymentRuntimeService {
               (
                 await this.deps.provider.createSandbox({
                   language: "typescript",
+                  resources: this.deps.resources,
                   autoStopInterval: this.deps.autoStopMinutes ?? 15,
                   labels: {
                     purpose: "deployment-runtime",

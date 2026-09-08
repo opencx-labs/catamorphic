@@ -9,7 +9,10 @@ type SandboxType = "execution" | "dev";
  * by (project, external user); execution sandboxes by (project, commit).
  */
 export class DbSandboxStore implements SandboxStore {
-  constructor(private readonly db: Kysely<DB>) {}
+  constructor(
+    private readonly db: Kysely<DB>,
+    private readonly allocationId?: string,
+  ) {}
 
   async findSandbox(opts: {
     projectId: string;
@@ -21,6 +24,10 @@ export class DbSandboxStore implements SandboxStore {
       .selectFrom("project_sandboxes")
       .where("project_id", "=", opts.projectId)
       .where("sandbox_type", "=", opts.sandboxType);
+
+    query = this.allocationId
+      ? query.where("allocation_id", "=", this.allocationId)
+      : query.where("allocation_id", "is", null);
 
     if (opts.commitSha !== undefined) {
       query = query.where("commit_sha", "=", opts.commitSha);
@@ -60,6 +67,7 @@ export class DbSandboxStore implements SandboxStore {
         commit_sha: record.commitSha,
         external_user_id: record.userId,
         status: record.status,
+        allocation_id: this.allocationId ?? null,
       })
       .returningAll()
       .executeTakeFirstOrThrow();
