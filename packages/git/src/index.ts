@@ -1,4 +1,5 @@
 export { CheckoutRemoteBackend } from "./checkout-remote-backend.js";
+export { type FileReadOptions, readFileSnapshot } from "./file-reads.js";
 export { FsBackend } from "./fs-backend.js";
 export { FsOriginRepo, FsRemoteBackend } from "./fs-remote-backend.js";
 export {

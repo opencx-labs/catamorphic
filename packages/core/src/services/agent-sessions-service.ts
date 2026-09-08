@@ -4308,14 +4308,9 @@ export class AgentSessionsService {
     sessionIds: readonly string[],
   ): Promise<void> {
     while (sessionIds.some((id) => this.runningTurns.has(id))) {
-      const drains = sessionIds.flatMap((id) => {
-        const drain = this.drainers.get(id);
-        return drain ? [drain] : [];
-      });
-      await Promise.race([
-        ...(drains.length > 0 ? [Promise.allSettled(drains)] : []),
-        new Promise<void>((resolve) => setTimeout(resolve, 25)),
-      ]);
+      // Do not attach another reaction to each still-pending drainer on
+      // every tick. Polling the running set already supplies the wake-up.
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
     }
   }
 

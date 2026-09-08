@@ -31,7 +31,15 @@ const DEFAULT_POLL_INTERVAL_MS = 750;
 const TERMINAL_STATUSES = new Set(["completed", "failed", "canceled"]);
 const MCP_INITIALIZE_ID = 0;
 
+export interface AppClientOptions {
+  /** Host response deadline, defaults to five minutes. Use start() for durable waits. */
+  requestTimeoutMs?: number;
+  /** Stop waiting without cancelling the workflow on its host. */
+  signal?: AbortSignal;
+}
+
 interface PendingCall {
+  options?: AppClientOptions;
   resolve(value: unknown): void;
   reject(error: Error): void;
   /** Kept so unanswered calls can be re-dispatched on a host-mode flip. */
@@ -159,7 +167,10 @@ class GuestBridge {
     // which this host ignored — re-dispatch them as tools/call.
     for (const [callId, entry] of [...this.pending]) {
       this.pending.delete(callId);
-      this.dispatchMcp(entry.message).then(entry.resolve, entry.reject);
+      this.dispatchMcp(entry.message, entry.options).then(
+        entry.resolve,
+        entry.reject,
+      );
     }
   }
 
@@ -170,40 +181,65 @@ class GuestBridge {
   private rpcRequest(
     method: string,
     params: Record<string, unknown>,
+    options?: AppClientOptions,
   ): Promise<unknown> {
     this.rpcCounter += 1;
     const id = this.rpcCounter;
-    return new Promise((resolve, reject) => {
+    if (this.rpcPending.size >= 128)
+      return Promise.reject(
+        new AppCallError("internal", "Too many pending host requests"),
+      );
+    return waitForHost((resolve, reject) => {
       this.rpcPending.set(id, { resolve, reject });
-      this.postRpc({ jsonrpc: "2.0", id, method, params });
-    });
+      try {
+        this.postRpc({ jsonrpc: "2.0", id, method, params });
+      } catch (error) {
+        this.rpcPending.delete(id);
+        throw error;
+      }
+      return () => {
+        this.rpcPending.delete(id);
+      };
+    }, options);
   }
 
   private async callTool(
     name: string,
     args: Record<string, unknown>,
+    options?: AppClientOptions,
   ): Promise<unknown> {
-    const result = (await this.rpcRequest("tools/call", {
-      name,
-      arguments: args,
-    })) as McpToolCallResult;
+    const result = (await this.rpcRequest(
+      "tools/call",
+      {
+        name,
+        arguments: args,
+      },
+      options,
+    )) as McpToolCallResult;
     if (result.isError) {
       throw new AppCallError("workflow_failed", toolResultErrorMessage(result));
     }
     return toolResultValue(result);
   }
 
-  private dispatchMcp(message: OutboundCall): Promise<unknown> {
+  private dispatchMcp(
+    message: OutboundCall,
+    options?: AppClientOptions,
+  ): Promise<unknown> {
     if (message.kind === "poll-run") {
-      return this.callTool(POLL_RUN_TOOL, { runId: message.runId });
+      return this.callTool(POLL_RUN_TOOL, { runId: message.runId }, options);
     }
     // The typed client chooses how to wait (invoke = resolve with the
     // terminal output, start = return the run id); the mode rides along.
     // Model-initiated calls omit it and the server defaults to invoke.
-    return this.callTool(message.workflowName, {
-      input: message.input ?? null,
-      mode: message.mode,
-    });
+    return this.callTool(
+      message.workflowName,
+      {
+        input: message.input ?? null,
+        mode: message.mode,
+      },
+      options,
+    );
   }
 
   subscribeDisplay(listener: (display: AppDisplay) => void): () => void {
@@ -216,11 +252,28 @@ class GuestBridge {
 
   getContext(): Promise<AppContext> {
     if (this.context) return Promise.resolve(this.context);
-    return new Promise((resolve) => this.contextWaiters.push(resolve));
+    if (this.contextWaiters.length >= 128)
+      return Promise.reject(
+        new AppCallError("internal", "Too many pending context requests"),
+      );
+    return waitForHost<AppContext>((resolve) => {
+      this.contextWaiters.push(resolve);
+      return () => {
+        const index = this.contextWaiters.indexOf(resolve);
+        if (index !== -1) this.contextWaiters.splice(index, 1);
+      };
+    });
   }
 
-  send(message: OutboundCall): Promise<unknown> {
-    if (this.mode === "mcp") return this.dispatchMcp(message);
+  send(message: OutboundCall, options?: AppClientOptions): Promise<unknown> {
+    if (
+      new TextEncoder().encode(JSON.stringify(message)).byteLength >
+      1024 * 1024
+    )
+      return Promise.reject(
+        new AppCallError("internal", "Host request exceeds the 1 MiB limit"),
+      );
+    if (this.mode === "mcp") return this.dispatchMcp(message, options);
     this.counter += 1;
     const callId = `c${this.counter}`;
     const full: GuestToHostMessage = {
@@ -228,10 +281,22 @@ class GuestBridge {
       callId,
       catamorphicApp: APP_PROTOCOL_VERSION,
     };
-    return new Promise((resolve, reject) => {
-      this.pending.set(callId, { resolve, reject, message });
-      window.parent.postMessage(full, "*");
-    });
+    if (this.pending.size >= 128)
+      return Promise.reject(
+        new AppCallError("internal", "Too many pending host requests"),
+      );
+    return waitForHost((resolve, reject) => {
+      this.pending.set(callId, { resolve, reject, message, options });
+      try {
+        window.parent.postMessage(full, "*");
+      } catch (error) {
+        this.pending.delete(callId);
+        throw error;
+      }
+      return () => {
+        this.pending.delete(callId);
+      };
+    }, options);
   }
 
   reportHeight(height: number): void {
@@ -275,28 +340,36 @@ function getBridge(): GuestBridge {
  * set, so an out-of-contract name fails with `denied` at runtime and a type
  * error at compile time.
  */
-export function createClient<Contract>(): AppClient<Contract> {
+export function createClient<Contract>(
+  options?: AppClientOptions,
+): AppClient<Contract> {
   const transport = getBridge();
   return new Proxy({} as AppClient<Contract>, {
     get(_target, property) {
       if (typeof property !== "string") return undefined;
       return {
         call: (input: unknown) =>
-          transport.send({
-            kind: "call",
-            workflowName: property,
-            mode: "invoke",
-            input,
-          }),
+          transport.send(
+            {
+              kind: "call",
+              workflowName: property,
+              mode: "invoke",
+              input,
+            },
+            options,
+          ),
         start: async (input: unknown) => {
-          const value = await transport.send({
-            kind: "call",
-            workflowName: property,
-            mode: "start",
-            input,
-          });
+          const value = await transport.send(
+            {
+              kind: "call",
+              workflowName: property,
+              mode: "start",
+              input,
+            },
+            options,
+          );
           const { runId } = value as { runId: string };
-          return makeRunHandle(transport, runId);
+          return makeRunHandle(transport, runId, options);
         },
       };
     },
@@ -306,12 +379,18 @@ export function createClient<Contract>(): AppClient<Contract> {
 function makeRunHandle(
   transport: GuestBridge,
   runId: string,
+  options?: AppClientOptions,
 ): RunHandle<unknown> {
-  const poll = async (): Promise<TypedRunSnapshot<unknown>> => {
-    const snapshot = (await transport.send({
-      kind: "poll-run",
-      runId,
-    })) as RunSnapshot;
+  const poll = async (
+    signal = options?.signal,
+  ): Promise<TypedRunSnapshot<unknown>> => {
+    const snapshot = (await transport.send(
+      {
+        kind: "poll-run",
+        runId,
+      },
+      { ...options, signal },
+    )) as RunSnapshot;
     return { ...snapshot, output: snapshot.output ?? null };
   };
   return {
@@ -320,7 +399,8 @@ function makeRunHandle(
     result: async (opts) => {
       const interval = opts?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
       for (;;) {
-        const snapshot = await poll();
+        (opts?.signal ?? options?.signal)?.throwIfAborted();
+        const snapshot = await poll(opts?.signal ?? options?.signal);
         if (snapshot.status === "completed") return snapshot.output;
         if (TERMINAL_STATUSES.has(snapshot.status)) {
           throw new AppCallError(
@@ -328,7 +408,7 @@ function makeRunHandle(
             snapshot.error ?? `Run ${runId} ${snapshot.status}`,
           );
         }
-        await sleep(interval);
+        await sleep(interval, opts?.signal ?? options?.signal);
       }
     },
   };
@@ -344,8 +424,14 @@ export function reportHeight(height: number): void {
   getBridge().reportHeight(height);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return waitForHost<void>(
+    (resolve) => {
+      const timer = setTimeout(resolve, ms);
+      return () => clearTimeout(timer);
+    },
+    { signal, requestTimeoutMs: Math.max(ms + 1_000, 300_000) },
+  );
 }
 
 /** Observe compact/full presentation and visibility without remounting the app. */
@@ -353,4 +439,46 @@ export function subscribeDisplay(
   listener: (display: AppDisplay) => void,
 ): () => void {
   return getBridge().subscribeDisplay(listener);
+}
+
+function waitForHost<T>(
+  register: (
+    resolve: (value: T) => void,
+    reject: (error: Error) => void,
+  ) => () => void,
+  options?: AppClientOptions,
+): Promise<T> {
+  const timeoutMs = options?.requestTimeoutMs ?? 300_000;
+  if (
+    !Number.isFinite(timeoutMs) ||
+    timeoutMs <= 0 ||
+    timeoutMs > 2_147_483_647
+  )
+    return Promise.reject(
+      new Error("requestTimeoutMs must be a positive timer duration"),
+    );
+  if (options?.signal?.aborted) return Promise.reject(options.signal.reason);
+  let cleanup: (() => void) | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let abort: (() => void) | undefined;
+  return new Promise<T>((resolve, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new AppCallError(
+            "internal",
+            "The host did not respond before the request deadline",
+          ),
+        ),
+      timeoutMs,
+    );
+    abort = () =>
+      reject(options?.signal?.reason ?? new Error("Host request aborted"));
+    options?.signal?.addEventListener("abort", abort, { once: true });
+    cleanup = register(resolve, reject);
+  }).finally(() => {
+    clearTimeout(timer);
+    if (abort) options?.signal?.removeEventListener("abort", abort);
+    cleanup?.();
+  });
 }

@@ -76,6 +76,16 @@ export class PasswordVault {
 
   constructor(private readonly profilesDir: string) {}
 
+  releaseProfile(profileId: string): void {
+    this.open.delete(profileId);
+    this.opening.delete(profileId);
+  }
+
+  dispose(): void {
+    this.open.clear();
+    this.opening.clear();
+  }
+
   private vaultFile(profileId: string): string {
     return path.join(this.profilesDir, profileId, "vault.kdbx");
   }
@@ -95,7 +105,10 @@ export class PasswordVault {
     const unlockPromise = this.openVault(profileId);
     this.opening.set(profileId, unlockPromise);
     try {
-      return await unlockPromise;
+      const vault = await unlockPromise;
+      if (this.opening.get(profileId) === unlockPromise)
+        this.open.set(profileId, vault);
+      return vault;
     } finally {
       if (this.opening.get(profileId) === unlockPromise) {
         this.opening.delete(profileId);
@@ -146,7 +159,6 @@ export class PasswordVault {
     }
 
     const vault: OpenVault = { db, file: vaultFile, deviceAuthed: false };
-    this.open.set(profileId, vault);
     return vault;
   }
 

@@ -91,6 +91,10 @@ export async function withProgram<T>(
     const sha = await repo
       .resolveRef("refs/catamorphic/published/main")
       .catch(() => null);
+    for (const [cachedKey, value] of recentFetches) {
+      if (Date.now() - value.at >= FETCH_TTL_MS || recentFetches.size >= 256)
+        recentFetches.delete(cachedKey);
+    }
     recentFetches.set(key, { at: Date.now(), sha });
     return await fn(repo, sha);
   } finally {

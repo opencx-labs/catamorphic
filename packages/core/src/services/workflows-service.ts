@@ -12,7 +12,7 @@ import {
 } from "@catamorphic/parser";
 import { type Identity, isBuilder } from "../identity.js";
 import { AccessDeniedError, assertBuilder } from "./artifact-scope.js";
-import { readProgramFiles, withProgram } from "./program-reader.js";
+import { withProgram } from "./program-reader.js";
 import {
   ProjectNotFoundError,
   type ProjectsService,
@@ -173,7 +173,7 @@ export class WorkflowsService {
       args.identity.tenantId,
       args.projectId,
       async (repo, ref) =>
-        read(ref ? await readProgramFiles(repo, ref, "") : {}),
+        read(ref ? await workflowSourceFiles(repo, ref) : {}),
       { publishedOnly: true },
     );
   }

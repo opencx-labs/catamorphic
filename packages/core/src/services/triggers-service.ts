@@ -34,6 +34,7 @@ import {
   WorkflowEnablementSuspendedError,
   type WorkflowEnablementsService,
 } from "./workflow-enablements-service.js";
+import { WORKFLOW_READ_OPTIONS } from "./workflow-source-files.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -238,7 +239,7 @@ export class TriggersService {
       args.identity.externalUserId,
     );
     try {
-      const files = await repo.readAllFiles();
+      const files = await repo.readAllFiles(WORKFLOW_READ_OPTIONS);
       // Generated types and the check script exist to serve the workflow
       // workspace. A project without one (docs-only, imported plain repo)
       // must not have a workflows/ directory conjured into it (ADR 0043).
@@ -698,7 +699,7 @@ export class TriggersService {
         this.capScanMemo();
         return { commitSha, bindings: recorded };
       }
-      files = await repo.readAllFilesAtRef(commitSha);
+      files = await repo.readAllFilesAtRef(commitSha, WORKFLOW_READ_OPTIONS);
     } finally {
       await repo.dispose();
     }
@@ -763,7 +764,10 @@ export class TriggersService {
           `Trigger revision ${args.commitSha} is not available at '${args.remoteBranch}'`,
         );
       }
-      files = await repo.readAllFilesAtRef(args.commitSha);
+      files = await repo.readAllFilesAtRef(
+        args.commitSha,
+        WORKFLOW_READ_OPTIONS,
+      );
     } finally {
       await repo.dispose();
     }

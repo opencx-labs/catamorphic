@@ -513,11 +513,8 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 export class RunsService {
+  private readonly preparedSourceBytes = new Map<string, number>();
   private readonly preparedSources = new Map<string, Promise<PreparedSource>>();
-  private readonly environmentRuntimes = new Map<
-    string,
-    { provider: SandboxProvider; runtime: DeploymentRuntimeService }
-  >();
 
   constructor(
     private readonly db: Kysely<DB>,
@@ -1538,7 +1535,6 @@ export class RunsService {
     if (allocation?.status !== "active") {
       throw new Error("Workflow Allocation is unavailable");
     }
-    const existing = this.environmentRuntimes.get(allocation.id);
     const binding = await this.deps.executionEnvironments.getRuntimeBinding({
       identity: args.identity,
       bindingId: allocation.bindingId,
@@ -1556,7 +1552,6 @@ export class RunsService {
     if (!provider?.deploymentRuntime) {
       throw new SandboxProviderNotConfiguredError();
     }
-    if (existing) return existing;
     const runtime = new EnvironmentDeploymentRuntimeService(
       new KyselyDeploymentRuntimeStore(this.db, allocation.id),
       {
@@ -1572,9 +1567,9 @@ export class RunsService {
         autoStopMinutes: this.deps.deploymentRuntimeOptions?.autoStopMinutes,
       },
     );
-    const selected = { provider, runtime };
-    this.environmentRuntimes.set(allocation.id, selected);
-    return selected;
+    // Runtime state and locks live in the store/provider. The allocation
+    // wrapper is cheap and must not retain every historical allocation.
+    return { provider, runtime };
   }
 
   private async trigger(args: {
@@ -1887,7 +1882,9 @@ export class RunsService {
             .catch(() => null));
         if (!commitSha)
           throw new ProductionDeploymentNotFoundError(args.projectId);
-        const files = await repo.readAllFilesAtRef(commitSha);
+        const files = await repo.readAllFilesAtRef(commitSha, {
+          filter: (file) => !file.startsWith("apps/"),
+        });
         return await prepareSource({
           projectId: args.projectId,
           workflowName: args.workflowName,
@@ -1910,12 +1907,37 @@ export class RunsService {
     // the hottest batch re-pays a git fetch and full parse every cycle.
     if (this.preparedSources.size >= PREPARED_SOURCE_CACHE_MAX) {
       const oldest = this.preparedSources.keys().next();
-      if (!oldest.done) this.preparedSources.delete(oldest.value);
+      if (!oldest.done) {
+        this.preparedSources.delete(oldest.value);
+        this.preparedSourceBytes.delete(oldest.value);
+      }
     }
     this.preparedSources.set(key, load);
     // A failed parse must not be remembered, or the run retries against a
     // cached rejection forever.
-    void load.catch(() => this.preparedSources.delete(key));
+    void load.then(
+      (source) => {
+        if (this.preparedSources.get(key) !== load) return;
+        const size = Buffer.byteLength(JSON.stringify(source));
+        this.preparedSourceBytes.set(key, size);
+        let total = [...this.preparedSourceBytes.values()].reduce(
+          (sum, bytes) => sum + bytes,
+          0,
+        );
+        for (const cachedKey of this.preparedSources.keys()) {
+          if (total <= 64 * 1024 * 1024) break;
+          total -= this.preparedSourceBytes.get(cachedKey) ?? 0;
+          this.preparedSourceBytes.delete(cachedKey);
+          this.preparedSources.delete(cachedKey);
+        }
+      },
+      () => {
+        if (this.preparedSources.get(key) === load) {
+          this.preparedSources.delete(key);
+          this.preparedSourceBytes.delete(key);
+        }
+      },
+    );
     return load;
   }
 

@@ -99,6 +99,7 @@ export class CloudflareSandboxProvider implements SandboxProvider {
     );
     // Drain the body so the connection can be reused.
     await response.arrayBuffer();
+    await this.deploymentRuntime.releaseSandbox?.({ sandboxId });
   }
 
   async getSandboxStatus(sandboxId: string): Promise<SandboxStatus> {

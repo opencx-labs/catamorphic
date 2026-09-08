@@ -206,6 +206,8 @@ export interface RuntimeHealth extends RuntimeSupervisorHealth {
 }
 
 export interface DeploymentRuntimeProvider {
+  /** Release host-side runtime resources after a sandbox stops or is destroyed. */
+  releaseSandbox?(args: { sandboxId: string }): Promise<void>;
   ensureRuntime(args: EnsureDeploymentRuntimeArgs): Promise<DeploymentRuntime>;
   /**
    * Uses invocationId for supervisor deduplication. A caller that cannot

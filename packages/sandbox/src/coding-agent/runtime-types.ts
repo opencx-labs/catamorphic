@@ -121,6 +121,8 @@ export interface AgentTurnHandle {
 }
 
 export interface SubscribeToAgentEvents {
+  /** Cancels event delivery without stopping the session or its active turn. */
+  signal?: AbortSignal;
   sessionId: string;
   after?: AgentEventCursor;
 }

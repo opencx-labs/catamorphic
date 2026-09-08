@@ -56,6 +56,7 @@ export class BrowserHistoryStore {
     this.writes.set(
       profileId,
       setTimeout(() => {
+        this.writes.delete(profileId);
         const entries = this.cache.get(profileId) ?? [];
         const file = this.file(profileId);
         try {
@@ -174,6 +175,12 @@ export class BrowserHistoryStore {
     return matches[0]?.bare ?? null;
   }
 
+  releaseProfile(profileId: string): void {
+    clearTimeout(this.writes.get(profileId));
+    this.writes.delete(profileId);
+    this.cache.delete(profileId);
+  }
+
   dispose(): void {
     for (const [profileId, timer] of this.writes) {
       clearTimeout(timer);
@@ -187,5 +194,6 @@ export class BrowserHistoryStore {
       }
     }
     this.writes.clear();
+    this.cache.clear();
   }
 }

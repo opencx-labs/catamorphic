@@ -1,3 +1,4 @@
+import type { FileReadOptions } from "./file-reads.js";
 export interface CommitInfo {
   sha: string;
   message: string;
@@ -101,8 +102,11 @@ export interface ProjectRepo {
     ref?: string;
     globs: readonly string[];
   }): Promise<string[]>;
-  readAllFiles(): Promise<Record<string, string>>;
-  readAllFilesAtRef(ref: string): Promise<Record<string, string>>;
+  readAllFiles(options?: FileReadOptions): Promise<Record<string, string>>;
+  readAllFilesAtRef(
+    ref: string,
+    options?: FileReadOptions,
+  ): Promise<Record<string, string>>;
   /**
    * The files under one directory prefix at a ref (e.g. `roles/`), without
    * materializing the whole tree. `prefix` is a directory path with its
@@ -115,7 +119,11 @@ export interface ProjectRepo {
   /** File paths at a ref, optionally under one directory prefix; no content. */
   listFilesAtRef(ref: string, opts?: { prefix?: string }): Promise<string[]>;
   /** One file's raw bytes at a ref, or null when absent (binaries intact). */
-  readBlobAtRef(ref: string, filePath: string): Promise<Uint8Array | null>;
+  readBlobAtRef(
+    ref: string,
+    filePath: string,
+    options?: { maxBytes?: number },
+  ): Promise<Uint8Array | null>;
   /** One working-tree file's raw bytes, or null when absent. */
   readFileBytes(filePath: string): Promise<Uint8Array | null>;
   /** File paths + blob ids at a ref (content-addressed digests, no content). */

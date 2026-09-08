@@ -290,7 +290,8 @@ interface LiveTurn {
     resolve: (result: PermissionResult) => void;
   };
   /** Settles when an AskUserQuestion call parks; re-armed per ask. */
-  askRaised: Promise<void>;
+  askRaised: boolean;
+  askWake?: () => void;
   raiseAsk: () => void;
 }
 
@@ -307,9 +308,11 @@ function createLiveTurn(state: SessionState | undefined): LiveTurn {
 
 /** Fresh one-shot signal for the next AskUserQuestion park. */
 function armAskSignal(live: LiveTurn): void {
-  live.askRaised = new Promise<void>((resolve) => {
-    live.raiseAsk = resolve;
-  });
+  live.askRaised = false;
+  live.raiseAsk = () => {
+    live.askRaised = true;
+    live.askWake?.();
+  };
 }
 
 /**
@@ -518,10 +521,16 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     try {
       while (live.iterator) {
         live.nextPending ??= live.iterator.next();
-        const winner = await Promise.race([
-          live.nextPending.then(() => "message" as const),
-          live.askRaised.then(() => "ask" as const),
-        ]);
+        const nextPending = live.nextPending;
+        const winner = await new Promise<"message" | "ask">(
+          (resolve, reject) => {
+            live.askWake = () => resolve("ask");
+            void nextPending.then(() => resolve("message"), reject);
+            if (live.askRaised) resolve("ask");
+          },
+        ).finally(() => {
+          live.askWake = undefined;
+        });
         if (winner === "ask") {
           yield* live.hookEvents.splice(0);
           yield {

@@ -372,10 +372,32 @@ async function workingContent(root: string, file: string): Promise<Content> {
         text: "",
         notice: "File is too large for an inline diff. Open it in your editor.",
       };
-    return decode(
-      await fs.readFile(target),
-      stat.mode & 0o111 ? "100755" : "100644",
-    );
+    const file = await fs.open(target, "r");
+    try {
+      const buffer = Buffer.alloc(Math.min(stat.size, MAX_DIFF_BYTES) + 1);
+      let bytesRead = 0;
+      while (bytesRead < buffer.length) {
+        const chunk = await file.read(
+          buffer,
+          bytesRead,
+          buffer.length - bytesRead,
+          bytesRead,
+        );
+        if (chunk.bytesRead === 0) break;
+        bytesRead += chunk.bytesRead;
+      }
+      if (bytesRead > stat.size)
+        return {
+          text: "",
+          notice: "File changed while reading its diff. Refresh to try again.",
+        };
+      return decode(
+        buffer.subarray(0, bytesRead),
+        stat.mode & 0o111 ? "100755" : "100644",
+      );
+    } finally {
+      await file.close();
+    }
   }
   return { text: "" };
 }

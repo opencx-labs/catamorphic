@@ -7,6 +7,7 @@ import {
   connectionById,
   getState,
   type PwaConnection,
+  subscribe,
   updateRemoteCredentials,
 } from "./store.js";
 
@@ -19,6 +20,10 @@ import {
  */
 const clients = new Map<string, CatamorphicApiClient>();
 const refreshes = new Map<string, Promise<string>>();
+subscribe(() => {
+  for (const id of clients.keys())
+    if (!connectionById(getState(), id)) clients.delete(id);
+});
 
 export function clientBaseUrl(serverUrl: string): string {
   return serverUrl.replace(/\/+$/, "").replace(/\/api$/, "");

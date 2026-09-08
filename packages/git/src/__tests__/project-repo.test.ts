@@ -29,6 +29,68 @@ describe("ProjectRepo", () => {
   });
 
   describe("file operations", () => {
+    it("selects sources before opening large files and skips nested repositories", async () => {
+      await repo.writeFile("workflows/main.ts", "export const value = 1");
+      await repo.writeFile("nested/.git/HEAD", "ref: refs/heads/main");
+      await repo.writeFile("nested/workflows/other.ts", "other repository");
+      const large = await fs.open(path.join(repo.repoPath, "archive.bin"), "w");
+      await large.truncate(256 * 1024 * 1024);
+      await large.close();
+      const files = await repo.readAllFiles({
+        filter: (file) => file.endsWith(".ts"),
+        excludeNestedRepositories: true,
+      });
+      expect(files).toEqual({ "workflows/main.ts": "export const value = 1" });
+      await expect(repo.readAllFiles()).rejects.toThrow("snapshot limit");
+    });
+
+    it("honors hierarchical ignore rules without hiding already tracked files", async () => {
+      await repo.writeFile("tracked.ts", "tracked");
+      await repo.commit("track file", {
+        name: "Test",
+        email: "test@example.com",
+      });
+      await repo.writeFile(".gitignore", "*.ts\ngenerated/\n!keep.ts\n");
+      await repo.writeFile("ignored.ts", "skip");
+      await repo.writeFile("keep.ts", "keep");
+      await repo.writeFile("src/.gitignore", "!local.ts\n");
+      await repo.writeFile("src/local.ts", "nested exception");
+      await repo.writeFile("generated/huge.ts", "skip directory");
+      const files = await repo.readAllFiles();
+      expect(files["tracked.ts"]).toBe("tracked");
+      expect(files["keep.ts"]).toBe("keep");
+      expect(files["src/local.ts"]).toBe("nested exception");
+      expect(files["ignored.ts"]).toBeUndefined();
+      expect(files["generated/huge.ts"]).toBeUndefined();
+    });
+
+    it("diffs changed blobs without loading unchanged large content", async () => {
+      await repo.writeFile("unchanged.txt", "unchanged");
+      await repo.writeFile("changed.txt", "before");
+      const base = await repo.commit("before", {
+        name: "Test",
+        email: "test@example.com",
+      });
+      await repo.writeFile("changed.txt", "after");
+      const head = await repo.commit("after", {
+        name: "Test",
+        email: "test@example.com",
+      });
+      const read = vi.spyOn(repo, "readBlobAtRef");
+      expect(await repo.diff({ base, head })).toEqual([
+        {
+          path: "changed.txt",
+          kind: "modified",
+          before: "before",
+          after: "after",
+        },
+      ]);
+      expect(read.mock.calls.map((call) => call[1])).toEqual([
+        "changed.txt",
+        "changed.txt",
+      ]);
+    });
+
     it("writeFile and readFile round-trip", async () => {
       await repo.writeFile("src/hello.ts", "export const x = 1;");
       const content = await repo.readFile("src/hello.ts");

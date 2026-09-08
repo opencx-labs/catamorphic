@@ -128,6 +128,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     this.connections.delete(sandboxId);
     const handle = await Sandbox.get(sandboxId);
     await handle.stop();
+    await this.deploymentRuntime.releaseSandbox?.({ sandboxId });
   }
 
   async destroySandbox(sandboxId: string): Promise<void> {
@@ -141,9 +142,13 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
         return undefined;
       throw error;
     });
-    if (!handle) return;
+    if (!handle) {
+      await this.deploymentRuntime.releaseSandbox?.({ sandboxId });
+      return;
+    }
     if (handle.status === "running") await handle.killWithTimeout(0);
     await handle.remove();
+    await this.deploymentRuntime.releaseSandbox?.({ sandboxId });
   }
 
   async getSandboxStatus(sandboxId: string): Promise<SandboxStatus> {

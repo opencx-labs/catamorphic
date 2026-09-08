@@ -18,6 +18,8 @@ import type {
   SubscribeToAgentEvents,
 } from "@catamorphic/sandbox";
 import {
+  AgentEventBuffer,
+  type AgentEventBufferOptions,
   AgentRuntimeUnsupportedError,
   agentCapabilityTools,
   withAgentContext,
@@ -49,6 +51,7 @@ export type AiSdkToolPolicyDecision =
   | { decision: "ask"; title?: string; description?: string };
 
 export interface AiSdkAgentRuntimeOpts {
+  eventBuffer?: AgentEventBufferOptions;
   model: LanguageModel;
   sandboxProvider: SandboxProvider;
   instructions?: string;
@@ -67,12 +70,6 @@ interface EventBase {
   sessionId: string;
   turnId?: string;
   providerPayloadRef?: string;
-}
-
-interface Subscriber {
-  queue: AgentRuntimeEvent[];
-  closed: boolean;
-  wake?: () => void;
 }
 
 interface PendingRequest {
@@ -105,8 +102,7 @@ interface AiSdkRuntimeSessionState {
   instructions: string;
   transcript: ModelMessage[];
   tools: ReturnType<typeof createTools>;
-  events: AgentRuntimeEvent[];
-  subscribers: Set<Subscriber>;
+  events: AgentEventBuffer;
   requests: Map<string, PendingRequest>;
   sequence: number;
   stopped: boolean;
@@ -121,6 +117,7 @@ interface AiSdkRuntimeSessionState {
 export class AiSdkAgentRuntime implements AgentRuntimeProvider {
   readonly name = "ai-sdk";
   private readonly sessions = new Map<string, AiSdkRuntimeSessionState>();
+  private readonly stoppedEvents = new Map<string, AgentEventBuffer>();
 
   constructor(private readonly opts: AiSdkAgentRuntimeOpts) {}
 
@@ -199,12 +196,12 @@ export class AiSdkAgentRuntime implements AgentRuntimeProvider {
         extraTools: this.opts.extraTools ?? [],
         toolContext,
       }),
-      events: [],
-      subscribers: new Set(),
+      events: new AgentEventBuffer(this.opts.eventBuffer),
       requests: new Map(),
       sequence: 0,
       stopped: false,
     };
+    this.stoppedEvents.delete(args.sessionId);
     this.sessions.set(args.sessionId, state);
     this.publish(state, {
       eventId: `ai-sdk:session:${args.sessionId}:started`,
@@ -236,7 +233,8 @@ export class AiSdkAgentRuntime implements AgentRuntimeProvider {
   }
 
   async stopSession(args: { sessionId: string }): Promise<void> {
-    const state = this.requireSession(args.sessionId);
+    const state = this.sessions.get(args.sessionId);
+    if (!state) return;
     if (state.stopped) return;
     state.activeTurn?.abort.abort("Session stopped");
     if (state.activeTurn) {
@@ -247,9 +245,13 @@ export class AiSdkAgentRuntime implements AgentRuntimeProvider {
       eventId: `ai-sdk:session:${args.sessionId}:stopped`,
       build: (base) => ({ ...base, type: "session.stopped" }),
     });
-    for (const subscriber of state.subscribers) {
-      subscriber.closed = true;
-      subscriber.wake?.();
+    state.transcript.length = 0;
+    state.events.close();
+    this.sessions.delete(args.sessionId);
+    this.stoppedEvents.set(args.sessionId, state.events);
+    while (this.stoppedEvents.size > 16) {
+      const oldest = this.stoppedEvents.keys().next().value;
+      if (oldest !== undefined) this.stoppedEvents.delete(oldest);
     }
   }
 
@@ -367,31 +369,13 @@ export class AiSdkAgentRuntime implements AgentRuntimeProvider {
     }
   }
 
-  async *subscribe(
-    args: SubscribeToAgentEvents,
-  ): AsyncIterable<AgentRuntimeEvent> {
-    const state = this.requireSession(args.sessionId);
-    const after = args.after?.sequence ?? 0;
-    const replay = state.events.filter((event) => event.sequence > after);
-    const subscriber: Subscriber = { queue: [], closed: false };
-    state.subscribers.add(subscriber);
-    try {
-      for (const event of replay) yield event;
-      while (true) {
-        const event = subscriber.queue.shift();
-        if (event) {
-          yield event;
-          continue;
-        }
-        if (subscriber.closed) break;
-        await new Promise<void>((resolve) => {
-          subscriber.wake = resolve;
-        });
-        subscriber.wake = undefined;
-      }
-    } finally {
-      state.subscribers.delete(subscriber);
-    }
+  subscribe(args: SubscribeToAgentEvents): AsyncIterable<AgentRuntimeEvent> {
+    const events =
+      this.sessions.get(args.sessionId)?.events ??
+      this.stoppedEvents.get(args.sessionId);
+    if (!events)
+      throw new Error(`Agent runtime session not found: ${args.sessionId}`);
+    return events.subscribe(args);
   }
 
   async listTasks(): Promise<readonly AgentTask[]> {
@@ -847,16 +831,15 @@ export class AiSdkAgentRuntime implements AgentRuntimeProvider {
     };
     const event = args.build(base);
     state.events.push(event);
-    for (const subscriber of state.subscribers) {
-      subscriber.queue.push(event);
-      subscriber.wake?.();
-    }
   }
 
   private requireSession(sessionId: string): AiSdkRuntimeSessionState {
     const state = this.sessions.get(sessionId);
-    if (!state)
+    if (!state) {
+      if (this.stoppedEvents.has(sessionId))
+        throw new Error("The agent runtime session is stopped");
       throw new Error(`Agent runtime session not found: ${sessionId}`);
+    }
     return state;
   }
 }

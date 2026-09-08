@@ -46,6 +46,8 @@ export interface ProfileStores {
  * showing profile A never repaints because profile B changed its theme.
  */
 export class ProfileConfigManager {
+  private readonly unsubscribeRemoved: () => void;
+  private readonly unsubscribeConnections = new Map<string, () => void>();
   private readonly stores = new Map<string, ProfileStores>();
   private readonly themeListeners = new Set<
     (profileId: string, theme: ResolvedTheme) => void
@@ -69,9 +71,15 @@ export class ProfileConfigManager {
     private readonly paths: DataPaths,
     private readonly profiles: ProfilesStore,
     private readonly systemAppearance: () => ThemeAppearance = () => "dark",
-  ) {}
+  ) {
+    this.unsubscribeRemoved = profiles.onRemoved((id) =>
+      this.releaseProfile(id),
+    );
+  }
 
   forProfile(profileId: string): ProfileStores {
+    if (!this.profiles.get(profileId))
+      throw new Error(`Profile no longer exists: ${profileId}`);
     const existing = this.stores.get(profileId);
     if (existing) return existing;
 
@@ -107,9 +115,12 @@ export class ProfileConfigManager {
     stores.prefs.watch((prefs) => {
       for (const listener of this.prefsListeners) listener(profileId, prefs);
     });
-    stores.connections.onChanged(() => {
-      for (const listener of this.connectionsListeners) listener(profileId);
-    });
+    this.unsubscribeConnections.set(
+      profileId,
+      stores.connections.onChanged(() => {
+        for (const listener of this.connectionsListeners) listener(profileId);
+      }),
+    );
     this.stores.set(profileId, stores);
     return stores;
   }
@@ -231,15 +242,29 @@ export class ProfileConfigManager {
     this.connectionsListeners.add(listener);
   }
 
-  dispose(): void {
-    for (const stores of this.stores.values()) {
-      stores.theme.dispose();
-      stores.keybindings.dispose();
-      stores.sidebar.dispose();
-      stores.prefs.dispose();
+  releaseProfile(profileId: string): void {
+    const stores = this.stores.get(profileId);
+    stores?.theme.dispose();
+    stores?.keybindings.dispose();
+    stores?.sidebar.dispose();
+    stores?.prefs.dispose();
+    this.stores.delete(profileId);
+    this.unsubscribeConnections.get(profileId)?.();
+    this.unsubscribeConnections.delete(profileId);
+    for (const [key, dispose] of this.projectSidebarWatchers) {
+      if (!key.startsWith(`${profileId}\0`)) continue;
+      dispose();
+      this.projectSidebarWatchers.delete(key);
     }
-    this.stores.clear();
-    for (const dispose of this.projectSidebarWatchers.values()) dispose();
-    this.projectSidebarWatchers.clear();
+  }
+
+  dispose(): void {
+    this.unsubscribeRemoved();
+    for (const profileId of this.stores.keys()) this.releaseProfile(profileId);
+    this.themeListeners.clear();
+    this.keybindingsListeners.clear();
+    this.sidebarListeners.clear();
+    this.connectionsListeners.clear();
+    this.prefsListeners.clear();
   }
 }

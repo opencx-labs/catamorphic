@@ -13,6 +13,7 @@ import type { ProjectEventsService } from "./project-events-service.js";
 import type { RunsService } from "./runs-service.js";
 import type { TriggersService } from "./triggers-service.js";
 import type { WorkflowEnablementsService } from "./workflow-enablements-service.js";
+import { WORKFLOW_READ_OPTIONS } from "./workflow-source-files.js";
 
 type WatcherRow = Selectable<DB["watchers"]>;
 
@@ -190,7 +191,7 @@ export class WatchersService {
       let commitSha: string;
       try {
         await repo.writeFile(sourcePath, input.source);
-        const files = await repo.readAllFiles();
+        const files = await repo.readAllFiles(WORKFLOW_READ_OPTIONS);
         // General-purpose projects need no workspace until they use workflows.
         // Keep this runtime prerequisite on the temporary revision only.
         const paths = [sourcePath];

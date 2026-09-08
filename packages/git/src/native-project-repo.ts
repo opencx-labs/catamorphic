@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { type FileReadOptions, readFileSnapshot } from "./file-reads.js";
 import {
   INTERNAL_REMOTE_PREFIX,
   nativeGit,
@@ -81,7 +82,27 @@ export class NativeProjectRepo extends ProjectRepoImpl {
       throw new Error(
         "This file exceeds the 64 MB document limit. Open it from its folder.",
       );
-    return new Uint8Array(await fs.readFile(target));
+    return this.readSnapshotBytes(filePath, 64 * 1024 * 1024);
+  }
+
+  override async readAllFiles(
+    options: FileReadOptions = {},
+  ): Promise<Record<string, string>> {
+    return readFileSnapshot({
+      paths: await this.listFiles(),
+      options: { maxFileBytes: 2 * 1024 * 1024, ...options },
+      read: async (file, maxBytes) => {
+        const stat = await fs.lstat(path.join(this.repoPath, file));
+        if (!stat.isFile() || stat.size > maxBytes) return null;
+        const bytes = await this.readSnapshotBytes(file, maxBytes);
+        if (bytes.includes(0)) return null;
+        try {
+          return new TextDecoder("utf8", { fatal: true }).decode(bytes);
+        } catch {
+          return null;
+        }
+      },
+    });
   }
 
   override async listFiles(opts?: { prefix?: string }): Promise<string[]> {
@@ -278,6 +299,7 @@ export class NativeProjectRepo extends ProjectRepoImpl {
   override async workdirDiff(): Promise<DiffEntry[]> {
     const status = await this.status();
     const entries: DiffEntry[] = [];
+    let retainedBytes = 0;
     for (const file of status.modifiedFiles) {
       const beforeBytes = status.baseCommit
         ? await this.readBlobAtRef(status.baseCommit, file)
@@ -289,12 +311,16 @@ export class NativeProjectRepo extends ProjectRepoImpl {
           return "Binary or large file. Open from its folder to inspect.";
         return new TextDecoder().decode(bytes);
       };
-      entries.push({
+      const entry: DiffEntry = {
         path: file,
         kind: !beforeBytes ? "added" : !afterBytes ? "deleted" : "modified",
         before: decode(beforeBytes),
         after: decode(afterBytes),
-      });
+      };
+      retainedBytes += Buffer.byteLength(JSON.stringify(entry));
+      if (retainedBytes > 64 * 1024 * 1024)
+        throw new Error("Working diff exceeds the 64 MiB snapshot limit");
+      entries.push(entry);
     }
     return entries;
   }
@@ -422,6 +448,7 @@ export class NativeProjectRepo extends ProjectRepoImpl {
   override async readBlobAtRef(
     ref: string,
     filePath: string,
+    options?: { maxBytes?: number },
   ): Promise<Uint8Array | null> {
     assertSafePath(filePath);
     const sha = await this.resolveRef(ref);
@@ -434,6 +461,10 @@ export class NativeProjectRepo extends ProjectRepoImpl {
       () => null,
     );
     if (size === null) return null;
+    if (options?.maxBytes !== undefined && size > options.maxBytes)
+      throw new Error(
+        `Project file '${filePath}' exceeds the ${options.maxBytes}-byte snapshot limit`,
+      );
     if (size > 64 * 1024 * 1024)
       throw new Error(
         "This file exceeds the 64 MB document limit. Open it from its folder.",
@@ -442,63 +473,42 @@ export class NativeProjectRepo extends ProjectRepoImpl {
   }
   override async readAllFilesAtRef(
     ref: string,
+    options?: FileReadOptions,
   ): Promise<Record<string, string>> {
-    return this.readFilesAtRef(ref, { prefix: "" });
+    return this.readTextSnapshotAtRef(ref, { prefix: "" }, options);
   }
   override async readFilesAtRef(
     ref: string,
     opts: { prefix: string },
   ): Promise<Record<string, string>> {
-    const sha = await this.resolveRef(ref);
-    const files: Record<string, string> = {};
-    for (const entry of await this.listBlobsAtRef(sha, opts)) {
-      const size = Number(
-        (await nativeGit(this.repoPath, ["cat-file", "-s", entry.oid])).trim(),
-      );
-      if (size > 2 * 1024 * 1024) continue;
-      const bytes = await this.readBlobAtRef(sha, entry.path);
-      if (bytes && bytes.byteLength <= 2 * 1024 * 1024 && !bytes.includes(0)) {
-        try {
-          files[entry.path] = new TextDecoder("utf-8", { fatal: true }).decode(
-            bytes,
-          );
-        } catch {
-          /* Binary files are read through readBlobAtRef. */
-        }
-      }
-    }
-    return files;
+    return this.readTextSnapshotAtRef(ref, opts);
   }
-  override async diff(opts: {
-    base: string;
-    head: string;
-  }): Promise<DiffEntry[]> {
-    const files = (
-      await nativeGit(this.repoPath, [
-        "diff",
-        "--name-only",
-        "-z",
-        opts.base,
-        opts.head,
-        "--",
-      ])
-    )
-      .split("\0")
-      .filter(Boolean);
-    const result: DiffEntry[] = [];
-    for (const file of files) {
-      const beforeBytes = await this.readBlobAtRef(opts.base, file);
-      const afterBytes = await this.readBlobAtRef(opts.head, file);
-      const before = beforeBytes ? new TextDecoder().decode(beforeBytes) : null;
-      const after = afterBytes ? new TextDecoder().decode(afterBytes) : null;
-      result.push({
-        path: file,
-        kind:
-          before === null ? "added" : after === null ? "deleted" : "modified",
-        before,
-        after,
-      });
-    }
-    return result;
+  private async readTextSnapshotAtRef(
+    ref: string,
+    opts: { prefix: string },
+    options?: FileReadOptions,
+  ): Promise<Record<string, string>> {
+    const sha = await this.resolveRef(ref);
+    const blobs = await this.listBlobsAtRef(sha, opts);
+    const byPath = new Map(blobs.map((entry) => [entry.path, entry.oid]));
+    return readFileSnapshot({
+      paths: blobs.map((entry) => entry.path),
+      options: { maxFileBytes: 2 * 1024 * 1024, ...options },
+      read: async (file, maxBytes) => {
+        const oid = byPath.get(file);
+        if (!oid) return null;
+        const size = Number(
+          (await nativeGit(this.repoPath, ["cat-file", "-s", oid])).trim(),
+        );
+        if (size > maxBytes) return null;
+        const bytes = await this.readBlobAtRef(sha, file, { maxBytes });
+        if (!bytes || bytes.includes(0)) return null;
+        try {
+          return new TextDecoder("utf8", { fatal: true }).decode(bytes);
+        } catch {
+          return null;
+        }
+      },
+    });
   }
 }

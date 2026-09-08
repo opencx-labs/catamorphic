@@ -213,8 +213,11 @@ export class ConnectionsStore {
   }
 
   /** Fired after every mutation (agent registries key caches off this). */
-  onChanged(listener: () => void): void {
+  onChanged(listener: () => void): () => void {
     this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   list(): McpConnection[] {

@@ -19,6 +19,7 @@
     "typecheck": "tsgo --project ./tsconfig.json"
   },
   "dependencies": {
+    "ignore": "^5.3.2",
     "isomorphic-git": "^1.38.6"
   },
   "devDependencies": {

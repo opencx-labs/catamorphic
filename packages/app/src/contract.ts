@@ -66,7 +66,10 @@ export interface RunHandle<Output> {
   /** Latest snapshot; `output` is typed once status is `completed`. */
   poll(): Promise<TypedRunSnapshot<Output>>;
   /** Polls until a terminal status and resolves with the typed output. */
-  result(opts?: { pollIntervalMs?: number }): Promise<Output>;
+  result(opts?: {
+    pollIntervalMs?: number;
+    signal?: AbortSignal;
+  }): Promise<Output>;
 }
 
 export type TypedRunSnapshot<Output> = Omit<RunSnapshot, "output"> & {

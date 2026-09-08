@@ -519,6 +519,15 @@ app.whenReady().then(async () => {
         : Promise.resolve({ action: "decline" }),
   });
 
+  const unsubscribeProfileRemoved = profilesStore.onRemoved((id) => {
+    void mcpApps.releaseProfile(id);
+    state.current?.agentRegistry.releaseProfile(id);
+  });
+  disposeProfileResources = async () => {
+    unsubscribeProfileRemoved();
+    await mcpApps.dispose();
+  };
+
   // Incognito sessions (ADR 0062): desktop-local state, consulted by the
   // mirror pusher and written from the renderer's chat creation.
   const incognitoSessions = new IncognitoSessionsStore(
@@ -647,6 +656,7 @@ app.whenReady().then(async () => {
   });
 });
 
+let disposeProfileResources: (() => Promise<void>) | undefined;
 let browserSupport: ReturnType<typeof registerBrowserSupport> | null = null;
 let terminalSupport: ReturnType<typeof registerTerminalSupport> | null = null;
 let agentBridge: ReturnType<typeof registerAgentBridge> | null = null;
@@ -657,6 +667,7 @@ registerDesktopShutdown({
   shutdown: async () => {
     await shutdownDesktopServices({
       steps: [
+        { name: "profile clients", dispose: () => disposeProfileResources?.() },
         { name: "profile settings", dispose: () => profileConfig.dispose() },
         { name: "browser", dispose: () => browserSupport?.dispose() },
         { name: "terminals", dispose: () => terminalSupport?.dispose() },

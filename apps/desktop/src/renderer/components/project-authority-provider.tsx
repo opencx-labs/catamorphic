@@ -1,7 +1,13 @@
 import { createApiClient } from "@catamorphic/api-client";
 import { CatamorphicProvider, useCatamorphic } from "@catamorphic/react";
 import { QueryClient, useQuery } from "@tanstack/react-query";
-import { createContext, type ReactNode, useContext, useMemo } from "react";
+import {
+  createContext,
+  type ReactNode,
+  useContext,
+  useEffect,
+  useMemo,
+} from "react";
 import { desktopApi } from "../lib/desktop-api.js";
 
 const RemoteAuthority = createContext<{
@@ -11,6 +17,7 @@ const RemoteAuthority = createContext<{
 } | null>(null);
 export const useRemoteAuthority = () => useContext(RemoteAuthority);
 const authorityCaches = new Map<string, QueryClient>();
+const authorityUsers = new Map<QueryClient, number>();
 
 /** Keep global connection/auth routes and caches with the project's authority. */
 export function ProjectAuthorityProvider({
@@ -43,7 +50,6 @@ export function ProjectAuthorityProvider({
       queries = new QueryClient({
         defaultOptions: { queries: { retry: 1, staleTime: 1000 } },
       });
-      authorityCaches.set(key, queries);
     }
     const baseUrl = `${local.apiClient.baseUrl.replace(/\/+$/, "")}/desktop/projects/${encodeURIComponent(projectId)}/remote-api`;
     return {
@@ -51,6 +57,23 @@ export function ProjectAuthorityProvider({
       apiClient: createApiClient({ baseUrl, fetch: local.apiClient.fetch }),
     };
   }, [remote, projectId, local.apiClient.baseUrl, local.apiClient.fetch]);
+  useEffect(() => {
+    if (!context || !remote) return;
+    const { queries } = context;
+    const key = `${remote.connectionId}:${remote.credentialEpoch}`;
+    authorityUsers.set(queries, (authorityUsers.get(queries) ?? 0) + 1);
+    authorityCaches.set(key, queries);
+    return () => {
+      const count = (authorityUsers.get(queries) ?? 1) - 1;
+      if (count > 0) {
+        authorityUsers.set(queries, count);
+        return;
+      }
+      authorityUsers.delete(queries);
+      if (authorityCaches.get(key) === queries) authorityCaches.delete(key);
+      queries.clear();
+    };
+  }, [context, remote]);
   const member = useQuery({
     queryKey: [
       "desktop",

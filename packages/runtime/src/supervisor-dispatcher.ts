@@ -61,6 +61,7 @@ interface InvocationState {
   request: RuntimeInvocationRequest;
   resolved: ResolvedRuntimeInvocation;
   fingerprint: string;
+  retainedBytes: number;
   events: RuntimeInvocationEvent[];
   promise: Promise<RuntimeInvocationResponse>;
   resolve: (response: RuntimeInvocationResponse) => void;
@@ -80,6 +81,10 @@ export interface RuntimeInvocationDispatcherOptions {
   workerFactory: RuntimeInvocationWorkerFactory;
   artifactIdentity?: RuntimeArtifactIdentity;
   maxRetainedInvocations?: number;
+  maxRetainedBytes?: number;
+  maxInvocationBytes?: number;
+  maxQueuedInvocations?: number;
+  maxQueuedBytes?: number;
   now?: () => Date;
   makeDirectory?: (path: string) => Promise<void>;
 }
@@ -135,11 +140,26 @@ export class RuntimeInvocationDispatcher {
       return existing.promise;
     }
 
+    if (this.queue.length >= (this.options.maxQueuedInvocations ?? 256))
+      throw new Error("Supervisor invocation queue is full");
+    const retainedBytes = Buffer.byteLength(JSON.stringify(request));
+    const queuedBytes = this.queue.reduce(
+      (sum, state) => sum + state.retainedBytes,
+      0,
+    );
+    if (
+      queuedBytes + retainedBytes >
+      (this.options.maxQueuedBytes ?? 32 * 1024 * 1024)
+    )
+      throw new Error("Supervisor invocation queue exceeds its memory limit");
+    if (retainedBytes > (this.options.maxInvocationBytes ?? 8 * 1024 * 1024))
+      throw new Error("Supervisor invocation input exceeds its memory limit");
     const deferred = createDeferred<RuntimeInvocationResponse>();
     const state: InvocationState = {
       request,
       resolved: this.resolveInvocation(request),
       fingerprint,
+      retainedBytes,
       events: [],
       promise: deferred.promise,
       resolve: deferred.resolve,
@@ -198,13 +218,15 @@ export class RuntimeInvocationDispatcher {
 
     if (args.waitMs && args.waitMs > 0 && state.status !== "done") {
       if (pending().length === 0) {
+        if (state.waiters.size >= 64)
+          throw new Error("Too many invocation event subscribers");
         await new Promise<void>((resolve) => {
           const settle = (): void => {
             clearTimeout(timer);
             state.waiters.delete(settle);
             resolve();
           };
-          const timer = setTimeout(settle, args.waitMs);
+          const timer = setTimeout(settle, Math.min(args.waitMs ?? 0, 30_000));
           // Node keeps the process alive for a pending timer; this wait must
           // never be the reason the supervisor stays up.
           timer.unref?.();
@@ -277,6 +299,7 @@ export class RuntimeInvocationDispatcher {
     } finally {
       if (state.worker) {
         await state.worker.terminate().catch(() => {});
+        state.worker = undefined;
       }
       this.activeCount -= 1;
       this.pump();
@@ -288,6 +311,18 @@ export class RuntimeInvocationDispatcher {
     terminal: RuntimeTerminalResult,
   ): void {
     if (state.status === "done") return;
+    const terminalBytes = Buffer.byteLength(JSON.stringify(terminal));
+    if (
+      state.retainedBytes + terminalBytes >
+      (this.options.maxInvocationBytes ?? 8 * 1024 * 1024)
+    ) {
+      this.failInfrastructure(
+        state,
+        new Error("Supervisor invocation output exceeds its memory limit"),
+      );
+      return;
+    }
+    state.retainedBytes += terminalBytes;
     const wasActive = state.status === "active";
     state.status = "done";
     if (state.deadlineTimer) clearTimeout(state.deadlineTimer);
@@ -338,13 +373,25 @@ export class RuntimeInvocationDispatcher {
     event: RuntimeWorkerEvent | { type: "accepted" } | { type: "started" },
   ): void {
     if (state.status === "done") return;
-    state.events.push({
+    const next = {
       invocationId: state.request.invocationId,
       sequence: state.events.length + 1,
       attempt: state.request.attempt,
       timestamp: this.now().toISOString(),
       ...event,
-    });
+    };
+    state.retainedBytes += Buffer.byteLength(JSON.stringify(next));
+    if (
+      state.retainedBytes > (this.options.maxInvocationBytes ?? 8 * 1024 * 1024)
+    ) {
+      state.abortController.abort(
+        new Error("Supervisor invocation events exceed their memory limit"),
+      );
+      if (state.worker) void state.worker.terminate().catch(() => {});
+      this.failInfrastructure(state, state.abortController.signal.reason);
+      return;
+    }
+    state.events.push(next);
     this.wakeWaiters(state);
   }
 
@@ -471,9 +518,17 @@ export class RuntimeInvocationDispatcher {
     const completed = [...this.states.values()].filter(
       (state) => state.status === "done",
     );
-    const excess = completed.length - this.maxRetainedInvocations;
-    for (const state of completed.slice(0, Math.max(0, excess))) {
+    let count = completed.length;
+    let bytes = completed.reduce((sum, state) => sum + state.retainedBytes, 0);
+    for (const state of completed) {
+      if (
+        count <= this.maxRetainedInvocations &&
+        bytes <= (this.options.maxRetainedBytes ?? 32 * 1024 * 1024)
+      )
+        break;
       this.states.delete(state.request.invocationId);
+      count -= 1;
+      bytes -= state.retainedBytes;
     }
   }
 }
