@@ -316,16 +316,27 @@ describe("floating surfaces", () => {
       ),
     ).toBeUndefined();
     const choose = async (query: string, item: string) => {
+      // Closing restores the anchor's focus after the exit animation. Finish
+      // that handoff before opening the next palette.
+      await app.waitFor(`!${floating}`);
+      await app.eval(
+        "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))",
+      );
       await key("p", { metaKey: true });
       await app.waitFor(
-        "!!document.querySelector('textarea[placeholder*=\"Search or ask\"]:not([inert])')",
+        "document.activeElement?.matches('textarea[aria-label=\"Search commands, pages, and more\"]') && !document.activeElement.closest('[inert]')",
       );
       await run(
-        `setReactValue($('textarea[placeholder*="Search or ask"]'),${JSON.stringify(query)});$('textarea[placeholder*="Search or ask"]').focus()`,
+        `setReactValue(document.activeElement,${JSON.stringify(query)})`,
       );
-      await app.waitFor(
-        `document.querySelector('[data-item-id="${item}"]')?.getAttribute('aria-selected')==='true'`,
+      const row = `document.activeElement.closest('[role=dialog]').querySelector('[data-item-id="${item}"]')`;
+      await app.waitFor(`!!${row}`);
+      // Choose this result explicitly; other open palettes and hover-driven
+      // selection must not decide which resource the Enter gesture exercises.
+      await app.eval(
+        `${row}.dispatchEvent(new MouseEvent('mouseover',{bubbles:true}))`,
       );
+      await app.waitFor(`${row}?.getAttribute('aria-selected')==='true'`);
     };
     await choose("Settings", "tab:settings");
     expect(
