@@ -566,14 +566,21 @@ describe("floating surfaces", () => {
         "const save=$('[data-floating-surface] [data-testid=editor-save]');const rect=save.getBoundingClientRect();return save.contains(document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2))",
       ),
     ).toBe(true);
-    await run("$('[data-floating-surface] [data-testid=editor-save]').click()");
+    await click("Open as full tab");
+    await app.waitFor(`!${floating}`);
+    expect(
+      await run(
+        "const save=$('[data-workspace-slot=full] [data-testid=editor-save]');const rect=save.getBoundingClientRect();return save.contains(document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2))",
+      ),
+    ).toBe(true);
+    await run(
+      "$('[data-workspace-slot=full] [data-testid=editor-save]').click()",
+    );
     await app.waitFor(
-      "!document.querySelector('[data-floating-surface] [data-testid=editor-save]')",
+      "!document.querySelector('[data-workspace-slot=full] [data-testid=editor-save]')",
     );
     expect(
       fs.readFileSync(path.join(root, "placement-two.ts"), "utf8"),
     ).toContain("// floating edit");
-    await click("Hide floating panel");
-    await app.waitFor(`!${floating}`);
   });
 });

@@ -1163,7 +1163,7 @@ describeIf("unified RunsService integration", () => {
     const parent = await core.runs.triggerProduction({
       identity,
       projectId,
-      workflowName: "parentWorkflow",
+      workflowName: "parentWaitingChildWorkflow",
       input: { parent: true },
     });
     const worker = core.runs.startWorker({
@@ -1172,11 +1172,10 @@ describeIf("unified RunsService integration", () => {
       pollIntervalMs: 5,
       leaseSeconds: 5,
     });
-    // Wait for the child row, not for the parent's `waiting` status. The parent
-    // holds `waiting` only between spawning the child and that child finishing,
-    // and childWorkflow returns immediately, so polling for the status can miss
-    // the window entirely. The child row is durable once created.
+    // Use a paused child: an immediately completing child can finish before
+    // polling observes its row, making cancellation a no-op on a settled run.
     const child = await waitForChildRun({ parentRunId: parent.id });
+    await waitForStatus({ runId: child.id, status: "waiting" });
     await worker.stop();
 
     await core.runs.cancel({

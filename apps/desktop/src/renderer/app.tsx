@@ -4935,6 +4935,7 @@ export function App() {
   const isSplitSlot = (key: string) =>
     viewSlots[key] === "left" || viewSlots[key] === "right";
   const paneFocusProps = (key: string) => ({
+    "data-workspace-slot": viewSlots[key],
     "data-floating-surface": viewSlots[key] === "floating" ? key : undefined,
     "data-floating-state":
       viewSlots[key] === "floating"
@@ -5626,6 +5627,7 @@ export function App() {
           frame) rather than push the document taller than the window. */}
       <main
         data-tab-layout={tabsInSidebar ? "sidebar" : "top"}
+        data-header-placement={headerInSidebar ? "sidebar" : "top"}
         className={`workspace-surface relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${tabsInSidebar ? "bg-sidebar" : "bg-bg"}`}
       >
         {headerInSidebar && (

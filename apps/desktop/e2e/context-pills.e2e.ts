@@ -532,8 +532,9 @@ describe("context pills", () => {
     await runWait(
       `return timelineText().includes('Received 1 attachment: delayed.bin');`,
     );
-    expect(await run(`return timelineText();`)).toContain(
-      ".catamorphic/attachments/",
+    await runWait(
+      `return timelineText().includes('.catamorphic/attachments/');`,
+      { label: "agent streamed the saved attachment path" },
     );
     await run(`
       File.prototype.arrayBuffer=function(){return Promise.reject(new Error('Clipboard read failed'))};
@@ -810,8 +811,9 @@ describe("context pills", () => {
     await runWait(
       `return timelineText().includes('Received 1 attachment: Screenshot.png');`,
     );
-    expect(await run(`return timelineText();`)).toContain(
-      ".catamorphic/attachments/",
+    await runWait(
+      `return timelineText().includes('.catamorphic/attachments/');`,
+      { label: "agent streamed the saved screenshot path" },
     );
   });
 });

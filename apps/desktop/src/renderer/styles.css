@@ -1161,6 +1161,19 @@ kbd {
   border-radius: var(--radius-sm);
 }
 
+/* With the header in the sidebar, the right toggle shares the toolbar row
+   of the full or right pane. Keep that corner clear of content actions. */
+[data-header-placement="sidebar"]
+  :is([data-workspace-slot="full"], [data-workspace-slot="right"])
+  :is(
+    [data-editor-toolbar],
+    [data-browser-toolbar],
+    .workflow-header,
+    [data-settings] > header
+  ) {
+  padding-right: 52px;
+}
+
 /* Floating controls use the same corner chrome as chat tabs. Reserve the
    content's existing toolbar row so controls never cover its actions. */
 [data-floating-surface] :is([data-settings] > header) {
