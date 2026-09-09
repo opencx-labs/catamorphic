@@ -258,6 +258,21 @@ and must not be treated as arbitrary overridable appearance preferences.
 
 ## Design log
 
+### 2026-09-09: Chat delivery state and floating previews
+
+The chat hook's in-flight operation owns the sending indicator, spanning lazy
+session creation through delivery acknowledgement. Mutation observer snapshots
+must not keep a settled conversation busy. Async results belong to the initiating
+conversation: changing projects or sessions resets local state, and late creation,
+send, retry, or queue-action results must not affect the newly selected chat.
+Queue controls report failed requests and retain the server inbox as authority.
+
+A full-page chat is a workspace pane beneath floating previews and their backdrop;
+a partial chat is itself a floating surface. Keep their stacking levels distinct.
+Modified-link tests must check visible hit targets above the source chat, not only
+that a floating browser exists in the DOM.
+
+
 ### 2026-09-09: Top tabs and an optional workspace frame
 
 New profiles start with horizontal tabs in the top bar and `tabFrame: false`.
@@ -3787,3 +3802,19 @@ at the caret. Do not send or erase the draft while file preparation is pending.
 
 Future resource-opening and composer changes must preserve these contracts and
 their Electron interaction tests.
+
+
+### 2026-09-09: Chat visibility across resource opening
+
+Opening a link preserves the source chat's presentation. Full-tab chats remain
+in the tab bar when a resource takes focus; they do not also gain a dock bubble.
+Floating and minimized chats have a bubble. A normal link from a floating chat
+leaves that dock open over the page. A floating resource preview minimizes the
+floating chat, whose bubble restores the same conversation and draft.
+
+Rendering and chat activity use the same workspace layout resolver. Both panes
+of a valid split count as visible, regardless of keyboard focus, so a response
+beside a browser does not acquire an unread badge or hidden-chat activity cues.
+Tab-group collapse changes strip presentation, not whether a materialized
+surface can render as a preview. Delayed split expansion may finalize only the
+layout that started it; newer navigation owns the screen.

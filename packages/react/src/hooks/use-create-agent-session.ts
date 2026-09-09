@@ -40,6 +40,7 @@ export function useCreateAgentSession(
         const result = await apiClient.POST(
           "/api/projects/{projectId}/agent/sessions",
           {
+            signal: AbortSignal.timeout(15_000),
             params: { path: { projectId: projectId as string } },
             body: input,
           },

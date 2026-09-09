@@ -1,5 +1,6 @@
 import { ATTACHMENT_MARKER } from "@catamorphic/sandbox/attachments";
 import { act, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { describe, expect, it } from "vitest";
 import { apiUrl, HttpResponse, http } from "../../test/handlers.js";
 import { renderHookWithProviders } from "../../test/render.js";
@@ -39,6 +40,208 @@ const session = {
 };
 
 describe("useAgentChat", () => {
+  it.each(["edit", "remove", "send-now", "hold"] as const)(
+    "surfaces a rejected queued-message %s action and recovers on retry",
+    async (action) => {
+      let rejected = true;
+      const turnId = "queued-turn";
+      const route = apiUrl(
+        `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/turns/${turnId}`,
+      );
+      const response = () =>
+        rejected
+          ? HttpResponse.json(
+              { message: "Queue is not writable" },
+              { status: 403 },
+            )
+          : HttpResponse.json({ ok: true });
+      server.use(
+        http.get(
+          apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`),
+          () =>
+            HttpResponse.json({
+              ...session,
+              messages: [],
+              pendingTurns: [
+                {
+                  id: turnId,
+                  messageId: "queued-message",
+                  content: "Queued",
+                  metadata: null,
+                  deliveryMode: "next_turn",
+                  status: "queued",
+                  createdAt: new Date().toISOString(),
+                },
+              ],
+            }),
+        ),
+        http.patch(route, response),
+        http.delete(route, response),
+        http.post(`${route}/send-now`, response),
+      );
+      const { result } = renderHookWithProviders(() =>
+        useAgentChat(PROJECT_ID, { sessionId: SESSION_ID }),
+      );
+      await waitFor(() => expect(result.current.queue).toHaveLength(1));
+      const invoke = () => {
+        if (action === "edit") result.current.updateQueued(turnId, "Edited");
+        else if (action === "remove") result.current.removeQueued(turnId);
+        else if (action === "send-now") result.current.sendQueuedNow(turnId);
+        else result.current.holdQueued(turnId);
+      };
+      act(invoke);
+      await waitFor(() =>
+        expect(result.current.error?.message).toBe("Queue is not writable"),
+      );
+      expect(result.current.queue).toHaveLength(1);
+      rejected = false;
+      act(invoke);
+      await waitFor(() => expect(result.current.error).toBeNull());
+      expect(result.current.isSending).toBe(false);
+    },
+  );
+
+  it("does not adopt a late session creation after switching projects", async () => {
+    let finishCreation: (() => void) | undefined;
+    let sends = 0;
+    server.use(
+      http.post(
+        apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions`),
+        async () => {
+          await new Promise<void>((resolve) => {
+            finishCreation = resolve;
+          });
+          return HttpResponse.json(session, { status: 201 });
+        },
+      ),
+      http.post(
+        apiUrl(
+          `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/messages`,
+        ),
+        () => {
+          sends += 1;
+          return HttpResponse.json(
+            {
+              messageId: "accepted",
+              turnId: "turn",
+              mode: "next_turn",
+              created: true,
+            },
+            { status: 202 },
+          );
+        },
+      ),
+    );
+    const created: string[] = [];
+    const { result, rerender } = renderHookWithProviders(
+      ({ projectId }) =>
+        useAgentChat(projectId, { onSessionCreated: (id) => created.push(id) }),
+      { initialProps: { projectId: PROJECT_ID } },
+    );
+    let sending: Promise<void> | undefined;
+    act(() => {
+      sending = result.current.send("Old project");
+    });
+    await waitFor(() => expect(finishCreation).toBeDefined());
+    rerender({ projectId: OTHER_PROJECT_ID });
+    expect(result.current.isSending).toBe(false);
+    await act(async () => {
+      finishCreation?.();
+      await sending;
+    });
+    expect(result.current.sessionId).toBeNull();
+    expect(result.current.optimisticMessages).toEqual([]);
+    expect(created).toEqual([]);
+    expect(sends).toBe(0);
+  });
+
+  it("keeps late send failures out of a different chat", async () => {
+    const other = "00000000-0000-4000-8000-000000000004";
+    let finishSend: (() => void) | undefined;
+    server.use(
+      http.get(
+        apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/:id`),
+        ({ params }) =>
+          HttpResponse.json({
+            ...session,
+            id: params.id,
+            messages: [],
+            pendingTurns: [],
+          }),
+      ),
+      http.post(
+        apiUrl(
+          `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/messages`,
+        ),
+        async () => {
+          await new Promise<void>((resolve) => {
+            finishSend = resolve;
+          });
+          return HttpResponse.json(
+            { message: "Old chat no longer writable" },
+            { status: 403 },
+          );
+        },
+      ),
+    );
+    const { result, rerender } = renderHookWithProviders(
+      ({ sessionId }) => useAgentChat(PROJECT_ID, { sessionId }),
+      { initialProps: { sessionId: SESSION_ID } },
+    );
+    let sending: Promise<void> | undefined;
+    act(() => {
+      sending = result.current.send("Old chat");
+    });
+    await waitFor(() => expect(finishSend).toBeDefined());
+    rerender({ sessionId: other });
+    expect(result.current.isSending).toBe(false);
+    await act(async () => {
+      finishSend?.();
+      await sending;
+    });
+    expect(result.current.error).toBeNull();
+    expect(result.current.activity).toBeUndefined();
+    expect(result.current.optimisticMessages).toEqual([]);
+  });
+
+  it("settles sending after the host adopts a lazily created session", async () => {
+    server.use(
+      http.post(apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions`), () =>
+        HttpResponse.json(session, { status: 201 }),
+      ),
+      http.get(
+        apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`),
+        () => HttpResponse.json({ ...session, messages: [], pendingTurns: [] }),
+      ),
+      http.post(
+        apiUrl(
+          `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/messages`,
+        ),
+        () =>
+          HttpResponse.json(
+            {
+              messageId: "accepted",
+              turnId: "turn",
+              mode: "next_turn",
+              created: true,
+            },
+            { status: 202 },
+          ),
+      ),
+    );
+    const { result } = renderHookWithProviders(() => {
+      const [sessionId, setSessionId] = useState<string>();
+      return useAgentChat(PROJECT_ID, {
+        sessionId,
+        onSessionCreated: setSessionId,
+      });
+    });
+    await act(() => result.current.send("Hello"));
+    await waitFor(() => expect(result.current.sessionId).toBe(SESSION_ID));
+    await waitFor(() => expect(result.current.isSending).toBe(false));
+    expect(result.current.activity).toBeUndefined();
+  });
+
   it("retries a lost send acknowledgement with the same delivery key", async () => {
     const keys: string[] = [];
     server.use(

@@ -133,6 +133,11 @@ export function useAgentChat(
     sessionId: string | null;
   }>({ projectId, controlledSessionId, sessionId: controlledSessionId });
   const [sendInProgress, setSendInProgress] = useState(0);
+  const [retryInProgress, setRetryInProgress] = useState(false);
+  const [actionError, setActionError] = useState<CatamorphicError | null>(null);
+  // Async work may finish after the host switches chats. Only its original
+  // conversation may adopt the result or update local presentation state.
+  const operationScopeRef = useRef({});
   const [optimisticMessages, setOptimisticMessages] = useState<
     OptimisticAgentMessage[]
   >([]);
@@ -146,7 +151,7 @@ export function useAgentChat(
     attachments: AgentChatAttachment[];
     deliveryMode: "next_turn" | "interrupt";
   } | null>(null);
-  const sessionCreationRef = useRef<Promise<string> | null>(null);
+  const sessionCreationRef = useRef<Promise<string | null> | null>(null);
   const heldTurnIdRef = useRef<string | null>(null);
   const { apiClient } = useCatamorphic();
   // A controlled-id change normally means the host switched sessions, so chat
@@ -167,6 +172,11 @@ export function useAgentChat(
       sessionId: controlledSessionId,
     });
     if (!adoptedOwnSession) {
+      operationScopeRef.current = {};
+      setSendInProgress(0);
+      setRetryInProgress(false);
+      setActionError(null);
+      heldTurnIdRef.current = null;
       setOptimisticMessages([]);
       blockedSendRef.current = null;
     }
@@ -222,8 +232,10 @@ export function useAgentChat(
     });
   }, [projectId, queryClient, session.data]);
 
-  const isSending =
-    sendInProgress > 0 || createSession.isPending || sendMessage.isPending;
+  // The operation spans lazy creation through delivery acknowledgement.
+  // Mutation observers can retain an older pending snapshot when the host
+  // adopts the created id; they are not another source of chat activity.
+  const isSending = sendInProgress > 0;
   const persistedMessages = session.data?.messages ?? [];
   const queuedTurns =
     session.data?.pendingTurns?.filter((turn) => turn.status !== "running") ??
@@ -262,6 +274,7 @@ export function useAgentChat(
     const existingSessionId = activeSessionRef.current.sessionId;
     if (existingSessionId) return existingSessionId;
     if (!sessionCreationRef.current) {
+      const scope = operationScopeRef.current;
       sessionCreationRef.current = createSession
         .mutateAsync({
           ...(agentIdRef.current ? { agentId: agentIdRef.current } : {}),
@@ -269,6 +282,7 @@ export function useAgentChat(
           ...(options.source ? { source: options.source } : {}),
         })
         .then((created) => {
+          if (operationScopeRef.current !== scope) return null;
           activeSessionRef.current = {
             projectId,
             controlledSessionId,
@@ -283,7 +297,8 @@ export function useAgentChat(
           return created.id;
         })
         .finally(() => {
-          sessionCreationRef.current = null;
+          if (operationScopeRef.current === scope)
+            sessionCreationRef.current = null;
         });
     }
     return sessionCreationRef.current;
@@ -295,6 +310,8 @@ export function useAgentChat(
     deliveryMode: "next_turn" | "interrupt";
   }) => {
     if (!projectId) return;
+    const scope = operationScopeRef.current;
+    setActionError(null);
     let accepted = false;
     const optimistic: OptimisticAgentMessage = {
       id: randomId(),
@@ -308,7 +325,7 @@ export function useAgentChat(
     setSendInProgress((count) => count + 1);
     try {
       const targetSessionId = await ensureSessionId();
-      if (!targetSessionId) return;
+      if (!targetSessionId || operationScopeRef.current !== scope) return;
       const receipt = await sendMessage.mutateAsync({
         idempotencyKey: optimistic.id,
         sessionId: targetSessionId,
@@ -317,6 +334,7 @@ export function useAgentChat(
         deliveryMode: input.deliveryMode,
       });
       accepted = true;
+      if (operationScopeRef.current !== scope) return;
       setOptimisticMessages((messages) =>
         messages.map((message) =>
           message.id === optimistic.id
@@ -326,6 +344,8 @@ export function useAgentChat(
       );
       blockedSendRef.current = null;
     } catch (error) {
+      if (operationScopeRef.current !== scope) return;
+      setActionError(toCatamorphicError({ cause: error }));
       if (
         error instanceof CatamorphicError &&
         error.code === "authentication_required"
@@ -335,26 +355,24 @@ export function useAgentChat(
         blockedSendRef.current = input;
       }
     } finally {
-      setSendInProgress((count) => Math.max(0, count - 1));
-      if (!accepted) {
-        setOptimisticMessages((messages) =>
-          messages.filter((message) => message.id !== optimistic.id),
-        );
+      if (operationScopeRef.current === scope) {
+        setSendInProgress((count) => Math.max(0, count - 1));
+        if (!accepted) {
+          setOptimisticMessages((messages) =>
+            messages.filter((message) => message.id !== optimistic.id),
+          );
+        }
       }
-      await queryClient.invalidateQueries({
+      void queryClient.invalidateQueries({
         queryKey: ["cat", "project", projectId],
       });
     }
   };
 
-  const [actionError, setActionError] = useState<CatamorphicError | null>(null);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a different active chat must not inherit this action's error.
-  useEffect(() => {
-    setActionError(null);
-  }, [projectId, sessionId]);
   const interrupt = async () => {
     const target = activeSessionRef.current.sessionId;
     if (!projectId || !target) return;
+    const scope = operationScopeRef.current;
     setActionError(null);
     try {
       await runWithCatamorphicError(async () =>
@@ -370,6 +388,7 @@ export function useAgentChat(
         ),
       );
     } catch (error) {
+      if (operationScopeRef.current !== scope) return;
       setActionError(
         error instanceof CatamorphicError
           ? error
@@ -381,10 +400,10 @@ export function useAgentChat(
     });
   };
 
-  const [retryInProgress, setRetryInProgress] = useState(false);
   const retry = async () => {
     const target = activeSessionRef.current.sessionId;
     if (!projectId || !target || retryInProgress) return;
+    const scope = operationScopeRef.current;
     setRetryInProgress(true);
     setActionError(null);
     try {
@@ -392,20 +411,24 @@ export function useAgentChat(
         assertApiOk(
           await apiClient.POST(
             "/api/projects/{projectId}/agent/sessions/{sessionId}/retry",
-            { params: { path: { projectId, sessionId: target } } },
+            {
+              params: { path: { projectId, sessionId: target } },
+              signal: AbortSignal.timeout(15_000),
+            },
           ),
           "Retry was not confirmed",
         ),
       );
     } catch (error) {
+      if (operationScopeRef.current !== scope) return;
       setActionError(
         error instanceof CatamorphicError
           ? error
           : toCatamorphicError({ cause: error }),
       );
     } finally {
-      setRetryInProgress(false);
-      await queryClient.invalidateQueries({
+      if (operationScopeRef.current === scope) setRetryInProgress(false);
+      void queryClient.invalidateQueries({
         queryKey: ["cat", "project", projectId, "agent", "session", target],
       });
     }
@@ -427,12 +450,31 @@ export function useAgentChat(
     });
   };
 
-  const error =
-    actionError ??
-    createSession.error ??
-    sendMessage.error ??
-    session.error ??
-    null;
+  const runQueueAction = async ({
+    target,
+    action,
+    onSuccess,
+  }: {
+    target: string;
+    action: (signal: AbortSignal) => Promise<unknown>;
+    onSuccess?: () => void;
+  }) => {
+    const scope = operationScopeRef.current;
+    setActionError(null);
+    try {
+      await runWithCatamorphicError(() => action(AbortSignal.timeout(15_000)));
+      if (operationScopeRef.current === scope) onSuccess?.();
+    } catch (error) {
+      if (operationScopeRef.current === scope)
+        setActionError(toCatamorphicError({ cause: error }));
+    } finally {
+      void queryClient.invalidateQueries({
+        queryKey: ["cat", "project", projectId, "agent", "session", target],
+      });
+    }
+  };
+
+  const error = actionError ?? session.error ?? null;
 
   return {
     sessionId,
@@ -453,9 +495,11 @@ export function useAgentChat(
             : session.data.execution.cancellationRequested
               ? "Stopping agent"
               : (session.data.execution.activity ?? "Waiting for agent")
-          : isSending
-            ? "Sending message"
-            : undefined,
+          : retryInProgress
+            ? "Retrying message"
+            : isSending
+              ? "Sending message"
+              : undefined,
     connectionLost: session.error?.code === "network",
     error,
     authenticationRequired: authenticationRequiredFrom(error),
@@ -473,7 +517,6 @@ export function useAgentChat(
       const queued = queue.find((message) => message.id === id);
       const target = activeSessionRef.current.sessionId;
       if (!projectId || !target || !queued) return;
-      if (heldTurnIdRef.current === id) heldTurnIdRef.current = null;
       const withoutMarkers = content.split(ATTACHMENT_MARKER).join("");
       const markerCount =
         (content.length - withoutMarkers.length) / ATTACHMENT_MARKER.length;
@@ -482,71 +525,90 @@ export function useAgentChat(
           ? content
           : withoutMarkers +
             ATTACHMENT_MARKER.repeat(queued.attachments.length);
-      void apiClient
-        .PATCH(
-          "/api/projects/{projectId}/agent/sessions/{sessionId}/turns/{turnId}",
-          {
-            params: { path: { projectId, sessionId: target, turnId: id } },
-            body: {
-              content: next,
-              metadata: { attachments: queued.attachments },
-              held: false,
-            },
-          },
-        )
-        .then(() =>
-          queryClient.invalidateQueries({
-            queryKey: ["cat", "project", projectId, "agent", "session", target],
-          }),
-        );
+      void runQueueAction({
+        target,
+        onSuccess: () => {
+          if (heldTurnIdRef.current === id) heldTurnIdRef.current = null;
+        },
+        action: async (signal) =>
+          assertApiOk(
+            await apiClient.PATCH(
+              "/api/projects/{projectId}/agent/sessions/{sessionId}/turns/{turnId}",
+              {
+                signal,
+                params: { path: { projectId, sessionId: target, turnId: id } },
+                body: {
+                  content: next,
+                  metadata: { attachments: queued.attachments },
+                  held: false,
+                },
+              },
+            ),
+            "Queued message could not be updated",
+          ),
+      });
     },
     removeQueued: (id) => {
       const target = activeSessionRef.current.sessionId;
       if (!projectId || !target) return;
-      void apiClient
-        .DELETE(
-          "/api/projects/{projectId}/agent/sessions/{sessionId}/turns/{turnId}",
-          { params: { path: { projectId, sessionId: target, turnId: id } } },
-        )
-        .then(() =>
-          queryClient.invalidateQueries({
-            queryKey: ["cat", "project", projectId, "agent", "session", target],
-          }),
-        );
+      void runQueueAction({
+        target,
+        action: async (signal) =>
+          assertApiOk(
+            await apiClient.DELETE(
+              "/api/projects/{projectId}/agent/sessions/{sessionId}/turns/{turnId}",
+              {
+                signal,
+                params: { path: { projectId, sessionId: target, turnId: id } },
+              },
+            ),
+            "Queued message could not be removed",
+          ),
+      });
     },
     sendQueuedNow: (id) => {
       const target = activeSessionRef.current.sessionId;
       if (!projectId || !target) return;
-      void apiClient
-        .POST(
-          "/api/projects/{projectId}/agent/sessions/{sessionId}/turns/{turnId}/send-now",
-          { params: { path: { projectId, sessionId: target, turnId: id } } },
-        )
-        .then(() =>
-          queryClient.invalidateQueries({
-            queryKey: ["cat", "project", projectId, "agent", "session", target],
-          }),
-        );
+      void runQueueAction({
+        target,
+        action: async (signal) =>
+          assertApiOk(
+            await apiClient.POST(
+              "/api/projects/{projectId}/agent/sessions/{sessionId}/turns/{turnId}/send-now",
+              {
+                signal,
+                params: { path: { projectId, sessionId: target, turnId: id } },
+              },
+            ),
+            "Queued message could not be sent now",
+          ),
+      });
     },
     holdQueued: (id) => {
       const target = activeSessionRef.current.sessionId;
       if (!projectId || !target) return;
       const turnId = id ?? heldTurnIdRef.current;
       if (!turnId) return;
-      heldTurnIdRef.current = id;
-      void apiClient
-        .PATCH(
-          "/api/projects/{projectId}/agent/sessions/{sessionId}/turns/{turnId}",
-          {
-            params: { path: { projectId, sessionId: target, turnId } },
-            body: { held: id !== null },
-          },
-        )
-        .then(() =>
-          queryClient.invalidateQueries({
-            queryKey: ["cat", "project", projectId, "agent", "session", target],
-          }),
-        );
+      if (id !== null) heldTurnIdRef.current = id;
+      void runQueueAction({
+        target,
+        onSuccess: () => {
+          if (id === null && heldTurnIdRef.current === turnId)
+            heldTurnIdRef.current = null;
+        },
+        action: async (signal) =>
+          assertApiOk(
+            await apiClient.PATCH(
+              "/api/projects/{projectId}/agent/sessions/{sessionId}/turns/{turnId}",
+              {
+                signal,
+                params: { path: { projectId, sessionId: target, turnId } },
+                body: { held: id !== null },
+              },
+            ),
+            "Queued message editing state could not be updated",
+          ),
+      });
     },
     retry,
     resumeAfterAuthentication: () => {
@@ -556,6 +618,10 @@ export function useAgentChat(
     interrupt,
     startNewSession: () => {
       if (sendInProgress === 0) {
+        operationScopeRef.current = {};
+        setActionError(null);
+        setRetryInProgress(false);
+        heldTurnIdRef.current = null;
         activeSessionRef.current = {
           projectId,
           controlledSessionId,

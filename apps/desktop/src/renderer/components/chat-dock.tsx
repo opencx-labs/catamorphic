@@ -2662,7 +2662,7 @@ function ChatDockContent({
     !dropActive;
   return (
     <div
-      className={`pointer-events-none absolute z-30 flex flex-col items-center justify-end ${
+      className={`pointer-events-none absolute ${presentsAsTab ? "z-10" : "z-30"} flex flex-col items-center justify-end ${
         splitResizing
           ? "transition-[padding]"
           : "transition-[padding,left,right]"

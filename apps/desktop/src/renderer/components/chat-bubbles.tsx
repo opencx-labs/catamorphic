@@ -125,6 +125,7 @@ function Bubble({
   }, [menuOpen]);
   return (
     <div
+      data-chat-bubble={entry.localId}
       data-session-id={entry.sessionId}
       className={`group relative ${
         exiting

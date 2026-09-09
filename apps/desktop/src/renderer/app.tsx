@@ -171,6 +171,10 @@ import {
 import { TAB_DRAG_TYPE, type TabDragPayload } from "./lib/tab-drag.js";
 import { useSidebarReveal } from "./lib/use-sidebar-reveal.js";
 import { NEW_WORKFLOW_PROMPT } from "./lib/workflow-authoring.js";
+import {
+  resolveWorkspaceLayout,
+  type SplitView,
+} from "./lib/workspace-layout.js";
 import { AppScreen, useApps } from "./screens/app-screen.js";
 import {
   type BrowserCommands,
@@ -277,14 +281,6 @@ interface EditorEntry {
   chatLocalId?: string;
   /** Attached surface kept as a chip without occupying a tab. */
   background?: boolean;
-}
-
-/** Two tabs tiled side by side; the focused one is `activeTabKey`. */
-interface SplitView {
-  leftKey: string;
-  rightKey: string;
-  /** Left pane's fraction of the width (drag the divider to change). */
-  ratio: number;
 }
 
 /** Snapshot of a closed tab, enough to bring it back (Cmd+Shift+T). */
@@ -526,10 +522,16 @@ const tabbedTerminals = (ws: Workspace) =>
 const tabbedEditors = (ws: Workspace) =>
   ws.editors.filter((editor) => !editor.background);
 
-/** A chat's surface is on screen: the floating dock, or its focused tab. */
+/** Rendering, read receipts, and activity cues agree about both split panes. */
+const workspaceLayout = (ws: Workspace) =>
+  resolveWorkspaceLayout({
+    ...ws,
+    tabKeys: orderedTabKeys(ws, { includeCollapsed: true }),
+  });
 const chatVisible = (ws: Workspace, chat: ChatDockEntry) =>
   chat.mode === "partial" ||
-  (chat.mode === "tab" && ws.activeTabKey === chatTabKey(chat.localId));
+  (chat.mode === "tab" &&
+    Boolean(workspaceLayout(ws).viewSlots[chatTabKey(chat.localId)]));
 
 /** Tab keys attached to a chat, in per-kind order. */
 const attachedTabKeys = (ws: Workspace, chatLocalId: string) => [
@@ -1481,7 +1483,9 @@ export function App() {
         const next =
           updated.floatingKey &&
           (updated.floatingKey === updated.activeTabKey ||
-            !orderedTabKeys(updated).includes(updated.floatingKey) ||
+            !orderedTabKeys(updated, { includeCollapsed: true }).includes(
+              updated.floatingKey,
+            ) ||
             (updated.activeTabKey !== previous.activeTabKey &&
               updated.floatingKey === previous.floatingKey))
             ? { ...updated, floatingKey: undefined }
@@ -3638,6 +3642,7 @@ export function App() {
    * the tween lands.
    */
   const unsplitTimerRef = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(unsplitTimerRef.current), []);
   const removeSurface = (key: string) => {
     if (key.startsWith("terminal:")) {
       const localId = key.slice("terminal:".length);
@@ -3746,19 +3751,24 @@ export function App() {
       current.split &&
       (key === current.split.leftKey || key === current.split.rightKey)
     ) {
-      const target = key === current.split.leftKey ? 1 : 0;
-      updateWorkspace((ws) =>
-        ws.split
-          ? {
-              ...ws,
-              activeTabKey: key,
-              split: { ...ws.split, ratio: target },
-            }
-          : ws,
-      );
+      const expandingSplit = {
+        ...current.split,
+        ratio: key === current.split.leftKey ? 1 : 0,
+      };
+      updateWorkspace((ws) => ({
+        ...ws,
+        activeTabKey: key,
+        split: expandingSplit,
+      }));
       window.clearTimeout(unsplitTimerRef.current);
       unsplitTimerRef.current = window.setTimeout(() => {
-        updateWorkspace((ws) => ({ ...ws, split: null, activeTabKey: key }));
+        // A later navigation, close, resize, or project restoration owns its
+        // layout. An old animation must never bring its former pane back.
+        updateWorkspace((ws) =>
+          ws.split === expandingSplit && ws.activeTabKey === key
+            ? { ...ws, split: null }
+            : ws,
+        );
       }, 220);
       return;
     }
@@ -4880,25 +4890,7 @@ export function App() {
   // change, a plain tab open) silently falls back to the single view —
   // no updater needs to know about splits.
   chatLabelsRef.current = chatLabels;
-  const allTabKeysNow = orderedTabKeys(workspace);
-  const split =
-    workspace.split &&
-    allTabKeysNow.includes(workspace.split.leftKey) &&
-    allTabKeysNow.includes(workspace.split.rightKey) &&
-    (workspace.activeTabKey === workspace.split.leftKey ||
-      workspace.activeTabKey === workspace.split.rightKey)
-      ? workspace.split
-      : null;
-
-  /** Which tabs the content area shows, and where. */
-  const viewSlots: Record<string, "full" | "left" | "right" | "floating"> =
-    split
-      ? { [split.leftKey]: "left", [split.rightKey]: "right" }
-      : workspace.activeTabKey
-        ? { [workspace.activeTabKey]: "full" }
-        : {};
-  if (workspace.floatingKey && allTabKeysNow.includes(workspace.floatingKey))
-    viewSlots[workspace.floatingKey] = "floating";
+  const { split, viewSlots } = workspaceLayout(workspace);
   const splitRatio = split?.ratio ?? 0.5;
   const SLOT_CLASSES = {
     full: "absolute inset-0 flex flex-col",
