@@ -818,7 +818,13 @@ export function App() {
     null,
   );
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [rightSidebarOpen, setRightSidebarOpen] = useState(true);
+  const [savedRightSidebarOpen, setSavedRightSidebarOpen] = useState(false);
+  // Opening an empty sidebar is a temporary customization affordance, scoped
+  // to this profile/project. It must not replace the populated-sidebar choice.
+  const [emptyRightSidebar, setEmptyRightSidebar] = useState<{
+    scope: string;
+    open: boolean;
+  } | null>(null);
   const [sidebarError, setSidebarError] = useState<string>();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [closingWorkflow, setClosingWorkflow] = useState<string | null>(null);
@@ -848,12 +854,12 @@ export function App() {
     void desktopApi.getPrefs().then((loaded) => {
       setPrefs(loaded);
       setSidebarOpen(loaded.sidebarOpen);
-      setRightSidebarOpen(loaded.rightSidebarOpen);
+      setSavedRightSidebarOpen(loaded.rightSidebarOpen);
     });
     return desktopApi.onPrefsChanged((next) => {
       setPrefs(next);
       setSidebarOpen(next.sidebarOpen);
-      setRightSidebarOpen(next.rightSidebarOpen);
+      setSavedRightSidebarOpen(next.rightSidebarOpen);
     });
   }, []);
   const prefsRef = useRef(prefs);
@@ -974,6 +980,8 @@ export function App() {
     null,
   );
 
+  const [sidebarConfigScope, setSidebarConfigScope] = useState<string>();
+
   const allProjects = projectsQuery.data?.items ?? [];
   // Projects created before profiles existed have no owner; the default
   // profile shows them (matches main-process lazy adoption).
@@ -1019,6 +1027,31 @@ export function App() {
     config: sidebarConfig,
     context: projectExperienceContext,
   });
+
+  const sidebarScope = `${activeProfile?.id}:${projectId}`;
+  useEffect(() => {
+    setEmptyRightSidebar((current) =>
+      current?.scope === sidebarScope ? current : null,
+    );
+  }, [sidebarScope]);
+  const rightSidebarHasContent = Boolean(
+    projectId &&
+      sidebarConfigScope === sidebarScope &&
+      remoteSurfaceResolved &&
+      visibleSidebars?.right.length,
+  );
+  const emptyRightSidebarOpen =
+    emptyRightSidebar?.scope === sidebarScope ? emptyRightSidebar.open : null;
+  const rightSidebarOpen =
+    emptyRightSidebarOpen ?? (rightSidebarHasContent && savedRightSidebarOpen);
+  useEffect(() => {
+    if (!rightSidebarHasContent || emptyRightSidebarOpen === null) return;
+    // Content added during customization inherits the panel's current pose;
+    // from this point onward the existing profile preference owns it again.
+    setSavedRightSidebarOpen(emptyRightSidebarOpen);
+    void desktopApi.setPrefs({ rightSidebarOpen: emptyRightSidebarOpen });
+    setEmptyRightSidebar(null);
+  }, [rightSidebarHasContent, emptyRightSidebarOpen]);
 
   useEffect(() => {
     if (!projectId) {
@@ -1127,6 +1160,7 @@ export function App() {
           if (stale || currentRequest !== request) return;
           signature = next;
           setSidebarConfig(resolved.config);
+          setSidebarConfigScope(sidebarScope);
         };
         if (animate) transitionSidebarUpdate(apply);
         else apply();
@@ -1138,7 +1172,7 @@ export function App() {
       stale = true;
       unsubscribe();
     };
-  }, [projectId]);
+  }, [projectId, sidebarScope]);
 
   /**
    * Switching profile follows the workspace's occupancy: an empty
@@ -1183,16 +1217,16 @@ export function App() {
       // Providers above App (theme, keybindings) refetch on this signal —
       // in-place switches get no main-process broadcast to this window.
       window.dispatchEvent(new Event("catamorphic:profile-refetch"));
-      const [sidebar, agents, nextPrefs] = await Promise.all([
-        desktopApi.sidebarConfigGet(),
+      // The scoped sidebar effect owns configuration loading, including
+      // project overrides. A second profile-only fetch could overwrite it.
+      const [agents, nextPrefs] = await Promise.all([
         desktopApi.agentsList(),
         desktopApi.getPrefs(),
       ]);
-      setSidebarConfig(sidebar.config);
       setAgentsData(agents);
       setPrefs(nextPrefs);
       setSidebarOpen(nextPrefs.sidebarOpen);
-      setRightSidebarOpen(nextPrefs.rightSidebarOpen);
+      setSavedRightSidebarOpen(nextPrefs.rightSidebarOpen);
       setProfileVeil({ stage: "out" });
     } finally {
       completingSwitchRef.current = false;
@@ -4002,11 +4036,15 @@ export function App() {
       openTerminalTab({ side: mode === "side", floating: mode === "floating" }),
     "new-editor-tab": (mode) =>
       openEditorTab({ side: mode === "side", floating: mode === "floating" }),
-    "toggle-right-sidebar": () =>
-      setRightSidebarOpen((value) => {
-        void desktopApi.setPrefs({ rightSidebarOpen: !value });
-        return !value;
-      }),
+    "toggle-right-sidebar": () => {
+      const open = !rightSidebarOpen;
+      if (rightSidebarHasContent) {
+        setSavedRightSidebarOpen(open);
+        void desktopApi.setPrefs({ rightSidebarOpen: open });
+      } else {
+        setEmptyRightSidebar({ scope: sidebarScope, open });
+      }
+    },
     "toggle-sidebar": () =>
       setSidebarOpen((value) => {
         void desktopApi.setPrefs({ sidebarOpen: !value });

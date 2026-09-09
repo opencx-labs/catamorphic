@@ -3818,3 +3818,15 @@ beside a browser does not acquire an unread badge or hidden-chat activity cues.
 Tab-group collapse changes strip presentation, not whether a materialized
 surface can render as a preview. Delayed split expansion may finalize only the
 layout that started it; newer navigation owns the screen.
+
+
+### 2026-09-09: Empty right sidebar defaults
+
+An empty right sidebar starts closed on launch and when entering a profile or
+project. A profile without a project has no rendered sidebar sections. Configured,
+authorized sections count as content even when their lists are currently empty;
+a temporary loading or permission state must not overwrite the saved preference.
+Users can still open an empty sidebar to customize it. That temporary choice is
+local to the current profile/project and is forgotten on relaunch. Once content
+is added, the existing profile-level open/closed preference resumes tracking the
+panel. Visiting an empty project does not overwrite the choice for populated ones.

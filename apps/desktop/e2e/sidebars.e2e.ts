@@ -5,15 +5,22 @@ import { type AppHandle, launchApp } from "./harness.js";
 
 let app: AppHandle;
 let configFile: string;
+let projectId: string;
 beforeAll(async () => {
   app = await launchApp();
   await app.waitFor(`!!document.querySelector('[data-sidebar="right"]')`);
+  expect(
+    await app.eval(
+      `document.querySelector('[data-sidebar="right"]').getAttribute('aria-hidden')`,
+    ),
+  ).toBe("true");
   configFile = await app.eval<string>(
     "window.catamorphicDesktop.sidebarConfigFile()",
   );
-  await app.eval(
+  const project = await app.eval<{ id: string }>(
     `window.catamorphicDesktop.createProject({name:'Sidebar studio',rootPath:${JSON.stringify(`${app.userDataDir}/sidebar-studio`)}})`,
   );
+  projectId = project.id;
   await app.eval("location.reload()");
   await app.waitFor(
     `document.body?.innerText.includes('Sidebar studio') && !!document.querySelector('[aria-label="Pin a project note"]')`,
@@ -24,6 +31,21 @@ afterAll(async () => {
 });
 const writeConfig = (config: unknown) =>
   fs.writeFileSync(configFile, `module.exports = ${JSON.stringify(config)};\n`);
+
+const toggleRight = () =>
+  app.eval(
+    `document.querySelector('[aria-label="Collapse right sidebar"], [aria-label="Expand right sidebar"]').click()`,
+  );
+const waitRight = (open: boolean) =>
+  app.waitFor(
+    `document.querySelector('[data-sidebar="right"]')?.getAttribute('aria-hidden') === '${!open}'`,
+  );
+const reload = async () => {
+  await app.eval("window.__sidebarReload = true; location.reload()");
+  await app.waitFor(
+    `!window.__sidebarReload && !!document.querySelector('[data-sidebar="right"]')`,
+  );
+};
 
 describe("tabbed sidebars", () => {
   it("hides the default left tab strip and keeps the footer below customized tabs", async () => {
@@ -204,10 +226,72 @@ describe("tabbed sidebars", () => {
     expect(app.getRendererErrors()).toEqual([]);
   });
 
+  it("remembers the populated sidebar choice across relaunch and empty projects", async () => {
+    await toggleRight();
+    await waitRight(false);
+    await app.waitFor(
+      "window.catamorphicDesktop.getPrefs().then(p => p.rightSidebarOpen === false)",
+    );
+    await reload();
+    await app.waitFor(
+      `!!document.querySelector('[data-sidebar="right"] [role="tab"]')`,
+    );
+    await waitRight(false);
+    await toggleRight();
+    await waitRight(true);
+    await app.waitFor(
+      "window.catamorphicDesktop.getPrefs().then(p => p.rightSidebarOpen === true)",
+    );
+    const root = `${app.userDataDir}/empty-sidebar-project`;
+    const project = await app.eval<{ id: string }>(
+      `window.catamorphicDesktop.createProject({name:'Empty sidebar project',rootPath:${JSON.stringify(root)}})`,
+    );
+    fs.writeFileSync(
+      `${root}/.catamorphic/sidebar.js`,
+      `module.exports = ${JSON.stringify({ ...DEFAULT_SIDEBAR_CONFIG, right: [] })};\n`,
+    );
+    await app.eval(
+      `window.catamorphicDesktop.setPrefs({lastProjectId:${JSON.stringify(project.id)}})`,
+    );
+    await reload();
+    await app.waitFor(
+      `document.querySelector('[data-sidebar="right"]')?.textContent.includes('Add tab')`,
+    );
+    await waitRight(false);
+    expect(
+      await app.eval(
+        "window.catamorphicDesktop.getPrefs().then(p => p.rightSidebarOpen)",
+      ),
+    ).toBe(true);
+    await app.eval(
+      `window.catamorphicDesktop.setPrefs({lastProjectId:${JSON.stringify(projectId)}})`,
+    );
+    await reload();
+    await app.waitFor(
+      `!!document.querySelector('[data-sidebar="right"] [role="tab"]')`,
+    );
+    await waitRight(true);
+  });
+
   it("centers Add tab in an empty right sidebar and opens customization", async () => {
     writeConfig({ ...DEFAULT_SIDEBAR_CONFIG, right: [] });
     await app.waitFor(
       `document.querySelector('[data-sidebar="right"]')?.textContent.includes('Add tab')`,
+    );
+    await waitRight(false);
+    await toggleRight();
+    await waitRight(true);
+    // An empty panel is only open for this visit, even if its profile's
+    // populated-sidebar preference is open.
+    await reload();
+    await app.waitFor(
+      `document.querySelector('[data-sidebar="right"]')?.textContent.includes('Add tab')`,
+    );
+    await waitRight(false);
+    await toggleRight();
+    await waitRight(true);
+    await app.waitFor(
+      `document.querySelector('[data-sidebar="right"]').getAnimations().every(a => a.playState !== 'running')`,
     );
     expect(
       await app.eval(`(() => {
@@ -226,5 +310,45 @@ describe("tabbed sidebars", () => {
     );
     expect(await app.eval("document.body.innerText")).toContain(configFile);
     writeConfig(DEFAULT_SIDEBAR_CONFIG);
+    await app.waitFor(
+      `!!document.querySelector('[data-sidebar="right"] [role="tab"]')`,
+    );
+    await waitRight(true);
+    await app.waitFor(
+      "window.catamorphicDesktop.getPrefs().then(p => p.rightSidebarOpen === true)",
+    );
+  });
+
+  it("keeps a newly created profile without a project closed", async () => {
+    const profile = await app.eval<{ id: string }>(
+      "window.catamorphicDesktop.profilesCreate('Empty profile')",
+    );
+    await app.eval(
+      `window.catamorphicDesktop.windowSetProfile(${JSON.stringify(profile.id)})`,
+    );
+    await reload();
+    await app.waitFor(
+      `!!document.querySelector('[aria-label="Switch profile: Empty profile"]')`,
+    );
+    await waitRight(false);
+    expect(app.getRendererErrors()).toEqual([]);
+    if (process.env.CATAMORPHIC_SIDEBAR_SCREENSHOT)
+      await app.screenshot(process.env.CATAMORPHIC_SIDEBAR_SCREENSHOT);
+    // An empty workspace switches profiles in place. Its configuration and
+    // visibility must come from the destination, including project overrides.
+    await app.eval(
+      `document.querySelector('[aria-label="Switch profile: Empty profile"]').click()`,
+    );
+    await app.eval(
+      `Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Default Profile' && !b.getAttribute('aria-label')).click()`,
+    );
+    await app.waitFor(
+      `!!document.querySelector('[aria-label="Switch profile: Default Profile"]')`,
+    );
+    await app.waitFor(
+      `!!document.querySelector('[data-sidebar="right"] [role="tab"]')`,
+    );
+    await waitRight(true);
+    expect(app.getRendererErrors()).toEqual([]);
   });
 });
