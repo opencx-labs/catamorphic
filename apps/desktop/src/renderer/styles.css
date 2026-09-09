@@ -79,15 +79,14 @@
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
 }
 
-/* The light workspace sits inside the sidebar-colored window frame.
-   Scope its shape to appearance so custom palettes and Paper share it.
+/* Framing is a profile preference, independent of palette and tab placement.
    The sidebar's selection/hover surfaces remain neutral and token-driven. */
 @layer components {
   :where([data-theme="light"]) .tabbed-sidebar {
     --color-bg-overlay: var(--color-bg-raised);
   }
 
-  [data-theme="light"] .workspace-surface[data-tab-layout="top"] {
+  .workspace-surface[data-tab-layout="top"][data-tab-frame="on"] {
     margin: 6px 6px 6px 0;
     border-radius: calc(var(--radius-lg) + 6px);
   }

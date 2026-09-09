@@ -100,7 +100,7 @@ export function SettingsScreen({
       id: "workspace",
       label: "Workspace",
       keywords:
-        "layout sidebar tabs header address bookmarks links preview floating",
+        "layout sidebar tabs header address bookmarks links preview floating border frame",
       content: (
         <>
           <LayoutSection />
@@ -761,7 +761,7 @@ function LayoutSection() {
           }
           className="field h-8 rounded-md px-2 text-sm"
         >
-          <option value="top">Top bar</option>
+          <option value="top">Top bar (default)</option>
           <option value="sidebar">Sidebar</option>
         </select>
       </label>
@@ -784,6 +784,23 @@ function LayoutSection() {
           </select>
         </label>
       )}
+      <label className="flex items-center justify-between gap-3 text-sm">
+        <span>
+          Tab frame
+          <span className="mt-1 block text-xs text-fg-muted">
+            Add a rounded, inset border around tab content. Off by default.
+          </span>
+        </span>
+        <input
+          type="checkbox"
+          name="tabFrame"
+          checked={prefs.tabFrame}
+          onChange={(event) =>
+            void desktopApi.setPrefs({ tabFrame: event.target.checked })
+          }
+          className="size-4 shrink-0 accent-(--color-accent)"
+        />
+      </label>
       <label className="flex flex-wrap items-center justify-between gap-3 text-sm">
         Pinned bookmarks
         <select

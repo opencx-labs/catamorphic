@@ -232,7 +232,40 @@ that friction is intentional.
 - Tokens are mapped into Tailwind 4 via `@theme inline` so utilities and
   registry components pick them up without a config file.
 
+## Settings contracts and current precedence
+
+`src/shared/app-prefs.ts` is the canonical contract, defaults, and normalizer for
+ordinary desktop preferences. The main process persists it through `PrefsStore`;
+the renderer imports the same type. Keep new preference defaults there, rather
+than duplicating the contract across IPC consumers.
+
+There is currently no universal settings resolver. From lowest to highest
+priority, the implemented rules are:
+
+| Setting family | Current precedence |
+|---|---|
+| Layout, tab frame, notification and other app preferences | Built-in defaults, then profile `prefs.json` |
+| Theme | System Light/Dark baseline or explicit profile preset, then profile token/font overrides |
+| Sidebar contents | Built-in sidebar, profile sidebar, shared project sidebar, personal project sidebar |
+| Default agent | Profile default, shared project default, personal project default |
+
+`ProfileConfigManager.forProject()` selects the project's owning profile; it
+does **not** add a general project preference layer. Layout and tab-frame settings
+do not yet support project overrides. Do not infer precedence from the name of
+that method or silently apply the sidebar's whole-file fallback to other settings.
+Enforced project policies, credentials, and runtime state have their own semantics
+and must not be treated as arbitrary overridable appearance preferences.
+
 ## Design log
+
+### 2026-09-09: Top tabs and an optional workspace frame
+
+New profiles start with horizontal tabs in the top bar and `tabFrame: false`.
+Settings > Workspace exposes Tab frame, a profile-level toggle for the rounded,
+inset workspace frame. Frame choice is independent of tab placement and theme;
+light appearance no longer introduces a frame implicitly. Existing explicit tab
+placement remains selected. The customization agent's layout mirror uses the same
+preference as Settings. Floating surfaces keep their own containment and chrome.
 
 ### 2026-09-09: Settings navigation, search motion, and quiet empty sections
 

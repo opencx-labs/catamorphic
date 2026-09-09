@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_PREFS, normalizePrefs, PrefsStore } from "./prefs.js";
+import { DEFAULT_PREFS, normalizePrefs } from "../shared/app-prefs.js";
+import { PrefsStore } from "./prefs.js";
 
 const directories: string[] = [];
 
@@ -20,6 +21,14 @@ function store(): { file: string; value: PrefsStore } {
 }
 
 describe("PrefsStore", () => {
+  it("starts fresh profiles with top tabs and no frame", () => {
+    expect(store().value.load()).toMatchObject({
+      tabPlacement: "top",
+      headerPlacement: "top",
+      tabFrame: false,
+    });
+  });
+
   it("defaults session presentation state to empty lists", () => {
     expect(normalizePrefs({})).toEqual(DEFAULT_PREFS);
   });

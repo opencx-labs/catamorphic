@@ -7,12 +7,12 @@ import type {
   TurnOptions,
 } from "@catamorphic/sandbox";
 import { BUILTIN_ACTIONS } from "../../shared/actions.js";
+import type { AppPrefs } from "../../shared/app-prefs.js";
 import {
   DEFAULT_KEYBINDINGS,
   type Keybindings,
   normalizeKeybindings,
 } from "../keybindings.js";
-import type { AppPrefs } from "../prefs.js";
 import type { ProfileStores } from "../profile-config.js";
 import type { SidebarConfigStore } from "../sidebar-config.js";
 import { normalizeTheme, THEME_PRESETS, THEME_TOKENS } from "../theme.js";
@@ -248,7 +248,9 @@ changing only colors. Fonts are also editable in Settings under Theme.
 Edit \`${DESKTOP_LAYOUT_WORKSPACE_PATH}\` to set \`tabPlacement\` to
 \`"top"\` or \`"sidebar"\`, and \`pinnedBookmarks\` to \`"tiles"\` or
 \`"list"\`. Set \`headerPlacement\` to \`"sidebar"\` for the full Arc layout,
-or \`"top"\` for a title-only header above the content. All apply live to the current profile. These are independent
+or \`"top"\` for a title-only header above the content. Set \`tabFrame\` to
+\`true\` to add a rounded inset frame or \`false\` to remove it. Top tabs and
+no frame are the defaults. All apply live to the current profile. These are independent
 of the color theme and sidebar section order. Sidebar mode always keeps
 tabs out of the header, including while the
 sidebar is collapsed. The header shows the active title or browser address
@@ -374,7 +376,7 @@ export class DesktopConfigAgent implements CodingAgentProvider {
             null,
             2,
           )}\n`,
-          [DESKTOP_LAYOUT_WORKSPACE_PATH]: `${JSON.stringify({ tabPlacement: prefs.tabPlacement, headerPlacement: prefs.headerPlacement, pinnedBookmarks: prefs.pinnedBookmarks }, null, 2)}\n`,
+          [DESKTOP_LAYOUT_WORKSPACE_PATH]: `${JSON.stringify({ tabPlacement: prefs.tabPlacement, headerPlacement: prefs.headerPlacement, tabFrame: prefs.tabFrame, pinnedBookmarks: prefs.pinnedBookmarks }, null, 2)}\n`,
         },
         session.workingDirectory,
       );
@@ -503,6 +505,8 @@ export class DesktopConfigAgent implements CodingAgentProvider {
       );
       if (typeof raw !== "object" || raw === null) return;
       const patch: Partial<AppPrefs> = {};
+      if ("tabFrame" in raw && typeof raw.tabFrame === "boolean")
+        patch.tabFrame = raw.tabFrame;
       if (
         "tabPlacement" in raw &&
         (raw.tabPlacement === "top" || raw.tabPlacement === "sidebar")
@@ -521,6 +525,7 @@ export class DesktopConfigAgent implements CodingAgentProvider {
       const store = this.stores(session).prefs;
       const current = store.load();
       if (
+        (patch.tabFrame !== undefined && patch.tabFrame !== current.tabFrame) ||
         (patch.tabPlacement !== undefined &&
           patch.tabPlacement !== current.tabPlacement) ||
         (patch.pinnedBookmarks !== undefined &&
