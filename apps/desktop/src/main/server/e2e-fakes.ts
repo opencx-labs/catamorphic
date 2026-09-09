@@ -21,6 +21,7 @@ import type {
   TurnOptions,
 } from "@catamorphic/sandbox";
 import { inlineAttachmentReferences } from "@catamorphic/sandbox";
+import type { desktopSettingsContext } from "./desktop-settings-context.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -187,6 +188,9 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
      * without a model or a live MCP server.
      */
     private readonly askToolPermission?: ToolPermissionHandler,
+    private readonly settingsContext?: (
+      projectId: string,
+    ) => ReturnType<typeof desktopSettingsContext>,
   ) {}
 
   interrupt(providerSessionId: string): void {
@@ -709,6 +713,24 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       );
       if (tool) await tool.execute({}, state.toolContext);
       yield { type: "text", content: "Cleared the pointers." };
+      yield { type: "done" };
+      return;
+    }
+
+    if (message.trim() === "E2E enable personal tab frame") {
+      const context = this.settingsContext?.(session.projectId);
+      const file = context?.files?.preferences.personal;
+      if (!file || context.access !== "native")
+        throw new Error("Personal settings file unavailable");
+      const raw = fs.existsSync(file)
+        ? JSON.parse(fs.readFileSync(file, "utf8"))
+        : {};
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify({ ...raw, tabFrame: true }));
+      yield {
+        type: "text",
+        content: "Personal tab frame updated by editing its JSON file.",
+      };
       yield { type: "done" };
       return;
     }

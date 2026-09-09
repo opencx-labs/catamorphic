@@ -57,6 +57,7 @@ import {
   type KeybindingAction,
 } from "../../shared/actions.js";
 import type { OpenMode as CommitMode } from "../../shared/open-mode.js";
+import { SETTINGS_CATALOG } from "../../shared/settings-catalog.js";
 import { sidebarSections } from "../../shared/sidebar.js";
 import type { TerminalMacro } from "../../shared/terminal-macros.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
@@ -76,6 +77,10 @@ import {
 } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
+import {
+  createPaletteIndex,
+  PALETTE_RESULT_LIMIT,
+} from "../lib/palette-search.js";
 import { useProjectSkills } from "../lib/skills.js";
 import { NEW_WORKFLOW_PROMPT } from "../lib/workflow-authoring.js";
 import { useApps } from "../screens/app-screen.js";
@@ -321,7 +326,7 @@ const LIST_MAX_HEIGHT = 350;
  * input pops the chip (cmdk convention).
  */
 export interface PaletteMode {
-  id: "agent" | "web";
+  id: "agent" | "web" | "settings";
   /** Typed trigger, matched with or without the leading @. */
   trigger: string;
   /** Alternate typed names that commit the same mode (e.g. "chat"). */
@@ -336,6 +341,16 @@ export interface PaletteMode {
 }
 
 export const PALETTE_MODES: PaletteMode[] = [
+  {
+    id: "settings",
+    trigger: "settings",
+    aliases: ["preferences"],
+    chip: "Settings",
+    icon: SettingsIcon,
+    label: "Search settings",
+    description: "Find a setting and open its control",
+    placeholder: "Search settings…",
+  },
   {
     id: "agent",
     trigger: "agent",
@@ -465,9 +480,9 @@ export function CommandPalette({
   profiles,
   activeProfileId,
   sidebarConfig,
-  onOpenUrl,
-  onOpenTab,
-  onOpenSession,
+  onOpenUrl: suppliedOnOpenUrl,
+  onOpenTab: suppliedOnOpenTab,
+  onOpenSession: suppliedOnOpenSession,
   onSelectProject,
   onSwitchProfile,
   onSendToAgent,
@@ -574,6 +589,31 @@ export function CommandPalette({
 }) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const navigation = useRef({
+    onOpenUrl: suppliedOnOpenUrl,
+    onOpenTab: suppliedOnOpenTab,
+    onOpenSession: suppliedOnOpenSession,
+  });
+  navigation.current = {
+    onOpenUrl: suppliedOnOpenUrl,
+    onOpenTab: suppliedOnOpenTab,
+    onOpenSession: suppliedOnOpenSession,
+  };
+  const onOpenUrl = useCallback(
+    (...args: Parameters<typeof suppliedOnOpenUrl>) =>
+      navigation.current.onOpenUrl(...args),
+    [],
+  );
+  const onOpenTab = useCallback(
+    (...args: Parameters<typeof suppliedOnOpenTab>) =>
+      navigation.current.onOpenTab(...args),
+    [],
+  );
+  const onOpenSession = useCallback(
+    (...args: Parameters<typeof suppliedOnOpenSession>) =>
+      navigation.current.onOpenSession(...args),
+    [],
+  );
   const [mode, setMode] = useState<PaletteMode | null>(null);
   // Exiting chip lingers to play chip-out; removed on animationend.
   const [exitingMode, setExitingMode] = useState<PaletteMode | null>(null);
@@ -717,6 +757,28 @@ export function CommandPalette({
         )
       : undefined;
 
+  // Keep the exiting list intact, but always start a fresh opening even if
+  // the user reopens before its exit animation has finished. This precedes
+  // pickerRequest so an explicit picker can initialize the fresh palette.
+  useEffect(() => {
+    const reset = () => {
+      setQuery("");
+      setSelectedIndex(0);
+      setMode(null);
+      setExitingMode(null);
+      setPicker(null);
+      setExitingPicker(null);
+      listMotionRef.current.reset();
+    };
+    if (open) {
+      reset();
+      const frame = requestAnimationFrame(() => inputRef.current?.focus());
+      return () => cancelAnimationFrame(frame);
+    }
+    const timer = setTimeout(reset, 250);
+    return () => clearTimeout(timer);
+  }, [open]);
+
   // Cmd+P agent commands open the overlay already inside a picker.
   useEffect(() => {
     if (variant !== "overlay" || !pickerRequest) return;
@@ -808,29 +870,6 @@ export function CommandPalette({
     window.addEventListener("focus", onWindowFocus);
     return () => window.removeEventListener("focus", onWindowFocus);
   }, [variant]);
-
-  // Focus on open; reset the query after the exit transition so the list
-  // doesn't visibly re-expand while the panel is still fading out (the
-  // cmdk trick, minus its 500ms — ours matches the 200ms transition).
-  useEffect(() => {
-    if (open) {
-      // rAF waits out the `inert` removal — focus() no-ops on inert trees.
-      const frame = requestAnimationFrame(() => inputRef.current?.focus());
-      return () => cancelAnimationFrame(frame);
-    }
-    const timer = setTimeout(() => {
-      setQuery("");
-      setSelectedIndex(0);
-      setMode(null);
-      setExitingMode(null);
-      setPicker(null);
-      setExitingPicker(null);
-      // Next open is a fresh first paint — the panel's enter animation
-      // covers it; stale row positions would fade-rise every row.
-      listMotionRef.current.reset();
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [open]);
 
   // Action rows come straight from the shared registry — one entry there
   // yields the shortcut, the Settings row, the agent doc, and this row.
@@ -1154,8 +1193,62 @@ export function CommandPalette({
     }));
   }, [history, bookmarks, onOpenUrl]);
 
+  const settingItems = useMemo<PaletteItem[]>(
+    () =>
+      SETTINGS_CATALOG.map((setting) => ({
+        id: `setting:${setting.id}`,
+        label: setting.label,
+        detail: `Settings · ${setting.category}`,
+        icon: SettingsIcon,
+        keywords: [
+          "settings",
+          "preferences",
+          setting.category,
+          ...setting.keywords,
+        ],
+        kind: "navigate",
+        run: (mode) =>
+          onOpenTab(
+            {
+              kind: "settings",
+              name: "settings",
+              label: "Settings",
+              destination: { id: setting.id, requestId: crypto.randomUUID() },
+            },
+            mode,
+          ),
+      })),
+    [onOpenTab],
+  );
+  const searchSettings = useMemo(
+    () => createPaletteIndex(settingItems),
+    [settingItems],
+  );
+  const searchEverything = useMemo(
+    () =>
+      createPaletteIndex([
+        ...startingActionItems,
+        ...actionItems,
+        ...skillItems,
+        ...projectItems,
+        ...profileItems,
+        ...sidebarItems,
+        ...historyItems,
+        ...settingItems,
+      ]),
+    [
+      startingActionItems,
+      actionItems,
+      skillItems,
+      projectItems,
+      profileItems,
+      sidebarItems,
+      historyItems,
+      settingItems,
+    ],
+  );
   const trimmed = query.trim();
-  const results = useMemo<PaletteItem[]>(() => {
+  const allResults = useMemo<PaletteItem[]>(() => {
     // Picker active: the list IS the question. Agent rows or effort rows,
     // narrowed by whatever is typed; picking answers and closes.
     if (picker === "model") {
@@ -1520,6 +1613,7 @@ export function CommandPalette({
     // Chip mode active: the whole input belongs to that mode. One row —
     // Enter commits it — so typing never drifts into unrelated matches.
     if (mode) {
+      if (mode.id === "settings") return searchSettings(trimmed);
       const modeQuery = trimmed;
       if (mode.id === "agent") {
         return [
@@ -1613,26 +1707,7 @@ export function CommandPalette({
       ];
     }
 
-    const scored = [
-      ...startingActionItems,
-      ...actionItems,
-      ...skillItems,
-      ...projectItems,
-      ...profileItems,
-      ...sidebarItems,
-      ...historyItems,
-    ]
-      .map((item) => ({
-        item,
-        score: commandScore(
-          item.label,
-          trimmed,
-          item.keywords.filter((keyword) => keyword.trim() !== ""),
-        ),
-      }))
-      .filter((entry) => entry.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .map((entry) => entry.item);
+    const scored = searchEverything(trimmed);
 
     const multiline = query.includes("\n");
     const sendItem: PaletteItem = {
@@ -1669,6 +1744,8 @@ export function CommandPalette({
     return [...scored, ...(webItem ? [webItem] : []), ...sendItems];
   }, [
     trimmed,
+    searchSettings,
+    searchEverything,
     projectId,
     query,
     mode,
@@ -1701,6 +1778,11 @@ export function CommandPalette({
     harnessModels,
     effortModel,
   ]);
+
+  const results = useMemo(
+    () => allResults.slice(0, PALETTE_RESULT_LIMIT),
+    [allResults],
+  );
 
   // Two-part list animation, both measured in a layout effect so targets
   // land in the SAME frame the rows change (ResizeObserver + rAF was a

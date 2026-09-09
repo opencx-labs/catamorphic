@@ -5,6 +5,7 @@ import {
   isValidFontStack,
   type ThemeFonts,
 } from "../shared/theme-fonts.js";
+import { ConfigFile, readConfigObject } from "./config-file.js";
 
 /**
  * Per-profile theme, stored at `<userData>/profiles/<id>/theme.json` so the
@@ -17,28 +18,10 @@ import {
  * so a fully custom theme is just a selection with every token overridden.
  * Optional `fonts.sans` and `fonts.mono` override the desktop font stacks.
  */
-export const THEME_TOKENS = [
-  "bg",
-  "bg-raised",
-  "bg-overlay",
-  "bg-inset",
-  "sidebar",
-  "border",
-  "border-strong",
-  "fg",
-  "fg-muted",
-  "fg-faint",
-  "accent",
-  "accent-fg",
-  "success",
-  "warning",
-  "danger",
-  "info",
-  "user-tint",
-  "agent-tint",
-] as const;
+export { THEME_TOKENS, type ThemeToken } from "../shared/theme-tokens.js";
 
-export type ThemeToken = (typeof THEME_TOKENS)[number];
+import { THEME_TOKENS, type ThemeToken } from "../shared/theme-tokens.js";
+
 export type ThemeColors = Record<ThemeToken, string>;
 
 export interface ThemePreset {
@@ -439,28 +422,58 @@ export function windowBackgroundColor(theme: ResolvedTheme): string {
     : presetById(theme.preset).colors.bg;
 }
 
+export function validateThemeConfig(raw: Record<string, unknown>): void {
+  for (const key of ["selection", "preset"]) {
+    const value = raw[key];
+    if (
+      value !== undefined &&
+      value !== "system" &&
+      !THEME_PRESETS.some((preset) => preset.id === value)
+    )
+      throw new Error(`Unknown theme ${key}`);
+  }
+  for (const family of ["overrides", "fonts"]) {
+    const values = raw[family];
+    if (values === undefined) continue;
+    if (!values || typeof values !== "object" || Array.isArray(values))
+      throw new Error(`${family} must be a JSON object`);
+    for (const [key, value] of Object.entries(values)) {
+      if (
+        family === "fonts"
+          ? !["sans", "mono"].includes(key) || !isValidFontStack(value)
+          : !THEME_TOKENS.some((token) => token === key) || !isValidColor(value)
+      )
+        throw new Error(`Invalid theme ${family}.${key}`);
+    }
+  }
+}
+
 export class ThemeStore {
   private watcher: fs.FSWatcher | undefined;
   private debounce: ReturnType<typeof setTimeout> | undefined;
 
+  private readonly config: ConfigFile;
+  get error() {
+    return this.config.error;
+  }
   constructor(
     readonly file: string,
     private readonly systemAppearance: () => ThemeAppearance = () => "dark",
-  ) {}
+  ) {
+    this.config = new ConfigFile(file, validateThemeConfig);
+  }
 
   load(): ThemeConfig {
-    try {
-      return normalizeTheme(JSON.parse(fs.readFileSync(this.file, "utf-8")));
-    } catch {
-      return { ...DEFAULT_THEME, overrides: {} };
-    }
+    return normalizeTheme(this.config.read());
   }
 
   save(config: ThemeConfig): void {
-    fs.writeFileSync(
-      this.file,
-      `${JSON.stringify(normalizeTheme(config), null, 2)}\n`,
+    const extras = Object.fromEntries(
+      Object.entries(readConfigObject(this.file)).filter(
+        ([key]) => !["selection", "preset", "overrides", "fonts"].includes(key),
+      ),
     );
+    this.config.write({ ...extras, ...config });
   }
 
   resolved(): ResolvedTheme {
@@ -469,6 +482,7 @@ export class ThemeStore {
 
   /** Watch the containing directory (same rationale as KeybindingsStore). */
   watch(onChange: (theme: ResolvedTheme) => void): void {
+    this.load();
     const dir = path.dirname(this.file);
     const name = path.basename(this.file);
     this.watcher = fs.watch(dir, (_event, changed) => {

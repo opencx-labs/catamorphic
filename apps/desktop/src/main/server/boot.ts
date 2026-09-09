@@ -43,6 +43,7 @@ import { shutdownDesktopServices } from "../shutdown.js";
 import { userSkillFiles, userSkillInfos } from "../user-skills.js";
 import { syncProfileMcpWorkflowConnections } from "../workflow-mcp-connections.js";
 import { DesktopAgentRegistry } from "./agent-registry.js";
+import { DESKTOP_SETTINGS_SKILL } from "./desktop-settings-skill.js";
 import { E2eLocalSandboxProvider } from "./e2e-fakes.js";
 import { FileGithubTokenStore, GITHUB_APP } from "./github.js";
 import {
@@ -368,6 +369,10 @@ export async function startEmbeddedServer(
   }
 
   const catamorphic = createCatamorphic({
+    hostSkills: (defaults) => ({
+      ...defaults,
+      "configuring-catamorphic-desktop/SKILL.md": DESKTOP_SETTINGS_SKILL,
+    }),
     hostId,
     toolPermissions,
     database: { db },
@@ -919,9 +924,8 @@ export async function startEmbeddedServer(
     },
   });
 
-  // Host-tier skills (ADR 0049): the desktop passes no hook, so this is the
-  // framework default set, staged as a native Claude Code plugin and listed
-  // in every harness's system prompt.
+  // Host-tier skills: framework defaults plus desktop configuration guidance,
+  // staged for native discovery and listed in every harness's system prompt.
   try {
     hostSkillsRuntime = materializeHostSkills(
       paths.hostSkillsDir,

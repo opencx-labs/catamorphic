@@ -1,0 +1,14 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "chat-queue",
+  "type": "registry:component",
+  "description": "Server-owned outgoing queue with editing, removal and send-now callbacks. Optional host content and hints.",
+  "dependencies": ["@catamorphic/react", "lucide-react"],
+  "registryDependencies": [],
+  "files": [
+    {
+      "path": "components/catamorphic/chat-queue.tsx",
+      "type": "registry:component"
+    }
+  ]
+}

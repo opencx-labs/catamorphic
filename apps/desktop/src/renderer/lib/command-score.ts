@@ -129,3 +129,19 @@ export function commandScore(
       : haystack;
   return score(full, query, normalize(full), normalize(query), 0, 0, {});
 }
+
+export function prepareCommand(
+  label: string,
+  keywords: readonly string[] = [],
+) {
+  const full = `${label} ${keywords.filter(Boolean).join(" ")}`.trim();
+  return { full, lower: normalize(full) };
+}
+export function scorePreparedCommand(
+  command: ReturnType<typeof prepareCommand>,
+  query: string,
+  lower: string,
+): number {
+  return score(command.full, query, command.lower, lower, 0, 0, {});
+}
+export const normalizeCommandQuery = normalize;

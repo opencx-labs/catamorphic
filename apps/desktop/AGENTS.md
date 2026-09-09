@@ -18,7 +18,7 @@ UI work. Every interaction matters; this is a polished product, not a demo.
   ghostty/PTY terminals with OSC 133 shell integration.
 - An embedder like any other: it boots the server in-process
   (`src/main/server/boot.ts`) on pglite + microsandbox + filesystem
-  storage, and passes none of the doctrine hooks (ADR 0049).
+  storage, and extends the host skill tier with desktop configuration guidance (ADR 0049).
 
 Main-process map (`src/main/`): `server/` embeds core (boot, agent
 registry, project agents ADR 0050, workspace tools, triggers, e2e fakes);
@@ -57,163 +57,77 @@ is its desktop-focused variant. The shared orchestrator assigns this worktree
 its own data directories and loopback ports, so do not start a normal desktop
 watcher in a checkout another session is using.
 
-## Verification Checklist
+## Verification and debugging
 
-Run all of these from the repository root before finalizing any major change:
-"finalizing" means before you report the work as done, not merely before a
-commit. A change that hasn't passed the full checklist is not done:
+Use the root `bun run check` merge gate before completing engineering work. It
+includes typechecks, builds, deterministic Postgres-backed tests, PWA E2E and both
+desktop modes. Docker must be running. Credentials do not authorize external tests.
 
-### 1. Typecheck
+Focused checks, from the worktree root:
 
-```bash
+```sh
 bun run --cwd apps/desktop typecheck
-```
-
-### 2. Unit tests
-
-```bash
 bun run --cwd apps/desktop test
-```
-
-### 3. End-to-end tests (required before every commit)
-
-```bash
 bun run --cwd apps/desktop test:e2e
 bun run --cwd apps/desktop test:e2e:visible
 ```
 
-Automated Electron windows must not interrupt the user. Isolated E2E windows
-are non-focusable, ignore physical mouse input, and use `showInactive()` when
-visible. The visible-suite harness emulates page focus through CDP so editors
-and foreground query behavior work without native activation. Drive keyboard
-and pointer interactions through CDP. Do not restore
-native focus stealing to make a test pass; test OS-focus behavior separately
-only when that behavior is explicitly under test.
+Both Electron modes are required before a commit. Suite membership lives in
+[vitest.e2e.config.ts](vitest.e2e.config.ts), not a manually copied list here.
+Build changed packages first; desktop resolves them through `dist`. Main-process
+changes require a relaunch; renderer changes hot-reload.
 
-Before sending native keys, wait for the intended input to hold focus and for
-its result selection to settle. Closed palettes remain mounted inside inert
-ancestors, so element presence alone does not establish readiness. Finish a
-floating panel's exit and focus handoff before opening the next palette. Hidden
-layout tests measure resting geometry; visible motion tests cover entrance and
-exit transforms.
+E2E uses isolated temporary data and a prompt-keyed fake agent, with no provider
+calls. Extend [e2e-fakes.ts](src/main/server/e2e-fakes.ts) for deterministic failure
+and recovery scenarios. Real provider behavior is not covered by fake success.
+Tests sharing an app instance are stateful; rerunning a later test in isolation
+may omit its setup. Keep teardown through app Quit and require exit code 0.
+SIGKILL is reserved for explicit crash-recovery tests. Never suppress crash alerts
+or disable CrashReporter to hide teardown errors.
 
-On macOS and Windows, isolated test windows also start with native opacity zero
-so even the visible-renderer suites do not cover the developer's screen. This
-preserves the shown lifecycle, layout, animation, and CDP screenshots. To watch a
-test while debugging, explicitly run
-`CATAMORPHIC_E2E_REVEAL_WINDOWS=1 bun run --cwd apps/desktop test:e2e:visible`.
-This opt-in reveals the windows while retaining focus and mouse isolation.
+Automated windows must not steal focus or accept physical mouse input. The visible
+harness uses shown, non-focusable windows with opacity zero and CDP focus emulation.
+Drive keys/pointers through CDP after input focus and selection settle. A closed
+palette may still exist inside an inert ancestor. Wait for exit motion and focus
+handoff before opening another palette. Native focus behavior needs a dedicated
+scenario; do not remove isolation to make a test pass.
 
-On Linux, Electron's `focusable: false` bypasses the window manager, preventing
-native maximize/restore. Run the gate on a private display with a window manager:
+To watch isolated windows explicitly, set `CATAMORPHIC_E2E_REVEAL_WINDOWS=1`.
+On Linux use a private Xvfb display with Openbox and
+`CATAMORPHIC_E2E_VIRTUAL_DISPLAY=1`; never enable that flag on the user's display.
 
-```bash
-xvfb-run -a --server-args="-screen 0 1440x900x24" bash -c 'openbox >/dev/null 2>&1 & CATAMORPHIC_E2E_VIRTUAL_DISPLAY=1 exec bun run check'
-```
+## Visual verification
 
-The explicit virtual-display flag allows managed Linux test windows; the private
-display isolates them from the user's input. Never set this flag on a user's real
-display. macOS and Windows keep non-focusable test windows.
+UI changes also require inspecting the running app:
 
-Before completing engineering work, run `bun run check` from the repository
-root. It is the merge gate, including deterministic Postgres-complete
-workspace tests and both desktop E2E modes. Docker must be running so the
-test commands can create their disposable Postgres database. Run credentialed
-external integrations only when explicitly authorized with `bun run
-test:external`.
-
-The root `bun run test` command runs root orchestration tests and the
-deterministic, Postgres-complete workspace test graph. The focused desktop
-unit-test command above runs only this app's test files through the
-repository-pinned Node runtime.
-
-The default command keeps the real Electron window hidden so local runs do
-not steal focus. The visible command runs the compositor, focus, and
-native-window suites (`motion`, `skills`, `tool-permissions`, and
-`window-state`, and `workflows`) with a displayed window;
-run both before every commit. Both commands build the app and drive the real
-Electron binary over CDP against an
-isolated temp `userData` dir with a deterministic fake agent
-(`CATAMORPHIC_E2E_FAKE_AGENT=1`) — no API key, no microsandbox, and no
-interference with a normally-running app instance. Covers the main flows:
-first launch → project creation → palette New Tab, browser tabs
-(open/navigate/close), chat create + send + reply, Cmd+N idempotency,
-streamed preamble messages, and the ask_user question panel.
-
-- Suites: `e2e/app.e2e.ts` (user flows), `e2e/motion.e2e.ts` (the motion
-  contract from `DESIGN.md` — easing/duration bounds, enter/exit pairing,
-  animate-before-unmount), `e2e/onboarding.e2e.ts`, `e2e/agents.e2e.ts`,
-  `e2e/project-agents.e2e.ts` (committed agent definitions + consent), and
-  `e2e/recovery.e2e.ts`. `e2e/app.e2e.ts` also covers session source,
-  subsession promotion, recursive archive confirmation, and project-shaped
-  member navigation. Harness:
-  `e2e/harness.ts`, config: `vitest.e2e.config.ts`. A separate
-  model-in-the-loop eval (`bun run test:eval`, `e2e/agent-build.eval.ts`)
-  exercises real agent app-building and is not part of the required
-  checklist.
-- If a motion test fails after a UI change, the animation is presumed wrong,
-  not the test — read the "Motion contract" section of `DESIGN.md` before
-  touching the test constants.
-- Normal teardown must finish through the app's Quit lifecycle and exit with
-  code 0. A signal or nonzero exit fails the suite, even if UI assertions pass.
-  SIGKILL belongs only to explicit crash-recovery scenarios. Do not suppress
-  macOS crash alerts or disable CrashReporter to make tests quiet. Terminal
-  shutdown tracks native exits independently of tabs and waits for callbacks
-  before Electron frees its Node environment. `e2e/shutdown.e2e.ts` covers
-  repeated teardown with live and just-closed terminals and an unfinished HTTP
-  request. The desktop Fastify host uses `forceCloseConnections: true` so its
-  HTTP close cannot strand the database flush.
-- Tests within the file run in order and share one app instance — later
-  groups assume the project created in "first launch" exists.
-- The fake agent (`src/main/server/e2e-fakes.ts`) is prompt-keyed: "ask
-  me ... questions" triggers the question flow, "preamble" triggers the
-  multi-segment text flow, "edit a file" writes into the sandbox,
-  "slowly" runs an interruptible ~4s turn (queueing/interrupt tests),
-  "auth error" / "rate limit" fail the turn once with provider-style
-  rejections (the retry recovers — asserting the friendly rewrite and
-  retry/auto-retry paths from `server/agent-errors.ts`), any message
-  with attachments echoes what arrived, and "terminal: <cmd>" /
-  "terminal @<id>: <cmd>" execute the REAL `run_terminal` workspace tool
-  (the only e2e path through the bridge → renderer → chips machinery).
-  When adding agent-facing UI
-  behavior, extend it with a new keyed prompt and cover the flow with a
-  test.
-- The e2e agent is a fake: nothing here exercises real model-provider
-  APIs, so provider-side failures (revoked keys, quota) must be simulated
-  through keyed prompts like "auth error" — never assumed covered.
-
-### 4. Visual verification (UI changes)
-
-Type checks and tests verify code, not feel. For UI changes, also launch
-the app and check the change visually end to end (see `DESIGN.md` and the
-CDP driver at `scripts/drive.mjs`):
-
-```bash
+```sh
 bun run dev:desktop
-# Read the `CDP:` URL printed by the development orchestrator, then:
-CDP_PORT="<printed CDP port>" bun apps/desktop/scripts/drive.mjs window maximize
-CDP_PORT="<printed CDP port>" bun apps/desktop/scripts/drive.mjs shot /tmp/app.png
+# Use the CDP port printed by the orchestrator:
+CDP_PORT="<port>" bun apps/desktop/scripts/drive.mjs window maximize
+CDP_PORT="<port>" bun apps/desktop/scripts/drive.mjs shot /tmp/app.png
 ```
 
-For deterministic visual checks without provider calls, start with
-`CATAMORPHIC_E2E_FAKE_AGENT=1 bun run dev:desktop`. It uses the worktree
-data paths and fake agents. Run the CDP driver with Bun, which supplies
-the WebSocket API even when the system Node version is older.
+For credential-free manual checks, use `CATAMORPHIC_E2E_FAKE_AGENT=1` when launching.
+The root runner unsets `ELECTRON_RUN_AS_NODE`. Never reset user data to prepare a
+test without an explicit request. Prefer the isolated Electron harness.
 
-The shared development runner unsets `ELECTRON_RUN_AS_NODE`. Main-process
-changes need a full relaunch; renderer changes hot-reload. Maximize the window
-before screenshots. Rebuild changed workspace packages first; the desktop
-resolves them via `dist/`.
+## Contract map
 
-## Design log
+| Work | Current contract | Implementation |
+|---|---|---|
+| Tabs, splits, floating chats, opening | [Workspace interactions](docs/workspace-interactions.md) | `renderer/lib/workspace-state.ts`, `shared/open-mode.ts` |
+| Preferences and reset | [Settings](docs/settings.md) | `shared/settings.ts`, `main/settings-store.ts` |
+| Delivery and embedding | [Chat state](docs/chat-state.md) | `packages/react` hook/reducer, registry source |
+| Idle CPU and memory | [Performance](docs/performance.md) | `scripts/desktop-soak.ts`, `e2e/runtime-idle.e2e.ts` |
+| Styling and animation | [Design system](DESIGN.md) | tokens, list motion and native motion tests |
 
-When you and the user settle a significant desktop design or philosophy
-choice, record it as a dated entry in `DESIGN.md` → "Design log" in the
-same change (the desktop counterpart of the ADR rule).
+[DESIGN-HISTORY.md](DESIGN-HISTORY.md) records prior rationale. Current contracts
+win over superseded entries. Significant accepted choices need an ADR and a short
+entry in DESIGN.md. Do not re-copy full contracts into this file.
 
 ## Resource links and unavailable actions
 
-Resource opening and composer paste follow ADR 0108 and the 2026-09-09 DESIGN.md entry. Use `shared/open-mode.ts` and the resource button/menu primitives: click/Enter opens here, Cmd (Ctrl outside macOS) opens a tab, Cmd+Shift opens to the side, Option/Alt opens floating. Do not add a shortcut that floats the current surface. Persist pathless clipboard files when they cannot be sent as model media; never silently discard them.
+Resource opening and composer paste follow ADR 0108 and [workspace interactions](docs/workspace-interactions.md). Use `shared/open-mode.ts` and the resource button/menu primitives: click/Enter opens here, Cmd (Ctrl outside macOS) opens a tab, Cmd+Shift opens to the side, Option/Alt opens floating. Do not add a shortcut that floats the current surface. Persist pathless clipboard files when they cannot be sent as model media; never silently discard them.
 
 Use the shared `surface-link.ts` resolver for agent-visible destinations. Keep
 workflow/app targets aligned with `open_surface` and the workspace tab keys.

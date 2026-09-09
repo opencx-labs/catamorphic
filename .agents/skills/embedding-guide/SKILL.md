@@ -149,3 +149,11 @@ with `WorkflowEditor`. Consume `selectedNodeAtom`, `graphAtom`, and
 `graphParseStateAtom` for details and preview status. Use `useCodeEditorLink`
 for source navigation. The canvas preserves its viewport and animates layout
 changes, with reduced-motion support. Do not remount it to resize a panel.
+
+## Executable examples and chat reliability
+
+The [embedding example](../../../packages/registry/src/examples/embedding.tsx) is
+compiled by the registry typecheck. Prefer it over adapting an unchecked code
+fragment. For delivery, inbox editing, failure recovery and host responsibilities,
+read the [chat contract](../../../apps/desktop/docs/chat-state.md). Desktop
+presentation is an example host policy, not a required embedding model.

@@ -1,3 +1,7 @@
+import type { ChatDockEntry, ChatMode } from "../lib/workspace-types.js";
+
+export type { ChatDockEntry, ChatMode } from "../lib/workspace-types.js";
+
 import {
   type AgentChatAttachment,
   type AgentChatTextAttachment,
@@ -65,6 +69,7 @@ import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { classifyPastedText, selectionName, textPill } from "../lib/text-pills";
 import { AgentQuestionPanel } from "./agent-question-panel";
 import { AuthenticationRequiredCard } from "./authentication-required-card.js";
+import { ChatDeliveryRecovery } from "./catamorphic/agent-chat.js";
 import {
   attachmentsFromMetadata,
   ChatTimeline,
@@ -94,8 +99,6 @@ import {
 import { RemoteMessageConnectionGuard } from "./remote-message-connection-guard.js";
 import { SessionInspector } from "./session-inspector.js";
 import { ShortcutHint } from "./shortcut-hint";
-
-export type ChatMode = "min" | "partial" | "tab";
 
 /**
  * A workspace tab attached to this chat — the agent's working surfaces
@@ -1139,32 +1142,6 @@ function SurfacesRail({
       </div>
     </div>
   );
-}
-
-export interface ChatDockEntry {
-  localId: string;
-  sessionId?: string;
-  mode: ChatMode;
-  /** Local-only session (ADR 0062): never mirrored to a linked remote. */
-  incognito?: boolean;
-  /**
-   * The chat this one was forked from, when the parent is (or was) open
-   * in this workspace — puts the fork on the parent's surfaces rail.
-   */
-  parentLocalId?: string;
-  /** Auto-sent as the first message on mount (palette "Send to agent"). */
-  pendingMessage?: string;
-  /**
-   * Agent picked for this chat before its session exists (palette "Switch
-   * agent" on a fresh chat). Once a session is live, the session row owns
-   * the choice.
-   */
-  agentId?: string;
-  /**
-   * The chat's attached tabs are folded under its tab in the strip
-   * (host-managed; only meaningful while the chat is a tab).
-   */
-  surfacesCollapsed?: boolean;
 }
 
 export interface ChatDockProps {
@@ -3086,6 +3063,7 @@ function ChatDockContent({
               }}
             />
           </ResourceLinkBoundary>
+          <ChatDeliveryRecovery chat={chat} />
           {runtimeSettingsError ? (
             <p
               role="alert"

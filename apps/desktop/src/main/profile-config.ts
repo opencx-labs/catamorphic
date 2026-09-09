@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { AppPrefs } from "../shared/app-prefs.js";
+import type { SettingsPatch, SettingsScope } from "../shared/settings.js";
 import { AgentBindingsStore } from "./agent-bindings-store.js";
 import { AgentsStore } from "./agents-store.js";
 import { ConnectionsStore } from "./connections-store.js";
@@ -9,6 +10,11 @@ import { PrefsStore } from "./prefs.js";
 import type { ProfilesStore } from "./profiles.js";
 import { RemoteProjectsStore } from "./remote-projects-store.js";
 import type { DataPaths } from "./server/paths.js";
+import {
+  type SettingsFiles,
+  SettingsStore,
+  saveSettings,
+} from "./settings-store.js";
 import {
   projectLocalSidebarFile,
   projectSidebarFile,
@@ -50,6 +56,7 @@ export class ProfileConfigManager {
   private readonly unsubscribeRemoved: () => void;
   private readonly unsubscribeConnections = new Map<string, () => void>();
   private readonly stores = new Map<string, ProfileStores>();
+  private readonly settingsStores = new Map<string, SettingsStore>();
   private readonly themeListeners = new Set<
     (profileId: string, theme: ResolvedTheme) => void
   >();
@@ -60,7 +67,7 @@ export class ProfileConfigManager {
   // renderer's active project (layered resolution), so listeners refetch.
   private readonly sidebarListeners = new Set<(profileId: string) => void>();
   /** Lazy per-(profile, project) watchers on the non-profile layers. */
-  private readonly projectSidebarWatchers = new Map<string, () => void>();
+  private readonly projectConfigWatchers = new Map<string, () => void>();
   private readonly connectionsListeners = new Set<
     (profileId: string) => void
   >();
@@ -166,17 +173,97 @@ export class ProfileConfigManager {
     });
   }
 
-  /**
-   * Store for this user's project-local sidebar override
-   * (`profiles/<id>/sidebar-projects/<projectId>.js`, layer 1). Used by the
-   * chat agent's `sidebar.local.js` mirror; the file is optional and is
-   * never seeded with the template.
-   */
-  projectSidebarStore(projectId: string): SidebarConfigStore {
-    const profileId = this.profiles.profileForProject(projectId).id;
-    return new SidebarConfigStore(
-      projectLocalSidebarFile(this.profileDir(profileId), projectId),
+  settingsFiles(
+    profileId: string,
+    project?: { id: string; rootPath: string | null },
+  ): SettingsFiles {
+    const stores = this.forProfile(profileId);
+    const files = {
+      profile: stores.prefs.file,
+      ...(project
+        ? {
+            personal: path.join(
+              this.profileDir(profileId),
+              "settings-projects",
+              `${project.id}.json`,
+            ),
+          }
+        : {}),
+      ...(project?.rootPath
+        ? {
+            project: path.join(
+              project.rootPath,
+              ".catamorphic",
+              "settings.json",
+            ),
+          }
+        : {}),
+    };
+    if (project) {
+      const prefix = `${profileId}\0settings:${project.id}:`;
+      const key = `${prefix}${project.rootPath}`;
+      for (const [existing, dispose] of this.projectConfigWatchers) {
+        if (existing.startsWith(prefix) && existing !== key) {
+          dispose();
+          this.projectConfigWatchers.delete(existing);
+        }
+      }
+      if (!this.projectConfigWatchers.has(key)) {
+        const notify = () => this.notifyPrefsChanged(profileId);
+        const disposers = [files.personal, files.project].flatMap((file) =>
+          file ? [watchSidebarLayerFile(file, notify)] : [],
+        );
+        this.projectConfigWatchers.set(key, () => {
+          for (const dispose of disposers) dispose();
+        });
+      }
+    }
+    return files;
+  }
+
+  resolveSettings(
+    profileId: string,
+    project?: { id: string; rootPath: string | null },
+    scope: SettingsScope = "personal",
+  ) {
+    let settings = this.settingsStores.get(profileId);
+    if (!settings) {
+      settings = new SettingsStore();
+      this.settingsStores.set(profileId, settings);
+    }
+    const result = settings.load(this.settingsFiles(profileId, project), scope);
+    const stores = this.forProfile(profileId);
+    stores.theme.load();
+    stores.keybindings.load();
+    const sidebar = this.resolveSidebar(profileId, project);
+    result.errors.push(
+      ...[
+        stores.theme.error,
+        stores.keybindings.error,
+        sidebar.error ? `${sidebar.file}: ${sidebar.error}` : undefined,
+      ].filter((error): error is string => Boolean(error)),
     );
+    return result;
+  }
+
+  saveSettings(
+    profileId: string,
+    project: { id: string; rootPath: string | null } | undefined,
+    scope: SettingsScope,
+    patch: SettingsPatch,
+  ) {
+    saveSettings({
+      files: this.settingsFiles(profileId, project),
+      scope,
+      patch,
+    });
+    this.notifyPrefsChanged(profileId);
+    return this.resolveSettings(profileId, project, scope);
+  }
+
+  private notifyPrefsChanged(profileId: string) {
+    const prefs = this.forProfile(profileId).prefs.load();
+    for (const listener of this.prefsListeners) listener(profileId, prefs);
   }
 
   /** Idempotent per (profile, project); disposed with everything else. */
@@ -186,7 +273,7 @@ export class ProfileConfigManager {
     projectRoot: string | null,
   ): void {
     const key = `${profileId}\0${projectId}`;
-    if (this.projectSidebarWatchers.has(key)) return;
+    if (this.projectConfigWatchers.has(key)) return;
     const notify = () => this.notifySidebarChanged(profileId);
     const disposers: Array<() => void> = [
       watchSidebarLayerFile(
@@ -199,7 +286,7 @@ export class ProfileConfigManager {
         watchSidebarLayerFile(projectSidebarFile(projectRoot), notify),
       );
     }
-    this.projectSidebarWatchers.set(key, () => {
+    this.projectConfigWatchers.set(key, () => {
       for (const dispose of disposers) dispose();
     });
   }
@@ -250,12 +337,13 @@ export class ProfileConfigManager {
     stores?.sidebar.dispose();
     stores?.prefs.dispose();
     this.stores.delete(profileId);
+    this.settingsStores.delete(profileId);
     this.unsubscribeConnections.get(profileId)?.();
     this.unsubscribeConnections.delete(profileId);
-    for (const [key, dispose] of this.projectSidebarWatchers) {
+    for (const [key, dispose] of this.projectConfigWatchers) {
       if (!key.startsWith(`${profileId}\0`)) continue;
       dispose();
-      this.projectSidebarWatchers.delete(key);
+      this.projectConfigWatchers.delete(key);
     }
   }
 

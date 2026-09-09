@@ -28,6 +28,7 @@ import {
   type WebContents,
 } from "electron";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
+import type { SettingsPatch, SettingsScope } from "../shared/settings.js";
 import type { UsageSummary, UsageWindowDays } from "../shared/usage.js";
 import type { BindingAuth } from "./agent-bindings-store.js";
 import {
@@ -417,6 +418,78 @@ export function registerIpcHandlers(
     storesFor(event).prefs.save(
       typeof patch === "object" && patch !== null ? patch : {},
     ),
+  );
+
+  const settingsContext = async (
+    event: Electron.IpcMainInvokeEvent,
+    projectId?: string,
+  ) => {
+    const profileId = windows.profileFor(event.sender);
+    if (
+      projectId &&
+      (typeof projectId !== "string" || !/^[a-zA-Z0-9_-]+$/.test(projectId))
+    )
+      throw new Error("Invalid project id");
+    if (projectId && profiles.profileForProject(projectId).id !== profileId)
+      throw new Error("Project belongs to another profile");
+    return {
+      profileId,
+      project: projectId
+        ? {
+            id: projectId,
+            rootPath:
+              (await state.current?.projectRoots.get(projectId)) ?? null,
+          }
+        : undefined,
+    };
+  };
+  ipcMain.handle(
+    "catamorphic:settings-get",
+    async (
+      event,
+      input: { projectId?: string; scope?: SettingsScope } = {},
+    ) => {
+      const { profileId, project } = await settingsContext(
+        event,
+        input.projectId,
+      );
+      if (
+        input.scope &&
+        !["profile", "project", "personal"].includes(input.scope)
+      )
+        throw new Error("Unknown settings scope");
+      return profileConfig.resolveSettings(
+        profileId,
+        project,
+        input.scope ?? "personal",
+      );
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:settings-set",
+    async (
+      event,
+      input: { projectId?: string; scope: SettingsScope; patch: SettingsPatch },
+    ) => {
+      if (!["profile", "project", "personal"].includes(input.scope))
+        throw new Error("Unknown settings scope");
+      if (
+        !input.patch ||
+        typeof input.patch !== "object" ||
+        Array.isArray(input.patch)
+      )
+        throw new Error("Invalid settings patch");
+      const { profileId, project } = await settingsContext(
+        event,
+        input.projectId,
+      );
+      return profileConfig.saveSettings(
+        profileId,
+        project,
+        input.scope,
+        input.patch,
+      );
+    },
   );
 
   // Desktop-notification clicks land here: surface the window so the

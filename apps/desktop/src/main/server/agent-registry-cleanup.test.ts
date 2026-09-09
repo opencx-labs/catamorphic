@@ -48,3 +48,34 @@ it("does not initialize a lazy agent after its profile has been released", async
   await registry.dispose();
   expect(Reflect.get(registry, "closeables").size).toBe(0);
 });
+
+it("does not expose settings-specific tools to agents", async () => {
+  const config = {
+    id: "agent",
+    name: "Read only",
+    harness: "ai-sdk",
+    provider: "openai",
+    model: "mock-model",
+    mode: "read-only",
+  };
+  const deps = {
+    profiles: { list: () => ({ profiles: [{ id: "profile" }] }) },
+    profileConfig: {
+      forProfile: () => ({
+        agents: { list: () => [config], get: () => config },
+        connections: { list: () => [] },
+      }),
+    },
+    workspaceBridge: {},
+    sandboxProvider: {},
+    agentHomesDir: "/unused",
+    harnessComponentsDir: "/unused",
+  } as unknown as DesktopAgentRegistryDeps;
+  const registry = new DesktopAgentRegistry(deps);
+  const tools = registry
+    .workspaceToolsForAgent("agent")
+    ?.map((tool) => tool.name);
+  expect(tools).not.toContain("get_desktop_settings");
+  expect(tools).not.toContain("update_desktop_setting");
+  await registry.dispose();
+});

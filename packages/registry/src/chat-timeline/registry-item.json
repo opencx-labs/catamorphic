@@ -10,7 +10,7 @@
     "remark-gfm",
     "use-stick-to-bottom"
   ],
-  "registryDependencies": [],
+  "registryDependencies": ["@catamorphic/chat-queue"],
   "files": [
     {
       "path": "components/catamorphic/chat-timeline.tsx",

@@ -64,5 +64,6 @@ browser storage. Those remain generated API and TanStack Query state.
 - Edge interaction paths have `pointer-events: none`; dragging an edge pans
   rather than editing it.
 - The graph is read-only. Users do not drag, connect, or delete nodes or edges.
-- The detail panel exposes Details and Code. See `panel-editor.mdc` for
-  bidirectional code and canvas linking.
+- The host owns its inspector and source editor (ADR 0097). See `panel-editor.mdc`
+  for shared selection and bidirectional source linking; do not add a framework
+  Details/Code panel.

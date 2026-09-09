@@ -405,6 +405,10 @@ const api = {
       ipcRenderer.removeListener("catamorphic:keybindings-changed", handler);
   },
   // --- per-profile app preferences (notifications) ---
+  getSettings: (input: unknown = {}): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:settings-get", input),
+  setSettings: (input: unknown): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:settings-set", input),
   getPrefs: (): Promise<unknown> => ipcRenderer.invoke("catamorphic:prefs-get"),
   setPrefs: (patch: unknown): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:prefs-set", patch),

@@ -2,7 +2,11 @@
 
 import { ATTACHMENT_MARKER } from "@catamorphic/sandbox/attachments";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
+import {
+  chatDeliveryReducer,
+  initialChatDelivery,
+} from "../lib/chat-delivery.js";
 import {
   assertApiOk,
   CatamorphicError,
@@ -59,6 +63,10 @@ export interface UseAgentChatResult {
   session: AgentSessionDetail | null;
   messages: AgentMessage[];
   optimisticMessages: OptimisticAgentMessage[];
+  /** Failed local deliveries retain their content and idempotency key for recovery. */
+  failedMessages: OptimisticAgentMessage[];
+  resendFailed: (id: string) => Promise<void>;
+  dismissFailed: (id: string) => void;
   /** Messages waiting behind the in-flight turn, in send order. */
   queue: PendingAgentTurn[];
   queuedMessageCount: number;
@@ -82,16 +90,16 @@ export interface UseAgentChatResult {
     message: string,
     attachments?: AgentChatAttachment[],
   ) => Promise<void>;
-  updateQueued: (id: string, content: string) => void;
-  removeQueued: (id: string) => void;
+  updateQueued: (id: string, content: string) => Promise<boolean>;
+  removeQueued: (id: string) => Promise<boolean>;
   /** Promote a queued message to the front and interrupt the current turn. */
-  sendQueuedNow: (id: string) => void;
+  sendQueuedNow: (id: string) => Promise<boolean>;
   /**
    * Mark a queued message as being edited (null = none). While the edited
    * message is at the head of the queue, dispatch waits for the edit to
    * finish — its turn doesn't lapse, it sends when the user is done.
    */
-  holdQueued: (id: string | null) => void;
+  holdQueued: (id: string | null) => Promise<boolean>;
   /** Re-run the last failed turn in place (no new user message). */
   retry: () => Promise<void>;
   /** Resume the preserved head message after the member authorizes access. */
@@ -115,6 +123,8 @@ export interface OptimisticAgentMessage {
   role: "user";
   content: string;
   attachments?: AgentChatAttachment[];
+  /** Preserve admission intent when retrying an uncertain delivery. */
+  deliveryMode?: "next_turn" | "interrupt";
 }
 
 /**
@@ -132,21 +142,34 @@ export function useAgentChat(
     controlledSessionId: string | null;
     sessionId: string | null;
   }>({ projectId, controlledSessionId, sessionId: controlledSessionId });
-  const [sendInProgress, setSendInProgress] = useState(0);
-  const [retryInProgress, setRetryInProgress] = useState(false);
-  const [actionError, setActionError] = useState<CatamorphicError | null>(null);
-  // Async work may finish after the host switches chats. Only its original
-  // conversation may adopt the result or update local presentation state.
   const operationScopeRef = useRef({});
-  const [optimisticMessages, setOptimisticMessages] = useState<
-    OptimisticAgentMessage[]
-  >([]);
+  const [delivery, dispatchDelivery] = useReducer(
+    chatDeliveryReducer,
+    operationScopeRef.current,
+    initialChatDelivery,
+  );
+  const {
+    optimistic: optimisticMessages,
+    error: actionError,
+    retrying: retryInProgress,
+  } = delivery;
+  const sendInProgress = delivery.pending.length;
+  const setActionError = (error: CatamorphicError | null) =>
+    dispatchDelivery({
+      type: "error",
+      scope: operationScopeRef.current,
+      error,
+    });
+  const retryRequestRef = useRef<object | null>(null);
+  const queueActionTailRef = useRef(Promise.resolve());
+  const pendingSendIdsRef = useRef(new Set<string>());
   const activeSessionRef = useRef<{
     projectId: string | undefined;
     controlledSessionId: string | null;
     sessionId: string | null;
   }>({ projectId, controlledSessionId, sessionId: controlledSessionId });
   const blockedSendRef = useRef<{
+    id?: string;
     content: string;
     attachments: AgentChatAttachment[];
     deliveryMode: "next_turn" | "interrupt";
@@ -173,11 +196,11 @@ export function useAgentChat(
     });
     if (!adoptedOwnSession) {
       operationScopeRef.current = {};
-      setSendInProgress(0);
-      setRetryInProgress(false);
-      setActionError(null);
+      dispatchDelivery({ type: "reset", scope: operationScopeRef.current });
+      retryRequestRef.current = null;
+      queueActionTailRef.current = Promise.resolve();
+      pendingSendIdsRef.current = new Set();
       heldTurnIdRef.current = null;
-      setOptimisticMessages([]);
       blockedSendRef.current = null;
     }
   }
@@ -254,19 +277,21 @@ export function useAgentChat(
     optimisticMessages,
   );
   useEffect(() => {
-    if (optimisticMessages.length === 0 || persistedMessages.length === 0) {
+    if (
+      (optimisticMessages.length === 0 && delivery.failed.length === 0) ||
+      persistedMessages.length === 0
+    ) {
       return;
     }
     const persistedIds = new Set(
       persistedMessages.map((message) => message.id),
     );
-    setOptimisticMessages((messages) => {
-      const pending = messages.filter(
-        (message) => !persistedIds.has(message.id),
-      );
-      return pending.length === messages.length ? messages : pending;
+    dispatchDelivery({
+      type: "persisted",
+      scope: operationScopeRef.current,
+      ids: persistedIds,
     });
-  }, [optimisticMessages, persistedMessages]);
+  }, [optimisticMessages, delivery.failed, persistedMessages]);
   const isWorking = session.data?.execution?.status === "running";
 
   const ensureSessionId = async (): Promise<string | null> => {
@@ -308,21 +333,24 @@ export function useAgentChat(
     content: string;
     attachments: AgentChatAttachment[];
     deliveryMode: "next_turn" | "interrupt";
+    id?: string;
   }) => {
-    if (!projectId) return;
-    const scope = operationScopeRef.current;
+    if (!projectId || delivery.scope !== operationScopeRef.current) return;
+    const scope = delivery.scope;
     setActionError(null);
     let accepted = false;
     const optimistic: OptimisticAgentMessage = {
-      id: randomId(),
+      id: input.id ?? randomId(),
       role: "user",
       content: input.content,
+      deliveryMode: input.deliveryMode,
       ...(input.attachments.length > 0
         ? { attachments: input.attachments }
         : {}),
     };
-    setOptimisticMessages((messages) => [...messages, optimistic]);
-    setSendInProgress((count) => count + 1);
+    if (pendingSendIdsRef.current.has(optimistic.id)) return;
+    pendingSendIdsRef.current.add(optimistic.id);
+    dispatchDelivery({ type: "start", scope, message: optimistic });
     try {
       const targetSessionId = await ensureSessionId();
       if (!targetSessionId || operationScopeRef.current !== scope) return;
@@ -335,13 +363,12 @@ export function useAgentChat(
       });
       accepted = true;
       if (operationScopeRef.current !== scope) return;
-      setOptimisticMessages((messages) =>
-        messages.map((message) =>
-          message.id === optimistic.id
-            ? { ...message, id: receipt.messageId }
-            : message,
-        ),
-      );
+      dispatchDelivery({
+        type: "accepted",
+        scope,
+        id: optimistic.id,
+        messageId: receipt.messageId,
+      });
       blockedSendRef.current = null;
     } catch (error) {
       if (operationScopeRef.current !== scope) return;
@@ -352,17 +379,12 @@ export function useAgentChat(
       ) {
         // This request was rejected before the server accepted it. Retain one
         // retryable intent; accepted messages always live in the server inbox.
-        blockedSendRef.current = input;
+        blockedSendRef.current = { ...input, id: optimistic.id };
       }
     } finally {
-      if (operationScopeRef.current === scope) {
-        setSendInProgress((count) => Math.max(0, count - 1));
-        if (!accepted) {
-          setOptimisticMessages((messages) =>
-            messages.filter((message) => message.id !== optimistic.id),
-          );
-        }
-      }
+      if (scope === operationScopeRef.current)
+        pendingSendIdsRef.current.delete(optimistic.id);
+      dispatchDelivery({ type: "settled", scope, id: optimistic.id, accepted });
       void queryClient.invalidateQueries({
         queryKey: ["cat", "project", projectId],
       });
@@ -370,9 +392,11 @@ export function useAgentChat(
   };
 
   const interrupt = async () => {
+    if (delivery.scope !== operationScopeRef.current) return;
     const target = activeSessionRef.current.sessionId;
     if (!projectId || !target) return;
-    const scope = operationScopeRef.current;
+    const scope = delivery.scope;
+    if (scope !== operationScopeRef.current) return;
     setActionError(null);
     try {
       await runWithCatamorphicError(async () =>
@@ -401,10 +425,12 @@ export function useAgentChat(
   };
 
   const retry = async () => {
+    if (delivery.scope !== operationScopeRef.current) return;
     const target = activeSessionRef.current.sessionId;
-    if (!projectId || !target || retryInProgress) return;
+    if (!projectId || !target || retryRequestRef.current) return;
     const scope = operationScopeRef.current;
-    setRetryInProgress(true);
+    retryRequestRef.current = scope;
+    dispatchDelivery({ type: "retry", scope, active: true });
     setActionError(null);
     try {
       await runWithCatamorphicError(async () =>
@@ -427,7 +453,8 @@ export function useAgentChat(
           : toCatamorphicError({ cause: error }),
       );
     } finally {
-      if (operationScopeRef.current === scope) setRetryInProgress(false);
+      if (retryRequestRef.current === scope) retryRequestRef.current = null;
+      dispatchDelivery({ type: "retry", scope, active: false });
       void queryClient.invalidateQueries({
         queryKey: ["cat", "project", projectId, "agent", "session", target],
       });
@@ -459,15 +486,27 @@ export function useAgentChat(
     action: (signal: AbortSignal) => Promise<unknown>;
     onSuccess?: () => void;
   }) => {
-    const scope = operationScopeRef.current;
+    const scope = delivery.scope;
+    if (scope !== operationScopeRef.current) return false;
     setActionError(null);
+    const previous = queueActionTailRef.current;
+    let release = () => {};
+    queueActionTailRef.current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     try {
+      await previous;
+      if (operationScopeRef.current !== scope) return false;
       await runWithCatamorphicError(() => action(AbortSignal.timeout(15_000)));
-      if (operationScopeRef.current === scope) onSuccess?.();
+      if (operationScopeRef.current !== scope) return false;
+      onSuccess?.();
+      return true;
     } catch (error) {
       if (operationScopeRef.current === scope)
         setActionError(toCatamorphicError({ cause: error }));
+      return false;
     } finally {
+      release();
       void queryClient.invalidateQueries({
         queryKey: ["cat", "project", projectId, "agent", "session", target],
       });
@@ -481,6 +520,23 @@ export function useAgentChat(
     session: session.data ?? null,
     messages: visibleMessages,
     optimisticMessages: reconciledOptimistic,
+    failedMessages: delivery.failed,
+    resendFailed: async (id) => {
+      const message = delivery.failed.find((item) => item.id === id);
+      if (message)
+        await performSend({
+          id: message.id,
+          content: message.content,
+          attachments: message.attachments ?? [],
+          deliveryMode: message.deliveryMode ?? "next_turn",
+        });
+    },
+    dismissFailed: (id) =>
+      dispatchDelivery({
+        type: "dismiss-failed",
+        scope: operationScopeRef.current,
+        id,
+      }),
     queue,
     queuedMessageCount: queue.length,
     isLoading: session.isLoading,
@@ -513,10 +569,11 @@ export function useAgentChat(
         deliveryMode: "interrupt",
       });
     },
-    updateQueued: (id, content) => {
+    updateQueued: async (id, content) => {
       const queued = queue.find((message) => message.id === id);
+      if (delivery.scope !== operationScopeRef.current) return false;
       const target = activeSessionRef.current.sessionId;
-      if (!projectId || !target || !queued) return;
+      if (!projectId || !target || !queued) return false;
       const withoutMarkers = content.split(ATTACHMENT_MARKER).join("");
       const markerCount =
         (content.length - withoutMarkers.length) / ATTACHMENT_MARKER.length;
@@ -525,7 +582,7 @@ export function useAgentChat(
           ? content
           : withoutMarkers +
             ATTACHMENT_MARKER.repeat(queued.attachments.length);
-      void runQueueAction({
+      return runQueueAction({
         target,
         onSuccess: () => {
           if (heldTurnIdRef.current === id) heldTurnIdRef.current = null;
@@ -548,11 +605,15 @@ export function useAgentChat(
           ),
       });
     },
-    removeQueued: (id) => {
+    removeQueued: async (id) => {
+      if (delivery.scope !== operationScopeRef.current) return false;
       const target = activeSessionRef.current.sessionId;
-      if (!projectId || !target) return;
-      void runQueueAction({
+      if (!projectId || !target) return false;
+      return runQueueAction({
         target,
+        onSuccess: () => {
+          if (heldTurnIdRef.current === id) heldTurnIdRef.current = null;
+        },
         action: async (signal) =>
           assertApiOk(
             await apiClient.DELETE(
@@ -566,11 +627,15 @@ export function useAgentChat(
           ),
       });
     },
-    sendQueuedNow: (id) => {
+    sendQueuedNow: async (id) => {
+      if (delivery.scope !== operationScopeRef.current) return false;
       const target = activeSessionRef.current.sessionId;
-      if (!projectId || !target) return;
-      void runQueueAction({
+      if (!projectId || !target) return false;
+      return runQueueAction({
         target,
+        onSuccess: () => {
+          if (heldTurnIdRef.current === id) heldTurnIdRef.current = null;
+        },
         action: async (signal) =>
           assertApiOk(
             await apiClient.POST(
@@ -584,13 +649,14 @@ export function useAgentChat(
           ),
       });
     },
-    holdQueued: (id) => {
+    holdQueued: async (id) => {
+      if (delivery.scope !== operationScopeRef.current) return false;
       const target = activeSessionRef.current.sessionId;
-      if (!projectId || !target) return;
+      if (!projectId || !target) return false;
       const turnId = id ?? heldTurnIdRef.current;
-      if (!turnId) return;
+      if (!turnId) return false;
       if (id !== null) heldTurnIdRef.current = id;
-      void runQueueAction({
+      return runQueueAction({
         target,
         onSuccess: () => {
           if (id === null && heldTurnIdRef.current === turnId)
@@ -617,10 +683,15 @@ export function useAgentChat(
     },
     interrupt,
     startNewSession: () => {
-      if (sendInProgress === 0) {
+      if (
+        delivery.scope === operationScopeRef.current &&
+        pendingSendIdsRef.current.size === 0
+      ) {
         operationScopeRef.current = {};
-        setActionError(null);
-        setRetryInProgress(false);
+        dispatchDelivery({ type: "reset", scope: operationScopeRef.current });
+        retryRequestRef.current = null;
+        queueActionTailRef.current = Promise.resolve();
+        pendingSendIdsRef.current = new Set();
         heldTurnIdRef.current = null;
         activeSessionRef.current = {
           projectId,
@@ -628,7 +699,6 @@ export function useAgentChat(
           sessionId: null,
         };
         setActiveSession({ projectId, controlledSessionId, sessionId: null });
-        setOptimisticMessages([]);
         blockedSendRef.current = null;
         sessionCreationRef.current = null;
       }

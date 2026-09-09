@@ -1,6 +1,8 @@
-"use client";
+import { ChatQueue } from "../chat-queue/chat-queue.js";
 
-import type { AgentMessage } from "@catamorphic/react";
+("use client");
+
+import type { AgentMessage, PendingAgentTurn } from "@catamorphic/react";
 import {
   ArrowDown,
   Bot,
@@ -45,6 +47,20 @@ export interface ChatTimelineProps {
   activity?: string;
   /** Number of queued messages beyond the in-flight one. */
   queuedCount?: number;
+  queue?: PendingAgentTurn[];
+  onUpdateQueued?: (
+    id: string,
+    content: string,
+  ) => undefined | boolean | Promise<undefined | boolean>;
+  onRemoveQueued?: (
+    id: string,
+  ) => undefined | boolean | Promise<undefined | boolean>;
+  onSendQueuedNow?: (
+    id: string,
+  ) => undefined | boolean | Promise<undefined | boolean>;
+  onHoldQueued?: (
+    id: string | null,
+  ) => undefined | boolean | Promise<undefined | boolean>;
   /** Re-run the last failed turn in place. */
   onRetry?: () => void;
   error?: string | null;
@@ -100,6 +116,11 @@ export function ChatTimeline({
   messages,
   activity,
   queuedCount = 0,
+  queue,
+  onUpdateQueued,
+  onRemoveQueued,
+  onSendQueuedNow,
+  onHoldQueued,
   onRetry,
   error,
   emptyState = "Ask the agent to build or change your project.",
@@ -143,12 +164,21 @@ export function ChatTimeline({
           <div className="flex items-center gap-2 text-xs text-fg-muted">
             <LoaderCircle className="size-4 animate-spin" />
             <span className="animate-pulse">{activity}</span>
-            {queuedCount > 0 && (
+            {!queue && queuedCount > 0 && (
               <span className="ml-auto text-fg-faint">
                 {queuedCount} queued
               </span>
             )}
           </div>
+        )}
+        {queue && queue.length > 0 && (
+          <ChatQueue
+            queue={queue}
+            onUpdate={onUpdateQueued}
+            onRemove={onRemoveQueued}
+            onSendNow={onSendQueuedNow}
+            onHold={onHoldQueued}
+          />
         )}
         {error && (
           <div className="rounded-lg border border-danger/50 bg-danger/10 px-3 py-2 text-xs text-danger">

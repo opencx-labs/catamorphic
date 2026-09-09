@@ -857,3 +857,10 @@ See [ADR 0100](docs/decisions/0100-workspace-resource-admission.md) and the
 execution context, the typed capability registry, permission-filtered discovery,
 MCP/HTTP transports, and host directory/approval integration. Use these existing
 seams when agents need environment or assignment awareness.
+
+## Maintained host examples
+
+The [React host examples](packages/registry/src/examples/embedding.tsx) compile with
+the registry on every check. They demonstrate controlled chat selection and a
+host-owned workflow inspector. [Chat delivery responsibilities](apps/desktop/docs/chat-state.md)
+separate reusable mechanics from the desktop reference presentation.

@@ -46,6 +46,7 @@ import type { ProfilesStore } from "../profiles.js";
 import { projectDefaultAgentSlug } from "../project-manifest.js";
 import { shellBinShimDir } from "../shell-integration.js";
 import { FriendlyAgentErrors } from "./agent-errors.js";
+import { desktopSettingsContext } from "./desktop-settings-context.js";
 import { E2eFakeCodingAgent } from "./e2e-fakes.js";
 import { composeSkillsNote, type HostSkillsRuntime } from "./host-skills.js";
 import { localAgentWorkspace } from "./local-agent-workspace.js";
@@ -996,6 +997,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         this.deps.sandboxProvider,
         this.workspaceTools(config, topology),
         this.toolPermissionHandler(config, profileId),
+        (projectId) => this.settingsContext(projectId, config),
       );
       return {
         id: config.id,
@@ -1251,7 +1253,20 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           this.deps.checkoutNotice?.(projectId, sessionId) ??
           Promise.resolve(null),
       },
+      (projectId) => this.settingsContext(projectId, opts.config),
     );
+  }
+
+  private settingsContext(projectId: string, config: AgentConfig) {
+    return desktopSettingsContext({
+      config: this.deps.profileConfig,
+      profileId: this.deps.profiles.profileForProject(projectId).id,
+      project: {
+        id: projectId,
+        rootPath: this.deps.projectRootPath?.(projectId) ?? null,
+      },
+      access: config.mode === "read-only" ? "read-only" : "native",
+    });
   }
 
   /**

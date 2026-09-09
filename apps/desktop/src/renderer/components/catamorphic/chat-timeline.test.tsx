@@ -51,7 +51,9 @@ describe("ChatTimeline queue editing", () => {
               attachments: [],
             },
           ]}
-          onHoldQueued={(id) => holds.push(id)}
+          onHoldQueued={(id) => {
+            holds.push(id);
+          }}
         />,
       );
     });

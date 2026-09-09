@@ -723,3 +723,11 @@ pnpm -C frontend add \
 ```
 
 After any catamorphic change: rebuild the affected packages, then re-run the `pnpm add …@file:` commands so pnpm refreshes the dependency, then restart the host process. If SQL migrations changed, run `catamorphic-db migrate` again.
+
+## Executable examples and chat reliability
+
+The [embedding example](../../../packages/registry/src/examples/embedding.tsx) is
+compiled by the registry typecheck. Prefer it over adapting an unchecked code
+fragment. For delivery, inbox editing, failure recovery and host responsibilities,
+read the [chat contract](../../../apps/desktop/docs/chat-state.md). Desktop
+presentation is an example host policy, not a required embedding model.

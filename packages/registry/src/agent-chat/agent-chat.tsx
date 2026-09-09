@@ -1,6 +1,10 @@
 "use client";
 
-import { useAgentChat, useToolPermissions } from "@catamorphic/react";
+import {
+  type UseAgentChatResult,
+  useAgentChat,
+  useToolPermissions,
+} from "@catamorphic/react";
 import { ArrowUp, Bot, Maximize2, Minimize2, Plus } from "lucide-react";
 import { type FormEvent, type KeyboardEvent, useState } from "react";
 import { ChatTimeline, toTimeline } from "../chat-timeline/chat-timeline.js";
@@ -140,7 +144,12 @@ export function AgentChat({
           }
           messages={messages}
           activity={activity}
-          queuedCount={Math.max(0, chat.queuedMessageCount - 1)}
+          queue={chat.queue}
+          onUpdateQueued={chat.updateQueued}
+          onRemoveQueued={chat.removeQueued}
+          onSendQueuedNow={chat.sendQueuedNow}
+          onHoldQueued={chat.holdQueued}
+          onRetry={() => void chat.retry()}
           error={chat.error?.message ?? null}
         />
         {permissions.permissions.length > 0 && (
@@ -158,6 +167,7 @@ export function AgentChat({
           </div>
         )}
       </div>
+      <ChatDeliveryRecovery chat={chat} />
       <form
         className={`flex min-h-16 items-center gap-2 border border-border bg-bg-raised/95 p-2 backdrop-blur-xl ${expanded ? "rounded-b-2xl" : "rounded-2xl"}`}
         onSubmit={submit}
@@ -201,5 +211,51 @@ export function AgentChat({
         </button>
       </form>
     </section>
+  );
+}
+
+/** Local failures remain recoverable without confusing delivery with execution. */
+export function ChatDeliveryRecovery({
+  chat,
+}: {
+  chat: Pick<
+    UseAgentChatResult,
+    | "failedMessages"
+    | "resendFailed"
+    | "dismissFailed"
+    | "isSending"
+    | "authenticationRequired"
+  >;
+}) {
+  if (chat.authenticationRequired) return null;
+  return (
+    <div className="shrink-0" aria-live="polite">
+      {chat.failedMessages.map((message) => (
+        <div
+          key={message.id}
+          className="flex items-center gap-3 border-t border-border px-3 py-2 text-xs"
+          data-failed-delivery={message.id}
+        >
+          <span className="min-w-0 flex-1 truncate text-fg-muted">
+            Not delivered: {message.content || "Attachment"}
+          </span>
+          <button
+            type="button"
+            className="text-accent disabled:opacity-40"
+            disabled={chat.isSending}
+            onClick={() => void chat.resendFailed(message.id)}
+          >
+            Send again
+          </button>
+          <button
+            type="button"
+            className="text-fg-muted hover:text-fg"
+            onClick={() => chat.dismissFailed(message.id)}
+          >
+            Dismiss
+          </button>
+        </div>
+      ))}
+    </div>
   );
 }

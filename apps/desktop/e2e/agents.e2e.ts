@@ -843,7 +843,18 @@ describe("agents and profiles", () => {
     if (dispatchedEarly) {
       throw new Error("queued message dispatched while it was being edited");
     }
-    // Committing the edit (Enter) releases it; the edited text sends.
+    // Rejected edits keep both the local draft and the server hold.
+    await app.blockRequests(["*/agent/sessions/*/turns/*"]);
+    await run(`
+      $('[data-testid="chat-queued-edit"]').dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',bubbles:true,cancelable:true}));
+      return true;
+    `);
+    await runWait(
+      `return !!$('[data-testid="chat-queued-message"] [role="alert"]') && $('[data-testid="chat-queued-edit"]')?.value === 'actually right words';`,
+      { label: "failed queue edit preserves the draft" },
+    );
+    await app.blockRequests([]);
+    // Committing again releases the successfully updated queue entry.
     await run(`
       const editor = $('[data-testid="chat-queued-edit"]');
       editor.dispatchEvent(new KeyboardEvent('keydown',

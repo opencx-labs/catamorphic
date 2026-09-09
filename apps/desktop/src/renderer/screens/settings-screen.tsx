@@ -15,11 +15,25 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { ACTION_LABELS, KEYBINDING_ACTIONS } from "../../shared/actions.js";
 import { bindingFromEvent, parseBinding } from "../../shared/keybindings.js";
+import {
+  SETTING_SOURCE_LABELS,
+  SETTINGS,
+  type SettingKey,
+  type SettingsPatch,
+  type SettingsScope,
+  type SettingsSnapshot,
+  WORKSPACE_SETTING_KEYS,
+} from "../../shared/settings.js";
+import {
+  SETTINGS_BY_ID,
+  type SettingsDestination,
+} from "../../shared/settings-catalog.js";
 import type { TerminalMacro } from "../../shared/terminal-macros.js";
 import {
   DEFAULT_THEME_FONTS,
   isValidFontStack,
 } from "../../shared/theme-fonts.js";
+import { TOKEN_LABELS } from "../../shared/theme-tokens.js";
 import { PendingButton } from "../components/pending-button.js";
 import {
   type AgentHarness,
@@ -43,11 +57,15 @@ import { useTerminalAppearance } from "../lib/terminal-appearance.js";
 import { useTheme } from "../lib/theme.js";
 
 export function SettingsScreen({
+  projectId,
+  destination,
   onClose,
   onAddAgent,
   onConfigureAgent,
   onManageConnectors,
 }: {
+  projectId?: string;
+  destination?: SettingsDestination;
   onClose: () => void;
   onAddAgent: () => void;
   /** Open the configure-agent modal (ADR 0056) for one roster agent. */
@@ -67,6 +85,79 @@ export function SettingsScreen({
     },
     [],
   );
+  useEffect(() => {
+    if (!destination) return;
+    const entry = SETTINGS_BY_ID.get(destination.id);
+    const root = scrollRef.current;
+    if (!entry || !root) return;
+    setQuery("");
+    setSelected(entry.category);
+    let highlighted: HTMLElement | null = null;
+    let frame = 0;
+    const reveal = () => {
+      const target =
+        root.querySelector<HTMLElement>(
+          `[data-setting-id="${CSS.escape(entry.id)}"]`,
+        ) ??
+        root.querySelector<HTMLElement>(`#settings-${CSS.escape(entry.id)}`);
+      if (!target || target.closest("[hidden]")) return;
+      observer.disconnect();
+      frame = requestAnimationFrame(() => {
+        const distance =
+          target.getBoundingClientRect().top - root.getBoundingClientRect().top;
+        root.scrollTo({
+          top: root.scrollTop + distance - 12,
+          behavior: "instant",
+        });
+        navigationScrollTop.current = root.scrollTop;
+        setSelected(entry.category);
+        target.dataset.settingsTarget = "true";
+        target.classList.add(
+          "outline",
+          "outline-1",
+          "outline-accent",
+          "outline-offset-4",
+          "rounded-lg",
+        );
+        highlighted = target;
+        const control =
+          target.querySelector<HTMLElement>("[data-setting-control]") ??
+          target.querySelector<HTMLElement>(
+            "input:not(:disabled),select:not(:disabled)",
+          ) ??
+          target.querySelector<HTMLElement>("button:not(:disabled)");
+        if (control) control.focus({ preventScroll: true });
+        else {
+          target.tabIndex = -1;
+          target.focus({ preventScroll: true });
+        }
+      });
+    };
+    const observer = new MutationObserver(reveal);
+    observer.observe(root, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["hidden"],
+    });
+    reveal();
+    const timeout = setTimeout(() => observer.disconnect(), 5000);
+    return () => {
+      observer.disconnect();
+      clearTimeout(timeout);
+      cancelAnimationFrame(frame);
+      if (highlighted) {
+        delete highlighted.dataset.settingsTarget;
+        highlighted.classList.remove(
+          "outline",
+          "outline-1",
+          "outline-accent",
+          "outline-offset-4",
+          "rounded-lg",
+        );
+      }
+    };
+  }, [destination]);
   const sections = [
     {
       id: "agents",
@@ -92,7 +183,7 @@ export function SettingsScreen({
         "theme colors dark light nord catppuccin rose pine font ghostty terminal",
       content: (
         <>
-          <ThemeSection />
+          <ThemeSection destination={destination} />
           <TerminalSection />
         </>
       ),
@@ -104,7 +195,7 @@ export function SettingsScreen({
         "layout sidebar tabs header address bookmarks links preview floating border frame",
       content: (
         <>
-          <LayoutSection />
+          <LayoutSection projectId={projectId} />
           <SidebarSection />
         </>
       ),
@@ -119,7 +210,7 @@ export function SettingsScreen({
       id: "shortcuts",
       label: "Keyboard shortcuts",
       keywords: "keys bindings hotkeys",
-      content: <ShortcutsSection />,
+      content: <ShortcutsSection destination={destination} />,
     },
     {
       id: "notifications",
@@ -191,7 +282,7 @@ export function SettingsScreen({
         <div className="min-w-0 flex-1">
           <h1 className="text-base font-semibold">Settings</h1>
           <p className="mt-1 text-xs text-fg-muted">
-            Make this profile your own.
+            Make this workspace your own.
           </p>
         </div>
         <label className="relative order-3 w-full @xl/settings:order-none @xl/settings:w-64">
@@ -220,6 +311,7 @@ export function SettingsScreen({
           <X className="size-4" />
         </button>
       </header>
+      <ConfigurationErrors projectId={projectId} />
       <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col @2xl/settings:flex-row">
         <label className="flex shrink-0 items-center gap-3 px-6 pb-4 text-sm text-fg-muted @2xl/settings:hidden">
           Category
@@ -261,8 +353,8 @@ export function SettingsScreen({
             const root = scrollRef.current;
             if (!root || query) return;
             const requestedTop = navigationScrollTop.current;
-            navigationScrollTop.current = null;
             if (requestedTop === root.scrollTop) return;
+            navigationScrollTop.current = null;
             const lastSection = sections.at(-1);
             if (
               lastSection &&
@@ -606,27 +698,6 @@ function ConnectorsSection({ onManage }: { onManage: () => void }) {
   );
 }
 
-const TOKEN_LABELS: Record<ThemeToken, string> = {
-  bg: "Background",
-  "bg-raised": "Raised surface",
-  "bg-overlay": "Overlay",
-  "bg-inset": "Inset",
-  sidebar: "Sidebar and window frame",
-  border: "Border",
-  "border-strong": "Border (strong)",
-  fg: "Text",
-  "fg-muted": "Text (muted)",
-  "fg-faint": "Text (faint)",
-  accent: "Accent",
-  "accent-fg": "Text on accent",
-  success: "Success",
-  warning: "Warning",
-  danger: "Danger",
-  info: "Info",
-  "user-tint": "User message tint",
-  "agent-tint": "Agent message tint",
-};
-
 /**
  * Theme picker: preset swatch cards plus a per-token color editor. Changes
  * apply immediately — the main process rewrites theme.json, which
@@ -638,68 +709,11 @@ const TOKEN_LABELS: Record<ThemeToken, string> = {
  * isn't focused. Per profile (profiles/<id>/prefs.json), live-applied.
  */
 function NotificationsSection() {
-  const [prefs, setPrefsState] = useState<AppPrefs | null>(null);
-  useEffect(() => {
-    void desktopApi.getPrefs().then(setPrefsState);
-    return desktopApi.onPrefsChanged(setPrefsState);
-  }, []);
-  if (!prefs) return null;
-
-  const Toggle = ({
-    label,
-    description,
-    checked,
-    onChange,
-  }: {
-    label: string;
-    description: string;
-    checked: boolean;
-    onChange: (value: boolean) => void;
-  }) => (
-    <label className="flex cursor-pointer items-center justify-between gap-4 rounded-lg border border-border bg-bg-raised/40 p-3">
-      <span className="min-w-0">
-        <span className="block text-[13px]">{label}</span>
-        <span className="block text-[11px] leading-4 text-fg-faint">
-          {description}
-        </span>
-      </span>
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-        className="size-4 shrink-0 accent-(--color-accent)"
-      />
-    </label>
-  );
-
   return (
-    <section className="mt-8">
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-semibold">Notifications</h2>
-      </div>
-      <div className="flex flex-col gap-2">
-        <Toggle
-          label="Notification sounds"
-          description="A soft chime when an agent finishes working or asks you a question."
-          checked={prefs.notificationSounds}
-          onChange={(value) =>
-            void desktopApi
-              .setPrefs({ notificationSounds: value })
-              .then(setPrefsState)
-          }
-        />
-        <Toggle
-          label="Desktop notifications"
-          description="An OS notification for the same events while the app is in the background."
-          checked={prefs.desktopNotifications}
-          onChange={(value) =>
-            void desktopApi
-              .setPrefs({ desktopNotifications: value })
-              .then(setPrefsState)
-          }
-        />
-      </div>
-    </section>
+    <LayoutSection
+      keys={["notificationSounds", "desktopNotifications"]}
+      title="Notifications"
+    />
   );
 }
 
@@ -708,24 +722,7 @@ function TerminalSection() {
     useTerminalAppearance();
   return (
     <section className="mt-8 flex flex-col gap-3">
-      <h2 className="text-sm font-semibold">Terminal</h2>
-      <label className="flex flex-wrap items-center justify-between gap-3 text-sm">
-        Appearance
-        <select
-          name="terminalAppearance"
-          value={source}
-          onChange={(event) =>
-            void desktopApi.setPrefs({
-              terminalAppearance:
-                event.target.value === "ghostty" ? "ghostty" : "app",
-            })
-          }
-          className="field h-8 rounded-md px-2 text-sm"
-        >
-          <option value="app">App theme</option>
-          <option value="ghostty">Ghostty configuration</option>
-        </select>
-      </label>
+      <LayoutSection keys={["terminalAppearance"]} title="Terminal" />
       {source === "ghostty" && (
         <>
           <p className="text-xs text-fg-muted" aria-live="polite">
@@ -762,120 +759,184 @@ function TerminalSection() {
   );
 }
 
-function LayoutSection() {
-  const [prefs, setPrefs] = useState<AppPrefs | null>(null);
+function LayoutSection({
+  projectId,
+  keys = WORKSPACE_SETTING_KEYS,
+  title = "Workspace layout",
+}: {
+  projectId?: string;
+  keys?: SettingKey[];
+  title?: string;
+}) {
+  const [scope, setScope] = useState<SettingsScope>("profile");
+  const [snapshot, setSnapshot] = useState<SettingsSnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const generation = useRef(0);
+  const [refreshKey, setRefreshKey] = useState(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Retry intentionally restarts a failed IPC read.
   useEffect(() => {
-    void desktopApi.getPrefs().then(setPrefs);
-    return desktopApi.onPrefsChanged(setPrefs);
-  }, []);
-  if (!prefs) return null;
+    let alive = true;
+    const refresh = () => {
+      const request = ++generation.current;
+      void desktopApi
+        .getSettings({ projectId, scope })
+        .then((result) => {
+          if (alive && request === generation.current) {
+            setSnapshot(result);
+            setError(null);
+          }
+        })
+        .catch((cause) => {
+          if (alive && request === generation.current) setError(String(cause));
+        });
+    };
+    setSnapshot(null);
+    refresh();
+    const unsubscribe = desktopApi.onPrefsChanged(refresh);
+    return () => {
+      alive = false;
+      generation.current++;
+      unsubscribe();
+    };
+  }, [projectId, scope, refreshKey]);
+  const save = async (patch: SettingsPatch) => {
+    const request = generation.current;
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await desktopApi.setSettings({ projectId, scope, patch });
+      if (request === generation.current) setSnapshot(result);
+    } catch (cause) {
+      if (request === generation.current) setError(String(cause));
+    } finally {
+      setSaving(false);
+    }
+  };
   return (
-    <section className="mt-8 flex flex-col gap-3">
-      <h2 className="text-sm font-semibold">Workspace layout</h2>
-      <label className="flex flex-wrap items-center justify-between gap-3 text-sm">
-        Open tabs
-        <select
-          name="tabPlacement"
-          value={prefs.tabPlacement}
-          onChange={(event) =>
-            void desktopApi.setPrefs({
-              tabPlacement:
-                event.target.value === "sidebar" ? "sidebar" : "top",
-            })
-          }
-          className="field h-8 rounded-md px-2 text-sm"
-        >
-          <option value="top">Top bar (default)</option>
-          <option value="sidebar">Sidebar</option>
-        </select>
-      </label>
-      {prefs.tabPlacement === "sidebar" && (
-        <label className="flex flex-wrap items-center justify-between gap-3 text-sm">
-          Title and address bar
+    <section
+      className="mt-8 flex flex-col gap-3"
+      data-settings-layout={title === "Workspace layout" ? "" : undefined}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold">{title}</h2>
+        {projectId && (
           <select
-            name="headerPlacement"
-            value={prefs.headerPlacement}
-            onChange={(event) =>
-              void desktopApi.setPrefs({
-                headerPlacement:
-                  event.target.value === "sidebar" ? "sidebar" : "top",
-              })
-            }
-            className="field h-8 rounded-md px-2 text-sm"
+            aria-label="Settings scope"
+            className="field h-8 rounded-md px-2 text-xs"
+            value={scope}
+            disabled={saving}
+            onChange={(event) => setScope(event.target.value as SettingsScope)}
           >
-            <option value="top">Above content</option>
-            <option value="sidebar">In sidebar</option>
+            <option value="profile">Profile</option>
+            {projectId && (
+              <option value="personal">This project, just for me</option>
+            )}
+            {projectId &&
+              (snapshot?.projectAvailable || scope === "project") && (
+                <option value="project">Project default</option>
+              )}
           </select>
-        </label>
-      )}
-      <label className="flex items-center justify-between gap-3 text-sm">
-        <span>
-          Tab frame
-          <span className="mt-1 block text-xs text-fg-muted">
-            Add a rounded, inset border around tab content. Off by default.
-          </span>
-        </span>
-        <input
-          type="checkbox"
-          name="tabFrame"
-          checked={prefs.tabFrame}
-          onChange={(event) =>
-            void desktopApi.setPrefs({ tabFrame: event.target.checked })
-          }
-          className="size-4 shrink-0 accent-(--color-accent)"
-        />
-      </label>
-      <label className="flex flex-wrap items-center justify-between gap-3 text-sm">
-        Pinned bookmarks
-        <select
-          name="pinnedBookmarks"
-          value={prefs.pinnedBookmarks}
-          onChange={(event) =>
-            void desktopApi.setPrefs({
-              pinnedBookmarks: event.target.value === "list" ? "list" : "tiles",
-            })
-          }
-          className="field h-8 rounded-md px-2 text-sm"
-        >
-          <option value="tiles">Icon tiles</option>
-          <option value="list">List</option>
-        </select>
-      </label>
-      <label className="flex flex-wrap items-center justify-between gap-3 text-sm">
-        Links requesting a new window
-        <select
-          name="linkOpenMode"
-          value={prefs.linkOpenMode}
-          onChange={(event) =>
-            void desktopApi.setPrefs({
-              linkOpenMode:
-                event.target.value === "floating" ? "floating" : "tab",
-            })
-          }
-          className="field h-8 rounded-md px-2 text-sm"
-        >
-          <option value="tab">New tab</option>
-          <option value="floating">Floating preview</option>
-        </select>
-      </label>
-      <label className="flex flex-wrap items-center justify-between gap-3 text-sm">
-        {/Mac/.test(navigator.platform) ? "Option" : "Alt"}-click links to
-        preview
-        <input
-          type="checkbox"
-          name="previewLinksWithAlt"
-          checked={prefs.previewLinksWithAlt}
-          onChange={(event) =>
-            void desktopApi.setPrefs({
-              previewLinksWithAlt: event.target.checked,
-            })
-          }
-        />
-      </label>
-      <p className="text-sm text-fg-muted text-pretty">
-        Changes apply to this profile. You can also ask your agent to arrange
-        the sidebar or change these preferences.
+        )}
+      </div>
+      <p className="text-xs text-fg-muted">
+        {scope === "profile"
+          ? "Defaults for projects in this profile."
+          : scope === "project"
+            ? "Shared with everyone using this project."
+            : "Your overrides for this project."}
       </p>
+      {error && (
+        <p role="alert" className="text-xs text-danger">
+          {error}{" "}
+          <button
+            type="button"
+            className="underline"
+            onClick={() => setRefreshKey((value) => value + 1)}
+          >
+            Retry
+          </button>
+        </p>
+      )}
+      {snapshot &&
+        keys.map((key) => {
+          const definition = SETTINGS[key];
+          const id = `setting-${key}`;
+          const value = snapshot.values[key];
+          const overridden = Object.hasOwn(snapshot.overrides, key);
+          return (
+            <div
+              key={key}
+              className={`-mx-2 flex justify-between rounded-lg p-2 ${"options" in definition ? "flex-col items-stretch gap-2 @xl/settings:flex-row @xl/settings:items-center @xl/settings:gap-4" : "items-center gap-4"}`}
+              data-setting={key}
+              data-setting-id={key}
+            >
+              <div className="min-w-0">
+                <label htmlFor={id} className="text-sm">
+                  {key === "previewLinksWithAlt" &&
+                  /Mac/.test(navigator.platform)
+                    ? "Option-click web links to preview"
+                    : definition.label}
+                </label>
+                {"description" in definition && (
+                  <p className="mt-1 text-xs text-fg-muted">
+                    {definition.description}
+                  </p>
+                )}
+                <p className="mt-1 text-[11px] text-fg-muted">
+                  {overridden
+                    ? `Custom for ${SETTING_SOURCE_LABELS[scope].toLowerCase()}`
+                    : `${SETTING_SOURCE_LABELS[scope]} · From ${SETTING_SOURCE_LABELS[snapshot.sources[key]].toLowerCase()}`}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-3">
+                {overridden && (
+                  <button
+                    type="button"
+                    aria-label={`Reset ${definition.label} to inherited`}
+                    disabled={saving}
+                    className="text-xs text-fg-muted hover:text-fg disabled:opacity-40"
+                    onClick={() => void save({ [key]: null })}
+                  >
+                    Reset
+                  </button>
+                )}
+                {"options" in definition ? (
+                  <select
+                    id={id}
+                    name={key}
+                    disabled={saving}
+                    value={String(value)}
+                    className="field h-8 rounded-md px-2 text-sm"
+                    onChange={(event) =>
+                      void save({ [key]: event.target.value })
+                    }
+                  >
+                    {Object.entries(definition.options).map(
+                      ([option, label]) => (
+                        <option key={option} value={option}>
+                          {label}
+                        </option>
+                      ),
+                    )}
+                  </select>
+                ) : (
+                  <input
+                    id={id}
+                    name={key}
+                    type="checkbox"
+                    disabled={saving}
+                    checked={value === true}
+                    className="size-4 accent-(--color-accent)"
+                    onChange={(event) =>
+                      void save({ [key]: event.target.checked })
+                    }
+                  />
+                )}
+              </div>
+            </div>
+          );
+        })}
     </section>
   );
 }
@@ -942,9 +1003,35 @@ function MacrosSection() {
     }
   };
   return (
-    <section className="mt-8 flex flex-col gap-3">
+    <section
+      data-setting-id="terminalMacros"
+      className="mt-8 flex flex-col gap-3"
+    >
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold">Terminal macros</h2>
+        <div className="flex items-center gap-3">
+          <h2 className="text-sm font-semibold">Terminal macros</h2>
+          {macros.length > 0 && (
+            <button
+              type="button"
+              aria-label="Reset terminal macros to inherited"
+              disabled={saving}
+              className="text-xs text-fg-muted hover:text-fg"
+              onClick={() => {
+                setSaving(true);
+                void desktopApi
+                  .setSettings({
+                    scope: "profile",
+                    patch: { terminalMacros: null },
+                  })
+                  .then((result) => setPrefs(result.values))
+                  .catch((cause) => setError(String(cause)))
+                  .finally(() => setSaving(false));
+              }}
+            >
+              Reset
+            </button>
+          )}
+        </div>
         <button
           type="button"
           disabled={!prefs || saving}
@@ -1138,11 +1225,21 @@ function MacrosSection() {
   );
 }
 
-function ThemeSection() {
+function ThemeSection({ destination }: { destination?: SettingsDestination }) {
   const theme = useTheme();
   const [presets, setPresets] = useState<ThemePreset[]>([]);
   const [file, setFile] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const saveTheme = (config: Parameters<typeof desktopApi.setTheme>[0]) => {
+    void desktopApi.setTheme(config).then(
+      () => setSaveError(""),
+      (error) => setSaveError(String(error)),
+    );
+  };
   const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    if (destination?.id.startsWith("theme.overrides.")) setEditing(true);
+  }, [destination]);
 
   useEffect(() => {
     void desktopApi.themePresets().then(setPresets);
@@ -1157,14 +1254,19 @@ function ThemeSection() {
   const systemSelected = theme.selection === "system";
 
   return (
-    <section className="mt-8">
+    <section className="mt-8" data-setting-id="theme.selection">
+      {saveError && (
+        <p role="alert" className="mb-3 break-words text-xs text-danger">
+          {saveError}
+        </p>
+      )}
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-sm font-semibold">Theme</h2>
         {overridden && (
           <button
             type="button"
             onClick={() =>
-              void desktopApi.setTheme({
+              void saveTheme({
                 fonts: theme.fonts,
                 selection: theme.selection,
                 overrides: {},
@@ -1181,12 +1283,13 @@ function ThemeSection() {
       <button
         type="button"
         onClick={() =>
-          void desktopApi.setTheme({
+          void saveTheme({
             selection: "system",
             overrides: {},
             fonts: theme.fonts,
           })
         }
+        data-setting-control
         aria-pressed={systemSelected}
         className={`mb-2 flex w-full cursor-pointer items-center gap-2.5 rounded-lg border p-2.5 text-left transition-colors duration-150 ${
           systemSelected
@@ -1226,7 +1329,7 @@ function ThemeSection() {
               aria-pressed={active}
               data-theme-preset={preset.id}
               onClick={() =>
-                void desktopApi.setTheme({
+                void saveTheme({
                   fonts: theme.fonts,
                   selection: preset.id,
                   overrides: {},
@@ -1306,6 +1409,7 @@ function ThemeSection() {
           {(Object.keys(TOKEN_LABELS) as ThemeToken[]).map((token) => (
             <div
               key={token}
+              data-setting-id={`theme.overrides.${token}`}
               className="flex h-8 items-center justify-between rounded-md border border-border bg-bg-raised/40 px-2.5"
             >
               <span className="text-xs">
@@ -1322,7 +1426,7 @@ function ThemeSection() {
                   type="color"
                   value={toHex6(theme.colors[token])}
                   onChange={(event) =>
-                    void desktopApi.setTheme({
+                    void saveTheme({
                       fonts: theme.fonts,
                       selection: theme.selection,
                       overrides: {
@@ -1349,7 +1453,7 @@ function ThemeSection() {
               type="button"
               className="cursor-pointer text-xs text-fg-muted hover:text-fg"
               onClick={() =>
-                void desktopApi.setTheme({
+                void saveTheme({
                   selection: theme.selection,
                   overrides: theme.overrides,
                 })
@@ -1362,6 +1466,7 @@ function ThemeSection() {
         {(["sans", "mono"] as const).map((token) => (
           <label
             key={token}
+            data-setting-id={`theme.fonts.${token}`}
             className="flex flex-col gap-1 text-xs text-fg-muted"
           >
             {token === "sans" ? "Interface font" : "Monospace font"}
@@ -1389,7 +1494,7 @@ function ThemeSection() {
                 const font = value || DEFAULT_THEME_FONTS[token];
                 event.currentTarget.value = font;
                 if (font === theme.fonts[token]) return;
-                void desktopApi.setTheme({
+                void saveTheme({
                   selection: theme.selection,
                   overrides: theme.overrides,
                   fonts: { ...theme.fonts, [token]: font },
@@ -1605,7 +1710,7 @@ function SidebarSection() {
   }, []);
 
   return (
-    <section className="mt-8">
+    <section data-setting-id="sidebar" className="mt-8">
       <h2 className="mb-1 text-sm font-semibold">Sidebar</h2>
       <p className="text-xs text-fg-muted">
         The left sidebar's sections and items are defined in a JavaScript file.
@@ -1633,9 +1738,16 @@ function SidebarSection() {
  * recording. Saves apply immediately (no Save button) — the main process
  * rewrites keybindings.json, which broadcasts back to every window.
  */
-function ShortcutsSection() {
+function ShortcutsSection({
+  destination,
+}: {
+  destination?: SettingsDestination;
+}) {
   const [prefs, setPrefs] = useState<AppPrefs | null>(null);
   const [filter, setFilter] = useState("");
+  useEffect(() => {
+    if (destination?.id.startsWith("shortcut.")) setFilter("");
+  }, [destination]);
   useEffect(() => {
     void desktopApi.getPrefs().then(setPrefs);
     return desktopApi.onPrefsChanged(setPrefs);
@@ -1687,7 +1799,9 @@ function ShortcutsSection() {
       );
       const next = { ...bindings, [recording]: binding };
       for (const action of conflicts) next[action] = "";
-      void desktopApi.setKeybindings(next);
+      void desktopApi
+        .setKeybindings(next)
+        .catch((error) => setNotice(String(error)));
       setNotice(
         conflicts.length
           ? `Shortcut moved from ${conflicts.map((action) => ACTION_LABELS[action]).join(", ")} to ${ACTION_LABELS[recording]}.`
@@ -1711,7 +1825,11 @@ function ShortcutsSection() {
         {!isDefault && (
           <button
             type="button"
-            onClick={() => void desktopApi.setKeybindings(DEFAULT_KEYBINDINGS)}
+            onClick={() =>
+              void desktopApi
+                .setKeybindings(DEFAULT_KEYBINDINGS)
+                .catch((error) => setNotice(String(error)))
+            }
             className="flex cursor-pointer items-center gap-1 text-xs text-fg-muted hover:text-fg"
           >
             <RotateCcw className="size-3" />
@@ -1744,6 +1862,7 @@ function ShortcutsSection() {
           <div
             key={action}
             data-item-id={action}
+            data-setting-id={`shortcut.${action}`}
             className="flex min-h-9 flex-wrap items-center justify-between gap-2 rounded-lg bg-bg-raised/40 px-3 py-1.5"
           >
             <span className="text-[13px]">{ACTION_LABELS[action]}</span>
@@ -1770,10 +1889,12 @@ function ShortcutsSection() {
                   type="button"
                   aria-label={`Remove shortcut for ${ACTION_LABELS[action]}`}
                   onClick={() => {
-                    void desktopApi.setKeybindings({
-                      ...bindings,
-                      [action]: "",
-                    });
+                    void desktopApi
+                      .setKeybindings({
+                        ...bindings,
+                        [action]: "",
+                      })
+                      .catch((error) => setNotice(String(error)));
                     setNotice(`Shortcut removed for ${ACTION_LABELS[action]}.`);
                   }}
                   className="grid size-6 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-overlay hover:text-fg"
@@ -1793,5 +1914,49 @@ function ShortcutsSection() {
         <span className="break-all font-mono">{file}</span>
       </p>
     </section>
+  );
+}
+
+function ConfigurationErrors({ projectId }: { projectId?: string }) {
+  const [errors, setErrors] = useState<string[]>([]);
+  useEffect(() => {
+    let alive = true;
+    let generation = 0;
+    const refresh = () => {
+      const request = ++generation;
+      void desktopApi
+        .getSettings({ projectId })
+        .then((snapshot) => {
+          if (alive && request === generation) setErrors(snapshot.errors);
+        })
+        .catch((error) => {
+          if (alive && request === generation) setErrors([String(error)]);
+        });
+    };
+    refresh();
+    const off = [
+      desktopApi.onPrefsChanged(refresh),
+      desktopApi.onThemeChanged(refresh),
+      desktopApi.onKeybindingsChanged(refresh),
+      desktopApi.onSidebarConfigChanged(refresh),
+    ];
+    return () => {
+      alive = false;
+      for (const dispose of off) dispose();
+    };
+  }, [projectId]);
+  if (!errors.length) return null;
+  return (
+    <div
+      role="alert"
+      className="mx-auto mb-3 max-h-32 w-full max-w-5xl shrink-0 overflow-y-auto px-6 text-xs text-danger"
+      data-config-errors
+    >
+      {errors.map((error) => (
+        <p key={error} className="break-words py-1">
+          {error}
+        </p>
+      ))}
+    </div>
   );
 }

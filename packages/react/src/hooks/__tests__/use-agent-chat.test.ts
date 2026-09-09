@@ -933,7 +933,7 @@ describe("useAgentChat", () => {
     const queuedId = result.current.queue[0]?.id as string;
 
     // Marker count matches the attachments: the edit stands as typed.
-    act(() =>
+    await act(() =>
       result.current.updateQueued(
         queuedId,
         `look at ${ATTACHMENT_MARKER} then ${ATTACHMENT_MARKER}`,
@@ -946,7 +946,7 @@ describe("useAgentChat", () => {
     );
 
     // A marker was deleted: all pills reflow to the end, none remapped.
-    act(() =>
+    await act(() =>
       result.current.updateQueued(queuedId, `only ${ATTACHMENT_MARKER} left`),
     );
     await waitFor(() =>
@@ -1151,4 +1151,92 @@ describe("useAgentChat", () => {
     rerender({ projectId: PROJECT_ID });
     expect(result.current.sessionId).toBeNull();
   });
+});
+
+it.each(["next_turn", "interrupt"] as const)(
+  "preserves failed %s delivery content and idempotency on resend",
+  async (deliveryMode) => {
+    const ids: string[] = [];
+    const modes: unknown[] = [];
+    server.use(
+      http.post(
+        apiUrl(
+          `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/messages`,
+        ),
+        async ({ request }) => {
+          const body = (await request.json()) as {
+            idempotencyKey: string;
+            deliveryMode: unknown;
+          };
+          ids.push(body.idempotencyKey);
+          modes.push(body.deliveryMode);
+          return ids.length === 1
+            ? HttpResponse.json(
+                { message: "Temporarily unavailable" },
+                { status: 403 },
+              )
+            : HttpResponse.json(
+                {
+                  messageId: "recovered",
+                  turnId: "turn",
+                  mode: "next_turn",
+                  created: true,
+                },
+                { status: 202 },
+              );
+        },
+      ),
+    );
+    const { result } = renderHookWithProviders(() =>
+      useAgentChat(PROJECT_ID, { sessionId: SESSION_ID }),
+    );
+    await act(async () => {
+      await result.current[deliveryMode === "interrupt" ? "sendNow" : "send"](
+        "Preserve this message",
+      );
+    });
+    expect(result.current.failedMessages[0]?.content).toBe(
+      "Preserve this message",
+    );
+    expect(result.current.isSending).toBe(false);
+    const id = result.current.failedMessages[0]!.id;
+    await act(async () => {
+      await result.current.resendFailed(id);
+    });
+    expect(ids).toEqual([id, id]);
+    expect(modes).toEqual([deliveryMode, deliveryMode]);
+    expect(result.current.failedMessages).toEqual([]);
+  },
+);
+
+it("serializes queue hold and release so a slow hold cannot overtake release", async () => {
+  const operations: boolean[] = [];
+  let releaseHold: (() => void) | undefined;
+  server.use(
+    http.patch(
+      apiUrl(
+        `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/turns/queued`,
+      ),
+      async ({ request }) => {
+        const body = (await request.json()) as { held: boolean };
+        operations.push(body.held);
+        if (body.held)
+          await new Promise<void>((resolve) => {
+            releaseHold = resolve;
+          });
+        return HttpResponse.json({ ok: true });
+      },
+    ),
+  );
+  const { result } = renderHookWithProviders(() =>
+    useAgentChat(PROJECT_ID, { sessionId: SESSION_ID }),
+  );
+  act(() => {
+    result.current.holdQueued("queued");
+    result.current.holdQueued(null);
+  });
+  await waitFor(() => expect(releaseHold).toBeDefined());
+  expect(operations).toEqual([true]);
+  act(() => releaseHold?.());
+  await waitFor(() => expect(operations).toEqual([true, false]));
 });

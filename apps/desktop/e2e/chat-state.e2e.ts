@@ -199,10 +199,11 @@ it("preserves floating chats, their draft, and their bubble when opening links",
     ),
   ).toBe(true);
   await app.screenshot("/tmp/chat-link-floating-preview.png");
-  await clickButton("Dismiss floating panel");
-  await app.waitFor("!document.querySelector('[data-floating-surface]')");
+  // The bubble itself restores the chat and dismisses the resource preview.
   await app.eval(`document.querySelector('${bubble}').click()`);
-  await app.waitFor("!!document.querySelector('[data-floating-chat]')");
+  await app.waitFor(
+    "!!document.querySelector('[data-floating-chat]') && !document.querySelector('[data-floating-surface]')",
+  );
   expect(
     await app.eval(
       "document.querySelector('[data-floating-chat] [data-composer-input]').textContent",

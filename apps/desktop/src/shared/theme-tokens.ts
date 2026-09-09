@@ -1,0 +1,43 @@
+export const THEME_TOKENS = [
+  "bg",
+  "bg-raised",
+  "bg-overlay",
+  "bg-inset",
+  "sidebar",
+  "border",
+  "border-strong",
+  "fg",
+  "fg-muted",
+  "fg-faint",
+  "accent",
+  "accent-fg",
+  "success",
+  "warning",
+  "danger",
+  "info",
+  "user-tint",
+  "agent-tint",
+] as const;
+
+export type ThemeToken = (typeof THEME_TOKENS)[number];
+
+export const TOKEN_LABELS = {
+  bg: "Background",
+  "bg-raised": "Raised surface",
+  "bg-overlay": "Overlay",
+  "bg-inset": "Inset",
+  sidebar: "Sidebar and window frame",
+  border: "Border",
+  "border-strong": "Border (strong)",
+  fg: "Text",
+  "fg-muted": "Text (muted)",
+  "fg-faint": "Text (faint)",
+  accent: "Accent",
+  "accent-fg": "Text on accent",
+  success: "Success",
+  warning: "Warning",
+  danger: "Danger",
+  info: "Info",
+  "user-tint": "User message tint",
+  "agent-tint": "Agent message tint",
+} as const;

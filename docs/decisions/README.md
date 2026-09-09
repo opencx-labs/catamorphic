@@ -121,3 +121,6 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0106](0106-profile-terminal-macros.md) | Profile-owned terminal macros and configurable floating dismissal | Accepted |
 | [0107](0107-sidebar-footer-and-floating-chrome.md) | Sidebar footer, centered tabs, floating chrome and editor themes | Accepted |
 | [0108](0108-unified-resource-opening-and-paste.md) | Unified resource opening and composer file paste | Accepted |
+| [0109](0109-desktop-state-and-settings-contracts.md) | Desktop transitions and scoped settings | Accepted |
+| [0110](0110-discoverable-desktop-settings.md) | Discoverable desktop settings | Agent tools superseded by 0111 |
+| [0111](0111-direct-desktop-configuration.md) | Direct desktop configuration editing | Accepted |

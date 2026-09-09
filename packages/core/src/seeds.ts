@@ -352,6 +352,15 @@ A Catamorphic project is a folder that can hold any kind of work — documents, 
 
 Hidden metadata lives in \`.catamorphic/\` (the project manifest and project-scoped config) and \`.agents/\` (these skills). Everything visible in the tree is the user's own work — keep it that way.
 
+## App settings versus project content
+
+Preferences such as theme, fonts, keyboard shortcuts, tabs and notifications are
+host configuration, not workflow code. Consult the host's offered configuration
+skill and tools before editing them. In Catamorphic desktop, use the host skill
+\`configuring-catamorphic-desktop\` and the per-turn host configuration context
+for exact file paths, schemas and scopes. Edit those files directly when accessible. Other embedders may expose a different contract.
+Never assume a sandbox's filesystem is the host's configuration directory.
+
 ## Adding automations or apps to a project that has none
 
 Workflows and apps live in a bun workspace: a root \`package.json\` with \`"workspaces": ["contracts", "workflows", "apps/*"]\`. If \`workflows/package.json\` does not exist yet, install the workspace BEFORE writing the first workflow, by copying this skill's support files (in \`files/\` next to this document) into place:
@@ -380,9 +389,9 @@ A desktop-local connection saves to the project folder on that device. A remote
 MCP connection saves on that server. Use the desktop-local connection or local
 file tools for private drafts. Saving does not mean uploading or committing.
 
-To share selected documents, use the desktop's Server section, choose the files,
-and Upload. Other drafts stay local. A conflict keeps both versions until the
-user chooses which to keep. Sharing a link uploads only the named document.
+To share selected documents, use the host's sharing tools or UI and check the
+destination and audience. A desktop-local draft is not automatically available
+on a remote server. Follow the host's conflict and upload contract.
 To record a document in project history, put it outside \`store/\`, review it,
 and explicitly commit it. Explain where it will go before pushing or sharing.
 

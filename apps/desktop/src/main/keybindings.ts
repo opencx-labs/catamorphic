@@ -7,6 +7,7 @@ import {
   type Keybindings,
 } from "../shared/actions.js";
 import { isValidBinding, parseBinding } from "../shared/keybindings.js";
+import { ConfigFile, readConfigObject } from "./config-file.js";
 
 export {
   DEFAULT_KEYBINDINGS,
@@ -56,23 +57,38 @@ export class KeybindingsStore {
   private watcher: fs.FSWatcher | undefined;
   private debounce: ReturnType<typeof setTimeout> | undefined;
 
-  constructor(readonly file: string) {}
-
-  load(): Keybindings {
-    try {
-      return normalizeKeybindings(
-        JSON.parse(fs.readFileSync(this.file, "utf-8")),
-      );
-    } catch {
-      return { ...DEFAULT_KEYBINDINGS };
-    }
+  private readonly config: ConfigFile;
+  constructor(readonly file: string) {
+    this.config = new ConfigFile(file, (raw) => {
+      for (const action of KEYBINDING_ACTIONS) {
+        if (Object.hasOwn(raw, action) && !isValidBinding(raw[action]))
+          throw new Error(`Invalid shortcut for ${action}`);
+      }
+      const assigned = new Map<string, string>();
+      for (const [action, value] of Object.entries(normalizeKeybindings(raw))) {
+        const parsed = parseBinding(value);
+        if (!parsed) continue;
+        const signature = `${[...parsed.modifiers]
+          .map((mod) =>
+            mod === "Cmd" && process.platform !== "darwin" ? "Ctrl" : mod,
+          )
+          .sort()
+          .join("+")}:${parsed.key.toLowerCase()}`;
+        const other = assigned.get(signature);
+        if (other)
+          throw new Error(`Shortcut conflict between ${other} and ${action}`);
+        assigned.set(signature, action);
+      }
+    });
   }
-
+  get error() {
+    return this.config.error;
+  }
+  load(): Keybindings {
+    return normalizeKeybindings(this.config.read());
+  }
   save(bindings: Keybindings): void {
-    fs.writeFileSync(
-      this.file,
-      `${JSON.stringify(normalizeKeybindings(bindings), null, 2)}\n`,
-    );
+    this.config.write({ ...readConfigObject(this.file), ...bindings });
   }
 
   /**
@@ -80,6 +96,7 @@ export class KeybindingsStore {
    * editors replace files by rename, which drops direct-file watchers).
    */
   watch(onChange: (bindings: Keybindings) => void): void {
+    this.load();
     const dir = path.dirname(this.file);
     const name = path.basename(this.file);
     this.watcher = fs.watch(dir, (_event, changed) => {

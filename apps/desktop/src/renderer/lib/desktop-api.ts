@@ -1,6 +1,11 @@
 import type { AppPrefs } from "../../shared/app-prefs.js";
 import type { BookmarkPlacement } from "../../shared/bookmark-target.js";
 import type { OpenMode } from "../../shared/open-mode.js";
+import type {
+  SettingsPatch,
+  SettingsScope,
+  SettingsSnapshot,
+} from "../../shared/settings.js";
 import type { TerminalAppearanceResult } from "../../shared/terminal-appearance.js";
 import type { ThemeFonts } from "../../shared/theme-fonts.js";
 import type { DesktopUpdateState } from "../../shared/update.js";
@@ -956,6 +961,15 @@ export interface CatamorphicDesktopApi {
     cancelled: boolean;
   }>;
   onCloseSurface: (listener: () => void) => () => void;
+  getSettings: (input?: {
+    projectId?: string;
+    scope?: SettingsScope;
+  }) => Promise<SettingsSnapshot>;
+  setSettings: (input: {
+    projectId?: string;
+    scope: SettingsScope;
+    patch: SettingsPatch;
+  }) => Promise<SettingsSnapshot>;
   getPrefs: () => Promise<AppPrefs>;
   setPrefs: (patch: Partial<AppPrefs>) => Promise<AppPrefs>;
   onPrefsChanged: (listener: (prefs: AppPrefs) => void) => () => void;

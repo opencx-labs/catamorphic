@@ -211,3 +211,44 @@ describe("project session context", () => {
     );
   });
 });
+
+it("refreshes exact host configuration context for the initiating session, even without a window", async () => {
+  const inner = new RecordingAgent();
+  let profile = "profile-one";
+  const requested: string[] = [];
+  const agent = new WorkspaceContextAgent(
+    inner,
+    {
+      overview: async () => {
+        throw new Error("No window");
+      },
+    } as unknown as WorkspaceBridge,
+    false,
+    undefined,
+    undefined,
+    (projectId) => {
+      requested.push(projectId);
+      return {
+        profileId: profile,
+        files: { theme: `/profiles/${profile}/theme.json` },
+      };
+    },
+  );
+  const session = await agent.startSession({
+    sessionId: "mine",
+    projectId: "initiating-project",
+    userId: "user",
+    sandboxId: "",
+    workingDirectory: "/other-worktree",
+  });
+  for await (const _event of agent.sendMessage(session, "Set the theme")) {
+  }
+  expect(inner.lastMessage).toContain("/profiles/profile-one/theme.json");
+  profile = "profile-two";
+  for await (const _event of agent.sendMessage(session, "Reset it")) {
+  }
+  expect(inner.lastMessage).toContain("/profiles/profile-two/theme.json");
+  expect(inner.lastMessage).not.toContain("/profiles/profile-one");
+  expect(requested).toEqual(["initiating-project", "initiating-project"]);
+  expect(inner.lastMessage.endsWith("Reset it")).toBe(true);
+});

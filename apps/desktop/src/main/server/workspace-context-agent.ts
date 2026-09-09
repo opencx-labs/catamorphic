@@ -97,6 +97,7 @@ export class WorkspaceContextAgent implements CodingAgentProvider {
      */
     private readonly skillsNote?: () => string | undefined,
     private readonly coordination?: AgentCoordinationContext,
+    private readonly settingsContext?: (projectId: string) => unknown,
   ) {
     this.name = inner.name;
     if (inner.interrupt) {
@@ -173,7 +174,16 @@ export class WorkspaceContextAgent implements CodingAgentProvider {
     } catch {
       // A recovery notice must not break a turn.
     }
-    const prefix = [context, projectSessions, checkoutNotice]
+    let settingsContext = "";
+    try {
+      const settings = this.settingsContext?.(session.projectId);
+      if (settings)
+        settingsContext = `<desktop_settings_context>${escapeContextValue(JSON.stringify(settings))}</desktop_settings_context>`;
+    } catch {
+      settingsContext =
+        "<desktop_settings_context>Host configuration paths could not be resolved. Do not guess paths or change desktop configuration this turn.</desktop_settings_context>";
+    }
+    const prefix = [context, projectSessions, checkoutNotice, settingsContext]
       .filter(Boolean)
       .join("\n\n");
     yield* this.inner.sendMessage(
@@ -245,7 +255,8 @@ function escapeContextValue(value: string): string {
     .replaceAll("'", "&apos;");
 }
 
-const WORKSPACE_TOOLS_PLAYBOOK = `## The user's workspace
+const WORKSPACE_TOOLS_PLAYBOOK = `
+## The user's workspace
 
 This chat lives inside the user's desktop app, next to their real browser tabs, terminals, editors, and other chats. Its users range from non-programmers to professional engineers doing real development work on real codebases — calibrate to THIS user from how they talk and what the project holds. With an engineer, communicate like a senior colleague: file paths, branches, diffs, and git vocabulary are welcome, and never simplify away technical substance. With a non-technical user, describe behavior and outcomes in plain language. You can see and drive the workspace:
 
