@@ -350,7 +350,7 @@ describe("terminal tabs", () => {
       const ta = $('textarea[aria-label="Terminal input"]');
       ta.focus();
       ta.dispatchEvent(new KeyboardEvent('keydown',
-        { key: 'w', code: 'KeyW', metaKey: true, bubbles: true, cancelable: true }));
+        { key: 'w', code: 'KeyW', metaKey: /Mac/.test(navigator.platform), ctrlKey: !/Mac/.test(navigator.platform), bubbles: true, cancelable: true }));
       return true;
     `);
     await runWait(`return !$('canvas');`, { label: "terminal tab closed" });

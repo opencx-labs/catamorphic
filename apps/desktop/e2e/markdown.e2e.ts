@@ -162,7 +162,7 @@ describe("markdown editor", () => {
     });
     await run(`
       $('.cat-mdedit-pane').dispatchEvent(new KeyboardEvent('keydown',
-        { key: 's', metaKey: true, bubbles: true, cancelable: true }));
+        { key: 's', metaKey: /Mac/.test(navigator.platform), ctrlKey: !/Mac/.test(navigator.platform), bubbles: true, cancelable: true }));
       return true;
     `);
     await runWait(`return !hasUnsavedChanges();`, {
@@ -244,7 +244,7 @@ describe("markdown editor", () => {
     });
     await run(`
       $('.cat-mdedit-pane').dispatchEvent(new KeyboardEvent('keydown',
-        { key: 's', metaKey: true, bubbles: true, cancelable: true }));
+        { key: 's', metaKey: /Mac/.test(navigator.platform), ctrlKey: !/Mac/.test(navigator.platform), bubbles: true, cancelable: true }));
       return true;
     `);
     await runWait(`return !hasUnsavedChanges();`, {

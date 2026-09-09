@@ -2181,6 +2181,9 @@ function ChatDockContent({
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.nativeEvent.isComposing) return;
+    const primaryModifier = /Mac/.test(navigator.platform)
+      ? event.metaKey
+      : event.ctrlKey;
     // The slash menu owns navigation keys while open (before recall's
     // ArrowUp/Down claim below). Escape closes it and stays in the
     // composer — preventDefault keeps the window listener from stepping
@@ -2212,7 +2215,7 @@ function ChatDockContent({
         setSlashDismissed(true);
         return;
       }
-      if (event.key === "Enter" && !event.shiftKey && !event.metaKey) {
+      if (event.key === "Enter" && !event.shiftKey && !primaryModifier) {
         event.preventDefault();
         const entry = slashMatches[slashSelected];
         if (entry) runSlash(entry);
@@ -2259,7 +2262,7 @@ function ChatDockContent({
       return;
     }
     if (event.key !== "Enter") return;
-    if (event.metaKey) {
+    if (primaryModifier) {
       event.preventDefault();
       submitNow();
       return;
@@ -3406,7 +3409,11 @@ function ChatDockContent({
                     occupancy and window size; danger red past 90%. */}
                 <ContextMeter messages={chat.messages} />
                 <ShortcutHint
-                  label={chat.isWorking ? "Queue (⌘↵ sends now)" : "Send"}
+                  label={
+                    chat.isWorking
+                      ? `Queue (${/Mac/.test(navigator.platform) ? "⌘↵" : "Ctrl+Enter"} sends now)`
+                      : "Send"
+                  }
                   shortcut="↵"
                 >
                   <button

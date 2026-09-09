@@ -936,7 +936,7 @@ describe("agents and profiles", () => {
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'jump the line');
       ta.dispatchEvent(new KeyboardEvent('keydown',
-        { key: 'Enter', metaKey: true, bubbles: true, cancelable: true }));
+        { key: 'Enter', metaKey: /Mac/.test(navigator.platform), ctrlKey: !/Mac/.test(navigator.platform), bubbles: true, cancelable: true }));
       return true;
     `);
     await runWait(
