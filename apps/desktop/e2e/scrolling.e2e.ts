@@ -80,6 +80,11 @@ it("scrolls Settings to the last section without moving the workspace chrome", a
   })()`,
     { label: "last Settings section reachable by wheel" },
   );
+  expect(
+    await app.eval(
+      `document.querySelector('[aria-label="Settings category"]').value`,
+    ),
+  ).toBe("import");
   // With no importable browsers (for example on Linux CI), the last action
   // precedes the Import section. Scrolling to the end can move past it.
   const deltaY = await run<number>(`
