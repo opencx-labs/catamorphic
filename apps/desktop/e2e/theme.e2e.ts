@@ -41,6 +41,22 @@ afterAll(async () => {
   await app?.stop();
 });
 
+it("starts a fresh profile in the system appearance without pinning a preset", async () => {
+  const theme = await app.eval<{ selection: string; appearance: string }>(
+    "window.catamorphicDesktop.getTheme()",
+  );
+  const appearance = await app.eval<string>(
+    "matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'",
+  );
+  expect(theme.selection).toBe("system");
+  expect(theme.appearance).toBe(appearance);
+  expect(await app.eval("document.documentElement.dataset.theme")).toBe(
+    appearance,
+  );
+  const file = await app.eval<string>("window.catamorphicDesktop.themeFile()");
+  expect(fs.existsSync(file)).toBe(false);
+});
+
 it("applies font edits to body and utility text, preserves them across presets, and resets", async () => {
   // Hidden windows do not reliably emit native focus/blur events. Dispatch
   // React's bubbling focusout event to exercise the same input save handler.

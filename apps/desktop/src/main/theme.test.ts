@@ -74,23 +74,26 @@ describe("desktop theme", () => {
     },
   );
 
-  it("uses the system selection when no profile preference exists", () => {
-    expect(DEFAULT_THEME).toEqual({ selection: "system", overrides: {} });
+  it.each(["light", "dark"] as const)(
+    "uses the system %s appearance when no profile preference exists",
+    (appearance) => {
+      expect(DEFAULT_THEME).toEqual({ selection: "system", overrides: {} });
 
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cat-theme-"));
-    temporaryDirectories.push(directory);
-    const store = new ThemeStore(
-      path.join(directory, "theme.json"),
-      () => "light",
-    );
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cat-theme-"));
+      temporaryDirectories.push(directory);
+      const store = new ThemeStore(
+        path.join(directory, "theme.json"),
+        () => appearance,
+      );
 
-    expect(store.load()).toEqual(DEFAULT_THEME);
-    expect(store.resolved()).toMatchObject({
-      selection: "system",
-      preset: "light",
-      appearance: "light",
-    });
-  });
+      expect(store.load()).toEqual(DEFAULT_THEME);
+      expect(store.resolved()).toMatchObject({
+        selection: "system",
+        preset: appearance,
+        appearance,
+      });
+    },
+  );
 
   it("re-resolves a system selection when the operating system changes", () => {
     let appearance: "dark" | "light" = "dark";

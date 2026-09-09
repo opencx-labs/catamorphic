@@ -6950,11 +6950,7 @@ function CustomItems({
     onEmptyChange?.(isEmpty);
   }, [isEmpty, onEmptyChange]);
   if (items.length === 0) {
-    return (
-      <p className="px-2 py-1 text-xs text-fg-faint">
-        No items yet. Add some in sidebar.js.
-      </p>
-    );
+    return <p className="sidebar-empty-state">No items yet.</p>;
   }
   return (
     <ul className="flex flex-col gap-0.5">
@@ -7135,11 +7131,7 @@ function WorkflowsNav({
     onEmptyChange?.(isEmpty);
   }, [isEmpty, onEmptyChange]);
   if (workflows.length === 0) {
-    return (
-      <p className="px-2 py-1 text-xs text-fg-faint">
-        Ask the agent to create one.
-      </p>
-    );
+    return <p className="sidebar-empty-state">Ask the agent to create one.</p>;
   }
   return (
     <ul className="flex flex-col gap-0.5">
@@ -7191,11 +7183,7 @@ function AppsNav({
     onEmptyChange?.(isEmpty);
   }, [isEmpty, onEmptyChange]);
   if (apps.length === 0) {
-    return (
-      <p className="px-2 py-1 text-xs text-fg-faint">
-        Ask the agent to build one.
-      </p>
-    );
+    return <p className="sidebar-empty-state">Ask the agent to build one.</p>;
   }
   return (
     <ul className="flex flex-col gap-0.5">
@@ -7297,7 +7285,7 @@ function SessionsNav({
     onEmptyChange?.(isEmpty);
   }, [isEmpty, onEmptyChange]);
   if (sessions.length === 0 && renderedSessions.length === 0) {
-    return <p className="px-2 py-1 text-xs text-fg-faint">No chats yet.</p>;
+    return <p className="sidebar-empty-state">No chats yet.</p>;
   }
   const renderedByParent = new Map<string | null, typeof renderedSessions>();
   const renderedIds = new Set(

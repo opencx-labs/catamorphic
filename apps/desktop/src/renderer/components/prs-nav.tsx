@@ -100,9 +100,7 @@ export function PrsNav({
     );
   if (!prs) return null;
   if (prs.length === 0) {
-    return (
-      <p className="px-2 py-1 text-xs text-fg-faint">No open pull requests.</p>
-    );
+    return <p className="sidebar-empty-state">No open pull requests.</p>;
   }
   return (
     <ul className="flex flex-col gap-0.5">
@@ -283,9 +281,9 @@ function PrRow({
               {fileError}
             </li>
           ) : files === null ? (
-            <li className="px-2 py-1 text-xs text-fg-faint">Loading…</li>
+            <li className="sidebar-empty-state">Loading…</li>
           ) : files.length === 0 ? (
-            <li className="px-2 py-1 text-xs text-fg-faint">No files.</li>
+            <li className="sidebar-empty-state">No files.</li>
           ) : (
             files.map((file) => {
               const badge = statusBadge(file.status);

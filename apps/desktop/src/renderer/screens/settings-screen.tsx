@@ -38,6 +38,7 @@ import {
   matchesBinding,
   useKeybindings,
 } from "../lib/keybindings.js";
+import { useListMotion } from "../lib/list-motion.js";
 import { useTerminalAppearance } from "../lib/terminal-appearance.js";
 import { useTheme } from "../lib/theme.js";
 
@@ -56,6 +57,15 @@ export function SettingsScreen({
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState("agents");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const navigationFrame = useRef(0);
+  const navigationMotion = useRef<Animation | null>(null);
+  useEffect(
+    () => () => {
+      cancelAnimationFrame(navigationFrame.current);
+      navigationMotion.current?.cancel();
+    },
+    [],
+  );
   const sections = [
     {
       id: "agents",
@@ -130,13 +140,35 @@ export function SettingsScreen({
     ),
   );
   const navigateTo = (id: string) => {
+    cancelAnimationFrame(navigationFrame.current);
+    navigationMotion.current?.cancel();
     setQuery("");
     setSelected(id);
-    requestAnimationFrame(() =>
-      scrollRef.current
-        ?.querySelector(`#settings-${id}`)
-        ?.scrollIntoView({ block: "start" }),
-    );
+    navigationFrame.current = requestAnimationFrame(() => {
+      const root = scrollRef.current;
+      const target = root?.querySelector(`#settings-${id}`);
+      if (!root || !target) return;
+      const distance =
+        target.getBoundingClientRect().top - root.getBoundingClientRect().top;
+      target.scrollIntoView({ block: "start", behavior: "instant" });
+      if (
+        Math.abs(distance) < 12 ||
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      )
+        return;
+      // Like workspace tab cycling: signal a new location on a persistent
+      // surface, without scrolling through every intervening settings row.
+      navigationMotion.current = root.animate(
+        [
+          {
+            opacity: 0.3,
+            transform: `translateY(${Math.sign(distance) * 8}px)`,
+          },
+          { opacity: 1, transform: "translateY(0)" },
+        ],
+        { duration: 200, easing: "cubic-bezier(0.2, 0, 0, 1)" },
+      );
+    });
   };
   return (
     <div
@@ -158,6 +190,8 @@ export function SettingsScreen({
             type="search"
             value={query}
             onChange={(event) => {
+              cancelAnimationFrame(navigationFrame.current);
+              navigationMotion.current?.cancel();
               setQuery(event.target.value);
               scrollRef.current?.scrollTo({ top: 0 });
             }}
@@ -1569,6 +1603,13 @@ function ShortcutsSection() {
   const [recording, setRecording] = useState<KeybindingAction | null>(null);
   const [file, setFile] = useState<string>("");
   const [notice, setNotice] = useState("");
+  const listRef = useRef<HTMLDivElement>(null);
+  const actions = KEYBINDING_ACTIONS.filter((action) =>
+    `${ACTION_LABELS[action]} ${bindings[action]}`
+      .toLowerCase()
+      .includes(filter.toLowerCase().trim()),
+  );
+  useListMotion(listRef, actions.join(","));
 
   useEffect(() => {
     void desktopApi.keybindingsFile().then(setFile);
@@ -1644,14 +1685,24 @@ function ShortcutsSection() {
         placeholder="Find a shortcut…"
         className="field mb-3 h-8 w-full rounded-md px-3 text-sm"
       />
-      <div className="flex flex-col gap-1.5">
-        {KEYBINDING_ACTIONS.filter((action) =>
-          `${ACTION_LABELS[action]} ${bindings[action]}`
-            .toLowerCase()
-            .includes(filter.toLowerCase()),
-        ).map((action) => (
+      <div
+        ref={listRef}
+        data-shortcut-results
+        className="relative flex flex-col gap-1.5 overflow-clip"
+      >
+        {actions.length === 0 && (
+          <p
+            role="status"
+            data-item-id="empty"
+            className="py-6 text-center text-sm text-fg-muted"
+          >
+            No shortcuts match your search.
+          </p>
+        )}
+        {actions.map((action) => (
           <div
             key={action}
+            data-item-id={action}
             className="flex min-h-9 flex-wrap items-center justify-between gap-2 rounded-lg bg-bg-raised/40 px-3 py-1.5"
           >
             <span className="text-[13px]">{ACTION_LABELS[action]}</span>

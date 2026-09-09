@@ -46,10 +46,10 @@ export function FilesNav({
   );
   useEffect(() => onEmptyChange?.(tree.length === 0), [tree, onEmptyChange]);
   if (query.isLoading) {
-    return <p className="px-2 py-1 text-xs text-fg-faint">Loading…</p>;
+    return <p className="sidebar-empty-state">Loading…</p>;
   }
   if (tree.length === 0) {
-    return <p className="px-2 py-1 text-xs text-fg-faint">No files yet.</p>;
+    return <p className="sidebar-empty-state">No files yet.</p>;
   }
   return (
     <ul className="flex flex-col gap-0.5" data-testid="files-nav">

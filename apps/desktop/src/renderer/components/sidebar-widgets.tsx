@@ -55,7 +55,7 @@ export function SidebarActivity({
         </OpenResourceButton>
       ))}
       {!sessions.isLoading && !sessions.isError && active.length === 0 && (
-        <p className="px-2 py-1 text-fg-faint">No agents need attention.</p>
+        <p className="sidebar-empty-state">No agents need attention.</p>
       )}
       {(workflows.data ?? []).map((workflow) => (
         <WorkflowActivity

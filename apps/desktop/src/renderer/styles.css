@@ -835,6 +835,15 @@ kbd {
   overflow: hidden;
 }
 
+.sidebar-empty-state {
+  padding: 8px;
+  text-align: center;
+  text-wrap: balance;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-fg-muted);
+}
+
 /* Keyboard tab cycling (Cmd+[ / Cmd+]): the persistent content pane
    nudges in from the direction of travel — a content-changed signal on
    a wrapper that never unmounts (so no exit pair), like title-change.
