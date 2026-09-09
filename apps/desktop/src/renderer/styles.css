@@ -1195,6 +1195,12 @@ kbd {
   padding-top: 44px;
 }
 
+/* Native non-overlay scrollbars reduce the tab row's height on Linux and
+   Windows. Keep the header aligned while retaining trackpad/key scrolling. */
+[data-tab-orientation="horizontal"] {
+  scrollbar-width: none;
+}
+
 .tabbed-sidebar[data-overlay="true"] {
   position: absolute;
 }
