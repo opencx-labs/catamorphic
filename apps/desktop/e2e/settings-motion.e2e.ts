@@ -130,3 +130,54 @@ it("honors reduced motion and the last rapid category choice, including the comp
     await app.cdp("Emulation.setEmulatedMedia", { features: [] });
   }
 });
+
+it.each([1300, 900])(
+  "keeps the requested final category selected at window width %i",
+  async (width) => {
+    await app.eval(
+      `window.catamorphicDesktop.devWindow('setSize', ${width}, 600)`,
+    );
+    await app.waitFor(`(() => {
+      const nav = document.querySelector('nav[aria-label="Settings categories"]');
+      return (nav.getClientRects().length > 0) === ${width === 1300};
+    })()`);
+    const headerTop = await run<number>(
+      `return $('[data-settings] > header').getBoundingClientRect().top;`,
+    );
+    for (const id of ["notifications", "import"]) {
+      await run(`
+        const select = $('[aria-label="Settings category"]');
+        const option = [...select.options].find(option => option.value === '${id}');
+        if (select.getClientRects().length) {
+          select.value = option.value;
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+        } else {
+          navigate(option.textContent);
+        }
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      `);
+      await app.waitFor(`(() => {
+        const root = document.querySelector('[data-settings-scroll]');
+        return root.scrollTop > 0 && root.getAnimations().length === 0;
+      })()`);
+      expect(
+        await run(`return $('[aria-label="Settings category"]').value;`),
+      ).toBe(id);
+      expect(
+        await run(
+          `return $('[data-settings] > header').getBoundingClientRect().top;`,
+        ),
+      ).toBe(headerTop);
+      expect(
+        await run(`
+          let parent = $('[data-settings-scroll]').parentElement;
+          while (parent) {
+            if (parent.scrollTop !== 0) return false;
+            parent = parent.parentElement;
+          }
+          return true;
+        `),
+      ).toBe(true);
+    }
+  },
+);

@@ -59,6 +59,7 @@ export function SettingsScreen({
   const scrollRef = useRef<HTMLDivElement>(null);
   const navigationFrame = useRef(0);
   const navigationMotion = useRef<Animation | null>(null);
+  const navigationScrollTop = useRef<number | null>(null);
   useEffect(
     () => () => {
       cancelAnimationFrame(navigationFrame.current);
@@ -142,6 +143,7 @@ export function SettingsScreen({
   const navigateTo = (id: string) => {
     cancelAnimationFrame(navigationFrame.current);
     navigationMotion.current?.cancel();
+    navigationScrollTop.current = null;
     setQuery("");
     setSelected(id);
     navigationFrame.current = requestAnimationFrame(() => {
@@ -150,7 +152,16 @@ export function SettingsScreen({
       if (!root || !target) return;
       const distance =
         target.getBoundingClientRect().top - root.getBoundingClientRect().top;
-      target.scrollIntoView({ block: "start", behavior: "instant" });
+      root.scrollTo({
+        top:
+          root.scrollTop +
+          distance -
+          (Number.parseFloat(getComputedStyle(target).scrollMarginTop) || 0),
+        behavior: "instant",
+      });
+      // The final categories may be too short to align at the top. Keep
+      // the requested selection when this programmatic scroll is clamped.
+      navigationScrollTop.current = root.scrollTop;
       if (
         Math.abs(distance) < 12 ||
         window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -192,6 +203,7 @@ export function SettingsScreen({
             onChange={(event) => {
               cancelAnimationFrame(navigationFrame.current);
               navigationMotion.current?.cancel();
+              navigationScrollTop.current = null;
               setQuery(event.target.value);
               scrollRef.current?.scrollTo({ top: 0 });
             }}
@@ -248,6 +260,18 @@ export function SettingsScreen({
           onScroll={() => {
             const root = scrollRef.current;
             if (!root || query) return;
+            const requestedTop = navigationScrollTop.current;
+            navigationScrollTop.current = null;
+            if (requestedTop === root.scrollTop) return;
+            const lastSection = sections.at(-1);
+            if (
+              lastSection &&
+              root.scrollTop > 0 &&
+              root.scrollHeight - root.clientHeight - root.scrollTop <= 1
+            ) {
+              setSelected(lastSection.id);
+              return;
+            }
             const top = root.getBoundingClientRect().top;
             const current = [...sections].reverse().find((section) => {
               const element = root.querySelector(`#settings-${section.id}`);
