@@ -258,6 +258,11 @@ describe("configurable browser workspace", () => {
     await app.waitFor(
       "!!document.querySelector('button[aria-label=\"Expand sidebar\"]')",
     );
+    // This hidden-window suite checks resting geometry. Chromium can pause
+    // tab-in at its 3px entrance offset; visible motion tests cover the tween.
+    await run(
+      "for (const animation of $('[data-tab-orientation=horizontal]').getAnimations({subtree:true})) { if (animation.animationName === 'tab-in') animation.finish(); }",
+    );
     const centers = await run<[number, number]>(
       "return [$('button[aria-label=\"Expand sidebar\"]'), $('[data-tab-orientation=horizontal] > [data-point-key]')].map(e => {const r=e.getBoundingClientRect(); return r.y+r.height/2})",
     );
