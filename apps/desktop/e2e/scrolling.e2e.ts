@@ -42,6 +42,9 @@ beforeAll(async () => {
   );
   await app.eval(`window.catamorphicDesktop.devWindow('setSize', 900, 480)`);
   await app.waitFor(`window.innerHeight <= 480`);
+  await app.waitFor(
+    `!document.querySelector('#settings-import .animate-pulse')`,
+  );
 });
 
 afterAll(async () => {
@@ -49,6 +52,9 @@ afterAll(async () => {
 });
 
 it("scrolls Settings to the last section without moving the workspace chrome", async () => {
+  await app.eval(
+    `new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`,
+  );
   const before = await run<number>(
     `return document.querySelector('main').getBoundingClientRect().top;`,
   );
@@ -67,10 +73,37 @@ it("scrolls Settings to the last section without moving the workspace chrome", a
   await app.waitFor(
     `(() => {
     const panel = document.querySelector('[data-settings-scroll]');
+    const footer = panel.querySelector('#settings-import section > p:last-child');
+    const rect = footer.getBoundingClientRect();
+    const bounds = panel.getBoundingClientRect();
+    return panel.scrollTop > 0 && rect.top >= bounds.top && rect.bottom <= bounds.bottom;
+  })()`,
+    { label: "last Settings section reachable by wheel" },
+  );
+  // With no importable browsers (for example on Linux CI), the last action
+  // precedes the Import section. Scrolling to the end can move past it.
+  const deltaY = await run<number>(`
+    const panel = $('[data-settings-scroll]');
     const button = [...panel.querySelectorAll('button')].filter(el => el.getClientRects().length > 0).at(-1);
     const rect = button.getBoundingClientRect();
     const bounds = panel.getBoundingClientRect();
-    return panel.scrollTop > 0 && rect.top >= bounds.top && rect.bottom <= bounds.bottom;
+    return rect.top < bounds.top ? rect.top - bounds.top - 16 : 0;
+  `);
+  if (deltaY !== 0) {
+    await app.cdp("Input.dispatchMouseEvent", {
+      type: "mouseWheel",
+      ...point,
+      deltaX: 0,
+      deltaY,
+    });
+  }
+  await app.waitFor(
+    `(() => {
+    const panel = document.querySelector('[data-settings-scroll]');
+    const button = [...panel.querySelectorAll('button')].filter(el => el.getClientRects().length > 0).at(-1);
+    const rect = button.getBoundingClientRect();
+    const bounds = panel.getBoundingClientRect();
+    return rect.top >= bounds.top && rect.bottom <= bounds.bottom;
   })()`,
     { label: "last Settings action reachable by wheel" },
   );
