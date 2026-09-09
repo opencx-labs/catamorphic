@@ -90,6 +90,13 @@ and pointer interactions through CDP. Do not restore
 native focus stealing to make a test pass; test OS-focus behavior separately
 only when that behavior is explicitly under test.
 
+Before sending native keys, wait for the intended input to hold focus and for
+its result selection to settle. Closed palettes remain mounted inside inert
+ancestors, so element presence alone does not establish readiness. Finish a
+floating panel's exit and focus handoff before opening the next palette. Hidden
+layout tests measure resting geometry; visible motion tests cover entrance and
+exit transforms.
+
 On macOS and Windows, isolated test windows also start with native opacity zero
 so even the visible-renderer suites do not cover the developer's screen. This
 preserves the shown lifecycle, layout, animation, and CDP screenshots. To watch a

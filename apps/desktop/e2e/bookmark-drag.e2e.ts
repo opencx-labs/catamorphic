@@ -57,7 +57,10 @@ afterAll(async () => {
 describe("drag tabs and chats into bookmarks", () => {
   it("pins the dragged browser page into a folder", async () => {
     await run(
-      "setReactValue($('textarea[placeholder*=\"Search or ask\"]'),'https://example.test/reference')",
+      "const input=$('textarea[placeholder*=\"Search or ask\"]');input.focus();setReactValue(input,'https://example.test/reference')",
+    );
+    await app.waitFor(
+      "document.activeElement?.matches('textarea[aria-label=\"Search commands, pages, and more\"]') && document.activeElement.closest('[role=dialog]').querySelector('[data-item-id=web]')?.getAttribute('aria-selected')==='true'",
     );
     await app.press("Enter");
     await app.waitFor(
