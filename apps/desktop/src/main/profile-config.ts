@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { AppPrefs } from "../shared/app-prefs.js";
 import { AgentBindingsStore } from "./agent-bindings-store.js";
 import { AgentsStore } from "./agents-store.js";
 import { ConnectionsStore } from "./connections-store.js";
 import { type Keybindings, KeybindingsStore } from "./keybindings.js";
-import { type AppPrefs, PrefsStore } from "./prefs.js";
+import { PrefsStore } from "./prefs.js";
 import type { ProfilesStore } from "./profiles.js";
 import { RemoteProjectsStore } from "./remote-projects-store.js";
 import type { DataPaths } from "./server/paths.js";

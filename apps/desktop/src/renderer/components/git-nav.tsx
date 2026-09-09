@@ -141,11 +141,7 @@ export function GitNav({
   }, [isEmpty, onEmptyChange]);
   if (!overview && !error) return null;
   if (overview?.available === false)
-    return (
-      <p className="px-2 py-1 text-xs text-fg-faint">
-        Install git to see changes.
-      </p>
-    );
+    return <p className="sidebar-empty-state">Install git to see changes.</p>;
   return (
     <div className="flex flex-col gap-1" data-testid="git-changes">
       {(error || overview?.error) && (
@@ -280,7 +276,7 @@ function WorktreeSection({
             </p>
           )}
           {!count && !tree.error && !tree.comparisonError && (
-            <p className="px-2 py-1 text-xs text-fg-faint">No changes.</p>
+            <p className="sidebar-empty-state">No changes.</p>
           )}
         </Collapsible>
       </div>

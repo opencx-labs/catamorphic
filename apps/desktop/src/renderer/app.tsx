@@ -5628,6 +5628,7 @@ export function App() {
       <main
         data-tab-layout={tabsInSidebar ? "sidebar" : "top"}
         data-header-placement={headerInSidebar ? "sidebar" : "top"}
+        data-tab-frame={prefs?.tabFrame ? "on" : "off"}
         className={`workspace-surface relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${tabsInSidebar ? "bg-sidebar" : "bg-bg"}`}
       >
         {headerInSidebar && (
@@ -5728,7 +5729,7 @@ export function App() {
 
         {projectId ? (
           <div
-            className={`relative flex min-h-0 flex-1 flex-col bg-bg ${headerInSidebar && sidebarOpen ? "mt-1.5" : ""} ${tabsInSidebar ? `workspace-content overflow-hidden ${compactWindow ? "" : "mb-1.5 rounded-[14px]"}` : ""}`}
+            className={`workspace-content relative flex min-h-0 flex-1 flex-col bg-bg ${tabsInSidebar ? "overflow-hidden" : ""} ${prefs?.tabFrame && headerInSidebar && sidebarOpen ? "mt-1.5" : ""} ${prefs?.tabFrame && tabsInSidebar && !compactWindow ? "mb-1.5 rounded-[14px]" : ""}`}
           >
             {/* Every tab pane lives in this wrapper so keyboard cycling
                   can nudge the visible content from the direction of
@@ -6950,11 +6951,7 @@ function CustomItems({
     onEmptyChange?.(isEmpty);
   }, [isEmpty, onEmptyChange]);
   if (items.length === 0) {
-    return (
-      <p className="px-2 py-1 text-xs text-fg-faint">
-        No items yet. Add some in sidebar.js.
-      </p>
-    );
+    return <p className="sidebar-empty-state">No items yet.</p>;
   }
   return (
     <ul className="flex flex-col gap-0.5">
@@ -7135,11 +7132,7 @@ function WorkflowsNav({
     onEmptyChange?.(isEmpty);
   }, [isEmpty, onEmptyChange]);
   if (workflows.length === 0) {
-    return (
-      <p className="px-2 py-1 text-xs text-fg-faint">
-        Ask the agent to create one.
-      </p>
-    );
+    return <p className="sidebar-empty-state">Ask the agent to create one.</p>;
   }
   return (
     <ul className="flex flex-col gap-0.5">
@@ -7191,11 +7184,7 @@ function AppsNav({
     onEmptyChange?.(isEmpty);
   }, [isEmpty, onEmptyChange]);
   if (apps.length === 0) {
-    return (
-      <p className="px-2 py-1 text-xs text-fg-faint">
-        Ask the agent to build one.
-      </p>
-    );
+    return <p className="sidebar-empty-state">Ask the agent to build one.</p>;
   }
   return (
     <ul className="flex flex-col gap-0.5">
@@ -7297,7 +7286,7 @@ function SessionsNav({
     onEmptyChange?.(isEmpty);
   }, [isEmpty, onEmptyChange]);
   if (sessions.length === 0 && renderedSessions.length === 0) {
-    return <p className="px-2 py-1 text-xs text-fg-faint">No chats yet.</p>;
+    return <p className="sidebar-empty-state">No chats yet.</p>;
   }
   const renderedByParent = new Map<string | null, typeof renderedSessions>();
   const renderedIds = new Set(

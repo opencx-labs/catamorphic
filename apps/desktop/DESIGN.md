@@ -1,6 +1,6 @@
 # Catamorphic Desktop — Design System
 
-The desktop app aims for the OpenCode / Obsidian feel: minimal chrome, dark-first,
+The desktop app aims for the OpenCode / Obsidian feel: minimal chrome, system-first,
 terminal-editor calm. Everything visual flows from the tokens in
 [`src/renderer/styles.css`](src/renderer/styles.css).
 
@@ -232,7 +232,62 @@ that friction is intentional.
 - Tokens are mapped into Tailwind 4 via `@theme inline` so utilities and
   registry components pick them up without a config file.
 
+## Settings contracts and current precedence
+
+`src/shared/app-prefs.ts` is the canonical contract, defaults, and normalizer for
+ordinary desktop preferences. The main process persists it through `PrefsStore`;
+the renderer imports the same type. Keep new preference defaults there, rather
+than duplicating the contract across IPC consumers.
+
+There is currently no universal settings resolver. From lowest to highest
+priority, the implemented rules are:
+
+| Setting family | Current precedence |
+|---|---|
+| Layout, tab frame, notification and other app preferences | Built-in defaults, then profile `prefs.json` |
+| Theme | System Light/Dark baseline or explicit profile preset, then profile token/font overrides |
+| Sidebar contents | Built-in sidebar, profile sidebar, shared project sidebar, personal project sidebar |
+| Default agent | Profile default, shared project default, personal project default |
+
+`ProfileConfigManager.forProject()` selects the project's owning profile; it
+does **not** add a general project preference layer. Layout and tab-frame settings
+do not yet support project overrides. Do not infer precedence from the name of
+that method or silently apply the sidebar's whole-file fallback to other settings.
+Enforced project policies, credentials, and runtime state have their own semantics
+and must not be treated as arbitrary overridable appearance preferences.
+
 ## Design log
+
+### 2026-09-09: Top tabs and an optional workspace frame
+
+New profiles start with horizontal tabs in the top bar and `tabFrame: false`.
+Settings > Workspace exposes Tab frame, a profile-level toggle for the rounded,
+inset workspace frame. Frame choice is independent of tab placement and theme;
+light appearance no longer introduces a frame implicitly. Existing explicit tab
+placement remains selected. The customization agent's layout mirror uses the same
+preference as Settings. Floating surfaces keep their own containment and chrome.
+
+### 2026-09-09: Settings navigation, search motion, and quiet empty sections
+
+Settings category navigation uses the same persistent-content signal as workspace
+tab cycling: a 200ms fade and 8px vertical arrival on the standard easing, from
+the direction of the destination. The scroll position changes directly so distant
+categories do not race past the user. Sections stay mounted, preserving edits;
+rapid navigation cancels the previous transition. Reduced motion jumps directly.
+
+Keyboard shortcut search uses `useListMotion`, the same 200ms survivor movement
+and new-row fade used by the command palette and connector search. Keep stable
+`data-item-id` keys, including the no-results message, and a positioned list
+container so filtering measures rows in the list's own coordinate space. Clip
+moving rows to that container so they cannot overlap adjacent sections. Search
+must retain input focus, handle clearing an empty result, and respect reduced
+motion. Do not introduce a separate animation for each searchable list.
+
+Sidebar section empty states use `.sidebar-empty-state`: centered, balanced text
+with equal horizontal padding, 12px type, and the muted foreground token. They
+should remain readable in both system appearances without competing with rows.
+Fresh profiles continue to use `selection: "system"`; an explicit preset remains
+fixed. First-install checks cover the native appearance and both default palettes.
 
 ### 2026-09-07: Native terminal shutdown must complete before exit
 

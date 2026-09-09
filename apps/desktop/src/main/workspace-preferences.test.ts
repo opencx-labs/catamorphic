@@ -2,8 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { normalizePrefs } from "../shared/app-prefs.js";
 import { BookmarksStore } from "./bookmarks.js";
-import { normalizePrefs, PrefsStore } from "./prefs.js";
+import { PrefsStore } from "./prefs.js";
 
 const directories: string[] = [];
 function tempFile(name: string) {
@@ -67,10 +68,14 @@ describe("workspace preferences", () => {
       }),
     );
     const store = new PrefsStore(file);
-    expect(store.load().tabPlacement).toBe("top");
+    expect(store.load()).toMatchObject({
+      tabPlacement: "top",
+      tabFrame: false,
+    });
     store.save({
       tabPlacement: "sidebar",
       headerPlacement: "sidebar",
+      tabFrame: true,
       pinnedBookmarks: "list",
       linkOpenMode: "floating",
       previewLinksWithAlt: false,
@@ -87,6 +92,7 @@ describe("workspace preferences", () => {
     expect(new PrefsStore(file).load()).toMatchObject({
       tabPlacement: "sidebar",
       headerPlacement: "sidebar",
+      tabFrame: true,
       pinnedBookmarks: "list",
       linkOpenMode: "floating",
       previewLinksWithAlt: false,
@@ -104,8 +110,16 @@ describe("workspace preferences", () => {
     });
     expect(JSON.parse(fs.readFileSync(file, "utf8")).custom).toBe("keep");
     expect(
-      normalizePrefs({ tabPlacement: "garbage", pinnedBookmarks: null }),
-    ).toMatchObject({ tabPlacement: "top", pinnedBookmarks: "tiles" });
+      normalizePrefs({
+        tabPlacement: "garbage",
+        tabFrame: "true",
+        pinnedBookmarks: null,
+      }),
+    ).toMatchObject({
+      tabPlacement: "top",
+      tabFrame: false,
+      pinnedBookmarks: "tiles",
+    });
   });
 });
 

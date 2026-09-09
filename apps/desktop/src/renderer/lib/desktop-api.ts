@@ -1,3 +1,4 @@
+import type { AppPrefs } from "../../shared/app-prefs.js";
 import type { BookmarkPlacement } from "../../shared/bookmark-target.js";
 import type { OpenMode } from "../../shared/open-mode.js";
 import type { TerminalAppearanceResult } from "../../shared/terminal-appearance.js";
@@ -5,7 +6,7 @@ import type { ThemeFonts } from "../../shared/theme-fonts.js";
 import type { DesktopUpdateState } from "../../shared/update.js";
 import type { UsageSummary } from "../../shared/usage.js";
 
-export type { DesktopUpdateState, UsageSummary };
+export type { AppPrefs, DesktopUpdateState, UsageSummary };
 
 export interface ServerInfo {
   url: string | null;
@@ -668,23 +669,6 @@ export interface ThemeConfig {
   selection: string;
   overrides: Partial<ThemeColors>;
   fonts?: Partial<ThemeFonts>;
-}
-
-/** Per-profile app preferences (profiles/<id>/prefs.json). */
-export interface AppPrefs {
-  notificationSounds: boolean;
-  desktopNotifications: boolean;
-  sidebarOpen: boolean;
-  tabPlacement: "top" | "sidebar";
-  headerPlacement: "top" | "sidebar";
-  pinnedBookmarks: "tiles" | "list";
-  linkOpenMode: "tab" | "floating";
-  previewLinksWithAlt: boolean;
-  terminalMacros: import("../../shared/terminal-macros.js").TerminalMacro[];
-  terminalAppearance: "app" | "ghostty";
-  rightSidebarOpen: boolean;
-  lastProjectId?: string;
-  unreadSessionIds: string[];
 }
 
 export interface ResolvedTheme extends ThemeConfig {

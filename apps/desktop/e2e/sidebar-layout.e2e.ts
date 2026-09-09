@@ -36,6 +36,11 @@ afterAll(async () => {
 
 describe("configurable browser workspace", () => {
   it("keeps the empty header blank and places collapse inside the sidebar", async () => {
+    expect(
+      await app.eval(
+        "window.catamorphicDesktop.getPrefs().then(p => ({tabPlacement:p.tabPlacement,tabFrame:p.tabFrame}))",
+      ),
+    ).toEqual({ tabPlacement: "top", tabFrame: false });
     await app.eval(
       "window.catamorphicDesktop.setPrefs({tabPlacement:'sidebar'})",
     );
@@ -429,5 +434,61 @@ describe("configurable browser workspace", () => {
       "window.catamorphicDesktop.sidebarConfigFile()",
     );
     expect(await app.eval("document.body.innerText")).toContain(file);
+  });
+  it("toggles the frame independently of theme and tab placement and persists it", async () => {
+    await run("button('Settings').click()");
+    await app.waitFor("!!document.querySelector('input[name=tabFrame]')");
+    await app.eval(
+      "window.catamorphicDesktop.setPrefs({tabPlacement:'top',tabFrame:false})",
+    );
+    await app.waitFor(
+      "document.querySelector('main').dataset.tabLayout === 'top'",
+    );
+    for (const appearance of ["light", "dark"]) {
+      await app.eval(
+        `window.catamorphicDesktop.setTheme({selection:'${appearance}',overrides:{}})`,
+      );
+      await app.waitFor(
+        `document.documentElement.dataset.theme === '${appearance}'`,
+      );
+      expect(await run("return getComputedStyle($('main')).borderRadius")).toBe(
+        "0px",
+      );
+      await run("$('input[name=tabFrame]').click()");
+      await app.waitFor(
+        "document.querySelector('main').dataset.tabFrame === 'on'",
+      );
+      expect(await run("return getComputedStyle($('main')).borderRadius")).toBe(
+        "16px",
+      );
+      await run("$('input[name=tabFrame]').click()");
+      await app.waitFor(
+        "document.querySelector('main').dataset.tabFrame === 'off'",
+      );
+    }
+    await run("setReactValue($('select[name=tabPlacement]'), 'sidebar')");
+    await app.waitFor(
+      "!!document.querySelector('aside [data-tab-orientation=vertical]')",
+    );
+    expect(
+      await run(
+        "return getComputedStyle($('.workspace-content')).borderRadius",
+      ),
+    ).toBe("0px");
+    await run("$('input[name=tabFrame]').click()");
+    await app.waitFor(
+      "getComputedStyle(document.querySelector('.workspace-content')).borderRadius === '14px'",
+    );
+    // The stored preference survives a renderer reload, independently of tab placement.
+    await app.eval("location.reload()");
+    await app.waitFor(
+      "document.querySelector('main')?.dataset.tabFrame === 'on' && !!document.querySelector('aside [data-tab-orientation=vertical]')",
+    );
+    await app.eval(
+      "window.catamorphicDesktop.setPrefs({tabPlacement:'sidebar',tabFrame:false})",
+    );
+    await app.waitFor(
+      "document.querySelector('main').dataset.tabFrame === 'off' && document.querySelector('main').dataset.tabLayout === 'sidebar'",
+    );
   });
 });
