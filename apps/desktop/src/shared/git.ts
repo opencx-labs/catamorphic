@@ -14,6 +14,8 @@ export interface GitChangedFile {
 }
 
 export interface GitWorktree {
+  /** False when only checkout metadata was requested. */
+  loaded?: boolean;
   path: string;
   branch: string | null;
   isMain: boolean;

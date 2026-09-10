@@ -9,7 +9,7 @@ let app: AppHandle;
 let temp: string;
 let root: string;
 let linked: string;
-const helper = `const $ = s => document.querySelector(s); const $$ = s => [...document.querySelectorAll(s)]; const byText = (s,t) => $$(s).find(e => e.textContent.trim().includes(t)); ${setReactValueJs}`;
+const helper = `const $ = s => document.querySelector(s); const $$ = s => [...document.querySelectorAll(s)]; const byText = (s,t) => $$(s).find(e => e.textContent.trim().includes(t)); const diffText = () => { const read = root => root.textContent + [...root.querySelectorAll("*")].filter(e => e.shadowRoot).map(e => read(e.shadowRoot)).join("\\n"); return $$("[data-testid=code-diff]").map(read).join("\\n").replaceAll("\\u00a0", " "); }; ${setReactValueJs}`;
 const run = <T>(body: string) => app.eval<T>(`(()=>{${helper};${body}})()`);
 const wait = (body: string) =>
   app.waitFor(`(()=>{${helper};${body}})()`, { timeoutMs: 60_000 });
@@ -70,7 +70,13 @@ beforeAll(async () => {
   await wait(
     `const b=$('[data-testid="project-submit"]');if(b&&!b.disabled){b.click();return true;}return false;`,
   );
-  await wait(`return $$('[data-worktree-path]').length === 2;`);
+  await wait(`return $$('[data-worktree-path]').length === 1;`);
+  await run(
+    `setReactValue($('select[aria-label="Changes checkout"]'), ${JSON.stringify(linked)});return true;`,
+  );
+  await wait(
+    `return !!$$('[data-worktree-path]').find(e=>e.dataset.worktreePath===${JSON.stringify(linked)});`,
+  );
 });
 afterAll(async () => {
   await app?.stop();
@@ -85,24 +91,28 @@ it("groups worktrees and opens committed versus local diffs without crossing che
   await run(
     `const tree=$$('[data-worktree-path]').find(e=>e.dataset.worktreePath===${JSON.stringify(linked)});tree.querySelector('[data-change-group="branch"] button').click();return true;`,
   );
-  await wait(
-    `return $('.monaco-diff-editor')?.textContent.replaceAll("\u00a0", " ").includes('Committed branch document');`,
+  await wait(`return diffText().includes('Committed branch document');`);
+  expect(await run(`return diffText();`)).not.toContain(
+    "Private working document",
   );
-  expect(
-    await run(
-      `return $('.monaco-diff-editor').textContent.replaceAll("\u00a0", " ");`,
-    ),
-  ).not.toContain("Private working document");
+  await run(
+    `setReactValue($('select[aria-label="Changes checkout"]'), ${JSON.stringify(root)});return true;`,
+  );
+  await wait(
+    `return !!$$('[data-worktree-path]').find(e=>e.dataset.worktreePath===${JSON.stringify(root)});`,
+  );
   await run(
     `const tree=$$('[data-worktree-path]').find(e=>e.dataset.worktreePath===${JSON.stringify(root)});tree.querySelector('[data-change-group="unstaged"] button').click();return true;`,
   );
-  await wait(
-    `return $$('.monaco-diff-editor').some(e=>e.textContent.replaceAll("\u00a0", " ").includes('Working primary document'));`,
-  );
+  await wait(`return diffText().includes('Working primary document');`);
   await fs.writeFile(path.join(root, "notes.txt"), "Edited outside the app\n");
   await run(`window.dispatchEvent(new Event('focus'));return true;`);
+  await wait(`return diffText().includes('Edited outside the app');`);
+  await run(
+    `setReactValue($('select[aria-label="Changes checkout"]'), ${JSON.stringify(linked)});return true;`,
+  );
   await wait(
-    `return $$('.monaco-diff-editor').some(e=>e.textContent.replaceAll("\u00a0", " ").includes('Edited outside the app'));`,
+    `return !!$$('[data-worktree-path]').find(e=>e.dataset.worktreePath===${JSON.stringify(linked)});`,
   );
   const header = `$$('[data-worktree-path]').find(e=>e.dataset.worktreePath===${JSON.stringify(linked)}).querySelector('h4 button')`;
   await run(`${header}.click();return true;`);

@@ -365,7 +365,7 @@ describe("remote projects (ADR 0055)", () => {
     // Member documents and sharing live in the default Project sidebar.
     // Files is a collapsible section, without builder-only Git controls.
     await runWait(
-      `$('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]')?.click();
+      `[...document.querySelectorAll('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]')].find(button => button.textContent.trim() === 'Files')?.click();
        return $('[data-testid="files-nav"]')?.textContent.includes('store');`,
       {
         timeoutMs: 60_000,
@@ -446,14 +446,14 @@ describe("remote projects (ADR 0055)", () => {
 
   it("Publish ships a dirty store file first, then hands back the link", async () => {
     await run(
-      `$('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]')?.click(); return true;`,
+      `[...document.querySelectorAll('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]')].find(button => button.textContent.trim() === 'Files')?.click(); return true;`,
     );
     await run(
-      `byText('[data-testid="files-nav"] button', 'customers').click(); return true;`,
+      `const folder = byText('[data-testid="files-nav"] button', 'customers'); if (folder?.getAttribute('aria-expanded') === 'false') folder.click(); return true;`,
     );
     await runWait(
       `const folder = byText('[data-testid="files-nav"] button', 'acme');
-       if (!folder) return false; folder.click(); return true;`,
+       if (!folder) return false; if (folder.getAttribute('aria-expanded') === 'false') folder.click(); return true;`,
       { label: "open customer folder" },
     );
     await runWait(

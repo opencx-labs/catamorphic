@@ -34,6 +34,7 @@ import {
   isValidFontStack,
 } from "../../shared/theme-fonts.js";
 import { TOKEN_LABELS } from "../../shared/theme-tokens.js";
+import { ActionSearchInput } from "../components/action-search-input.js";
 import { PendingButton } from "../components/pending-button.js";
 import {
   type AgentHarness,
@@ -55,6 +56,7 @@ import {
 import { useListMotion } from "../lib/list-motion.js";
 import { useTerminalAppearance } from "../lib/terminal-appearance.js";
 import { useTheme } from "../lib/theme.js";
+import { useAppPreferences } from "../lib/use-app-preferences.js";
 
 export function SettingsScreen({
   projectId,
@@ -173,7 +175,7 @@ export function SettingsScreen({
     {
       id: "connections",
       label: "Connections",
-      keywords: "connectors plugins mcp tools",
+      keywords: "connectors plugins mcp tools github cli account",
       content: <ConnectorsSection onManage={onManageConnectors} />,
     },
     {
@@ -196,6 +198,17 @@ export function SettingsScreen({
       content: (
         <>
           <LayoutSection projectId={projectId} />
+          <LayoutSection
+            title="Code review"
+            keys={[
+              "diffLayout",
+              "diffWrap",
+              "reviewStartView",
+              "reviewGrouping",
+              "changesFileLayout",
+              "prDefaultView",
+            ]}
+          />
           <SidebarSection />
         </>
       ),
@@ -253,6 +266,7 @@ export function SettingsScreen({
       // The final categories may be too short to align at the top. Keep
       // the requested selection when this programmatic scroll is clamped.
       navigationScrollTop.current = root.scrollTop;
+      setSelected(id);
       if (
         Math.abs(distance) < 12 ||
         window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -285,9 +299,10 @@ export function SettingsScreen({
             Make this workspace your own.
           </p>
         </div>
-        <label className="relative order-3 w-full @xl/settings:order-none @xl/settings:w-64">
+        <div className="relative order-3 w-full @xl/settings:order-none @xl/settings:w-64">
           <Search className="pointer-events-none absolute top-2 left-2.5 size-4 text-fg-muted" />
-          <input
+          <ActionSearchInput
+            action="search-settings"
             aria-label="Search settings"
             type="search"
             value={query}
@@ -301,7 +316,7 @@ export function SettingsScreen({
             placeholder="Search settings…"
             className="field h-8 w-full rounded-lg pr-3 pl-8 text-sm"
           />
-        </label>
+        </div>
         <button
           type="button"
           onClick={onClose}
@@ -661,6 +676,28 @@ function AgentsSection({
  * quick count of what's installed.
  */
 function ConnectorsSection({ onManage }: { onManage: () => void }) {
+  const { prefs, update, error: preferenceError } = useAppPreferences();
+  const [githubStatus, setGithubStatus] = useState<{
+    available: boolean;
+    login?: string;
+    error?: string;
+  } | null>(null);
+  const [checkingGithub, setCheckingGithub] = useState(false);
+  const checkGithub = async (connect = false) => {
+    setCheckingGithub(true);
+    try {
+      const status = await desktopApi.githubCliStatus();
+      setGithubStatus(status);
+      if (connect && status.available) await update({ githubCliEnabled: true });
+    } catch {
+      setGithubStatus({
+        available: false,
+        error: "Could not check GitHub CLI. Try again.",
+      });
+    } finally {
+      setCheckingGithub(false);
+    }
+  };
   const [connections, setConnections] = useState<ConnectionInfo[]>([]);
   useEffect(() => {
     void desktopApi
@@ -672,6 +709,59 @@ function ConnectorsSection({ onManage }: { onManage: () => void }) {
 
   return (
     <section className="mt-8">
+      <div
+        className="mb-8 rounded-lg border border-border bg-bg-raised p-4"
+        data-testid="github-cli-connection"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold">GitHub CLI</h2>
+            <p className="mt-1 text-xs text-fg-muted">
+              Optional connection for pull requests, reviews, and repository
+              access.
+            </p>
+          </div>
+          <span className="text-xs text-fg-muted">
+            {prefs.githubCliEnabled ? "Enabled" : "Not connected"}
+          </span>
+        </div>
+        <p className="mt-3 text-xs text-fg-muted">
+          Uses your existing GitHub CLI account. Disconnecting here keeps you
+          signed in to GitHub CLI.
+        </p>
+        {githubStatus?.login && (
+          <p className="mt-2 text-xs">Verified account: {githubStatus.login}</p>
+        )}
+        {(githubStatus?.error || preferenceError) && (
+          <p role="alert" className="mt-2 text-xs text-danger">
+            {githubStatus?.error || preferenceError}
+          </p>
+        )}
+        <div className="mt-3 flex gap-3">
+          <button
+            type="button"
+            disabled={checkingGithub}
+            onClick={() => void checkGithub(!prefs.githubCliEnabled)}
+            className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-bg-overlay disabled:opacity-50"
+          >
+            {checkingGithub
+              ? "Checking…"
+              : prefs.githubCliEnabled
+                ? "Check account"
+                : "Connect GitHub CLI"}
+          </button>
+          {prefs.githubCliEnabled && (
+            <button
+              type="button"
+              disabled={checkingGithub}
+              onClick={() => void update({ githubCliEnabled: false })}
+              className="rounded-md px-3 py-1.5 text-xs text-fg-muted hover:bg-bg-overlay"
+            >
+              Disconnect
+            </button>
+          )}
+        </div>
+      </div>
       <h2 className="mb-1 text-sm font-semibold">Connectors</h2>
       <p className="mb-3 text-xs text-fg-muted">
         Tools your agents can use — MCP servers and Claude Code plugins.
@@ -722,7 +812,10 @@ function TerminalSection() {
     useTerminalAppearance();
   return (
     <section className="mt-8 flex flex-col gap-3">
-      <LayoutSection keys={["terminalAppearance"]} title="Terminal" />
+      <LayoutSection
+        keys={["codeTheme", "terminalAppearance"]}
+        title="Code and terminal"
+      />
       {source === "ghostty" && (
         <>
           <p className="text-xs text-fg-muted" aria-live="polite">
@@ -922,7 +1015,23 @@ function LayoutSection({
                     </button>
                   )}
                 </span>
-                {"options" in definition ? (
+                {"range" in definition ? (
+                  <input
+                    id={id}
+                    name={key}
+                    type="number"
+                    min={definition.range.min}
+                    max={definition.range.max}
+                    step={definition.range.step}
+                    disabled={saving}
+                    value={Number(value)}
+                    className="field h-8 w-20 rounded-md px-2 text-sm"
+                    onChange={(event) => {
+                      const next = event.target.valueAsNumber;
+                      if (definition.valid(next)) void save({ [key]: next });
+                    }}
+                  />
+                ) : "options" in definition ? (
                   <select
                     id={id}
                     name={key}
@@ -1713,8 +1822,8 @@ function ImportSection() {
       )}
 
       <p className="mt-2 text-xs text-fg-faint">
-        Only bookmarks are imported — they land as pinned bookmarks; folders are
-        flattened.
+        Only bookmarks are imported. They go into Saved bookmarks with their
+        folders preserved. Pin favorites separately.
       </p>
     </section>
   );

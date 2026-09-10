@@ -29,6 +29,56 @@ export interface ActionDefinition {
 
 export const BUILTIN_ACTIONS = [
   {
+    id: "submit-pr-comment",
+    label: "Post pull request comment",
+    description: "post the focused review comment or reply",
+    defaultBinding: "Cmd+Enter",
+    keywords: ["review", "comment", "reply"],
+    hiddenInPalette: true,
+  },
+  {
+    id: "open-settings",
+    label: "Settings",
+    description: "open settings, including when no project is selected",
+    defaultBinding: "Cmd+Alt+,",
+    keywords: ["preferences", "configuration"],
+  },
+  {
+    id: "search-files",
+    label: "Find files",
+    description: "focus filename search or open Files in the command palette",
+    defaultBinding: "Cmd+Shift+O",
+    keywords: ["files", "search", "filename"],
+  },
+  {
+    id: "search-content",
+    label: "Search file content",
+    description: "search content in the review or command palette",
+    defaultBinding: "Cmd+Shift+F",
+    keywords: ["content", "grep", "search"],
+  },
+  {
+    id: "search-diff",
+    label: "Find in diff",
+    description: "search the visible diff",
+    defaultBinding: "Cmd+F",
+    keywords: ["diff", "find"],
+  },
+  {
+    id: "search-changes",
+    label: "Find changed files",
+    description: "focus filename search in Changes",
+    defaultBinding: "Cmd+Alt+F",
+    keywords: ["changes", "files", "search"],
+  },
+  {
+    id: "search-settings",
+    label: "Search settings",
+    description: "focus the settings search",
+    defaultBinding: "",
+    keywords: ["settings", "search"],
+  },
+  {
     id: "check-for-updates",
     label: "Check for updates",
     description: "check for a newer Catamorphic desktop version",

@@ -1,44 +1,18 @@
-import { ChevronRight, GitPullRequest, MoreHorizontal } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { GitPullRequest } from "lucide-react";
+import { useEffect, useState } from "react";
 import type { OpenMode } from "../../shared/open-mode.js";
-import {
-  desktopApi,
-  type PullRequestFile,
-  type PullRequestSummary,
-  type SidebarMenuEntry,
-} from "../lib/desktop-api.js";
-import { Collapsible } from "./collapsible.js";
+import { desktopApi, type PullRequestSummary } from "../lib/desktop-api.js";
+import { useAppPreferences } from "../lib/use-app-preferences.js";
 import { OpenResourceButton } from "./open-resource-button.js";
-import { ShortcutHint } from "./shortcut-hint.js";
-import { MenuPortal } from "./sidebar-item-row.js";
 import type { WorkspaceTab } from "./workspace-tabs.js";
 
-/**
- * The sidebar's Pull Requests section: the project's open PRs (via the
- * linked remote's host), expandable into their changed files. Clicking
- * a file opens its patch as a read-only diff tab; the ⋯ menu (or a
- * right-click) opens the PR on GitHub in a browser tab.
- */
+/** The project PR inbox opens each review directly in the workspace. */
 
 const REFRESH_MS = 60_000;
-
-const PR_MENU: SidebarMenuEntry[] = [
-  { label: "Open on GitHub", action: "open-tab" },
-];
-
-const statusBadge = (status: string): { letter: string; className: string } =>
-  status === "added"
-    ? { letter: "A", className: "text-success" }
-    : status === "removed"
-      ? { letter: "D", className: "text-danger" }
-      : status === "renamed"
-        ? { letter: "R", className: "text-warning" }
-        : { letter: "M", className: "text-info" };
 
 export function PrsNav({
   projectId,
   onOpenDiff,
-  onOpenUrl,
   onEmptyChange,
 }: {
   projectId: string;
@@ -47,13 +21,20 @@ export function PrsNav({
   /** Reports emptiness up so hide-when-empty sections can drop entirely. */
   onEmptyChange?: (empty: boolean) => void;
 }) {
+  const { prefs, update, error: preferencesError } = useAppPreferences();
+  const filter = prefs.prDefaultView;
+  const setFilter = (prDefaultView: "all" | "for-you" | "created") =>
+    void update({ prDefaultView });
+  const [search, setSearch] = useState("");
   const [prs, setPrs] = useState<PullRequestSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [refresh, setRefresh] = useState(0);
   const isEmpty = !error && (!prs || prs.length === 0);
   useEffect(() => {
     onEmptyChange?.(isEmpty);
   }, [isEmpty, onEmptyChange]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reconnect and Retry invalidate remote data
   useEffect(() => {
     let cancelled = false;
     setPrs(null);
@@ -90,234 +71,158 @@ export function PrsNav({
       window.removeEventListener("focus", load);
       unsubscribe();
     };
-  }, [projectId]);
+  }, [projectId, refresh, prefs.githubCliEnabled]);
 
+  if (
+    error?.includes("[github-cli-required]") ||
+    error?.includes("[github-cli-disabled]")
+  )
+    return (
+      <div
+        className="flex flex-col gap-2 px-2 py-1 text-xs"
+        data-testid="prs-connect-github"
+      >
+        <p className="text-fg-muted">
+          Choose the optional GitHub CLI connection in Settings to see pull
+          requests.
+        </p>
+        <button
+          type="button"
+          className="text-left text-accent"
+          onClick={() =>
+            onOpenDiff({
+              kind: "settings",
+              name: "settings",
+              label: "Settings",
+              destination: {
+                id: "connections",
+                requestId: crypto.randomUUID(),
+              },
+            })
+          }
+        >
+          Open connection settings
+        </button>
+        <button
+          type="button"
+          className="text-left text-accent"
+          onClick={() => setRefresh((value) => value + 1)}
+        >
+          Retry after signing in
+        </button>
+      </div>
+    );
   if (error)
     return (
-      <p role="alert" className="break-words px-2 py-1 text-xs text-danger">
-        {error}
-      </p>
+      <div className="px-2 py-1 text-xs">
+        <p role="alert" className="break-words text-danger">
+          {error}
+        </p>
+        <button
+          type="button"
+          className="mt-2 text-accent"
+          onClick={() => setRefresh((value) => value + 1)}
+        >
+          Retry
+        </button>
+      </div>
     );
   if (!prs) return null;
   if (prs.length === 0) {
     return <p className="sidebar-empty-state">No open pull requests.</p>;
   }
-  return (
-    <ul className="flex flex-col gap-0.5">
-      {prs.map((pr) => (
-        <PrRow
-          key={`${projectId}:${pr.number}`}
-          pr={pr}
-          projectId={projectId}
-          onOpenDiff={onOpenDiff}
-          onOpenUrl={onOpenUrl}
-        />
-      ))}
-    </ul>
+  const filtered = prs.filter(
+    (pr) =>
+      (filter === "all" ||
+        (filter === "created"
+          ? pr.author === pr.viewerLogin
+          : (pr.reviewRequestedForViewer ??
+            pr.requestedReviewers?.includes(pr.viewerLogin ?? "")))) &&
+      `${pr.number} ${pr.title} ${pr.author}`
+        .toLowerCase()
+        .includes(search.toLowerCase()),
   );
-}
-
-function PrRow({
-  pr,
-  projectId,
-  onOpenDiff,
-  onOpenUrl,
-}: {
-  pr: PullRequestSummary;
-  projectId: string;
-  onOpenDiff: (tab: WorkspaceTab, mode?: OpenMode) => void;
-  onOpenUrl: (url: string, mode: OpenMode) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  // Refresh patches when the PR changes or its disclosure reopens.
-  const [fileError, setFileError] = useState<string | null>(null);
-  const [files, setFiles] = useState<PullRequestFile[] | null>(null);
-  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuButtonRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const dismiss = (event: Event) => {
-      if (
-        event.target instanceof Element &&
-        event.target.closest("[data-sidebar-menu]")
-      ) {
-        return;
-      }
-      if (
-        event.target instanceof Node &&
-        menuButtonRef.current?.contains(event.target)
-      ) {
-        return;
-      }
-      setMenuOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setMenuOpen(false);
-      }
-    };
-    window.addEventListener("pointerdown", dismiss);
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("scroll", dismiss, true);
-    return () => {
-      window.removeEventListener("pointerdown", dismiss);
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("scroll", dismiss, true);
-    };
-  }, [menuOpen]);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: A PR update invalidates its cached file patches.
-  useEffect(() => {
-    if (!expanded) return;
-    let cancelled = false;
-    setFileError(null);
-    setFiles(null);
-    void desktopApi
-      .prFiles(projectId, pr.number)
-      .then((next) => {
-        if (!cancelled) setFiles(next);
-      })
-      .catch((reason) => {
-        if (!cancelled)
-          setFileError(
-            reason instanceof Error
-              ? reason.message
-              : "Could not load changed files.",
-          );
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [expanded, projectId, pr.number, pr.updatedAt]);
-  const toggle = () => setExpanded((value) => !value);
-
-  const fileDiffTab = (file: PullRequestFile): WorkspaceTab => ({
-    kind: "diff",
-    name: `PR #${pr.number} · ${file.path}`,
-    label: `PR #${pr.number} · ${file.path.split("/").at(-1) ?? file.path}`,
-    detail: file.path,
-    projectId,
-    source: {
-      type: "pr",
-      prNumber: pr.number,
-      filePath: file.path,
-      patch: file.patch,
-      status: file.status,
-    },
-  });
-
   return (
-    <li>
-      {/* biome-ignore lint/a11y/noStaticElementInteractions: right-click mirrors the row's ⋯ button, which stays keyboard-reachable */}
-      <div
-        className="group relative flex h-7 items-center rounded-md transition-colors duration-150 hover:bg-bg-overlay/60"
-        onContextMenu={(event) => {
-          event.preventDefault();
-          setMenuAt({ x: event.clientX, y: event.clientY });
-          setMenuOpen(true);
-        }}
-      >
-        <ShortcutHint label={`${pr.author} · ${pr.head} → ${pr.base}`}>
+    <div className="flex flex-col gap-2">
+      {preferencesError && (
+        <p role="alert" className="px-2 text-xs text-danger">
+          {preferencesError}
+        </p>
+      )}
+      <fieldset className="flex gap-1 px-2" aria-label="Pull request scope">
+        {(["for-you", "created", "all"] as const).map((value) => (
           <button
             type="button"
-            onClick={toggle}
-            className="flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-[13px] text-fg-muted hover:text-fg"
-            aria-expanded={expanded}
+            key={value}
+            aria-pressed={filter === value}
+            onClick={() => setFilter(value)}
+            className={`rounded-md px-2 py-1 text-xs ${filter === value ? "bg-bg-overlay text-fg" : "text-fg-muted"}`}
           >
-            <ChevronRight
-              className={`size-3 shrink-0 text-fg-faint transition-transform duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-                expanded ? "rotate-90" : ""
-              }`}
-            />
-            <GitPullRequest className="size-3.5 shrink-0 text-fg-faint" />
-            <span className="truncate">
-              #{pr.number} {pr.title}
-            </span>
+            {value === "for-you"
+              ? "For you"
+              : value === "created"
+                ? "Created"
+                : "All"}
           </button>
-        </ShortcutHint>
-        <button
-          ref={menuButtonRef}
-          type="button"
-          onClick={() => {
-            if (menuOpen) {
-              setMenuOpen(false);
-              return;
-            }
-            const rect = menuButtonRef.current?.getBoundingClientRect();
-            if (rect) {
-              setMenuAt({ x: rect.right, y: rect.bottom + 4 });
-              setMenuOpen(true);
-            }
-          }}
-          className={`mr-1 grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg ${
-            menuOpen ? "" : "opacity-0 group-hover:opacity-100"
-          }`}
-          aria-label={`More actions for #${pr.number}`}
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-        >
-          <MoreHorizontal className="size-3.5" />
-        </button>
-        {menuAt && (
-          <MenuPortal
-            open={menuOpen}
-            position={menuAt}
-            entries={PR_MENU}
-            onPick={() => {
-              setMenuOpen(false);
-              onOpenUrl(pr.url, "tab");
-            }}
-            onExited={() => setMenuAt(null)}
-          />
+        ))}
+      </fieldset>
+      <input
+        aria-label="Find pull requests"
+        placeholder="Find pull requests…"
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+        className="field mx-2 min-w-0 rounded-md px-2 py-1 text-xs"
+      />
+      {filter === "for-you" &&
+        prs.some((pr) => pr.reviewRequestsUnavailable) && (
+          <p role="status" className="px-2 text-xs text-warning">
+            Team review requests are unavailable. Showing direct requests.
+          </p>
         )}
-      </div>
-      <Collapsible open={expanded}>
-        <ul className="ml-5 flex flex-col gap-0.5">
-          {fileError ? (
-            <li role="alert" className="px-2 py-1 text-xs text-danger">
-              {fileError}
-            </li>
-          ) : files === null ? (
-            <li className="sidebar-empty-state">Loading…</li>
-          ) : files.length === 0 ? (
-            <li className="sidebar-empty-state">No files.</li>
-          ) : (
-            files.map((file) => {
-              const badge = statusBadge(file.status);
-              const separator = file.path.lastIndexOf("/");
-              const dir =
-                separator >= 0 ? file.path.slice(0, separator + 1) : "";
-              const base =
-                separator >= 0 ? file.path.slice(separator + 1) : file.path;
-              return (
-                <li key={file.path}>
-                  <OpenResourceButton
-                    type="button"
-                    onOpen={(mode) => onOpenDiff(fileDiffTab(file), mode)}
-                    className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left font-mono text-xs transition-colors duration-150 hover:bg-bg-overlay/60"
-                  >
-                    <span className="min-w-0 flex-1 truncate">
-                      {dir && <span className="text-fg-faint">{dir}</span>}
-                      <span className="text-fg">{base}</span>
-                    </span>
-                    <span
-                      className={`shrink-0 text-[11px] font-semibold ${badge.className}`}
-                    >
-                      {badge.letter}
-                    </span>
-                    <span className="shrink-0 text-[11px] text-fg-muted">
-                      +{file.additions} −{file.deletions}
-                    </span>
-                  </OpenResourceButton>
-                </li>
-              );
-            })
-          )}
-        </ul>
-      </Collapsible>
-    </li>
+      {filtered.length === 0 && (
+        <p className="sidebar-empty-state">
+          {filter === "for-you"
+            ? "No matching review requests."
+            : "No matching pull requests."}
+        </p>
+      )}
+      <ul
+        // biome-ignore lint/a11y/noRedundantRoles: Preserve list semantics when CSS removes markers.
+        role="list"
+        className="flex flex-col gap-1 px-1"
+      >
+        {filtered.map((pr) => (
+          <li key={pr.number}>
+            <OpenResourceButton
+              aria-label={`Open review #${pr.number}: ${pr.title}`}
+              onOpen={(mode) =>
+                onOpenDiff(
+                  {
+                    kind: "diff",
+                    name: `review:${pr.number}`,
+                    label: `#${pr.number} ${pr.title}`,
+                    projectId,
+                    source: { type: "review", prNumber: pr.number },
+                  },
+                  mode,
+                )
+              }
+              className="flex w-full min-w-0 items-start gap-2 rounded-md px-2 py-2 text-left hover:bg-bg-overlay"
+            >
+              <GitPullRequest className="mt-0.5 size-4 shrink-0 text-fg-muted" />
+              <div className="min-w-0 flex-1">
+                <p className="line-clamp-2 text-xs font-medium text-fg">
+                  {pr.title}
+                </p>
+                <p className="mt-1 truncate text-[11px] text-fg-muted">
+                  #{pr.number} · {pr.author}
+                  {pr.draft ? " · Draft" : ""}
+                </p>
+              </div>
+            </OpenResourceButton>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

@@ -1,15 +1,14 @@
-import { DiffEditor } from "@monaco-editor/react";
 import { useEffect, useState } from "react";
+import { CodeDiff } from "../components/code-diff.js";
 import type { DiffSource } from "../components/workspace-tabs.js";
 import { desktopApi, type GitFileDiff } from "../lib/desktop-api.js";
-import { useMonacoTheme } from "../lib/monaco-setup.js";
-import { useTheme } from "../lib/theme.js";
+import { pullRequestPatch } from "../lib/review-guide.js";
+import { ReviewScreen } from "./review-screen.js";
 
 /**
  * A read-only diff tab. Local sources (the sidebar's Changes rows) load
- * before/after content over IPC and render Monaco's side-by-side diff;
- * PR sources already carry their unified patch text and render it as a
- * tinted line list — no checkout of the PR branch exists to diff against.
+ * before/after content over IPC. Local revisions and remote patches share
+ * the virtualized Pierre renderer and profile-owned Shiki syntax themes.
  * Diffs reload cheaply, so the screen mounts only while visible.
  */
 
@@ -19,10 +18,17 @@ export interface DiffScreenProps {
 }
 
 export function DiffScreen({ projectId, source }: DiffScreenProps) {
+  if (source.type === "review")
+    return <ReviewScreen projectId={projectId} number={source.prNumber} />;
   return source.type === "local" ? (
     <LocalDiff projectId={projectId} source={source} />
   ) : (
-    <PatchView patch={source.patch} />
+    <PatchView
+      patch={source.patch}
+      filePath={source.filePath}
+      status={source.status}
+      previousPath={source.previousPath}
+    />
   );
 }
 
@@ -41,8 +47,6 @@ function LocalDiff({
   projectId: string;
   source: Extract<DiffSource, { type: "local" }>;
 }) {
-  const theme = useTheme();
-  const editorTheme = useMonacoTheme();
   const [diff, setDiff] = useState<GitFileDiff | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -112,28 +116,11 @@ function LocalDiff({
       {/* The editor sits in its own bordered surface so a short diff ends
           in chrome, not in a void of unbounded background. */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border">
-        <div className="min-h-0 flex-1">
-          <DiffEditor
-            height="100%"
-            // Distinct model paths per side so Monaco infers the language
-            // from the file extension (the same mechanism as editor tabs).
-            originalModelPath={`file:///diff-original/${encodeURIComponent(projectId)}/${encodeURIComponent(source.worktreePath)}/${source.mode}/${source.filePath.split("/").map(encodeURIComponent).join("/")}`}
-            modifiedModelPath={`file:///diff-modified/${encodeURIComponent(projectId)}/${encodeURIComponent(source.worktreePath)}/${source.mode}/${source.filePath.split("/").map(encodeURIComponent).join("/")}`}
-            original={diff.before}
-            modified={diff.after}
-            theme={editorTheme}
-            options={{
-              readOnly: true,
-              renderSideBySide: true,
-              lineNumbers: "on",
-              minimap: { enabled: false },
-              fontSize: 13,
-              fontFamily: theme?.fonts.mono,
-              scrollBeyondLastLine: false,
-              automaticLayout: true,
-              padding: { top: 12 },
-              fixedOverflowWidgets: true,
-            }}
+        <div className="flex min-h-0 flex-1 flex-col">
+          <CodeDiff
+            path={source.filePath}
+            before={diff.before}
+            after={diff.after}
           />
         </div>
         <div className="flex h-7 shrink-0 items-center gap-2 border-t border-border bg-bg-raised/60 px-3 font-mono text-[11px] text-fg-faint">
@@ -148,31 +135,26 @@ function LocalDiff({
 }
 
 /** A PR file's unified patch, tinted per line like any diff viewer. */
-function PatchView({ patch }: { patch: string | null }) {
+function PatchView({
+  patch,
+  filePath,
+  status,
+  previousPath,
+}: {
+  status?: string;
+  previousPath?: string;
+  patch: string | null;
+  filePath: string;
+}) {
   if (patch === null) {
     return <Note>No text diff available (binary or too large).</Note>;
   }
   return (
-    <div className="min-h-0 flex-1 overflow-auto bg-bg">
-      <div className="w-max min-w-full py-3 font-mono text-[12px] leading-5">
-        {patch.split("\n").map((line, index) => (
-          <div
-            // biome-ignore lint/suspicious/noArrayIndexKey: static patch lines
-            key={index}
-            className={`whitespace-pre px-3 ${
-              line.startsWith("@@")
-                ? "bg-bg-raised text-fg-muted"
-                : line.startsWith("+")
-                  ? "bg-[color-mix(in_srgb,var(--color-success)_12%,transparent)] text-fg"
-                  : line.startsWith("-")
-                    ? "bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)] text-fg"
-                    : "text-fg-muted"
-            }`}
-          >
-            {line || " "}
-          </div>
-        ))}
-      </div>
-    </div>
+    <CodeDiff
+      path={filePath}
+      status={status}
+      previousPath={previousPath}
+      patch={pullRequestPatch({ path: filePath, patch, status, previousPath })}
+    />
   );
 }

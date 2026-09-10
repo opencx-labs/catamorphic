@@ -199,6 +199,7 @@ export interface TabGroup {
 
 export function WorkspaceTabBar({
   orientation = "horizontal",
+  alignment = "start",
   tabs,
   activeKey,
   secondaryKey,
@@ -212,6 +213,7 @@ export function WorkspaceTabBar({
   onDragStateChange,
 }: {
   orientation?: "horizontal" | "vertical";
+  alignment?: "start" | "center";
   tabs: WorkspaceTab[];
   activeKey?: string;
   /** The unfocused pane of a split view — styled active but muted. */
@@ -316,7 +318,7 @@ export function WorkspaceTabBar({
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: drag-and-drop target for tab reordering; tabs themselves are buttons
     <div
-      className={`app-no-drag flex min-w-0 gap-1 ${vertical ? "flex-col" : "flex-1 items-center [justify-content:safe_center] self-stretch overflow-x-auto overflow-y-hidden"}`}
+      className={`app-no-drag flex min-w-0 gap-1 ${vertical ? "flex-col" : `flex-1 items-center ${alignment === "center" ? "[justify-content:safe_center]" : "justify-start"} self-stretch overflow-x-auto overflow-y-hidden`}`}
       data-tab-orientation={orientation}
       onDragOver={(event) => {
         if (dragKey) {

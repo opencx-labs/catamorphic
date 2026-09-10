@@ -1,4 +1,9 @@
-import { useAgentSessions, useRuns, useWorkflows } from "@catamorphic/react";
+import {
+  useAgentSession,
+  useAgentSessions,
+  useRuns,
+  useWorkflows,
+} from "@catamorphic/react";
 import type { AgentSession } from "@catamorphic/react/types";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
@@ -50,7 +55,15 @@ export function SidebarActivity({
             {session.title ?? "Untitled chat"}
           </span>
           <span className="shrink-0 text-fg-faint">
-            {session.attentionRequired ? "Needs you" : "Working"}
+            {session.attentionRequired ? (
+              "Needs you"
+            ) : (
+              <SessionActivity
+                projectId={projectId}
+                sessionId={session.id}
+                visible={visible}
+              />
+            )}
           </span>
         </OpenResourceButton>
       ))}
@@ -69,6 +82,43 @@ export function SidebarActivity({
     </div>
   );
 }
+function SessionActivity({
+  projectId,
+  sessionId,
+  visible,
+}: {
+  projectId: string;
+  sessionId: string;
+  visible: boolean;
+}) {
+  const detail = useAgentSession(
+    visible ? projectId : undefined,
+    visible ? sessionId : undefined,
+    { refetchInterval: visible ? 2000 : false },
+  );
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!visible) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [visible]);
+  const execution = detail.data?.execution;
+  const started = execution?.activityAt ?? execution?.startedAt;
+  const seconds = started
+    ? Math.max(0, Math.floor((now - Date.parse(started)) / 1000))
+    : null;
+  const activity = execution?.activity ?? "Preparing";
+  return (
+    <span
+      title={activity}
+      className="inline-block max-w-44 truncate align-bottom"
+    >
+      {activity}
+      {seconds !== null && Number.isFinite(seconds) ? ` · ${seconds}s` : ""}
+    </span>
+  );
+}
+
 function WorkflowActivity({
   projectId,
   name,

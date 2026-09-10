@@ -108,19 +108,32 @@ async function comparisonBase(
 }
 const shortRef = (ref: string) => ref.replace(/^refs\/(heads|remotes)\//, "");
 const overviewRequests = new Map<string, Promise<GitOverview>>();
-export async function gitOverview(rootPath: string): Promise<GitOverview> {
-  const key = await fs.realpath(rootPath).catch(() => path.resolve(rootPath));
+const overviewQueues = new Map<string, Promise<unknown>>();
+export async function gitOverview(
+  rootPath: string,
+  paths?: string[],
+): Promise<GitOverview> {
+  const root = await fs.realpath(rootPath).catch(() => path.resolve(rootPath));
+  const key = JSON.stringify([root, paths]);
   const pending = overviewRequests.get(key);
   if (pending) return pending;
-  const request = readGitOverview(key);
+  const previous = overviewQueues.get(root) ?? Promise.resolve();
+  const request = previous
+    .catch(() => {})
+    .then(() => readGitOverview(root, paths));
+  overviewQueues.set(root, request);
   overviewRequests.set(key, request);
   try {
     return await request;
   } finally {
     if (overviewRequests.get(key) === request) overviewRequests.delete(key);
+    if (overviewQueues.get(root) === request) overviewQueues.delete(root);
   }
 }
-async function readGitOverview(rootPath: string): Promise<GitOverview> {
+async function readGitOverview(
+  rootPath: string,
+  paths?: string[],
+): Promise<GitOverview> {
   let trees: ListedWorktree[];
   try {
     trees = await worktreeList(rootPath);
@@ -140,12 +153,12 @@ async function readGitOverview(rootPath: string): Promise<GitOverview> {
     "--show-toplevel",
   ]);
   const result: GitWorktree[] = [];
-  // Bound concurrent status work so one slow/missing worktree does not serialize every other checkout.
-  for (let offset = 0; offset < trees.length; offset += 4) {
+  // Only requested checkouts run status; discovery never scans their files.
+  for (let offset = 0; offset < trees.length; offset += 1) {
     result.push(
       ...(await Promise.all(
         trees
-          .slice(offset, offset + 4)
+          .slice(offset, offset + 1)
           .map(async (tree, index): Promise<GitWorktree> => {
             const entry: GitWorktree = {
               ...tree,
@@ -153,7 +166,11 @@ async function readGitOverview(rootPath: string): Promise<GitOverview> {
               isCurrent: tree.path === selected,
               changes: [],
               branchChanges: [],
+              loaded: paths
+                ? paths.includes(tree.path)
+                : tree.path === selected,
             };
+            if (!entry.loaded) return entry;
             if (tree.prunable) {
               entry.error = `Worktree unavailable: ${tree.prunable}`;
               return entry;
@@ -218,7 +235,12 @@ function changeKind(status: string): GitChangedFile["kind"] {
 }
 async function uncommittedChanges(cwd: string): Promise<GitChangedFile[]> {
   const parts = (
-    await git(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])
+    await git(cwd, [
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--untracked-files=normal",
+    ])
   ).split("\0");
   const files: GitChangedFile[] = [];
   for (let i = 0; i < parts.length; i++) {
@@ -271,6 +293,38 @@ function parseNameStatus(output: string): GitChangedFile[] {
   }
   return files;
 }
+/** Enumerate an untracked directory only when the user opens it. */
+export async function gitUntrackedDirectory({
+  worktreePath,
+  directory,
+}: {
+  worktreePath: string;
+  directory: string;
+}): Promise<{ files: GitChangedFile[]; truncated: boolean }> {
+  const relative = directory.replace(/\/$/, "");
+  validateFile(relative);
+  const paths = (
+    await git(worktreePath, [
+      "ls-files",
+      "--others",
+      "--exclude-standard",
+      "-z",
+      "--",
+      `${relative}/`,
+    ])
+  )
+    .split("\0")
+    .filter(Boolean);
+  return {
+    files: paths.slice(0, 2000).map((filePath) => ({
+      path: filePath,
+      mode: "untracked",
+      kind: "added",
+    })),
+    truncated: paths.length > 2000,
+  };
+}
+
 function validateFile(filePath: string): void {
   if (
     !filePath ||

@@ -761,6 +761,7 @@ export function registerBrowserSupport(
       project: bookmarks.forProject(projectId),
       profileId,
       pinned: bookmarks.pinned(profileId),
+      library: bookmarks.library(profileId),
     });
 
   ipcMain.handle(
@@ -768,6 +769,7 @@ export function registerBrowserSupport(
     (_event, input: { projectId: string; profileId: string }) => ({
       project: bookmarks.forProject(input.projectId),
       pinned: bookmarks.pinned(input.profileId),
+      library: bookmarks.library(input.profileId),
     }),
   );
   ipcMain.handle(
@@ -877,6 +879,14 @@ export function registerBrowserSupport(
     },
   );
 
+  ipcMain.handle(
+    "catamorphic:bookmarks-remove-library",
+    (_event, input: { projectId: string; profileId: string; id: string }) => {
+      bookmarks.removeLibrary(input.profileId, input.id);
+      bookmarksChanged(input.projectId, input.profileId);
+    },
+  );
+
   // --- sidebar config (per sender profile) ---
   const sidebarFor = (event: Electron.IpcMainInvokeEvent) =>
     profileConfig.forProfile(windows.profileFor(event.sender)).sidebar;
@@ -912,7 +922,7 @@ export function registerBrowserSupport(
 
   // --- import from other browsers ---
   // Detection + parsing lives in ./browser-import (pure, per-browser).
-  // Imported bookmarks land in a profile's pinned list; a source profile
+  // Imported bookmarks land in a profile's bookmark library; a source profile
   // can also become a brand-new Catamorphic profile.
   ipcMain.handle("catamorphic:browser-import-list", () =>
     listImportableBrowsers(),
@@ -946,13 +956,17 @@ export function registerBrowserSupport(
           profilesCreated.push(profile.id);
           targetProfileId = profile.id;
         }
-        bookmarksImported += bookmarks.importPinned(targetProfileId, imported);
+        bookmarksImported += bookmarks.importBookmarks(
+          targetProfileId,
+          imported,
+        );
         if (targetProfileId === currentProfileId) {
           broadcast("catamorphic:bookmarks-changed", {
             projectId: null,
             project: null,
             profileId: targetProfileId,
             pinned: bookmarks.pinned(targetProfileId),
+            library: bookmarks.library(targetProfileId),
           });
         }
       }

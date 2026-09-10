@@ -51,6 +51,7 @@ export function TabbedSidebar({
   open,
   scope,
   header,
+  headerActions,
   footer,
   error,
   onCustomize,
@@ -64,6 +65,7 @@ export function TabbedSidebar({
   open: boolean;
   scope: string;
   header?: ReactNode;
+  headerActions?: ReactNode;
   footer?: ReactNode;
   error?: string;
   onCustomize: () => void;
@@ -120,12 +122,13 @@ export function TabbedSidebar({
     >
       <div className="sidebar-inner" style={{ width: layout.width }}>
         {header}
-        {tabs.length > 1 && (
-          <div className="flex h-10 shrink-0 items-center justify-center px-2">
+        {(tabs.length > 1 || headerActions) && (
+          <div className="flex h-10 shrink-0 items-center gap-2 px-2">
+            {headerActions}
             <div
               role="tablist"
               aria-label={`${side === "left" ? "Left" : "Right"} sidebar tabs`}
-              className="flex min-w-0 max-w-full items-center justify-center gap-1 overflow-x-auto"
+              className="flex min-w-0 flex-1 items-center justify-center gap-1 overflow-x-auto"
             >
               {tabs.map((tab, index) => (
                 <ShortcutHint key={tab.id} label={tab.title}>

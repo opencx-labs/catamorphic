@@ -258,6 +258,37 @@ the historical log explains how it arrived here.
   paths; invalid edits retain the last valid configuration and surface file errors.
 - [Earlier decisions and rationale](DESIGN-HISTORY.md).
 
+- 2026-09-10: Accepted [ADR 0118](../../docs/decisions/0118-review-navigation-and-code-rendering.md).
+  Pierre Diffs and Shiki share code themes. File sidebars search paths; content
+  search lives in Cmd+P and reviews. Guide uses original path-based navigation.
+  Changes follows the active checkout and stops polling while hidden.
+
+- 2026-09-10: [ADR 0113](../../docs/decisions/0113-desktop-workspace-frame-and-local-pr-access.md)
+  makes workspace inset, rounding and separators independent settings. Right sidebar
+  collapse lives in its header. Empty pin targets remain visible; inspectors yield to drags.
+
+- 2026-09-10: [ADR 0114](../../docs/decisions/0114-focused-pull-request-review.md)
+  removes duplicate PR file trees, consolidates search and display controls,
+  and separates overview metadata, local guide, changes and discussion.
+
+- 2026-09-10: [ADR 0115](../../docs/decisions/0115-native-review-conversation.md) gives Discussion its own thread list, persistent composer, local drafts and native inline replies through the existing CLI account.
+
+### 2026-09-10: Saved bookmarks and readable review prose
+
+Browser imports go into the profile library, not the pinned grid. Pins are explicit
+shortcuts; saved folders survive pinning and unpinning (ADR 0116). The sidebar gives
+pins, saved bookmarks, and project bookmarks their own labels and bounded scrolling.
+
+Review Overview uses a raised description card with a 72ch reading measure, stronger
+heading levels, and separate bordered disclosures. Markdown in chats keeps its own
+density. Theme tokens supply all surface, border, and text colors.
+
+### 2026-09-10: Optional GitHub CLI connection
+
+Connections offers an explicit, per-profile GitHub CLI option with account checking
+and local disconnect. PRs link to this setting when disabled instead of silently
+using the machine login. MCP agent tools remain separate (ADR 0117).
+
 Rich attachment previews share InspectorPortal across composer and conversation. File references use compact pills; web links retain prose styling with destination cards. Content loads only on inspection, and unavailable previews retain useful metadata. See [chat state](docs/chat-state.md).
 
 Browser tools wake only the guest they operate on and restore focus after native

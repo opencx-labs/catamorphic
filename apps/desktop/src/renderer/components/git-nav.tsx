@@ -1,5 +1,5 @@
 import { ChevronRight, GitBranch } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { OpenMode } from "../../shared/open-mode.js";
 import {
   desktopApi,
@@ -7,9 +7,13 @@ import {
   type GitDiffMode,
   type GitOverview,
   type GitWorktree,
+  type SessionCheckoutInfo,
 } from "../lib/desktop-api.js";
+import { useAppPreferences } from "../lib/use-app-preferences.js";
+import { ActionSearchInput } from "./action-search-input.js";
 import { Collapsible } from "./collapsible.js";
 import { OpenResourceButton } from "./open-resource-button.js";
+import { WindowedList } from "./windowed-list.js";
 import type { WorkspaceTab } from "./workspace-tabs.js";
 
 /** Per-checkout changes, with separate index, working-file and committed comparisons.
@@ -41,7 +45,7 @@ interface ChangeTreeDir {
 function buildChangeTree(files: GitChangedFile[]): ChangeTreeDir {
   const root: ChangeTreeDir = { name: "", dirs: [], files: [] };
   for (const file of files) {
-    const segments = file.path.split("/");
+    const segments = file.path.split("/").filter(Boolean);
     let node = root;
     for (const segment of segments.slice(0, -1)) {
       let next = node.dirs.find((dir) => dir.name === segment);
@@ -68,18 +72,50 @@ function buildChangeTree(files: GitChangedFile[]): ChangeTreeDir {
 export function GitNav({
   projectId,
   onOpenDiff,
+  activeSessionId,
+  visible = true,
   onEmptyChange,
 }: {
   projectId: string;
+  activeSessionId?: string;
+  visible?: boolean;
   onOpenDiff: (tab: WorkspaceTab, mode?: OpenMode) => void;
   onEmptyChange?: (empty: boolean) => void;
 }) {
+  const [scope, setScope] = useState<string>(
+    () => localStorage.getItem(`changes-scope:${projectId}`) ?? "follow",
+  );
+  const [query, setQuery] = useState("");
+  const { prefs, update, error: preferencesError } = useAppPreferences();
+  const flat = prefs.changesFileLayout === "flat";
+  const lastSession = useRef(activeSessionId);
+  if (activeSessionId) lastSession.current = activeSessionId;
+  const followedSession = lastSession.current;
   const [overview, setOverview] = useState<GitOverview | null>(null);
+  const [owners, setOwners] = useState<SessionCheckoutInfo[]>([]);
+  useEffect(() => {
+    if (!visible) return;
+    let active = true;
+    void desktopApi
+      .sessionCheckouts(projectId)
+      .then((items) => {
+        if (active) setOwners(items);
+      })
+      .catch(() => {
+        if (active) setOwners([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [projectId, visible]);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
+    if (!visible) return;
     let cancelled = false;
     let running = false;
     let queued = false;
+    let timer: number | undefined;
+    let delay = REFRESH_MS;
     setOverview(null);
     setError(null);
     const load = async () => {
@@ -88,13 +124,30 @@ export function GitNav({
         return;
       }
       running = true;
+      window.clearTimeout(timer);
+      const started = performance.now();
       try {
-        const next = await desktopApi.gitOverview(projectId);
+        const allPaths =
+          scope === "all"
+            ? (await desktopApi.gitOverview(projectId, [])).worktrees.map(
+                (tree) => tree.path,
+              )
+            : undefined;
+        const next = await desktopApi.gitOverview(
+          projectId,
+          scope === "follow" ? undefined : scope === "all" ? allPaths : [scope],
+          scope === "follow" ? followedSession : undefined,
+        );
         if (!cancelled) {
           setOverview(next);
           setError(null);
+          delay = Math.max(
+            REFRESH_MS,
+            Math.min(120_000, (performance.now() - started) * 20),
+          );
         }
       } catch (reason) {
+        delay = Math.min(120_000, delay * 2);
         if (!cancelled)
           setError(
             reason instanceof Error
@@ -106,23 +159,35 @@ export function GitNav({
         if (queued && !cancelled) {
           queued = false;
           void load();
+        } else if (!cancelled) {
+          timer = window.setTimeout(() => {
+            if (document.visibilityState !== "hidden" && document.hasFocus())
+              void load();
+          }, delay);
         }
       }
     };
     void load();
-    const timer = window.setInterval(() => void load(), REFRESH_MS);
-    const focus = () => void load();
+    const focus = () => {
+      if (document.visibilityState !== "hidden") void load();
+    };
     window.addEventListener("focus", focus);
+    document.addEventListener("visibilitychange", focus);
     const unsubscribe = desktopApi.onGitChanged((change) => {
-      if (change.projectId === projectId) void load();
+      if (
+        change.projectId === projectId &&
+        document.visibilityState !== "hidden"
+      )
+        void load();
     });
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
       window.removeEventListener("focus", focus);
+      document.removeEventListener("visibilitychange", focus);
       unsubscribe();
     };
-  }, [projectId]);
+  }, [projectId, scope, followedSession, visible]);
   const hasContent = overview?.worktrees.some(
     (tree) =>
       tree.changes.length ||
@@ -144,19 +209,81 @@ export function GitNav({
     return <p className="sidebar-empty-state">Install git to see changes.</p>;
   return (
     <div className="flex flex-col gap-1" data-testid="git-changes">
+      {preferencesError && (
+        <p role="alert" className="px-2 text-xs text-danger">
+          {preferencesError}
+        </p>
+      )}
       {(error || overview?.error) && (
         <p role="alert" className="break-words px-2 py-1 text-xs text-danger">
           {error ?? overview?.error}
         </p>
       )}
-      {overview?.worktrees.map((tree) => (
-        <WorktreeSection
-          key={`${projectId}:${tree.path}`}
-          tree={tree}
-          projectId={projectId}
-          onOpenDiff={onOpenDiff}
-        />
-      ))}
+      <div className="flex flex-col gap-2 px-2 py-1">
+        <select
+          aria-label="Changes checkout"
+          className="field min-w-0 rounded-md px-2 py-1 text-xs"
+          value={scope}
+          onChange={(event) => {
+            setScope(event.target.value);
+            localStorage.setItem(
+              `changes-scope:${projectId}`,
+              event.target.value,
+            );
+          }}
+        >
+          <option value="follow">Follow active chat</option>
+          <option value="all">All checkouts</option>
+          {overview?.worktrees.map((tree) => (
+            <option key={tree.path} value={tree.path}>
+              {tree.branch ?? "Detached HEAD"} · {tree.path}
+            </option>
+          ))}
+        </select>
+        <div className="flex items-center gap-2">
+          <ActionSearchInput
+            action="search-changes"
+            aria-label="Find changed files"
+            placeholder="Find changed files…"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            className="field min-w-0 flex-1 rounded-md px-2 py-1 text-xs"
+          />
+          <button
+            type="button"
+            className="text-xs text-fg-muted"
+            onClick={() => {
+              void update({ changesFileLayout: flat ? "tree" : "flat" });
+            }}
+          >
+            {flat ? "Flat" : "Tree"}
+          </button>
+        </div>
+      </div>
+      {overview &&
+        scope !== "follow" &&
+        scope !== "all" &&
+        !overview.worktrees.some((tree) => tree.path === scope) && (
+          <p role="status" className="px-2 py-1 text-xs text-warning">
+            The selected checkout is unavailable. Choose another checkout or
+            follow the active chat.
+          </p>
+        )}
+      {overview?.worktrees
+        .filter((tree) => tree.loaded !== false)
+        .map((tree) => (
+          <WorktreeSection
+            key={`${projectId}:${tree.path}`}
+            tree={tree}
+            query={query}
+            flat={flat}
+            sessionIds={owners
+              .filter((owner) => owner.path === tree.path)
+              .map((owner) => owner.sessionId)}
+            projectId={projectId}
+            onOpenDiff={onOpenDiff}
+          />
+        ))}
     </div>
   );
 }
@@ -168,20 +295,64 @@ const GROUPS: Array<{ mode: GitDiffMode; label: string }> = [
   { mode: "untracked", label: "Untracked" },
 ];
 function WorktreeSection({
+  sessionIds,
+  flat,
   tree,
+  query,
   projectId,
   onOpenDiff,
 }: {
   tree: GitWorktree;
+  query: string;
+  sessionIds: string[];
+  flat: boolean;
   projectId: string;
   onOpenDiff: (tab: WorkspaceTab, mode?: OpenMode) => void;
 }) {
   const [open, setOpen] = useState(true);
+  const [directories, setDirectories] = useState<
+    Record<string, GitChangedFile[]>
+  >({});
+  const [directoryNotice, setDirectoryNotice] = useState<string | null>(null);
+  const [loadingDirectory, setLoadingDirectory] = useState<string | null>(null);
   const contentId = useId();
+  const matchesQuery = (file: GitChangedFile) =>
+    file.path.toLowerCase().includes(query.toLowerCase());
+  const branchFiles = tree.branchChanges.filter(matchesQuery);
   const count = new Set(
     [...tree.changes, ...tree.branchChanges].map((file) => file.path),
   ).size;
   const openFile = (file: GitChangedFile, mode?: OpenMode) => {
+    if (file.mode === "untracked" && file.path.endsWith("/")) {
+      if (loadingDirectory) return;
+      setLoadingDirectory(file.path);
+      setDirectoryNotice(null);
+      void desktopApi
+        .gitUntrackedDirectory({
+          projectId,
+          worktreePath: tree.path,
+          directory: file.path,
+        })
+        .then((result) => {
+          setDirectories((current) => ({
+            ...current,
+            [file.path]: result.files,
+          }));
+          if (result.truncated)
+            setDirectoryNotice(
+              "Showing the first 2,000 untracked files. Use Files search to find more.",
+            );
+        })
+        .catch((error: unknown) =>
+          setDirectoryNotice(
+            error instanceof Error
+              ? error.message
+              : "Could not read this folder. Try again.",
+          ),
+        )
+        .finally(() => setLoadingDirectory(null));
+      return;
+    }
     const label =
       file.mode === "branch"
         ? `vs ${tree.baseLabel}`
@@ -239,6 +410,21 @@ function WorktreeSection({
           >
             {tree.path.split("/").at(-1) ?? tree.path}
           </p>
+          {sessionIds.length > 0 && (
+            <div className="flex flex-wrap gap-1 px-2 py-1">
+              {sessionIds.map((id) => (
+                <OpenResourceButton
+                  key={id}
+                  className="rounded bg-bg-overlay px-1.5 py-0.5 text-[10px] text-fg-muted"
+                  onOpen={(mode) =>
+                    onOpenDiff({ kind: "chat", name: id }, mode)
+                  }
+                >
+                  Chat {id.slice(0, 6)}
+                </OpenResourceButton>
+              ))}
+            </div>
+          )}
           {tree.locked && (
             <p className="px-2 text-xs text-fg-faint">Locked: {tree.locked}</p>
           )}
@@ -247,27 +433,56 @@ function WorktreeSection({
               {tree.error}
             </p>
           )}
+          {loadingDirectory && (
+            <p role="status" className="px-2 text-xs text-fg-muted">
+              Loading {loadingDirectory}…
+            </p>
+          )}
+          {directoryNotice && (
+            <p role="status" className="px-2 text-xs text-warning">
+              {directoryNotice}
+            </p>
+          )}
+          {Object.keys(directories).length > 0 && (
+            <button
+              type="button"
+              className="px-2 py-1 text-left text-xs text-fg-muted hover:text-fg"
+              onClick={() => {
+                setDirectories({});
+                setDirectoryNotice(
+                  "Open an untracked folder to reload its files.",
+                );
+              }}
+            >
+              Reload untracked folders
+            </button>
+          )}
           {GROUPS.map((group) => {
-            const files = tree.changes.filter(
-              (file) => file.mode === group.mode,
-            );
+            const files = tree.changes
+              .filter((file) => file.mode === group.mode)
+              .flatMap((file) => directories[file.path] ?? [file])
+              .filter(
+                (file) =>
+                  matchesQuery(file) ||
+                  (file.mode === "untracked" && file.path.endsWith("/")),
+              );
             return (
               files.length > 0 && (
                 <div key={group.mode} data-change-group={group.mode}>
                   <h5 className="px-2 pt-1 text-[11px] text-fg-faint">
                     {group.label} <span>{files.length}</span>
                   </h5>
-                  <ChangeTree files={files} onOpen={openFile} />
+                  <ChangeTree flat={flat} files={files} onOpen={openFile} />
                 </div>
               )
             );
           })}
-          {tree.branchChanges.length > 0 && (
+          {branchFiles.length > 0 && (
             <div data-change-group="branch">
               <h5 className="px-2 pt-1 text-[11px] text-fg-faint">
                 Committed vs {tree.baseLabel}
               </h5>
-              <ChangeTree files={tree.branchChanges} onOpen={openFile} />
+              <ChangeTree flat={flat} files={branchFiles} onOpen={openFile} />
             </div>
           )}
           {tree.comparisonError && (
@@ -285,84 +500,82 @@ function WorktreeSection({
 }
 
 function ChangeTree({
+  flat,
   files,
   onOpen,
 }: {
+  flat: boolean;
   files: GitChangedFile[];
   onOpen: (file: GitChangedFile, mode?: OpenMode) => void;
 }) {
-  const root = buildChangeTree(files);
+  const [closed, setClosed] = useState<Set<string>>(new Set());
+  type Row =
+    | { key: string; depth: number; file: GitChangedFile }
+    | { key: string; depth: number; dir: ChangeTreeDir };
+  const rows: Row[] = [];
+  const visit = (node: ChangeTreeDir, prefix: string, depth: number) => {
+    for (const dir of node.dirs) {
+      const key = `${prefix}${dir.name}/`;
+      rows.push({ key, depth, dir });
+      if (!closed.has(key)) visit(dir, key, depth + 1);
+    }
+    for (const file of node.files) rows.push({ key: file.path, depth, file });
+  };
+  if (flat)
+    for (const file of files) rows.push({ key: file.path, depth: 0, file });
+  else visit(buildChangeTree(files), "", 0);
   return (
-    <div className="flex flex-col gap-px">
-      {root.dirs.map((dir) => (
-        <DirNode key={dir.name} dir={dir} depth={0} onOpen={onOpen} />
-      ))}
-      {root.files.map((file) => (
-        <FileRow key={file.path} file={file} depth={0} onOpen={onOpen} />
-      ))}
-    </div>
-  );
-}
-
-function DirNode({
-  dir,
-  depth,
-  onOpen,
-}: {
-  dir: ChangeTreeDir;
-  depth: number;
-  onOpen: (file: GitChangedFile, mode?: OpenMode) => void;
-}) {
-  const [open, setOpen] = useState(true);
-  return (
-    <div className="flex flex-col gap-px">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        aria-expanded={open}
-        style={{ paddingLeft: `${8 + depth * 12}px` }}
-        className="flex h-6 w-full cursor-pointer items-center gap-1 rounded-md pr-2 text-left font-mono text-xs text-fg-faint transition-colors duration-150 hover:bg-bg-overlay/60 hover:text-fg-muted"
-      >
-        <ChevronRight
-          className={`size-3 shrink-0 transition-transform duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
-            open ? "rotate-90" : ""
-          }`}
-        />
-        <span className="truncate">{dir.name}/</span>
-      </button>
-      <Collapsible open={open}>
-        {dir.dirs.map((child) => (
-          <DirNode
-            key={child.name}
-            dir={child}
-            depth={depth + 1}
-            onOpen={onOpen}
-          />
-        ))}
-        {dir.files.map((file) => (
+    <WindowedList
+      items={rows}
+      itemKey={(row) => row.key}
+      label="Changed files"
+      renderItem={(row) =>
+        "file" in row ? (
           <FileRow
-            key={file.path}
-            file={file}
-            depth={depth + 1}
+            file={row.file}
+            fullPath={flat}
+            depth={row.depth}
             onOpen={onOpen}
           />
-        ))}
-      </Collapsible>
-    </div>
+        ) : (
+          <button
+            type="button"
+            aria-expanded={!closed.has(row.key)}
+            onClick={() =>
+              setClosed((current) => {
+                const next = new Set(current);
+                if (next.has(row.key)) next.delete(row.key);
+                else next.add(row.key);
+                return next;
+              })
+            }
+            style={{ paddingLeft: 8 + row.depth * 12 }}
+            className="flex h-7 w-full items-center gap-1 rounded-md pr-2 text-left font-mono text-xs text-fg-muted hover:bg-bg-overlay"
+          >
+            <ChevronRight
+              className={`size-3 shrink-0 ${closed.has(row.key) ? "" : "rotate-90"}`}
+            />
+            <span className="truncate">{row.dir.name}/</span>
+          </button>
+        )
+      }
+    />
   );
 }
 
 /** 28px leaf row: basename + kind letter (the tree shows the directory). */
 function FileRow({
+  fullPath = false,
   file,
   depth,
   onOpen,
 }: {
   file: GitChangedFile;
+  fullPath?: boolean;
   depth: number;
   onOpen: (file: GitChangedFile, mode?: OpenMode) => void;
 }) {
-  const base = file.path.split("/").at(-1) ?? file.path;
+  const base = file.path.split("/").filter(Boolean).at(-1) ?? file.path;
   const badge = KIND_BADGES[file.kind];
   return (
     <OpenResourceButton
@@ -374,7 +587,10 @@ function FileRow({
       style={{ paddingLeft: `${8 + depth * 12 + (depth > 0 ? 16 : 0)}px` }}
       className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md pr-2 text-left font-mono text-xs transition-colors duration-150 hover:bg-bg-overlay/60"
     >
-      <span className="min-w-0 flex-1 truncate text-fg">{base}</span>
+      <span className="min-w-0 flex-1 truncate text-fg">
+        {fullPath ? file.path : base}
+        {file.path.endsWith("/") ? " (open folder)" : ""}
+      </span>
       <span className={`shrink-0 text-[11px] font-semibold ${badge.className}`}>
         {badge.letter}
       </span>

@@ -57,3 +57,15 @@ describe("PrefsStore", () => {
     });
   });
 });
+
+it("requires an explicit GitHub CLI opt-in and persists disconnect", () => {
+  const { value, file } = store();
+  expect(normalizePrefs({}).githubCliEnabled).toBe(false);
+  expect(normalizePrefs({ githubCliEnabled: "true" }).githubCliEnabled).toBe(
+    false,
+  );
+  value.save({ githubCliEnabled: true });
+  expect(new PrefsStore(file).load().githubCliEnabled).toBe(true);
+  value.save({ githubCliEnabled: false });
+  expect(new PrefsStore(file).load().githubCliEnabled).toBe(false);
+});

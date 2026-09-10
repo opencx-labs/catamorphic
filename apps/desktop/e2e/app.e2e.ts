@@ -820,7 +820,7 @@ describe("palette intent", () => {
        return options.length > 0 &&
               options.some((el) => el.textContent.includes('Toggle left sidebar')) &&
               options.some((el) => el.textContent.includes('Toggle right sidebar')) &&
-              !options.some((el) => el.querySelector('span.truncate')?.textContent === 'Settings');`,
+              !options.some((el) => el.getAttribute('data-item-id') === 'tab:settings');`,
       { label: "> shows commands, hides navigate rows" },
     );
     const footer = await run<boolean>(

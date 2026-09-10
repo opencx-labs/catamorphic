@@ -31,7 +31,7 @@ export const SETTINGS_CATALOG: readonly SettingsEntry[] = [
       category:
         key === "terminalMacros"
           ? "macros"
-          : key === "terminalAppearance"
+          : key === "terminalAppearance" || key === "codeTheme"
             ? "appearance"
             : key === "notificationSounds" || key === "desktopNotifications"
               ? "notifications"
@@ -106,7 +106,15 @@ export const SETTINGS_CATALOG: readonly SettingsEntry[] = [
     id: "connections",
     label: "Connections",
     category: "connections",
-    keywords: ["connector", "mcp", "plugins", "tools", "accounts"],
+    keywords: [
+      "connector",
+      "mcp",
+      "plugins",
+      "tools",
+      "accounts",
+      "github",
+      "cli",
+    ],
   },
   {
     id: "import",

@@ -45,6 +45,13 @@ export interface CodeHost {
 
 /** Host-neutral PR shapes — what review surfaces render. */
 export interface PullRequestSummary {
+  body?: string;
+  headSha?: string;
+  viewerLogin?: string;
+  requestedReviewers?: string[];
+  reviewRequestedForViewer?: boolean;
+  reviewRequestsUnavailable?: boolean;
+
   number: number;
   title: string;
   url: string;

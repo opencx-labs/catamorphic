@@ -117,6 +117,7 @@ describe("SessionCheckouts", () => {
       {
         sessionId,
         kind: "managed",
+        path: created.path,
         branch: created.branch,
       },
     ]);

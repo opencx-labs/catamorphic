@@ -185,9 +185,9 @@ describe("configurable browser workspace", () => {
   it("removes a folder while keeping its remaining bookmarks", async () => {
     await run("$('button[aria-label=\"More actions for Reference\"]').click()");
     await app.waitFor("!!document.querySelector('[data-sidebar-menu]')");
-    await run("button('Unpin into this project').click()");
+    await run("button('Unpin').click()");
     await app.waitFor(
-      "!document.querySelector('[aria-label=\"Pinned bookmarks\"]')",
+      "!document.querySelector('[aria-label=\"Pinned bookmarks\"] [data-point-key]')",
     );
     await run("$('button[aria-label=\"More actions for Reference\"]').click()");
     await run("button('Edit bookmark…').click()");
@@ -328,7 +328,7 @@ describe("configurable browser workspace", () => {
       ),
     ).toEqual(
       await app.eval(
-        "[0, 0, innerWidth - document.querySelector('[data-sidebar=right]').getBoundingClientRect().width, innerHeight]",
+        "[6, 6, innerWidth - document.querySelector('[data-sidebar=right]').getBoundingClientRect().width - 12, innerHeight - 12]",
       ),
     );
     expect(
@@ -361,7 +361,7 @@ describe("configurable browser workspace", () => {
       ),
     ).toEqual(
       await app.eval(
-        "[0, 0, innerWidth - document.querySelector('[data-sidebar=right]').getBoundingClientRect().width, innerHeight]",
+        "[6, 6, innerWidth - document.querySelector('[data-sidebar=right]').getBoundingClientRect().width - 12, innerHeight - 12]",
       ),
     );
     expect(
@@ -435,60 +435,79 @@ describe("configurable browser workspace", () => {
     );
     expect(await app.eval("document.body.innerText")).toContain(file);
   });
-  it("toggles the frame independently of theme and tab placement and persists it", async () => {
+  it("edits workspace padding, rounding and dividers independently and persists them", async () => {
     await run("button('Settings').click()");
-    await app.waitFor("!!document.querySelector('input[name=tabFrame]')");
+    await app.waitFor("!!document.querySelector('input[name=contentPadding]')");
     await app.eval(
-      "window.catamorphicDesktop.setPrefs({tabPlacement:'top',tabFrame:false})",
+      "window.catamorphicDesktop.setPrefs({contentPadding:12,contentRadius:20,sidebarDividers:false})",
     );
     await app.waitFor(
-      "document.querySelector('main').dataset.tabLayout === 'top' && getComputedStyle(document.querySelector('main')).borderRadius === '0px'",
+      "getComputedStyle(document.querySelector('main')).marginTop === '12px'",
     );
-    for (const appearance of ["light", "dark"]) {
-      await app.eval(
-        `window.catamorphicDesktop.setTheme({selection:'${appearance}',overrides:{}})`,
-      );
-      await app.waitFor(
-        `document.documentElement.dataset.theme === '${appearance}'`,
-      );
-      expect(await run("return getComputedStyle($('main')).borderRadius")).toBe(
-        "0px",
-      );
-      await run("$('input[name=tabFrame]').click()");
-      await app.waitFor(
-        "document.querySelector('main').dataset.tabFrame === 'on' && getComputedStyle(document.querySelector('main')).borderRadius === '16px'",
-      );
-      expect(await run("return getComputedStyle($('main')).borderRadius")).toBe(
-        "16px",
-      );
-      await run("$('input[name=tabFrame]').click()");
-      await app.waitFor(
-        "document.querySelector('main').dataset.tabFrame === 'off' && getComputedStyle(document.querySelector('main')).borderRadius === '0px'",
-      );
-    }
-    await run("setReactValue($('select[name=tabPlacement]'), 'sidebar')");
-    await app.waitFor(
-      "!!document.querySelector('aside [data-tab-orientation=vertical]')",
+    expect(await run("return getComputedStyle($('main')).borderRadius")).toBe(
+      "20px",
     );
     expect(
       await run(
-        "return getComputedStyle($('.workspace-content')).borderRadius",
+        "return getComputedStyle($('[data-sidebar=right]')).borderLeftWidth",
       ),
     ).toBe("0px");
-    await run("$('input[name=tabFrame]').click()");
+    expect(
+      await run(
+        "return !!$('[data-sidebar=right] button[aria-label=\"Collapse right sidebar\"]')",
+      ),
+    ).toBe(true);
+    for (const placement of ["top", "sidebar"]) {
+      await app.eval(
+        `window.catamorphicDesktop.setPrefs({tabPlacement:'${placement}'})`,
+      );
+      await app.waitFor(
+        `document.querySelector('main').dataset.tabLayout === '${placement}'`,
+      );
+      expect(await run("return getComputedStyle($('main')).borderRadius")).toBe(
+        "20px",
+      );
+    }
+    await run("setReactValue($('input[name=contentRadius]'), '0')");
     await app.waitFor(
-      "getComputedStyle(document.querySelector('.workspace-content')).borderRadius === '14px'",
+      "getComputedStyle(document.querySelector('main')).borderRadius === '0px'",
     );
-    // The stored preference survives a renderer reload, independently of tab placement.
+    await run("$('input[name=sidebarDividers]').click()");
+    await app.waitFor(
+      "getComputedStyle(document.querySelector('[data-sidebar=right]')).borderLeftWidth === '1px'",
+    );
     await app.eval("location.reload()");
     await app.waitFor(
-      "document.querySelector('main')?.dataset.tabFrame === 'on' && !!document.querySelector('aside [data-tab-orientation=vertical]')",
+      "document.querySelector('main') && getComputedStyle(document.querySelector('main')).borderRadius === '0px'",
     );
-    await app.eval(
-      "window.catamorphicDesktop.setPrefs({tabPlacement:'sidebar',tabFrame:false})",
-    );
-    await app.waitFor(
-      "document.querySelector('main').dataset.tabFrame === 'off' && document.querySelector('main').dataset.tabLayout === 'sidebar'",
+    expect(await run("return getComputedStyle($('main')).marginTop")).toBe(
+      "12px",
     );
   });
+});
+
+it("does not use GitHub CLI for PRs without profile opt-in", async () => {
+  await app.waitFor(
+    "!!document.querySelector('[data-testid=github-cli-connection]')",
+  );
+  expect(
+    await app.eval(
+      "document.querySelector('[data-testid=github-cli-connection]').textContent.includes('Connect GitHub CLI')",
+    ),
+  ).toBe(true);
+  await app.eval(
+    "window.catamorphicDesktop.setPrefs({ githubCliEnabled: false })",
+  );
+  expect(
+    await app.eval(
+      "window.catamorphicDesktop.prList('unconfigured-project').then(() => 'unexpected success', error => error.message.includes('[github-cli-disabled]'))",
+    ),
+  ).toBe(true);
+  await app.eval("location.reload()");
+  await app.waitFor("!!window.catamorphicDesktop");
+  expect(
+    await app.eval(
+      "window.catamorphicDesktop.getPrefs().then(prefs => prefs.githubCliEnabled)",
+    ),
+  ).toBe(false);
 });

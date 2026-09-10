@@ -1,9 +1,11 @@
 import { ChevronRight, File, Folder } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { fileSearchScore } from "../../shared/file-search-score.js";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { useLocalProjectFiles } from "../lib/local-project-files.js";
-import { Collapsible } from "./collapsible.js";
+import { ActionSearchInput } from "./action-search-input.js";
+import { LazyList } from "./lazy-list.js";
 import { OpenResourceButton } from "./open-resource-button.js";
 
 interface FileTreeNode {
@@ -26,6 +28,10 @@ export function FilesNav({
   onOpen: (path: string, mode?: OpenMode) => void;
   onEmptyChange?: (empty: boolean) => void;
 }) {
+  const [search, setSearch] = useState("");
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(
+    () => new Set(["store"]),
+  );
   const query = useLocalProjectFiles(projectId);
   const refetch = query.refetch;
   useEffect(
@@ -45,82 +51,119 @@ export function FilesNav({
     [contentOnly, query.data],
   );
   useEffect(() => onEmptyChange?.(tree.length === 0), [tree, onEmptyChange]);
-  if (query.isLoading) {
-    return <p className="sidebar-empty-state">Loading…</p>;
-  }
-  if (tree.length === 0) {
-    return <p className="sidebar-empty-state">No files yet.</p>;
-  }
+  const matches = useMemo(
+    () =>
+      !search
+        ? []
+        : (query.data ?? [])
+            .filter((entry) => isVisibleProjectFile(entry.path, contentOnly))
+            .map((entry) => ({
+              ...entry,
+              score: fileSearchScore(entry.path, search),
+            }))
+            .filter((entry) => entry.score > 0)
+            .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path)),
+    [query.data, search, contentOnly],
+  );
+  const rows = useMemo(() => {
+    const result: { node: FileTreeNode; depth: number }[] = [];
+    const visit = (nodes: FileTreeNode[], depth: number) => {
+      for (const node of nodes) {
+        result.push({ node, depth });
+        if (node.children && expanded.has(node.path))
+          visit(node.children, depth + 1);
+      }
+    };
+    if (search)
+      return matches.map((entry) => ({
+        node: { name: entry.path, path: entry.path },
+        depth: 0,
+      }));
+    visit(tree, 0);
+    return result;
+  }, [tree, expanded, search, matches]);
+  if (query.isLoading) return <p className="sidebar-empty-state">Loading…</p>;
   return (
-    <ul className="flex flex-col gap-0.5" data-testid="files-nav">
-      {tree.map((node) => (
-        <FileNode
-          key={node.path}
-          node={node}
-          activePath={activePath}
-          onOpen={onOpen}
-        />
-      ))}
-    </ul>
+    <div className="flex flex-col gap-2" data-testid="files-nav">
+      <ActionSearchInput
+        action="search-files"
+        aria-label="Find files"
+        placeholder="Find files…"
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+        className="field mx-2 min-w-0 rounded-md px-2 py-1 text-xs"
+      />
+      <LazyList
+        items={rows}
+        itemKey={(row) => row.node.path}
+        label="Project files"
+        renderItem={({ node, depth }) => (
+          <FileNode
+            node={node}
+            depth={depth}
+            activePath={activePath}
+            onOpen={onOpen}
+            expanded={expanded.has(node.path)}
+            onToggle={() =>
+              setExpanded((current) => {
+                const next = new Set(current);
+                if (next.has(node.path)) next.delete(node.path);
+                else next.add(node.path);
+                return next;
+              })
+            }
+          />
+        )}
+      />
+      {search && matches.length === 0 && (
+        <p className="sidebar-empty-state">No matching files.</p>
+      )}
+    </div>
   );
 }
 
 function FileNode({
   node,
+  depth,
+  expanded,
+  onToggle,
   activePath,
   onOpen,
 }: {
   node: FileTreeNode;
+  depth: number;
+  expanded: boolean;
+  onToggle: () => void;
   activePath?: string;
   onOpen: (path: string, mode?: OpenMode) => void;
 }) {
-  const [open, setOpen] = useState(node.path === "store");
-  if (node.children) {
-    return (
-      <li>
+  const className = `flex h-7 w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] hover:bg-bg-overlay/60 hover:text-fg ${activePath === node.path ? "bg-bg-overlay text-fg" : "text-fg-muted"}`;
+  return (
+    <div style={{ paddingLeft: depth * 12 }}>
+      {node.children ? (
         <button
           type="button"
-          onClick={() => setOpen((value) => !value)}
-          className="flex h-7 w-full cursor-pointer items-center gap-1.5 rounded-md px-2 text-left text-[13px] text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
-          aria-expanded={open}
+          className={className}
+          aria-expanded={expanded}
+          onClick={onToggle}
         >
           <ChevronRight
-            className={`size-3 shrink-0 text-fg-faint transition-transform ${open ? "rotate-90" : ""}`}
+            className={`size-3 shrink-0 ${expanded ? "rotate-90" : ""}`}
           />
-          <Folder className="size-3.5 shrink-0 text-fg-faint" />
+          <Folder className="size-3.5 shrink-0" />
           <span className="truncate">{node.name}</span>
         </button>
-        <Collapsible open={open}>
-          <ul className="ml-3 border-l border-border pl-1">
-            {node.children.map((child) => (
-              <FileNode
-                key={child.path}
-                node={child}
-                activePath={activePath}
-                onOpen={onOpen}
-              />
-            ))}
-          </ul>
-        </Collapsible>
-      </li>
-    );
-  }
-  return (
-    <li>
-      <OpenResourceButton
-        type="button"
-        onOpen={(mode) => onOpen(node.path, mode)}
-        className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] hover:text-fg ${
-          activePath === node.path
-            ? "bg-bg-overlay text-fg"
-            : "text-fg-muted hover:bg-bg-overlay/60"
-        }`}
-        title={node.path}
-      >
-        <File className="size-3.5 shrink-0 text-fg-faint" />
-        <span className="truncate">{node.name}</span>
-      </OpenResourceButton>
-    </li>
+      ) : (
+        <OpenResourceButton
+          onOpen={(mode) => onOpen(node.path, mode)}
+          className={className}
+          title={node.path}
+        >
+          <File className="size-3.5 shrink-0" />
+          <span className="truncate">{node.name}</span>
+        </OpenResourceButton>
+      )}
+    </div>
   );
 }
 

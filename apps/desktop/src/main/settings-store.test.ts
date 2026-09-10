@@ -118,3 +118,36 @@ it("profile state writes preserve future keys and refuse corrupt files", () => {
   expect(() => store.save({ rightSidebarOpen: true })).toThrow();
   expect(fs.readFileSync(paths.profile, "utf8")).toBe("broken");
 });
+
+it("validates workspace dimensions and preserves explicit zero and divider overrides", () => {
+  const paths = files();
+  saveSettings({
+    files: paths,
+    scope: "profile",
+    patch: { contentPadding: 12, contentRadius: 20, sidebarDividers: true },
+  });
+  saveSettings({
+    files: paths,
+    scope: "personal",
+    patch: { contentPadding: 0, contentRadius: 0, sidebarDividers: false },
+  });
+  expect(loadSettings(paths).values).toMatchObject({
+    contentPadding: 0,
+    contentRadius: 0,
+    sidebarDividers: false,
+  });
+  expect(() =>
+    saveSettings({
+      files: paths,
+      scope: "profile",
+      patch: { contentPadding: -1 },
+    }),
+  ).toThrow();
+  expect(() =>
+    saveSettings({
+      files: paths,
+      scope: "profile",
+      patch: { contentRadius: 100 },
+    }),
+  ).toThrow();
+});
