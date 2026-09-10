@@ -116,10 +116,11 @@ describe("connector OAuth", () => {
         label: "connectors modal with the connection",
       },
     );
-    await runWait(
-      `return modal() && getComputedStyle(modal().parentElement).opacity === "1" && modal().getAnimations().every(animation => animation.playState === "finished");`,
-    );
-    await app.screenshot("/tmp/connectors-computer-use.png");
+    expect(
+      await run(
+        `return [...modal().querySelectorAll('button')].some(button => button.textContent.includes('Connect Codex Computer Use'));`,
+      ),
+    ).toBe(true);
     await run(
       `byText('[data-testid="connection-row"] button', 'Test').click(); return true;`,
     );

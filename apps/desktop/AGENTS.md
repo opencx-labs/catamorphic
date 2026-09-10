@@ -93,6 +93,8 @@ handoff before opening another palette. Native focus behavior needs a dedicated
 scenario; do not remove isolation to make a test pass.
 
 To watch isolated windows explicitly, set `CATAMORPHIC_E2E_REVEAL_WINDOWS=1`.
+Capture screenshots only in visible suites; a hidden Linux window may never
+produce the compositor frame that CDP capture waits for.
 On Linux use a private Xvfb display with Openbox and
 `CATAMORPHIC_E2E_VIRTUAL_DISPLAY=1`; never enable that flag on the user's display.
 
