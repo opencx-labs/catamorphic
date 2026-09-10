@@ -1,4 +1,9 @@
 import path from "node:path";
+import { emitLog } from "@catamorphic/otel";
+import {
+  loadTelemetryEnvironmentFile,
+  startTelemetry,
+} from "@catamorphic/otel/node";
 import {
   app,
   BrowserWindow,
@@ -38,6 +43,7 @@ import {
   registerDesktopShutdown,
   shutdownDesktopServices,
 } from "./shutdown.js";
+import { projectTelemetrySettings } from "./telemetry-settings.js";
 import { registerTerminalSupport } from "./terminal.js";
 import { windowBackgroundColor } from "./theme.js";
 import {
@@ -141,6 +147,19 @@ ipcMain.handle("catamorphic:remote-take-pending-link", () => {
   pendingConnectLink = null;
   return link;
 });
+
+try {
+  loadTelemetryEnvironmentFile({
+    path: path.join(app.getPath("userData"), "otel.env"),
+  });
+} catch {
+  console.warn("Desktop telemetry settings could not be read; check otel.env.");
+}
+const telemetry = startTelemetry({
+  serviceName: "catamorphic-desktop",
+  serviceVersion: app.getVersion(),
+});
+emitLog({ scope: "catamorphic-desktop", body: "Desktop starting" });
 
 const paths = resolveDataPaths();
 const profilesStore = new ProfilesStore(paths.profilesFile);
@@ -611,6 +630,18 @@ app.whenReady().then(async () => {
       [desktopProfileMcpProvider],
     );
     versionBackup.markBootSuccessful();
+    telemetry.configureProjects({
+      resolve: (projectId) =>
+        projectTelemetrySettings({
+          projectId,
+          rootPath: server?.projectRoots.getSync(projectId),
+          userDataPath: app.getPath("userData"),
+        }),
+      onError: () =>
+        console.warn(
+          "Project telemetry configuration is invalid; export for that project is disabled.",
+        ),
+    });
     state.broadcast("catamorphic:server-changed", {
       url: server.url,
       hasCodingAgent: server.hasCodingAgent,
@@ -680,6 +711,13 @@ registerDesktopShutdown({
           dispose: async () => {
             await server?.shutdown();
             server = null;
+          },
+        },
+        {
+          name: "telemetry",
+          dispose: async () => {
+            emitLog({ scope: "catamorphic-desktop", body: "Desktop stopped" });
+            await telemetry.shutdown();
           },
         },
       ],

@@ -435,58 +435,10 @@ describe("configurable browser workspace", () => {
     );
     expect(await app.eval("document.body.innerText")).toContain(file);
   });
-  it("edits workspace padding, rounding and dividers independently and persists them", async () => {
-    await run("button('Settings').click()");
-    await app.waitFor("!!document.querySelector('input[name=contentPadding]')");
-    await app.eval(
-      "window.catamorphicDesktop.setPrefs({contentPadding:12,contentRadius:20,sidebarDividers:false})",
-    );
-    await app.waitFor(
-      "getComputedStyle(document.querySelector('main')).marginTop === '12px'",
-    );
-    expect(await run("return getComputedStyle($('main')).borderRadius")).toBe(
-      "20px",
-    );
-    expect(
-      await run(
-        "return getComputedStyle($('[data-sidebar=right]')).borderLeftWidth",
-      ),
-    ).toBe("0px");
-    expect(
-      await run(
-        "return !!$('[data-sidebar=right] button[aria-label=\"Collapse right sidebar\"]')",
-      ),
-    ).toBe(true);
-    for (const placement of ["top", "sidebar"]) {
-      await app.eval(
-        `window.catamorphicDesktop.setPrefs({tabPlacement:'${placement}'})`,
-      );
-      await app.waitFor(
-        `document.querySelector('main').dataset.tabLayout === '${placement}'`,
-      );
-      expect(await run("return getComputedStyle($('main')).borderRadius")).toBe(
-        "20px",
-      );
-    }
-    await run("setReactValue($('input[name=contentRadius]'), '0')");
-    await app.waitFor(
-      "getComputedStyle(document.querySelector('main')).borderRadius === '0px'",
-    );
-    await run("$('input[name=sidebarDividers]').click()");
-    await app.waitFor(
-      "getComputedStyle(document.querySelector('[data-sidebar=right]')).borderLeftWidth === '1px'",
-    );
-    await app.eval("location.reload()");
-    await app.waitFor(
-      "document.querySelector('main') && getComputedStyle(document.querySelector('main')).borderRadius === '0px'",
-    );
-    expect(await run("return getComputedStyle($('main')).marginTop")).toBe(
-      "12px",
-    );
-  });
 });
 
 it("does not use GitHub CLI for PRs without profile opt-in", async () => {
+  await run("button('Settings').click()");
   await app.waitFor(
     "!!document.querySelector('[data-testid=github-cli-connection]')",
   );

@@ -137,3 +137,6 @@ Settled design decisions live here as short Architecture Decision Records. They 
 - [0117: Optional GitHub CLI connection](0117-optional-github-cli-connection.md)
 
 | [0112](0112-browser-control-and-tool-media.md) | Browser control, host tool media, and Codex app-server | Accepted |
+
+| [0119](0119-three-signal-observability.md) | Three-signal observability | Accepted |
+| [0120](0120-telemetry-correlation-context.md) | Telemetry correlation context | Accepted |

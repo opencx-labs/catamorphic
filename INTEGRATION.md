@@ -173,7 +173,17 @@ family. See `docs/decisions/0039-custom-trigger-kinds.md`.
 
 ### Observability
 
-Catamorphic instruments itself with `@opentelemetry/api` only. Register your OpenTelemetry SDK (NodeSDK, exporters, sampling) in the host as usual and catamorphic's spans (`workflow.run`, `workflow.execute`, `project.create`, `project.deploy`, `sandbox.*`) appear in your traces automatically, correlated with your HTTP spans. Without an SDK they are no-ops. For dev, the repo-root `docker-compose.yml` ships an OTel collector → ClickHouse stack to point your exporter at.
+Catamorphic libraries use only the OpenTelemetry APIs (`@opentelemetry/api`
+and `@opentelemetry/api-logs`). Register your own tracer, meter, and logger
+providers and choose any exporters, processors, samplers, resources, or views.
+Libraries do not initialize SDKs, read exporter environment variables, or take
+ownership of your providers. Without providers, instrumentation is a no-op.
+The optional `@catamorphic/otel/node` entry point provides the shipped hosts'
+NodeSDK bootstrap and accepts the complete `NodeSDKConfiguration` for embedders
+who want it. SDK/exporter dependencies are optional peers, required only by that
+entry point. See [OBSERVABILITY.md](OBSERVABILITY.md) for configuration, coverage,
+project routing, signal conventions, and the local collector.
+
 
 ## Database-only setup (just run the migrations)
 

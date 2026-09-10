@@ -5,6 +5,7 @@ import {
   pushToRemote,
   syncWithNetworkRemote,
 } from "@catamorphic/git";
+import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely } from "kysely";
 import type { Identity } from "../identity.js";
 import type {
@@ -12,6 +13,8 @@ import type {
   PullRequestFile,
   PullRequestSummary,
 } from "./code-host.js";
+
+const tracer = getTracer("@catamorphic/core");
 
 const SYNC_AUTHOR = { name: "Catamorphic", email: "system@catamorphic.dev" };
 
@@ -76,26 +79,39 @@ export class RemoteSyncService {
     identity: Identity,
     projectId: string,
   ): Promise<RemoteSyncOutcome> {
-    const row = await this.projectRow(identity, projectId);
-    if (!row?.remote_url) return { status: "no-remote" };
+    return withSpan(
+      {
+        tracer,
+        name: "project.remote.sync",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        const row = await this.projectRow(identity, projectId);
+        if (!row?.remote_url) return { status: "no-remote" };
 
-    const credentials = await this.credentialsFor(identity, row.remote_url);
-    const dev = await this.projectManager.openDev(
-      identity.tenantId,
-      projectId,
-      identity.externalUserId,
+        const credentials = await this.credentialsFor(identity, row.remote_url);
+        const dev = await this.projectManager.openDev(
+          identity.tenantId,
+          projectId,
+          identity.externalUserId,
+        );
+        try {
+          return await syncWithNetworkRemote({
+            dev,
+            url: row.remote_url,
+            credentials,
+            remoteBranch: row.remote_branch ?? "main",
+            author: SYNC_AUTHOR,
+          });
+        } finally {
+          await dev.dispose();
+        }
+      },
     );
-    try {
-      return await syncWithNetworkRemote({
-        dev,
-        url: row.remote_url,
-        credentials,
-        remoteBranch: row.remote_branch ?? "main",
-        author: SYNC_AUTHOR,
-      });
-    } finally {
-      await dev.dispose();
-    }
   }
 
   /**
@@ -133,61 +149,74 @@ export class RemoteSyncService {
     projectId: string,
     input: { title: string; body?: string; localRef?: string },
   ): Promise<{ url: string; number: number; branch: string }> {
-    const row = await this.projectRow(identity, projectId);
-    const remoteUrl = row?.remote_url;
-    if (!remoteUrl) throw new ProjectHasNoRemoteError(projectId);
-    const host = this.hosts.find((h) => h.handles(remoteUrl));
-    if (!host?.createPullRequest) {
-      throw new PullRequestsUnsupportedError(remoteUrl);
-    }
-    const credentials = await host.credentials(identity);
-
-    const dev = await this.projectManager.openDev(
-      identity.tenantId,
-      projectId,
-      identity.externalUserId,
-    );
-    try {
-      if (!input.localRef) {
-        const status = await dev.status();
-        if (status.dirty) {
-          if (
-            await this.projectManager.localPath({
-              tenantId: identity.tenantId,
-              projectId,
-            })
-          )
-            throw new Error(
-              "Record the changes you want to share first. Opening a pull request will not stage your pending work.",
-            );
-          await dev.commit(input.title, SYNC_AUTHOR);
+    return withSpan(
+      {
+        tracer,
+        name: "project.remote.create_pull_request",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        const row = await this.projectRow(identity, projectId);
+        const remoteUrl = row?.remote_url;
+        if (!remoteUrl) throw new ProjectHasNoRemoteError(projectId);
+        const host = this.hosts.find((h) => h.handles(remoteUrl));
+        if (!host?.createPullRequest) {
+          throw new PullRequestsUnsupportedError(remoteUrl);
         }
-      }
-      const branch = prBranchName(input.title, new Date());
-      await pushToRemote({
-        repoPath: dev.repoPath,
-        native: Boolean(
-          await this.projectManager.localPath({
-            tenantId: identity.tenantId,
-            projectId,
-          }),
-        ),
-        url: remoteUrl,
-        credentials,
-        ref: input.localRef ?? "HEAD",
-        remoteBranch: branch,
-      });
-      const pr = await host.createPullRequest(identity, {
-        remoteUrl,
-        title: input.title,
-        head: branch,
-        base: row?.default_branch ?? row?.remote_branch ?? "main",
-        body: input.body,
-      });
-      return { ...pr, branch };
-    } finally {
-      await dev.dispose();
-    }
+        const credentials = await host.credentials(identity);
+
+        const dev = await this.projectManager.openDev(
+          identity.tenantId,
+          projectId,
+          identity.externalUserId,
+        );
+        try {
+          if (!input.localRef) {
+            const status = await dev.status();
+            if (status.dirty) {
+              if (
+                await this.projectManager.localPath({
+                  tenantId: identity.tenantId,
+                  projectId,
+                })
+              )
+                throw new Error(
+                  "Record the changes you want to share first. Opening a pull request will not stage your pending work.",
+                );
+              await dev.commit(input.title, SYNC_AUTHOR);
+            }
+          }
+          const branch = prBranchName(input.title, new Date());
+          await pushToRemote({
+            repoPath: dev.repoPath,
+            native: Boolean(
+              await this.projectManager.localPath({
+                tenantId: identity.tenantId,
+                projectId,
+              }),
+            ),
+            url: remoteUrl,
+            credentials,
+            ref: input.localRef ?? "HEAD",
+            remoteBranch: branch,
+          });
+          const pr = await host.createPullRequest(identity, {
+            remoteUrl,
+            title: input.title,
+            head: branch,
+            base: row?.default_branch ?? row?.remote_branch ?? "main",
+            body: input.body,
+          });
+          return { ...pr, branch };
+        } finally {
+          await dev.dispose();
+        }
+      },
+    );
   }
 
   /**
@@ -199,12 +228,25 @@ export class RemoteSyncService {
     identity: Identity,
     projectId: string,
   ): Promise<PullRequestSummary[]> {
-    const row = await this.projectRow(identity, projectId);
-    const remoteUrl = row?.remote_url;
-    if (!remoteUrl) return [];
-    const host = this.hosts.find((h) => h.handles(remoteUrl));
-    if (!host?.listPullRequests) return [];
-    return host.listPullRequests(identity, { remoteUrl });
+    return withSpan(
+      {
+        tracer,
+        name: "project.remote.list_pull_requests",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        const row = await this.projectRow(identity, projectId);
+        const remoteUrl = row?.remote_url;
+        if (!remoteUrl) return [];
+        const host = this.hosts.find((h) => h.handles(remoteUrl));
+        if (!host?.listPullRequests) return [];
+        return host.listPullRequests(identity, { remoteUrl });
+      },
+    );
   }
 
   /** A PR's changed files with patches; throws when unsupported. */
@@ -213,14 +255,27 @@ export class RemoteSyncService {
     projectId: string,
     number: number,
   ): Promise<PullRequestFile[]> {
-    const row = await this.projectRow(identity, projectId);
-    const remoteUrl = row?.remote_url;
-    if (!remoteUrl) throw new ProjectHasNoRemoteError(projectId);
-    const host = this.hosts.find((h) => h.handles(remoteUrl));
-    if (!host?.pullRequestFiles) {
-      throw new PullRequestsUnsupportedError(remoteUrl);
-    }
-    return host.pullRequestFiles(identity, { remoteUrl, number });
+    return withSpan(
+      {
+        tracer,
+        name: "project.remote.pull_request_files",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        const row = await this.projectRow(identity, projectId);
+        const remoteUrl = row?.remote_url;
+        if (!remoteUrl) throw new ProjectHasNoRemoteError(projectId);
+        const host = this.hosts.find((h) => h.handles(remoteUrl));
+        if (!host?.pullRequestFiles) {
+          throw new PullRequestsUnsupportedError(remoteUrl);
+        }
+        return host.pullRequestFiles(identity, { remoteUrl, number });
+      },
+    );
   }
 
   private async credentialsFor(identity: Identity, remoteUrl: string) {

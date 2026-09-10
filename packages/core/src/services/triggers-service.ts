@@ -481,6 +481,7 @@ export class TriggersService {
         name: "trigger.fire",
         attributes: {
           "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
           "catamorphic.project.id": args.projectId,
           "catamorphic.trigger.kind": kind.name,
           "catamorphic.trigger.mode": mode,

@@ -296,3 +296,10 @@ input. In-page pointers use the same `point_at`/`clear_pointers` contract as she
 pointers. Native computer access is an optional profile connector with the
 existing queued consent UI; cancellation withdraws the request. See
 [Computer use](docs/computer-use.md) and ADR 0112.
+
+
+## Observability
+
+The desktop exports logs, traces, and metrics through standard OTEL settings.
+Machine settings and committed project defaults select local and remote destinations independently.
+See [OBSERVABILITY.md](../../OBSERVABILITY.md) and ADR 0119 for configuration.

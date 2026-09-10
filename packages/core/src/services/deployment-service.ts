@@ -125,15 +125,32 @@ export class DeploymentService {
     projectId: string,
     externalUserId: string,
   ) {
-    return this.withDev(tenantId, projectId, externalUserId, async (repo) => {
-      const current = await repo.currentBranch();
-      if (current !== "main") return { branch: current, created: false };
-      const name = await generateWorkBranchName({
-        isTaken: (n) => repo.hasBranch(n),
-      });
-      await repo.createBranch(name);
-      return { branch: name, created: true };
-    });
+    return withSpan(
+      {
+        tracer,
+        name: "project.ensure_work_branch",
+        attributes: {
+          "catamorphic.tenant.id": tenantId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        return this.withDev(
+          tenantId,
+          projectId,
+          externalUserId,
+          async (repo) => {
+            const current = await repo.currentBranch();
+            if (current !== "main") return { branch: current, created: false };
+            const name = await generateWorkBranchName({
+              isTaken: (n) => repo.hasBranch(n),
+            });
+            await repo.createBranch(name);
+            return { branch: name, created: true };
+          },
+        );
+      },
+    );
   }
 
   async checkoutBranch(
@@ -142,10 +159,27 @@ export class DeploymentService {
     externalUserId: string,
     branch: string,
   ) {
-    return this.withDev(tenantId, projectId, externalUserId, async (repo) => {
-      await repo.checkout(branch);
-      return repo.status();
-    });
+    return withSpan(
+      {
+        tracer,
+        name: "project.checkout_branch",
+        attributes: {
+          "catamorphic.tenant.id": tenantId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        return this.withDev(
+          tenantId,
+          projectId,
+          externalUserId,
+          async (repo) => {
+            await repo.checkout(branch);
+            return repo.status();
+          },
+        );
+      },
+    );
   }
 
   async deploy(
@@ -333,27 +367,44 @@ export class DeploymentService {
     externalUserId: string,
     opts?: { files?: Record<string, string> },
   ) {
-    return this.withDev(tenantId, projectId, externalUserId, async (repo) => {
-      if (await this.projectManager.localPath({ tenantId, projectId })) {
-        throw new Error(
-          "This project uses its existing Git remote. Use Git sync to download changes; its published snapshot is already available locally.",
+    return withSpan(
+      {
+        tracer,
+        name: "project.pull_from_remote",
+        attributes: {
+          "catamorphic.tenant.id": tenantId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        return this.withDev(
+          tenantId,
+          projectId,
+          externalUserId,
+          async (repo) => {
+            if (await this.projectManager.localPath({ tenantId, projectId })) {
+              throw new Error(
+                "This project uses its existing Git remote. Use Git sync to download changes; its published snapshot is already available locally.",
+              );
+            }
+            if (opts?.files) {
+              for (const [path, content] of Object.entries(opts.files)) {
+                await repo.writeFile(path, content);
+              }
+            }
+            const author = authorFor(externalUserId);
+            return pull({
+              dev: repo,
+              remote: requireRemote(this.projectManager),
+              tenantId,
+              projectId,
+              remoteBranch: REMOTE_BRANCH,
+              author,
+            });
+          },
         );
-      }
-      if (opts?.files) {
-        for (const [path, content] of Object.entries(opts.files)) {
-          await repo.writeFile(path, content);
-        }
-      }
-      const author = authorFor(externalUserId);
-      return pull({
-        dev: repo,
-        remote: requireRemote(this.projectManager),
-        tenantId,
-        projectId,
-        remoteBranch: REMOTE_BRANCH,
-        author,
-      });
-    });
+      },
+    );
   }
 
   async discardDraft(
@@ -361,18 +412,35 @@ export class DeploymentService {
     projectId: string,
     externalUserId: string,
   ) {
-    return this.withDev(tenantId, projectId, externalUserId, async (repo) => {
-      await repo.resetWorkingTree();
-      const branch = await repo.currentBranch();
-      if (
-        branch !== "main" &&
-        !(await this.projectManager.localPath({ tenantId, projectId }))
-      ) {
-        await repo.checkout("main");
-        await repo.deleteBranch(branch).catch(() => {});
-      }
-      return { discarded: true, branch };
-    });
+    return withSpan(
+      {
+        tracer,
+        name: "project.discard_draft",
+        attributes: {
+          "catamorphic.tenant.id": tenantId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        return this.withDev(
+          tenantId,
+          projectId,
+          externalUserId,
+          async (repo) => {
+            await repo.resetWorkingTree();
+            const branch = await repo.currentBranch();
+            if (
+              branch !== "main" &&
+              !(await this.projectManager.localPath({ tenantId, projectId }))
+            ) {
+              await repo.checkout("main");
+              await repo.deleteBranch(branch).catch(() => {});
+            }
+            return { discarded: true, branch };
+          },
+        );
+      },
+    );
   }
 
   async resolveConflicts(
@@ -381,17 +449,36 @@ export class DeploymentService {
     externalUserId: string,
     opts: { resolutions: Record<string, string>; message?: string },
   ) {
-    return this.withDev(tenantId, projectId, externalUserId, async (repo) => {
-      for (const [filepath, content] of Object.entries(opts.resolutions)) {
-        await repo.writeFile(filepath, content);
-      }
-      const author = authorFor(externalUserId);
-      const sha = await repo.commit(
-        opts.message ?? "Resolve merge conflicts",
-        author,
-      );
-      return { commitSha: sha };
-    });
+    return withSpan(
+      {
+        tracer,
+        name: "project.resolve_conflicts",
+        attributes: {
+          "catamorphic.tenant.id": tenantId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        return this.withDev(
+          tenantId,
+          projectId,
+          externalUserId,
+          async (repo) => {
+            for (const [filepath, content] of Object.entries(
+              opts.resolutions,
+            )) {
+              await repo.writeFile(filepath, content);
+            }
+            const author = authorFor(externalUserId);
+            const sha = await repo.commit(
+              opts.message ?? "Resolve merge conflicts",
+              author,
+            );
+            return { commitSha: sha };
+          },
+        );
+      },
+    );
   }
 }
 

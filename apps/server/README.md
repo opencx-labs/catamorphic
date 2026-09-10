@@ -84,3 +84,10 @@ Agent context and deferred capabilities are documented in
 current user's display name and a paginated project-member directory for ordinary
 membership managers. `StockServerOptions.agentCapabilities` customizes profiles,
 capabilities, approvals, and activity reporting; host access remains authoritative.
+
+## Observability
+
+Configure `OTEL_EXPORTER_OTLP_ENDPOINT` to export traces, metrics, and logs.
+Standard OTEL variables select protocols, headers, sampling, and signal-specific
+settings. `OTEL_SDK_DISABLED=true` disables export. See
+[OBSERVABILITY.md](../../OBSERVABILITY.md) for examples and coverage.

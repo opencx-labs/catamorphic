@@ -48,6 +48,7 @@ import {
   tool,
 } from "ai";
 import { z } from "zod";
+import { agentTelemetry } from "./telemetry.js";
 
 const DEFAULT_INSTRUCTIONS = `You are working in a Catamorphic project — a folder that can hold any kind of work: documents, notes, data, code, automations, apps.
 Use the provided tools to inspect and edit the project in your working directory.
@@ -145,6 +146,9 @@ export type McpPolicySource =
   | (() => Record<string, McpToolPolicyLayers>);
 
 interface AiSdkSessionState {
+  sessionId: string;
+  userId: string;
+  projectId: string;
   instructions: string;
   tools: ReturnType<typeof createTools>;
   messages: ModelMessage[];
@@ -321,6 +325,9 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     }
 
     this.sessions.set(providerSessionId, {
+      sessionId: opts.sessionId,
+      userId: opts.userId,
+      projectId: opts.projectId,
       instructions,
       tools: createTools(
         {
@@ -471,7 +478,14 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
         ? this.opts.resolveModel(opts.model)
         : this.opts.model;
     state.abort = new AbortController();
+    const telemetry = agentTelemetry({
+      model,
+      sessionId: state.sessionId,
+      userId: state.userId,
+      projectId: state.projectId,
+    });
     const agent = new ToolLoopAgent({
+      telemetry: telemetry.settings,
       model,
       instructions: withAgentContext(state.instructions, opts?.context),
       tools: {
@@ -508,10 +522,12 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     const pendingMcpCalls = new Map<string, { name: string; input: unknown }>();
 
     try {
-      const result = await agent.stream({
-        messages: requestMessages,
-        abortSignal: state.abort.signal,
-      });
+      const result = await telemetry.run(() =>
+        agent.stream({
+          messages: requestMessages,
+          abortSignal: state.abort?.signal,
+        }),
+      );
       for await (const part of result.stream) {
         if (part.type === "text-delta") {
           text += part.text;
@@ -587,6 +603,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       }
       yield { type: "done" };
     } catch (error) {
+      if (!state.abort?.signal.aborted) telemetry.fail(error);
       if (text.trim().length > 0) {
         yield { type: "text", content: text };
       }
@@ -598,6 +615,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
         yield { type: "error", content: errorMessage(error) };
       }
     } finally {
+      telemetry.finish({ cancelled: state.abort?.signal.aborted ?? false });
       state.running = false;
       state.abort = undefined;
     }

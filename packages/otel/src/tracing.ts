@@ -1,10 +1,10 @@
-import type { Attributes, Span, Tracer } from "@opentelemetry/api";
-import {
-  context,
-  propagation,
-  SpanStatusCode,
-  trace,
-} from "@opentelemetry/api";
+import type { Attributes, Span, SpanKind, Tracer } from "@opentelemetry/api";
+import { SpanStatusCode } from "@opentelemetry/api";
+
+import { injectTelemetryContext } from "./correlation.js";
+import { emitLog, SeverityNumber } from "./logging.js";
+import { measureOperation } from "./metrics.js";
+import { contextualTracer } from "./scoped-telemetry.js";
 
 export type SpanAttributes = Attributes;
 
@@ -15,19 +15,27 @@ export type SpanAttributes = Attributes;
  * span produced here is a no-op with negligible overhead.
  */
 export function getTracer(instrumentationScope: string): Tracer {
-  return trace.getTracer(instrumentationScope);
+  return contextualTracer(instrumentationScope);
 }
 
 export function currentTraceContext(): Record<string, string> {
-  const carrier: Record<string, string> = {};
-  propagation.inject(context.active(), carrier);
-  return carrier;
+  return injectTelemetryContext();
 }
 
 export interface WithSpanOptions {
   tracer: Tracer;
   name: string;
   attributes?: SpanAttributes;
+  kind?: SpanKind;
+}
+
+const spanErrors = new WeakMap<Span, string>();
+
+/** Mark a handled domain failure without throwing away the operation's result. */
+export function markSpanError(args: { span: Span; errorType: string }): void {
+  spanErrors.set(args.span, args.errorType);
+  args.span.setAttribute("error.type", args.errorType);
+  args.span.setStatus({ code: SpanStatusCode.ERROR });
 }
 
 /**
@@ -36,22 +44,36 @@ export interface WithSpanOptions {
  * rethrowing.
  */
 export async function withSpan<T>(
-  { tracer, name, attributes }: WithSpanOptions,
+  { tracer, name, attributes, kind }: WithSpanOptions,
   fn: (span: Span) => Promise<T>,
 ): Promise<T> {
-  return tracer.startActiveSpan(name, { attributes }, async (span) => {
+  return tracer.startActiveSpan(name, { attributes, kind }, async (span) => {
+    const finish = measureOperation(name);
+    let errorType: string | undefined;
     try {
       const result = await fn(span);
-      span.setStatus({ code: SpanStatusCode.OK });
       return result;
     } catch (err) {
-      span.recordException(err instanceof Error ? err : String(err));
+      errorType = err instanceof Error ? err.name : "_OTHER";
+      span.setAttribute("error.type", errorType);
+      span.recordException({ name: errorType });
       span.setStatus({
         code: SpanStatusCode.ERROR,
-        message: err instanceof Error ? err.message : String(err),
       });
       throw err;
     } finally {
+      const failure = errorType ?? spanErrors.get(span);
+      if (failure)
+        emitLog({
+          scope: "@catamorphic/otel",
+          body: "Operation failed",
+          severity: SeverityNumber.ERROR,
+          attributes: {
+            "catamorphic.operation.name": name,
+            "error.type": failure,
+          },
+        });
+      finish(failure);
       span.end();
     }
   });

@@ -1,5 +1,5 @@
 import type { DB } from "@catamorphic/db";
-import { getTracer, withSpan } from "@catamorphic/otel";
+import { getTracer, setSpanCorrelation, withSpan } from "@catamorphic/otel";
 import type { AgentEventCursor, AgentRuntimeEvent } from "@catamorphic/sandbox";
 import type { Kysely, Transaction } from "kysely";
 import type { Identity } from "../identity.js";
@@ -59,19 +59,25 @@ export class AgentRuntimeEventsService {
         tracer,
         name: "agent.runtime.event.append",
         attributes: {
-          "catamorphic.session.id": event.sessionId,
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+          "catamorphic.agent.session.id": event.sessionId,
           ...(event.turnId
-            ? { "catamorphic.agent.turn_id": event.turnId }
+            ? { "catamorphic.agent.turn.id": event.turnId }
             : {}),
         },
       },
-      async () => {
+      async (span) => {
         const inserted = await this.db.transaction().execute(async (trx) => {
-          await requireRuntimeSession({
+          const session = await requireRuntimeSession({
             db: trx,
             identity: args.identity,
             sessionId: event.sessionId,
             lock: true,
+          });
+          setSpanCorrelation({
+            span,
+            attributes: { "catamorphic.project.id": session.projectId },
           });
           return appendEvent({ trx, event });
         });

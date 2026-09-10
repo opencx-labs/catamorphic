@@ -253,8 +253,9 @@ describe("workflow authoring", { retry: 0 }, () => {
       "edited workflow ready",
     );
     await run(`button('Save').click(); return true;`);
+    await wait(`return !!button('Saved');`, "workflow save completed");
     await app.waitFor(
-      `(async()=>{const {url}=await window.catamorphicDesktop.getServerState(); const file=await fetch(url+'/api/projects/${projectId}/files/linked-workflow.ts').then(r=>r.json()); const state=await window.catamorphicDesktop.workspaceStateGet('${projectId}'); return file.content.includes('Team report') && state.tabs.some(tab=>tab.name==='linkedWorkflow'&&!tab.workflowDraft);})()`,
+      `(async()=>{const {url}=await window.catamorphicDesktop.getServerState(); const response=await fetch(url+'/api/projects/${projectId}/files/linked-workflow.ts'); if(!response.ok) throw new Error('Read saved workflow failed ('+response.status+'): '+await response.text()); const file=await response.json(); const state=await window.catamorphicDesktop.workspaceStateGet('${projectId}'); return file.content.includes('Team report') && state?.tabs?.some(tab=>tab.name==='linkedWorkflow'&&!tab.workflowDraft);})()`,
       { label: "source saved and draft cleared" },
     );
   });

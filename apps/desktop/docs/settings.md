@@ -30,8 +30,11 @@ Settings > Workspace provides a scope selector, effective values at that scope,
 source labels and Reset only for explicit choices. A profile edit can remain masked
 by a project override. Reset that project override to follow the profile again.
 Rows reserve space for Reset and source text across inherited and custom states,
-so toggles and resets do not reflow nearby controls. Tab frame previews its inset
-with the standard 200 ms transition; reduced motion applies it immediately.
+so toggles and resets do not reflow nearby controls. Content padding and corner
+radius preview with the standard 200 ms transition; reduced motion applies them
+immediately. Tab frame independently controls the border.
+Scope selectors wrap below headings when space is tight, and option controls
+shrink within their rows so both sidebars can remain open without horizontal scroll.
 
 ## Other families
 

@@ -198,7 +198,11 @@ Host can safely `JOIN host.orgs.id = catamorphic.projects.tenant_id` from its ow
 
 ## Observability
 
-Every service call and sandbox operation is instrumented with `@opentelemetry/api` (spans like `workflow.run`, `project.deploy`, `sandbox.exec` with `catamorphic.*` attributes). Register your OpenTelemetry SDK in the host and the spans appear in your traces; without one they're no-ops. Injected sandbox providers are wrapped automatically.
+Core service hot paths and sandbox operations emit OpenTelemetry spans and
+operation metrics. Libraries also emit correlated diagnostic logs through the
+OpenTelemetry logs API. Hosts own all providers and exporters; without them,
+instrumentation is a no-op. See [OBSERVABILITY.md](../../OBSERVABILITY.md) for
+coverage and configuration. Injected sandbox providers are wrapped automatically.
 
 ## Lifecycle
 

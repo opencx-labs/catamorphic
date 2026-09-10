@@ -1,7 +1,10 @@
 import type { DB } from "@catamorphic/db";
+import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely } from "kysely";
 import { type Identity, identityCovers } from "../identity.js";
 import { AppNotFoundError } from "./apps-service.js";
+
+const tracer = getTracer("@catamorphic/core");
 
 /**
  * Serialized-snapshot cap. App-local storage is for this user's todos,
@@ -42,19 +45,32 @@ export class AppStorageService {
     projectId: string,
     appName: string,
   ): Promise<{ data: Record<string, string>; revision: string }> {
-    const app = await this.appRow(identity, projectId, appName);
-    if (!app) return { data: {}, revision: "0" };
-    const row = await this.db
-      .selectFrom("app_storage")
-      .where("app_id", "=", app.id)
-      .where("external_user_id", "=", identity.externalUserId)
-      .select(["data", "updated_at"])
-      .executeTakeFirst();
-    if (!row) return { data: {}, revision: "0" };
-    return {
-      data: sanitizeSnapshot(row.data),
-      revision: row.updated_at.getTime().toString(36),
-    };
+    return withSpan(
+      {
+        tracer,
+        name: "app.storage.get",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        const app = await this.appRow(identity, projectId, appName);
+        if (!app) return { data: {}, revision: "0" };
+        const row = await this.db
+          .selectFrom("app_storage")
+          .where("app_id", "=", app.id)
+          .where("external_user_id", "=", identity.externalUserId)
+          .select(["data", "updated_at"])
+          .executeTakeFirst();
+        if (!row) return { data: {}, revision: "0" };
+        return {
+          data: sanitizeSnapshot(row.data),
+          revision: row.updated_at.getTime().toString(36),
+        };
+      },
+    );
   }
 
   /** Replace the caller's snapshot (last write wins, like localStorage). */
@@ -64,24 +80,37 @@ export class AppStorageService {
     appName: string,
     data: Record<string, string>,
   ): Promise<void> {
-    assertWithinQuota(data);
-    const app = await this.appRow(identity, projectId, appName);
-    if (!app) throw new AppNotFoundError(appName);
-    await this.db
-      .insertInto("app_storage")
-      .values({
-        app_id: app.id,
-        external_user_id: identity.externalUserId,
-        data: JSON.stringify(data),
-        updated_at: new Date(),
-      })
-      .onConflict((oc) =>
-        oc.columns(["app_id", "external_user_id"]).doUpdateSet({
-          data: JSON.stringify(data),
-          updated_at: new Date(),
-        }),
-      )
-      .execute();
+    return withSpan(
+      {
+        tracer,
+        name: "app.storage.put",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        assertWithinQuota(data);
+        const app = await this.appRow(identity, projectId, appName);
+        if (!app) throw new AppNotFoundError(appName);
+        await this.db
+          .insertInto("app_storage")
+          .values({
+            app_id: app.id,
+            external_user_id: identity.externalUserId,
+            data: JSON.stringify(data),
+            updated_at: new Date(),
+          })
+          .onConflict((oc) =>
+            oc.columns(["app_id", "external_user_id"]).doUpdateSet({
+              data: JSON.stringify(data),
+              updated_at: new Date(),
+            }),
+          )
+          .execute();
+      },
+    );
   }
 
   private appRow(identity: Identity, projectId: string, appName: string) {

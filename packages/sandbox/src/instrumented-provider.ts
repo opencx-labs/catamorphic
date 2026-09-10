@@ -1,4 +1,4 @@
-import { getTracer, withSpan } from "@catamorphic/otel";
+import { getTracer, markSpanError, withSpan } from "@catamorphic/otel";
 import type {
   CancelRuntimeInvocationArgs,
   CreateSandboxOpts,
@@ -97,7 +97,14 @@ export function instrumentSandboxProvider(
       ),
 
     getSandboxStatus: (sandboxId: string): Promise<SandboxStatus> =>
-      provider.getSandboxStatus(sandboxId),
+      withSpan(
+        {
+          tracer,
+          name: "sandbox.status",
+          attributes: { ...base, "catamorphic.sandbox.id": sandboxId },
+        },
+        () => provider.getSandboxStatus(sandboxId),
+      ),
 
     executeCommand: (
       sandboxId: string,
@@ -117,6 +124,8 @@ export function instrumentSandboxProvider(
             opts,
           );
           span.setAttribute("catamorphic.sandbox.exit_code", result.exitCode);
+          if (result.exitCode !== 0)
+            markSpanError({ span, errorType: "process_exit" });
           return result;
         },
       ),

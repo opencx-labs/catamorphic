@@ -16,6 +16,7 @@ import {
 import {
   createApp,
   identityFromBearer,
+  instrumentHttpServer,
   serveSpaDist,
 } from "@catamorphic/fastify-plugin";
 import {
@@ -447,6 +448,7 @@ async function buildStockServerInner(
       );
     } else done(null, payload);
   });
+  instrumentHttpServer(app);
   app.addHook("onSend", (request, reply, payload, done) => {
     if (reply.statusCode !== 401 || !request.url.startsWith("/api/")) {
       done(null, payload);
@@ -508,6 +510,7 @@ async function buildStockServerInner(
   // the owner-only credential from the mounted data directory and invokes it
   // from the same machine or container.
   const operatorApp = Fastify();
+  instrumentHttpServer(operatorApp);
   disposers.push(() => operatorApp.close());
   registerMachineSetup({
     app: operatorApp,

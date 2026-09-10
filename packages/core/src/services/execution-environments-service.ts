@@ -1,3 +1,4 @@
+import { getTracer, withSpan } from "@catamorphic/otel";
 import type {
   EnvironmentBinding,
   EnvironmentIsolation,
@@ -17,6 +18,8 @@ import {
 import { AccessDeniedError } from "./artifact-scope.js";
 import type { ProjectEnvironmentsService } from "./project-environments-service.js";
 import { EnvironmentCapacityError } from "./worker-capacity.js";
+
+const tracer = getTracer("@catamorphic/core");
 
 export interface EnvironmentAdmission {
   environmentName: string;
@@ -119,92 +122,107 @@ export class ExecutionEnvironmentsService {
     allowed?: readonly string[];
     preferred?: readonly string[];
   }): Promise<EnvironmentDiscovery> {
-    if (!mayUseProject(args.identity, args.projectId)) {
-      throw new AccessDeniedError();
-    }
-    const policy = await this.projects.list(args);
-    if (policy.invalid) throw new Error(policy.invalid.error);
-    const includeDenied = isBuilder(args.identity, args.projectId);
-    const items: EnvironmentDiscoveryItem[] = [];
-    for (const name of Object.keys(policy.environments).sort()) {
-      const granted = identityMayUseEnvironment(
-        args.identity,
-        args.projectId,
-        name,
-      );
-      const agentAllowed = !args.allowed || args.allowed.includes(name);
-      const allowed = granted && agentAllowed;
-      if (!allowed && !includeDenied) continue;
-      const definition = policy.environments[name];
-      if (!definition) continue;
-      const evaluated = await this.evaluate({ ...args, name }).catch(
-        (error) => {
-          if (error instanceof EnvironmentCapacityError)
-            return {
-              bindingUnavailable: false as const,
-              reasons: [error.message],
-            };
-          throw error;
+    return withSpan(
+      {
+        tracer,
+        name: "environment.discover",
+        attributes: {
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+          "catamorphic.project.id": args.projectId,
         },
-      );
-      const admission =
-        "admission" in evaluated ? evaluated.admission : undefined;
-      const compatibilityReasons =
-        "admission" in evaluated
-          ? []
-          : evaluated.bindingUnavailable
-            ? ["Host binding is unavailable"]
-            : evaluated.reasons;
-      const reasons = allowed
-        ? compatibilityReasons
-        : [
-            ...(granted ? [] : ["Identity is not granted this Environment"]),
-            ...(agentAllowed
+      },
+      async () => {
+        if (!mayUseProject(args.identity, args.projectId)) {
+          throw new AccessDeniedError();
+        }
+        const policy = await this.projects.list(args);
+        if (policy.invalid) throw new Error(policy.invalid.error);
+        const includeDenied = isBuilder(args.identity, args.projectId);
+        const items: EnvironmentDiscoveryItem[] = [];
+        for (const name of Object.keys(policy.environments).sort()) {
+          const granted = identityMayUseEnvironment(
+            args.identity,
+            args.projectId,
+            name,
+          );
+          const agentAllowed = !args.allowed || args.allowed.includes(name);
+          const allowed = granted && agentAllowed;
+          if (!allowed && !includeDenied) continue;
+          const definition = policy.environments[name];
+          if (!definition) continue;
+          const evaluated = await this.evaluate({ ...args, name }).catch(
+            (error) => {
+              if (error instanceof EnvironmentCapacityError)
+                return {
+                  bindingUnavailable: false as const,
+                  reasons: [error.message],
+                };
+              throw error;
+            },
+          );
+          const admission =
+            "admission" in evaluated ? evaluated.admission : undefined;
+          const compatibilityReasons =
+            "admission" in evaluated
               ? []
-              : ["Agent policy does not allow this Environment"]),
-          ];
-      items.push({
-        name,
-        label:
-          definition.binding === "this-machine" ||
-          admission?.binding.trust === "local"
-            ? "This machine"
-            : name,
-        clientRequired: definition.binding === "this-machine",
-        ...(definition.description
-          ? { description: definition.description }
-          : {}),
-        available: Boolean(admission),
-        compatible: Boolean(admission) && allowed,
-        preferred: args.preferred?.includes(name) ?? false,
-        allowed,
-        reasons,
-        ...(admission
-          ? {
-              binding: {
-                trust: admission.binding.trust,
-                isolation: admission.binding.isolation,
-                capabilities: admission.binding.capabilities,
-                resources: admission.binding.resources,
-              },
-            }
-          : {}),
-      });
-    }
-    const defaultEnvironment = [
-      ...(args.preferred ?? []),
-      policy.defaultEnvironment,
-      ...items.map((item) => item.name),
-    ].find((name) =>
-      items.some(
-        (item) =>
-          item.name === name &&
-          item.allowed &&
-          item.compatible &&
-          item.available,
-      ),
+              : evaluated.bindingUnavailable
+                ? ["Host binding is unavailable"]
+                : evaluated.reasons;
+          const reasons = allowed
+            ? compatibilityReasons
+            : [
+                ...(granted
+                  ? []
+                  : ["Identity is not granted this Environment"]),
+                ...(agentAllowed
+                  ? []
+                  : ["Agent policy does not allow this Environment"]),
+              ];
+          items.push({
+            name,
+            label:
+              definition.binding === "this-machine" ||
+              admission?.binding.trust === "local"
+                ? "This machine"
+                : name,
+            clientRequired: definition.binding === "this-machine",
+            ...(definition.description
+              ? { description: definition.description }
+              : {}),
+            available: Boolean(admission),
+            compatible: Boolean(admission) && allowed,
+            preferred: args.preferred?.includes(name) ?? false,
+            allowed,
+            reasons,
+            ...(admission
+              ? {
+                  binding: {
+                    trust: admission.binding.trust,
+                    isolation: admission.binding.isolation,
+                    capabilities: admission.binding.capabilities,
+                    resources: admission.binding.resources,
+                  },
+                }
+              : {}),
+          });
+        }
+        const defaultEnvironment = [
+          ...(args.preferred ?? []),
+          policy.defaultEnvironment,
+          ...items.map((item) => item.name),
+        ].find((name) =>
+          items.some(
+            (item) =>
+              item.name === name &&
+              item.allowed &&
+              item.compatible &&
+              item.available,
+          ),
+        );
+        return { items, ...(defaultEnvironment ? { defaultEnvironment } : {}) };
+      },
     );
-    return { items, ...(defaultEnvironment ? { defaultEnvironment } : {}) };
   }
 
   async listCompatible(args: {
@@ -237,72 +255,85 @@ export class ExecutionEnvironmentsService {
     preferred?: readonly string[];
     requirements: EnvironmentRequirements;
   }): Promise<EnvironmentAdmission> {
-    const policy = await this.projects.list(args);
-    if (policy.invalid) throw new Error(policy.invalid.error);
-    if (args.environment) {
-      const definition = policy.environments[args.environment];
-      if (!definition) throw new EnvironmentNotFoundError(args.environment);
-      if (args.allowed && !args.allowed.includes(args.environment)) {
-        throw new EnvironmentAccessDeniedError(args.environment);
-      }
-      if (
-        !identityMayUseEnvironment(
-          args.identity,
-          args.projectId,
-          args.environment,
-        )
-      ) {
-        throw new EnvironmentAccessDeniedError(args.environment);
-      }
-      const evaluated = await this.evaluate({
-        ...args,
-        name: args.environment,
-      });
-      if ("admission" in evaluated) return evaluated.admission;
-      if (evaluated.bindingUnavailable) {
-        throw new EnvironmentBindingUnavailableError(
-          args.environment,
-          definition.binding,
-        );
-      }
-      throw new EnvironmentIncompatibleError(
-        args.environment,
-        evaluated.reasons,
-      );
-    }
-
-    const ordered = [
-      ...(args.preferred ?? []),
-      ...(policy.defaultEnvironment ? [policy.defaultEnvironment] : []),
-      ...Object.keys(policy.environments).sort(),
-    ].filter((name, index, all) => all.indexOf(name) === index);
-    const reasons: Record<string, readonly string[]> = {};
-    for (const name of ordered) {
-      if (!policy.environments[name]) continue;
-      if (args.allowed && !args.allowed.includes(name)) {
-        reasons[name] = ["Agent policy does not allow this Environment"];
-        continue;
-      }
-      if (!identityMayUseEnvironment(args.identity, args.projectId, name)) {
-        reasons[name] = ["Identity is not granted this Environment"];
-        continue;
-      }
-      const evaluated = await this.evaluate({ ...args, name }).catch(
-        (error) => {
-          if (error instanceof EnvironmentCapacityError)
-            return {
-              bindingUnavailable: false as const,
-              reasons: [error.message],
-            };
-          throw error;
+    return withSpan(
+      {
+        tracer,
+        name: "environment.admit",
+        attributes: {
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+          "catamorphic.project.id": args.projectId,
         },
-      );
-      if ("admission" in evaluated) return evaluated.admission;
-      reasons[name] = evaluated.bindingUnavailable
-        ? ["Host binding is unavailable"]
-        : evaluated.reasons;
-    }
-    throw new NoCompatibleEnvironmentError(reasons);
+      },
+      async () => {
+        const policy = await this.projects.list(args);
+        if (policy.invalid) throw new Error(policy.invalid.error);
+        if (args.environment) {
+          const definition = policy.environments[args.environment];
+          if (!definition) throw new EnvironmentNotFoundError(args.environment);
+          if (args.allowed && !args.allowed.includes(args.environment)) {
+            throw new EnvironmentAccessDeniedError(args.environment);
+          }
+          if (
+            !identityMayUseEnvironment(
+              args.identity,
+              args.projectId,
+              args.environment,
+            )
+          ) {
+            throw new EnvironmentAccessDeniedError(args.environment);
+          }
+          const evaluated = await this.evaluate({
+            ...args,
+            name: args.environment,
+          });
+          if ("admission" in evaluated) return evaluated.admission;
+          if (evaluated.bindingUnavailable) {
+            throw new EnvironmentBindingUnavailableError(
+              args.environment,
+              definition.binding,
+            );
+          }
+          throw new EnvironmentIncompatibleError(
+            args.environment,
+            evaluated.reasons,
+          );
+        }
+
+        const ordered = [
+          ...(args.preferred ?? []),
+          ...(policy.defaultEnvironment ? [policy.defaultEnvironment] : []),
+          ...Object.keys(policy.environments).sort(),
+        ].filter((name, index, all) => all.indexOf(name) === index);
+        const reasons: Record<string, readonly string[]> = {};
+        for (const name of ordered) {
+          if (!policy.environments[name]) continue;
+          if (args.allowed && !args.allowed.includes(name)) {
+            reasons[name] = ["Agent policy does not allow this Environment"];
+            continue;
+          }
+          if (!identityMayUseEnvironment(args.identity, args.projectId, name)) {
+            reasons[name] = ["Identity is not granted this Environment"];
+            continue;
+          }
+          const evaluated = await this.evaluate({ ...args, name }).catch(
+            (error) => {
+              if (error instanceof EnvironmentCapacityError)
+                return {
+                  bindingUnavailable: false as const,
+                  reasons: [error.message],
+                };
+              throw error;
+            },
+          );
+          if ("admission" in evaluated) return evaluated.admission;
+          reasons[name] = evaluated.bindingUnavailable
+            ? ["Host binding is unavailable"]
+            : evaluated.reasons;
+        }
+        throw new NoCompatibleEnvironmentError(reasons);
+      },
+    );
   }
 
   private async evaluate(args: {

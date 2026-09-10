@@ -32,6 +32,7 @@ import {
   tool,
 } from "ai";
 import { z } from "zod";
+import { agentTelemetry } from "./telemetry.js";
 
 const DEFAULT_INSTRUCTIONS = `You are working in a Catamorphic project, a folder that can hold documents, notes, data, code, automations, and apps.
 Use the available tools to inspect and edit the project in your working directory.
@@ -401,21 +402,28 @@ export class AiSdkAgentRuntime implements AgentRuntimeProvider {
     effort?: "low" | "medium" | "high" | "xhigh" | "max";
   }): Promise<void> {
     const { state, turn } = args;
+    const telemetry = agentTelemetry({
+      model: args.model ?? this.opts.model,
+      sessionId: state.session.sessionId,
+      projectId: state.session.projectId,
+      turnId: turn.turnId,
+    });
     let continuation = true;
     let iteration = 0;
     let cumulativeUsage: MappedUsage | undefined;
     try {
+      const model =
+        args.model && this.opts.resolveModel
+          ? this.opts.resolveModel(args.model)
+          : this.opts.model;
       while (continuation && !turn.interrupted) {
         iteration += 1;
         continuation = false;
         let text = "";
         let completedText = false;
-        const model =
-          args.model && this.opts.resolveModel
-            ? this.opts.resolveModel(args.model)
-            : this.opts.model;
         const effort = args.effort ?? this.opts.effort;
         const agent = new ToolLoopAgent({
+          telemetry: telemetry.settings,
           model,
           instructions: withAgentContext(state.instructions, args?.context),
           tools: {
@@ -457,10 +465,12 @@ export class AiSdkAgentRuntime implements AgentRuntimeProvider {
               }
             : {}),
         });
-        const result = await agent.stream({
-          messages: state.transcript,
-          abortSignal: turn.abort.signal,
-        });
+        const result = await telemetry.run(() =>
+          agent.stream({
+            messages: state.transcript,
+            abortSignal: turn.abort.signal,
+          }),
+        );
         const pending: PendingTurnRequest[] = [];
         const toolCalls = new Map<
           string,
@@ -669,6 +679,7 @@ export class AiSdkAgentRuntime implements AgentRuntimeProvider {
         });
       }
     } catch (error) {
+      if (!turn.interrupted) telemetry.fail(error);
       this.cancelRequestsForTurn(state, turn.turnId);
       if (!turn.interrupted) {
         const message = errorMessage(error);
@@ -686,6 +697,7 @@ export class AiSdkAgentRuntime implements AgentRuntimeProvider {
         });
       }
     } finally {
+      telemetry.finish({ cancelled: turn.interrupted });
       this.cancelRequestsForTurn(state, turn.turnId);
       if (state.activeTurn === turn) state.activeTurn = undefined;
     }
