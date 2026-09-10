@@ -56,6 +56,7 @@ import {
   BUILTIN_ACTIONS,
   type KeybindingAction,
 } from "../../shared/actions.js";
+import type { FileSearchResult } from "../../shared/file-search.js";
 import type { OpenMode as CommitMode } from "../../shared/open-mode.js";
 import { SETTINGS_CATALOG } from "../../shared/settings-catalog.js";
 import { sidebarSections } from "../../shared/sidebar.js";
@@ -326,7 +327,7 @@ const LIST_MAX_HEIGHT = 350;
  * input pops the chip (cmdk convention).
  */
 export interface PaletteMode {
-  id: "agent" | "web" | "settings";
+  id: "agent" | "web" | "settings" | "files" | "content";
   /** Typed trigger, matched with or without the leading @. */
   trigger: string;
   /** Alternate typed names that commit the same mode (e.g. "chat"). */
@@ -341,6 +342,26 @@ export interface PaletteMode {
 }
 
 export const PALETTE_MODES: PaletteMode[] = [
+  {
+    id: "files",
+    trigger: "files",
+    aliases: ["file"],
+    chip: "Files",
+    icon: FileCode,
+    label: "Find files",
+    description: "Find a filename in this project",
+    placeholder: "Search filenames…",
+  },
+  {
+    id: "content",
+    trigger: "content",
+    aliases: ["grep"],
+    chip: "File content",
+    icon: Search,
+    label: "Search file content",
+    description: "Find text and open its matching line",
+    placeholder: "Search inside files…",
+  },
   {
     id: "settings",
     trigger: "settings",
@@ -506,6 +527,7 @@ export function CommandPalette({
   onPickModel,
   onHighlightTarget,
   pickerRequest,
+  searchRequest,
   incognitoAllowed = true,
 }: {
   variant: "overlay" | "tab";
@@ -584,6 +606,7 @@ export function CommandPalette({
   onHighlightTarget?: (target: "chat" | "close" | null) => void;
   /** Overlay only: open straight into a picker (Cmd+P agent commands). */
   pickerRequest?: { kind: PaletteInPicker; nonce: string } | null;
+  searchRequest?: { mode: "files" | "content"; nonce: string } | null;
   /** Project policy (ADR 0062): hide the incognito command when false. */
   incognitoAllowed?: boolean;
 }) {
@@ -615,6 +638,41 @@ export function CommandPalette({
     [],
   );
   const [mode, setMode] = useState<PaletteMode | null>(null);
+  const [fileSearch, setFileSearch] = useState<FileSearchResult | null>(null);
+  const [fileSearchError, setFileSearchError] = useState<string | null>(null);
+  useEffect(() => {
+    setFileSearch(null);
+    setFileSearchError(null);
+    if (
+      !open ||
+      !projectId ||
+      (mode?.id !== "files" && mode?.id !== "content") ||
+      !query.trim()
+    )
+      return;
+    let cancelled = false;
+    const searchMode = mode.id;
+    const timer = window.setTimeout(() => {
+      void desktopApi
+        .fileSearch({ projectId, query, mode: searchMode })
+        .then((result) => {
+          if (!cancelled) setFileSearch(result);
+        })
+        .catch((error: unknown) => {
+          if (!cancelled)
+            setFileSearchError(
+              error instanceof Error
+                ? error.message
+                : "Search failed. Try again.",
+            );
+        });
+    }, 150);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      void desktopApi.cancelFileSearch().catch(() => {});
+    };
+  }, [open, projectId, mode?.id, query]);
   // Exiting chip lingers to play chip-out; removed on animationend.
   const [exitingMode, setExitingMode] = useState<PaletteMode | null>(null);
   const [picker, setPicker] = useState<PaletteInPicker | null>(null);
@@ -784,6 +842,11 @@ export function CommandPalette({
     if (variant !== "overlay" || !pickerRequest) return;
     enterPicker(pickerRequest.kind);
   }, [variant, pickerRequest, enterPicker]);
+  useEffect(() => {
+    if (variant !== "overlay" || !searchRequest) return;
+    const next = PALETTE_MODES.find((mode) => mode.id === searchRequest.mode);
+    if (next) enterMode(next);
+  }, [variant, searchRequest, enterMode]);
 
   const keybindings = useKeybindings();
 
@@ -1614,6 +1677,42 @@ export function CommandPalette({
     // Enter commits it — so typing never drifts into unrelated matches.
     if (mode) {
       if (mode.id === "settings") return searchSettings(trimmed);
+      if (mode.id === "files" || mode.id === "content") {
+        if (!fileSearch?.matches.length)
+          return [
+            {
+              id: "files:status",
+              disabled: true,
+              icon: Search,
+              label:
+                fileSearchError ??
+                (!trimmed
+                  ? "Type to search this project"
+                  : fileSearch
+                    ? "No matches"
+                    : "Searching…"),
+              detail: fileSearch?.truncated
+                ? "Search limit reached. Refine your query."
+                : undefined,
+              keywords: [],
+              kind: "action",
+              run: () => {},
+            },
+          ];
+        return fileSearch.matches.map((match) => ({
+          id: `file:${match.path}:${match.line ?? 0}`,
+          icon: FileCode,
+          label: match.line ? `${match.path}:${match.line}` : match.path,
+          detail: match.text ?? "File",
+          keywords: [],
+          kind: "navigate",
+          run: (commitMode) =>
+            onOpenUrl(
+              `file:${match.path}${match.line ? `:${match.line}` : ""}`,
+              commitMode,
+            ),
+        }));
+      }
       const modeQuery = trimmed;
       if (mode.id === "agent") {
         return [
@@ -1744,6 +1843,8 @@ export function CommandPalette({
     return [...scored, ...(webItem ? [webItem] : []), ...sendItems];
   }, [
     trimmed,
+    fileSearch,
+    fileSearchError,
     searchSettings,
     searchEverything,
     projectId,
@@ -2050,6 +2151,16 @@ export function CommandPalette({
         aria-label="Results"
       >
         <div ref={sizerRef} className="p-2">
+          {(mode?.id === "files" || mode?.id === "content") &&
+            fileSearch &&
+            (fileSearch.truncated ||
+              fileSearch.matches.length > PALETTE_RESULT_LIMIT) && (
+              <p role="status" className="px-4 py-2 text-xs text-fg-muted">
+                Showing the first{" "}
+                {Math.min(fileSearch.matches.length, PALETTE_RESULT_LIMIT)}{" "}
+                matches. Refine your query to see more.
+              </p>
+            )}
           {results.map((item, index) => {
             const Icon = item.icon;
             const isSelected = index === selected;

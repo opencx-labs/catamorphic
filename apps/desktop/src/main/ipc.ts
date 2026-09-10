@@ -12,6 +12,7 @@ import {
 import { discoverCheckout, nativeGit } from "@catamorphic/git";
 import {
   buildInstallationUrl,
+  GithubApi,
   GithubAuthError,
   pollDeviceToken,
   repoFullNameFromUrl,
@@ -27,7 +28,9 @@ import {
   shell,
   type WebContents,
 } from "electron";
+import type { FileSearchInput } from "../shared/file-search.js";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
+import { prCommentInputSchema } from "../shared/pr-details.js";
 import type { SettingsPatch, SettingsScope } from "../shared/settings.js";
 import type { UsageSummary, UsageWindowDays } from "../shared/usage.js";
 import type { BindingAuth } from "./agent-bindings-store.js";
@@ -52,8 +55,19 @@ import {
 import type { ConnectorsService } from "./connectors.js";
 import { defaultDesktopProjectsDir } from "./development-paths.js";
 import { readEditorFile, writeEditorFile } from "./editor-files.js";
-import { gitFileDiff, gitOverview, listWorktreePaths } from "./git-view.js";
-import { githubCliToken } from "./github-cli.js";
+import { searchProjectFiles } from "./file-search.js";
+import {
+  gitFileDiff,
+  gitOverview,
+  gitUntrackedDirectory,
+  listWorktreePaths,
+} from "./git-view.js";
+import {
+  githubCliPrComment,
+  githubCliPrDetails,
+  githubCliRepository,
+  githubCliToken,
+} from "./github-cli.js";
 import {
   type HarnessExecutable,
   harnessPathEnvironment,
@@ -99,6 +113,7 @@ import {
 } from "./remote-sync.js";
 import type { EmbeddedServer } from "./server/boot.js";
 import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./server/boot.js";
+import { e2eReviewFixture } from "./server/e2e-review-fixture.js";
 import { GITHUB_APP } from "./server/github.js";
 import {
   listAgentModels,
@@ -1525,6 +1540,7 @@ export function registerIpcHandlers(
         return {
           ...bounds,
           maximized: window.isMaximized(),
+          visible: window.isVisible(),
           focused: window.isFocused(),
           focusable: window.isFocusable(),
           opacity: window.getOpacity(),
@@ -1785,6 +1801,7 @@ export function registerIpcHandlers(
   const ensureGithubRepositoryAccess = async (
     server: EmbeddedServer,
     fullName: string,
+    allowCli: boolean,
   ) => {
     const github = server.catamorphic.core.github;
     if (!github) {
@@ -1797,7 +1814,7 @@ export function registerIpcHandlers(
       // A missing, stale, or narrower stored credential gets one chance to
       // use the local GitHub CLI as a credential source.
     }
-    const cliToken = await githubCliToken();
+    const cliToken = allowCli ? await githubCliToken() : null;
     if (cliToken) {
       try {
         await github.connectForRepository(
@@ -1873,7 +1890,11 @@ export function registerIpcHandlers(
         reopen: (id) => server.catamorphic.core.projects.get(identity, id),
         create: async (id, rootPath) => {
           if (builderCheckout && githubFullName) {
-            await ensureGithubRepositoryAccess(server, githubFullName);
+            await ensureGithubRepositoryAccess(
+              server,
+              githubFullName,
+              storesFor(event).prefs.load().githubCliEnabled,
+            );
             const github = server.catamorphic.core.github;
             if (!github) throw new Error("GitHub integration not configured");
             return github.importRepo(identity, {
@@ -2313,6 +2334,43 @@ export function registerIpcHandlers(
     "catamorphic:editor-file-read",
     (_event, input: { filePath: string }) => readEditorFile(input),
   );
+  const activeSearches = new Map<number, AbortController>();
+  ipcMain.handle("catamorphic:file-search-cancel", (event) => {
+    activeSearches.get(event.sender.id)?.abort();
+  });
+  ipcMain.handle(
+    "catamorphic:file-search",
+    async (event, input: FileSearchInput) => {
+      if (
+        !input ||
+        typeof input.query !== "string" ||
+        !["files", "content"].includes(input.mode)
+      )
+        throw new Error("Invalid search");
+      activeSearches.get(event.sender.id)?.abort();
+      const controller = new AbortController();
+      activeSearches.set(event.sender.id, controller);
+      try {
+        const root = await requireRoot(input.projectId);
+        const directory = input.worktreePath ?? root;
+        if (
+          directory !== root &&
+          !(await listWorktreePaths(root)).includes(directory)
+        )
+          throw new Error("Not a checkout of this project");
+        controller.signal.throwIfAborted();
+        return await searchProjectFiles({
+          root: directory,
+          query: input.query,
+          mode: input.mode,
+          signal: controller.signal,
+        });
+      } finally {
+        if (activeSearches.get(event.sender.id) === controller)
+          activeSearches.delete(event.sender.id);
+      }
+    },
+  );
   ipcMain.handle(
     "catamorphic:project-local-files",
     async (_event, projectId: string) => {
@@ -2413,10 +2471,28 @@ export function registerIpcHandlers(
 
   ipcMain.handle(
     "catamorphic:git-overview",
-    async (_event, projectId: string) => {
+    async (_event, projectId: string, paths?: string[], sessionId?: string) => {
       const rootPath = await state.current?.projectRoots.get(projectId);
       if (!rootPath) return { available: false, worktrees: [] };
-      return gitOverview(rootPath);
+      if (
+        paths !== undefined &&
+        (!Array.isArray(paths) ||
+          paths.some((value) => typeof value !== "string"))
+      )
+        throw new Error("Invalid checkout scope");
+      const scopedPaths =
+        paths ??
+        (sessionId && state.current
+          ? [
+              (
+                await state.current.sessionCheckouts.describe({
+                  projectId,
+                  sessionId,
+                })
+              ).path,
+            ]
+          : undefined);
+      return gitOverview(rootPath, scopedPaths);
     },
   );
 
@@ -2426,6 +2502,18 @@ export function registerIpcHandlers(
       (await state.current?.sessionCheckouts.assigned(projectId)) ?? [],
   );
 
+  ipcMain.handle(
+    "catamorphic:git-untracked-directory",
+    async (
+      _event,
+      input: { projectId: string; worktreePath: string; directory: string },
+    ) => {
+      const root = await requireRoot(input.projectId);
+      if (!(await listWorktreePaths(root)).includes(input.worktreePath))
+        throw new Error("Not a checkout of this project");
+      return gitUntrackedDirectory(input);
+    },
+  );
   ipcMain.handle(
     "catamorphic:git-file-diff",
     async (_event, input: GitDiffInput) => {
@@ -2438,24 +2526,92 @@ export function registerIpcHandlers(
     },
   );
 
-  ipcMain.handle("catamorphic:pr-list", (_event, projectId: string) => {
+  const requireGithubCli = (event: Electron.IpcMainInvokeEvent) => {
+    if (!storesFor(event).prefs.load().githubCliEnabled) {
+      throw new Error(
+        "[github-cli-disabled] Connect GitHub CLI in Settings > Connections to use it for pull requests.",
+      );
+    }
+  };
+  ipcMain.handle("catamorphic:github-cli-status", async () => {
+    const token = await githubCliToken();
+    if (!token)
+      return {
+        available: false,
+        error:
+          "Install GitHub CLI and sign in with gh auth login, then try again.",
+      };
+    try {
+      const account = await new GithubApi(token, {
+        signal: AbortSignal.timeout(10000),
+      }).getUser();
+      return { available: true, login: account.login };
+    } catch {
+      return {
+        available: false,
+        error:
+          "GitHub CLI authentication could not be verified. Check gh auth status and try again.",
+      };
+    }
+  });
+
+  ipcMain.handle("catamorphic:pr-comment", async (event, raw: unknown) => {
+    const input = prCommentInputSchema.parse(raw);
+    const fixture = e2eReviewFixture();
+    if (fixture) return fixture.postComment(input);
+    requireGithubCli(event);
+    return githubCliPrComment({
+      rootPath: await requireRoot(input.projectId),
+      input,
+    });
+  });
+
+  ipcMain.handle(
+    "catamorphic:pr-details",
+    async (event, projectId: string, number: number) => {
+      const fixture = e2eReviewFixture();
+      if (fixture) return fixture.details;
+      requireGithubCli(event);
+      return githubCliPrDetails({
+        rootPath: await requireRoot(projectId),
+        number,
+      });
+    },
+  );
+
+  ipcMain.handle("catamorphic:pr-list", async (event, projectId: string) => {
+    const fixture = e2eReviewFixture();
+    if (fixture) return fixture.prs;
+    requireGithubCli(event);
     const server = state.current;
     if (!server) return [];
-    return server.catamorphic.core.remoteSync.listPullRequests(
-      identity,
-      projectId,
+    const root = await server.projectRoots.get(projectId);
+    const cli = root ? await githubCliRepository(root) : null;
+    if (cli) {
+      const [viewer, prs] = await Promise.all([
+        cli.api.getUser(),
+        cli.api.listPullRequests(cli.fullName),
+      ]);
+      return prs.map((pr) => ({ ...pr, viewerLogin: viewer.login }));
+    }
+    throw new Error(
+      "[github-cli-required] Sign in with gh auth login to load pull requests.",
     );
   });
 
   ipcMain.handle(
     "catamorphic:pr-files",
-    (_event, projectId: string, number: number) => {
+    async (event, projectId: string, number: number) => {
+      const fixture = e2eReviewFixture();
+      if (fixture) return fixture.files;
+      requireGithubCli(event);
       const server = state.current;
       if (!server) throw new Error("Server not running");
-      return server.catamorphic.core.remoteSync.pullRequestFiles(
-        identity,
-        projectId,
-        Number(number),
+      const root = await server.projectRoots.get(projectId);
+      const cli = root ? await githubCliRepository(root) : null;
+      if (cli) return cli.api.pullRequestFiles(cli.fullName, Number(number));
+      throw new Error(
+        "[github-cli-required] Sign in with gh auth login to load pull request files.",
       );
     },
   );

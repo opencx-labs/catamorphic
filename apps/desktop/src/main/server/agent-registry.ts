@@ -33,6 +33,7 @@ import {
   connectionServerKeys,
   toAgentMcpServer,
 } from "../connections-store.js";
+import { connectorHarnessPath } from "../connector-harness.js";
 import type { ConnectorsService } from "../connectors.js";
 import {
   type DownloadableHarness,
@@ -505,7 +506,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           picked.has(connectionId),
         );
       if (included) {
-        plugins.push({ name: connector.name, path: connector.path });
+        plugins.push({
+          name: connector.name,
+          path: connectorHarnessPath(connector.path),
+        });
       }
     }
     // Host-tier skills ride as a plugin regardless of connection

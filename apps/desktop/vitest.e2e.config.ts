@@ -2,6 +2,8 @@ import { defineConfig } from "vitest/config";
 
 const visibleMode = process.env.CATAMORPHIC_E2E_WINDOW_MODE === "visible";
 const visibleSuites = [
+  // Review viewport resizing and screenshots need a live compositor.
+  "e2e/pr-review.e2e.ts",
   "e2e/settings-palette.e2e.ts",
   "e2e/settings-inheritance.e2e.ts",
   "e2e/chat-state.e2e.ts",

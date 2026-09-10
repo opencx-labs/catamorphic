@@ -1,7 +1,9 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { BookmarkPlacement } from "../shared/bookmark-target.js";
+import type { FileSearchInput } from "../shared/file-search.js";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
 import type { OpenMode } from "../shared/open-mode.js";
+import type { PrCommentInput } from "../shared/pr-details.js";
 import type { DesktopUpdateState } from "../shared/update.js";
 
 export interface ServerInfo {
@@ -734,6 +736,8 @@ const api = {
     ipcRenderer.invoke("catamorphic:device-auth-available"),
 
   // --- bookmarks ---
+  githubCliStatus: (): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:github-cli-status"),
   bookmarksGet: (input: {
     projectId: string;
     profileId: string;
@@ -782,6 +786,12 @@ const api = {
     profileId: string;
     id: string;
   }): Promise<void> => ipcRenderer.invoke("catamorphic:bookmarks-unpin", input),
+  bookmarksRemoveLibrary: (input: {
+    projectId: string;
+    profileId: string;
+    id: string;
+  }): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:bookmarks-remove-library", input),
   bookmarksRemovePinned: (input: {
     projectId: string;
     profileId: string;
@@ -805,12 +815,28 @@ const api = {
   // --- git + pull requests (dev surfaces) ---
   gitRecord: (input: GitRecordInput): Promise<string> =>
     ipcRenderer.invoke("catamorphic:git-record", input),
-  gitOverview: (projectId: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:git-overview", projectId),
+  gitOverview: (
+    projectId: string,
+    paths?: string[],
+    sessionId?: string,
+  ): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:git-overview", projectId, paths, sessionId),
   sessionCheckouts: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:session-checkouts", projectId),
+  gitUntrackedDirectory: (input: {
+    projectId: string;
+    worktreePath: string;
+    directory: string;
+  }) => ipcRenderer.invoke("catamorphic:git-untracked-directory", input),
   gitFileDiff: (input: GitDiffInput) =>
     ipcRenderer.invoke("catamorphic:git-file-diff", input),
+  cancelFileSearch: () => ipcRenderer.invoke("catamorphic:file-search-cancel"),
+  fileSearch: (input: FileSearchInput) =>
+    ipcRenderer.invoke("catamorphic:file-search", input),
+  prComment: (input: PrCommentInput): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:pr-comment", input),
+  prDetails: (projectId: string, number: number): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:pr-details", projectId, number),
   prList: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:pr-list", projectId),
   prFiles: (projectId: string, number: number): Promise<unknown> =>

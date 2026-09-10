@@ -61,6 +61,7 @@ import {
 } from "../shared/project-experience.js";
 import { sidebarSections, visibleSidebarConfig } from "../shared/sidebar.js";
 import type { TerminalMacro } from "../shared/terminal-macros.js";
+import { findSearchInput } from "./components/action-search-input.js";
 import {
   type AgentPointer,
   AgentPointers,
@@ -1836,6 +1837,10 @@ export function App() {
    * tab; anything else (or no focused browser tab) opens a new tab.
    */
   const openUrl = async (url: string, mode: CommitMode) => {
+    if (url.startsWith("file:")) {
+      await openLinkedSurface(url, { mode });
+      return;
+    }
     const target = parseChatBookmarkUrl(url);
     if (target) {
       if (!projects.some((project) => project.id === target.projectId)) {
@@ -2588,6 +2593,20 @@ export function App() {
     setPaletteOpen(true);
     setPickerRequest({ kind, nonce: crypto.randomUUID() });
   };
+  const [searchRequest, setSearchRequest] = useState<{
+    mode: "files" | "content";
+    nonce: string;
+  } | null>(null);
+  const focusSearch = (action: string, mode?: "files" | "content") => {
+    const input = findSearchInput(action);
+    if (input) {
+      input.focus();
+      input.select();
+    } else if (mode) {
+      setPaletteOpen(true);
+      setSearchRequest({ mode, nonce: crypto.randomUUID() });
+    }
+  };
 
   // Layered default agent (ADR 0056): this user's per-project override,
   // then the project's committed default (.catamorphic/project.json), then
@@ -3172,6 +3191,17 @@ export function App() {
     if (browserId) browserCommandsRef.current.get(browserId)?.[command]();
   };
   const actionHandlers: Record<ActionId, (mode?: CommitMode) => void> = {
+    "submit-pr-comment": () => {
+      const form = document.activeElement?.closest("form[data-pr-comment]");
+      if (form instanceof HTMLFormElement) form.requestSubmit();
+    },
+    "open-settings": () =>
+      openTab({ kind: "settings", name: "settings", label: "Settings" }),
+    "search-files": () => focusSearch("search-files", "files"),
+    "search-content": () => focusSearch("search-content", "content"),
+    "search-diff": () => focusSearch("search-diff"),
+    "search-changes": () => focusSearch("search-changes"),
+    "search-settings": () => focusSearch("search-settings"),
     "browser-focus-address": () => runBrowserCommand("focusAddress"),
     "browser-reload": () => runBrowserCommand("reload"),
     "browser-reload-hard": () => runBrowserCommand("reloadIgnoringCache"),
@@ -3300,6 +3330,15 @@ export function App() {
       const bindings = keybindingsRef.current;
       const action = KEYBINDING_ACTIONS.find(
         (candidate) =>
+          (candidate !== "submit-pr-comment" ||
+            (guestId === undefined &&
+              Boolean(
+                document.activeElement?.closest("form[data-pr-comment]"),
+              ))) &&
+          (!["search-diff", "search-changes", "search-settings"].includes(
+            candidate,
+          ) ||
+            (guestId === undefined && Boolean(findSearchInput(candidate)))) &&
           (candidate !== "dismiss-floating" ||
             (floatingEscapeEnabledRef.current &&
               ![
@@ -3529,7 +3568,9 @@ export function App() {
                 ...base,
                 kind: "diff",
                 filePath:
-                  entry?.kind === "diff" ? entry.source.filePath : undefined,
+                  entry?.kind === "diff" && entry.source.type !== "review"
+                    ? entry.source.filePath
+                    : undefined,
               };
             }
             const [kind, name] = key.split(":", 2);
@@ -3654,7 +3695,14 @@ export function App() {
           const tab = ws.tabs.find((t) => tabKey(t) === key);
           if (!tab) return null;
           return tab.kind === "diff"
-            ? { kind: "diff", name: tab.name, filePath: tab.source.filePath }
+            ? {
+                kind: "diff",
+                name: tab.name,
+                filePath:
+                  tab.source.type !== "review"
+                    ? tab.source.filePath
+                    : undefined,
+              }
             : { kind: tab.kind, name: tab.name };
         }
         case "openAgentBrowser": {
@@ -4621,6 +4669,7 @@ export function App() {
   const workspaceTabBar = (
     <WorkspaceTabBar
       orientation={tabsInSidebar ? "vertical" : "horizontal"}
+      alignment={prefs?.tabAlignment ?? "start"}
       tabs={allTabs}
       activeKey={focusedTabKey}
       secondaryKey={splitCompanionKey}
@@ -4643,7 +4692,10 @@ export function App() {
   );
 
   return (
-    <div className="relative isolate flex h-full bg-sidebar">
+    <div
+      data-sidebar-dividers={prefs?.sidebarDividers ? "on" : "off"}
+      className="relative isolate flex h-full bg-sidebar"
+    >
       {/* Agent pointers: glow + scroll on data-point-key elements. The
           workspace object is the re-resolve trigger — a pointed tab may
           mount after the point_at call. */}
@@ -4851,10 +4903,17 @@ export function App() {
         data-tab-layout={tabsInSidebar ? "sidebar" : "top"}
         data-header-placement={headerInSidebar ? "sidebar" : "top"}
         data-tab-frame={prefs?.tabFrame ? "on" : "off"}
+        style={{
+          margin: prefs?.contentPadding ?? 6,
+          borderRadius: prefs?.contentRadius ?? 14,
+        }}
         className={`workspace-surface relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${tabsInSidebar ? "bg-sidebar" : "bg-bg"}`}
       >
-        {headerInSidebar && (
-          <ShortcutHint label="Toggle right sidebar">
+        {headerInSidebar && !rightSidebarOpen && (
+          <ShortcutHint
+            label="Expand right sidebar"
+            shortcut={formatBinding(keybindings["toggle-right-sidebar"])}
+          >
             <button
               type="button"
               aria-label={
@@ -4888,7 +4947,7 @@ export function App() {
                 {sidebarToggle}
               </span>
             )}
-            {(projectId || workspace.browsers.length > 0) &&
+            {(projectId || allTabs.length > 0) &&
               !tabsInSidebar &&
               workspaceTabBar}
             {projectId && tabsInSidebar && !headerInSidebar && workspaceTitle}
@@ -4928,30 +4987,32 @@ export function App() {
                 </ShortcutHint>
               );
             })()}
-            <ShortcutHint
-              label="Toggle right sidebar"
-              shortcut={formatBinding(keybindings["toggle-right-sidebar"])}
-            >
-              <button
-                type="button"
-                aria-label={
-                  rightSidebarOpen
-                    ? "Collapse right sidebar"
-                    : "Expand right sidebar"
-                }
-                aria-expanded={rightSidebarOpen}
-                className="app-no-drag ml-auto grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:text-fg"
-                onClick={() => actionHandlers["toggle-right-sidebar"]?.()}
+            {!rightSidebarOpen && (
+              <ShortcutHint
+                label="Expand right sidebar"
+                shortcut={formatBinding(keybindings["toggle-right-sidebar"])}
               >
-                <PanelRight className="size-4" />
-              </button>
-            </ShortcutHint>
+                <button
+                  type="button"
+                  aria-label={
+                    rightSidebarOpen
+                      ? "Collapse right sidebar"
+                      : "Expand right sidebar"
+                  }
+                  aria-expanded={rightSidebarOpen}
+                  className="app-no-drag ml-auto grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:text-fg"
+                  onClick={() => actionHandlers["toggle-right-sidebar"]?.()}
+                >
+                  <PanelRight className="size-4" />
+                </button>
+              </ShortcutHint>
+            )}
           </div>
         )}
 
         {projectId ? (
           <div
-            className={`workspace-content relative flex min-h-0 flex-1 flex-col bg-bg ${tabsInSidebar ? "overflow-hidden" : ""} ${prefs?.tabFrame && headerInSidebar && sidebarOpen ? "mt-1.5" : ""} ${prefs?.tabFrame && tabsInSidebar && !compactWindow ? "mb-1.5 rounded-[14px]" : ""}`}
+            className={`workspace-content relative flex min-h-0 flex-1 flex-col bg-bg ${tabsInSidebar ? "overflow-hidden" : ""} `}
           >
             {/* Every tab pane lives in this wrapper so keyboard cycling
                   can nudge the visible content from the direction of
@@ -5572,6 +5633,22 @@ export function App() {
               onCollapse={minimizeFloatingChats}
             />
           </div>
+        ) : activeTab?.kind === "settings" ? (
+          <SettingsScreen
+            destination={activeTab.destination}
+            onClose={() => closeTab(tabKey(activeTab))}
+            onAddAgent={() => setWizardModalOpen(true)}
+            onConfigureAgent={openConfigureAgent}
+            onManageConnectors={() => setConnectorsModalOpen(true)}
+          />
+        ) : activeTab?.kind === "profile-settings" && profilesData ? (
+          <ProfileSettingsScreen
+            profileId={activeTab.name}
+            activeProfileId={activeProfile?.id ?? profilesData.defaultProfileId}
+            data={profilesData}
+            projects={allProjects}
+            onClose={() => closeTab(tabKey(activeTab))}
+          />
         ) : workspace.browsers.length > 0 ? (
           <div className="relative flex min-h-0 flex-1 flex-col">
             {workspace.browsers.map((browser) => (
@@ -5626,6 +5703,22 @@ export function App() {
       <TabbedSidebar
         key={`right:${activeProfile?.id}:${projectId}`}
         side="right"
+        headerActions={
+          <ShortcutHint
+            label="Collapse right sidebar"
+            shortcut={formatBinding(keybindings["toggle-right-sidebar"])}
+          >
+            <button
+              type="button"
+              aria-label="Collapse right sidebar"
+              aria-expanded={rightSidebarOpen}
+              onClick={() => actionHandlers["toggle-right-sidebar"]()}
+              className="app-no-drag grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-overlay hover:text-fg"
+            >
+              <PanelRight className="size-4" />
+            </button>
+          </ShortcutHint>
+        }
         scope={`${activeProfile?.id}:${projectId}`}
         tabs={sidebarTabs("right")}
         open={rightSidebarOpen}
@@ -5642,6 +5735,7 @@ export function App() {
           open={paletteOpen}
           onClose={() => setPaletteOpen(false)}
           pickerRequest={pickerRequest}
+          searchRequest={searchRequest}
           {...paletteProps}
         />
       )}
@@ -6091,11 +6185,16 @@ function ConfiguredSection({
             title={section.title ?? "Changes"}
             defaultOpen={defaultOpen}
           >
-            <GitNav
-              projectId={projectId}
-              onOpenDiff={onOpenTab}
-              onEmptyChange={setEmpty}
-            />
+            {(expanded) => (
+              <GitNav
+                key={projectId}
+                visible={visible && expanded}
+                activeSessionId={activeChatSessionId}
+                projectId={projectId}
+                onOpenDiff={onOpenTab}
+                onEmptyChange={setEmpty}
+              />
+            )}
           </SidebarSection>
         );
       case "prs":

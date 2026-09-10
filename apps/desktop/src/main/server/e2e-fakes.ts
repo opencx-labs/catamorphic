@@ -285,6 +285,19 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       return;
     }
 
+    if (
+      process.env.CATAMORPHIC_E2E_REVIEW === "1" &&
+      prompt.includes("create a code-aware review guide")
+    ) {
+      yield {
+        type: "text",
+        content:
+          "<!-- catamorphic-review-guide -->\n## Validate input\nThe [input guard](#file=src%2Fguard.ts) changes from unconditional acceptance to checking input length.\n\n- Check how empty input is handled by callers.\n\n## Check the boundary\nThe patch reads input.length. Verify which input types reach this boundary; the supplied patch does not include caller evidence.\n<!-- /catamorphic-review-guide -->",
+      };
+      yield { type: "done" };
+      return;
+    }
+
     // "read the editor": overview → active editor tab → read_tab, echoing
     // the live selection the bridge exposes (agent-side selection path).
     if (prompt.includes("read the editor")) {

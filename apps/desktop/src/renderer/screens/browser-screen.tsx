@@ -664,11 +664,17 @@ export function BrowserScreen({
     const unsubscribe = desktopApi.onBookmarksChanged((change) => {
       if (change.profileId !== profileId) return;
       if (change.projectId === projectId && change.project) {
-        setBookmarks({ project: change.project, pinned: change.pinned });
+        setBookmarks({
+          project: change.project,
+          pinned: change.pinned,
+          library: change.library,
+        });
       } else if (change.projectId === null) {
-        // Profile-wide change (e.g. browser import): pinned only.
+        // Profile-wide changes include the saved library and explicit pins.
         setBookmarks((current) =>
-          current ? { ...current, pinned: change.pinned } : current,
+          current
+            ? { ...current, pinned: change.pinned, library: change.library }
+            : current,
         );
       }
     });
@@ -680,7 +686,9 @@ export function BrowserScreen({
 
   // The saved entry for the current page, if any — pinned bookmarks count
   // too, so starring a pinned page doesn't create a project duplicate.
-  const currentBookmark: (Bookmark & { pinned: boolean }) | undefined = (() => {
+  const currentBookmark:
+    | (Bookmark & { pinned: boolean; library?: boolean })
+    | undefined = (() => {
     if (!bookmarks) return undefined;
     const pinned = bookmarks.pinned.bookmarks.find((entry) =>
       sameUrl(entry.url, pageUrl),
@@ -689,7 +697,11 @@ export function BrowserScreen({
     const owned = bookmarks.project.bookmarks.find((entry) =>
       sameUrl(entry.url, pageUrl),
     );
-    return owned ? { ...owned, pinned: false } : undefined;
+    if (owned) return { ...owned, pinned: false };
+    const saved = bookmarks.library?.bookmarks.find((entry) =>
+      sameUrl(entry.url, pageUrl),
+    );
+    return saved ? { ...saved, pinned: false, library: true } : undefined;
   })();
 
   const toggleBookmark = () => {
@@ -704,17 +716,23 @@ export function BrowserScreen({
       });
       return;
     }
-    void (currentBookmark.pinned
-      ? desktopApi.bookmarksRemovePinned({
+    void (currentBookmark.library
+      ? desktopApi.bookmarksRemoveLibrary({
           projectId,
           profileId,
           id: currentBookmark.id,
         })
-      : desktopApi.bookmarksRemove({
-          projectId,
-          profileId,
-          id: currentBookmark.id,
-        }));
+      : currentBookmark.pinned
+        ? desktopApi.bookmarksRemovePinned({
+            projectId,
+            profileId,
+            id: currentBookmark.id,
+          })
+        : desktopApi.bookmarksRemove({
+            projectId,
+            profileId,
+            id: currentBookmark.id,
+          }));
   };
 
   const updateSuggestions = useCallback(

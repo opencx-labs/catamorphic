@@ -106,6 +106,49 @@ describe("ProjectInspectorView", () => {
     expect(onDelete).toHaveBeenCalledOnce();
   });
 
+  it("bounds large worktree lists and reveals the last row on scroll", async () => {
+    const worktrees = Array.from({ length: 86 }, (_, index) => ({
+      path: `/projects/tree-${index}`,
+      branch: `branch-${index}`,
+      isMain: index === 0,
+      isCurrent: index === 0,
+      branchChanges: [],
+      changes: [],
+    }));
+    await act(async () => {
+      root.render(
+        <ProjectInspectorView
+          project={project}
+          current
+          snapshot={{ ...snapshot, git: { available: true, worktrees } }}
+          sessions={[]}
+          sessionsLoading={false}
+          loading={false}
+          onDelete={() => undefined}
+        />,
+      );
+    });
+    const list = container.querySelector<HTMLElement>(
+      '[aria-label="Project worktrees"]',
+    );
+    expect(list).not.toBeNull();
+    expect(list?.style.height).toBe("224px");
+    expect(list?.querySelectorAll("[data-windowed-index]").length).toBeLessThan(
+      25,
+    );
+    expect(list?.textContent).not.toContain("branch-85");
+    await act(async () => {
+      if (!list) throw new Error("Missing list");
+      list.scrollTop = 86 * 28 - 224;
+      list.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    expect(list?.textContent).toContain("branch-85");
+    expect(list?.querySelectorAll("[data-windowed-index]").length).toBeLessThan(
+      25,
+    );
+    expect(container.textContent).toContain("Local only");
+  });
+
   it("shows session status only for another project", async () => {
     await act(async () => {
       root.render(

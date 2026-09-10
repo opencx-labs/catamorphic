@@ -303,7 +303,7 @@ describe("tabbed sidebars", () => {
     })()`),
     ).toBeLessThan(2);
     await app.eval(
-      `document.querySelector('[data-sidebar="right"] button').click()`,
+      `[...document.querySelectorAll('[data-sidebar="right"] button')].find(b => b.textContent.trim() === 'Add tab').click()`,
     );
     await app.waitFor(
       `document.body.innerText.includes('The live sidebar configuration file on this machine is')`,

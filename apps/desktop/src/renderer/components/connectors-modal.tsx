@@ -495,6 +495,13 @@ export function ConnectorsModal({
                             <p className="truncate text-[11px] text-danger">
                               {authFlow.message ?? "Authorization failed"}
                             </p>
+                          ) : connection.authorizationError ? (
+                            <p
+                              role="alert"
+                              className="text-[11px] text-warning"
+                            >
+                              {connection.authorizationError}
+                            </p>
                           ) : probeResult ? (
                             <p
                               className={`truncate text-[11px] ${probeResult.ok ? "text-fg-muted" : probeResult.needsAuth ? "text-warning" : probeResult.error ? "text-danger" : "text-fg-faint"}`}

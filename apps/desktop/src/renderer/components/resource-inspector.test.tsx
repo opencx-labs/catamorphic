@@ -58,6 +58,33 @@ describe("ResourceInspector", () => {
     );
   });
 
+  it("removes the inspector during a drag so drop targets remain reachable", async () => {
+    await act(async () => {
+      root.render(
+        <ResourceInspector label="Project details" content={<p>Details</p>}>
+          {(props) => (
+            <button type="button" {...props}>
+              Project
+            </button>
+          )}
+        </ResourceInspector>,
+      );
+    });
+    await act(async () => container.querySelector("button")?.focus());
+    expect(document.querySelector("[data-resource-inspector]")).not.toBeNull();
+    await act(async () =>
+      document.dispatchEvent(new Event("dragstart", { bubbles: true })),
+    );
+    expect(document.querySelector("[data-resource-inspector]")).toBeNull();
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(document.querySelector("[data-resource-inspector]")).toBeNull();
+    await act(async () =>
+      document.dispatchEvent(new Event("dragend", { bubbles: true })),
+    );
+  });
+
   it("stays open while its own bounded content scrolls", async () => {
     await act(async () => {
       root.render(
