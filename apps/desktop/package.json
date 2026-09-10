@@ -49,7 +49,7 @@
     "@pierre/diffs": "^1.4.1",
     "@shikijs/monaco": "^4.4.3",
     "@tanstack/react-query": "^5.101.2",
-    "@tiptap/core": "3.30.4",
+    "@tiptap/core": "3.30.5",
     "@tiptap/extension-bubble-menu": "3.30.4",
     "@tiptap/extension-code-block-lowlight": "3.30.4",
     "@tiptap/extension-collaboration": "3.30.4",
