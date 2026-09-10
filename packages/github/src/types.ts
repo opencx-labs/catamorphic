@@ -62,6 +62,13 @@ export interface GithubRepo {
 }
 
 export interface GithubPullRequest {
+  body?: string;
+  headSha?: string;
+  viewerLogin?: string;
+  requestedReviewers?: string[];
+  reviewRequestedForViewer?: boolean;
+  reviewRequestsUnavailable?: boolean;
+
   number: number;
   title: string;
   url: string;

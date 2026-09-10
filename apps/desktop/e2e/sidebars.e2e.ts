@@ -255,7 +255,7 @@ describe("tabbed sidebars", () => {
     );
     await reload();
     await app.waitFor(
-      `document.querySelector('[data-sidebar="right"]')?.textContent.includes('Add tab')`,
+      `document.querySelector('[data-sidebar="right"]')?.textContent.includes('Customize sidebar')`,
     );
     await waitRight(false);
     expect(
@@ -273,10 +273,10 @@ describe("tabbed sidebars", () => {
     await waitRight(true);
   });
 
-  it("centers Add tab in an empty right sidebar and opens customization", async () => {
+  it("centers Customize sidebar in an empty right sidebar and opens customization", async () => {
     writeConfig({ ...DEFAULT_SIDEBAR_CONFIG, right: [] });
     await app.waitFor(
-      `document.querySelector('[data-sidebar="right"]')?.textContent.includes('Add tab')`,
+      `document.querySelector('[data-sidebar="right"]')?.textContent.includes('Customize sidebar')`,
     );
     await waitRight(false);
     await toggleRight();
@@ -285,7 +285,7 @@ describe("tabbed sidebars", () => {
     // populated-sidebar preference is open.
     await reload();
     await app.waitFor(
-      `document.querySelector('[data-sidebar="right"]')?.textContent.includes('Add tab')`,
+      `document.querySelector('[data-sidebar="right"]')?.textContent.includes('Customize sidebar')`,
     );
     await waitRight(false);
     await toggleRight();
@@ -296,14 +296,14 @@ describe("tabbed sidebars", () => {
     expect(
       await app.eval(`(() => {
       const side = document.querySelector('[data-sidebar="right"]');
-      const button = [...side.querySelectorAll('button')].find(b => b.textContent.includes('Add tab'));
+      const button = [...side.querySelectorAll('button')].find(b => b.textContent.includes('Customize sidebar'));
       const bounds = side.getBoundingClientRect();
       const rect = button.getBoundingClientRect();
       return Math.abs((rect.left + rect.right) / 2 - (bounds.left + bounds.right) / 2);
     })()`),
     ).toBeLessThan(2);
     await app.eval(
-      `document.querySelector('[data-sidebar="right"] button').click()`,
+      `[...document.querySelectorAll('[data-sidebar="right"] button')].find(b => b.textContent.trim() === 'Customize sidebar').click()`,
     );
     await app.waitFor(
       `document.body.innerText.includes('The live sidebar configuration file on this machine is')`,

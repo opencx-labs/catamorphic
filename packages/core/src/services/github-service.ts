@@ -142,7 +142,11 @@ export class GithubService {
         const api = new GithubApi(await this.freshToken(identity), {
           fetch: this.fetch,
         });
-        return api.listPullRequests(fullName);
+        const viewer = await this.status(identity);
+        return (await api.listPullRequests(fullName)).map((pr) => ({
+          ...pr,
+          viewerLogin: viewer.connected ? viewer.login : undefined,
+        }));
       },
       pullRequestFiles: async (identity, input) => {
         const fullName = repoFullNameFromUrl(input.remoteUrl);

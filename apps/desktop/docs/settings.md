@@ -35,6 +35,12 @@ with the standard 200 ms transition; reduced motion applies it immediately.
 
 ## Other families
 
+Settings > Workspace > Code review exposes `diffLayout`, `diffWrap`,
+`reviewStartView`, `reviewGrouping`, `changesFileLayout` and `prDefaultView`.
+These are profile preferences in `prefs.json`, with reset and live file edits.
+The code theme lives in Appearance as `codeTheme`. Review progress and explicit
+checkout selection are runtime state, separate from presentation preferences.
+
 | Family | Resolution |
 |---|---|
 | Sidebar contents | Built-in, profile, shared project, personal project; whole document |
@@ -82,3 +88,10 @@ selection replaces inherited color overrides; individual token and font edits
 remain sparse. Theme edits use the shared configuration file validation and
 last-valid-value caches. The three dock preferences are profile choices:
 `dockMultiProject`, `dockDetached`, and `dockSide`.
+
+## Workspace frame
+
+Workspace settings expose `sidebarDividers` (default false), `contentPadding`
+(default 6px) and `contentRadius` (default 14px). Dimensions accept 0 through 48px,
+including square corners and no inset. They support profile, shared project and
+personal overrides, appear in settings search and apply live in every tab layout.

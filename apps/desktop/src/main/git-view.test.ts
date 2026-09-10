@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { nativeGit } from "@catamorphic/git";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { gitFileDiff, gitOverview, listWorktreePaths } from "./git-view.js";
+import {
+  gitFileDiff,
+  gitOverview,
+  gitUntrackedDirectory,
+  listWorktreePaths,
+} from "./git-view.js";
 
 const author = [
   "-c",
@@ -50,6 +55,9 @@ describe("worktree Git views", () => {
     const overview = await gitOverview(tree);
     expect(overview.worktrees).toHaveLength(2);
     const linked = overview.worktrees.find((item) => item.path === tree)!;
+    expect(overview.worktrees.find((item) => item.path === root)).toMatchObject(
+      { loaded: false, changes: [], branchChanges: [] },
+    );
     expect(linked.isCurrent).toBe(true);
     expect(linked.baseLabel).toBe("trunk");
     expect(linked.changes.map((file) => file.mode)).toEqual([
@@ -74,6 +82,29 @@ describe("worktree Git views", () => {
     ).toMatchObject({ before: "original\n", after: "committed\n" });
     expect(await fs.readFile(indexPath)).toEqual(index);
     expect(await nativeGit(root, ["show-ref"])).toBe(refs);
+  });
+
+  it("summarizes untracked directories until explicitly expanded", async () => {
+    await fs.mkdir(path.join(root, "new", "nested"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, "new", "nested", "file.ts"),
+      "export const value = 1;",
+    );
+    const overview = await gitOverview(root);
+    expect(overview.worktrees[0]?.changes).toContainEqual({
+      path: "new/",
+      mode: "untracked",
+      kind: "added",
+    });
+    expect(
+      await gitUntrackedDirectory({ worktreePath: root, directory: "new/" }),
+    ).toEqual({
+      files: [{ path: "new/nested/file.ts", mode: "untracked", kind: "added" }],
+      truncated: false,
+    });
+    await expect(
+      gitUntrackedDirectory({ worktreePath: root, directory: "../" }),
+    ).rejects.toThrow("Invalid");
   });
 
   it("uses the remote default branch and shows branch changes in the primary checkout too", async () => {
@@ -155,7 +186,7 @@ describe("worktree Git views", () => {
     await fs.writeFile(path.join(root, "notes.txt"), "ours");
     await commit(root, "ours");
     await nativeGit(root, [...author, "merge", "other"]).catch(() => {});
-    const overview = await gitOverview(root);
+    const overview = await gitOverview(root, [root, detached, missing]);
     expect(
       overview.worktrees.find((tree) => tree.path === detached),
     ).toMatchObject({ branch: null, locked: "In use" });

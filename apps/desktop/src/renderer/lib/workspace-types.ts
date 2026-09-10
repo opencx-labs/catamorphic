@@ -29,6 +29,7 @@ interface TabIndicators {
 
 /** What a diff tab shows: a local working-tree diff, or a PR file patch. */
 export type DiffSource =
+  | { type: "review"; prNumber: number }
   | {
       type: "local";
       worktreePath: string;
@@ -41,6 +42,7 @@ export type DiffSource =
       type: "pr";
       prNumber: number;
       filePath: string;
+      previousPath?: string;
       /** Unified-diff hunk text; null for binary or oversized files. */
       patch: string | null;
       status: string;

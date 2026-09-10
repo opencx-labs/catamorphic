@@ -1,7 +1,9 @@
 import { loader } from "@monaco-editor/react";
+import { shikiToMonaco } from "@shikijs/monaco";
 import * as monaco from "monaco-editor";
-import { useLayoutEffect } from "react";
-import { monacoTheme } from "./monaco-theme.js";
+import { useEffect } from "react";
+import { createHighlighter } from "shiki";
+import { CODE_THEMES, resolveCodeTheme, useCodeTheme } from "./code-theme.js";
 import { useTheme } from "./theme.js";
 import "monaco-editor/languages/definitions/register.all";
 import editorWorker from "monaco-editor/editor/editor.worker?worker";
@@ -25,14 +27,47 @@ self.MonacoEnvironment = {
 };
 loader.config({ monaco });
 
-// This bridge stays in the lazy editor bundle. Theme changes never load Monaco
-// in a workspace that has not opened an editor.
+// Loaded once with the editor chunk; all grammars and themes ship locally.
+const highlighting = createHighlighter({
+  themes: CODE_THEMES.flatMap((name) => [
+    resolveCodeTheme(name, true),
+    resolveCodeTheme(name, false),
+  ]),
+  langs: [
+    "typescript",
+    "javascript",
+    "tsx",
+    "jsx",
+    "json",
+    "jsonc",
+    "html",
+    "css",
+    "markdown",
+    "yaml",
+    "shellscript",
+    "python",
+    "sql",
+    "rust",
+    "go",
+    "toml",
+    "dockerfile",
+  ],
+}).then((highlighter) => {
+  shikiToMonaco(highlighter, monaco);
+});
+
 export function useMonacoTheme() {
   const theme = useTheme();
-  useLayoutEffect(() => {
-    if (!theme) return;
-    monaco.editor.defineTheme("catamorphic", monacoTheme(theme));
-    monaco.editor.setTheme("catamorphic");
-  }, [theme]);
-  return theme ? "catamorphic" : "vs-dark";
+  const [codeTheme] = useCodeTheme();
+  const name = resolveCodeTheme(codeTheme, theme?.appearance === "light");
+  useEffect(() => {
+    let active = true;
+    void highlighting.then(() => {
+      if (active) monaco.editor.setTheme(name);
+    });
+    return () => {
+      active = false;
+    };
+  }, [name]);
+  return name;
 }

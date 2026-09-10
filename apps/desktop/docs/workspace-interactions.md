@@ -55,6 +55,10 @@ An empty right sidebar starts closed on launch and context changes. Configured,
 authorized sections count as content even when their lists are empty. Automatically
 hiding an empty panel never overwrites its populated profile preference. Manual
 opening for customization is temporary until content is added.
+An empty right sidebar, including a window with no project, shows a centered
+Customize sidebar button. Both sidebar controls reveal the same open customization
+chat. Starting from an empty window creates the default project and completes any
+required agent setup before sending the customization request.
 
 ## Verification
 

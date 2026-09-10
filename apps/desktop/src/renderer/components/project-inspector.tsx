@@ -19,6 +19,8 @@ import {
   type SessionCheckoutInfo,
 } from "../lib/desktop-api";
 
+import { LazyList } from "./lazy-list";
+
 export interface ProjectInspectorSnapshot {
   root: string | null;
   git: GitOverview | null;
@@ -228,26 +230,32 @@ export function ProjectInspectorView({
           {worktrees.length === 0 ? (
             <EmptyLine loading={loading} empty="No worktrees reported" />
           ) : (
-            worktrees.map((worktree) => (
-              <div
-                key={worktree.path}
-                className="flex min-w-0 items-center gap-2 py-0.5"
-              >
-                <span
-                  className={`size-1.5 shrink-0 rounded-full ${worktree.error ? "bg-danger" : worktree.changes.length ? "bg-warning" : "bg-success"}`}
-                />
-                <span className="min-w-0 flex-1 truncate text-fg">
-                  {worktree.branch ?? "Detached HEAD"}
-                </span>
-                <span className="shrink-0 text-[10px] text-fg-faint">
-                  {new Set(worktree.changes.map((file) => file.path)).size
-                    ? `${new Set(worktree.changes.map((file) => file.path)).size} changed`
-                    : worktree.error
-                      ? "Unavailable"
-                      : "Clean"}
-                </span>
-              </div>
-            ))
+            <LazyList
+              label="Project worktrees"
+              items={worktrees}
+              itemKey={(worktree) => worktree.path}
+              maxHeight={224}
+              renderItem={(worktree) => (
+                <div
+                  key={worktree.path}
+                  className="flex h-7 min-w-0 items-center gap-2"
+                >
+                  <span
+                    className={`size-1.5 shrink-0 rounded-full ${worktree.error ? "bg-danger" : worktree.changes.length ? "bg-warning" : "bg-success"}`}
+                  />
+                  <span className="min-w-0 flex-1 truncate text-fg">
+                    {worktree.branch ?? "Detached HEAD"}
+                  </span>
+                  <span className="shrink-0 text-[10px] text-fg-faint">
+                    {new Set(worktree.changes.map((file) => file.path)).size
+                      ? `${new Set(worktree.changes.map((file) => file.path)).size} changed`
+                      : worktree.error
+                        ? "Unavailable"
+                        : "Clean"}
+                  </span>
+                </div>
+              )}
+            />
           )}
         </Section>
       )}
@@ -260,22 +268,28 @@ export function ProjectInspectorView({
           {prs.length === 0 ? (
             <EmptyLine loading={loading} empty="No open pull requests" />
           ) : (
-            prs.map((pr) => (
-              <div
-                key={pr.number}
-                className="flex min-w-0 items-center gap-2 py-0.5"
-              >
-                <span className="shrink-0 font-mono text-[10px] text-fg-faint">
-                  #{pr.number}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-fg">
-                  {pr.title}
-                </span>
-                {pr.draft && (
-                  <span className="text-[10px] text-fg-faint">Draft</span>
-                )}
-              </div>
-            ))
+            <LazyList
+              label="Project pull requests"
+              items={prs}
+              itemKey={(pr) => String(pr.number)}
+              maxHeight={168}
+              renderItem={(pr) => (
+                <div
+                  key={pr.number}
+                  className="flex h-7 min-w-0 items-center gap-2"
+                >
+                  <span className="shrink-0 font-mono text-[10px] text-fg-faint">
+                    #{pr.number}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-fg">
+                    {pr.title}
+                  </span>
+                  {pr.draft && (
+                    <span className="text-[10px] text-fg-faint">Draft</span>
+                  )}
+                </div>
+              )}
+            />
           )}
         </Section>
       )}
@@ -307,30 +321,36 @@ export function ProjectInspectorView({
           {ongoingSessions.length === 0 ? (
             <EmptyLine loading={sessionsLoading} empty="No ongoing sessions" />
           ) : (
-            ongoingSessions.map((session) => {
-              const checkout = checkoutBySession.get(session.id);
-              return (
-                <div
-                  key={session.id}
-                  className="flex min-w-0 items-center gap-2 py-0.5"
-                >
-                  <span
-                    className={`size-1.5 shrink-0 rounded-full ${session.running ? "animate-pulse bg-accent" : "bg-fg-faint"}`}
-                  />
-                  <span className="min-w-0 flex-1 truncate text-fg">
-                    {session.title || "Untitled session"}
-                  </span>
-                  <span className="max-w-24 shrink-0 truncate text-[10px] text-fg-faint">
-                    {session.running
-                      ? "Working"
-                      : session.status === "closed"
-                        ? "Closed"
-                        : "Ready"}
-                    {checkout?.branch ? ` · ${checkout.branch}` : ""}
-                  </span>
-                </div>
-              );
-            })
+            <LazyList
+              label="Project sessions"
+              items={ongoingSessions}
+              itemKey={(session) => session.id}
+              maxHeight={168}
+              renderItem={(session) => {
+                const checkout = checkoutBySession.get(session.id);
+                return (
+                  <div
+                    key={session.id}
+                    className="flex h-7 min-w-0 items-center gap-2"
+                  >
+                    <span
+                      className={`size-1.5 shrink-0 rounded-full ${session.running ? "animate-pulse bg-accent" : "bg-fg-faint"}`}
+                    />
+                    <span className="min-w-0 flex-1 truncate text-fg">
+                      {session.title || "Untitled session"}
+                    </span>
+                    <span className="max-w-24 shrink-0 truncate text-[10px] text-fg-faint">
+                      {session.running
+                        ? "Working"
+                        : session.status === "closed"
+                          ? "Closed"
+                          : "Ready"}
+                      {checkout?.branch ? ` · ${checkout.branch}` : ""}
+                    </span>
+                  </div>
+                );
+              }}
+            />
           )}
         </Section>
       )}

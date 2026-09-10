@@ -51,13 +51,15 @@ preserve them, and do not copy them into project overrides.
 ${SETTING_KEYS.map((key) => {
   const definition = SETTINGS[key];
   const value =
-    "options" in definition
-      ? Object.keys(definition.options)
-          .map((option) => JSON.stringify(option))
-          .join(" or ")
-      : key === "terminalMacros"
-        ? "array of macros (below)"
-        : "boolean";
+    "range" in definition
+      ? `number (${definition.range.min} through ${definition.range.max})`
+      : "options" in definition
+        ? Object.keys(definition.options)
+            .map((option) => JSON.stringify(option))
+            .join(" or ")
+        : key === "terminalMacros"
+          ? "array of macros (below)"
+          : "boolean";
   return `| ${key} | ${value} | ${definition.scopes.join(", ")} | ${JSON.stringify(normalizePrefs({})[key])} |`;
 }).join("\n")}
 

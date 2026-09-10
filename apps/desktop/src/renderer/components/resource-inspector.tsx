@@ -103,6 +103,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
   const panelInterested = useRef(false);
   const pointerFocus = useRef(false);
   const pinned = useRef(false);
+  const dragging = useRef(false);
   const [anchor, setAnchor] = useState<InspectorAnchor | null>(null);
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -113,6 +114,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
   }, [open]);
 
   const show = useCallback(() => {
+    if (dragging.current) return;
     const rect = triggerRef.current?.getBoundingClientRect();
     if (!rect) return;
     setAnchor({
@@ -123,6 +125,29 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
     });
     setMounted(true);
     setOpen(true);
+  }, []);
+  useEffect(() => {
+    const start = () => {
+      dragging.current = true;
+      clearTimeout(openTimer.current);
+      clearTimeout(closeTimer.current);
+      pinned.current = false;
+      triggerInterested.current = false;
+      panelInterested.current = false;
+      setOpen(false);
+      setMounted(false);
+    };
+    const end = () => {
+      dragging.current = false;
+    };
+    document.addEventListener("dragstart", start, true);
+    document.addEventListener("dragend", end, true);
+    document.addEventListener("drop", end, true);
+    return () => {
+      document.removeEventListener("dragstart", start, true);
+      document.removeEventListener("dragend", end, true);
+      document.removeEventListener("drop", end, true);
+    };
   }, []);
   const scheduleOpen = (immediate = false) => {
     clearTimeout(closeTimer.current);

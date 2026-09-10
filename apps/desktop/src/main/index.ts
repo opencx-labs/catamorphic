@@ -287,7 +287,6 @@ function createWindow(
       window.webContents.send("catamorphic:browser-open-url", { url });
     return { action: "deny" };
   });
-  if (!dock && saved.maximized) window.maximize();
   // A connect link that arrived before any window could take it (cold
   // launch from the link) is delivered once the renderer is up.
   window.webContents.once("did-finish-load", () => {
@@ -299,11 +298,14 @@ function createWindow(
       // Enter the native shown lifecycle without activating the app, then
       // hide in the same turn so local E2E runs never steal keyboard focus.
       window.showInactive();
+      if (!dock && saved.maximized) window.maximize();
       window.hide();
       return;
     }
     if (e2eDataDir || dock) window.showInactive();
     else window.show();
+    // Native window managers can ignore zoom requests before the first show.
+    if (!dock && saved.maximized) window.maximize();
     // Fullscreen after show: entering it on a hidden window leaves macOS
     // with a blank space until the next repaint.
     if (!dock && saved.fullscreen) window.setFullScreen(true);

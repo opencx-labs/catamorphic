@@ -21,6 +21,38 @@ afterEach(() => {
 });
 
 describe("BookmarksStore", () => {
+  it("places a tab in an imported pinned folder and preserves its identity on moves", () => {
+    const { value, file } = store();
+    value.importPinned("profile", {
+      folders: [{ path: ["Tools"] }],
+      bookmarks: [],
+    });
+    const folderId = value.pinned("profile").folders[0]?.id;
+    expect(folderId).toBeTruthy();
+    const bookmark = value.place({
+      projectId: "project",
+      profileId: "profile",
+      label: "Docs",
+      url: "https://example.com",
+      pinned: true,
+      folderId,
+    });
+    expect(value.pinned("profile").bookmarks).toEqual([bookmark]);
+    expect(bookmark.folderId).toBe(folderId);
+    expect(
+      new BookmarksStore(file).pinned("profile").bookmarks[0]?.folderId,
+    ).toBe(folderId);
+    const moved = value.place({
+      projectId: "project",
+      profileId: "profile",
+      label: "Docs",
+      url: bookmark.url,
+    });
+    expect(moved.id).toBe(bookmark.id);
+    expect(moved.folderId).toBeUndefined();
+    expect(value.pinned("profile").bookmarks).toHaveLength(0);
+  });
+
   it("imports a recursive profile bookmark tree idempotently", () => {
     const { value } = store();
     const imported = {
@@ -51,6 +83,42 @@ describe("BookmarksStore", () => {
     expect(tools?.parentId).toBe(dev?.id);
     expect(tree.bookmarks).toHaveLength(1);
     expect(tree.bookmarks[0]?.folderId).toBe(tools?.id);
+  });
+
+  it("keeps imports in the library and preserves their folder after pinning and unpinning", () => {
+    const { value, file } = store();
+    const imported = {
+      folders: [{ path: ["Work", "Docs"] }],
+      bookmarks: [
+        {
+          label: "Docs",
+          url: "https://example.com/docs",
+          folderPath: ["Work", "Docs"],
+        },
+      ],
+    };
+    expect(value.importBookmarks("profile", imported)).toBe(1);
+    expect(value.importBookmarks("profile", imported)).toBe(0);
+    expect(value.pinned("profile").bookmarks).toHaveLength(0);
+    const bookmark = value.library("profile").bookmarks[0];
+    if (!bookmark) throw new Error("Missing imported bookmark");
+    value.pin("project", "profile", bookmark.id);
+    value.pin("project", "profile", bookmark.id);
+    expect(value.pinned("profile").bookmarks).toHaveLength(1);
+    expect(value.library("profile").bookmarks[0]?.folderId).toBe(
+      bookmark.folderId,
+    );
+    value.unpin("profile", "project", bookmark.id);
+    expect(value.pinned("profile").bookmarks).toHaveLength(0);
+    expect(value.forProject("project").bookmarks).toHaveLength(0);
+    expect(new BookmarksStore(file).library("profile").bookmarks).toEqual([
+      bookmark,
+    ]);
+    expect(value.library("other-profile").bookmarks).toHaveLength(0);
+    value.removeLibrary("profile", bookmark.folderId ?? "missing");
+    expect(value.library("profile").bookmarks[0]?.folderId).toBe(
+      value.library("profile").folders[0]?.id,
+    );
   });
 
   it("migrates the former flat pinned array on read", () => {

@@ -105,6 +105,7 @@ interface ConnectionsFile {
 
 /** Connection as exposed to the renderer: secret values never included. */
 export interface PublicMcpConnection {
+  authorizationError?: string;
   id: string;
   name: string;
   /** Slug the harnesses use as the tool-name prefix (`<serverKey>/<tool>`). */
@@ -454,6 +455,9 @@ export function toPublicConnection(
     headerNames: Object.keys(headers ?? {}),
     envNames: Object.keys(env ?? {}),
     authorized: Boolean(oauth?.tokens?.access_token),
+    ...(connectionAuthorizationError(connection)
+      ? { authorizationError: connectionAuthorizationError(connection) }
+      : {}),
   };
 }
 
@@ -461,13 +465,24 @@ export function toPublicConnection(
 export function toAgentMcpServer(
   connection: McpConnection,
 ): AgentMcpServerConfig | undefined {
+  if (connectionAuthorizationError(connection)) return undefined;
+  const expand = (value: string) => expandConnectionValue(value, connection);
   if (connection.transport === "stdio") {
     if (!connection.command) return undefined;
     return {
       transport: "stdio",
-      command: connection.command,
-      ...(connection.args ? { args: connection.args } : {}),
-      ...(connection.env ? { env: connection.env } : {}),
+      command: expand(connection.command),
+      ...(connection.args ? { args: connection.args.map(expand) } : {}),
+      ...(connection.env
+        ? {
+            env: Object.fromEntries(
+              Object.entries(connection.env).map(([key, value]) => [
+                key,
+                expand(value),
+              ]),
+            ),
+          }
+        : {}),
       ...(connection.cwd ? { cwd: connection.cwd } : {}),
       ...(connection.envVars ? { envVars: connection.envVars } : {}),
     };
@@ -475,12 +490,74 @@ export function toAgentMcpServer(
   if (!connection.url) return undefined;
   // OAuth tokens ride as a bearer header: harnesses with their own MCP
   // client (Claude Code, Codex) never learn OAuth exists.
-  const headers = { ...connection.headers, ...bearerHeaders(connection.oauth) };
+  const headers = Object.fromEntries(
+    Object.entries(effectiveConnectionHeaders(connection)).map(
+      ([key, value]) => [key, expand(value)],
+    ),
+  );
   return {
     transport: connection.transport,
-    url: connection.url,
+    url: expand(connection.url),
     ...(Object.keys(headers).length > 0 ? { headers } : {}),
   };
+}
+
+function effectiveConnectionHeaders(connection: McpConnection) {
+  const oauth = bearerHeaders(connection.oauth);
+  return {
+    ...Object.fromEntries(
+      Object.entries(connection.headers ?? {}).filter(
+        ([key]) =>
+          !oauth.Authorization || key.toLowerCase() !== "authorization",
+      ),
+    ),
+    ...oauth,
+  };
+}
+
+function expandConnectionValue(
+  value: string,
+  connection: McpConnection,
+): string {
+  return value.replace(
+    /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g,
+    (_match, name: string, fallback: string | undefined) => {
+      const replacement =
+        connection.env?.[name] ?? process.env[name] ?? fallback;
+      return replacement && !replacement.includes("${")
+        ? replacement
+        : `\${${name}}`;
+    },
+  );
+}
+
+/** Missing configuration is reported by name, never by credential value. */
+export function connectionAuthorizationError(
+  connection: McpConnection,
+): string | undefined {
+  const values =
+    connection.transport === "stdio"
+      ? [
+          connection.command ?? "",
+          ...(connection.args ?? []),
+          ...Object.values(connection.env ?? {}),
+        ]
+      : [
+          connection.url ?? "",
+          ...Object.values(effectiveConnectionHeaders(connection)),
+        ];
+  const missing = new Set(
+    values.flatMap((value) =>
+      [
+        ...expandConnectionValue(value, connection).matchAll(
+          /\$\{([A-Za-z_][A-Za-z0-9_]*)[^}]*\}/g,
+        ),
+      ].map((match) => match[1]),
+    ),
+  );
+  return missing.size
+    ? `Authorization required: configure ${[...missing].join(", ")} in this connection.`
+    : undefined;
 }
 
 /** Stable, TOML/tool-name-safe server key for a connection. */

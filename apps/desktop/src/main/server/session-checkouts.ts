@@ -208,6 +208,7 @@ export class SessionCheckouts {
   async assigned(projectId: string): Promise<
     Array<{
       sessionId: string;
+      path: string;
       kind: "managed" | "external";
       branch: string | null;
     }>
@@ -225,6 +226,7 @@ export class SessionCheckouts {
     );
     const assigned: Array<{
       sessionId: string;
+      path: string;
       kind: "managed" | "external";
       branch: string | null;
     }> = [];
@@ -236,6 +238,7 @@ export class SessionCheckouts {
       if (description.kind === "primary") continue;
       assigned.push({
         sessionId: row.session_id,
+        path: description.path,
         kind: description.kind,
         branch: description.branch,
       });

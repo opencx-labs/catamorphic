@@ -10,7 +10,16 @@ import type {
   WorkspaceEvent,
 } from "../../shared/desktop-workspace.js";
 import type { FilePreviewInput } from "../../shared/file-preview.js";
+import type {
+  FileSearchInput,
+  FileSearchResult,
+} from "../../shared/file-search.js";
 import type { OpenMode } from "../../shared/open-mode.js";
+import type {
+  PrComment,
+  PrCommentInput,
+  PrDetails,
+} from "../../shared/pr-details.js";
 import type {
   SettingsPatch,
   SettingsScope,
@@ -30,6 +39,7 @@ export interface ServerInfo {
 
 export interface SessionCheckoutInfo {
   sessionId: string;
+  path?: string;
   kind: "managed" | "external";
   branch: string | null;
 }
@@ -250,6 +260,7 @@ export interface ConnectionInfo {
     | { kind: "plugin"; plugin: string };
   /** Has been through OAuth (tokens on file). */
   authorized: boolean;
+  authorizationError?: string;
   /** The profile's ceiling for this connection's tools (undefined = auto). */
   toolPolicy?: McpToolPolicy;
   /** A ceiling set by whoever provisioned the connection (an org sharing
@@ -573,11 +584,13 @@ export interface ProjectBookmarks {
 }
 
 export interface BookmarksData {
+  library?: ProjectBookmarks;
   project: ProjectBookmarks;
   pinned: ProjectBookmarks;
 }
 
 export interface BookmarksChange {
+  library?: ProjectBookmarks;
   /** Null for profile-wide changes (e.g. a browser import touching pinned). */
   projectId: string | null;
   project: ProjectBookmarks | null;
@@ -596,6 +609,7 @@ export type {
 } from "../../shared/git.js";
 
 import type {
+  GitChangedFile,
   GitDiffInput,
   GitFileDiff,
   GitOverview,
@@ -604,6 +618,13 @@ import type {
 
 /** Mirror of core's host-neutral PR shapes. */
 export interface PullRequestSummary {
+  body?: string;
+  headSha?: string;
+  viewerLogin?: string;
+  requestedReviewers?: string[];
+  reviewRequestedForViewer?: boolean;
+  reviewRequestsUnavailable?: boolean;
+
   number: number;
   title: string;
   url: string;
@@ -1199,6 +1220,11 @@ export interface CatamorphicDesktopApi {
   onVaultChanged: (listener: (profileId: string) => void) => () => void;
   deviceAuthAvailable: () => Promise<boolean>;
 
+  githubCliStatus: () => Promise<{
+    available: boolean;
+    login?: string;
+    error?: string;
+  }>;
   bookmarksGet: (input: {
     projectId: string;
     profileId: string;
@@ -1241,6 +1267,11 @@ export interface CatamorphicDesktopApi {
     profileId: string;
     id: string;
   }) => Promise<void>;
+  bookmarksRemoveLibrary: (input: {
+    projectId: string;
+    profileId: string;
+    id: string;
+  }) => Promise<void>;
   bookmarksRemovePinned: (input: {
     projectId: string;
     profileId: string;
@@ -1272,9 +1303,22 @@ export interface CatamorphicDesktopApi {
   onThemeChanged: (listener: (theme: ResolvedTheme) => void) => () => void;
 
   gitRecord: (input: GitRecordInput) => Promise<string>;
-  gitOverview: (projectId: string) => Promise<GitOverview>;
+  gitOverview: (
+    projectId: string,
+    paths?: string[],
+    sessionId?: string,
+  ) => Promise<GitOverview>;
   sessionCheckouts: (projectId: string) => Promise<SessionCheckoutInfo[]>;
+  gitUntrackedDirectory: (input: {
+    projectId: string;
+    worktreePath: string;
+    directory: string;
+  }) => Promise<{ files: GitChangedFile[]; truncated: boolean }>;
   gitFileDiff: (input: GitDiffInput) => Promise<GitFileDiff>;
+  cancelFileSearch: () => Promise<void>;
+  fileSearch: (input: FileSearchInput) => Promise<FileSearchResult>;
+  prComment: (input: PrCommentInput) => Promise<PrComment>;
+  prDetails: (projectId: string, number: number) => Promise<PrDetails>;
   prList: (projectId: string) => Promise<PullRequestSummary[]>;
   prFiles: (projectId: string, number: number) => Promise<PullRequestFile[]>;
 

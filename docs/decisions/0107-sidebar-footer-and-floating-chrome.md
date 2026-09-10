@@ -1,6 +1,6 @@
 # 0107: Sidebar footer and floating chrome
 
-- **Status:** Accepted
+- **Status:** Accepted; editor palette paragraph superseded by [0112](0112-review-navigation-and-code-rendering.md)
 - **Date:** 2026-09-08
 - **Builds on:** 0081, 0102, 0105
 

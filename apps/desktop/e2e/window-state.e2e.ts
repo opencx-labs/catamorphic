@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp } from "./harness.js";
 
@@ -28,10 +30,16 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 700));
 describe("window state", () => {
   it("a maximized window relaunches maximized", async () => {
     app = await launchApp();
+    await app.waitFor(
+      "window.catamorphicDesktop.devWindow('get').then(state => state.visible)",
+    );
     await (app as AppHandle).eval(
       `window.catamorphicDesktop.devWindow('maximize')`,
     );
-    await settle();
+    await app.waitFor(
+      "window.catamorphicDesktop.devWindow('get').then(state => state.maximized)",
+      { timeoutMs: 10_000, label: "native maximize completed" },
+    );
     expect((await geometry()).maximized).toBe(true);
     // In Linux CI the private display isolates physical input; windows must
     // remain managed for native maximize/restore behavior to be testable.
@@ -47,9 +55,37 @@ describe("window state", () => {
     }
     expect(await app.eval("document.hasFocus()")).toBe(true);
     const { userDataDir } = app;
+    // This is crash recovery: wait for the debounced state write before SIGKILL.
+    await expect
+      .poll(async () => {
+        try {
+          const state: unknown = JSON.parse(
+            await fs.readFile(
+              path.join(userDataDir, "window-state.json"),
+              "utf8",
+            ),
+          );
+          return (
+            state !== null &&
+            typeof state === "object" &&
+            "maximized" in state &&
+            state.maximized === true
+          );
+        } catch {
+          return false;
+        }
+      })
+      .toBe(true);
     await app.kill();
 
     app = await launchApp({ userDataDir });
+    await app.waitFor(
+      "window.catamorphicDesktop.devWindow('get').then(state => state.visible)",
+    );
+    await app.waitFor(
+      "window.catamorphicDesktop.devWindow('get').then(state => state.maximized)",
+      { timeoutMs: 10_000, label: "saved native maximize restored" },
+    );
     expect((await geometry()).maximized).toBe(true);
   }, 180_000);
 

@@ -40,7 +40,7 @@ const PROJECT_MENU: SidebarMenuEntry[] = [
 const PINNED_MENU: SidebarMenuEntry[] = [
   { label: "Open in new tab", action: "open-tab" },
   { label: "Copy link", action: "copy-url" },
-  { label: "Unpin into this project", action: "unpin" },
+  { label: "Unpin", action: "unpin" },
   { label: "Rename…", action: "rename" },
   { label: "Delete", action: "remove", danger: true },
 ];
@@ -94,22 +94,15 @@ export function BookmarksNav({
   const [edit, setEdit] = useState<BookmarkEdit | null>(null);
   const [expanded, setExpanded] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [dragging, setDragging] = useState(false);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [status, setStatus] = useState("");
   useEffect(() => {
-    const start = (event: DragEvent) => {
-      if (event.dataTransfer?.types.includes(TAB_DRAG_TYPE)) setDragging(true);
-    };
     const end = () => {
-      setDragging(false);
       setDropTarget(null);
     };
-    document.addEventListener("dragstart", start);
     document.addEventListener("dragend", end);
     document.addEventListener("drop", end);
     return () => {
-      document.removeEventListener("dragstart", start);
       document.removeEventListener("dragend", end);
       document.removeEventListener("drop", end);
     };
@@ -119,7 +112,9 @@ export function BookmarksNav({
     (data.pinned.bookmarks.length === 0 &&
       data.pinned.folders.length === 0 &&
       data.project.bookmarks.length === 0 &&
-      data.project.folders.length === 0);
+      data.project.folders.length === 0 &&
+      !data.library?.bookmarks.length &&
+      !data.library?.folders.length);
   useEffect(() => {
     onEmptyChange?.(isEmpty);
   }, [isEmpty, onEmptyChange]);
@@ -134,10 +129,16 @@ export function BookmarksNav({
     const unsubscribe = desktopApi.onBookmarksChanged((change) => {
       if (change.profileId !== profileId) return;
       if (change.projectId === projectId && change.project) {
-        setData({ project: change.project, pinned: change.pinned });
+        setData({
+          project: change.project,
+          pinned: change.pinned,
+          library: change.library,
+        });
       } else if (change.projectId === null) {
         setData((current) =>
-          current ? { ...current, pinned: change.pinned } : current,
+          current
+            ? { ...current, pinned: change.pinned, library: change.library }
+            : current,
         );
       }
     });
@@ -177,15 +178,15 @@ export function BookmarksNav({
       if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return;
       event.preventDefault();
       event.stopPropagation();
-      setDragging(false);
       setDropTarget(null);
       const bookmark = readBookmarkDrop(event.dataTransfer);
       if (!bookmark) {
         setError("Open a page or send a chat message before pinning it.");
         return;
       }
-      const folderId = target.startsWith("folder:")
-        ? target.slice(7)
+      const pinned = target === "pinned" || target.startsWith("pinned-folder:");
+      const folderId = target.includes("folder:")
+        ? target.slice(target.indexOf("folder:") + 7)
         : undefined;
       perform(
         desktopApi
@@ -194,7 +195,7 @@ export function BookmarksNav({
             profileId,
             ...bookmark,
             folderId,
-            pinned: target === "pinned",
+            pinned,
           })
           .then(() => {
             if (folderId)
@@ -202,8 +203,9 @@ export function BookmarksNav({
                 current.includes(folderId) ? current : [...current, folderId],
               );
             const location = folderId
-              ? data?.project.folders.find((folder) => folder.id === folderId)
-                  ?.label
+              ? (pinned ? data?.pinned : data?.project)?.folders.find(
+                  (folder) => folder.id === folderId,
+                )?.label
               : target === "pinned"
                 ? "Pinned bookmarks"
                 : "Bookmarks";
@@ -256,7 +258,7 @@ export function BookmarksNav({
         break;
     }
   };
-  const row = (bookmark: Bookmark, pinned: boolean) => (
+  const row = (bookmark: Bookmark, pinned: boolean, library = false) => (
     <li
       key={bookmark.id}
       draggable
@@ -285,11 +287,32 @@ export function BookmarksNav({
             tile={pinned && pinnedStyle === "tiles"}
           />
         }
-        menu={menuOverride ?? (pinned ? PINNED_MENU : PROJECT_MENU)}
+        menu={
+          menuOverride ??
+          (pinned
+            ? PINNED_MENU
+            : library
+              ? PROJECT_MENU.map((entry) =>
+                  entry.action === "edit"
+                    ? { label: "Rename…", action: "rename" }
+                    : entry,
+                )
+              : PROJECT_MENU)
+        }
         resource
         defaultOpenMode={defaultOpenMode}
         onOpen={(mode) => open(bookmark.url, mode)}
-        onAction={(entry) => runAction(entry, bookmark, pinned)}
+        onAction={(entry) =>
+          library && entry.action === "remove"
+            ? perform(
+                desktopApi.bookmarksRemoveLibrary({
+                  projectId,
+                  profileId,
+                  id: bookmark.id,
+                }),
+              )
+            : runAction(entry, bookmark, pinned)
+        }
       />
     </li>
   );
@@ -298,6 +321,7 @@ export function BookmarksNav({
     scope: ProjectBookmarks,
     pinned: boolean,
     parentId?: string,
+    library = false,
   ): ReactNode =>
     scope.folders
       .filter((folder) => folder.parentId === parentId)
@@ -312,8 +336,18 @@ export function BookmarksNav({
         return (
           <li
             key={folder.id}
-            data-bookmark-drop={pinned ? undefined : `folder:${folder.id}`}
-            {...(pinned ? {} : dropHandlers(`folder:${folder.id}`))}
+            data-bookmark-drop={`${pinned ? "pinned-folder" : "folder"}:${folder.id}`}
+            {...(library
+              ? {}
+              : dropHandlers(
+                  `${pinned ? "pinned-folder" : "folder"}:${folder.id}`,
+                ))}
+            className={
+              dropTarget ===
+              `${pinned ? "pinned-folder" : "folder"}:${folder.id}`
+                ? "rounded-md bg-accent/10 ring-1 ring-accent"
+                : undefined
+            }
           >
             <SidebarItemRow
               label={folder.label}
@@ -341,9 +375,11 @@ export function BookmarksNav({
                   });
                 if (entry.action === "remove")
                   perform(
-                    (pinned
-                      ? desktopApi.bookmarksRemovePinned
-                      : desktopApi.bookmarksRemove)({
+                    (library
+                      ? desktopApi.bookmarksRemoveLibrary
+                      : pinned
+                        ? desktopApi.bookmarksRemovePinned
+                        : desktopApi.bookmarksRemove)({
                       projectId,
                       profileId,
                       id: folder.id,
@@ -353,12 +389,12 @@ export function BookmarksNav({
             />
             <Collapsible open={open}>
               <ul role="list" className="ml-4 flex flex-col gap-0.5">
-                {children.map((bookmark) => row(bookmark, pinned))}
-                {renderFolders(scope, pinned, folder.id)}
+                {children.map((bookmark) => row(bookmark, pinned, library))}
+                {renderFolders(scope, pinned, folder.id, library)}
               </ul>
               {children.length === 0 && !nested && (
                 <p className="px-4 py-2 text-xs text-fg-muted">
-                  Drop a tab or chat here.
+                  {library ? "Empty folder" : "Drop a tab or chat here."}
                 </p>
               )}
             </Collapsible>
@@ -372,34 +408,73 @@ export function BookmarksNav({
       {...dropHandlers("root")}
       className={`flex flex-col gap-2 rounded-md ${dropTarget === "root" ? "bg-accent/10 ring-1 ring-accent" : ""}`}
     >
-      {data && (data.pinned.bookmarks.length > 0 || dragging) && (
-        <ul
-          role="list"
-          aria-label="Pinned bookmarks"
-          data-bookmark-drop="pinned"
-          {...dropHandlers("pinned")}
-          className={`${dropTarget === "pinned" ? "rounded-md bg-accent/10 ring-1 ring-accent" : ""} ${
-            pinnedStyle === "tiles"
-              ? "grid grid-cols-4 gap-2 px-1 py-1"
-              : "flex flex-col gap-0.5"
-          }`}
-        >
-          {data.pinned.bookmarks.length === 0 && dragging && (
-            <li className="col-span-4 px-2 py-3 text-center text-xs text-fg-muted">
-              Pin across projects
-            </li>
-          )}
-          {data.pinned.bookmarks
-            .filter((bookmark) => !bookmark.folderId)
-            .map((bookmark) => row(bookmark, true))}
-        </ul>
-      )}
-      {data && (
-        <ul role="list" className="flex flex-col gap-0.5">
-          {renderFolders(data.pinned, true)}
-        </ul>
-      )}
-      <ul role="list" className="flex flex-col gap-0.5">
+      <h3 className="px-2 pt-1 text-xs font-medium text-fg-muted">Pinned</h3>
+      <section
+        className="max-h-[min(40vh,24rem)] overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
+        aria-label="Pinned bookmarks scroll area"
+      >
+        {data && (
+          <ul
+            role="list"
+            aria-label="Pinned bookmarks"
+            data-bookmark-drop="pinned"
+            {...dropHandlers("pinned")}
+            className={`${dropTarget === "pinned" ? "rounded-md bg-accent/10 ring-1 ring-accent" : ""} ${
+              pinnedStyle === "tiles"
+                ? "grid grid-cols-4 gap-2 px-1 py-1"
+                : "flex flex-col gap-0.5"
+            }`}
+          >
+            {data.pinned.bookmarks.filter((bookmark) => !bookmark.folderId)
+              .length === 0 && (
+              <li className="col-span-4 px-2 py-3 text-center text-xs text-fg-muted">
+                Drop a tab here to pin across projects
+              </li>
+            )}
+            {data.pinned.bookmarks
+              .filter((bookmark) => !bookmark.folderId)
+              .map((bookmark) => row(bookmark, true))}
+          </ul>
+        )}
+        {data && (
+          <ul role="list" className="flex flex-col gap-0.5">
+            {renderFolders(data.pinned, true)}
+          </ul>
+        )}
+      </section>
+      {data?.library &&
+        (data.library.bookmarks.length > 0 ||
+          data.library.folders.length > 0) && (
+          <section
+            aria-label="Bookmark library"
+            onDragOver={(event) => {
+              event.stopPropagation();
+              event.dataTransfer.dropEffect = "none";
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            className="max-h-64 overflow-y-auto overscroll-contain"
+          >
+            <h3 className="sticky top-0 bg-bg px-2 py-2 text-xs font-medium text-fg-muted">
+              Saved bookmarks
+            </h3>
+            <ul role="list" className="flex flex-col gap-0.5">
+              {data.library.bookmarks
+                .filter((bookmark) => !bookmark.folderId)
+                .map((bookmark) => row(bookmark, false, true))}
+              {renderFolders(data.library, false, undefined, true)}
+            </ul>
+          </section>
+        )}
+      <h3 className="px-2 pt-1 text-xs font-medium text-fg-muted">
+        Project bookmarks
+      </h3>
+      <ul
+        role="list"
+        className="max-h-64 overflow-y-auto flex flex-col gap-0.5"
+      >
         {data?.project.bookmarks
           .filter((bookmark) => !bookmark.folderId)
           .map((bookmark) => row(bookmark, false))}

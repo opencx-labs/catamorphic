@@ -1,4 +1,4 @@
-import { type AppPrefs, normalizePrefs } from "./app-prefs.js";
+import { type AppPrefs, CODE_THEMES, normalizePrefs } from "./app-prefs.js";
 import { normalizeTerminalMacros } from "./terminal-macros.js";
 
 export type SettingsScope = "profile" | "project" | "personal";
@@ -35,6 +35,41 @@ export const SETTINGS = {
     scopes: profileScope,
     valid: oneOf("left", "right"),
     options: { left: "Left", right: "Right" },
+  },
+  sidebarDividers: {
+    label: "Sidebar dividers",
+    description: "Show a vertical separator beside each sidebar.",
+    scopes: projectScopes,
+    valid: boolean,
+  },
+  contentPadding: {
+    label: "Content padding",
+    description: "Space around the main workspace in pixels.",
+    scopes: projectScopes,
+    range: { min: 0, max: 48, step: 1 },
+    valid: (value: unknown) =>
+      typeof value === "number" &&
+      Number.isFinite(value) &&
+      value >= 0 &&
+      value <= 48,
+  },
+  contentRadius: {
+    label: "Content corner radius",
+    description:
+      "Round the main workspace corners in pixels. Use 0 for square corners.",
+    scopes: projectScopes,
+    range: { min: 0, max: 48, step: 1 },
+    valid: (value: unknown) =>
+      typeof value === "number" &&
+      Number.isFinite(value) &&
+      value >= 0 &&
+      value <= 48,
+  },
+  tabAlignment: {
+    label: "Tab alignment",
+    scopes: projectScopes,
+    valid: oneOf("start", "center"),
+    options: { start: "Left", center: "Centered" },
   },
   tabPlacement: {
     label: "Open tabs",
@@ -82,6 +117,54 @@ export const SETTINGS = {
     scopes: profileScope,
     valid: boolean,
   },
+  codeTheme: {
+    label: "Code and diff theme",
+    scopes: profileScope,
+    valid: oneOf(...CODE_THEMES),
+    options: {
+      github: "GitHub",
+      catppuccin: "Catppuccin",
+      "rose-pine": "Rose Pine",
+      one: "One",
+      solarized: "Solarized",
+      vitesse: "Vitesse",
+    },
+  },
+  diffLayout: {
+    label: "Diff layout",
+    scopes: profileScope,
+    valid: oneOf("split", "unified"),
+    options: { split: "Side by side", unified: "Unified" },
+  },
+  diffWrap: {
+    label: "Wrap diff lines",
+    scopes: profileScope,
+    valid: boolean,
+  },
+  reviewStartView: {
+    label: "Open reviews in",
+    scopes: profileScope,
+    valid: oneOf("overview", "guide", "diff"),
+    options: { overview: "Overview", guide: "Guide", diff: "Changes" },
+  },
+  reviewGrouping: {
+    label: "Review guide grouping",
+    scopes: profileScope,
+    valid: oneOf("purpose", "directory", "flat"),
+    options: { purpose: "Purpose", directory: "Directory", flat: "All files" },
+  },
+  changesFileLayout: {
+    label: "Changed file layout",
+    scopes: profileScope,
+    valid: oneOf("tree", "flat"),
+    options: { tree: "Tree", flat: "Flat" },
+  },
+  prDefaultView: {
+    label: "Pull request list",
+    scopes: profileScope,
+    valid: oneOf("for-you", "created", "all"),
+    options: { "for-you": "For you", created: "Created", all: "All" },
+  },
   terminalAppearance: {
     label: "Terminal appearance",
     scopes: profileScope,
@@ -114,6 +197,7 @@ export const SETTINGS = {
       scopes: readonly SettingsScope[];
       valid: (value: unknown) => boolean;
       options?: Record<string, string>;
+      range?: { min: number; max: number; step: number };
       description?: string;
     }
   >

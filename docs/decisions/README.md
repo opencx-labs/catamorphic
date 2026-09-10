@@ -125,4 +125,10 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0110](0110-discoverable-desktop-settings.md) | Discoverable desktop settings | Agent tools superseded by 0111 |
 | [0111](0111-direct-desktop-configuration.md) | Direct desktop configuration editing | Accepted |
 | [0112](0112-browser-control-and-tool-media.md) | Browser control, host tool media, and Codex app-server | Accepted |
-| [0113](0113-project-workspaces-and-shared-chat-dock.md) | Persistent project workspaces and a shared chat dock | Accepted |
+| [0113](0113-desktop-workspace-frame-and-local-pr-access.md) | Configurable workspace frame and local PR access | Accepted |
+| [0114](0114-focused-pull-request-review.md) | Focused pull request review | Accepted |
+| [0115](0115-native-review-conversation.md) | Native review conversation | Accepted |
+| [0116](0116-bookmark-library-and-pins.md) | Bookmark library and pins | Accepted |
+| [0117](0117-optional-github-cli-connection.md) | Optional GitHub CLI connection | Accepted |
+| [0118](0118-review-navigation-and-code-rendering.md) | Review navigation and code rendering | Accepted |
+| [0119](0119-project-workspaces-and-shared-chat-dock.md) | Persistent project workspaces and a shared chat dock | Accepted |

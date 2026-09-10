@@ -117,6 +117,17 @@ export class GithubApi {
     return (await response.json()) as T;
   }
 
+  private async requestPages<T>(path: string): Promise<T[]> {
+    const values: T[] = [];
+    for (let page = 1; ; page++) {
+      const batch = await this.request<T[]>(
+        `${path}${path.includes("?") ? "&" : "?"}per_page=100&page=${page}`,
+      );
+      values.push(...batch);
+      if (batch.length < 100) return values;
+    }
+  }
+
   async getUser(): Promise<GithubUser> {
     const raw = await this.request<{
       login: string;
@@ -165,27 +176,56 @@ export class GithubApi {
     return { url: raw.html_url, number: raw.number };
   }
 
+  /** GitHub includes direct and team requests in review-requested:@me. */
+  private async requestedReviewNumbers(fullName: string): Promise<Set<number>> {
+    const numbers = new Set<number>();
+    const query = encodeURIComponent(
+      `repo:${fullName} is:pr is:open review-requested:@me`,
+    );
+    for (let page = 1; page <= 10; page++) {
+      const result = await this.request<{
+        items: Array<{ number: number }>;
+        incomplete_results: boolean;
+        total_count: number;
+      }>(`/search/issues?q=${query}&per_page=100&page=${page}`);
+      if (result.incomplete_results || result.total_count > 1000)
+        throw new Error("Review request search is incomplete");
+      for (const item of result.items) numbers.add(item.number);
+      if (result.items.length < 100 || numbers.size >= result.total_count)
+        return numbers;
+    }
+    throw new Error("Review request search is incomplete");
+  }
+
   /** Open pull requests, most recently updated first. */
   async listPullRequests(fullName: string): Promise<GithubPullRequest[]> {
     if (!/^[\w.-]+\/[\w.-]+$/.test(fullName)) {
       throw new GithubApiError(400, `Invalid repository name: ${fullName}`);
     }
-    const raw = await this.request<
-      Array<{
-        number: number;
-        title: string;
-        html_url: string;
-        user: { login: string } | null;
-        head: { ref: string };
-        base: { ref: string };
-        draft: boolean;
-        updated_at: string;
-      }>
-    >(
-      `/repos/${fullName}/pulls?state=open&sort=updated&direction=desc&per_page=50`,
-    );
+    const raw = await this.requestPages<{
+      number: number;
+      title: string;
+      html_url: string;
+      user: { login: string } | null;
+      head: { ref: string; sha?: string };
+      body?: string | null;
+      requested_reviewers?: Array<{ login: string }>;
+      base: { ref: string };
+      draft: boolean;
+      updated_at: string;
+    }>(`/repos/${fullName}/pulls?state=open&sort=updated&direction=desc`);
+    const requested = raw.length
+      ? await this.requestedReviewNumbers(fullName).catch(() => undefined)
+      : new Set<number>();
     return raw.map((pr) => ({
+      ...(requested
+        ? { reviewRequestedForViewer: requested.has(pr.number) }
+        : { reviewRequestsUnavailable: true }),
       number: pr.number,
+      body: pr.body ?? "",
+      headSha: pr.head.sha,
+      requestedReviewers:
+        pr.requested_reviewers?.map((user) => user.login) ?? [],
       title: pr.title,
       url: pr.html_url,
       author: pr.user?.login ?? "unknown",
@@ -204,16 +244,14 @@ export class GithubApi {
     if (!/^[\w.-]+\/[\w.-]+$/.test(fullName)) {
       throw new GithubApiError(400, `Invalid repository name: ${fullName}`);
     }
-    const raw = await this.request<
-      Array<{
-        filename: string;
-        status: string;
-        additions: number;
-        deletions: number;
-        patch?: string;
-        previous_filename?: string;
-      }>
-    >(`/repos/${fullName}/pulls/${number}/files?per_page=100`);
+    const raw = await this.requestPages<{
+      filename: string;
+      status: string;
+      additions: number;
+      deletions: number;
+      patch?: string;
+      previous_filename?: string;
+    }>(`/repos/${fullName}/pulls/${number}/files`);
     return raw.map((file) => ({
       path: file.filename,
       status: file.status,

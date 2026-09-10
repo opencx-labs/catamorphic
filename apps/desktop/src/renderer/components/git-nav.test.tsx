@@ -6,7 +6,13 @@ import { desktopApi, type GitOverview } from "../lib/desktop-api.js";
 import { GitNav } from "./git-nav.js";
 
 vi.mock("../lib/desktop-api.js", () => ({
-  desktopApi: { gitOverview: vi.fn(), onGitChanged: vi.fn(() => () => {}) },
+  desktopApi: {
+    getPrefs: vi.fn().mockResolvedValue({}),
+    onPrefsChanged: vi.fn(() => () => {}),
+    sessionCheckouts: vi.fn().mockResolvedValue([]),
+    gitOverview: vi.fn(),
+    onGitChanged: vi.fn(() => () => {}),
+  },
 }));
 afterEach(() => vi.clearAllMocks());
 const overview: GitOverview = {
