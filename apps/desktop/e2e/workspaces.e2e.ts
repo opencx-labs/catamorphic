@@ -20,7 +20,9 @@ afterAll(async () => {
   dock?.close();
   await app?.stop();
 });
-const key = (key: string, modifiers = "metaKey: true") =>
+const commandModifier =
+  "metaKey: /Mac/.test(navigator.platform), ctrlKey: !/Mac/.test(navigator.platform)";
+const key = (key: string, modifiers = commandModifier) =>
   app.eval(
     `window.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, ${modifiers}, bubbles: true, cancelable: true }))`,
   );
@@ -53,7 +55,7 @@ it("keeps browser and terminal resources alive when the same window switches pro
     `!!document.querySelector('[data-workspace-visible="true"] canvas')`,
     { label: "first terminal" },
   );
-  await key("t", "metaKey: true, altKey: true");
+  await key("t", `${commandModifier}, altKey: true`);
   await app.waitFor(
     `!!document.querySelector('[data-workspace-visible="true"] input[aria-label="Address and search bar"]')`,
   );
@@ -169,7 +171,7 @@ it("keeps an unsent draft when detached and reattached, and supports either edge
   ).toBe("left");
   const toggleNative = () =>
     dock?.eval(
-      `window.dispatchEvent(new KeyboardEvent('keydown', {key:'m',metaKey:true,bubbles:true,cancelable:true}))`,
+      `window.dispatchEvent(new KeyboardEvent('keydown', {key:'m',${commandModifier},bubbles:true,cancelable:true}))`,
     );
   await toggleNative();
   await dock.waitFor(
