@@ -561,12 +561,18 @@ export function buildWorkspaceToolkit(
     {
       name: "point_at",
       description:
-        "Point the user's attention at a UI element with a subtle glow and scroll it into view. The glow stays until the user interacts with that element or you point at something else (pass keep_previous to stack pointers instead of replacing them). Targets: a workspace tab key from workspace_overview (glows that tab), 'app:<name>', 'sidebar:<item label>' (glows that sidebar entry), or 'chip:<surface key>' (glows that surface's chip on your own chat, e.g. 'chip:terminal:<id>'). Use clear_pointers when nothing should be highlighted anymore.",
+        "Point the user's attention at a UI element with a subtle glow and scroll it into view. The glow stays until the user interacts with that element or you point at something else (pass keep_previous to stack pointers instead of replacing them). For an element inside a browser page, pass its browser tab key as target and its snapshot uid. Targets: a workspace tab key from workspace_overview (glows that tab), 'app:<name>', 'sidebar:<item label>' (glows that sidebar entry), or 'chip:<surface key>' (glows that surface's chip on your own chat, e.g. 'chip:terminal:<id>'). Use clear_pointers when nothing should be highlighted anymore.",
       parameters: {
         target: z
           .string()
           .describe(
             "Tab key, 'app:<name>', 'sidebar:<item label>', or 'chip:<surface key>'",
+          ),
+        uid: z
+          .string()
+          .optional()
+          .describe(
+            "Element reference from browser_snapshot, for pointing inside a page",
           ),
         note: z
           .string()
@@ -583,6 +589,7 @@ export function buildWorkspaceToolkit(
           String(input.target),
           typeof input.note === "string" ? input.note : undefined,
           input.keep_previous === true,
+          typeof input.uid === "string" ? input.uid : undefined,
         );
         if (!result.ok) {
           throw new Error(result.error ?? "Could not find that element.");
@@ -710,21 +717,29 @@ export function buildWorkspaceToolkit(
     {
       name: "browser_snapshot",
       description:
-        "List a browser tab's interactive elements (links, buttons, inputs …) as numbered uids plus the page url/title. Snapshot before acting, and take a fresh snapshot after anything that changes the page (navigation, submit, dynamic content): uids go stale.",
+        "List a browser tab's interactive elements (links, buttons, inputs …) as opaque uids plus the page url/title. Use format=image for a screenshot (including canvas and embedded frames); coordinates use CSS viewport pixels. Snapshot before acting, and take a fresh snapshot after anything that changes the page (navigation, submit, dynamic content): uids go stale.",
       parameters: {
         key: z.string().describe("Browser tab key, e.g. 'browser:<id>'"),
+        format: z.enum(["dom", "image"]).optional(),
       },
       execute: (input, ctx) =>
-        bridge.browserSnapshot(ctx.projectId, String(input.key)),
+        bridge.browserSnapshot(
+          ctx.projectId,
+          String(input.key),
+          input.format === "image" ? "image" : "dom",
+        ),
     },
     {
       name: "browser_act",
       description:
-        "Act on a browser tab: 'click' or 'fill' an element by uid (from browser_snapshot), 'press' a key (e.g. Enter) on the focused element, 'navigate' to a url, 'scroll' up/down, 'read' the page's visible text, or 'wait_for' text to appear. The user sees each action highlighted live. Fails if the user has taken over the tab. Respect that and continue without it, or reclaim with surface_control only if your task requires the tab.",
+        "Act on a browser tab: 'click'/'hover' an element by uid or x/y CSS coordinates, 'drag' from x/y to toX/toY, 'fill' text or 'select' an option value by uid (from browser_snapshot), 'press' a key (e.g. Enter) on the focused element, 'navigate' to a url, 'scroll' up/down, 'read' the page's visible text, or 'wait_for' text to appear. Use point_at with a uid to highlight an element for the user. Fails if the user has taken over the tab. Respect that and continue without it, or reclaim with surface_control only if your task requires the tab.",
       parameters: {
         key: z.string().describe("Browser tab key"),
         action: z.enum([
           "click",
+          "hover",
+          "drag",
+          "select",
           "fill",
           "press",
           "navigate",
@@ -732,7 +747,14 @@ export function buildWorkspaceToolkit(
           "read",
           "wait_for",
         ]),
-        uid: z.number().int().optional().describe("Element uid (click, fill)"),
+        uid: z
+          .string()
+          .optional()
+          .describe("Element reference (click, hover, fill, select)"),
+        x: z.number().nonnegative().optional(),
+        y: z.number().nonnegative().optional(),
+        toX: z.number().nonnegative().optional(),
+        toY: z.number().nonnegative().optional(),
         text: z
           .string()
           .optional()
@@ -743,7 +765,7 @@ export function buildWorkspaceToolkit(
           .describe("Key for 'press', e.g. 'Enter', 'Escape', 'Tab'"),
         url: z.string().optional().describe("Target url (navigate)"),
         direction: z.enum(["up", "down"]).optional().describe("scroll only"),
-        timeoutMs: z.number().int().positive().optional(),
+        timeoutMs: z.number().int().positive().max(10000).optional(),
       },
       execute: (input, ctx) =>
         bridge.browserAct(
@@ -1090,17 +1112,36 @@ function parseBrowserAction(
   input: Record<string, unknown>,
 ): Parameters<WorkspaceBridge["browserAct"]>[2] {
   const action = String(input.action);
-  const uid = typeof input.uid === "number" ? input.uid : undefined;
+  const uid = typeof input.uid === "string" ? input.uid : undefined;
   const text = typeof input.text === "string" ? input.text : undefined;
   switch (action) {
     case "click":
-      if (uid === undefined) throw new Error("click needs a uid");
-      return { type: "click", uid };
+    case "hover":
+      if (uid !== undefined) return { type: action, uid };
+      if (typeof input.x === "number" && typeof input.y === "number")
+        return { type: action, x: input.x, y: input.y };
+      throw new Error(`${action} needs a uid or x/y coordinates`);
+    case "drag":
+      if (
+        typeof input.x !== "number" ||
+        typeof input.y !== "number" ||
+        typeof input.toX !== "number" ||
+        typeof input.toY !== "number"
+      )
+        throw new Error("drag needs x, y, toX and toY");
+      return {
+        type: "drag",
+        x: input.x,
+        y: input.y,
+        toX: input.toX,
+        toY: input.toY,
+      };
     case "fill":
+    case "select":
       if (uid === undefined || text === undefined) {
         throw new Error("fill needs a uid and text");
       }
-      return { type: "fill", uid, text };
+      return { type: action, uid, text };
     case "press":
       if (typeof input.press_key !== "string") {
         throw new Error("press needs press_key (e.g. 'Enter')");

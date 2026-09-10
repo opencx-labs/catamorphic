@@ -165,3 +165,55 @@ describe("tool permissions", () => {
     );
   }, 60_000);
 });
+
+it("queues concurrent native elicitation requests and settles each independently", async () => {
+  await run(`send('elicitation: queue');`);
+  await runWait(
+    `return $('[data-testid="elicitation-modal"]')?.textContent.includes('First app');`,
+  );
+  await app.screenshot("/tmp/codex-elicitation.png");
+  await run(`$('[data-testid="elicitation-modal"] form').requestSubmit();`);
+  await runWait(
+    `return $('[data-testid="elicitation-modal"]')?.textContent.includes('Second app');`,
+  );
+  await run(
+    `byText('[data-testid="elicitation-modal"] button','Cancel').click();`,
+  );
+  await runWait(
+    `return timeline().includes('elicitation decisions: accept,decline');`,
+  );
+  expect(await run(`return !!$('[data-testid="elicitation-modal"]');`)).toBe(
+    false,
+  );
+});
+it("withdraws native elicitation on cancellation", async () => {
+  await run(`send('elicitation: cancel');`);
+  await runWait(`return !!$('[data-testid="elicitation-modal"]');`);
+  await runWait(
+    `return !$('[data-testid="elicitation-modal"]') && timeline().includes('elicitation decisions: decline');`,
+  );
+});
+
+it("remembers native app consent only after the user chooses the chat scope", async () => {
+  await run(`send('elicitation: app');`);
+  await runWait(
+    `return $('[data-testid="elicitation-modal"]')?.textContent.includes('Allow this app for this chat');`,
+  );
+  expect(
+    await run(
+      `return $('[data-testid="elicitation-modal"] input[type="checkbox"]').checked;`,
+    ),
+  ).toBe(false);
+  await runWait(
+    `return document.getAnimations().filter(animation => animation.effect?.getComputedTiming().iterations !== Infinity).every(animation => animation.playState === 'finished');`,
+  );
+  await app.screenshot("/tmp/codex-app-consent.png");
+  await run(
+    `$('[data-testid="elicitation-modal"] input[type="checkbox"]').click();`,
+  );
+  await run(`$('[data-testid="elicitation-modal"] form').requestSubmit();`);
+  await runWait(`return timeline().includes('app consent: accept,accept');`);
+  expect(await run(`return !!$('[data-testid="elicitation-modal"]');`)).toBe(
+    false,
+  );
+});

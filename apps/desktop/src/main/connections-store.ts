@@ -41,6 +41,8 @@ export interface McpConnection {
   headers?: Record<string, string>;
   command?: string;
   args?: string[];
+  cwd?: string;
+  envVars?: string[];
   /** Decrypted in memory; never crosses the contextBridge. */
   env?: Record<string, string>;
   enabled: boolean;
@@ -111,6 +113,8 @@ export interface PublicMcpConnection {
   url?: string;
   command?: string;
   args?: string[];
+  cwd?: string;
+  envVars?: string[];
   headerNames: string[];
   envNames: string[];
   enabled: boolean;
@@ -130,6 +134,8 @@ export interface CreateConnectionInput {
   headers?: Record<string, string>;
   command?: string;
   args?: string[];
+  cwd?: string;
+  envVars?: string[];
   env?: Record<string, string>;
   enabled?: boolean;
   source?: ConnectionSource;
@@ -145,6 +151,8 @@ export interface UpdateConnectionInput {
   headers?: Record<string, string> | null;
   command?: string;
   args?: string[];
+  cwd?: string;
+  envVars?: string[];
   /** New env map; omit to keep the stored one, null to clear it. */
   env?: Record<string, string> | null;
   enabled?: boolean;
@@ -237,6 +245,8 @@ export class ConnectionsStore {
       ...(input.url ? { url: input.url } : {}),
       ...(input.command ? { command: input.command } : {}),
       ...(input.args && input.args.length > 0 ? { args: input.args } : {}),
+      ...(input.cwd ? { cwd: input.cwd } : {}),
+      ...(input.envVars ? { envVars: input.envVars } : {}),
       ...(input.iconUrl ? { iconUrl: input.iconUrl } : {}),
       ...(input.oauthClient ? { oauthClient: input.oauthClient } : {}),
       ...(input.ceiling ? { ceiling: input.ceiling } : {}),
@@ -258,6 +268,8 @@ export class ConnectionsStore {
     if (patch.url !== undefined) stored.url = patch.url;
     if (patch.command !== undefined) stored.command = patch.command;
     if (patch.args !== undefined) stored.args = patch.args;
+    if (patch.cwd !== undefined) stored.cwd = patch.cwd;
+    if (patch.envVars !== undefined) stored.envVars = patch.envVars;
     if (patch.enabled !== undefined) stored.enabled = patch.enabled;
     if (patch.ceiling !== undefined)
       stored.ceiling = patch.ceiling ?? undefined;
@@ -453,6 +465,8 @@ export function toAgentMcpServer(
       command: connection.command,
       ...(connection.args ? { args: connection.args } : {}),
       ...(connection.env ? { env: connection.env } : {}),
+      ...(connection.cwd ? { cwd: connection.cwd } : {}),
+      ...(connection.envVars ? { envVars: connection.envVars } : {}),
     };
   }
   if (!connection.url) return undefined;

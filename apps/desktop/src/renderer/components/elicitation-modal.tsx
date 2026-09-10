@@ -34,6 +34,7 @@ export type ElicitResult =
 
 export interface PendingElicitation {
   id: string;
+  askId?: number;
   label?: string;
   request: ElicitRequest;
   resolve: (result: ElicitResult) => void;
@@ -49,7 +50,11 @@ export function ElicitationModal({
 }) {
   if (!pending) return null;
   return (
-    <Modal open onClose={() => pending.resolve({ action: "cancel" })}>
+    <Modal
+      key={pending.id}
+      open
+      onClose={() => pending.resolve({ action: "cancel" })}
+    >
       <div className="w-[min(440px,90vw)] p-5" data-testid="elicitation-modal">
         {pending.request.mode === "url" ? (
           <UrlElicitation
@@ -192,7 +197,7 @@ function FormElicitation({
           data-disabled-reason="Complete the required fields first"
           className="h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Submit
+          Continue
         </PendingButton>
         <button
           type="button"
@@ -219,9 +224,10 @@ function ElicitField({
   const id = `elicit-${field.name}`;
   if (field.type === "boolean") {
     return (
-      <label className="flex cursor-pointer items-center gap-2 text-[13px] text-fg">
+      <label className="flex cursor-pointer items-start gap-2 text-[13px] text-fg">
         <input
           id={id}
+          className="mt-1 shrink-0"
           type="checkbox"
           checked={value === true}
           onChange={(event) => onChange(event.target.checked)}
@@ -229,7 +235,9 @@ function ElicitField({
         <span>
           {title}
           {field.description && (
-            <span className="ml-1 text-fg-faint">— {field.description}</span>
+            <span className="mt-0.5 block text-xs text-fg-faint">
+              {field.description}
+            </span>
           )}
         </span>
       </label>

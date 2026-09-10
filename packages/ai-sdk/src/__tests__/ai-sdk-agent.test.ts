@@ -1,4 +1,4 @@
-import type { SandboxProvider } from "@catamorphic/sandbox";
+import { agentToolResult, type SandboxProvider } from "@catamorphic/sandbox";
 import { simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
@@ -669,3 +669,69 @@ it("aborts an active model request when the session is disposed", async () => {
   expect(signal?.aborted).toBe(true);
   expect(agent.hasSession(session.providerSessionId ?? "")).toBe(false);
 });
+
+it.each(["host", "mcp"] as const)(
+  "preserves %s image blocks for the model without storing bytes in tool activity",
+  async (source) => {
+    const data =
+      "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP8z8DAwMDAxMDAwMDAAAANHQEDasKb6QAAAABJRU5ErkJggg==";
+    const result = agentToolResult({
+      content: [
+        { type: "text", text: "A screenshot" },
+        { type: "image", mimeType: "image/png", data },
+      ],
+    });
+    if (source === "mcp")
+      connectMcpServerMock.mockResolvedValueOnce({
+        tools: [
+          {
+            name: "screenshot",
+            description: "Read screen",
+            inputSchema: { type: "object", properties: {} },
+          },
+        ],
+        callTool: vi.fn(),
+        callToolRaw: vi.fn(async () => result),
+        readResource: vi.fn(),
+        close: vi.fn(async () => {}),
+      });
+    const model = new MockLanguageModelV4({
+      doStream: [
+        toolCallStream(
+          source === "host" ? "screenshot" : "mcp__computer__screenshot",
+          {},
+        ),
+        textStream("Seen"),
+      ],
+    });
+    const agent = new AiSdkCodingAgent({
+      model,
+      sandboxProvider: createProvider(),
+      ...(source === "host"
+        ? {
+            extraTools: [
+              {
+                name: "screenshot",
+                description: "Read screen",
+                parameters: {},
+                execute: async () => result,
+              },
+            ],
+          }
+        : {
+            mcpServers: {
+              computer: { transport: "http", url: "http://127.0.0.1/unused" },
+            },
+          }),
+    });
+    const events = await collect(
+      agent,
+      await start(agent),
+      "Inspect the screen",
+    );
+    expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain(
+      '"mediaType":"image/png"',
+    );
+    expect(JSON.stringify(events)).not.toContain(data);
+  },
+);

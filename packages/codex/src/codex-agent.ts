@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
   AgentAttachment,
+  AgentCapabilityGateway,
   AgentEffort,
   AgentEvent,
   AgentMcpServerConfig,
@@ -13,6 +14,7 @@ import type {
   McpToolPolicyLayers,
   ProviderSession,
   StartSessionOpts,
+  ToolPermissionHandler,
   ToolPolicyAnnotations,
   TurnOptions,
 } from "@catamorphic/sandbox";
@@ -26,18 +28,31 @@ import {
   resolveToolPermissionAcross,
   stagePluginDocs,
 } from "@catamorphic/sandbox";
-import {
-  Codex,
-  type CodexOptions,
-  type ThreadEvent,
-  type ThreadItem,
-  type ThreadOptions,
-  type UserInput,
+import type {
+  CodexOptions,
+  ThreadEvent,
+  ThreadItem,
+  ThreadOptions,
+  UserInput,
 } from "@openai/codex-sdk";
+
+import {
+  CodexAppServer,
+  type CodexElicitation,
+  type CodexElicitationResult,
+} from "./app-server.js";
 
 type CodexConfigObject = NonNullable<CodexOptions["config"]>;
 
 export interface CodexAgentOpts {
+  onToolPermission?: ToolPermissionHandler;
+  /** A handler per native session lifetime; discarded on restart or disposal. */
+  mcpElicitationForSession?: (context: {
+    sessionId: string;
+  }) => (
+    request: CodexElicitation,
+    signal?: AbortSignal,
+  ) => Promise<CodexElicitationResult>;
   /** API-key auth; omit to use the CODEX_HOME account login (`codex login`). */
   apiKey?: string;
   baseUrl?: string;
@@ -66,13 +81,8 @@ export interface CodexAgentOpts {
   /** Use the host's session todo list instead of Codex's private goals. */
   disableNativeGoals?: boolean;
   /**
-   * External MCP servers for this agent. Codex has no programmatic MCP
-   * option, but its CLI accepts arbitrary `--config` overrides — the SDK
-   * flattens these into `mcp_servers.<name>.*` keys, the same shape a
-   * `config.toml` would carry. The CLI owns the connections and speaks
-   * whatever protocol revision each server negotiates. Every turn spawns
-   * a fresh CLI, so a getter (read per spawn) carries a rotated
-   * credential to the next turn without a provider rebuild.
+   * Native MCP configuration, resolved each turn. Changed credentials or policies
+   * restart the session's app-server; unchanged configuration retains MCP state.
    */
   mcpServers?: McpServersSource;
   /** Host-owned MCP servers resolved for the current project/session. */
@@ -80,14 +90,10 @@ export interface CodexAgentOpts {
     context: ExtraToolContext,
   ) => Record<string, AgentMcpServerConfig>;
   /**
-   * Per-server tool permissions (see @catamorphic/sandbox tool-policy).
-   * Codex offers no per-call approval channel to a host (its approvals
-   * are the CLI's own prompts, and this harness runs with approvals off),
-   * so the policy applies COARSELY at spawn: tools that resolve to `deny`
-   * — and, failing closed, tools that would `ask` — are written to the
-   * server's `disabled_tools`. Only tools named in the policy or in
-   * {@link mcpToolAnnotations} can be resolved ahead of time; unknown
-   * tools follow the default only when it is explicit.
+   * Per-server tool policies intersect before native tool discovery. `ask` still
+   * fails closed here; the service's own elicitation is handled separately through
+   * mcpElicitationForSession. Known annotations resolve `auto`; unknown tools need an
+   * explicit allow default.
    */
   mcpPolicies?:
     | Record<string, McpToolPolicyLayers>
@@ -99,7 +105,7 @@ export interface CodexAgentOpts {
 }
 
 /**
- * Coding agent backed by the OpenAI Codex SDK. The Codex CLI runs on the
+ * Coding agent backed by the native OpenAI Codex app-server. The Codex CLI runs on the
  * **host machine** and operates on a local working directory — use it when
  * the project checkout the agent should edit lives on the same filesystem
  * as the server (or when the host itself is the isolation boundary, e.g. a
@@ -107,21 +113,14 @@ export interface CodexAgentOpts {
  * `@catamorphic/ai-sdk`.
  *
  * Sessions survive host restarts: the CLI persists threads under
- * `$CODEX_HOME/sessions`, and every turn resumes by thread id. Because each
- * turn spawns a fresh `codex exec resume`, per-turn model/effort overrides
- * apply cleanly via thread options.
+ * `$CODEX_HOME/sessions`, and every turn resumes by thread id. Native
+ * turn options refresh model/effort without discarding MCP state.
  */
 export class CodexAgent implements CodingAgentProvider {
   readonly name = "codex";
   private readonly opts: CodexAgentOpts;
-  /**
-   * Standing instructions for sessions whose thread hasn't started yet,
-   * keyed by host chat session id. The CLI has no system-prompt channel, so
-   * they ride with the first real user message; entries clear once the
-   * thread exists (or on dispose). Recomputed by a fresh startSession when a
-   * host restart drops them before the first turn ran.
-   */
-  private readonly pendingInstructions = new Map<string, string>();
+  /** Standing developer instructions, refreshed at start and retained through resume. */
+  private readonly sessionInstructions = new Map<string, string>();
   /**
    * The caller's tool-policy layers per host session id (ADR 0055). Codex
    * reads policy at spawn, so a session serving a scoped caller spawns
@@ -142,30 +141,36 @@ export class CodexAgent implements CodingAgentProvider {
     this.opts = opts;
   }
 
-  private buildClient(config: CodexOptions["config"] | undefined): Codex {
-    return new Codex({
-      apiKey: this.opts.apiKey,
-      baseUrl: this.opts.baseUrl,
-      codexPathOverride: this.opts.codexPathOverride,
-      ...(config ? { config } : {}),
-      // The SDK stops inheriting process.env once env is provided — merge
-      // ourselves so PATH and friends survive alongside the overrides.
-      ...(this.opts.env ? { env: mergedEnv(this.opts.env) } : {}),
-    });
+  private buildClient(
+    config: CodexOptions["config"] | undefined,
+    sessionId: string,
+  ): CodexAppServer {
+    return new CodexAppServer(
+      {
+        apiKey: this.opts.apiKey,
+        baseUrl: this.opts.baseUrl,
+        codexPathOverride: this.opts.codexPathOverride,
+        ...(config ? { config } : {}),
+        // Preserve the host environment alongside explicit account overrides.
+        ...(this.opts.env ? { env: mergedEnv(this.opts.env) } : {}),
+      },
+      this.opts.mcpElicitationForSession?.({ sessionId }),
+      this.opts.onToolPermission,
+      sessionId,
+    );
   }
 
-  /**
-   * The client a turn spawns through. A `Codex` is just spawn config, so
-   * one is built per turn from the live sources — servers with their
-   * current headers (a rotated token rides the next spawn), the
-   * provider's policies narrowed by the session's caller (ADR 0055) —
-   * with no provider rebuild and nothing to cache.
-   */
+  /** Reuse native MCP state until connection credentials or policy change. */
+  private clients = new Map<
+    string,
+    { signature: string; client: CodexAppServer }
+  >();
+
   private clientFor(
     session: ProviderSession,
     capabilityServer?: AgentMcpServerConfig,
     contextPrompt?: string,
-  ): Codex {
+  ): CodexAppServer {
     const own =
       typeof this.opts.mcpPolicies === "function"
         ? this.opts.mcpPolicies()
@@ -201,11 +206,17 @@ export class CodexAgent implements CodingAgentProvider {
     };
     const config =
       Object.keys(features).length > 0 ? { ...mcpConfig, features } : mcpConfig;
-    return this.buildClient(
-      contextPrompt
-        ? { ...config, developer_instructions: contextPrompt }
-        : config,
-    );
+    const signature = JSON.stringify(config);
+    const existing = this.clients.get(session.sessionId);
+    if (existing?.client.available && existing.signature === signature) {
+      existing.client.setContext(contextPrompt);
+      return existing.client;
+    }
+    existing?.client.close();
+    const client = this.buildClient(config, session.sessionId);
+    client.setContext(contextPrompt);
+    this.clients.set(session.sessionId, { signature, client });
+    return client;
   }
 
   async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
@@ -215,7 +226,7 @@ export class CodexAgent implements CodingAgentProvider {
       .filter(Boolean)
       .join("\n\n");
     if (instructions) {
-      this.pendingInstructions.set(opts.sessionId, instructions);
+      this.sessionInstructions.set(opts.sessionId, instructions);
     }
     if (opts.toolPolicies) {
       this.callerPolicies.set(opts.sessionId, opts.toolPolicies);
@@ -247,15 +258,50 @@ export class CodexAgent implements CodingAgentProvider {
     message: string,
     opts?: TurnOptions,
   ): AsyncIterable<AgentEvent> {
-    const gateway = opts?.capabilities
-      ? await listenAgentCapabilityGateway(opts.capabilities)
-      : undefined;
+    if (this.runningSessions.has(session.sessionId))
+      throw new Error("A turn is already running in this session.");
+    this.runningSessions.add(session.sessionId);
+    let entry = this.gateways.get(session.sessionId);
     try {
-      yield* this.sendMessageOnHost(session, message, opts, gateway?.config);
+      if (opts?.capabilities && !entry) {
+        const state: { current?: AgentCapabilityGateway } = {
+          current: opts.capabilities,
+        };
+        const listener = await listenAgentCapabilityGateway({
+          discover: (args) => {
+            if (!state.current) throw new Error("No active turn");
+            return state.current.discover(args);
+          },
+          invoke: (args) => {
+            if (!state.current) throw new Error("No active turn");
+            return state.current.invoke(args);
+          },
+        });
+        entry = { state, listener };
+        this.gateways.set(session.sessionId, entry);
+      }
+      if (entry) entry.state.current = opts?.capabilities;
+      yield* this.sendMessageOnHost(
+        session,
+        message,
+        opts,
+        entry?.listener.config,
+      );
     } finally {
-      await gateway?.close();
+      if (entry) entry.state.current = undefined;
+      this.runningSessions.delete(session.sessionId);
     }
   }
+
+  private runningSessions = new Set<string>();
+
+  private gateways = new Map<
+    string,
+    {
+      state: { current?: AgentCapabilityGateway };
+      listener: Awaited<ReturnType<typeof listenAgentCapabilityGateway>>;
+    }
+  >();
 
   private async *sendMessageOnHost(
     session: ProviderSession,
@@ -263,21 +309,21 @@ export class CodexAgent implements CodingAgentProvider {
     opts?: TurnOptions,
     capabilityServer?: AgentMcpServerConfig,
   ): AsyncIterable<AgentEvent> {
-    // Each turn spawns a fresh CLI run with this turn's options, so per-turn
-    // model/effort overrides take effect without any in-memory thread state.
-    // The first turn starts the thread; later turns resume it by id.
+    // Native turn options refresh while MCP processes survive between turns.
     if (opts?.toolPolicies) {
       this.callerPolicies.set(session.sessionId, opts.toolPolicies);
     }
-    const client = this.clientFor(session, capabilityServer, opts?.context);
+    const context =
+      [this.sessionInstructions.get(session.sessionId), opts?.context]
+        .filter(Boolean)
+        .join("\n\n") || undefined;
+    const client = this.clientFor(session, capabilityServer, context);
     const threadOptions = this.threadOptions(session.workingDirectory, opts);
     const thread = session.providerSessionId
       ? client.resumeThread(session.providerSessionId, threadOptions)
       : client.startThread(threadOptions);
     const prose = renderUserMessage(message, opts?.attachments);
-    const text = session.providerSessionId
-      ? prose
-      : this.withInstructions(session.sessionId, prose);
+    const text = prose;
     const abortController = new AbortController();
     this.turnAbortControllers.set(session.sessionId, abortController);
     if (session.providerSessionId) {
@@ -323,7 +369,6 @@ export class CodexAgent implements CodingAgentProvider {
           terminal = true;
         }
         if (event.type === "thread.started" && !session.providerSessionId) {
-          this.pendingInstructions.delete(session.sessionId);
           this.turnAbortControllers.set(event.thread_id, abortController);
           yield { type: "session", providerSessionId: event.thread_id };
         }
@@ -373,9 +418,13 @@ export class CodexAgent implements CodingAgentProvider {
   }
 
   async dispose(session: ProviderSession): Promise<void> {
-    // Threads live on disk under $CODEX_HOME; nothing else to release.
+    // Preserve durable transcripts while releasing all live process resources.
     this.interrupt(session.providerSessionId ?? session.sessionId);
-    this.pendingInstructions.delete(session.sessionId);
+    this.clients.get(session.sessionId)?.client.close();
+    this.clients.delete(session.sessionId);
+    await this.gateways.get(session.sessionId)?.listener.close();
+    this.gateways.delete(session.sessionId);
+    this.sessionInstructions.delete(session.sessionId);
     this.callerPolicies.delete(session.sessionId);
     this.sessionContexts.delete(session.sessionId);
     this.sessionMcpServers.delete(session.sessionId);
@@ -385,25 +434,6 @@ export class CodexAgent implements CodingAgentProvider {
     for (const [key, current] of this.turnAbortControllers) {
       if (current === controller) this.turnAbortControllers.delete(key);
     }
-  }
-
-  /**
-   * Codex has no system-prompt channel, so standing instructions ride with
-   * the thread's first user message inside a labeled block — attached to a
-   * real turn, never a turn of their own.
-   */
-  private withInstructions(sessionId: string, message: string): string {
-    const instructions = this.pendingInstructions.get(sessionId);
-    if (!instructions) return message;
-    return [
-      "<session_instructions>",
-      "Standing instructions for this session. The user's message follows after the closing tag.",
-      "",
-      instructions,
-      "</session_instructions>",
-      "",
-      message,
-    ].join("\n");
   }
 
   private threadOptions(
@@ -416,7 +446,10 @@ export class CodexAgent implements CodingAgentProvider {
       ...(workingDirectory ? { workingDirectory } : {}),
       skipGitRepoCheck: true,
       sandboxMode: this.opts.sandboxMode ?? "workspace-write",
-      approvalPolicy: "never",
+      approvalPolicy:
+        this.opts.mcpElicitationForSession || this.opts.onToolPermission
+          ? "on-request"
+          : "never",
       networkAccessEnabled: this.opts.networkAccessEnabled ?? true,
       ...(model ? { model } : {}),
       ...(effort ? { modelReasoningEffort: effort } : {}),
@@ -446,6 +479,8 @@ function mcpServersConfig(
       ...(config.transport === "stdio"
         ? {
             command: config.command,
+            ...(config.cwd ? { cwd: config.cwd } : {}),
+            ...(config.envVars ? { env_vars: config.envVars } : {}),
             ...(config.args ? { args: config.args } : {}),
             ...(config.env ? { env: config.env } : {}),
           }
@@ -470,7 +505,7 @@ function mcpServersConfig(
 /**
  * The Codex-side rendering of a policy: the same per-tool resolution the
  * shared `ToolGate` runs live in the other harnesses, applied once at
- * spawn because Codex has no per-call approval channel — ask fails closed.
+ * native discovery; tool-level ask fails closed.
  * Two shapes:
  * - When tools the host has NOT listed would still be allowed (every
  *   layer's default is `allow`), an unknown tool may run: emit

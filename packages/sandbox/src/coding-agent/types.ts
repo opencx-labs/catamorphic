@@ -130,6 +130,9 @@ export type AgentMcpServerConfig =
       transport: "stdio";
       command: string;
       args?: string[];
+      cwd?: string;
+      /** Explicit environment names inherited by the MCP child. */
+      envVars?: string[];
       env?: Record<string, string>;
       /** Harness hint for servers whose tools are already host-authorized. */
       defaultToolsApprovalMode?: "auto" | "prompt" | "writes" | "approve";

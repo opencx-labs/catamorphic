@@ -141,6 +141,7 @@ function normalizeSource(
   if (record.source === "github" && typeof record.repo === "string") {
     return { kind: "git", url: `https://github.com/${record.repo}.git` };
   }
+  if (record.enabled === false) return undefined;
   if (typeof record.url === "string") {
     if (record.source === "git-subdir" && typeof record.path === "string") {
       return { kind: "git", url: record.url, subdir: record.path };
@@ -239,22 +240,42 @@ export function liftMcpOAuthClient(
 export async function readInstalledPlugin(
   pluginDir: string,
 ): Promise<InstalledPluginInfo> {
-  const manifestPath = path.join(pluginDir, ".claude-plugin", "plugin.json");
-  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf-8")) as {
+  const manifestText = await fs
+    .readFile(path.join(pluginDir, ".claude-plugin", "plugin.json"), "utf-8")
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+      return fs.readFile(
+        path.join(pluginDir, ".codex-plugin", "plugin.json"),
+        "utf-8",
+      );
+    });
+  const manifest = JSON.parse(manifestText) as {
     name?: string;
     description?: string;
     version?: string;
-    mcpServers?: Record<string, unknown>;
+    mcpServers?: Record<string, unknown> | string;
   };
   const mcpJson = await fs
-    .readFile(path.join(pluginDir, ".mcp.json"), "utf-8")
+    .readFile(
+      path.resolve(
+        pluginDir,
+        typeof manifest.mcpServers === "string"
+          ? manifest.mcpServers
+          : ".mcp.json",
+      ),
+      "utf-8",
+    )
     .then((raw) => JSON.parse(raw) as Record<string, unknown>)
-    .catch(() => undefined);
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT" && typeof manifest.mcpServers !== "string")
+        return undefined;
+      throw error;
+    });
   const declared = {
     ...((mcpJson?.mcpServers as Record<string, unknown> | undefined) ??
       mcpJson ??
       {}),
-    ...(manifest.mcpServers ?? {}),
+    ...(typeof manifest.mcpServers === "object" ? manifest.mcpServers : {}),
   };
   const mcpServers: Record<string, AgentMcpServerConfig> = {};
   const mcpOAuth: Record<string, McpOAuthClientHint> = {};
@@ -282,9 +303,9 @@ export function liftMcpServer(
   const record = raw as Record<string, unknown>;
   const substitute = (value: string): string =>
     pluginRoot
-      ? // biome-ignore lint/suspicious/noTemplateCurlyInString: the plugin spec's literal placeholder syntax
-        value.replaceAll("${CLAUDE_PLUGIN_ROOT}", pluginRoot)
+      ? value.replace(/\$\{(?:CLAUDE|CODEX)_PLUGIN_ROOT\}/g, () => pluginRoot)
       : value;
+  if (record.enabled === false) return undefined;
   if (typeof record.url === "string") {
     const type = record.type === "sse" ? "sse" : "http";
     return {
@@ -296,9 +317,25 @@ export function liftMcpServer(
     };
   }
   if (typeof record.command === "string") {
+    const command = substitute(record.command);
+    const cwd =
+      typeof record.cwd === "string"
+        ? path.resolve(pluginRoot ?? process.cwd(), substitute(record.cwd))
+        : undefined;
     return {
       transport: "stdio",
-      command: substitute(record.command),
+      command:
+        command.startsWith(".") && (cwd || pluginRoot)
+          ? path.resolve(cwd ?? pluginRoot ?? ".", command)
+          : command,
+      ...(cwd ? { cwd } : {}),
+      ...(Array.isArray(record.env_vars)
+        ? {
+            envVars: record.env_vars.filter(
+              (value): value is string => typeof value === "string",
+            ),
+          }
+        : {}),
       ...(Array.isArray(record.args)
         ? { args: record.args.map((arg) => substitute(String(arg))) }
         : {}),

@@ -184,6 +184,7 @@ async function connectTransport(
     return connect(
       new StdioClientTransport({
         command: config.command,
+        cwd: config.cwd,
         args: config.args,
         env: Object.fromEntries(
           Object.entries({ ...process.env, ...config.env }).filter(

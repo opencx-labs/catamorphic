@@ -259,3 +259,9 @@ the historical log explains how it arrived here.
 - [Earlier decisions and rationale](DESIGN-HISTORY.md).
 
 Rich attachment previews share InspectorPortal across composer and conversation. File references use compact pills; web links retain prose styling with destination cards. Content loads only on inspection, and unavailable previews retain useful metadata. See [chat state](docs/chat-state.md).
+
+Browser tools wake only the guest they operate on and restore focus after native
+input. In-page pointers use the same `point_at`/`clear_pointers` contract as shell
+pointers. Native computer access is an optional profile connector with the
+existing queued consent UI; cancellation withdraws the request. See
+[Computer use](docs/computer-use.md) and ADR 0112.

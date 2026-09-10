@@ -6,6 +6,11 @@ import type {
   ToolPermissionRequest,
 } from "@catamorphic/sandbox";
 import { BrowserWindow, ipcMain, webContents } from "electron";
+import {
+  type BrowserAction,
+  BrowserDriver,
+  browserUrl,
+} from "./browser-driver.js";
 import type { AgentTerminals } from "./terminal.js";
 import {
   capOutput,
@@ -39,18 +44,15 @@ export interface WorkspaceBridge {
     sessionId: string,
     url: string,
   ): Promise<{ key: string }>;
-  browserSnapshot(projectId: string, key: string): Promise<unknown>;
+  browserSnapshot(
+    projectId: string,
+    key: string,
+    format?: "dom" | "image",
+  ): Promise<unknown>;
   browserAct(
     projectId: string,
     key: string,
-    action:
-      | { type: "click"; uid: number }
-      | { type: "fill"; uid: number; text: string }
-      | { type: "press"; key: string }
-      | { type: "navigate"; url: string }
-      | { type: "read" }
-      | { type: "scroll"; direction: "up" | "down" }
-      | { type: "wait_for"; text: string; timeoutMs?: number },
+    action: BrowserAction,
   ): Promise<unknown>;
   /**
    * Run a command in a terminal: a fresh agent terminal by default, or —
@@ -147,6 +149,7 @@ export interface WorkspaceBridge {
     target: string,
     note: string | undefined,
     keepPrevious: boolean,
+    uid?: string,
   ): Promise<{ ok: boolean; error?: string }>;
   clearPointers(projectId: string): Promise<void>;
   /**
@@ -158,6 +161,7 @@ export interface WorkspaceBridge {
   elicit(
     label: string | undefined,
     request: ElicitRequest,
+    signal?: AbortSignal,
   ): Promise<ElicitResult>;
   /**
    * An agent wants to use an MCP tool whose policy says "ask": the front
@@ -208,128 +212,6 @@ const sleep = (ms: number) =>
 /** Raw PTY buffer → what the model reads: sanitized, tail-capped. */
 const modelOutput = (raw: string): string =>
   capOutput(sanitizeTerminalOutput(raw), OUTPUT_CAP);
-
-/** Guest-side script: index interactive elements, act, and visualize. */
-const GUEST_HELPERS = `
-(() => {
-  if (window.__catAgent) return;
-  const highlight = (el) => {
-    try {
-      const rect = el.getBoundingClientRect();
-      const glow = document.createElement("div");
-      glow.style.cssText =
-        "position:fixed;z-index:2147483647;pointer-events:none;" +
-        "border:2px solid rgba(249,82,37,.9);border-radius:6px;" +
-        "box-shadow:0 0 0 4px rgba(249,82,37,.25);" +
-        "transition:opacity .6s ease,transform .6s ease;" +
-        "left:" + (rect.left - 3) + "px;top:" + (rect.top - 3) + "px;" +
-        "width:" + (rect.width + 6) + "px;height:" + (rect.height + 6) + "px;";
-      document.documentElement.appendChild(glow);
-      requestAnimationFrame(() => {
-        glow.style.opacity = "0";
-        glow.style.transform = "scale(1.06)";
-      });
-      setTimeout(() => glow.remove(), 700);
-    } catch {}
-  };
-  const setNativeValue = (el, value) => {
-    const proto = el instanceof HTMLTextAreaElement
-      ? HTMLTextAreaElement.prototype
-      : HTMLInputElement.prototype;
-    const setter = Object.getOwnPropertyDescriptor(proto, "value");
-    if (setter && setter.set) setter.set.call(el, value);
-    else el.value = value;
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-  };
-  window.__catAgent = {
-    uids: [],
-    snapshot() {
-      const selector = [
-        "a[href]", "button", "input", "textarea", "select",
-        "[role=button]", "[role=link]", "[role=textbox]",
-        "[role=combobox]", "[role=checkbox]", "[role=menuitem]",
-        "[contenteditable=true]",
-      ].join(",");
-      const visible = [...document.querySelectorAll(selector)].filter((el) => {
-        const rect = el.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0;
-      });
-      this.uids = visible;
-      const lines = visible.slice(0, 300).map((el, i) => {
-        const tag = el.tagName.toLowerCase();
-        const type = el.getAttribute("type");
-        const text = (el.innerText || el.value || el.placeholder ||
-          el.getAttribute("aria-label") || el.title || "")
-          .trim().replace(/\\s+/g, " ").slice(0, 90);
-        return "[" + i + "] <" + tag + (type ? " type=" + type : "") + "> " + text;
-      });
-      return {
-        url: location.href,
-        title: document.title,
-        elements: lines.join("\\n"),
-        truncated: visible.length > 300,
-      };
-    },
-    click(uid) {
-      const el = this.uids[uid];
-      if (!el) return { error: "Unknown uid " + uid + ". Take a fresh snapshot." };
-      highlight(el);
-      el.scrollIntoView({ block: "center", behavior: "instant" });
-      el.focus && el.focus();
-      el.click();
-      return { ok: true };
-    },
-    fill(uid, text) {
-      const el = this.uids[uid];
-      if (!el) return { error: "Unknown uid " + uid + ". Take a fresh snapshot." };
-      highlight(el);
-      el.scrollIntoView({ block: "center", behavior: "instant" });
-      el.focus && el.focus();
-      if (el.isContentEditable) el.textContent = text;
-      else setNativeValue(el, text);
-      return { ok: true };
-    },
-    press(key) {
-      const el = document.activeElement || document.body;
-      const options = { key, bubbles: true, cancelable: true };
-      el.dispatchEvent(new KeyboardEvent("keydown", options));
-      el.dispatchEvent(new KeyboardEvent("keyup", options));
-      if (key === "Enter" && el.form) el.form.requestSubmit();
-      return { ok: true };
-    },
-    read() {
-      return {
-        url: location.href,
-        title: document.title,
-        text: (document.body?.innerText ?? "").slice(0, 30000),
-      };
-    },
-    scroll(direction) {
-      window.scrollBy({
-        top: (direction === "up" ? -0.8 : 0.8) * window.innerHeight,
-        behavior: "instant",
-      });
-      return { ok: true, scrollY: window.scrollY };
-    },
-    waitFor(text, timeoutMs) {
-      const deadline = Date.now() + (timeoutMs || 5000);
-      return new Promise((resolve) => {
-        const check = () => {
-          if ((document.body?.innerText ?? "").includes(text)) {
-            resolve({ found: true });
-          } else if (Date.now() > deadline) {
-            resolve({ found: false, error: "Timed out waiting for: " + text });
-          } else {
-            setTimeout(check, 250);
-          }
-        };
-        check();
-      });
-    },
-  };
-})();
-`;
 
 export function registerAgentBridge(agentTerminals: AgentTerminals): {
   bridge: WorkspaceBridge;
@@ -405,28 +287,40 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
    */
   const rpcToFront = <T>(
     method: string,
-    params: unknown,
+    params: Record<string, unknown>,
     timeoutMs = RPC_TIMEOUT_MS,
+    signal?: AbortSignal,
   ): Promise<T | null> => {
     const windows = BrowserWindow.getAllWindows().filter(
       (window) => !window.isDestroyed(),
     );
     const target = BrowserWindow.getFocusedWindow() ?? windows[0];
-    if (!target || target.isDestroyed()) return Promise.resolve(null);
+    if (!target || target.isDestroyed() || signal?.aborted)
+      return Promise.resolve(null);
     const id = ++nextId;
     return new Promise<T | null>((resolve) => {
-      const timer = setTimeout(() => {
-        if (pending.delete(id)) resolve(null);
-      }, timeoutMs);
-      pending.set(id, {
-        timer,
-        resolve: resolve as (value: unknown) => void,
-        remaining: 1,
-      });
+      const finish = (value: unknown) => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
+        resolve(value as T | null);
+      };
+      const abort = () => {
+        if (!pending.delete(id)) return;
+        if (!target.isDestroyed())
+          target.webContents.send("catamorphic:bridge-request", {
+            id: ++nextId,
+            method: `${method}Cancel`,
+            params: { askId: id },
+          });
+        finish(null);
+      };
+      const timer = setTimeout(abort, timeoutMs);
+      pending.set(id, { timer, remaining: 1, resolve: finish });
+      signal?.addEventListener("abort", abort, { once: true });
       target.webContents.send("catamorphic:bridge-request", {
         id,
         method,
-        params,
+        params: { ...params, askId: id },
       });
     });
   };
@@ -470,12 +364,44 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
     return guest;
   };
 
-  const runInGuest = async <T>(
-    guest: Electron.WebContents,
-    expression: string,
-  ): Promise<T> => {
-    await guest.executeJavaScript(GUEST_HELPERS);
-    return (await guest.executeJavaScript(expression)) as T;
+  const drivers = new Map<
+    number,
+    { projectId: string; driver: BrowserDriver }
+  >();
+  const driverFor = async (projectId: string, key: string) => {
+    const guest = await guestFor(projectId, key);
+    const existing = drivers.get(guest.id);
+    if (existing) return existing.driver;
+    const driver = new BrowserDriver(
+      guest,
+      () => guardControl(key),
+      async (active) => {
+        const result = await rpc<{ ok: true } | { error: string }>(
+          "browserActivity",
+          { projectId, key, active },
+        );
+        if (active && (!result || "error" in result))
+          throw new Error(
+            result && "error" in result
+              ? result.error
+              : "Browser workspace unavailable",
+          );
+      },
+    );
+    drivers.set(guest.id, { projectId, driver });
+    const guestId = guest.id;
+    guest.once("destroyed", () => {
+      drivers.delete(guestId);
+      takenOver.delete(key);
+    });
+    return driver;
+  };
+  const clearPagePointers = async (projectId: string) => {
+    await Promise.all(
+      [...drivers.values()]
+        .filter((entry) => entry.projectId === projectId)
+        .map(({ driver }) => driver.clear()),
+    );
   };
 
   const bridge: WorkspaceBridge = {
@@ -507,11 +433,7 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
         throw new Error(`No terminal found for ${key}`);
       }
       if (key.startsWith("browser:")) {
-        const guest = await guestFor(projectId, key);
-        return {
-          kind: "page",
-          ...(await runInGuest<object>(guest, "window.__catAgent.read()")),
-        };
+        return (await driverFor(projectId, key)).read();
       }
       const result = await rpc("readTab", { projectId, key });
       if (!result) throw new Error(`Nothing readable behind ${key}`);
@@ -521,7 +443,7 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
     async openBrowser(projectId, sessionId, url) {
       const result = await rpc<{ key: string } | { error: string }>(
         "openAgentBrowser",
-        { projectId, sessionId, url },
+        { projectId, sessionId, url: browserUrl(url) },
       );
       if (!result || "error" in result) {
         throw new Error(
@@ -532,49 +454,12 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
       return result;
     },
 
-    async browserSnapshot(projectId, key) {
-      const guest = await guestFor(projectId, key);
-      return runInGuest(guest, "window.__catAgent.snapshot()");
+    async browserSnapshot(projectId, key, format) {
+      return (await driverFor(projectId, key)).snapshot(format);
     },
 
     async browserAct(projectId, key, action) {
-      guardControl(key);
-      const guest = await guestFor(projectId, key);
-      switch (action.type) {
-        case "navigate": {
-          await guest.loadURL(action.url).catch((error: Error) => {
-            // ERR_ABORTED fires on redirects/SPA takeovers; the load went on.
-            if (!/ERR_ABORTED/.test(error.message)) throw error;
-          });
-          return { ok: true, url: guest.getURL() };
-        }
-        case "click":
-          return runInGuest(guest, `window.__catAgent.click(${action.uid})`);
-        case "fill":
-          return runInGuest(
-            guest,
-            `window.__catAgent.fill(${action.uid}, ${JSON.stringify(action.text)})`,
-          );
-        case "press":
-          return runInGuest(
-            guest,
-            `window.__catAgent.press(${JSON.stringify(action.key)})`,
-          );
-        case "read":
-          return runInGuest(guest, "window.__catAgent.read()");
-        case "scroll":
-          return runInGuest(
-            guest,
-            `window.__catAgent.scroll(${JSON.stringify(action.direction)})`,
-          );
-        case "wait_for":
-          return runInGuest(
-            guest,
-            `window.__catAgent.waitFor(${JSON.stringify(action.text)}, ${
-              action.timeoutMs ?? 5000
-            })`,
-          );
-      }
+      return (await driverFor(projectId, key)).act(action);
     },
 
     async runTerminal(
@@ -778,7 +663,16 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
       return result;
     },
 
-    async pointAt(projectId, target, note, keepPrevious) {
+    async pointAt(projectId, target, note, keepPrevious, uid) {
+      if (!keepPrevious) await bridge.clearPointers(projectId);
+      if (uid !== undefined) {
+        await (await driverFor(projectId, target)).point(
+          uid,
+          note,
+          keepPrevious,
+        );
+        return { ok: true };
+      }
       const result = await rpc<{ ok: boolean; error?: string } | null>(
         "pointAt",
         { projectId, target, note, keepPrevious },
@@ -790,14 +684,16 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
     },
 
     async clearPointers(projectId) {
+      await clearPagePointers(projectId);
       await rpc("clearPointers", { projectId });
     },
 
-    async elicit(label, request) {
-      const result = await rpc<ElicitResult>(
+    async elicit(label, request, signal) {
+      const result = await rpcToFront<ElicitResult>(
         "elicit",
         { label, request },
         ELICIT_TIMEOUT_MS,
+        signal,
       );
       // No window, or the user closed it without answering → decline; a
       // pending tool call must never hang forever on a missing UI.
@@ -805,41 +701,12 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
     },
 
     async toolPermission(label, request, signal) {
-      // ONE window (focused, else the first): an unfocused app must still
-      // queue the ask rather than auto-deny it — the user just alt-tabbed.
-      const windows = BrowserWindow.getAllWindows().filter(
-        (window) => !window.isDestroyed(),
+      const result = await rpcToFront<unknown>(
+        "toolPermission",
+        { label, request },
+        ELICIT_TIMEOUT_MS,
+        signal,
       );
-      const target = BrowserWindow.getFocusedWindow() ?? windows[0];
-      if (!target || target.isDestroyed()) return null;
-      if (signal?.aborted) return null;
-      const id = ++nextId;
-      const result = await new Promise<unknown>((resolve) => {
-        const finish = (value: unknown) => {
-          clearTimeout(timer);
-          signal?.removeEventListener("abort", abort);
-          resolve(value);
-        };
-        const abort = () => {
-          if (!pending.delete(id)) return;
-          if (!target.isDestroyed()) {
-            target.webContents.send("catamorphic:bridge-request", {
-              id: ++nextId,
-              method: "toolPermissionCancel",
-              params: { askId: id },
-            });
-          }
-          finish(null);
-        };
-        const timer = setTimeout(abort, ELICIT_TIMEOUT_MS);
-        pending.set(id, { resolve: finish, remaining: 1, timer });
-        signal?.addEventListener("abort", abort, { once: true });
-        target.webContents.send("catamorphic:bridge-request", {
-          id,
-          method: "toolPermission",
-          params: { label, request, askId: id },
-        });
-      });
       if (result === null || result === undefined) return null;
       // Anything but a well-formed "allow" is a deny — a renderer error
       // reply ({ error }) must never read as consent.
@@ -865,6 +732,7 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
 
     async setControl(projectId, key, controlled) {
       if (controlled) takenOver.delete(key);
+      else takenOver.add(key);
       await rpc("surfaceControl", { projectId, key, controlled });
     },
 

@@ -930,6 +930,7 @@ export interface CatamorphicDesktopApi {
     marketplace: string,
     pluginName: string,
   ) => Promise<InstalledConnectorInfo>;
+  connectorsCodexComputerUse: () => Promise<InstalledConnectorInfo>;
   connectorsRemove: (name: string) => Promise<boolean>;
   onConnectionsChanged: (
     listener: (connections: ConnectionInfo[]) => void,

@@ -80,6 +80,11 @@ export {
   type ToolPermissionRequest,
   type ToolPolicyAnnotations,
 } from "./coding-agent/tool-policy.js";
+export {
+  type AgentToolResult,
+  agentToolResult,
+  extraToolResult,
+} from "./coding-agent/tool-result.js";
 export type {
   AgentAttachment,
   AgentEffort,

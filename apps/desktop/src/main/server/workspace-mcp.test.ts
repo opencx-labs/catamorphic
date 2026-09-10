@@ -1,4 +1,4 @@
-import type { ExtraTool } from "@catamorphic/sandbox";
+import { agentToolResult, type ExtraTool } from "@catamorphic/sandbox";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -49,6 +49,46 @@ describe("workspace MCP", () => {
     ]);
     await client.close();
     await server.close();
+  });
+
+  it("validates arguments before execution and sends image blocks to MCP clients", async () => {
+    let calls = 0;
+    const image = {
+      type: "image",
+      mimeType: "image/png",
+      data: "AA==",
+    } as const;
+    const server = createWorkspaceMcpServer(
+      [
+        {
+          name: "snapshot",
+          description: "Capture",
+          parameters: { key: z.string() },
+          execute: async () => {
+            calls++;
+            return agentToolResult({ content: [image] });
+          },
+        },
+      ],
+      { projectId: "p" },
+    );
+    const client = new Client({ name: "media-test", version: "1" });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(b);
+    await client.connect(a);
+    try {
+      expect(
+        await client.callTool({ name: "snapshot", arguments: { key: 42 } }),
+      ).toHaveProperty("isError", true);
+      expect(calls).toBe(0);
+      expect(
+        await client.callTool({ name: "snapshot", arguments: { key: "tab" } }),
+      ).toMatchObject({ content: [image] });
+      expect(calls).toBe(1);
+    } finally {
+      await client.close();
+      await server.close();
+    }
   });
 
   it("serves tools over the stateless loopback HTTP route", async () => {

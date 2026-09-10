@@ -927,6 +927,16 @@ export function registerIpcHandlers(
     },
   );
 
+  ipcMain.handle("catamorphic:connectors-codex-computer-use", async (event) => {
+    if (!connectors) throw new Error("Connectors are unavailable");
+    const installed = await connectors.connectCodexComputerUse(
+      windows.profileFor(event.sender),
+      process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex"),
+    );
+    connectionsChanged(event);
+    return installed;
+  });
+
   ipcMain.handle(
     "catamorphic:connectors-remove",
     async (event, name: string) => {

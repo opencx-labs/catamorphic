@@ -165,6 +165,12 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
       ) {
         return;
       }
+      // Keyboard focus scrolls offscreen links into view asynchronously. Keep
+      // their preview attached instead of immediately dismissing it on that scroll.
+      if (triggerRef.current?.contains(document.activeElement)) {
+        show();
+        return;
+      }
       pinned.current = false;
       triggerInterested.current = false;
       panelInterested.current = false;
@@ -192,7 +198,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
       window.removeEventListener("scroll", dismissForScroll, true);
       window.removeEventListener("pointerdown", dismissForPointer);
     };
-  }, [open]);
+  }, [open, show]);
 
   useEffect(() => {
     if (openRequest === undefined || openRequest === 0) return;

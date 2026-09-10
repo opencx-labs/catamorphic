@@ -38,6 +38,8 @@ import { toAgentMcpServer, toPublicConnection } from "./connections-store.js";
  */
 
 export interface InstalledConnector {
+  /** External installation remains owned by the source application. */
+  external?: boolean;
   /** Plugin name, unique per profile. */
   name: string;
   description: string;
@@ -344,31 +346,126 @@ export class ConnectorsService {
       mcpOAuth: {} as Record<string, McpOAuthClientHint>,
     }));
 
+    return this.registerPlugin(
+      profileId,
+      marketplace,
+      pluginName,
+      targetDir,
+      info,
+      false,
+    );
+  }
+
+  /** Register the user's native Codex runtime in place, without copying binaries. */
+  async connectCodexComputerUse(
+    profileId: string,
+    codexHome: string,
+  ): Promise<InstalledConnector> {
+    const cache = path.join(
+      codexHome,
+      "plugins",
+      "cache",
+      "openai-bundled",
+      "unified-computer-use",
+    );
+    const versions = (
+      await fs.promises.readdir(cache, { withFileTypes: true }).catch(() => [])
+    )
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+    versions.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    const version = versions[0];
+    if (!version)
+      throw new Error(
+        "Install Computer Use in the Codex app first, then try again.",
+      );
+    const targetDir = path.join(cache, version);
+    const info = await readInstalledPlugin(targetDir);
+    const native = info.mcpServers.cua_repl;
+    if (native?.transport !== "stdio")
+      throw new Error(
+        "This Codex installation does not expose the native computer-use runtime.",
+      );
+    await fs.promises.access(native.command, fs.constants.X_OK);
+    native.env = { ...native.env, CUA_REPL_ENABLED_SURFACES: "computer" };
+    return this.registerPlugin(
+      profileId,
+      "Installed Codex",
+      "codex-computer-use",
+      targetDir,
+      {
+        ...info,
+        description:
+          "Native app control using your installed Codex Computer Use service.",
+        mcpServers: { cua_repl: native },
+      },
+      true,
+    );
+  }
+
+  private registerPlugin(
+    profileId: string,
+    marketplace: string,
+    pluginName: string,
+    targetDir: string,
+    info: Awaited<ReturnType<typeof readInstalledPlugin>>,
+    external: boolean,
+  ): InstalledConnector {
     const connections = this.deps.connectionsFor(profileId);
-    // Reinstall replaces the plugin's previous connections wholesale.
-    connections.removeForPlugin(pluginName);
+    // Refresh transport details without changing agent assignments or user policy.
+    const previous = connections
+      .list()
+      .filter(
+        (connection) =>
+          connection.source.kind === "plugin" &&
+          connection.source.plugin === pluginName,
+      );
     const connectionIds: string[] = [];
     for (const [serverName, config] of Object.entries(info.mcpServers)) {
-      const connection = connections.create({
+      const existing = previous.find(
+        (connection) =>
+          connection.name === serverName &&
+          connection.transport === config.transport,
+      );
+      const input = {
         name: serverName,
         transport: config.transport,
         ...(config.transport === "stdio"
-          ? { command: config.command, args: config.args, env: config.env }
+          ? {
+              command: config.command,
+              args: config.args,
+              env: config.env,
+              cwd: config.cwd,
+              envVars: config.envVars,
+            }
           : { url: config.url, headers: config.headers }),
-        source: { kind: "plugin", plugin: pluginName },
+        source: { kind: "plugin" as const, plugin: pluginName },
         ...(info.mcpOAuth[serverName]
           ? { oauthClient: info.mcpOAuth[serverName] }
           : {}),
-      });
+      };
+      const connection =
+        (existing ? connections.update(existing.id, input) : undefined) ??
+        connections.create(input);
+      if (!existing && pluginName === "codex-computer-use") {
+        connections.setToolPolicy(connection.id, {
+          default: "deny",
+          tools: { js: "allow", js_reset: "allow" },
+        });
+      }
       connectionIds.push(connection.id);
     }
 
+    for (const old of previous)
+      if (!connectionIds.includes(old.id)) connections.remove(old.id);
+
     const installed: InstalledConnector = {
       name: pluginName,
-      description: info.description || entry.description,
-      version: info.version ?? entry.version,
+      description: info.description,
+      version: info.version,
       marketplace,
       path: targetDir,
+      external,
       connectionIds,
     };
     const data = this.load(profileId);
@@ -387,9 +484,10 @@ export class ConnectorsService {
     data.installed = data.installed.filter((entry) => entry.name !== name);
     this.save(profileId, data);
     this.deps.connectionsFor(profileId).removeForPlugin(name);
-    await fs.promises
-      .rm(connector.path, { recursive: true, force: true })
-      .catch(() => {});
+    if (!connector.external)
+      await fs.promises
+        .rm(connector.path, { recursive: true, force: true })
+        .catch(() => {});
     return true;
   }
 
@@ -502,6 +600,17 @@ export class ConnectorsService {
    * (Claude Code, Codex) never refresh it themselves.
    */
   async refreshTokens(profileId: string): Promise<void> {
+    const computer = this.listInstalled(profileId).find(
+      (connector) =>
+        connector.name === "codex-computer-use" && connector.external,
+    );
+    if (computer && !fs.existsSync(computer.path)) {
+      // Codex removes old version directories on update. Preserve the connection IDs.
+      await this.connectCodexComputerUse(
+        profileId,
+        path.resolve(computer.path, "../../../../.."),
+      ).catch(() => {});
+    }
     const store = this.deps.connectionsFor(profileId);
     for (const connection of store.list()) {
       if (!connection.enabled || !connection.oauth?.tokens) continue;

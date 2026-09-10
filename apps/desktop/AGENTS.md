@@ -119,6 +119,7 @@ test without an explicit request. Prefer the isolated Electron harness.
 | Preferences and reset | [Settings](docs/settings.md) | `shared/settings.ts`, `main/settings-store.ts` |
 | Delivery and embedding | [Chat state](docs/chat-state.md) | `packages/react` hook/reducer, registry source |
 | Idle CPU and memory | [Performance](docs/performance.md) | `scripts/desktop-soak.ts`, `e2e/runtime-idle.e2e.ts` |
+| Browser control and native computer use | [Computer use](docs/computer-use.md) | `main/browser-driver.ts`, `packages/codex` |
 | Styling and animation | [Design system](DESIGN.md) | tokens, list motion and native motion tests |
 
 [DESIGN-HISTORY.md](DESIGN-HISTORY.md) records prior rationale. Current contracts

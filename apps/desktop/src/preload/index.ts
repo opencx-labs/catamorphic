@@ -198,6 +198,8 @@ const api = {
       marketplace,
       pluginName,
     ),
+  connectorsCodexComputerUse: (): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:connectors-codex-computer-use"),
   connectorsRemove: (name: string): Promise<boolean> =>
     ipcRenderer.invoke("catamorphic:connectors-remove", name),
   onConnectionsChanged: (listener: (data: unknown) => void): (() => void) => {

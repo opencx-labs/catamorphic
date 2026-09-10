@@ -46,6 +46,7 @@ import type { ProfilesStore } from "../profiles.js";
 import { projectDefaultAgentSlug } from "../project-manifest.js";
 import { shellBinShimDir } from "../shell-integration.js";
 import { FriendlyAgentErrors } from "./agent-errors.js";
+import { createCodexElicitation } from "./codex-elicitation.js";
 import { desktopSettingsContext } from "./desktop-settings-context.js";
 import { E2eFakeCodingAgent } from "./e2e-fakes.js";
 import { composeSkillsNote, type HostSkillsRuntime } from "./host-skills.js";
@@ -504,7 +505,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         connector.connectionIds.some((connectionId) =>
           picked.has(connectionId),
         );
-      if (included) {
+      if (included && !connector.external) {
         plugins.push({ name: connector.name, path: connector.path });
       }
     }
@@ -548,7 +549,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const bridge = this.deps.workspaceBridge;
     const broker = this.deps.toolPermissions;
     if (!bridge && !broker) return undefined;
-    return async (request) => {
+    return async (request, signal) => {
+      if (signal?.aborted) return { decision: "deny" };
       // Race the desktop consent modal against the HTTP broker (remote
       // companion clients): the first REAL answer wins, and the loser is
       // withdrawn — the modal via abort, the broker entry via answer().
@@ -562,10 +564,20 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         ) => {
           if (settled) return;
           settled = true;
+          signal?.removeEventListener("abort", cancel);
           if (source === "bridge" && ask) broker?.answer(ask.id, value);
           if (source === "broker") abortModal.abort();
           resolve(value);
         };
+        const cancel = () => {
+          abortModal.abort();
+          settle({ decision: "deny" }, "bridge");
+        };
+        signal?.addEventListener("abort", cancel, { once: true });
+        if (signal?.aborted) {
+          cancel();
+          return;
+        }
         void ask?.promise.then((value) => settle(value, "broker"));
         if (bridge) {
           void bridge
@@ -586,6 +598,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             });
         }
       });
+      if (signal?.aborted) return { decision: "deny" };
       if (decision.decision === "allow" && decision.remember === "always") {
         const connectionId = this.livePolicies(config, profileId).connectionIds[
           request.server
@@ -998,6 +1011,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         this.workspaceTools(config, topology),
         this.toolPermissionHandler(config, profileId),
         (projectId) => this.settingsContext(projectId, config),
+        this.deps.workspaceBridge?.elicit.bind(this.deps.workspaceBridge),
       );
       return {
         id: config.id,
@@ -1149,6 +1163,16 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             return this.wrapErrors(
               this.withWorkspace(
                 new CodexAgent({
+                  onToolPermission: this.toolPermissionHandler(
+                    config,
+                    profileId,
+                  ),
+                  mcpElicitationForSession: () =>
+                    createCodexElicitation({
+                      elicit: this.deps.workspaceBridge?.elicit.bind(
+                        this.deps.workspaceBridge,
+                      ),
+                    }),
                   model: config.model || undefined,
                   effort: config.effort,
                   disableNativeSubagents: true,

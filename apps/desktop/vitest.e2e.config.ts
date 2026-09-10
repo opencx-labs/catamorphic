@@ -2,6 +2,7 @@ import { defineConfig } from "vitest/config";
 
 const visibleMode = process.env.CATAMORPHIC_E2E_WINDOW_MODE === "visible";
 const visibleSuites = [
+  "e2e/browser-control.e2e.ts",
   "e2e/resource-previews.e2e.ts",
   "e2e/settings-palette.e2e.ts",
   "e2e/settings-inheritance.e2e.ts",

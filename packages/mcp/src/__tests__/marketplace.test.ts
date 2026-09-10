@@ -120,3 +120,26 @@ describe("liftMcpOAuthClient", () => {
     expect(liftMcpOAuthClient({ url: "https://x" })).toBeUndefined();
   });
 });
+
+it("resolves native Codex plugin launch paths and explicit environment inheritance", () => {
+  expect(
+    liftMcpServer(
+      {
+        command: "./bin/launcher",
+        args: ["mcp"],
+        cwd: ".",
+        env_vars: ["CODEX_HOME"],
+      },
+      "/plugins/computer-use",
+    ),
+  ).toEqual({
+    transport: "stdio",
+    command: "/plugins/computer-use/bin/launcher",
+    args: ["mcp"],
+    cwd: "/plugins/computer-use",
+    envVars: ["CODEX_HOME"],
+  });
+  expect(
+    liftMcpServer({ enabled: false, command: "disabled" }, "/plugin"),
+  ).toBeUndefined();
+});
