@@ -1,15 +1,9 @@
-import type { ContextMenuEntry } from "../components/sidebar-item-row.js";
+import type { ChatSessionMenuEntry } from "../../shared/chat-session-actions.js";
 
-export type ChatSessionAction =
-  | "new-subsession"
-  | "mark-read"
-  | "mark-unread"
-  | "archive"
-  | "unarchive";
-
-export interface ChatSessionMenuEntry extends ContextMenuEntry {
-  action: ChatSessionAction;
-}
+export type {
+  ChatSessionAction,
+  ChatSessionMenuEntry,
+} from "../../shared/chat-session-actions.js";
 
 /** One action vocabulary shared by sidebar session rows and dock bubbles. */
 export function chatSessionMenu(args: {

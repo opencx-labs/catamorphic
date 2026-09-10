@@ -1,9 +1,18 @@
 import type { ResourcePreview } from "@catamorphic/react";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { BookmarkPlacement } from "../shared/bookmark-target.js";
+import type {
+  ChatDraft,
+  ChatDraftUpdate,
+  DockCommand,
+  DockData,
+  DockSnapshot,
+  WorkspaceEvent,
+} from "../shared/desktop-workspace.js";
 import type { FilePreviewInput } from "../shared/file-preview.js";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
 import type { OpenMode } from "../shared/open-mode.js";
+import type { SettingsScope } from "../shared/settings.js";
 import type { DesktopUpdateState } from "../shared/update.js";
 
 export interface ServerInfo {
@@ -12,6 +21,68 @@ export interface ServerInfo {
 }
 
 const api = {
+  workspaceInitial: (): Promise<string | undefined> =>
+    ipcRenderer.invoke("catamorphic:workspace-initial"),
+  dockDraftGet: (localId: string): Promise<ChatDraft | null> =>
+    ipcRenderer.invoke("catamorphic:dock-draft-get", localId),
+  dockDraftSet: (localId: string, draft: ChatDraft): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:dock-draft-set", localId, draft),
+  onDockDraft: (listener: (update: ChatDraftUpdate) => void): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      update: ChatDraftUpdate,
+    ) => listener(update);
+    ipcRenderer.on("catamorphic:dock-draft", handler);
+    return () => ipcRenderer.removeListener("catamorphic:dock-draft", handler);
+  },
+  workspaceClaim: (projectId: string): Promise<boolean> =>
+    ipcRenderer.invoke("catamorphic:workspace-claim", projectId),
+  workspaceNavigate: (projectId: string, newWindow = false): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:workspace-navigate", projectId, newWindow),
+  workspaceActive: (projectId: string): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:workspace-active", projectId),
+  dockPublish: (data: DockData): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:dock-publish", data),
+  dockRemove: (projectId: string, localId: string): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:dock-remove", projectId, localId),
+  dockSnapshot: (): Promise<DockSnapshot> =>
+    ipcRenderer.invoke("catamorphic:dock-snapshot"),
+  dockCommand: (command: DockCommand): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:dock-command", command),
+  dockActivate: (localId?: string): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:dock-activate", localId),
+  dockNewChat: (): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:dock-new-chat"),
+  dockAction: (
+    localId: string,
+    action: "close" | "minimize" | "send",
+    message?: string,
+  ): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:dock-action", localId, action, message),
+  dockResize: (size: { width: number; height: number }): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:dock-resize", size),
+  onDockSnapshot: (
+    listener: (snapshot: DockSnapshot) => void,
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      snapshot: DockSnapshot,
+    ) => listener(snapshot);
+    ipcRenderer.on("catamorphic:dock-snapshot", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:dock-snapshot", handler);
+  },
+  onWorkspaceEvent: (
+    listener: (event: WorkspaceEvent) => void,
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      event: WorkspaceEvent,
+    ) => listener(event);
+    ipcRenderer.on("catamorphic:workspace-event", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:workspace-event", handler);
+  },
   getServerState: (): Promise<ServerInfo> =>
     ipcRenderer.invoke("catamorphic:server-state"),
   updateState: (): Promise<DesktopUpdateState> =>
@@ -444,13 +515,20 @@ const api = {
       ipcRenderer.removeListener("catamorphic:sidebar-pointer-zone", handler);
   },
 
-  getTheme: (): Promise<unknown> => ipcRenderer.invoke("catamorphic:theme-get"),
-  setTheme: (config: unknown): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:theme-set", config),
+  getTheme: (projectId?: string, scope?: SettingsScope): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:theme-get", projectId, scope),
+  setTheme: (
+    config: unknown,
+    projectId?: string,
+    scope?: SettingsScope,
+  ): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:theme-set", config, projectId, scope),
+  themeConfig: (projectId?: string, scope?: SettingsScope) =>
+    ipcRenderer.invoke("catamorphic:theme-config", projectId, scope),
   themePresets: (): Promise<unknown[]> =>
     ipcRenderer.invoke("catamorphic:theme-presets"),
-  themeFile: (): Promise<string> =>
-    ipcRenderer.invoke("catamorphic:theme-file"),
+  themeFile: (projectId?: string, scope?: SettingsScope): Promise<string> =>
+    ipcRenderer.invoke("catamorphic:theme-file", projectId, scope),
   onThemeChanged: (listener: (theme: unknown) => void): (() => void) => {
     const handler = (_event: unknown, theme: unknown) => listener(theme);
     ipcRenderer.on("catamorphic:theme-changed", handler);

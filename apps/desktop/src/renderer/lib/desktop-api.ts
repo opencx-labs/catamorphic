@@ -1,6 +1,14 @@
 import type { ResourcePreview } from "@catamorphic/react";
 import type { AppPrefs } from "../../shared/app-prefs.js";
 import type { BookmarkPlacement } from "../../shared/bookmark-target.js";
+import type {
+  ChatDraft,
+  ChatDraftUpdate,
+  DockCommand,
+  DockData,
+  DockSnapshot,
+  WorkspaceEvent,
+} from "../../shared/desktop-workspace.js";
 import type { FilePreviewInput } from "../../shared/file-preview.js";
 import type { OpenMode } from "../../shared/open-mode.js";
 import type {
@@ -842,6 +850,27 @@ export interface CatamorphicDesktopApi {
     listener: (state: DesktopUpdateState) => void,
   ) => () => void;
 
+  workspaceInitial: () => Promise<string | undefined>;
+  dockDraftGet: (localId: string) => Promise<ChatDraft | null>;
+  dockDraftSet: (localId: string, draft: ChatDraft) => Promise<void>;
+  onDockDraft: (listener: (update: ChatDraftUpdate) => void) => () => void;
+  workspaceClaim: (projectId: string) => Promise<boolean>;
+  workspaceNavigate: (projectId: string, newWindow?: boolean) => Promise<void>;
+  workspaceActive: (projectId: string) => Promise<void>;
+  dockPublish: (data: DockData) => Promise<void>;
+  dockRemove: (projectId: string, localId: string) => Promise<void>;
+  dockSnapshot: () => Promise<DockSnapshot>;
+  dockCommand: (command: DockCommand) => Promise<void>;
+  dockActivate: (localId?: string) => Promise<void>;
+  dockNewChat: () => Promise<void>;
+  dockAction: (
+    localId: string,
+    action: "close" | "minimize" | "send",
+    message?: string,
+  ) => Promise<void>;
+  dockResize: (size: { width: number; height: number }) => Promise<void>;
+  onDockSnapshot: (listener: (snapshot: DockSnapshot) => void) => () => void;
+  onWorkspaceEvent: (listener: (event: WorkspaceEvent) => void) => () => void;
   windowProfile: () => Promise<string>;
   windowSetProfile: (profileId: string) => Promise<string>;
   openProfileWindow: (profileId: string) => Promise<void>;
@@ -1225,10 +1254,21 @@ export interface CatamorphicDesktopApi {
   }) => Promise<void>;
   onBookmarksChanged: (listener: (data: BookmarksChange) => void) => () => void;
 
-  getTheme: () => Promise<ResolvedTheme>;
-  setTheme: (config: ThemeConfig) => Promise<ResolvedTheme>;
+  getTheme: (
+    projectId?: string,
+    scope?: SettingsScope,
+  ) => Promise<ResolvedTheme>;
+  setTheme: (
+    config: Partial<ThemeConfig> | null,
+    projectId?: string,
+    scope?: SettingsScope,
+  ) => Promise<ResolvedTheme>;
+  themeConfig: (
+    projectId?: string,
+    scope?: SettingsScope,
+  ) => Promise<Partial<ThemeConfig>>;
   themePresets: () => Promise<ThemePreset[]>;
-  themeFile: () => Promise<string>;
+  themeFile: (projectId?: string, scope?: SettingsScope) => Promise<string>;
   onThemeChanged: (listener: (theme: ResolvedTheme) => void) => () => void;
 
   gitRecord: (input: GitRecordInput) => Promise<string>;

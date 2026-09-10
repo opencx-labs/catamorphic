@@ -182,7 +182,13 @@ it.each(["accept", "decline", "cancel", "disconnect", "abandon"] as const)(
     } finally {
       client.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      await rm(home, { recursive: true, force: true });
+      // close() signals the native process; its final writes can race removal.
+      await rm(home, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 100,
+      });
     }
   },
   30000,

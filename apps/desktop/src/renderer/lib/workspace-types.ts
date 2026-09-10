@@ -1,3 +1,5 @@
+export type { ChatDockEntry, ChatMode } from "../../shared/chat.js";
+
 import type { GitDiffMode } from "../../shared/git.js";
 import type { SettingsDestination } from "../../shared/settings-catalog.js";
 
@@ -106,30 +108,3 @@ export type WorkspaceTab = (
   TabIndicators & { chatLocalId?: string };
 
 export const tabKey = (tab: WorkspaceTab) => `${tab.kind}:${tab.name}`;
-
-export type ChatMode = "min" | "partial" | "tab";
-export interface ChatDockEntry {
-  localId: string;
-  sessionId?: string;
-  mode: ChatMode;
-  /** Local-only session (ADR 0062): never mirrored to a linked remote. */
-  incognito?: boolean;
-  /**
-   * The chat this one was forked from, when the parent is (or was) open
-   * in this workspace — puts the fork on the parent's surfaces rail.
-   */
-  parentLocalId?: string;
-  /** Auto-sent as the first message on mount (palette "Send to agent"). */
-  pendingMessage?: string;
-  /**
-   * Agent picked for this chat before its session exists (palette "Switch
-   * agent" on a fresh chat). Once a session is live, the session row owns
-   * the choice.
-   */
-  agentId?: string;
-  /**
-   * The chat's attached tabs are folded under its tab in the strip
-   * (host-managed; only meaningful while the chat is a tab).
-   */
-  surfacesCollapsed?: boolean;
-}

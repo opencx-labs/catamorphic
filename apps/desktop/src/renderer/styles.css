@@ -1228,3 +1228,49 @@ kbd {
   font-size: 12px;
   line-height: 20px;
 }
+/* Project navigation acknowledges the theme change without moving the workspace. */
+.project-switch-tint {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 90;
+  background: var(--color-accent);
+  animation: project-switch-tint 180ms var(--ease-standard) both;
+}
+@keyframes project-switch-tint {
+  from {
+    opacity: 0.045;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .project-switch-tint {
+    display: none;
+    animation: none;
+  }
+}
+
+[data-dock-side="left"] [data-floating-chat] {
+  align-self: flex-start;
+}
+[data-dock-side="right"] [data-floating-chat] {
+  align-self: flex-end;
+}
+[data-dock-host] [data-floating-chat] {
+  max-width: min(100%, 52rem);
+}
+
+[data-native-drag] {
+  -webkit-app-region: drag;
+}
+
+/* A detached rail sizes to its contents rather than a workspace viewport. */
+[data-dock-native] [data-bubble-items][aria-hidden="false"] {
+  max-width: calc(100vw - 60px);
+}
+
+html[data-surface="dock"] body {
+  background: transparent;
+}

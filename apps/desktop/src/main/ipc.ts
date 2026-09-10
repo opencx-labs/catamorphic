@@ -110,12 +110,7 @@ import {
 } from "./server/harness-models.js";
 import type { DataPaths } from "./server/paths.js";
 import { parseProjectAgentId } from "./server/project-agents.js";
-import {
-  normalizeTheme,
-  type ResolvedTheme,
-  THEME_PRESETS,
-  windowBackgroundColor,
-} from "./theme.js";
+import { THEME_PRESETS } from "./theme.js";
 import { createUsageScanner } from "./usage-scan.js";
 import { watchSidebarEdge } from "./window-sidebar-edge.js";
 
@@ -363,34 +358,53 @@ export function registerIpcHandlers(
     storesFor(event).keybindings.load(),
   );
 
-  ipcMain.handle("catamorphic:theme-get", (event) =>
-    storesFor(event).theme.resolved(),
+  const themeContext = async (
+    event: Electron.IpcMainInvokeEvent,
+    projectId?: string,
+    scope?: SettingsScope,
+  ) => {
+    if (scope && !["profile", "project", "personal"].includes(scope))
+      throw new Error("Unknown theme scope");
+    const profileId = windows.profileFor(event.sender);
+    if (projectId && profiles.profileForProject(projectId).id !== profileId)
+      throw new Error("Project belongs to another profile");
+    return {
+      profileId,
+      projectId,
+      scope,
+      projectRoot: projectId
+        ? await state.current?.projectRoots.get(projectId)
+        : null,
+    };
+  };
+  ipcMain.handle(
+    "catamorphic:theme-get",
+    async (event, projectId?: string, scope?: SettingsScope) =>
+      profileConfig.projectTheme(await themeContext(event, projectId, scope)),
+  );
+  ipcMain.handle(
+    "catamorphic:theme-config",
+    async (event, projectId?: string, scope?: SettingsScope) =>
+      profileConfig.themeConfig(await themeContext(event, projectId, scope)),
   );
 
   ipcMain.handle("catamorphic:theme-presets", () =>
     THEME_PRESETS.map(({ id, label, colors }) => ({ id, label, colors })),
   );
 
-  // Saving triggers the file watcher, which syncs the native window
-  // background and broadcasts the resolved theme to the profile's windows.
   ipcMain.handle(
     "catamorphic:theme-set",
-    (event, input: unknown): ResolvedTheme => {
-      const store = storesFor(event).theme;
-      const next = normalizeTheme(input);
-      store.save(next);
-      const resolved = store.resolved();
-      // Apply to the calling window synchronously so the UI can't flash
-      // between the click and the watcher's debounce.
-      const window = BrowserWindow.fromWebContents(event.sender);
-      window?.setBackgroundColor(windowBackgroundColor(resolved));
-      return resolved;
-    },
+    async (event, theme: unknown, projectId?: string, scope?: SettingsScope) =>
+      profileConfig.saveProjectTheme({
+        ...(await themeContext(event, projectId, scope)),
+        theme,
+      }),
   );
 
   ipcMain.handle(
     "catamorphic:theme-file",
-    (event) => storesFor(event).theme.file,
+    async (event, projectId?: string, scope?: SettingsScope) =>
+      profileConfig.themeFile(await themeContext(event, projectId, scope)),
   );
 
   // Saving triggers the same file watcher that external edits do, which

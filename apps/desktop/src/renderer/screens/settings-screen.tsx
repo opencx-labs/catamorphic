@@ -54,7 +54,6 @@ import {
 } from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
 import { useTerminalAppearance } from "../lib/terminal-appearance.js";
-import { useTheme } from "../lib/theme.js";
 
 export function SettingsScreen({
   projectId,
@@ -183,7 +182,7 @@ export function SettingsScreen({
         "theme colors dark light nord catppuccin rose pine font ghostty terminal",
       content: (
         <>
-          <ThemeSection destination={destination} />
+          <ThemeSection projectId={projectId} destination={destination} />
           <TerminalSection />
         </>
       ),
@@ -196,6 +195,10 @@ export function SettingsScreen({
       content: (
         <>
           <LayoutSection projectId={projectId} />
+          <LayoutSection
+            keys={["dockMultiProject", "dockDetached", "dockSide"]}
+            title="Chat dock"
+          />
           <SidebarSection />
         </>
       ),
@@ -1246,17 +1249,69 @@ function MacrosSection() {
   );
 }
 
-function ThemeSection({ destination }: { destination?: SettingsDestination }) {
-  const theme = useTheme();
+function ThemeSection({
+  projectId,
+  destination,
+}: {
+  projectId?: string;
+  destination?: SettingsDestination;
+}) {
+  const [scope, setScope] = useState<SettingsScope>("profile");
+  const [theme, setTheme] = useState<Awaited<
+    ReturnType<typeof desktopApi.getTheme>
+  > | null>(null);
+  const [config, setConfig] = useState<
+    Awaited<ReturnType<typeof desktopApi.themeConfig>>
+  >({});
+  const [projectAvailable, setProjectAvailable] = useState(false);
   const [presets, setPresets] = useState<ThemePreset[]>([]);
   const [file, setFile] = useState("");
   const [saveError, setSaveError] = useState("");
-  const saveTheme = (config: Parameters<typeof desktopApi.setTheme>[0]) => {
-    void desktopApi.setTheme(config).then(
-      () => setSaveError(""),
-      (error) => setSaveError(String(error)),
-    );
+  const generation = useRef(0);
+  const saveTheme = (next: Parameters<typeof desktopApi.setTheme>[0]) => {
+    const request = ++generation.current;
+    void desktopApi
+      .setTheme(next, projectId, scope)
+      .then(async (resolved) => {
+        const authored = await desktopApi.themeConfig(projectId, scope);
+        if (request !== generation.current) return;
+        setTheme(resolved);
+        setConfig(authored);
+        setSaveError("");
+      })
+      .catch((error) => {
+        if (request === generation.current) setSaveError(String(error));
+      });
   };
+  useEffect(() => {
+    const refresh = () => {
+      const request = ++generation.current;
+      void Promise.all([
+        desktopApi.getTheme(projectId, scope),
+        desktopApi.themeConfig(projectId, scope),
+        desktopApi.themeFile(projectId, scope),
+        desktopApi.getSettings({ projectId, scope }),
+      ])
+        .then(([resolved, authored, file, settings]) => {
+          if (request !== generation.current) return;
+          setTheme(resolved);
+          setConfig(authored);
+          setFile(file);
+          setProjectAvailable(settings.projectAvailable);
+          setSaveError(settings.errors.join("\n"));
+        })
+        .catch((error) => {
+          if (request === generation.current) setSaveError(String(error));
+        });
+    };
+    setTheme(null);
+    refresh();
+    const stop = desktopApi.onThemeChanged(refresh);
+    return () => {
+      generation.current++;
+      stop();
+    };
+  }, [projectId, scope]);
   const [editing, setEditing] = useState(false);
   useEffect(() => {
     if (destination?.id.startsWith("theme.overrides.")) setEditing(true);
@@ -1264,18 +1319,56 @@ function ThemeSection({ destination }: { destination?: SettingsDestination }) {
 
   useEffect(() => {
     void desktopApi.themePresets().then(setPresets);
-    void desktopApi.themeFile().then(setFile);
   }, []);
 
   if (!theme) return null;
 
-  const overridden = Object.keys(theme.overrides).length > 0;
+  const overridden = Object.keys(config.overrides ?? {}).length > 0;
   const dark = presets.find((preset) => preset.id === "dark");
   const light = presets.find((preset) => preset.id === "light");
   const systemSelected = theme.selection === "system";
 
   return (
     <section className="mt-8" data-setting-id="theme.selection">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <label className="flex items-center gap-2 text-xs text-fg-muted">
+          Apply to
+          <select
+            aria-label="Theme scope"
+            className="field h-8 rounded-md px-2"
+            value={scope}
+            onChange={(event) => {
+              const value = event.target.value;
+              if (
+                value === "profile" ||
+                value === "project" ||
+                value === "personal"
+              )
+                setScope(value);
+            }}
+          >
+            <option value="profile">Profile</option>
+            {projectId && projectAvailable && (
+              <option value="project">Project</option>
+            )}
+            {projectId && <option value="personal">Just for me</option>}
+          </select>
+        </label>
+        {scope !== "profile" && (
+          <button
+            type="button"
+            className="text-xs text-fg-muted hover:text-fg"
+            onClick={() => saveTheme(null)}
+          >
+            Use inherited theme
+          </button>
+        )}
+      </div>
+      {scope !== "profile" && (
+        <p className="mb-3 text-xs text-fg-muted">
+          Only changes in this scope override the inherited theme.
+        </p>
+      )}
       {saveError && (
         <p role="alert" className="mb-3 break-words text-xs text-danger">
           {saveError}
@@ -1288,8 +1381,8 @@ function ThemeSection({ destination }: { destination?: SettingsDestination }) {
             type="button"
             onClick={() =>
               void saveTheme({
-                fonts: theme.fonts,
-                selection: theme.selection,
+                fonts: config.fonts,
+                ...(config.selection ? { selection: config.selection } : {}),
                 overrides: {},
               })
             }
@@ -1307,7 +1400,7 @@ function ThemeSection({ destination }: { destination?: SettingsDestination }) {
           void saveTheme({
             selection: "system",
             overrides: {},
-            fonts: theme.fonts,
+            fonts: config.fonts,
           })
         }
         data-setting-control
@@ -1351,7 +1444,7 @@ function ThemeSection({ destination }: { destination?: SettingsDestination }) {
               data-theme-preset={preset.id}
               onClick={() =>
                 void saveTheme({
-                  fonts: theme.fonts,
+                  fonts: config.fonts,
                   selection: preset.id,
                   overrides: {},
                 })
@@ -1435,7 +1528,7 @@ function ThemeSection({ destination }: { destination?: SettingsDestination }) {
             >
               <span className="text-xs">
                 {TOKEN_LABELS[token]}
-                {theme.overrides[token] && (
+                {config.overrides?.[token] && (
                   <span className="ml-1.5 text-accent">•</span>
                 )}
               </span>
@@ -1448,10 +1541,12 @@ function ThemeSection({ destination }: { destination?: SettingsDestination }) {
                   value={toHex6(theme.colors[token])}
                   onChange={(event) =>
                     void saveTheme({
-                      fonts: theme.fonts,
-                      selection: theme.selection,
+                      fonts: config.fonts,
+                      ...(config.selection
+                        ? { selection: config.selection }
+                        : {}),
                       overrides: {
-                        ...theme.overrides,
+                        ...config.overrides,
                         [token]: event.target.value,
                       },
                     })
@@ -1475,8 +1570,8 @@ function ThemeSection({ destination }: { destination?: SettingsDestination }) {
               className="cursor-pointer text-xs text-fg-muted hover:text-fg"
               onClick={() =>
                 void saveTheme({
-                  selection: theme.selection,
-                  overrides: theme.overrides,
+                  ...(config.selection ? { selection: config.selection } : {}),
+                  overrides: config.overrides,
                 })
               }
             >
@@ -1516,9 +1611,9 @@ function ThemeSection({ destination }: { destination?: SettingsDestination }) {
                 event.currentTarget.value = font;
                 if (font === theme.fonts[token]) return;
                 void saveTheme({
-                  selection: theme.selection,
-                  overrides: theme.overrides,
-                  fonts: { ...theme.fonts, [token]: font },
+                  ...(config.selection ? { selection: config.selection } : {}),
+                  overrides: config.overrides,
+                  fonts: { ...config.fonts, [token]: font },
                 });
               }}
             />

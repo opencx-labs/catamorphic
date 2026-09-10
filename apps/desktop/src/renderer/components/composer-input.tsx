@@ -1,4 +1,5 @@
 import type { AgentChatAttachment } from "@catamorphic/react";
+import { ATTACHMENT_MARKER } from "@catamorphic/react";
 import {
   type AnimationEvent,
   type ClipboardEvent,
@@ -11,6 +12,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import type { ChatDraft } from "../../shared/desktop-workspace.js";
 import type { OpenMode } from "../../shared/open-mode.js";
 import {
   PILL_ATTR,
@@ -64,6 +66,8 @@ export interface ComposerInputHandle {
   replaceText(text: string): void;
   /** The wire shape: prose with markers + attachments in marker order. */
   read(): SerializedComposer<AgentChatAttachment>;
+  snapshot(): ChatDraft;
+  restore(draft: ChatDraft): void;
   /** Drop everything (after send). */
   clear(): void;
   /** Animate the newest live pill out; false when there is none. */
@@ -422,6 +426,38 @@ export const ComposerInput = forwardRef<
       insertText,
       replaceText,
       read,
+      snapshot: () => {
+        const root = rootRef.current;
+        if (!root) return { message: "", attachments: [] };
+        const result = serializeComposer(root, resolve, { trim: false });
+        return {
+          message: result.message,
+          attachments: result.attachments.map(
+            ({ id: _id, ...attachment }) => attachment,
+          ),
+        };
+      },
+      restore: (draft: ChatDraft) => {
+        const root = rootRef.current;
+        if (!root) return;
+        attachmentsRef.current.clear();
+        exitingRef.current.clear();
+        const nodes: Node[] = [];
+        const parts = draft.message.split(ATTACHMENT_MARKER);
+        for (const [index, text] of parts.entries()) {
+          nodes.push(document.createTextNode(text));
+          const attachment = draft.attachments[index];
+          if (index < parts.length - 1 && attachment) {
+            const id = crypto.randomUUID();
+            attachmentsRef.current.set(id, { ...attachment, id });
+            const template = document.createElement("template");
+            template.innerHTML = hostHtml(id);
+            nodes.push(...template.content.childNodes);
+          }
+        }
+        root.replaceChildren(...nodes);
+        sync();
+      },
       clear,
       removeLastPill: () => {
         const last = livePillIds().at(-1);
@@ -438,6 +474,8 @@ export const ComposerInput = forwardRef<
       replaceText,
       read,
       clear,
+      resolve,
+      sync,
       livePillIds,
       removePill,
       emptyButPills,

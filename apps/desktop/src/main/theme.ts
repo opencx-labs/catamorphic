@@ -378,6 +378,41 @@ export function normalizeTheme(raw: unknown): ThemeConfig {
   };
 }
 
+/** Preserve omitted settings so a personal edit does not freeze its parents. */
+export function normalizeThemeLayer(raw: unknown): Partial<ThemeConfig> {
+  const next = normalizeTheme(raw);
+  const hasSelection =
+    typeof raw === "object" &&
+    raw !== null &&
+    "selection" in raw &&
+    (raw.selection === "system" ||
+      THEME_PRESETS.some((preset) => preset.id === raw.selection));
+  return {
+    ...(hasSelection ? { selection: next.selection } : {}),
+    overrides: next.overrides,
+    ...(next.fonts ? { fonts: next.fonts } : {}),
+  };
+}
+
+/** A selection replaces inherited color edits; token and font edits remain sparse. */
+export function resolveThemeLayers(
+  layers: readonly unknown[],
+  systemAppearance: ThemeAppearance = "dark",
+): ResolvedTheme {
+  const config = layers.reduce<ThemeConfig>((current, raw) => {
+    const next = normalizeThemeLayer(raw);
+    return {
+      selection: next.selection ?? current.selection,
+      overrides: {
+        ...(next.selection ? {} : current.overrides),
+        ...next.overrides,
+      },
+      fonts: { ...current.fonts, ...next.fonts },
+    };
+  }, DEFAULT_THEME);
+  return resolveTheme(config, systemAppearance);
+}
+
 /** Perceived luminance of a hex color, or null for non-hex values. */
 function hexLuminance(color: string): number | null {
   const hex = /^#([0-9a-f]{6})/i.exec(

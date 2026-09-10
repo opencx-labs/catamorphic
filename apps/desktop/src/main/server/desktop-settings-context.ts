@@ -32,7 +32,11 @@ export function desktopSettingsContext({
     profileId,
     files: {
       preferences,
-      theme: stores.theme.file,
+      theme: {
+        profile: stores.theme.file,
+        project: preferences.project,
+        personal: preferences.personal,
+      },
       shortcuts: stores.keybindings.file,
       sidebar: {
         profile: stores.sidebar.file,

@@ -11,6 +11,9 @@ import {
  * outside tools) can add keys without this build eating them.
  */
 export interface AppPrefs {
+  dockMultiProject: boolean;
+  dockDetached: boolean;
+  dockSide: "left" | "right";
   /** Soft chime when an agent finishes or asks a question. */
   notificationSounds: boolean;
   /** OS notification for the same events while the app is unfocused. */
@@ -36,6 +39,9 @@ export interface AppPrefs {
 }
 
 export const DEFAULT_PREFS: AppPrefs = {
+  dockMultiProject: false,
+  dockDetached: false,
+  dockSide: "right",
   notificationSounds: true,
   desktopNotifications: true,
   sidebarOpen: true,
@@ -66,6 +72,9 @@ export function normalizePrefs(raw: unknown): AppPrefs {
       ? (raw as Record<string, unknown>)
       : {};
   return {
+    dockMultiProject: record.dockMultiProject === true,
+    dockDetached: record.dockDetached === true,
+    dockSide: record.dockSide === "left" ? "left" : "right",
     notificationSounds:
       typeof record.notificationSounds === "boolean"
         ? record.notificationSounds

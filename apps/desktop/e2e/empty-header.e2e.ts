@@ -32,6 +32,7 @@ describe("empty workspace header", () => {
         for (const rightOpen of [false, true]) {
           // Wait for the native sidebar layout to settle before hit testing.
           await app.waitFor(`(() => {
+            if ([...document.querySelectorAll('[data-sidebar]')].some(sidebar => sidebar.getAnimations().some(animation => animation.playState === 'running'))) return false;
             const header = document.querySelector('.workspace-chrome').getBoundingClientRect();
             const toggle = document.querySelector('[aria-label="${rightOpen ? "Collapse" : "Expand"} right sidebar"]');
             if (!toggle) return false;

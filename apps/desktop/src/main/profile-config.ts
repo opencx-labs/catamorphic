@@ -4,6 +4,7 @@ import type { AppPrefs } from "../shared/app-prefs.js";
 import type { SettingsPatch, SettingsScope } from "../shared/settings.js";
 import { AgentBindingsStore } from "./agent-bindings-store.js";
 import { AgentsStore } from "./agents-store.js";
+import { readConfigObject, writeConfigObject } from "./config-file.js";
 import { ConnectionsStore } from "./connections-store.js";
 import { type Keybindings, KeybindingsStore } from "./keybindings.js";
 import { PrefsStore } from "./prefs.js";
@@ -14,6 +15,7 @@ import {
   type SettingsFiles,
   SettingsStore,
   saveSettings,
+  validateSettingsFile,
 } from "./settings-store.js";
 import {
   projectLocalSidebarFile,
@@ -24,9 +26,13 @@ import {
   watchSidebarLayerFile,
 } from "./sidebar-config.js";
 import {
+  normalizeTheme,
+  normalizeThemeLayer,
   type ResolvedTheme,
+  resolveThemeLayers,
   type ThemeAppearance,
   ThemeStore,
+  validateThemeConfig,
 } from "./theme.js";
 
 /** Everything a profile owns beyond browser state: look, keys, agents. */
@@ -221,6 +227,115 @@ export class ProfileConfigManager {
     return files;
   }
 
+  private settingsStore(profileId: string): SettingsStore {
+    let store = this.settingsStores.get(profileId);
+    if (!store) {
+      store = new SettingsStore();
+      this.settingsStores.set(profileId, store);
+    }
+    return store;
+  }
+
+  themeFile(input: {
+    profileId: string;
+    projectId?: string;
+    projectRoot?: string | null;
+    scope?: SettingsScope;
+  }): string {
+    const scope = input.scope ?? (input.projectId ? "personal" : "profile");
+    if (scope === "profile") return this.forProfile(input.profileId).theme.file;
+    const files = this.settingsFiles(
+      input.profileId,
+      input.projectId
+        ? { id: input.projectId, rootPath: input.projectRoot ?? null }
+        : undefined,
+    );
+    const file = files[scope];
+    if (!file) throw new Error("This theme scope is unavailable");
+    return file;
+  }
+
+  themeConfig(input: {
+    profileId: string;
+    projectId?: string;
+    projectRoot?: string | null;
+    scope?: SettingsScope;
+  }) {
+    const scope = input.scope ?? (input.projectId ? "personal" : "profile");
+    if (scope === "profile")
+      return this.forProfile(input.profileId).theme.load();
+    return normalizeThemeLayer(
+      this.settingsStore(input.profileId).read(this.themeFile(input), scope)
+        .value.theme,
+    );
+  }
+
+  projectTheme(input: {
+    profileId: string;
+    projectId?: string;
+    projectRoot?: string | null;
+    scope?: SettingsScope;
+  }): ResolvedTheme {
+    const profile = this.forProfile(input.profileId).theme.load();
+    if (!input.projectId || input.scope === "profile")
+      return resolveThemeLayers([profile], this.systemAppearance());
+    const files = this.settingsFiles(input.profileId, {
+      id: input.projectId,
+      rootPath: input.projectRoot ?? null,
+    });
+    const store = this.settingsStore(input.profileId);
+    return resolveThemeLayers(
+      [
+        profile,
+        store.read(files.project, "project").value.theme,
+        ...(input.scope === "project"
+          ? []
+          : [store.read(files.personal, "personal").value.theme]),
+      ],
+      this.systemAppearance(),
+    );
+  }
+
+  saveProjectTheme(input: {
+    profileId: string;
+    projectId?: string;
+    projectRoot?: string | null;
+    scope?: SettingsScope;
+    theme: unknown;
+  }) {
+    const scope = input.scope ?? (input.projectId ? "personal" : "profile");
+    if (input.theme !== null && input.theme !== undefined) {
+      if (typeof input.theme !== "object" || Array.isArray(input.theme))
+        throw new Error("Theme must be a JSON object");
+      validateThemeConfig(Object.fromEntries(Object.entries(input.theme)));
+    }
+    if (scope === "profile")
+      this.forProfile(input.profileId).theme.save(normalizeTheme(input.theme));
+    else {
+      const file = this.themeFile(input);
+      const raw = readConfigObject(file);
+      validateSettingsFile(raw, scope);
+      if (input.theme === null || input.theme === undefined) delete raw.theme;
+      else {
+        const extras =
+          raw.theme && typeof raw.theme === "object"
+            ? Object.fromEntries(
+                Object.entries(raw.theme).filter(
+                  ([key]) =>
+                    !["selection", "preset", "overrides", "fonts"].includes(
+                      key,
+                    ),
+                ),
+              )
+            : {};
+        raw.theme = { ...extras, ...normalizeThemeLayer(input.theme) };
+      }
+      writeConfigObject(file, raw);
+    }
+    this.notifyPrefsChanged(input.profileId);
+    return this.projectTheme(input);
+  }
+
   resolveSettings(
     profileId: string,
     project?: { id: string; rootPath: string | null },
@@ -264,6 +379,8 @@ export class ProfileConfigManager {
   private notifyPrefsChanged(profileId: string) {
     const prefs = this.forProfile(profileId).prefs.load();
     for (const listener of this.prefsListeners) listener(profileId, prefs);
+    for (const listener of this.themeListeners)
+      listener(profileId, this.forProfile(profileId).theme.resolved());
   }
 
   /** Idempotent per (profile, project); disposed with everything else. */

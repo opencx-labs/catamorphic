@@ -38,7 +38,7 @@ with the standard 200 ms transition; reduced motion applies it immediately.
 | Family | Resolution |
 |---|---|
 | Sidebar contents | Built-in, profile, shared project, personal project; whole document |
-| Theme | System-following or explicit profile preset, then profile token/font overrides |
+| Theme | Profile, shared project, personal project; sparse selection, token and font overrides |
 | Default agent | Profile, shared project, personal project |
 | Runtime state | Explicit owner, not inherited appearance configuration |
 
@@ -75,3 +75,10 @@ filters, expands advanced colors when needed, waits for async controls, scrolls,
 highlights and focuses the target. A floating chat minimizes so it cannot obscure
 the control. Rows identify the inspected scope even when navigation passes its
 section header. Navigation never changes a preference itself.
+
+Project themes use the same profile, shared-project and personal-project priority
+as workspace settings. Missing selections, colors and fonts inherit. Choosing a
+selection replaces inherited color overrides; individual token and font edits
+remain sparse. Theme edits use the shared configuration file validation and
+last-valid-value caches. The three dock preferences are profile choices:
+`dockMultiProject`, `dockDetached`, and `dockSide`.

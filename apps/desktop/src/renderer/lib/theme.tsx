@@ -1,5 +1,6 @@
 import type { AppMountProps } from "@catamorphic/ui";
 import {
+  type CSSProperties,
   createContext,
   type ReactNode,
   useContext,
@@ -46,7 +47,7 @@ export function appHostTheme(theme: ResolvedTheme): AppHostTheme {
  * remain the pre-JS first paint). `color-scheme` follows the resolved
  * appearance so native scrollbars/form controls match.
  */
-function applyTheme(theme: ResolvedTheme): void {
+export function applyTheme(theme: ResolvedTheme): void {
   const root = document.documentElement;
   for (const [token, value] of Object.entries(theme.colors)) {
     root.style.setProperty(`--color-${token}`, value);
@@ -91,4 +92,80 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 /** The current resolved theme, or null before the first load. */
 export function useTheme(): ResolvedTheme | null {
   return useContext(ThemeContext);
+}
+
+/** Apply the same resolved tokens to windows, project scopes, and chat bubbles. */
+export function themeStyle(theme: ResolvedTheme | null): CSSProperties {
+  return theme
+    ? {
+        ...Object.fromEntries(
+          Object.entries(theme.colors).map(([key, value]) => [
+            `--color-${key}`,
+            value,
+          ]),
+        ),
+        ...Object.fromEntries(
+          Object.entries(theme.fonts).map(([key, value]) => [
+            `--font-${key}`,
+            value,
+          ]),
+        ),
+        colorScheme: theme.appearance,
+      }
+    : {};
+}
+
+export function useProjectTheme(projectId?: string) {
+  const [theme, setTheme] = useState<ResolvedTheme | null>(null);
+  useEffect(() => {
+    let live = true;
+    let generation = 0;
+    const load = () => {
+      const request = ++generation;
+      void desktopApi.getTheme(projectId).then((next) => {
+        if (live && request === generation) setTheme(next);
+      });
+    };
+    load();
+    const stop = desktopApi.onThemeChanged(load);
+    return () => {
+      live = false;
+      stop();
+    };
+  }, [projectId]);
+  return theme;
+}
+
+/** Resolved theme boundary shared by workspaces and floating chat surfaces. */
+export function ThemeScope({
+  theme,
+  children,
+}: {
+  theme: ResolvedTheme | null;
+  children: ReactNode;
+}) {
+  return (
+    <ThemeContext.Provider value={theme}>{children}</ThemeContext.Provider>
+  );
+}
+
+export function ProjectTheme({
+  projectId,
+  children,
+}: {
+  projectId?: string;
+  children: ReactNode;
+}) {
+  const theme = useProjectTheme(projectId);
+  return (
+    <ThemeScope theme={theme}>
+      <div
+        className="size-full"
+        data-theme={theme?.appearance}
+        style={themeStyle(theme)}
+      >
+        {children}
+      </div>
+    </ThemeScope>
+  );
 }

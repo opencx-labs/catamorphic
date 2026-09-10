@@ -69,13 +69,9 @@ import {
 import { AgentWizard } from "./components/agent-wizard.js";
 import { AnimatedTitle } from "./components/animated-title.js";
 import { BookmarksNav } from "./components/bookmarks-nav.js";
-import { ChatBubbles } from "./components/chat-bubbles.js";
-import {
-  ChatDock,
-  type ChatDockEntry,
-  type ChatSurface,
-} from "./components/chat-dock.js";
+import type { ChatDockEntry, ChatSurface } from "./components/chat-dock.js";
 import { ChatGlyph } from "./components/chat-icon.js";
+import { ChatRegistration } from "./components/chat-registration.js";
 import { SignalBadge } from "./components/chat-signals.js";
 import { Collapsible } from "./components/collapsible.js";
 import { CommandPalette } from "./components/command-palette.js";
@@ -172,6 +168,7 @@ import {
 import { TAB_DRAG_TYPE, type TabDragPayload } from "./lib/tab-drag.js";
 import { useSidebarReveal } from "./lib/use-sidebar-reveal.js";
 import { NEW_WORKFLOW_PROMPT } from "./lib/workflow-authoring.js";
+import { useWorkspace } from "./lib/workspace-context.js";
 import {
   attachedTabKeys,
   type BrowserEntry,
@@ -408,7 +405,16 @@ function focusedChatSurfaceId(): string | undefined {
   return lastPointerDownInFloatingChatId;
 }
 
-export function App() {
+export function App({
+  runtimeProjectId,
+  onProjectResolved,
+}: {
+  runtimeProjectId?: string;
+  onProjectResolved?: (projectId: string) => void;
+} = {}) {
+  const runtime = useWorkspace();
+  const visibleRef = useRef(runtime.visible);
+  visibleRef.current = runtime.visible;
   const queryClient = useQueryClient();
   useEffect(
     () =>
@@ -438,7 +444,9 @@ export function App() {
   // the project list all loaded. No piecemeal popping on launch.
   const [bootRevealed, setBootRevealed] = useState(false);
   const [bootVeilGone, setBootVeilGone] = useState(false);
-  const [activeProjectId, setActiveProjectId] = useState<string>();
+  const [activeProjectId, setActiveProjectId] = useState<string | undefined>(
+    runtimeProjectId,
+  );
   const [workspaces, setWorkspaces] = useState<Record<string, Workspace>>({});
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   // Remote projects (ADR 0055): connect from an invitation link; per-file
@@ -472,6 +480,7 @@ export function App() {
     // Pull the pending link on mount (cold launch from an invite) and
     // whenever main nudges; main clears it once taken.
     const take = () => {
+      if (!visibleRef.current) return;
       void desktopApi.remoteTakePendingLink().then((raw) => {
         if (!raw) return;
         void desktopApi.remoteParseLink(raw).then((link) => {
@@ -508,7 +517,6 @@ export function App() {
   const [chipAttention, setChipAttention] = useState<Record<string, string[]>>(
     {},
   );
-  const [bubblesCollapsed, setBubblesCollapsed] = useState(false);
 
   // Notification preferences (per profile): soft chime + desktop banner
   // when an agent finishes or asks a question. Also carries relaunch
@@ -695,15 +703,16 @@ export function App() {
             !ownedElsewhere.has(project.id)),
       )
     : allProjects;
-  const activeProject =
-    projects.find((project) => project.id === activeProjectId) ??
-    // A relaunch lands in the profile's last active project, then the
-    // profile default, then whatever exists.
-    projects.find((project) => project.id === prefs?.lastProjectId) ??
-    projects.find(
-      (project) => project.id === activeProfile?.defaultProjectId,
-    ) ??
-    projects[0];
+  const activeProject = runtimeProjectId
+    ? projects.find((project) => project.id === runtimeProjectId)
+    : (projects.find((project) => project.id === activeProjectId) ??
+      // A relaunch lands in the profile's last active project, then the
+      // profile default, then whatever exists.
+      projects.find((project) => project.id === prefs?.lastProjectId) ??
+      projects.find(
+        (project) => project.id === activeProfile?.defaultProjectId,
+      ) ??
+      projects[0]);
   const projectId = activeProject?.id;
   const remoteSurfaceResolved = Boolean(
     projectId && remoteSurfaceState?.projectId === projectId,
@@ -797,6 +806,12 @@ export function App() {
       window.removeEventListener("focus", syncOnFocus);
     };
   }, [projectId]);
+  useEffect(() => {
+    if (projectId) {
+      setActiveProjectId(projectId);
+      onProjectResolved?.(projectId);
+    }
+  }, [projectId, onProjectResolved]);
 
   const startWithAgent = async (): Promise<void> => {
     const project = await desktopApi.createDefaultProject();
@@ -891,7 +906,10 @@ export function App() {
       ws.tabs.every(
         (tab) => tab.kind === "palette" || tab.kind === "agent-setup",
       );
-    if (!emptyWorkspaceNow) {
+    if (
+      !emptyWorkspaceNow ||
+      document.querySelectorAll("[data-project-runtime]").length > 1
+    ) {
       void desktopApi.openProfileWindow(profile.id);
       return;
     }
@@ -909,11 +927,6 @@ export function App() {
       // roster (the setup-tab auto-open, chat gating) must not act on the
       // OLD profile's roster while the NEW profile's project is active.
       setAgentsData(null);
-      setActiveProfileId(profile.id);
-      setActiveProjectId(profile.defaultProjectId);
-      // Providers above App (theme, keybindings) refetch on this signal —
-      // in-place switches get no main-process broadcast to this window.
-      window.dispatchEvent(new Event("catamorphic:profile-refetch"));
       // The scoped sidebar effect owns configuration loading, including
       // project overrides. A second profile-only fetch could overwrite it.
       const [agents, nextPrefs] = await Promise.all([
@@ -924,6 +937,11 @@ export function App() {
       setPrefs(nextPrefs);
       setSidebarOpen(nextPrefs.sidebarOpen);
       setSavedRightSidebarOpen(nextPrefs.rightSidebarOpen);
+      // Resolve the destination and its preferences together so the workspace
+      // owner never claims a project using the previous profile's settings.
+      setActiveProfileId(profile.id);
+      setActiveProjectId(profile.defaultProjectId);
+      window.dispatchEvent(new Event("catamorphic:profile-refetch"));
       setProfileVeil({ stage: "out" });
     } finally {
       completingSwitchRef.current = false;
@@ -1790,13 +1808,15 @@ export function App() {
   const openBrowserTabRef = useRef(openBrowserTab);
   openBrowserTabRef.current = openBrowserTab;
   useEffect(() => {
-    return desktopApi.onBrowserOpenUrl((url, mode) =>
-      openBrowserTabRef.current(url, {
-        floating: mode
-          ? mode === "floating"
-          : prefsRef.current?.linkOpenMode === "floating",
-        side: mode === "side",
-      }),
+    return desktopApi.onBrowserOpenUrl(
+      (url, mode) =>
+        visibleRef.current &&
+        openBrowserTabRef.current(url, {
+          floating: mode
+            ? mode === "floating"
+            : prefsRef.current?.linkOpenMode === "floating",
+          side: mode === "side",
+        }),
     );
   }, []);
 
@@ -1979,7 +1999,9 @@ export function App() {
   const revealChatRef = useRef(revealChat);
   revealChatRef.current = revealChat;
 
+  const closingChatIds = useRef(new Set<string>());
   const closeChat = (localId: string) => {
+    closingChatIds.current.delete(localId);
     chatClosersRef.current.delete(localId);
     chatMinimizersRef.current.delete(localId);
     updateWorkspace((ws) => {
@@ -2028,6 +2050,7 @@ export function App() {
       const activeSignals = active ? signalsByChat[active.localId] : undefined;
       if (
         activeIsVisible &&
+        !closingChatIds.current.has(active.localId) &&
         !active.sessionId &&
         !active.pendingMessage &&
         !activeSignals?.working &&
@@ -2249,7 +2272,7 @@ export function App() {
       const ws = workspaceRef.current;
       const chat = ws.chats.find((candidate) => candidate.localId === localId);
       if (!chat) return;
-      const visible = chatVisible(ws, chat);
+      const visible = visibleRef.current && chatVisible(ws, chat);
       const focused = document.hasFocus();
       const current = prefsRef.current;
       const title = chatLabelsRef.current[localId] ?? "Chat";
@@ -2292,7 +2315,12 @@ export function App() {
       const chat = ws.chats.find((candidate) => candidate.localId === localId);
       // Response landed while the chat was hidden (minimized bubble or a
       // background tab) → unread dot.
-      if (before.working && !next.working && chat && !chatVisible(ws, chat)) {
+      if (
+        before.working &&
+        !next.working &&
+        chat &&
+        (!visibleRef.current || !chatVisible(ws, chat))
+      ) {
         if (chat.sessionId) {
           setSessionListPreference("unreadSessionIds", [chat.sessionId], true);
         }
@@ -2316,7 +2344,7 @@ export function App() {
   useEffect(() => {
     const visibleIds = new Set(
       workspace.chats
-        .filter((chat) => chatVisible(workspace, chat))
+        .filter((chat) => runtime.visible && chatVisible(workspace, chat))
         .flatMap((chat) => (chat.sessionId ? [chat.sessionId] : [])),
     );
     const newlyVisible = [...visibleIds].filter(
@@ -2324,12 +2352,12 @@ export function App() {
     );
     visibleSessionIdsRef.current = visibleIds;
     setSessionListPreference("unreadSessionIds", newlyVisible, false);
-  }, [workspace, setSessionListPreference]);
+  }, [workspace, runtime.visible, setSessionListPreference]);
 
   const acknowledgingAttentionRef = useRef(new Set<string>());
   useEffect(() => {
-    for (const chat of workspace.chats.filter((candidate) =>
-      chatVisible(workspace, candidate),
+    for (const chat of workspace.chats.filter(
+      (candidate) => runtime.visible && chatVisible(workspace, candidate),
     )) {
       const sessionId = chat.sessionId;
       if (
@@ -2346,7 +2374,7 @@ export function App() {
         },
       });
     }
-  }, [workspace, sessionsById, acknowledgeSessionAttention]);
+  }, [workspace, runtime.visible, sessionsById, acknowledgeSessionAttention]);
 
   // Cmd+W (via the app menu) closes the most specific surface in focus:
   // the floating chat if one is open, else the active workspace tab.
@@ -2408,6 +2436,10 @@ export function App() {
     });
   }, []);
   const closeActiveSurface = useCallback(() => {
+    const chatProject = document.activeElement?.closest<HTMLElement>(
+      "[data-chat-project]",
+    )?.dataset.chatProject;
+    if (chatProject && chatProject !== projectIdRef.current) return;
     // A guest-focused key can arrive through both Electron's menu and the
     // webview relay. Decide once after those deliveries and any preceding
     // surface transition (for example Escape: tab → floating) have settled.
@@ -2454,7 +2486,9 @@ export function App() {
     }, 25);
   }, []);
   useEffect(() => {
-    return desktopApi.onCloseSurface(closeActiveSurface);
+    return desktopApi.onCloseSurface(() => {
+      if (visibleRef.current) closeActiveSurface();
+    });
   }, [closeActiveSurface]);
 
   // --- agent commands (palette pickers) ---
@@ -3352,6 +3386,9 @@ export function App() {
         )
       )
         return;
+      // Terminal editors may prevent the native key while deliberately
+      // bubbling a bound application shortcut.
+      if (!visibleRef.current) return;
       if (dispatchShortcut(event)) {
         event.preventDefault();
         return;
@@ -3375,18 +3412,20 @@ export function App() {
       }
     };
     window.addEventListener("keydown", onKeyDown);
-    const unsubscribeGuestKeys = desktopApi.onBrowserGuestKey((key) =>
-      dispatchShortcut(
-        {
-          key: key.key,
-          code: key.code,
-          metaKey: key.meta,
-          ctrlKey: key.control,
-          altKey: key.alt,
-          shiftKey: key.shift,
-        },
-        key.webContentsId,
-      ),
+    const unsubscribeGuestKeys = desktopApi.onBrowserGuestKey(
+      (key) =>
+        visibleRef.current &&
+        dispatchShortcut(
+          {
+            key: key.key,
+            code: key.code,
+            metaKey: key.meta,
+            ctrlKey: key.control,
+            altKey: key.alt,
+            shiftKey: key.shift,
+          },
+          key.webContentsId,
+        ),
     );
     return () => {
       window.removeEventListener("keydown", onKeyDown);
@@ -3394,8 +3433,22 @@ export function App() {
     };
   }, []);
 
+  const addChatRef = useRef(addChat);
+  addChatRef.current = addChat;
+  useEffect(
+    () =>
+      desktopApi.onWorkspaceEvent((event) => {
+        if (
+          event.kind === "newChat" &&
+          event.projectId === projectIdRef.current
+        )
+          addChatRef.current();
+      }),
+    [],
+  );
+
   const selectProject = (id: string) => {
-    setActiveProjectId(id);
+    void desktopApi.workspaceNavigate(id);
     // Remembered per profile: a relaunch lands in the last project.
     void desktopApi.setPrefs({ lastProjectId: id });
   };
@@ -3461,9 +3514,8 @@ export function App() {
       method: string,
       params: Record<string, unknown>,
     ): Promise<unknown> => {
-      if (params.projectId && params.projectId !== projectIdRef.current) {
+      if (params.projectId && params.projectId !== projectIdRef.current)
         return null;
-      }
       const ws = workspaceRef.current;
       switch (method) {
         case "overview": {
@@ -3926,6 +3978,7 @@ export function App() {
         }
         case "elicit": {
           // Main routes this to one window, including when the app is unfocused.
+          if (!visibleRef.current) return null;
           const request = params.request as
             | PendingElicitation["request"]
             | undefined;
@@ -4006,6 +4059,8 @@ export function App() {
           return { ok: true };
         }
         case "requestConnection": {
+          if (projectIdRef.current)
+            void desktopApi.workspaceNavigate(projectIdRef.current);
           // Main sends this to ONE window (focused, else first) — no
           // renderer-side focus guard, so an unfocused single window
           // still shows the modal instead of silently declining.
@@ -4059,6 +4114,12 @@ export function App() {
     };
 
     return desktopApi.onBridgeRequest(({ id, method, params }) => {
+      if (
+        params.projectId
+          ? params.projectId !== projectIdRef.current
+          : !visibleRef.current
+      )
+        return;
       void handle(method, params)
         .catch((error: Error) => ({ error: error.message }))
         .then((result) => desktopApi.bridgeRespond({ id, result }));
@@ -4150,7 +4211,7 @@ export function App() {
       return groupId ? { ...tab, groupId } : tab;
     })
     .filter((tab): tab is WorkspaceTab => tab !== null);
-  const activeChatTabId = focusedTabKey?.startsWith("chat:")
+  const _activeChatTabId = focusedTabKey?.startsWith("chat:")
     ? focusedTabKey.slice("chat:".length)
     : undefined;
   const activeBrowserTabId = focusedTabKey?.startsWith("browser:")
@@ -4687,7 +4748,7 @@ export function App() {
   );
 
   return (
-    <div className="relative isolate flex h-full bg-sidebar">
+    <div className="relative flex h-full bg-sidebar">
       {/* Agent pointers: glow + scroll on data-point-key elements. The
           workspace object is the re-resolve trigger — a pointed tab may
           mount after the point_at call. */}
@@ -4826,6 +4887,9 @@ export function App() {
                 projects={projects}
                 activeProjectId={projectId}
                 onSelect={selectProject}
+                onOpenWindow={(id) => {
+                  void desktopApi.workspaceNavigate(id, true);
+                }}
                 onNewProject={() => setProjectModalOpen(true)}
                 onConnectRemote={() =>
                   setRemoteConnect({ open: true, link: null })
@@ -4892,6 +4956,7 @@ export function App() {
           (terminal canvases refit asynchronously and may overshoot for a
           frame) rather than push the document taller than the window. */}
       <main
+        data-workspace-content
         data-tab-layout={tabsInSidebar ? "sidebar" : "top"}
         data-header-placement={headerInSidebar ? "sidebar" : "top"}
         data-tab-frame={prefs?.tabFrame ? "on" : "off"}
@@ -4996,6 +5061,7 @@ export function App() {
 
         {projectId ? (
           <div
+            data-workspace-chat-region
             className={`workspace-content relative flex min-h-0 flex-1 flex-col bg-bg ${tabsInSidebar ? "overflow-hidden" : ""} ${prefs?.tabFrame && headerInSidebar && sidebarOpen ? "mt-1.5" : ""} ${prefs?.tabFrame && tabsInSidebar && !compactWindow ? "mb-1.5 rounded-[14px]" : ""}`}
           >
             {/* Every tab pane lives in this wrapper so keyboard cycling
@@ -5052,7 +5118,9 @@ export function App() {
                           projectId={projectId}
                           workflowName={tab.name}
                           canEdit={!memberShell}
-                          active={Boolean(viewSlots[tabKey(tab)])}
+                          active={
+                            runtime.visible && Boolean(viewSlots[tabKey(tab)])
+                          }
                           onAskAgent={(message) =>
                             sendToAgent(message, "float")
                           }
@@ -5158,8 +5226,12 @@ export function App() {
                     // Remounts (project/profile switches) resume at the
                     // last known URL, not the tab's original one.
                     initialUrl={browser.url || browser.initialUrl}
-                    active={browser.localId === activeBrowserTabId}
-                    toolbarActive={browser.localId === chromeBrowserId}
+                    active={
+                      runtime.visible && browser.localId === activeBrowserTabId
+                    }
+                    toolbarActive={
+                      runtime.visible && browser.localId === chromeBrowserId
+                    }
                     integratedToolbar={
                       tabsInSidebar &&
                       viewSlots[browserTabKey(browser.localId)] !== "floating"
@@ -5176,7 +5248,10 @@ export function App() {
                         void desktopApi.setPrefs({ sidebarOpen: true });
                       }
                     }}
-                    visible={Boolean(viewSlots[browserTabKey(browser.localId)])}
+                    visible={
+                      runtime.visible &&
+                      Boolean(viewSlots[browserTabKey(browser.localId)])
+                    }
                     keepAwake={busyBrowsers.has(browser.localId)}
                     onStateChange={(state) =>
                       onBrowserState(browser.localId, state)
@@ -5268,7 +5343,10 @@ export function App() {
                   <Suspense fallback={<div className="flex-1 bg-bg" />}>
                     <TerminalScreen
                       projectId={projectId}
-                      active={terminal.localId === activeTerminalTabId}
+                      active={
+                        runtime.visible &&
+                        terminal.localId === activeTerminalTabId
+                      }
                       initialCommand={terminal.initialCommand}
                       macroShortcuts={prefs?.terminalMacros.map(
                         (macro) => macro.shortcut,
@@ -5439,7 +5517,19 @@ export function App() {
             )}
 
             {workspace.chats.map((entry) => (
-              <ChatDock
+              <ChatRegistration
+                onReveal={() => revealChat(entry.localId)}
+                selected={entry.localId === workspace.activeChatId}
+                projectName={activeProject?.name ?? "Project"}
+                icon={chatIcons[entry.localId] ?? null}
+                fork={chatForks[entry.localId] ?? false}
+                unread={unreadByChat[entry.localId] ?? false}
+                attention={attentionByChat[entry.localId] ?? false}
+                menu={chatMenus[entry.localId] ?? []}
+                onMenuAction={(action) => {
+                  if (entry.sessionId)
+                    applySessionAction(entry.sessionId, action.action);
+                }}
                 key={entry.localId}
                 projectId={projectId}
                 entry={entry}
@@ -5458,7 +5548,7 @@ export function App() {
                 }
                 splitRatio={splitRatio}
                 splitResizing={dividerDragging}
-                bubbleClearance={bubblesCollapsed ? "corner" : "strip"}
+                bubbleClearance="strip"
                 backdropTab={
                   workspace.activeTabKey !== undefined &&
                   workspace.activeTabKey !== chatTabKey(entry.localId)
@@ -5574,6 +5664,7 @@ export function App() {
                   };
                 }}
                 onClose={closeChat}
+                onCloseStarted={() => closingChatIds.current.add(entry.localId)}
                 registerClose={(close) =>
                   chatClosersRef.current.set(entry.localId, close)
                 }
@@ -5587,30 +5678,6 @@ export function App() {
                 onSignalsChange={onSignalsChange}
               />
             ))}
-
-            <ChatBubbles
-              entries={workspace.chats}
-              labels={chatLabels}
-              icons={chatIcons}
-              forks={chatForks}
-              signals={signalsByChat}
-              unread={unreadByChat}
-              attention={attentionByChat}
-              menus={chatMenus}
-              activeLocalId={workspace.activeChatId}
-              autoCollapse={activeChatTabId !== undefined}
-              onCollapsedChange={setBubblesCollapsed}
-              onToggle={toggleChat}
-              onClose={closeChat}
-              onMenuAction={(localId, entry) => {
-                const sessionId = workspace.chats.find(
-                  (chat) => chat.localId === localId,
-                )?.sessionId;
-                if (sessionId) applySessionAction(sessionId, entry.action);
-              }}
-              onNewChat={() => addChat()}
-              onCollapse={minimizeFloatingChats}
-            />
           </div>
         ) : workspace.browsers.length > 0 ? (
           <div className="relative flex min-h-0 flex-1 flex-col">
@@ -5626,8 +5693,13 @@ export function App() {
                   projectId={null}
                   floatingDismissShortcut={keybindings["dismiss-floating"]}
                   initialUrl={browser.url || browser.initialUrl}
-                  active={browser.localId === activeBrowserTabId}
-                  visible={Boolean(viewSlots[browserTabKey(browser.localId)])}
+                  active={
+                    runtime.visible && browser.localId === activeBrowserTabId
+                  }
+                  visible={
+                    runtime.visible &&
+                    Boolean(viewSlots[browserTabKey(browser.localId)])
+                  }
                   onStateChange={(state) =>
                     onBrowserState(browser.localId, state)
                   }

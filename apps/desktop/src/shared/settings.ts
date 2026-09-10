@@ -17,6 +17,25 @@ const profileScope: readonly SettingsScope[] = ["profile"];
 
 /** User choices only. Sidebar pose, last project and unread ids are runtime state. */
 export const SETTINGS = {
+  dockMultiProject: {
+    label: "Chats from all projects",
+    description: "Show this profile's project chats together in the dock.",
+    scopes: profileScope,
+    valid: boolean,
+  },
+  dockDetached: {
+    label: "Detached chat dock",
+    description: "Keep the dock above other windows and desktops.",
+    scopes: profileScope,
+    valid: boolean,
+  },
+  dockSide: {
+    label: "Dock position",
+    description: "You can also drag the dock handle to either side.",
+    scopes: profileScope,
+    valid: oneOf("left", "right"),
+    options: { left: "Left", right: "Right" },
+  },
   tabPlacement: {
     label: "Open tabs",
     scopes: projectScopes,

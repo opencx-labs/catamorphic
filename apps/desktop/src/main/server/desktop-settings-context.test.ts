@@ -53,6 +53,11 @@ it("identifies the owning profile and primary project paths, with live file erro
     project: `${project.rootPath}/.catamorphic/settings.json`,
     personal: `${root}/profiles/${one.id}/settings-projects/${project.id}.json`,
   });
+  expect(context.files?.theme).toEqual({
+    profile: config.forProfile(one.id).theme.file,
+    project: context.files?.preferences.project,
+    personal: context.files?.preferences.personal,
+  });
   fs.writeFileSync(config.forProfile(one.id).theme.file, "broken");
   expect(desktopSettingsContext(input).errors?.[0]).toContain("theme.json");
   expect(JSON.stringify(context)).not.toContain(two.id);

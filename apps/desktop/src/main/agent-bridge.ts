@@ -213,7 +213,10 @@ const sleep = (ms: number) =>
 const modelOutput = (raw: string): string =>
   capOutput(sanitizeTerminalOutput(raw), OUTPUT_CAP);
 
-export function registerAgentBridge(agentTerminals: AgentTerminals): {
+export function registerAgentBridge(
+  agentTerminals: AgentTerminals,
+  targetFor?: (projectId?: string) => Electron.WebContents | undefined,
+): {
   bridge: WorkspaceBridge;
   /** Env for an agent terminal so its `open` shim reaches this app. */
   openHookEnv(projectId: string): Record<string, string>;
@@ -227,14 +230,15 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
       resolve: (value: unknown) => void;
       remaining: number;
       timer: ReturnType<typeof setTimeout>;
+      senders: Set<number>;
     }
   >();
 
   ipcMain.on(
     "catamorphic:bridge-response",
-    (_event, payload: { id: number; result: unknown }) => {
+    (event, payload: { id: number; result: unknown }) => {
       const entry = pending.get(payload.id);
-      if (!entry) return;
+      if (!entry?.senders.delete(event.sender.id)) return;
       if (payload.result !== null && payload.result !== undefined) {
         pending.delete(payload.id);
         clearTimeout(entry.timer);
@@ -256,9 +260,19 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
     params: unknown,
     timeoutMs = RPC_TIMEOUT_MS,
   ): Promise<T | null> => {
-    const windows = BrowserWindow.getAllWindows().filter(
-      (window) => !window.isDestroyed(),
-    );
+    const projectId =
+      typeof params === "object" &&
+      params !== null &&
+      "projectId" in params &&
+      typeof params.projectId === "string"
+        ? params.projectId
+        : undefined;
+    const target = targetFor?.(projectId);
+    const windows = targetFor
+      ? target
+        ? [{ webContents: target }]
+        : []
+      : BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed());
     if (windows.length === 0) return Promise.resolve(null);
     const id = ++nextId;
     return new Promise<T | null>((resolve) => {
@@ -269,6 +283,7 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
         timer,
         resolve: resolve as (value: unknown) => void,
         remaining: windows.length,
+        senders: new Set(windows.map((window) => window.webContents.id)),
       });
       for (const window of windows) {
         window.webContents.send("catamorphic:bridge-request", {
@@ -294,7 +309,12 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
     const windows = BrowserWindow.getAllWindows().filter(
       (window) => !window.isDestroyed(),
     );
-    const target = BrowserWindow.getFocusedWindow() ?? windows[0];
+    const recipient = targetFor?.(
+      typeof params.projectId === "string" ? params.projectId : undefined,
+    );
+    const target = recipient
+      ? { webContents: recipient, isDestroyed: () => recipient.isDestroyed() }
+      : (BrowserWindow.getFocusedWindow() ?? windows[0]);
     if (!target || target.isDestroyed() || signal?.aborted)
       return Promise.resolve(null);
     const id = ++nextId;
@@ -315,7 +335,12 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
         finish(null);
       };
       const timer = setTimeout(abort, timeoutMs);
-      pending.set(id, { timer, remaining: 1, resolve: finish });
+      pending.set(id, {
+        timer,
+        remaining: 1,
+        resolve: finish,
+        senders: new Set([target.webContents.id]),
+      });
       signal?.addEventListener("abort", abort, { once: true });
       target.webContents.send("catamorphic:bridge-request", {
         id,
@@ -720,7 +745,7 @@ export function registerAgentBridge(agentTerminals: AgentTerminals): {
     },
 
     async requestConnection(projectId, sessionId, query, reason) {
-      const result = await rpcToFront<{ installed: string[] }>(
+      const result = await rpc<{ installed: string[] }>(
         "requestConnection",
         { projectId, sessionId, query, reason },
         ELICIT_TIMEOUT_MS,

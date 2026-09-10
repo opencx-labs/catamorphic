@@ -6,10 +6,41 @@ import { PrefsStore } from "./prefs.js";
 import {
   loadSettings,
   type SettingsFiles,
+  SettingsStore,
   saveSettings,
 } from "./settings-store.js";
 
 const directories: string[] = [];
+
+it("keeps the last valid project theme and refuses unrelated saves over an invalid edit", () => {
+  const paths = files();
+  const store = new SettingsStore();
+  const project = paths.project!;
+  fs.writeFileSync(
+    project,
+    JSON.stringify({ theme: { overrides: { accent: "#123456" } } }),
+  );
+  expect(store.read(project, "project").value.theme).toEqual({
+    overrides: { accent: "#123456" },
+  });
+  const invalid = JSON.stringify({
+    theme: { overrides: { accent: "red;display:none" } },
+  });
+  fs.writeFileSync(project, invalid);
+  expect(store.load(paths).errors).toHaveLength(1);
+  expect(store.read(project, "project").value.theme).toEqual({
+    overrides: { accent: "#123456" },
+  });
+  expect(() =>
+    saveSettings({ files: paths, scope: "project", patch: { tabFrame: true } }),
+  ).toThrow("Invalid theme");
+  expect(fs.readFileSync(project, "utf8")).toBe(invalid);
+  fs.unlinkSync(project);
+  expect(store.read(project, "project")).toEqual({
+    value: {},
+    error: undefined,
+  });
+});
 afterEach(() => {
   for (const dir of directories.splice(0))
     fs.rmSync(dir, { recursive: true, force: true });

@@ -1,9 +1,3 @@
-import type { ChatDockEntry, ChatMode } from "../lib/workspace-types.js";
-import { FilePreviewProjectContext } from "./file-preview";
-import { renderResponseLink } from "./response-link";
-
-export type { ChatDockEntry, ChatMode } from "../lib/workspace-types.js";
-
 import {
   type AgentChatAttachment,
   type AgentChatTextAttachment,
@@ -48,7 +42,12 @@ import {
   useRef,
   useState,
 } from "react";
-import type { OpenMode, OpenModifiers } from "../../shared/open-mode.js";
+import type {
+  ChatDockProps,
+  ChatSurface,
+  McpAppRef,
+} from "../../shared/chat.js";
+import type { OpenMode } from "../../shared/open-mode.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
 import { commandScore } from "../lib/command-score";
 import {
@@ -69,6 +68,7 @@ import {
 } from "../lib/skills";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { classifyPastedText, selectionName, textPill } from "../lib/text-pills";
+import type { ChatMode } from "../lib/workspace-types.js";
 import { AgentQuestionPanel } from "./agent-question-panel";
 import { AuthenticationRequiredCard } from "./authentication-required-card.js";
 import { ChatDeliveryRecovery } from "./catamorphic/agent-chat.js";
@@ -80,7 +80,17 @@ import {
 } from "./catamorphic/chat-timeline";
 import { TodoProgress } from "./catamorphic/todo-progress.js";
 import { ChatGlyph } from "./chat-icon";
-import type { ChatSignals } from "./chat-signals";
+import { FilePreviewProjectContext } from "./file-preview";
+import { renderResponseLink } from "./response-link";
+
+export type {
+  ChatDockEntry,
+  ChatDockProps,
+  ChatMode,
+  ChatSurface,
+  McpAppRef,
+} from "../../shared/chat.js";
+
 import {
   type ComposerAttachment,
   ComposerInput,
@@ -101,58 +111,6 @@ import {
 import { RemoteMessageConnectionGuard } from "./remote-message-connection-guard.js";
 import { SessionInspector } from "./session-inspector.js";
 import { ShortcutHint } from "./shortcut-hint";
-
-/**
- * A workspace tab attached to this chat — the agent's working surfaces
- * (browser pages it linked, terminals for its project, files it changed) —
- * or a live activity the chat itself tracks (subagents at work, background
- * processes the agent started or left running).
- */
-export interface ChatSurface {
-  /** Workspace tab key ("browser:<id>" / "terminal:<id>" / "chat:<id>"). */
-  key: string;
-  kind:
-    | "browser"
-    | "terminal"
-    | "editor"
-    | "chat"
-    | "subagent"
-    | "watcher"
-    | "app"
-    | "workflow"
-    | "mcpapp";
-  label: string;
-  faviconUrl?: string | null;
-  /** The agent is actively working here (spinner on the chip). */
-  active?: boolean;
-  /**
-   * The agent opened this surface in the BACKGROUND (open_surface while
-   * the user was on another tab): the chip carries an accent dot with
-   * the waiting-state pulse (the question badge's sanctioned loop —
-   * indeterminate until the user answers) until the user opens the
-   * surface. Dismissal-by-interaction, like point_at's glow.
-   */
-  attention?: boolean;
-  /**
-   * Detail lines opened in an upward popover on click. Chips with `info`
-   * aren't workspace tabs — the popover IS their surface (a subagent's
-   * activity feed, a watcher's command).
-   */
-  info?: string[];
-  /** MCP app chips: the view to open when clicked. */
-  mcpApp?: McpAppRef;
-  /** The chip owns a workspace resource that can be explicitly disposed. */
-  removable?: boolean;
-}
-
-/** An MCP Apps view reachable from a chat's tool call. */
-export interface McpAppRef {
-  toolKey: string;
-  toolUseId: string;
-  title: string;
-  toolInput?: unknown;
-  toolResult?: unknown;
-}
 
 /** Chips group per kind once a chat collects this many surfaces. */
 const SURFACE_GROUP_THRESHOLD = 3;
@@ -1146,123 +1104,6 @@ function SurfacesRail({
   );
 }
 
-export interface ChatDockProps {
-  projectId: string;
-  entry: ChatDockEntry;
-  title: string;
-  placeholder?: string;
-  /** Whether this chat's workspace tab occupies a view slot (tab mode). */
-  tabActive: boolean;
-  /** Keep this visible chat fresh when another client writes while it is idle. */
-  refreshWhileIdle?: boolean;
-  /**
-   * Where the tab sits in the content view: the full area, or one half
-   * of a split. Floating/minimized modes ignore it.
-   */
-  slot?: "full" | "left" | "right";
-  /** Left pane's width fraction while the view is split. */
-  splitRatio?: number;
-  /** True while the split divider is being dragged (disables tweens). */
-  splitResizing?: boolean;
-  /**
-   * How the bubble UI occupies the bottom edge while this chat is a tab:
-   * "strip" = expanded centered strip (reserve bottom height), "corner" =
-   * single collapsed bubble at the right (side padding only), "none".
-   */
-  bubbleClearance: "none" | "corner" | "strip";
-  /**
-   * A tab is visible behind the floating dock. While the agent works,
-   * the dock lurks: it shrinks vertically to a strip showing the latest
-   * activity so the tab stays readable, and expands on hover/focus.
-   */
-  backdropTab?: boolean;
-  /** Profile-default agent for lazily created sessions. */
-  defaultAgentId?: string;
-  /**
-   * A highlighted palette command targets this chat — accent the floating
-   * dock's border so the command visibly points at it before Enter.
-   */
-  paletteTargeted?: boolean;
-  /** Tabs attached to this chat, rendered as the surfaces rail. */
-  surfaces?: ChatSurface[];
-  /**
-   * Open an attached surface: "tab" focuses it as a full tab, "split"
-   * tiles it to the right of the current view.
-   */
-  onOpenSurface?: (key: string, mode: OpenMode | "split") => void;
-  /** Permanently dispose an attached surface from its chip. */
-  onRemoveSurface?: (key: string) => void;
-  /** Open an MCP Apps view (a connection tool's ui:// template) as a tab. */
-  onOpenMcpApp?: (view: McpAppRef, mode: OpenMode | "split") => void;
-  /** Set while this tab is the unfocused pane of a split: click focuses. */
-  onFocusRequest?: () => void;
-  /**
-   * Bumped by the host when the user re-invokes "chat" on this already
-   * front chat (Cmd+N with a fresh chat open): the dock re-pulls the
-   * editor selection as if it had just come to the front.
-   */
-  pullSelectionNonce?: number;
-  /** Set while this tab sits in a split: return it to a full-width tab. */
-  onUnsplit?: () => void;
-  /**
-   * Agent-message links and menus follow the shared resource-opening
-   * grammar (ADR 0108), retaining the current chat and its draft.
-   */
-  onLinkClick?: (url: string, modifiers: OpenModifiers | OpenMode) => void;
-  /** An edited-file row in the turn-step log was clicked — open the file. */
-  onFileClick?: (path: string, modifiers?: OpenModifiers) => void;
-  /** Fork the conversation from this assistant message (hover action). */
-  onFork?: (messageId: string) => void;
-  /** Fork at the latest settled message from the session inspector. */
-  onForkCurrent?: () => void;
-  /** Archive this conversation while preserving its transcript. */
-  onArchive?: () => void;
-  /** Profile-local presentation state for the inspector's toggle label. */
-  archived?: boolean;
-  /** Changing this opens and pins the shared session inspector. */
-  inspectRequestNonce?: number;
-  /** Set on forked chats: reveal the parent conversation. */
-  onOpenParent?: () => void;
-  /** Open the harness-backed picker for this session's model override. */
-  onEditModel?: () => void;
-  /** Open the session reasoning-effort picker. */
-  onEditEffort?: () => void;
-  runtimeSettingsError?: string | null;
-  onEntryChange: (entry: ChatDockEntry) => void;
-  /** Records the tab → floating Escape handoff for an immediate Cmd+W. */
-  onEscapeToFloating?: (localId: string) => void;
-  /** Close the chat entirely (dismissing an empty chat removes it). */
-  onClose: (localId: string) => void;
-  /**
-   * Hands the host this dock's animated close, so external closers
-   * (Cmd+W's close-surface) play the same 250ms collapse as Escape
-   * instead of unmounting the dock mid-frame.
-   */
-  registerClose?: (close: () => void) => void;
-  /**
-   * Hands the host the staged tab-minimize (collapse tween first, mode
-   * flip after), so external minimizers (Cmd+M) read the same as the
-   * dock's own dash control.
-   */
-  registerMinimize?: (minimize: () => void) => void;
-  /**
-   * Hands the host this chat's live sender (palette skill rows, post-auth
-   * continuations). Sends queue behind an in-flight turn like composer
-   * sends do.
-   */
-  registerSend?: (send: (message: string) => void) => void;
-  onSessionCreated: (localId: string, sessionId: string) => void;
-  /**
-   * The chat's live signals changed: the agent started/stopped working,
-   * the composer gained/lost an unsent draft, or a question is waiting.
-   * Drives every indicator surface (bubbles, tabs, notifications).
-   */
-  onSignalsChange: (
-    localId: string,
-    signals: Required<Pick<ChatSignals, "working" | "draft" | "awaitingInput">>,
-  ) => void;
-}
-
 /**
  * One chat surface tied to one bottom bubble. Stays mounted while minimized
  * so queued sends and drafts survive; the panel morphs between a floating
@@ -1285,6 +1126,7 @@ function ChatDockContent({
   projectId,
   entry,
   title,
+  projectName,
   placeholder,
   tabActive,
   refreshWhileIdle = false,
@@ -1316,6 +1158,7 @@ function ChatDockContent({
   onEntryChange,
   onEscapeToFloating,
   onClose,
+  onCloseStarted,
   registerClose,
   registerMinimize,
   registerSend,
@@ -1480,6 +1323,43 @@ function ChatDockContent({
   const [draft, setDraft] = useState("");
   const [pillCount, setPillCount] = useState(0);
   const composerRef = useRef<ComposerInputHandle>(null);
+  const restoringDraft = useRef(false);
+  const draftLoaded = useRef(false);
+  const draftSerial = useRef("");
+  useEffect(() => {
+    let live = true;
+    const restore = (
+      next: import("../../shared/desktop-workspace.js").ChatDraft,
+    ) => {
+      const serial = JSON.stringify(next);
+      if (serial === draftSerial.current) return;
+      draftSerial.current = serial;
+      restoringDraft.current = true;
+      composerRef.current?.restore(next);
+      restoringDraft.current = false;
+    };
+    void desktopApi.dockDraftGet(entry.localId).then((next) => {
+      if (!live) return;
+      if (next) restore(next);
+      draftLoaded.current = true;
+    });
+    const stop = desktopApi.onDockDraft((update) => {
+      if (update.localId === entry.localId) restore(update.draft);
+    });
+    return () => {
+      live = false;
+      stop();
+    };
+  }, [entry.localId]);
+  const publishDraft = () => {
+    if (restoringDraft.current || !draftLoaded.current) return;
+    const next = composerRef.current?.snapshot();
+    if (!next) return;
+    const serial = JSON.stringify(next);
+    if (serial === draftSerial.current) return;
+    draftSerial.current = serial;
+    void desktopApi.dockDraftSet(entry.localId, next);
+  };
   const draftRef = useRef(draft);
   draftRef.current = draft;
   // Set while the dock itself rewrites the prose (recall, slash-complete)
@@ -2083,6 +1963,7 @@ function ChatDockContent({
   const animatedClose = () => {
     if (closingRef.current) return;
     closingRef.current = true;
+    onCloseStarted?.();
     setClosing(true);
   };
   const finishClose = () => {
@@ -2710,6 +2591,7 @@ function ChatDockContent({
         data-floating-chat={entry.mode === "partial" || undefined}
         data-lurking={lurking || undefined}
         data-chat-local-id={entry.localId}
+        data-chat-project={projectId}
         onAnimationEnd={(event) => {
           if (
             event.target !== event.currentTarget ||
@@ -2780,6 +2662,11 @@ function ChatDockContent({
                 </span>
               )}
             </span>
+            {projectName && (
+              <span className="max-w-40 truncate text-[10px] font-normal text-fg-faint">
+                {projectName}
+              </span>
+            )}
           </header>
           {/* Agent progress sits immediately left of the chat control bar;
           both stay above timeline content scrolled beneath them. */}
@@ -3360,6 +3247,7 @@ function ChatDockContent({
                       : ""
                   }`}
                   onChange={(state) => {
+                    publishDraft();
                     setPillCount(state.pillCount);
                     setDraft(state.text);
                     // Typing (or pasting) exits history-recall mode and

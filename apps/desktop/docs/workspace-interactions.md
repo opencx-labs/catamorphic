@@ -61,3 +61,18 @@ opening for customization is temporary until content is added.
 Run the workspace-state and workspace-layout unit tests, then Electron suites
 `chat-state`, `floating-surfaces`, `dock-modes`, `sidebars`, and `motion` as relevant.
 Check native hit targets and resting geometry, not just DOM presence.
+
+## Project windows and the shared dock
+
+Each project has one live workspace owner. Switching projects preserves mounted
+editors, terminals, browser pages and agent tool handlers. Opening a project in a
+new window focuses its existing owner when already open. Closing an occupied
+window hides it; explicit Quit owns shutdown.
+
+The profile can show chats from the current project or all its projects, attach
+or detach the dock, and place it on either edge. Drag its handle to change edges.
+A detached dock stays above other apps and follows macOS desktops. Chat cards
+and bubbles retain their project's theme; the new-chat control follows the
+current project. Files, links and session controls route to their owning project,
+using the same resource-opening gestures as other workspace surfaces. Project
+switches use a 180ms, low-opacity accent tint; reduced motion disables it.

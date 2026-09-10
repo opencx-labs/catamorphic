@@ -125,6 +125,10 @@ describe("interrupted turn recovery", () => {
     // The relaunch killed the harness's in-memory session. Sending again
     // must NOT dead-end on "Session not found" — the host re-anchors with
     // the persisted transcript and the conversation just continues.
+    await runWait(
+      `return !!visibleDock()?.querySelector('[data-composer-input]');`,
+      { label: "recovered chat composer after the timeline settles" },
+    );
     await run(`
       const dock = $$('section[aria-label]')
         .find((el) => !el.inert && el.querySelector('[data-composer-input]'));

@@ -1,13 +1,23 @@
 import type { ProjectSummary } from "@catamorphic/react/types";
-import { Box, Check, ChevronsUpDown, FolderPlus, Link2 } from "lucide-react";
+import {
+  Box,
+  Check,
+  ChevronsUpDown,
+  FolderPlus,
+  Link2,
+  PanelsTopLeft,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useWorkspace } from "../lib/workspace-context.js";
 import { ProjectInspector } from "./project-inspector";
 import { ResourceInspector } from "./resource-inspector";
+import { ShortcutHint } from "./shortcut-hint";
 
 export interface ProjectSwitcherProps {
   projects: ProjectSummary[];
   activeProjectId?: string;
   onSelect: (projectId: string) => void;
+  onOpenWindow?: (projectId: string) => void;
   onNewProject: () => void;
   onConnectRemote: () => void;
   onDeleteProject: (project: ProjectSummary) => void;
@@ -17,10 +27,15 @@ export function ProjectSwitcher({
   projects,
   activeProjectId,
   onSelect,
+  onOpenWindow,
   onNewProject,
   onConnectRemote,
   onDeleteProject,
 }: ProjectSwitcherProps) {
+  const { visible } = useWorkspace();
+  useEffect(() => {
+    if (!visible) setOpen(false);
+  }, [visible]);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const active = projects.find((project) => project.id === activeProjectId);
@@ -115,24 +130,46 @@ export function ProjectSwitcher({
                 }
               >
                 {(inspectorProps) => (
-                  <button
-                    {...inspectorProps}
-                    type="button"
-                    role="option"
-                    aria-selected={isActive}
-                    onClick={() => {
-                      onSelect(project.id);
-                      setOpen(false);
-                    }}
-                    className={`flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${isActive ? "text-fg" : "text-fg-muted hover:bg-bg-raised hover:text-fg"}`}
-                  >
-                    <span className="min-w-0 flex-1 truncate">
-                      {project.name}
-                    </span>
-                    {isActive && (
-                      <Check className="size-3.5 shrink-0 text-accent" />
+                  <div className="group flex items-center">
+                    <button
+                      {...inspectorProps}
+                      type="button"
+                      role="option"
+                      aria-selected={isActive}
+                      onClick={(event) => {
+                        if (event.metaKey || event.ctrlKey || event.shiftKey)
+                          onOpenWindow?.(project.id);
+                        else onSelect(project.id);
+                        setOpen(false);
+                      }}
+                      className={`flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${isActive ? "text-fg" : "text-fg-muted hover:bg-bg-raised hover:text-fg"}`}
+                    >
+                      <span className="min-w-0 flex-1 truncate">
+                        {project.name}
+                      </span>
+                      {isActive && (
+                        <Check className="size-3.5 shrink-0 text-accent" />
+                      )}
+                    </button>
+                    {onOpenWindow && (
+                      <ShortcutHint
+                        label="Open project in another window"
+                        side="top"
+                      >
+                        <button
+                          type="button"
+                          aria-label={`Open ${project.name} in another window`}
+                          className="grid size-7 shrink-0 place-items-center rounded text-fg-faint opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-bg-raised hover:text-fg"
+                          onClick={() => {
+                            onOpenWindow(project.id);
+                            setOpen(false);
+                          }}
+                        >
+                          <PanelsTopLeft className="size-3.5" />
+                        </button>
+                      </ShortcutHint>
                     )}
-                  </button>
+                  </div>
                 )}
               </ResourceInspector>
             );

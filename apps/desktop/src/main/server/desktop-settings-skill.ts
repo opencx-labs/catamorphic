@@ -72,18 +72,23 @@ An empty shortcut leaves a macro unbound. Bound macros need a modifier or F key;
 avoid collisions with other macros and the keybindings file. Saving never runs a
 macro. Removing a macro does not kill its running terminal.
 
-## Theme: profile JSON
+## Theme: scoped JSON
 
 Shape: {"selection":"system","overrides":{},"fonts":{}}. All keys are optional.
 selection is "system" or one of: ${THEME_PRESETS.map((preset) => JSON.stringify(preset.id)).join(", ")}.
-System follows the operating system's light/dark preference live. Delete selection
-to reset to system. overrides maps the following tokens to CSS colors:
+The profile theme file is a theme object. Shared and personal project files store
+that same object under the theme key beside ordinary preferences. Use the supplied
+theme paths. Precedence is profile, shared project, then personal project. Missing
+keys inherit; deleting the project theme object resets that scope. System follows
+the operating system live. A new selection resets inherited color edits; font and
+individual color edits remain sparse. Delete profile selection to reset to system. overrides maps the following tokens to CSS colors:
 ${THEME_TOKENS.join(", ")}.
 Use hex, rgb/rgba, hsl/hsla or oklch colors. Example:
 {"selection":"system","overrides":{"accent":"#ff5500"}}.
 fonts accepts sans and mono CSS font-stack strings, e.g. {"mono":"'JetBrains Mono', monospace"}.
 Use installed font names and generic fallbacks; do not use url() or CSS declarations.
-Delete just the affected token or font key to restore the selected preset's value.
+Delete just the affected token or font key to restore its inherited value. Preserve
+unrelated preference keys when editing a project settings file.
 
 ## Keyboard shortcuts: profile JSON
 

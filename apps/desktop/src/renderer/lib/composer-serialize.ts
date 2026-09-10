@@ -42,6 +42,7 @@ const BLOCKS = new Set(["DIV", "P", "LI", "PRE", "BLOCKQUOTE"]);
 export function serializeComposer<T>(
   root: WalkableNode,
   resolve: (pillId: string) => T | null,
+  options: { trim?: boolean } = {},
 ): SerializedComposer<T> {
   let out = "";
   const attachments: T[] = [];
@@ -87,7 +88,7 @@ export function serializeComposer<T>(
     const child = children[index];
     if (child) walk(child);
   }
-  const message = out.trim();
+  const message = options.trim === false ? out : out.trim();
   return {
     message,
     attachments,

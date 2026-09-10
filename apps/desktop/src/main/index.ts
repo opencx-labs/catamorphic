@@ -16,6 +16,7 @@ import { macApplicationMenu } from "./app-menu.js";
 import { registerBrowserSupport } from "./browser.js";
 import { toPublicConnection } from "./connections-store.js";
 import { ConnectorsService } from "./connectors.js";
+import { DesktopWorkspaces } from "./desktop-workspaces.js";
 import {
   desktopApplicationName,
   desktopDataDirFromEnvironment,
@@ -104,7 +105,10 @@ app.on("second-instance", (_event, argv) => {
   const window = BrowserWindow.getAllWindows()[0];
   if (window) {
     if (window.isMinimized()) window.restore();
-    if (!e2eDataDir) window.focus();
+    if (!e2eDataDir) {
+      window.show();
+      window.focus();
+    }
   }
   // Windows/Linux deliver a protocol URL as an argv of the second launch.
   const link = argv.find((arg) => arg.startsWith("catamorphic://"));
@@ -192,7 +196,10 @@ const windows: WindowProfileRegistry = {
     );
   },
   assign(sender, profileId) {
+    const previousProfileId = windows.profileFor(sender);
     windowProfiles.set(sender.id, profileId);
+    if (previousProfileId !== profileId)
+      desktopWorkspaces?.reassign(sender, previousProfileId);
     profilesStore.setLastActiveProfile(profileId);
     const window = BrowserWindow.fromWebContents(sender);
     window?.setBackgroundColor(
@@ -203,6 +210,7 @@ const windows: WindowProfileRegistry = {
     applyMenuForFocusedWindow();
   },
   openWindow(profileId) {
+    if (desktopWorkspaces?.activateProfile(profileId)) return;
     const window = createWindow(profileId);
     if (!e2eDataDir) window.focus();
   },
@@ -218,7 +226,11 @@ function sendToProfile(
   }
 }
 
-function createWindow(profileId?: string): BrowserWindow {
+function createWindow(
+  profileId?: string,
+  dock = false,
+  initialProjectId?: string,
+): BrowserWindow {
   const profile = profileId
     ? (profilesStore.get(profileId) ?? profilesStore.lastActiveProfile())
     : profilesStore.lastActiveProfile();
@@ -229,31 +241,31 @@ function createWindow(profileId?: string): BrowserWindow {
   );
   const saved = windowState.load();
   const window = new BrowserWindow({
-    width: saved.width,
-    height: saved.height,
+    width: dock ? 780 : saved.width,
+    height: dock ? 64 : saved.height,
     ...(saved.x !== undefined && saved.y !== undefined
       ? { x: saved.x, y: saved.y }
       : {}),
-    minWidth: 720,
-    minHeight: 480,
+    minWidth: dock ? 100 : 720,
+    minHeight: dock ? 64 : 480,
+    frame: !dock,
+    transparent: dock,
+    resizable: !dock,
+    skipTaskbar: dock,
     title: "Catamorphic",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     // Pre-paint background from the profile's theme so open doesn't flash;
     // stay hidden until the renderer has actually painted a frame.
     show: false,
-    // Preserve native shown/hidden lifecycles without covering the developer's
-    // screen, including the brief showInactive/hide used for CDP startup.
-    // Opacity is a native macOS/Windows setting; Linux CI uses a private display.
     opacity:
       e2eDataDir && process.env.CATAMORPHIC_E2E_REVEAL_WINDOWS !== "1" ? 0 : 1,
-    // Linux focusable:false bypasses the window manager and cannot maximize.
-    // A private Xvfb display supplies input isolation there while retaining
-    // native window management. Real desktop E2E windows remain non-focusable.
     focusable:
       e2eDataDir === undefined ||
       (process.platform === "linux" &&
         process.env.CATAMORPHIC_E2E_VIRTUAL_DISPLAY === "1"),
-    backgroundColor: windowBackgroundColor(stores.theme.resolved()),
+    backgroundColor: dock
+      ? "#00000000"
+      : windowBackgroundColor(stores.theme.resolved()),
     webPreferences: {
       preload: path.join(import.meta.dirname, "../preload/index.cjs"),
       contextIsolation: true,
@@ -270,16 +282,12 @@ function createWindow(profileId?: string): BrowserWindow {
     },
   });
   if (e2eDataDir) window.setIgnoreMouseEvents(true);
-  // Renderer links must stay inside the workspace. Feature-specific flows can
-  // open tabs through IPC, while this boundary catches plain window.open calls
-  // from current and future renderer components.
   window.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:/.test(url)) {
+    if (/^https?:/.test(url))
       window.webContents.send("catamorphic:browser-open-url", { url });
-    }
     return { action: "deny" };
   });
-  if (saved.maximized) window.maximize();
+  if (!dock && saved.maximized) window.maximize();
   // A connect link that arrived before any window could take it (cold
   // launch from the link) is delivered once the renderer is up.
   window.webContents.once("did-finish-load", () => {
@@ -294,13 +302,13 @@ function createWindow(profileId?: string): BrowserWindow {
       window.hide();
       return;
     }
-    if (e2eDataDir) window.showInactive();
+    if (e2eDataDir || dock) window.showInactive();
     else window.show();
     // Fullscreen after show: entering it on a hidden window leaves macOS
     // with a blank space until the next repaint.
-    if (saved.fullscreen) window.setFullScreen(true);
+    if (!dock && saved.fullscreen) window.setFullScreen(true);
   });
-  windowState.track(window, saved);
+  if (!dock) windowState.track(window, saved);
   // Captured now: `closed` fires after destruction, when touching
   // window.webContents throws "Object has been destroyed".
   const webContentsId = window.webContents.id;
@@ -311,14 +319,31 @@ function createWindow(profileId?: string): BrowserWindow {
   });
 
   if (process.env.ELECTRON_RENDERER_URL) {
-    void window.loadURL(process.env.ELECTRON_RENDERER_URL);
+    const query = new URLSearchParams(
+      dock
+        ? { surface: "dock" }
+        : initialProjectId
+          ? { project: initialProjectId }
+          : {},
+    );
+    void window.loadURL(`${process.env.ELECTRON_RENDERER_URL}?${query}`);
   } else {
     void window.loadFile(
       path.join(import.meta.dirname, "../renderer/index.html"),
+      {
+        query: dock
+          ? { surface: "dock" }
+          : initialProjectId
+            ? { project: initialProjectId }
+            : {},
+      },
     );
   }
+  desktopWorkspaces?.track(window, dock);
   return window;
 }
+
+let desktopWorkspaces: DesktopWorkspaces | null = null;
 
 // The default menu binds Cmd+W to "Close Window". The workspace has its
 // own closable surfaces (tabs, floating chats), so close-tab is forwarded
@@ -473,7 +498,8 @@ app.whenReady().then(async () => {
   });
   profileConfig.onThemeChanged((profileId, theme) => {
     for (const window of windows.windowsFor(profileId)) {
-      window.setBackgroundColor(windowBackgroundColor(theme));
+      if (!desktopWorkspaces?.isDock(window))
+        window.setBackgroundColor(windowBackgroundColor(theme));
       window.webContents.send("catamorphic:theme-changed", theme);
     }
   });
@@ -574,13 +600,22 @@ app.whenReady().then(async () => {
       (await state.current?.projectRoots.get(projectId)) ?? null,
   );
   terminalSupport = registerTerminalSupport(state, async (projectId) => ({
-    // Late-bound: the bridge registers just below, before any terminal
-    // can spawn.
     ...((await state.current?.agentRegistry.nativeToolchainEnvironment()) ??
       {}),
     ...(agentBridge?.openHookEnv(projectId) ?? {}),
   }));
-  agentBridge = registerAgentBridge(terminalSupport.agentTerminals);
+  desktopWorkspaces = new DesktopWorkspaces({
+    windows,
+    config: profileConfig,
+    showWindows: showWindow,
+    profileForProject: (projectId) =>
+      profilesStore.profileForProject(projectId).id,
+    createWindow,
+  });
+  agentBridge = registerAgentBridge(
+    terminalSupport.agentTerminals,
+    (projectId) => desktopWorkspaces?.target(projectId),
+  );
   ipcMain.handle("catamorphic:webview-preload", () =>
     path.join(import.meta.dirname, "../preload/webview.cjs"),
   );
@@ -652,7 +687,7 @@ app.whenReady().then(async () => {
   }
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (!desktopWorkspaces?.activate()) createWindow();
   });
 });
 

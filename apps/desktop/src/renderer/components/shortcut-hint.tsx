@@ -1,4 +1,5 @@
 import {
+  type CSSProperties,
   type ReactNode,
   useEffect,
   useLayoutEffect,
@@ -44,6 +45,7 @@ export function ShortcutHint({
 }) {
   const anchorRef = useRef<HTMLSpanElement>(null);
   const tooltipRef = useRef<HTMLSpanElement>(null);
+  const [themeTokens, setThemeTokens] = useState<CSSProperties>({});
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [position, setPosition] = useState<{ x: number; y: number } | null>(
     null,
@@ -81,6 +83,15 @@ export function ShortcutHint({
       const anchor = anchorRef.current;
       if (!anchor) return;
       const rect = anchor.getBoundingClientRect();
+      const computed = getComputedStyle(anchor);
+      setThemeTokens(
+        Object.fromEntries(
+          ["bg-overlay", "fg-muted", "fg-faint", "border"].map((token) => [
+            `--color-${token}`,
+            computed.getPropertyValue(`--color-${token}`),
+          ]),
+        ),
+      );
       setPosition({
         x: rect.x + rect.width / 2,
         y: side === "bottom" ? rect.bottom + 7 : rect.top - 7,
@@ -129,6 +140,7 @@ export function ShortcutHint({
             ref={tooltipRef}
             role="tooltip"
             style={{
+              ...themeTokens,
               left: position.x,
               top: side === "bottom" ? position.y : undefined,
               bottom:

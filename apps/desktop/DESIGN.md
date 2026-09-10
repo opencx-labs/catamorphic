@@ -265,3 +265,12 @@ input. In-page pointers use the same `point_at`/`clear_pointers` contract as she
 pointers. Native computer access is an optional profile connector with the
 existing queued consent UI; cancellation withdraws the request. See
 [Computer use](docs/computer-use.md) and ADR 0112.
+
+## Persistent project workspaces and dock
+
+Project switching changes visibility without disposing work. A profile can
+share its dock across projects, detach it above native windows, and place it
+on either edge. Project colors remain scoped to their chats and workspace.
+Cross-project resource navigation uses a subtle accent tint and honors reduced
+motion. See [ADR 0113](../../docs/decisions/0113-project-workspaces-and-shared-chat-dock.md)
+and the [workspace interactions](docs/workspace-interactions.md) contract.

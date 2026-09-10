@@ -1,5 +1,5 @@
 import { ChevronsRight, MessageSquare, Plus, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 import type { ChatSessionMenuEntry } from "../lib/chat-session-actions.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
 import type { ChatDockEntry } from "./chat-dock";
@@ -13,6 +13,10 @@ import { MenuPortal } from "./sidebar-item-row.js";
 const BUBBLE_HINT_DELAY_MS = 100;
 
 export interface ChatBubblesProps {
+  dragOffset?: number;
+  newChatProjectName?: string;
+  side?: "left" | "right";
+  themes?: Record<string, CSSProperties>;
   /** All chats; tab-mode chats contribute indicators but no strip bubble. */
   entries: ChatDockEntry[];
   labels: Record<string, string>;
@@ -74,7 +78,9 @@ function Bubble({
   menu,
   onMenuAction,
   onExited,
+  theme,
 }: {
+  theme?: CSSProperties;
   entry: ChatDockEntry;
   label: string;
   icon: string | null;
@@ -127,6 +133,7 @@ function Bubble({
     <div
       data-chat-bubble={entry.localId}
       data-session-id={entry.sessionId}
+      style={theme}
       className={`group relative ${
         exiting
           ? "animate-bubble-out pointer-events-none"
@@ -157,7 +164,7 @@ function Bubble({
           }${
             expanded
               ? "border-accent/60 bg-accent/15 text-accent"
-              : "border-border bg-bg-overlay text-fg-muted hover:border-border-strong hover:text-fg"
+              : "border-accent/25 bg-bg-overlay text-accent/80 hover:border-accent/60 hover:text-accent"
           }`}
           aria-label={expanded ? `Minimize ${label}` : `Open ${label}`}
           aria-expanded={expanded}
@@ -203,6 +210,10 @@ function Bubble({
  * showing aggregate activity (spinner) and unread indicators.
  */
 export function ChatBubbles({
+  dragOffset = 0,
+  newChatProjectName,
+  side = "right",
+  themes,
   entries,
   labels,
   icons,
@@ -327,14 +338,21 @@ export function ChatBubbles({
   };
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex justify-center pb-3">
+    <div
+      style={{ transform: `translateX(${dragOffset}px)` }}
+      className="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex justify-center pb-3"
+    >
       {/* The pill slides between centered (expanded) and right-docked
           (collapsed) via left+transform, both animatable. */}
       <div
         className={`pointer-events-auto absolute bottom-3 flex items-center rounded-full border border-border bg-bg-raised shadow-2xl transition-[left,translate,padding] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
           collapsed
-            ? "left-full -translate-x-[calc(100%+12px)] p-1"
-            : "left-1/2 -translate-x-1/2 gap-1.5 p-1.5"
+            ? side === "left"
+              ? "left-8 p-1"
+              : "left-full -translate-x-[calc(100%+32px)] p-1"
+            : side === "left"
+              ? "left-8 gap-1.5 p-1.5"
+              : "left-full -translate-x-[calc(100%+32px)] gap-1.5 p-1.5"
         }`}
       >
         {/* Expanded strip content folds its width away when collapsed. */}
@@ -344,11 +362,13 @@ export function ChatBubbles({
               ? "pointer-events-none max-w-0 opacity-0"
               : "max-w-[60vw] gap-1.5 opacity-100"
           }`}
+          data-bubble-items
           aria-hidden={collapsed}
           inert={collapsed ? true : undefined}
         >
           {display.entries.map((entry) => (
             <Bubble
+              theme={themes?.[entry.localId]}
               key={entry.localId}
               entry={entry}
               label={labels[entry.localId] ?? "Chat"}
@@ -367,7 +387,11 @@ export function ChatBubbles({
           ))}
           {/* The bubble + opens the floating aside, not a tab. */}
           <ShortcutHint
-            label="New chat"
+            label={
+              newChatProjectName
+                ? `New chat in ${newChatProjectName}`
+                : "New chat"
+            }
             shortcut={formatBinding(keybindings["new-floating-chat"])}
             side="top"
           >

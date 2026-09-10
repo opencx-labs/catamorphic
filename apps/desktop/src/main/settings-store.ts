@@ -11,6 +11,23 @@ import {
   readConfigObject,
   writeConfigObject,
 } from "./config-file.js";
+import { validateThemeConfig } from "./theme.js";
+
+export function validateSettingsFile(
+  value: Record<string, unknown>,
+  layer: SettingsScope,
+) {
+  validateSettingsLayer(value, layer);
+  if (value.theme !== undefined) {
+    if (
+      !value.theme ||
+      typeof value.theme !== "object" ||
+      Array.isArray(value.theme)
+    )
+      throw new Error("Theme must be a JSON object");
+    validateThemeConfig(Object.fromEntries(Object.entries(value.theme)));
+  }
+}
 
 export interface SettingsFiles {
   profile: string;
@@ -26,20 +43,23 @@ export function readSettingsFile(
 /** Scoped file caches belong to the profile manager, never process-global state. */
 export class SettingsStore {
   private readonly files = new Map<string, ConfigFile>();
+  read(file: string | undefined, layer: SettingsScope) {
+    if (!file) return { value: {}, error: undefined };
+    let store = this.files.get(file);
+    if (!store) {
+      store = new ConfigFile(file, (value) =>
+        validateSettingsFile(value, layer),
+      );
+      this.files.set(file, store);
+    }
+    return { value: store.read(), error: store.error };
+  }
+
   load(files: SettingsFiles, scope: SettingsScope = "personal") {
     const errors: string[] = [];
     const read = (layer: SettingsScope) => {
-      const file = files[layer];
-      if (!file) return {};
-      let store = this.files.get(file);
-      if (!store) {
-        store = new ConfigFile(file, (value) =>
-          validateSettingsLayer(value, layer),
-        );
-        this.files.set(file, store);
-      }
-      const value = store.read();
-      if (store.error) errors.push(store.error);
+      const { value, error } = this.read(files[layer], layer);
+      if (error) errors.push(error);
       return value;
     };
     return resolveSettings({
@@ -73,7 +93,7 @@ export function saveSettings({
   const file = files[scope];
   if (!file) throw new Error("This settings scope is unavailable");
   const raw = readSettingsFile(file); // Never overwrite a corrupt file.
-  validateSettingsLayer(raw, scope);
+  validateSettingsFile(raw, scope);
   for (const [key, value] of Object.entries(patch)) {
     if (!Object.hasOwn(SETTINGS, key))
       throw new Error(`Unknown setting: ${key}`);
