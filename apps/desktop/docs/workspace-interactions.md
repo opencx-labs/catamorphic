@@ -49,6 +49,8 @@ immediately. Empty sidebar text is horizontally centered.
 
 New profiles use top tabs and no inset tab frame. A single sidebar tab hides its
 strip. Left sidebar profile/settings controls remain sticky at the bottom.
+The right sidebar toggle stays at the workspace header's right edge, including
+before a project is open and while the left sidebar is collapsed.
 An empty right sidebar starts closed on launch and context changes. Configured,
 authorized sections count as content even when their lists are empty. Automatically
 hiding an empty panel never overwrites its populated profile preference. Manual

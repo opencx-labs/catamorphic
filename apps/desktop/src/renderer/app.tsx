@@ -4975,6 +4975,7 @@ export function App() {
             <ShortcutHint
               label="Toggle right sidebar"
               shortcut={formatBinding(keybindings["toggle-right-sidebar"])}
+              className="ml-auto shrink-0"
             >
               <button
                 type="button"
@@ -4984,7 +4985,7 @@ export function App() {
                     : "Expand right sidebar"
                 }
                 aria-expanded={rightSidebarOpen}
-                className="app-no-drag ml-auto grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:text-fg"
+                className="app-no-drag grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:text-fg"
                 onClick={() => actionHandlers["toggle-right-sidebar"]?.()}
               >
                 <PanelRight className="size-4" />
