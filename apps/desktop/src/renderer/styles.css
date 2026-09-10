@@ -90,6 +90,15 @@
     box-shadow: inset 0 0 0 1px var(--color-border);
   }
 
+  @media (prefers-reduced-motion: no-preference) {
+    .workspace-surface,
+    .workspace-content {
+      transition:
+        margin 200ms var(--ease-standard),
+        border-radius 200ms var(--ease-standard);
+    }
+  }
+
   [data-theme="light"] .sidebar-section + .sidebar-section {
     padding-top: 8px;
   }
@@ -1286,4 +1295,11 @@ kbd {
 .review-description .cat-markdown :is(pre, table) {
   max-width: 100%;
   overflow-x: auto;
+}
+
+/* File references are tokens inside prose, with the same surface as context pills. */
+.cat-markdown a[data-response-link="file"] {
+  text-decoration: none;
+  font-size: 12px;
+  line-height: 20px;
 }

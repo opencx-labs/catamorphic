@@ -21,6 +21,8 @@ import type {
   TurnOptions,
 } from "@catamorphic/sandbox";
 import { inlineAttachmentReferences } from "@catamorphic/sandbox";
+import type { WorkspaceBridge } from "../agent-bridge.js";
+import { createCodexElicitation } from "./codex-elicitation.js";
 import type { desktopSettingsContext } from "./desktop-settings-context.js";
 
 const execFileAsync = promisify(execFile);
@@ -191,6 +193,7 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     private readonly settingsContext?: (
       projectId: string,
     ) => ReturnType<typeof desktopSettingsContext>,
+    private readonly elicit?: WorkspaceBridge["elicit"],
   ) {}
 
   interrupt(providerSessionId: string): void {
@@ -682,6 +685,98 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
         yield {
           type: "text",
           content: `terminal error: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      yield { type: "done" };
+      return;
+    }
+
+    if (message === "elicitation: app") {
+      const handler = createCodexElicitation({ elicit: this.elicit });
+      const request = {
+        serverName: "Computer Use",
+        mode: "form",
+        message: 'Allow Computer Use to use "Calculator"?',
+        requestedSchema: { type: "object", properties: {} },
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          connector_id: "computer-use",
+          tool_params: { app: "com.apple.calculator" },
+          persist: ["session"],
+          riskLevel: "low",
+        },
+      };
+      const first = await handler(request);
+      const second = await handler(request);
+      yield {
+        type: "text",
+        content: `app consent: ${first.action},${second.action}`,
+      };
+      yield { type: "done" };
+      return;
+    }
+
+    if (message === "elicitation: queue" || message === "elicitation: cancel") {
+      if (!this.elicit) throw new Error("Elicitation unavailable");
+      const abort = new AbortController();
+      const timer =
+        message === "elicitation: cancel"
+          ? setTimeout(() => abort.abort(), 1200)
+          : undefined;
+      try {
+        const results = await Promise.all(
+          (message === "elicitation: queue"
+            ? ["First app", "Second app"]
+            : ["Cancelled app"]
+          ).map((label) =>
+            this.elicit?.(
+              label,
+              {
+                mode: "form",
+                message: `Allow access to ${label}?`,
+                fields: [],
+              },
+              abort.signal,
+            ),
+          ),
+        );
+        yield {
+          type: "text",
+          content: `elicitation decisions: ${results.map((result) => result?.action).join(",")}`,
+        };
+        yield { type: "done" };
+      } finally {
+        clearTimeout(timer);
+      }
+      return;
+    }
+
+    if (message.startsWith("E2E workspace tool ")) {
+      const request = JSON.parse(message.slice("E2E workspace tool ".length));
+      const tool = this.workspaceTools.find(
+        (candidate) => candidate.name === request.name,
+      );
+      try {
+        if (!tool) throw new Error(`Tool unavailable: ${request.name}`);
+        const result = await tool.execute(request.input, state.toolContext);
+        yield {
+          type: "text",
+          content:
+            `\n\`\`\`json\nE2E result ${request.serial}: ` +
+            JSON.stringify(result, (key, value) =>
+              key === "data" && typeof value === "string" && value.length > 1000
+                ? `<${value.length} base64 characters>`
+                : value,
+            ) +
+            "E2E end\n```",
+        };
+      } catch (error) {
+        yield {
+          type: "text",
+          content:
+            `\n\`\`\`json\nE2E result ${request.serial}: ` +
+            JSON.stringify({ error: String(error) }) +
+            "E2E end\n```",
         };
       }
       yield { type: "done" };

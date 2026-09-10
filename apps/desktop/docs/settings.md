@@ -29,6 +29,9 @@ invalid file silently. Valid file edits apply live.
 Settings > Workspace provides a scope selector, effective values at that scope,
 source labels and Reset only for explicit choices. A profile edit can remain masked
 by a project override. Reset that project override to follow the profile again.
+Rows reserve space for Reset and source text across inherited and custom states,
+so toggles and resets do not reflow nearby controls. Tab frame previews its inset
+with the standard 200 ms transition; reduced motion applies it immediately.
 
 ## Other families
 

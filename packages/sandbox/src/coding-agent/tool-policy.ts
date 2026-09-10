@@ -159,6 +159,8 @@ export type ToolPermissionDecision =
 
 export type ToolPermissionHandler = (
   request: ToolPermissionRequest,
+  /** Withdraw pending consent when the turn ends; never persist a cancelled grant. */
+  signal?: AbortSignal,
 ) => Promise<ToolPermissionDecision>;
 
 /** What a gate decides for one call: run it, or refuse with a message the
@@ -223,7 +225,7 @@ export class ToolGate {
         message: `The tool "${call.tool}" on ${call.server} needs the user's permission, and there is no one to ask in this context.`,
       };
     }
-    const asked = this.ask({
+    const request: ToolPermissionRequest = {
       ...(call.sessionId ? { sessionId: call.sessionId } : {}),
       server: call.server,
       tool: call.tool,
@@ -232,7 +234,10 @@ export class ToolGate {
         : {}),
       input: call.input,
       ...(call.annotations ? { annotations: call.annotations } : {}),
-    });
+    };
+    const asked = call.abortSignal
+      ? this.ask(request, call.abortSignal)
+      : this.ask(request);
     let answer: ToolPermissionDecision;
     const cancellation = call.abortSignal
       ? rejectOnAbort(call.abortSignal)

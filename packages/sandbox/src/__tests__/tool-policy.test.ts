@@ -168,7 +168,11 @@ describe("ToolGate (the shared allow / ask / deny decision)", () => {
     expect(no.allowed).toBe(false);
     if (!no.allowed) expect(no.message).toContain("declined");
 
-    const parked = new ToolGate(() => new Promise(() => {}));
+    let receivedSignal: AbortSignal | undefined;
+    const parked = new ToolGate((_request, signal) => {
+      receivedSignal = signal;
+      return new Promise(() => {});
+    });
     const controller = new AbortController();
     const pending = parked.decide({
       server: "s",
@@ -177,6 +181,7 @@ describe("ToolGate (the shared allow / ask / deny decision)", () => {
       layers: [...layers],
       abortSignal: controller.signal,
     });
+    expect(receivedSignal).toBe(controller.signal);
     controller.abort();
     const verdict = await pending;
     expect(verdict.allowed).toBe(false);

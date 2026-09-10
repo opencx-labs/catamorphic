@@ -1,5 +1,7 @@
+import type { ResourcePreview } from "@catamorphic/react";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { BookmarkPlacement } from "../shared/bookmark-target.js";
+import type { FilePreviewInput } from "../shared/file-preview.js";
 import type { FileSearchInput } from "../shared/file-search.js";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
 import type { OpenMode } from "../shared/open-mode.js";
@@ -44,6 +46,9 @@ const api = {
       return "";
     }
   },
+
+  filePreview: (input: FilePreviewInput): Promise<ResourcePreview> =>
+    ipcRenderer.invoke("catamorphic:file-preview", input),
 
   composerFileSave: (input: {
     projectId: string;
@@ -195,6 +200,8 @@ const api = {
       marketplace,
       pluginName,
     ),
+  connectorsCodexComputerUse: (): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:connectors-codex-computer-use"),
   connectorsRemove: (name: string): Promise<boolean> =>
     ipcRenderer.invoke("catamorphic:connectors-remove", name),
   onConnectionsChanged: (listener: (data: unknown) => void): (() => void) => {

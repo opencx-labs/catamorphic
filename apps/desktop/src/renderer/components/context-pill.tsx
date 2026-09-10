@@ -13,14 +13,17 @@ import {
 import {
   type MouseEvent as ReactMouseEvent,
   useEffect,
-  useLayoutEffect,
+  useId,
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
 import { type OpenMode, openModeFromEvent } from "../../shared/open-mode.js";
 import { textStats } from "../lib/text-pills";
 import type { ChatAttachmentView } from "./catamorphic/chat-timeline";
+import { ResourcePreviewContent } from "./catamorphic/resource-preview";
+import { FilePreview } from "./file-preview";
+import { InspectorPortal } from "./resource-inspector";
+import { WebPreview } from "./web-preview";
 
 /**
  * The context pill: one visual for everything the user pins beside their
@@ -85,14 +88,6 @@ export function pillKindLabel(view: PillView): string {
 const dataUrl = (view: MediaView) =>
   `data:${view.mediaType};base64,${view.dataBase64}`;
 
-const formatBytes = (base64Length: number) => {
-  const bytes = Math.round((base64Length * 3) / 4);
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024)
-    return `${(bytes / 1024).toFixed(bytes < 10240 ? 1 : 0)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-};
-
 const TEXT_DOCUMENT_TYPES = new Set([
   "text/plain",
   "text/markdown",
@@ -142,6 +137,8 @@ export function ContextPill({
 }: ContextPillProps) {
   const Icon = pillIcon(view);
   const anchorRef = useRef<HTMLSpanElement>(null);
+  const previewId = useId();
+  const restoringFocus = useRef(false);
   // mounted + open drive the popover's lifecycle: it mounts hidden, tweens
   // in, and on close tweens back out before unmounting — the exit mirrors
   // the entrance instead of blinking away.
@@ -174,7 +171,13 @@ export function ContextPill({
     clearTimeout(closeTimer.current);
     // A short grace so the pointer can travel into the popover (to scroll
     // a long paste) without it vanishing mid-way.
-    closeTimer.current = setTimeout(() => setOpen(false), 140);
+    closeTimer.current = setTimeout(() => {
+      if (
+        !anchorRef.current?.contains(document.activeElement) &&
+        !document.getElementById(previewId)?.contains(document.activeElement)
+      )
+        setOpen(false);
+    }, 140);
   };
   const closeNow = () => {
     clearTimeout(openTimer.current);
@@ -217,24 +220,37 @@ export function ContextPill({
       }}
       onMouseEnter={scheduleOpen}
       onMouseLeave={scheduleClose}
+      onFocus={() => {
+        if (!restoringFocus.current) scheduleOpen();
+      }}
+      onBlur={scheduleClose}
     >
-      {/* biome-ignore lint/a11y/noStaticElementInteractions: mousedown only guards the caret; the body is a hover surface, and a tab pill's open-on-click has the button role */}
-      <span
-        role={onOpen ? "button" : undefined}
-        tabIndex={onOpen ? -1 : undefined}
-        onClick={
-          onOpen ? (event) => onOpen(openModeFromEvent(event)) : undefined
-        }
-        onKeyDown={
-          onOpen
-            ? (event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  onOpen(openModeFromEvent(event));
-                }
-              }
-            : undefined
-        }
+      <button
+        type="button"
+        tabIndex={0}
+        aria-details={open ? previewId : undefined}
+        onClick={(event) => {
+          if (onOpen) {
+            closeNow();
+            onOpen(openModeFromEvent(event));
+          } else {
+            setMounted(true);
+            setOpen(true);
+          }
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            event.stopPropagation();
+            if (onOpen) {
+              closeNow();
+              onOpen(openModeFromEvent(event));
+            } else {
+              setMounted(true);
+              setOpen(true);
+            }
+          }
+        }}
         onMouseDown={(event: ReactMouseEvent) => {
           // Keep the composer's caret where it is; a click on a pill isn't a
           // request to move it.
@@ -255,7 +271,7 @@ export function ContextPill({
           <Icon className="size-3.5 shrink-0" />
         )}
         <span className="max-w-52 truncate">{label}</span>
-      </span>
+      </button>
       {onRemove && (
         <button
           type="button"
@@ -274,9 +290,23 @@ export function ContextPill({
       )}
       {mounted && (
         <PillPreview
+          id={previewId}
           view={view}
           anchor={anchorRef.current}
           open={open}
+          onDismiss={() => {
+            setOpen(false);
+            clearTimeout(openTimer.current);
+            if (
+              document
+                .getElementById(previewId)
+                ?.contains(document.activeElement)
+            ) {
+              restoringFocus.current = true;
+              anchorRef.current?.querySelector("button")?.focus();
+              restoringFocus.current = false;
+            }
+          }}
           onExited={() => setMounted(false)}
           onMouseEnter={() => clearTimeout(closeTimer.current)}
           onMouseLeave={scheduleClose}
@@ -287,176 +317,144 @@ export function ContextPill({
 }
 
 /**
- * The hover preview: a fixed popover above (or, when cramped, below) the
- * pill, clamped to the viewport. Portal-rendered so overflow-clipped hosts
+ * The hover preview uses the shared inspector beside the pill, clamped
+ * to the viewport. Portal-rendered so overflow-clipped hosts
  * (the composer scrolls, the timeline scrolls) never cut it off.
  */
 function PillPreview({
+  id,
   view,
   anchor,
   open,
+  onDismiss,
   onExited,
   onMouseEnter,
   onMouseLeave,
 }: {
+  id: string;
   view: PillView;
   anchor: HTMLElement | null;
-  /** false = play the exit transition; onExited fires when it lands. */
   open: boolean;
+  onDismiss: () => void;
   onExited: () => void;
   onMouseEnter: () => void;
   onMouseLeave: () => void;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [placement, setPlacement] = useState<{
-    left: number;
-    top?: number;
-    bottom?: number;
-    below: boolean;
-  } | null>(null);
-  // Placed once on mount; `shown` follows `open` a frame later so both the
-  // entrance and the exit run their transition.
-  const [shown, setShown] = useState(false);
   useEffect(() => {
-    if (open) {
-      const frame = requestAnimationFrame(() => setShown(true));
-      return () => cancelAnimationFrame(frame);
-    }
-    setShown(false);
-  }, [open]);
-
-  useLayoutEffect(() => {
-    const popover = ref.current;
-    if (!anchor || !popover) return;
-    const rect = anchor.getBoundingClientRect();
-    const width = popover.offsetWidth;
-    const height = popover.offsetHeight;
-    const margin = 8;
-    const left = Math.max(
-      margin,
-      Math.min(
-        rect.left + rect.width / 2 - width / 2,
-        window.innerWidth - width - margin,
-      ),
-    );
-    const roomAbove = rect.top - margin;
-    const below =
-      roomAbove < height + 6 && rect.bottom + height + 6 < window.innerHeight;
-    setPlacement(
-      below
-        ? { left, top: rect.bottom + 6, below }
-        : { left, bottom: window.innerHeight - rect.top + 6, below },
-    );
-  }, [anchor]);
-
-  const Icon = pillIcon(view);
-  const header = (
-    <div className="flex items-center gap-1.5 text-[11px] text-fg-muted">
-      <Icon className="size-3 shrink-0" />
-      <span className="truncate font-medium text-fg">
-        {view.kind === "text" && view.source.type === "tab"
-          ? view.source.title
-          : view.name}
-      </span>
-      <span className="ml-auto shrink-0 text-fg-faint">
-        {view.kind === "text"
-          ? view.source.type === "paste" || view.source.type === "selection"
-            ? textStats(view.text)
-            : pillKindLabel(view)
-          : `${pillKindLabel(view)} · ${formatBytes(view.dataBase64.length)}`}
-      </span>
-    </div>
-  );
-
-  const body =
-    view.kind === "text" ? <TextBody view={view} /> : <MediaBody view={view} />;
-
-  return createPortal(
-    <div
-      ref={ref}
-      role="tooltip"
-      data-testid="pill-preview"
-      data-open={open || undefined}
-      aria-hidden={!open}
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
-      style={
-        placement
-          ? {
-              left: placement.left,
-              top: placement.top,
-              bottom: placement.bottom,
-            }
-          : { left: -9999, top: 0 }
-      }
-      onTransitionEnd={(event) => {
-        if (event.propertyName === "opacity" && !open) onExited();
-      }}
-      className={`fixed z-[60] w-[26rem] max-w-[calc(100vw-16px)] rounded-lg border border-border bg-bg-overlay p-2.5 shadow-2xl transition-[opacity,translate] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
-        shown
-          ? "translate-y-0 opacity-100"
-          : placement?.below
-            ? "-translate-y-1 opacity-0"
-            : "translate-y-1 opacity-0"
-      }`}
+    if (!open) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      onDismiss();
+    };
+    const scroll = (event: Event) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest("[data-resource-inspector]")
+      )
+        return;
+      onDismiss();
+    };
+    const pointer = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        (anchor?.contains(event.target) ||
+          document.getElementById(id)?.contains(event.target))
+      )
+        return;
+      onDismiss();
+    };
+    window.addEventListener("pointerdown", pointer);
+    window.addEventListener("keydown", dismiss, true);
+    window.addEventListener("scroll", scroll, true);
+    return () => {
+      window.removeEventListener("pointerdown", pointer);
+      window.removeEventListener("keydown", dismiss, true);
+      window.removeEventListener("scroll", scroll, true);
+    };
+  }, [open, onDismiss, anchor, id]);
+  if (!anchor) return null;
+  const rect = anchor.getBoundingClientRect();
+  return (
+    <InspectorPortal
+      id={id}
+      label={`Preview ${view.name}`}
+      testId="pill-preview"
+      anchor={rect}
+      open={open}
+      onEnter={onMouseEnter}
+      onLeave={onMouseLeave}
+      onExited={onExited}
     >
-      {header}
-      {body}
-    </div>,
-    document.body,
+      {view.kind === "text" ? (
+        <TextBody view={view} />
+      ) : (
+        <MediaBody view={view} />
+      )}
+    </InspectorPortal>
   );
 }
 
 function MediaBody({ view }: { view: MediaView }) {
-  if (view.kind === "image") {
-    return (
-      <img
-        src={dataUrl(view)}
-        alt={view.name}
-        className="mt-1.5 max-h-64 max-w-full rounded-md object-contain"
-        draggable={false}
-      />
-    );
-  }
+  if (view.kind === "document" && !TEXT_DOCUMENT_TYPES.has(view.mediaType))
+    return <FilePreview document={view} />;
   const text = decodeDocumentPreview(view);
-  return text ? (
-    <pre className="mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-bg-inset p-2 font-mono text-[11px] leading-4 text-fg-muted">
-      {text}
-    </pre>
-  ) : (
-    <p className="mt-1 text-[11px] text-fg-faint">{view.mediaType}</p>
+  return (
+    <ResourcePreviewContent
+      preview={{
+        name: view.name,
+        typeLabel: pillKindLabel(view),
+        sizeBytes: Math.floor((view.dataBase64.length * 3) / 4),
+        content:
+          view.kind === "image"
+            ? { kind: "image", src: dataUrl(view) }
+            : text !== null
+              ? { kind: "text", text, truncated: view.dataBase64.length > 6000 }
+              : {
+                  kind: "unavailable",
+                  message: `No inline preview is available for ${view.mediaType}.`,
+                },
+      }}
+    />
   );
 }
 
 function TextBody({ view }: { view: TextView }) {
-  if (view.source.type === "tab") {
-    const where = view.source.url ?? view.source.filePath;
-    return (
-      <p className="mt-1 break-all text-[11px] leading-4 text-fg-muted">
-        {where ?? `${view.source.kind} tab`}
-      </p>
-    );
-  }
-  if (view.source.type === "url" || view.source.type === "path") {
-    return (
-      <p className="mt-1 break-all font-mono text-[11px] leading-4 text-fg-muted">
-        {view.text}
-      </p>
-    );
-  }
+  if (view.source.type === "url" && /^https?:\/\//i.test(view.source.url))
+    return <WebPreview url={view.source.url} />;
+  if (view.source.type === "path")
+    return <FilePreview filePath={view.source.path} />;
+  if (view.source.type === "tab" && view.source.filePath)
+    return <FilePreview filePath={view.source.filePath} />;
+  const location =
+    view.source.type === "selection"
+      ? view.source.filePath
+      : view.source.type === "url"
+        ? view.source.url
+        : view.source.type === "tab"
+          ? view.source.url
+          : undefined;
+  const excerpt =
+    view.source.type === "paste" || view.source.type === "selection";
   return (
-    <>
-      {view.source.type === "selection" && (
-        <p className="mt-0.5 truncate text-[11px] text-fg-faint">
-          {view.source.filePath}
-        </p>
-      )}
-      <pre
-        className="mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-bg-inset p-2 font-mono text-[11px] leading-4 text-fg-muted"
-        data-testid="pill-preview-text"
-      >
-        {view.text}
-      </pre>
-    </>
+    <ResourcePreviewContent
+      preview={{
+        name: view.source.type === "tab" ? view.source.title : view.name,
+        typeLabel: excerpt ? textStats(view.text) : pillKindLabel(view),
+        location,
+        content: excerpt
+          ? {
+              kind: "text",
+              text: view.text.slice(0, 16000),
+              truncated: view.text.length > 16000,
+            }
+          : {
+              kind: "unavailable",
+              message:
+                view.source.type === "tab" ? `${view.source.kind} tab` : "Link",
+            },
+      }}
+    />
   );
 }

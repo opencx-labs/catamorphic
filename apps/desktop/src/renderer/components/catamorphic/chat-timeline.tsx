@@ -17,7 +17,7 @@ import {
   SquareTerminal,
   Wrench,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useState } from "react";
+import { memo, type ReactNode, useCallback, useEffect, useState } from "react";
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
@@ -132,6 +132,12 @@ export interface ChatTimelineProps {
   contentClassName?: string;
   /** Names an agent id (agent-change markers); falls back to the id. */
   resolveAgentName?: (agentId: string) => string | undefined;
+  /** Host-owned previews for sanitized Markdown links. */
+  renderLink?: (props: {
+    href: string;
+    children: ReactNode;
+    onOpen: NonNullable<ChatTimelineProps["onLinkClick"]>;
+  }) => ReactNode;
   onLinkClick?: (
     url: string,
     modifiers: {
@@ -197,6 +203,7 @@ export function ChatTimeline({
   contentClassName = "",
   resolveAgentName,
   onLinkClick,
+  renderLink,
   onFileClick,
   resolveToolIcon,
   onFork,
@@ -237,6 +244,7 @@ export function ChatTimeline({
               isLast={message.id === lastConversationId}
               resolveAgentName={resolveAgentName}
               onLinkClick={onLinkClick}
+              renderLink={renderLink}
               onFileClick={onFileClick}
               resolveToolIcon={resolveToolIcon}
               // Retry re-runs the last user turn; without one there is
@@ -450,6 +458,7 @@ function MessageImpl({
   isLast,
   resolveAgentName,
   onLinkClick,
+  renderLink,
   onFileClick,
   resolveToolIcon,
   onRetry,
@@ -460,6 +469,7 @@ function MessageImpl({
   message: ChatTimelineMessage;
   isLast: boolean;
   resolveAgentName?: (agentId: string) => string | undefined;
+  renderLink?: ChatTimelineProps["renderLink"];
   onLinkClick?: ChatTimelineProps["onLinkClick"];
   onFileClick?: (
     path: string,
@@ -648,24 +658,20 @@ function MessageImpl({
             components={
               onLinkClick
                 ? {
-                    a: ({ href, children }) => (
-                      <a
-                        href={href}
-                        onClick={(event) => {
-                          event.preventDefault();
-                          if (href) {
-                            onLinkClick(href, {
-                              metaKey: event.metaKey,
-                              ctrlKey: event.ctrlKey,
-                              altKey: event.altKey,
-                              shiftKey: event.shiftKey,
-                            });
-                          }
-                        }}
-                      >
-                        {children}
-                      </a>
-                    ),
+                    a: ({ href, children }) =>
+                      renderLink && href ? (
+                        renderLink({ href, children, onOpen: onLinkClick })
+                      ) : (
+                        <a
+                          href={href}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            if (href) onLinkClick(href, event);
+                          }}
+                        >
+                          {children}
+                        </a>
+                      ),
                   }
                 : undefined
             }

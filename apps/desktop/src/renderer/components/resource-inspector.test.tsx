@@ -48,6 +48,10 @@ describe("ResourceInspector", () => {
     const trigger = container.querySelector("button");
     await act(async () => trigger?.focus());
     const dialog = document.querySelector('[role="dialog"]');
+    // Focus can scroll a chat link into view after its focus event opens the card.
+    await act(async () => container.dispatchEvent(new Event("scroll")));
+    expect(dialog?.getAttribute("data-open")).toBe("true");
+    await act(async () => dialog?.querySelector("button")?.focus());
     expect(dialog?.textContent).toContain("Action");
     expect(trigger?.getAttribute("aria-details")).toBe(dialog?.id);
     await act(async () =>
@@ -150,4 +154,16 @@ describe("ResourceInspector", () => {
       }),
     ).toEqual({ side: "left", left: 142, top: 132 });
   });
+});
+
+it("clamps a stale anchor after the viewport shrinks", () => {
+  const position = computeInspectorPosition({
+    anchor: { left: 1100, right: 1200, top: 900, bottom: 930 },
+    width: 320,
+    height: 250,
+    viewportWidth: 600,
+    viewportHeight: 500,
+  });
+  expect(position.left).toBe(272);
+  expect(position.top).toBe(242);
 });

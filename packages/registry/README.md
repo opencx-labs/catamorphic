@@ -24,7 +24,7 @@ Workflow authoring or execution capabilities.
 Items currently shipped: `catamorphic-provider`, `project-editor`,
 `file-explorer`, `git-panel`, `diff-drawer`, `runs-panel`,
 `plugins-settings`, `monaco-editor`, `agent-chat`, `chat-timeline`,
-`sessions-list`, `todo-progress`, and `tool-permission-card`.
+`sessions-list`, `todo-progress`, `tool-permission-card`, and `resource-preview`.
 
 The `agent-chat` item is a complete bottom-docked coding-agent conversation.
 It needs only a `projectId` inside `CatamorphicAppProvider`; optimistic queued
@@ -62,3 +62,13 @@ packages/registry/
 - **Imports**: only `@catamorphic/react`, `@catamorphic/ui`, and
   `lucide-react`. Anything else gets declared in `dependencies` so the
   shadcn CLI can install it for the host.
+
+## Resource previews
+
+`ResourcePreviewContent` renders host-supplied `ResourcePreview` data from
+`@catamorphic/react`: image, text, audio, video, or an explicit unavailable state,
+with name, type, size and location. Load bounded content only when a preview opens;
+the component owns no filesystem or network access. Hosts can compose it into
+hover/focus cards through `ChatTimeline.renderLink` (sanitized href, children and
+onOpen callback), while retaining the normal inline anchor fallback. Use plain
+text for active documents such as HTML, and thumbnails for document formats.

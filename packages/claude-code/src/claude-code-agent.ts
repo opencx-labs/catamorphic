@@ -34,6 +34,7 @@ import type {
 import {
   agentCapabilityTools,
   buildPluginsPreamble,
+  extraToolResult,
   isMediaAttachment,
   mergePolicyLayers,
   positiveTokenCount,
@@ -692,11 +693,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
                       args as Record<string, unknown>,
                       toolContext,
                     );
-                    return {
-                      content: [
-                        { type: "text", text: stringifyToolResult(result) },
-                      ],
-                    };
+                    return extraToolResult(result);
                   } catch (error) {
                     return {
                       content: [
@@ -948,6 +945,11 @@ function extractMcpToolResult(response: unknown): unknown {
       .map((block) => block.text)
       .join("\n");
     if (text) return text;
+    return {
+      content: record.content.map((block) =>
+        block.type === "image" ? { type: "image" } : block,
+      ),
+    };
   }
   return record;
 }
@@ -1262,13 +1264,6 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null
     ? (value as Record<string, unknown>)
     : undefined;
-}
-
-/** MCP tool results are text; non-string tool returns ship as JSON. */
-function stringifyToolResult(result: unknown): string {
-  if (typeof result === "string") return result;
-  if (result === undefined) return "ok";
-  return JSON.stringify(result, null, 2);
 }
 
 function mapContentBlock(block: ContentBlockLike): AgentEvent | null {

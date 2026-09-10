@@ -1,5 +1,7 @@
+import type { ResourcePreview } from "@catamorphic/react";
 import type { AppPrefs } from "../../shared/app-prefs.js";
 import type { BookmarkPlacement } from "../../shared/bookmark-target.js";
+import type { FilePreviewInput } from "../../shared/file-preview.js";
 import type {
   FileSearchInput,
   FileSearchResult,
@@ -707,6 +709,7 @@ export interface ResolvedTheme extends ThemeConfig {
 export interface CatamorphicDesktopApi {
   /** Absolute path of a pasted/dropped File; "" when it has none. */
   pathForFile: (file: File) => string;
+  filePreview: (input: FilePreviewInput) => Promise<ResourcePreview>;
   composerFileSave: (input: {
     projectId: string;
     name: string;
@@ -948,6 +951,7 @@ export interface CatamorphicDesktopApi {
     marketplace: string,
     pluginName: string,
   ) => Promise<InstalledConnectorInfo>;
+  connectorsCodexComputerUse: () => Promise<InstalledConnectorInfo>;
   connectorsRemove: (name: string) => Promise<boolean>;
   onConnectionsChanged: (
     listener: (connections: ConnectionInfo[]) => void,

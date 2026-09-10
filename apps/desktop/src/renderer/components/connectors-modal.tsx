@@ -369,10 +369,43 @@ export function ConnectorsModal({
       <div className="flex h-[min(640px,80vh)] flex-col p-4">
         <h2 className="text-sm font-semibold">Connectors</h2>
         <p className="mb-3 mt-0.5 text-xs text-fg-muted">
-          Tools your agents can use — MCP servers and Claude Code plugins.
-          Installed connectors work with every agent; assign them per agent when
-          editing it.
+          Tools your agents can use: MCP servers and plugins. Installed
+          connectors work with every agent; assign them per agent when editing
+          it.
         </p>
+
+        {
+          <button
+            type="button"
+            className="mb-3 self-start rounded-md border border-border px-3 py-1.5 text-xs text-fg hover:bg-bg-overlay"
+            disabled={busy !== null}
+            data-disabled-reason={
+              busy !== null ? "A connector is being updated" : undefined
+            }
+            onClick={async () => {
+              setBusy("codex-computer-use");
+              setError(null);
+              try {
+                const plugin = await desktopApi.connectorsCodexComputerUse();
+                await refresh();
+                void settleInstalled(plugin.connectionIds);
+              } catch (cause) {
+                setError(
+                  cause instanceof Error ? cause.message : String(cause),
+                );
+              } finally {
+                setBusy(null);
+              }
+            }}
+          >
+            {" "}
+            {busy === "codex-computer-use"
+              ? "Connecting…"
+              : installed.some((plugin) => plugin.name === "codex-computer-use")
+                ? "Reconnect Codex Computer Use"
+                : "Connect Codex Computer Use"}{" "}
+          </button>
+        }
 
         {agentRequest && (
           <div

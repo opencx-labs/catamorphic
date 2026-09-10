@@ -152,6 +152,9 @@ the animation is wrong, not the test.
 6. **Transitions only on state changes** — hover, focus, expand/collapse,
    enter/exit. Never on load, never ambient.
 
+Tab frame previews transition the workspace margins and corner radius over
+200 ms with the standard easing. Reduced motion applies the frame immediately.
+
 ### Current motion inventory
 
 | Animation | Duration | Pairs with |
@@ -255,7 +258,7 @@ the historical log explains how it arrived here.
   paths; invalid edits retain the last valid configuration and surface file errors.
 - [Earlier decisions and rationale](DESIGN-HISTORY.md).
 
-- 2026-09-10: Accepted [ADR 0112](../../docs/decisions/0112-review-navigation-and-code-rendering.md).
+- 2026-09-10: Accepted [ADR 0118](../../docs/decisions/0118-review-navigation-and-code-rendering.md).
   Pierre Diffs and Shiki share code themes. File sidebars search paths; content
   search lives in Cmd+P and reviews. Guide uses original path-based navigation.
   Changes follows the active checkout and stops polling while hidden.
@@ -285,3 +288,11 @@ density. Theme tokens supply all surface, border, and text colors.
 Connections offers an explicit, per-profile GitHub CLI option with account checking
 and local disconnect. PRs link to this setting when disabled instead of silently
 using the machine login. MCP agent tools remain separate (ADR 0117).
+
+Rich attachment previews share InspectorPortal across composer and conversation. File references use compact pills; web links retain prose styling with destination cards. Content loads only on inspection, and unavailable previews retain useful metadata. See [chat state](docs/chat-state.md).
+
+Browser tools wake only the guest they operate on and restore focus after native
+input. In-page pointers use the same `point_at`/`clear_pointers` contract as shell
+pointers. Native computer access is an optional profile connector with the
+existing queued consent UI; cancellation withdraws the request. See
+[Computer use](docs/computer-use.md) and ADR 0112.

@@ -6,9 +6,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const startThread = vi.fn();
 const resumeThread = vi.fn();
 const codexCtor = vi.fn();
+const setContext = vi.fn();
 
-vi.mock("@openai/codex-sdk", () => ({
-  Codex: class {
+vi.mock("../app-server.js", () => ({
+  CodexAppServer: class {
+    setContext = setContext;
+    available = true;
+    close = vi.fn();
     constructor(options: unknown) {
       codexCtor(options);
     }
@@ -72,6 +76,22 @@ describe("CodexAgent", () => {
     startThread.mockReset();
     resumeThread.mockReset();
     codexCtor.mockReset();
+    setContext.mockReset();
+  });
+
+  it("enables native approval requests for a host with only a tool-permission handler", async () => {
+    resumeThread.mockReturnValueOnce(
+      scriptedThread([{ type: "turn.completed", usage: dummyUsage() }]),
+    );
+    const agent = new CodexAgent({
+      onToolPermission: async () => ({ decision: "deny" }),
+    });
+    await collect(agent, "continue");
+    expect(resumeThread).toHaveBeenCalledWith(
+      "thread-1",
+      expect.objectContaining({ approvalPolicy: "on-request" }),
+    );
+    await agent.dispose(session);
   });
 
   it("keeps completed SDK error items non-fatal", async () => {
@@ -445,9 +465,9 @@ describe("CodexAgent", () => {
       })) {
         /* drain */
       }
+      expect(setContext).toHaveBeenLastCalledWith(context);
       expect(codexCtor.mock.calls.at(-1)?.[0]).toMatchObject({
         config: {
-          developer_instructions: context,
           mcp_servers: {
             catamorphic_capabilities: {
               url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:/),

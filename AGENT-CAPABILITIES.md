@@ -169,3 +169,15 @@ filtering, permission changes after discovery and approval, cancellation,
 Allocation changes, output validation, and both HTTP and subprocess MCP. Keep
 infrastructure setup in the host's existing provisioning/access/update workflow;
 see the [cluster setup reference](skills/setup-catamorphic-server/references/cluster-deployment.md).
+
+## Media-producing host tools
+
+`ExtraTool.execute` can return `agentToolResult({content:[...]})` from
+`@catamorphic/sandbox` for text and image blocks. Plain objects retain JSON
+semantics. Every bundled harness preserves marked images as model media; avoid
+putting base64 into ordinary JSON or chat activity. This contract is separate
+from the bounded JSON results of deferred capabilities above.
+
+Desktop browser and OS control are host extensions, not core capabilities. See
+[Computer use](apps/desktop/docs/computer-use.md). Native Codex elicitation uses
+the host's existing permission UI through its bidirectional app-server transport.

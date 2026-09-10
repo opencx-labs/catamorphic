@@ -42,6 +42,7 @@ import {
   type AgentEventBufferOptions,
   AgentRuntimeUnsupportedError,
   agentCapabilityTools,
+  extraToolResult,
   mergePolicyLayers,
   resolveMcpServers,
   resolveToolPermissionAcross,
@@ -662,11 +663,7 @@ export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
                       toolInput,
                       toolContext,
                     );
-                    return {
-                      content: [
-                        { type: "text", text: stringifyResult(result) },
-                      ],
-                    };
+                    return extraToolResult(result);
                   } catch (error) {
                     return {
                       content: [{ type: "text", text: errorMessage(error) }],

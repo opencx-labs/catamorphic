@@ -35,7 +35,12 @@ it.each(files)("agent guide links resolve: %s", (file) => {
 });
 
 it("shared chat registry components match their installed desktop copies", () => {
-  for (const name of ["agent-chat", "chat-queue", "tool-permission-card"]) {
+  for (const name of [
+    "agent-chat",
+    "chat-queue",
+    "tool-permission-card",
+    "resource-preview",
+  ]) {
     const source = fs
       .readFileSync(
         path.join(root, `packages/registry/src/${name}/${name}.tsx`),

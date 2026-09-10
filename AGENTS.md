@@ -89,7 +89,7 @@ Internal packages:
 - `packages/daytona` — **`@catamorphic/daytona`** backend plugin: `DaytonaSandboxProvider`, experimental Daytona git storage.
 - `packages/ai-sdk` — **`@catamorphic/ai-sdk`** coding-agent harness: `AiSdkCodingAgent` (Vercel AI SDK tool loop, any API model) running in the host process; the desktop's built-in harness.
 - `packages/claude-code` — **`@catamorphic/claude-code`** coding-agent harness backed by the Claude Agent SDK / Claude Code CLI: preset system prompt + settings-source fidelity (ADR 0045), `ask_user`, background-task events, per-session MCP servers (`mcpServersForSession`).
-- `packages/codex` — **`@catamorphic/codex`** coding-agent harness (OpenAI Codex SDK).
+- `packages/codex` — **`@catamorphic/codex`** coding-agent harness using the pinned OpenAI Codex app-server protocol.
 - `packages/mcp` — **`@catamorphic/mcp`**: MCP client infrastructure — both protocol generations with auto-negotiation, elicitation (form + URL), official MCP registry search, plugin-marketplace fetch/install.
 - `packages/otel` — OpenTelemetry helpers (`getTracer`, `withSpan`) over `@opentelemetry/api`.
 - `packages/runtime` — workflow execution harness (runs inside the sandbox).

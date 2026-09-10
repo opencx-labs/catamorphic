@@ -116,6 +116,11 @@ describe("connector OAuth", () => {
         label: "connectors modal with the connection",
       },
     );
+    expect(
+      await run(
+        `return [...modal().querySelectorAll('button')].some(button => button.textContent.includes('Connect Codex Computer Use'));`,
+      ),
+    ).toBe(true);
     await run(
       `byText('[data-testid="connection-row"] button', 'Test').click(); return true;`,
     );

@@ -1,6 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { ClaudeSlashCommand } from "@catamorphic/claude-code";
@@ -25,9 +26,11 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  nativeImage,
   shell,
   type WebContents,
 } from "electron";
+import type { FilePreviewInput } from "../shared/file-preview.js";
 import type { FileSearchInput } from "../shared/file-search.js";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
 import { prCommentInputSchema } from "../shared/pr-details.js";
@@ -55,6 +58,7 @@ import {
 import type { ConnectorsService } from "./connectors.js";
 import { defaultDesktopProjectsDir } from "./development-paths.js";
 import { readEditorFile, writeEditorFile } from "./editor-files.js";
+import { readFilePreview } from "./file-preview.js";
 import { searchProjectFiles } from "./file-search.js";
 import {
   gitFileDiff,
@@ -937,6 +941,16 @@ export function registerIpcHandlers(
       return installed;
     },
   );
+
+  ipcMain.handle("catamorphic:connectors-codex-computer-use", async (event) => {
+    if (!connectors) throw new Error("Connectors are unavailable");
+    const installed = await connectors.connectCodexComputerUse(
+      windows.profileFor(event.sender),
+      process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex"),
+    );
+    connectionsChanged(event);
+    return installed;
+  });
 
   ipcMain.handle(
     "catamorphic:connectors-remove",
@@ -2328,6 +2342,88 @@ export function registerIpcHandlers(
         name: input.name,
         bytes: input.bytes,
       }),
+  );
+
+  ipcMain.handle(
+    "catamorphic:file-preview",
+    async (_event, input: FilePreviewInput) => {
+      let temporary: string | undefined;
+      try {
+        const documentName =
+          "document" in input ? input.document.name : undefined;
+        if ("document" in input) {
+          if (typeof input.document.name !== "string")
+            throw new Error("Invalid document name");
+          if (
+            typeof input.document.dataBase64 !== "string" ||
+            input.document.dataBase64.length > 24 * 1024 * 1024
+          )
+            throw new Error("Document preview is too large");
+          temporary = await fs.promises.mkdtemp(
+            path.join(os.tmpdir(), "catamorphic-preview-"),
+          );
+          const filePath = path.join(
+            temporary,
+            `document${
+              input.document.mediaType === "application/pdf"
+                ? ".pdf"
+                : path
+                    .extname(input.document.name)
+                    .replace(/[^.a-zA-Z0-9]/g, "")
+                    .slice(0, 16)
+            }`,
+          );
+          await fs.promises.writeFile(
+            filePath,
+            Buffer.from(input.document.dataBase64, "base64"),
+            { mode: 0o600 },
+          );
+          input = { filePath };
+        }
+        if (typeof input.filePath !== "string" || input.filePath.includes("\0"))
+          throw new Error("Invalid file path");
+        const filePath = path.isAbsolute(input.filePath)
+          ? input.filePath
+          : input.projectId
+            ? path.resolve(await requireRoot(input.projectId), input.filePath)
+            : input.filePath;
+        const preview = await readFilePreview({
+          filePath,
+          thumbnail:
+            process.platform === "darwin" || process.platform === "win32"
+              ? async (file) => {
+                  let timer: ReturnType<typeof setTimeout> | undefined;
+                  try {
+                    const image = await Promise.race([
+                      nativeImage.createThumbnailFromPath(file, {
+                        width: 640,
+                        height: 480,
+                      }),
+                      new Promise<undefined>((resolve) => {
+                        timer = setTimeout(() => resolve(undefined), 3000);
+                      }),
+                    ]);
+                    return image && !image.isEmpty()
+                      ? image.toDataURL()
+                      : undefined;
+                  } finally {
+                    clearTimeout(timer);
+                  }
+                }
+              : undefined,
+        });
+        return temporary
+          ? {
+              ...preview,
+              name: documentName || "Document",
+              location: undefined,
+            }
+          : preview;
+      } finally {
+        if (temporary)
+          await fs.promises.rm(temporary, { recursive: true, force: true });
+      }
+    },
   );
 
   ipcMain.handle(

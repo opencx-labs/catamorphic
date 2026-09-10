@@ -1,5 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import type { ExtraTool, ExtraToolContext } from "@catamorphic/sandbox";
+import {
+  type ExtraTool,
+  type ExtraToolContext,
+  extraToolResult,
+} from "@catamorphic/sandbox";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -73,12 +77,12 @@ export function createWorkspaceMcpServer(
     }
     try {
       const result = await tool.execute(
-        request.params.arguments ?? {},
+        z
+          .object(tool.parameters as z.ZodRawShape)
+          .parse(request.params.arguments ?? {}),
         context,
       );
-      return {
-        content: [{ type: "text", text: stringifyResult(result) }],
-      };
+      return extraToolResult(result);
     } catch (error) {
       return {
         content: [
@@ -131,9 +135,4 @@ export function registerWorkspaceMcpRoute(
       await transport.handleRequest(request.raw, reply.raw, request.body);
     },
   });
-}
-
-function stringifyResult(result: unknown): string {
-  if (typeof result === "string") return result;
-  return JSON.stringify(result, null, 2) ?? String(result);
 }

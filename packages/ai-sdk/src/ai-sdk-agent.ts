@@ -25,7 +25,9 @@ import type {
 } from "@catamorphic/sandbox";
 import {
   agentCapabilityTools,
+  agentToolResult,
   buildPluginsPreamble,
+  extraToolResult,
   isMediaAttachment,
   mergePolicyLayers,
   positiveTokenCount,
@@ -546,9 +548,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
             yield {
               ...mapToolCall(pending.name, pending.input),
               toolUseId: part.toolCallId,
-              toolResult:
-                (part as { output?: unknown }).output ??
-                (part as { result?: unknown }).result,
+              toolResult: transcriptToolResult(part.output),
             };
           }
           continue;
@@ -812,6 +812,7 @@ function buildMcpTools(
         inputSchema: jsonSchema<Record<string, unknown>>(
           info.inputSchema as Parameters<typeof jsonSchema>[0],
         ),
+        toModelOutput: ({ output }) => mediaModelOutput(output),
         execute: async (input, options) => {
           const args = pruneEmptyOptionalArgs(
             input as Record<string, unknown>,
@@ -832,6 +833,50 @@ function buildMcpTools(
           // model reads JSON fine. Text-only results stay text;
           // flattenToolResult throws on isError results.
           const raw = await server.callToolRaw(info.name, args);
+          const blocks = z.array(z.unknown()).parse(raw.content ?? []);
+          const media = z
+            .array(
+              z.object({
+                type: z.literal("image"),
+                data: z.string(),
+                mimeType: z.enum([
+                  "image/png",
+                  "image/jpeg",
+                  "image/webp",
+                  "image/gif",
+                ]),
+              }),
+            )
+            .parse(
+              blocks.filter(
+                (part) =>
+                  typeof part === "object" &&
+                  part !== null &&
+                  "type" in part &&
+                  part.type === "image",
+              ),
+            );
+          if (media.length && !raw.isError) {
+            const text = blocks.flatMap((block) => {
+              const part = z
+                .object({ type: z.literal("text"), text: z.string() })
+                .safeParse(block);
+              return part.success
+                ? [
+                    {
+                      type: "text" as const,
+                      text: truncateToolOutput(part.data.text),
+                    },
+                  ]
+                : [];
+            });
+            if (raw.structuredContent !== undefined)
+              text.push({
+                type: "text",
+                text: JSON.stringify(raw.structuredContent),
+              });
+            return agentToolResult({ content: [...text, ...media] });
+          }
           if (raw.structuredContent !== undefined && !raw.isError) {
             return raw.structuredContent;
           }
@@ -972,6 +1017,7 @@ function createTools(
         tool({
           description: extra.description,
           inputSchema: z.object(extra.parameters as z.ZodRawShape),
+          toModelOutput: ({ output }) => mediaModelOutput(output),
           execute: async (input: Record<string, unknown>) => {
             const result = await extra.execute(input, extraContext);
             context.workingDirectory =
@@ -1391,4 +1437,43 @@ function htmlToText(html: string): string {
     .replace(/[ \t]+/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+/** Preserve model media while keeping screenshot bytes out of durable chat activity. */
+function transcriptToolResult(output: unknown): unknown {
+  if (
+    typeof output !== "object" ||
+    output === null ||
+    !("kind" in output) ||
+    output.kind !== "agent-tool-result"
+  )
+    return output;
+  return {
+    content: extraToolResult(output).content.map((part) =>
+      part.type === "image" ? { type: "image", mimeType: part.mimeType } : part,
+    ),
+  };
+}
+function mediaModelOutput(output: unknown) {
+  const result = extraToolResult(output);
+  if (result.isError)
+    return {
+      type: "error-text" as const,
+      value: result.content
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .join("\n"),
+    };
+  return {
+    type: "content" as const,
+    value: result.content.map((part) =>
+      part.type === "image"
+        ? {
+            type: "file" as const,
+            data: { type: "data" as const, data: part.data },
+            mediaType: part.mimeType,
+          }
+        : part,
+    ),
+  };
 }

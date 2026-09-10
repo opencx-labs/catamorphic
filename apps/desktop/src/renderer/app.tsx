@@ -41,6 +41,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 import {
   type ActionId,
   BUILTIN_ACTIONS,
@@ -1830,6 +1831,13 @@ export function App() {
 
   // Webview guest WebContents ids per browser tab — the agent bridge
   // drives pages from the main process by guest id.
+  const [busyBrowsers, setBusyBrowsers] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: guest activity belongs to the mounted project
+  useEffect(() => {
+    setBusyBrowsers(new Set());
+  }, [projectId]);
   const browserGuestIdsRef = useRef(new Map<string, number>());
 
   /**
@@ -2916,10 +2924,8 @@ export function App() {
   );
 
   // Pending MCP elicitation (a connector asking the user a form or to open
-  // a URL). One at a time — a modal blocks the surface anyway.
-  const [elicitation, setElicitation] = useState<PendingElicitation | null>(
-    null,
-  );
+  // a URL). Queue concurrent native tool requests so none is lost.
+  const [elicitations, setElicitation] = useState<PendingElicitation[]>([]);
   const setElicitationRef = useRef(setElicitation);
   setElicitationRef.current = setElicitation;
   // Pending tool-permission asks (MCP tools whose policy says "ask"). A
@@ -3634,6 +3640,33 @@ export function App() {
           );
           return { tabs, chats, sidebar, split: ws.split };
         }
+        case "browserActivity": {
+          const key = String(params.key);
+          if (!key.startsWith("browser:"))
+            return { error: "Expected a browser tab" };
+          const id = key.slice("browser:".length);
+          if (
+            params.active === true &&
+            !ws.browsers.some((browser) => browser.localId === id)
+          )
+            return { error: "Browser tab closed" };
+          flushSync(() =>
+            setBusyBrowsers((current) => {
+              const next = new Set(current);
+              if (params.active === true) next.add(id);
+              else next.delete(id);
+              return next;
+            }),
+          );
+          // Let Chromium attach and lay out the guest before native input/capture.
+          if (params.active === true)
+            await new Promise<void>((resolve) =>
+              requestAnimationFrame(() =>
+                requestAnimationFrame(() => resolve()),
+              ),
+            );
+          return { ok: true };
+        }
         case "browserGuest": {
           const key = String(params.key);
           const id = key.slice("browser:".length);
@@ -3940,10 +3973,7 @@ export function App() {
           return { ok: true };
         }
         case "elicit": {
-          // Broadcast reaches every window; only the focused one renders
-          // it (others return null = "not me"), so the user sees exactly
-          // one modal and it can't be answered by a background window.
-          if (!document.hasFocus()) return null;
+          // Main routes this to one window, including when the app is unfocused.
           const request = params.request as
             | PendingElicitation["request"]
             | undefined;
@@ -3954,16 +3984,30 @@ export function App() {
             typeof params.label === "string" ? params.label : undefined;
           // Resolve when the modal answers; the bridge awaits this promise.
           return new Promise<unknown>((resolve) => {
-            setElicitationRef.current({
-              id: crypto.randomUUID(),
-              label,
-              request,
-              resolve: (result) => {
-                setElicitationRef.current(null);
-                resolve(result);
+            const id = crypto.randomUUID();
+            setElicitationRef.current((queue) => [
+              ...queue,
+              {
+                id,
+                askId:
+                  typeof params.askId === "number" ? params.askId : undefined,
+                label,
+                request,
+                resolve: (result) => {
+                  setElicitationRef.current((current) =>
+                    current.filter((entry) => entry.id !== id),
+                  );
+                  resolve(result);
+                },
               },
-            });
+            ]);
           });
+        }
+        case "elicitCancel": {
+          setElicitationRef.current((current) =>
+            current.filter((entry) => entry.askId !== params.askId),
+          );
+          return { ok: true };
         }
         case "toolPermission": {
           // Main sends this to ONE window (focused, else first) — no
@@ -4190,7 +4234,7 @@ export function App() {
     // webview detaches its guest and background pages would stop
     // loading (worse for agent-driven tabs).
     return key.startsWith("browser:")
-      ? "invisible pointer-events-none absolute inset-0 flex flex-col"
+      ? `${busyBrowsers.has(key.slice("browser:".length)) ? "opacity-0" : "invisible"} pointer-events-none absolute inset-0 flex flex-col`
       : "hidden";
   };
   /** Ratio-driven pane geometry (50/50 until the divider is dragged). */
@@ -4707,7 +4751,7 @@ export function App() {
       {/* MCP elicitation: a connector asking the user a form or to open a
           sign-in URL. URL consent opens the page as a browser tab. */}
       <ElicitationModal
-        pending={elicitation}
+        pending={elicitations[0] ?? null}
         onOpenUrl={(url) => openBrowserTab(url)}
       />
       <ToolPermissionModal
@@ -5193,12 +5237,7 @@ export function App() {
                       }
                     }}
                     visible={Boolean(viewSlots[browserTabKey(browser.localId)])}
-                    keepAwake={Boolean(
-                      browser.agentControlled &&
-                        Object.values(signalsByChat).some(
-                          (signal) => signal.working,
-                        ),
-                    )}
+                    keepAwake={busyBrowsers.has(browser.localId)}
                     onStateChange={(state) =>
                       onBrowserState(browser.localId, state)
                     }
