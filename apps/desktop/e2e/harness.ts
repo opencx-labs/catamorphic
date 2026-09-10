@@ -18,6 +18,8 @@ const requireFromHarness = createRequire(import.meta.url);
 // Unique per-launch port: a leaked instance from an aborted run must not
 // answer the next run's CDP handshake.
 const cdpPort = () => 9300 + Math.floor(Math.random() * 400);
+// A diagnostic screenshot must not outlive the checks around it.
+const SCREENSHOT_TIMEOUT_MS = 10_000;
 
 /** A random CDP port that is actually free — a dev instance of the app
  * (or anything else) may be squatting on one of the candidates. */
@@ -333,13 +335,21 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
     else waiter.resolve(message.result);
   });
 
-  const send = (method: string, params?: unknown): Promise<unknown> => {
+  const send = (
+    method: string,
+    params?: unknown,
+    timeoutMs = 60_000,
+  ): Promise<unknown> => {
     const id = nextId++;
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         pending.delete(id);
-        reject(new Error(`CDP ${method} did not respond within 60 seconds`));
-      }, 60_000);
+        reject(
+          new Error(
+            `CDP ${method} did not respond within ${Math.round(timeoutMs / 1000)} seconds`,
+          ),
+        );
+      }, timeoutMs);
       pending.set(id, {
         resolve: (value) => {
           clearTimeout(timeout);
@@ -412,11 +422,23 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
     );
   };
 
+  // Screenshots are diagnostics, never assertions. A window that is not
+  // producing compositor frames — the default hidden mode — can leave
+  // Page.captureScreenshot unanswered, which used to fail the calling test
+  // with a CDP timeout instead of whatever it was actually checking.
   const screenshot = async (filePath: string): Promise<void> => {
-    const result = (await send("Page.captureScreenshot", {
-      format: "png",
-    })) as { data: string };
-    fs.writeFileSync(filePath, Buffer.from(result.data, "base64"));
+    try {
+      const result = (await send(
+        "Page.captureScreenshot",
+        { format: "png" },
+        SCREENSHOT_TIMEOUT_MS,
+      )) as { data: string };
+      fs.writeFileSync(filePath, Buffer.from(result.data, "base64"));
+    } catch (error) {
+      console.warn(
+        `[e2e] screenshot skipped for ${filePath}: ${(error as Error).message}`,
+      );
+    }
   };
 
   const press = async (key: KeyName, modifiers = 0): Promise<void> => {
