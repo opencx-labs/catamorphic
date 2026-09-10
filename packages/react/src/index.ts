@@ -263,6 +263,7 @@ export {
   matchWorkflowNodes,
   workflowNodeKeys,
 } from "./lib/match-workflow-nodes.js";
+export type { ResourcePreview } from "./lib/resource-preview.js";
 export {
   buildUntitledWorkflowName,
   displayNameFromWorkflowName,

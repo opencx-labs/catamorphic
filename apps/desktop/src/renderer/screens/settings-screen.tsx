@@ -883,24 +883,45 @@ function LayoutSection({
                     {definition.description}
                   </p>
                 )}
-                <p className="mt-1 text-[11px] text-fg-muted">
-                  {overridden
-                    ? `Custom for ${SETTING_SOURCE_LABELS[scope].toLowerCase()}`
-                    : `${SETTING_SOURCE_LABELS[scope]} · From ${SETTING_SOURCE_LABELS[snapshot.sources[key]].toLowerCase()}`}
+                <p className="mt-1 grid text-[11px] text-fg-muted">
+                  {/* Reserve the longest source label so toggling an override
+                      cannot change the row's height when its text wraps. */}
+                  <span
+                    aria-hidden="true"
+                    className="invisible col-start-1 row-start-1"
+                  >
+                    {SETTING_SOURCE_LABELS[scope]} · From{" "}
+                    {SETTING_SOURCE_LABELS.default.toLowerCase()}
+                  </span>
+                  <span className="col-start-1 row-start-1">
+                    {overridden
+                      ? `Custom for ${SETTING_SOURCE_LABELS[scope].toLowerCase()}`
+                      : `${SETTING_SOURCE_LABELS[scope]} · From ${SETTING_SOURCE_LABELS[snapshot.sources[key]].toLowerCase()}`}
+                  </span>
                 </p>
               </div>
-              <div className="flex shrink-0 items-center gap-3">
-                {overridden && (
-                  <button
-                    type="button"
-                    aria-label={`Reset ${definition.label} to inherited`}
-                    disabled={saving}
-                    className="text-xs text-fg-muted hover:text-fg disabled:opacity-40"
-                    onClick={() => void save({ [key]: null })}
+              <div
+                className={`flex shrink-0 items-center gap-3 ${"options" in definition ? "flex-row-reverse justify-end @xl/settings:flex-row" : ""}`}
+              >
+                <span className="grid text-xs">
+                  <span
+                    aria-hidden="true"
+                    className="invisible col-start-1 row-start-1"
                   >
                     Reset
-                  </button>
-                )}
+                  </span>
+                  {overridden && (
+                    <button
+                      type="button"
+                      aria-label={`Reset ${definition.label} to inherited`}
+                      disabled={saving}
+                      className="col-start-1 row-start-1 text-xs text-fg-muted hover:text-fg disabled:opacity-40"
+                      onClick={() => void save({ [key]: null })}
+                    >
+                      Reset
+                    </button>
+                  )}
+                </span>
                 {"options" in definition ? (
                   <select
                     id={id}

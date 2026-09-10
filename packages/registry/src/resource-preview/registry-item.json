@@ -1,0 +1,13 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "resource-preview",
+  "type": "registry:component",
+  "description": "Bounded image, text, audio and video previews with metadata and explicit fallback states. Hosts resolve files and own access.",
+  "dependencies": ["@catamorphic/react"],
+  "files": [
+    {
+      "path": "components/catamorphic/resource-preview.tsx",
+      "type": "registry:component"
+    }
+  ]
+}

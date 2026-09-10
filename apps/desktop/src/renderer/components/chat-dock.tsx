@@ -1,4 +1,6 @@
 import type { ChatDockEntry, ChatMode } from "../lib/workspace-types.js";
+import { FilePreviewProjectContext } from "./file-preview";
+import { renderResponseLink } from "./response-link";
 
 export type { ChatDockEntry, ChatMode } from "../lib/workspace-types.js";
 
@@ -1272,7 +1274,9 @@ export function ChatDock(props: ChatDockProps) {
       projectId={props.projectId}
       localOnly={props.entry.incognito}
     >
-      <ChatDockContent {...props} />
+      <FilePreviewProjectContext value={props.projectId}>
+        <ChatDockContent {...props} />
+      </FilePreviewProjectContext>
     </ProjectAuthorityProvider>
   );
 }
@@ -2747,7 +2751,7 @@ function ChatDockContent({
           </div>
         )}
         {/* The tab already names the chat — in tab mode the header collapses
-            and its controls float over the timeline's top-right corner. */}
+          and its controls float over the timeline's top-right corner. */}
         <div
           data-testid="chat-status-chrome"
           className={`flex shrink-0 items-center gap-2 border-b px-3 transition-[height,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${presentsAsTab ? "h-0 border-transparent" : "h-12 border-border"}`}
@@ -2778,7 +2782,7 @@ function ChatDockContent({
             </span>
           </header>
           {/* Agent progress sits immediately left of the chat control bar;
-            both stay above timeline content scrolled beneath them. */}
+          both stay above timeline content scrolled beneath them. */}
           <div
             data-testid="chat-status-controls"
             className={`z-10 flex shrink-0 items-center gap-1 ${presentsAsTab ? "absolute right-2 top-2" : "relative"}`}
@@ -2960,7 +2964,7 @@ function ChatDockContent({
           </div>
         </div>
         {/* In tab mode the scroller spans the full tab (scrollbar at the
-            edge) while the content column stays centered and readable. */}
+          edge) while the content column stays centered and readable. */}
         <div
           className={`flex min-h-0 w-full flex-1 flex-col ${
             isTab ? "" : "mx-auto max-w-3xl"
@@ -3055,6 +3059,7 @@ function ChatDockContent({
               }
               emptyState={emptyPrompt.empty}
               onLinkClick={onLinkClick}
+              renderLink={renderResponseLink}
               onFileClick={onFileClick}
               resolveToolIcon={resolveToolIcon}
               onFork={entry.sessionId ? onFork : undefined}
@@ -3073,7 +3078,7 @@ function ChatDockContent({
             </p>
           ) : null}
           {/* Keep the composer clear of the bubble UI: bottom padding for
-              the expanded strip, side padding for the corner bubble. */}
+            the expanded strip, side padding for the corner bubble. */}
           <div
             className={`flex w-full flex-col transition-[padding] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
               isTab
@@ -3088,13 +3093,13 @@ function ChatDockContent({
             }`}
           >
             {/* The surfaces rail: the agent's working tabs (linked pages,
-                terminals, changed files) live with the chat. Click opens
-                the tab; the split button (or Cmd+click) tiles it to the
-                right of the current view. Only real surfaces earn a chip —
-                the new-terminal affordance lives with the header controls. */}
+              terminals, changed files) live with the chat. Click opens
+              the tab; the split button (or Cmd+click) tiles it to the
+              right of the current view. Only real surfaces earn a chip —
+              the new-terminal affordance lives with the header controls. */}
             {/* The rail yields while lurking — the strip's few rows
-                belong to the latest activity, not to chips. CSS-collapsed
-                (not unmounted) so chip motion state survives the lurk. */}
+              belong to the latest activity, not to chips. CSS-collapsed
+              (not unmounted) so chip motion state survives the lurk. */}
             {railSurfaces.length > 0 && onOpenSurface && (
               <div
                 className={`shrink-0 overflow-hidden transition-[max-height,opacity] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
@@ -3243,8 +3248,8 @@ function ChatDockContent({
               checkNonce={remoteCheckNonce}
             />
             {/* Proactive auth banner: the session is knowably dead
-                (probe on focus/wake) — offer the re-login BEFORE a send
-                fails. Dismissible; a health change re-arms it. */}
+              (probe on focus/wake) — offer the re-login BEFORE a send
+              fails. Dismissible; a health change re-arms it. */}
             {authHealth !== "ok" &&
               !authBannerDismissed &&
               sessionAuthAgent &&
@@ -3298,9 +3303,9 @@ function ChatDockContent({
               onSubmit={submit}
             >
               {/* "/" command menu: skills (ADR 0052) merged with the
-                  harness's own commands. Rows commit on mousedown like
-                  the palette, so the composer never loses focus; the
-                  panel pops in/out and rows glide as the filter types. */}
+                harness's own commands. Rows commit on mousedown like
+                the palette, so the composer never loses focus; the
+                panel pops in/out and rows glide as the filter types. */}
               <SlashMenu
                 open={slashMenuOpen}
                 matches={slashMatches}
@@ -3310,8 +3315,8 @@ function ChatDockContent({
               />
               <div className="flex items-center gap-2">
                 {/* Any file attaches — as media when the agent takes it,
-                    as a path pill otherwise — so the picker never filters
-                    and never hides. */}
+                  as a path pill otherwise — so the picker never filters
+                  and never hides. */}
                 <ShortcutHint label="Attach files">
                   <button
                     type="button"
@@ -3333,8 +3338,8 @@ function ChatDockContent({
                   }}
                 />
                 {/* Prose and pills in one flow: pastes, selections, links,
-                    tabs, images and documents sit inline where they were
-                    dropped, enter with pill-in and leave with pill-out. */}
+                  tabs, images and documents sit inline where they were
+                  dropped, enter with pill-in and leave with pill-out. */}
                 <ComposerInput
                   ref={composerRef}
                   onAnimationEnd={(event) => {
@@ -3384,7 +3389,7 @@ function ChatDockContent({
                   ariaLabel="Message the assistant"
                 />
                 {/* Context ring (ADR 0057): quiet until a harness reports
-                    occupancy and window size; danger red past 90%. */}
+                  occupancy and window size; danger red past 90%. */}
                 <ContextMeter messages={chat.messages} />
                 <ShortcutHint
                   label={

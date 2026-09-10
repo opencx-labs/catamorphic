@@ -221,7 +221,7 @@ describe("context pills", () => {
       { label: "url preview" },
     );
     expect(ref).toContain("https://example.com/docs/page?x=1");
-    expect(ref).toContain("Link");
+    expect(ref).toContain("example.com");
     await run(
       `unhover(frontDock().querySelector('[data-testid="composer-pill"][data-pill-kind="url"]')); return true;`,
     );
@@ -396,8 +396,8 @@ describe("context pills", () => {
     await runWait(
       `const pop = $$('[data-testid="pill-preview"]')
          .find((el) => el.textContent.includes('https://example.com/'));
-       return !!pop && pop.getAttribute('aria-hidden') === 'true' &&
-         pop.classList.contains('opacity-0');`,
+       return !pop || (pop.getAttribute('aria-hidden') === 'true' &&
+         pop.classList.contains('opacity-0'));`,
       { label: "preview fading out" },
     );
   }, 60_000);

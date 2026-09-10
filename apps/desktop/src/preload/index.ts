@@ -1,5 +1,7 @@
+import type { ResourcePreview } from "@catamorphic/react";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { BookmarkPlacement } from "../shared/bookmark-target.js";
+import type { FilePreviewInput } from "../shared/file-preview.js";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
 import type { OpenMode } from "../shared/open-mode.js";
 import type { DesktopUpdateState } from "../shared/update.js";
@@ -42,6 +44,9 @@ const api = {
       return "";
     }
   },
+
+  filePreview: (input: FilePreviewInput): Promise<ResourcePreview> =>
+    ipcRenderer.invoke("catamorphic:file-preview", input),
 
   composerFileSave: (input: {
     projectId: string;

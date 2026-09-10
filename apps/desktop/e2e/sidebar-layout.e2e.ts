@@ -442,7 +442,7 @@ describe("configurable browser workspace", () => {
       "window.catamorphicDesktop.setPrefs({tabPlacement:'top',tabFrame:false})",
     );
     await app.waitFor(
-      "document.querySelector('main').dataset.tabLayout === 'top'",
+      "document.querySelector('main').dataset.tabLayout === 'top' && getComputedStyle(document.querySelector('main')).borderRadius === '0px'",
     );
     for (const appearance of ["light", "dark"]) {
       await app.eval(
@@ -456,14 +456,14 @@ describe("configurable browser workspace", () => {
       );
       await run("$('input[name=tabFrame]').click()");
       await app.waitFor(
-        "document.querySelector('main').dataset.tabFrame === 'on'",
+        "document.querySelector('main').dataset.tabFrame === 'on' && getComputedStyle(document.querySelector('main')).borderRadius === '16px'",
       );
       expect(await run("return getComputedStyle($('main')).borderRadius")).toBe(
         "16px",
       );
       await run("$('input[name=tabFrame]').click()");
       await app.waitFor(
-        "document.querySelector('main').dataset.tabFrame === 'off'",
+        "document.querySelector('main').dataset.tabFrame === 'off' && getComputedStyle(document.querySelector('main')).borderRadius === '0px'",
       );
     }
     await run("setReactValue($('select[name=tabPlacement]'), 'sidebar')");

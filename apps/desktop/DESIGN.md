@@ -152,6 +152,9 @@ the animation is wrong, not the test.
 6. **Transitions only on state changes** — hover, focus, expand/collapse,
    enter/exit. Never on load, never ambient.
 
+Tab frame previews transition the workspace margins and corner radius over
+200 ms with the standard easing. Reduced motion applies the frame immediately.
+
 ### Current motion inventory
 
 | Animation | Duration | Pairs with |
@@ -254,3 +257,5 @@ the historical log explains how it arrived here.
   Agents edit the same configuration files as the UI. Live context supplies exact
   paths; invalid edits retain the last valid configuration and surface file errors.
 - [Earlier decisions and rationale](DESIGN-HISTORY.md).
+
+Rich attachment previews share InspectorPortal across composer and conversation. File references use compact pills; web links retain prose styling with destination cards. Content loads only on inspection, and unavailable previews retain useful metadata. See [chat state](docs/chat-state.md).

@@ -14,7 +14,7 @@ import {
   SquareTerminal,
   Wrench,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
@@ -77,6 +77,12 @@ export interface ChatTimelineProps {
    * Modifier state rides along so hosts can offer alternate flavors
    * (background tab, minimize-and-open, ...).
    */
+  /** Optional host preview/pill rendering. The URL has passed Markdown sanitization. */
+  renderLink?: (props: {
+    href: string;
+    children: ReactNode;
+    onOpen: NonNullable<ChatTimelineProps["onLinkClick"]>;
+  }) => ReactNode;
   onLinkClick?: (
     url: string,
     modifiers: {
@@ -127,6 +133,7 @@ export function ChatTimeline({
   className = "",
   contentClassName = "",
   onLinkClick,
+  renderLink,
   onFileClick,
   resolveToolIcon,
 }: ChatTimelineProps) {
@@ -154,6 +161,7 @@ export function ChatTimeline({
             key={timelineKey(message, index, messages)}
             message={message}
             onLinkClick={onLinkClick}
+            renderLink={renderLink}
             onFileClick={onFileClick}
             resolveToolIcon={resolveToolIcon}
             actionable={message.id === lastConversationId}
@@ -215,12 +223,14 @@ function timelineKey(
 function Message({
   message,
   onLinkClick,
+  renderLink,
   onFileClick,
   resolveToolIcon,
   actionable,
   onRetry,
 }: {
   message: ChatTimelineMessage;
+  renderLink?: ChatTimelineProps["renderLink"];
   onLinkClick?: (
     url: string,
     modifiers: {
@@ -342,24 +352,27 @@ function Message({
             components={
               onLinkClick
                 ? {
-                    a: ({ href, children }) => (
-                      <a
-                        href={href}
-                        onClick={(event) => {
-                          event.preventDefault();
-                          if (href) {
-                            onLinkClick(href, {
-                              metaKey: event.metaKey,
-                              ctrlKey: event.ctrlKey,
-                              altKey: event.altKey,
-                              shiftKey: event.shiftKey,
-                            });
-                          }
-                        }}
-                      >
-                        {children}
-                      </a>
-                    ),
+                    a: ({ href, children }) =>
+                      renderLink && href ? (
+                        renderLink({ href, children, onOpen: onLinkClick })
+                      ) : (
+                        <a
+                          href={href}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            if (href) {
+                              onLinkClick(href, {
+                                metaKey: event.metaKey,
+                                ctrlKey: event.ctrlKey,
+                                altKey: event.altKey,
+                                shiftKey: event.shiftKey,
+                              });
+                            }
+                          }}
+                        >
+                          {children}
+                        </a>
+                      ),
                   }
                 : undefined
             }

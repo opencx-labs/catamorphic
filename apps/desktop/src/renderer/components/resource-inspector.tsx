@@ -40,9 +40,13 @@ export function computeInspectorPosition({
   const side: "left" | "right" = fitsRight ? "right" : "left";
   return {
     side,
-    left: fitsRight
-      ? anchor.right + GAP
-      : Math.max(VIEWPORT_MARGIN, anchor.left - width - GAP),
+    left: Math.max(
+      VIEWPORT_MARGIN,
+      Math.min(
+        fitsRight ? anchor.right + GAP : anchor.left - width - GAP,
+        viewportWidth - width - VIEWPORT_MARGIN,
+      ),
+    ),
     top: Math.max(
       VIEWPORT_MARGIN,
       Math.min(anchor.top, viewportHeight - height - VIEWPORT_MARGIN),
@@ -50,14 +54,16 @@ export function computeInspectorPosition({
   };
 }
 
-export interface ResourceInspectorTriggerProps {
-  ref: RefObject<HTMLButtonElement | null>;
+export interface ResourceInspectorTriggerProps<
+  T extends HTMLElement = HTMLButtonElement,
+> {
+  ref: RefObject<T | null>;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
   onPointerDown: () => void;
   onClick: () => void;
   onFocus: () => void;
-  onBlur: (event: React.FocusEvent<HTMLButtonElement>) => void;
+  onBlur: (event: React.FocusEvent<T>) => void;
   "aria-details"?: string;
 }
 
@@ -66,7 +72,7 @@ export interface ResourceInspectorTriggerProps {
  * pointer interest across the trigger-to-portal gap, flips at the viewport
  * edge, remains mounted for its exit motion, and dismisses on Escape.
  */
-export function ResourceInspector({
+export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
   label,
   children,
   content,
@@ -76,7 +82,7 @@ export function ResourceInspector({
   onOpen,
 }: {
   label: string;
-  children: (props: ResourceInspectorTriggerProps) => ReactNode;
+  children: (props: ResourceInspectorTriggerProps<T>) => ReactNode;
   content: ReactNode | ((dismiss: () => void) => ReactNode);
   delayMs?: number;
   /** Keep the inspector open after clicking its trigger. */
@@ -86,7 +92,7 @@ export function ResourceInspector({
   onOpen?: () => void;
 }) {
   const id = useId();
-  const triggerRef = useRef<HTMLButtonElement>(null);
+  const triggerRef = useRef<T>(null);
   const openTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
@@ -147,7 +153,10 @@ export function ResourceInspector({
       triggerInterested.current = false;
       panelInterested.current = false;
       setOpen(false);
+      pointerFocus.current = true;
       triggerRef.current?.focus();
+      pointerFocus.current = false;
+      clearTimeout(openTimer.current);
     };
     const dismissForScroll = (event: Event) => {
       if (
@@ -218,7 +227,12 @@ export function ResourceInspector({
           });
         },
         onClick: () => {
-          if (!pinOnClick) return;
+          if (!pinOnClick) {
+            clearTimeout(openTimer.current);
+            clearTimeout(closeTimer.current);
+            setOpen(false);
+            return;
+          }
           pinned.current = !pinned.current;
           if (pinned.current) show();
           else setOpen(false);
@@ -271,6 +285,7 @@ export function ResourceInspector({
 }
 
 export function InspectorPortal({
+  testId = "resource-inspector",
   id,
   label,
   anchor,
@@ -280,6 +295,7 @@ export function InspectorPortal({
   onExited,
   children,
 }: {
+  testId?: string;
   id: string;
   label: string;
   anchor: InspectorAnchor;
@@ -328,6 +344,9 @@ export function InspectorPortal({
 
   useEffect(() => {
     if (open) return;
+    for (const media of ref.current?.querySelectorAll("audio, video") ?? []) {
+      if (media instanceof HTMLMediaElement) media.pause();
+    }
     const timer = window.setTimeout(onExited, 180);
     return () => window.clearTimeout(timer);
   }, [open, onExited]);
@@ -340,7 +359,10 @@ export function InspectorPortal({
       aria-label={label}
       data-resource-inspector
       data-side={position.side}
-      data-testid="resource-inspector"
+      data-testid={testId}
+      data-open={open || undefined}
+      aria-hidden={!open}
+      inert={!open}
       style={{ left: position.left, top: position.top }}
       onPointerEnter={onEnter}
       onPointerLeave={onLeave}
@@ -362,7 +384,7 @@ export function InspectorPortal({
         )
           onExited();
       }}
-      className={`fixed z-[130] max-h-[calc(100vh-1rem)] w-80 overflow-y-auto overscroll-contain rounded-lg border border-border bg-bg-overlay p-3 shadow-2xl [scrollbar-gutter:stable] ${open ? `animate-inspector-in-${position.side}` : `pointer-events-none animate-inspector-out-${position.side}`}`}
+      className={`fixed z-[130] max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] w-80 overflow-y-auto overscroll-contain rounded-lg border border-border bg-bg-overlay p-3 shadow-2xl [scrollbar-gutter:stable] ${open ? `animate-inspector-in-${position.side}` : `pointer-events-none opacity-0 animate-inspector-out-${position.side}`}`}
     >
       {children}
     </div>,

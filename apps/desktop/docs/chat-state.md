@@ -33,6 +33,29 @@ host persists pathless clipboard bytes under the current project. Preserve text,
 caret insertion, selection pills, undo and draft contents while preparation runs.
 Resource links use the [workspace opening contract](workspace-interactions.md).
 
+## Attachment and response previews
+
+Composer and sent-message pills use the same lazy preview and shared InspectorPortal.
+File links in agent prose are compact pills; web links stay inline. Both expose
+hover/focus cards and preserve the workspace opening modifiers. Escape, outside
+interaction and background scrolling dismiss cards; pointer travel into a card
+keeps it open. Native media controls never autoplay and stop on dismissal.
+
+Desktop resolves file content on demand through `main/file-preview.ts`. Relative
+references resolve against the owning chat's project. Images, audio and video are
+limited to 16 MiB; text/code previews read at most 16 KiB and render as plain text,
+including HTML. PDF and office document thumbnails use the OS thumbnail provider
+on macOS/Windows with a deadline and size limit. Missing, corrupt, oversized or
+unsupported files keep their metadata and an explicit fallback. Inline document
+temporary files are private and removed after preview generation. Preview bytes
+are ephemeral and never added to chat history or agent input.
+
+Web cards reuse local browser history titles and show the destination. Hovering
+does not visit a site or fetch tracking images. Installable `resource-preview`
+provides the shared content renderer and `ResourcePreview` is a host-neutral data
+contract. The registry timeline's `renderLink` hook lets hosts supply their own
+preview UI after URL sanitization; desktop filesystem access stays in desktop.
+
 ## Registry maintenance
 
 Edit `packages/registry/src` first, then update installed consumers by adapting only
