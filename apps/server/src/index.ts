@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { emitLog } from "@catamorphic/otel";
+import { startTelemetry } from "@catamorphic/otel/node";
 import { lanAddresses, startMdnsResponder } from "./mdns.js";
 import { buildStockServer } from "./server.js";
 
@@ -17,6 +19,9 @@ import { buildStockServer } from "./server.js";
  *   ANTHROPIC_API_KEY | OPENROUTER_API_KEY | OPENAI_API_KEY  enable chat
  *   CATAMORPHIC_MODEL / CATAMORPHIC_EFFORT                   agent tuning
  */
+const telemetry = startTelemetry({ serviceName: "catamorphic-server" });
+emitLog({ scope: "catamorphic-server", body: "Server starting" });
+
 const port = Number(process.env.PORT ?? 4700);
 const operatorPort = Number(process.env.CATAMORPHIC_OPERATOR_PORT ?? 4701);
 const dataDir = process.env.CATAMORPHIC_DATA_DIR ?? "/data";
@@ -107,7 +112,12 @@ async function stop(signal: string) {
   stopping = true;
   console.log(`${signal}: shutting down…`);
   mdns?.close();
-  await server.shutdown();
+  try {
+    await server.shutdown();
+  } finally {
+    emitLog({ scope: "catamorphic-server", body: "Server stopped" });
+    await telemetry.shutdown();
+  }
   process.exit(0);
 }
 process.on("SIGTERM", () => void stop("SIGTERM"));

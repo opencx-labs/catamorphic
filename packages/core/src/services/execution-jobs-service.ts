@@ -1,5 +1,10 @@
 import type { DB, Json } from "@catamorphic/db";
-import { getTracer, withSpan } from "@catamorphic/otel";
+import {
+  getTracer,
+  type SpanAttributes,
+  setSpanCorrelation,
+  withSpan,
+} from "@catamorphic/otel";
 import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 
 export type ExecutionJobKind =
@@ -98,6 +103,41 @@ const EXHAUSTION_CLAIM_MS = 10 * 60 * 1_000;
 export const MAX_LEASE_EXPIRIES = 20;
 
 export class ExecutionJobsService {
+  /** Reconstitute correlation from the run, never from arbitrary job payload or baggage. */
+  async correlationForJob(args: {
+    job: ExecutionJob;
+  }): Promise<SpanAttributes> {
+    const run = await this.db
+      .selectFrom("workflow_runs")
+      .innerJoin("projects", "projects.id", "workflow_runs.project_id")
+      .select([
+        "workflow_runs.project_id",
+        "workflow_runs.external_user_id",
+        "workflow_runs.workflow_name",
+        "workflow_runs.deployment_artifact_id",
+        "workflow_runs.provenance",
+      ])
+      .where("workflow_runs.id", "=", args.job.workflowRunId)
+      .where("projects.tenant_id", "=", args.job.tenantId)
+      .executeTakeFirst();
+    return run
+      ? {
+          "catamorphic.commit.sha":
+            typeof run.provenance === "object" &&
+            run.provenance !== null &&
+            !Array.isArray(run.provenance) &&
+            typeof run.provenance.commitSha === "string"
+              ? run.provenance.commitSha
+              : undefined,
+          "catamorphic.project.id": run.project_id,
+          "user.id": run.external_user_id ?? undefined,
+          "catamorphic.workflow.name": run.workflow_name,
+          "catamorphic.deployment_artifact.id":
+            run.deployment_artifact_id ?? undefined,
+        }
+      : {};
+  }
+
   constructor(
     private readonly db: Kysely<DB>,
     private readonly workerNode?: { id: string; token: string },
@@ -120,6 +160,9 @@ export class ExecutionJobsService {
         tracer,
         name: "queue.enqueue",
         attributes: {
+          "catamorphic.queue.job.id": undefined,
+          "catamorphic.workflow.step.attempt.id":
+            args.workflowStepAttemptId ?? undefined,
           "catamorphic.tenant.id": args.tenantId,
           "catamorphic.queue.job.kind": args.kind,
           "catamorphic.queue.job.priority": args.priority ?? 0,
@@ -149,7 +192,10 @@ export class ExecutionJobsService {
           )
           .returningAll()
           .executeTakeFirstOrThrow();
-        span.setAttribute("catamorphic.queue.job.id", row.id);
+        setSpanCorrelation({
+          span,
+          attributes: { "catamorphic.queue.job.id": row.id },
+        });
         return mapExecutionJob(row);
       },
     );

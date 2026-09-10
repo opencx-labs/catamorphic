@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 let app: AppHandle;
 let projectId: string;
@@ -103,7 +103,9 @@ it("keeps inherited controls usable in the compact light settings view", async (
     `window.catamorphicDesktop.setTheme({selection:'light',overrides:{}})`,
   );
   await app.waitFor(`document.documentElement.dataset.theme === "light"`);
-  await app.eval(`window.catamorphicDesktop.devWindow('setSize',900,600)`);
+  // Leave both sidebars open so scope selectors and Reset rows must fit
+  // the narrow Settings surface, including platforms with wider controls.
+  await app.eval(`window.catamorphicDesktop.devWindow('setSize',840,600)`);
   await app.cdp("Emulation.setEmulatedMedia", {
     features: [{ name: "prefers-reduced-motion", value: "reduce" }],
   });
@@ -168,14 +170,19 @@ it("keeps checkbox rows and neighboring controls stable while changing and reset
   }
 });
 
-it("previews the tab frame smoothly in both directions and honors reduced motion", async () => {
+it("previews content padding smoothly in both directions and honors reduced motion", async () => {
   await app.cdp("Emulation.setEmulatedMedia", {
     features: [{ name: "prefers-reduced-motion", value: "no-preference" }],
   });
-  for (const checked of [false, true]) {
+  for (const padding of [0, 6]) {
+    const previous = padding === 0 ? 6 : 0;
+    await app.waitFor(
+      `(()=>{const input=document.querySelector('[name="contentPadding"]');return input && !input.disabled && input.valueAsNumber === ${previous} && parseFloat(getComputedStyle(document.querySelector('.workspace-surface')).marginTop) === ${previous};})()`,
+      { label: "saved content padding before sampling the next transition" },
+    );
     const samples = await app.eval<number[]>(`new Promise(resolve=>{
       const surface=document.querySelector('.workspace-surface');
-      const input=document.querySelector('[name="tabFrame"]');
+      const input=document.querySelector('[name="contentPadding"]');
       const margins=[];
       const start=performance.now();
       const sample=()=>{
@@ -183,10 +190,12 @@ it("previews the tab frame smoothly in both directions and honors reduced motion
         if(performance.now()-start<800)requestAnimationFrame(sample);
         else resolve(margins);
       };
-      sample();input.click();
+      sample();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(padding.toString())});
+      input.dispatchEvent(new Event('input',{bubbles:true}));
     })`);
-    expect(samples[0]).toBe(checked ? 0 : 6);
-    expect(samples.at(-1)).toBe(checked ? 6 : 0);
+    expect(samples[0]).toBe(previous);
+    expect(samples.at(-1)).toBe(padding);
     expect(samples.some((margin) => margin > 0 && margin < 6)).toBe(true);
   }
   await app.cdp("Emulation.setEmulatedMedia", {
@@ -198,4 +207,61 @@ it("previews the tab frame smoothly in both directions and honors reduced motion
     ),
   ).toBe("0s");
   expect(app.getRendererErrors()).toEqual([]);
+});
+
+it("edits workspace padding, rounding and dividers independently and persists them", async () => {
+  const run = <T>(body: string) =>
+    app.eval<T>(
+      `(() => { ${setReactValueJs} const $ = s => document.querySelector(s); ${body} })()`,
+    );
+  await chooseScope("profile");
+  await app.eval(
+    `document.querySelector('[aria-label="Expand right sidebar"]')?.click()`,
+  );
+  await app.waitFor("!!document.querySelector('input[name=contentPadding]')");
+  await app.eval(
+    "window.catamorphicDesktop.setPrefs({contentPadding:12,contentRadius:20,sidebarDividers:false})",
+  );
+  await app.waitFor(
+    "getComputedStyle(document.querySelector('main')).marginTop === '12px'",
+  );
+  expect(await run("return getComputedStyle($('main')).borderRadius")).toBe(
+    "20px",
+  );
+  expect(
+    await run(
+      "return getComputedStyle($('[data-sidebar=right]')).borderLeftWidth",
+    ),
+  ).toBe("0px");
+  expect(
+    await run(
+      "return !!$('[data-sidebar=right] button[aria-label=\"Collapse right sidebar\"]')",
+    ),
+  ).toBe(true);
+  for (const placement of ["top", "sidebar"]) {
+    await app.eval(
+      `window.catamorphicDesktop.setPrefs({tabPlacement:'${placement}'})`,
+    );
+    await app.waitFor(
+      `document.querySelector('main').dataset.tabLayout === '${placement}'`,
+    );
+    expect(await run("return getComputedStyle($('main')).borderRadius")).toBe(
+      "20px",
+    );
+  }
+  await run("setReactValue($('input[name=contentRadius]'), '0')");
+  await app.waitFor(
+    "getComputedStyle(document.querySelector('main')).borderRadius === '0px'",
+  );
+  await run("$('input[name=sidebarDividers]').click()");
+  await app.waitFor(
+    "getComputedStyle(document.querySelector('[data-sidebar=right]')).borderLeftWidth === '1px'",
+  );
+  await app.eval("location.reload()");
+  await app.waitFor(
+    "document.querySelector('main') && getComputedStyle(document.querySelector('main')).borderRadius === '0px'",
+  );
+  expect(await run("return getComputedStyle($('main')).marginTop")).toBe(
+    "12px",
+  );
 });

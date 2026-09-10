@@ -1,6 +1,6 @@
 # 0005 — OpenTelemetry instrumentation via `@opentelemetry/api` only
 
-- **Status:** Accepted
+- **Status:** Accepted (extended by [0119](0119-three-signal-observability.md) for logs, metrics, host bootstrap, and GenAI conventions)
 - **Date:** 2026-07-02
 
 ## Context

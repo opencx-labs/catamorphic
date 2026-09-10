@@ -1,5 +1,5 @@
 import type { DB, Json } from "@catamorphic/db";
-import { getTracer, withSpan } from "@catamorphic/otel";
+import { getTracer, setSpanCorrelation, withSpan } from "@catamorphic/otel";
 import type {
   AgentRuntimeRequest,
   AgentRuntimeRequestResponse,
@@ -96,15 +96,23 @@ export class AgentRuntimeRequestsService {
       {
         tracer,
         name: "agent.runtime.request.respond",
-        attributes: { "catamorphic.session.id": args.sessionId },
+        attributes: {
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+          "catamorphic.agent.session.id": args.sessionId,
+        },
       },
       async (span) => {
         await this.db.transaction().execute(async (trx) => {
-          await requireRuntimeSession({
+          const session = await requireRuntimeSession({
             db: trx,
             identity: args.identity,
             sessionId: args.sessionId,
             lock: true,
+          });
+          setSpanCorrelation({
+            span,
+            attributes: { "catamorphic.project.id": session.projectId },
           });
           const request = await selectRequestForUpdate({
             trx,
@@ -118,7 +126,10 @@ export class AgentRuntimeRequestsService {
           }
           const stored = requestFromPayload(request.payload);
           if (stored.turnId) {
-            span.setAttribute("catamorphic.agent.turn_id", stored.turnId);
+            setSpanCorrelation({
+              span,
+              attributes: { "catamorphic.agent.turn.id": stored.turnId },
+            });
           }
           if (stored.kind !== args.response.kind) {
             throw new AgentRuntimeRequestConflictError(args.requestId);

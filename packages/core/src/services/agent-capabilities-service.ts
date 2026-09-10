@@ -279,8 +279,10 @@ export class AgentCapabilitiesService {
             name: "agent.capability.invoke",
             attributes: {
               "catamorphic.capability.name": command.name,
-              "catamorphic.session.id": args.sessionId,
+              "catamorphic.agent.session.id": args.sessionId,
               "catamorphic.tenant.id": context.identity.tenantId,
+              "catamorphic.project.id": context.projectId,
+              "user.id": context.identity.externalUserId,
             },
           },
           async () => {

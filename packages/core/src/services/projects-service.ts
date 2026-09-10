@@ -231,6 +231,7 @@ export class ProjectsService {
         name: "project.create",
         attributes: {
           "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
         },
       },
       () => this.createInner(identity, input),
@@ -387,67 +388,106 @@ export class ProjectsService {
     projectId: string,
     input: UpdateProjectInput,
   ): Promise<Project> {
-    const existing = await this.getRow(identity, projectId);
+    return withSpan(
+      {
+        tracer,
+        name: "project.update",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        const existing = await this.getRow(identity, projectId);
 
-    const updated = await this.db
-      .updateTable("projects")
-      .set({
-        name: input.name ?? existing.name,
-        updated_at: new Date(),
-      })
-      .where("id", "=", projectId)
-      .where("tenant_id", "=", identity.tenantId)
-      .returningAll()
-      .executeTakeFirstOrThrow();
+        const updated = await this.db
+          .updateTable("projects")
+          .set({
+            name: input.name ?? existing.name,
+            updated_at: new Date(),
+          })
+          .where("id", "=", projectId)
+          .where("tenant_id", "=", identity.tenantId)
+          .returningAll()
+          .executeTakeFirstOrThrow();
 
-    return mapProject(updated);
+        return mapProject(updated);
+      },
+    );
   }
 
   async delete(identity: Identity, projectId: string): Promise<void> {
-    const row = await this.getRow(identity, projectId);
-    const project = mapProject(row);
+    return withSpan(
+      {
+        tracer,
+        name: "project.delete",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        const row = await this.getRow(identity, projectId);
+        const project = mapProject(row);
 
-    // Deprovisioning hooks run before anything is deleted: a throw aborts
-    // the delete so the host can retry, instead of leaking infrastructure
-    // for a project that no longer exists (ADR 0046).
-    for (const hook of this.hooks) {
-      if (!hook.onProjectDeleted) continue;
-      try {
-        await hook.onProjectDeleted({ project, identity });
-      } catch (cause) {
-        throw new ProjectDeprovisioningError({ projectId, cause });
-      }
-    }
+        // Deprovisioning hooks run before anything is deleted: a throw aborts
+        // the delete so the host can retry, instead of leaking infrastructure
+        // for a project that no longer exists (ADR 0046).
+        for (const hook of this.hooks) {
+          if (!hook.onProjectDeleted) continue;
+          try {
+            await hook.onProjectDeleted({ project, identity });
+          } catch (cause) {
+            throw new ProjectDeprovisioningError({ projectId, cause });
+          }
+        }
 
-    await this.db
-      .deleteFrom("projects")
-      .where("id", "=", projectId)
-      .where("tenant_id", "=", identity.tenantId)
-      .execute();
+        await this.db
+          .deleteFrom("projects")
+          .where("id", "=", projectId)
+          .where("tenant_id", "=", identity.tenantId)
+          .execute();
 
-    await this.projectManager
-      .delete(identity.tenantId, projectId)
-      .catch(() => {});
+        await this.projectManager
+          .delete(identity.tenantId, projectId)
+          .catch(() => {});
+      },
+    );
   }
 
   async listFiles(
     identity: Identity,
     projectId: string,
   ): Promise<ProjectFileEntry[]> {
-    await this.requireExists(identity, projectId);
-    return this.withDev(identity, projectId, async (repo) => {
-      const root = await this.projectManager.localPath({
-        tenantId: identity.tenantId,
-        projectId,
-      });
-      const filePaths = [
-        ...new Set([
-          ...(await repo.listFiles()),
-          ...(root ? await listLocalDocuments(root) : []),
-        ]),
-      ];
-      return filePaths.map((p) => ({ path: p, size: 0 }));
-    });
+    return withSpan(
+      {
+        tracer,
+        name: "project.list_files",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        await this.requireExists(identity, projectId);
+        return this.withDev(identity, projectId, async (repo) => {
+          const root = await this.projectManager.localPath({
+            tenantId: identity.tenantId,
+            projectId,
+          });
+          const filePaths = [
+            ...new Set([
+              ...(await repo.listFiles()),
+              ...(root ? await listLocalDocuments(root) : []),
+            ]),
+          ];
+          return filePaths.map((p) => ({ path: p, size: 0 }));
+        });
+      },
+    );
   }
 
   async readFile(
@@ -455,41 +495,67 @@ export class ProjectsService {
     projectId: string,
     filePath: string,
   ): Promise<string> {
-    await this.requireExists(identity, projectId);
-    return this.withDev(identity, projectId, async (repo) => {
-      try {
-        if (
-          await this.projectManager.localPath({
-            tenantId: identity.tenantId,
-            projectId,
-          })
-        ) {
-          const stat = await fs.stat(path.join(repo.repoPath, filePath));
-          if (!stat.isFile() || stat.size > 2 * 1024 * 1024)
-            throw new ProjectFileNotTextError();
-        }
-        const bytes = await repo.readFileBytes(filePath);
-        if (!bytes) throw new ProjectFileNotFoundError(projectId, filePath);
-        if (bytes.length > 2 * 1024 * 1024 || bytes.includes(0))
-          throw new ProjectFileNotTextError();
-        try {
-          return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-        } catch {
-          throw new ProjectFileNotTextError();
-        }
-      } catch (error) {
-        if (error instanceof ProjectFileNotTextError) throw error;
-        throw new ProjectFileNotFoundError(projectId, filePath);
-      }
-    });
+    return withSpan(
+      {
+        tracer,
+        name: "project.read_file",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        await this.requireExists(identity, projectId);
+        return this.withDev(identity, projectId, async (repo) => {
+          try {
+            if (
+              await this.projectManager.localPath({
+                tenantId: identity.tenantId,
+                projectId,
+              })
+            ) {
+              const stat = await fs.stat(path.join(repo.repoPath, filePath));
+              if (!stat.isFile() || stat.size > 2 * 1024 * 1024)
+                throw new ProjectFileNotTextError();
+            }
+            const bytes = await repo.readFileBytes(filePath);
+            if (!bytes) throw new ProjectFileNotFoundError(projectId, filePath);
+            if (bytes.length > 2 * 1024 * 1024 || bytes.includes(0))
+              throw new ProjectFileNotTextError();
+            try {
+              return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+            } catch {
+              throw new ProjectFileNotTextError();
+            }
+          } catch (error) {
+            if (error instanceof ProjectFileNotTextError) throw error;
+            throw new ProjectFileNotFoundError(projectId, filePath);
+          }
+        });
+      },
+    );
   }
 
   async readAllFiles(
     identity: Identity,
     projectId: string,
   ): Promise<Record<string, string>> {
-    await this.requireExists(identity, projectId);
-    return this.withDev(identity, projectId, (repo) => repo.readAllFiles());
+    return withSpan(
+      {
+        tracer,
+        name: "project.read_all_files",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        await this.requireExists(identity, projectId);
+        return this.withDev(identity, projectId, (repo) => repo.readAllFiles());
+      },
+    );
   }
 
   /**
@@ -505,19 +571,32 @@ export class ProjectsService {
     author = SYSTEM_AUTHOR,
     opts?: { paths?: readonly string[] },
   ): Promise<string> {
-    await this.requireExists(identity, projectId);
-    const repo = await this.projectManager.openDev(
-      identity.tenantId,
-      projectId,
-      identity.externalUserId,
+    return withSpan(
+      {
+        tracer,
+        name: "project.commit_all",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        await this.requireExists(identity, projectId);
+        const repo = await this.projectManager.openDev(
+          identity.tenantId,
+          projectId,
+          identity.externalUserId,
+        );
+        try {
+          const status = await repo.status();
+          if (!status.dirty) return await repo.resolveRef("HEAD");
+          return await repo.commit(message, author, opts);
+        } finally {
+          await repo.dispose();
+        }
+      },
     );
-    try {
-      const status = await repo.status();
-      if (!status.dirty) return await repo.resolveRef("HEAD");
-      return await repo.commit(message, author, opts);
-    } finally {
-      await repo.dispose();
-    }
   }
 
   async writeFile(
@@ -526,32 +605,45 @@ export class ProjectsService {
     filePath: string,
     input: WriteFileInput,
   ): Promise<string> {
-    await this.requireExists(identity, projectId);
-    assertMayManageRolePolicy(identity, projectId, [filePath]);
-    return this.withDev(identity, projectId, async (repo) => {
-      if (
-        input.expectedContent !== undefined &&
-        (await repo.readFile(filePath)) !== input.expectedContent
-      )
-        throw new ProjectFileConflictError();
-      if (
-        filePath.startsWith("store/") &&
-        (await this.projectManager.localPath({
-          tenantId: identity.tenantId,
-          projectId,
-        }))
-      )
-        await protectLocalDocuments(repo.repoPath);
-      await repo.writeFile(filePath, input.content);
-      if (input.commitMessage) {
-        await repo.commit(
-          input.commitMessage,
-          authorFor(identity.externalUserId),
-          { paths: [filePath] },
-        );
-      }
-      return input.content;
-    });
+    return withSpan(
+      {
+        tracer,
+        name: "project.write_file",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async () => {
+        await this.requireExists(identity, projectId);
+        assertMayManageRolePolicy(identity, projectId, [filePath]);
+        return this.withDev(identity, projectId, async (repo) => {
+          if (
+            input.expectedContent !== undefined &&
+            (await repo.readFile(filePath)) !== input.expectedContent
+          )
+            throw new ProjectFileConflictError();
+          if (
+            filePath.startsWith("store/") &&
+            (await this.projectManager.localPath({
+              tenantId: identity.tenantId,
+              projectId,
+            }))
+          )
+            await protectLocalDocuments(repo.repoPath);
+          await repo.writeFile(filePath, input.content);
+          if (input.commitMessage) {
+            await repo.commit(
+              input.commitMessage,
+              authorFor(identity.externalUserId),
+              { paths: [filePath] },
+            );
+          }
+          return input.content;
+        });
+      },
+    );
   }
 
   /**

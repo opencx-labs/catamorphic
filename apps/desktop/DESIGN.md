@@ -303,5 +303,11 @@ Project switching changes visibility without disposing work. A profile can
 share its dock across projects, detach it above native windows, and place it
 on either edge. Project colors remain scoped to their chats and workspace.
 Cross-project resource navigation uses a subtle accent tint and honors reduced
-motion. See [ADR 0119](../../docs/decisions/0119-project-workspaces-and-shared-chat-dock.md)
+motion. See [ADR 0121](../../docs/decisions/0121-project-workspaces-and-shared-chat-dock.md)
 and the [workspace interactions](docs/workspace-interactions.md) contract.
+
+## Observability
+
+The desktop exports logs, traces, and metrics through standard OTEL settings.
+Machine settings and committed project defaults select local and remote destinations independently.
+See [OBSERVABILITY.md](../../OBSERVABILITY.md) and ADR 0119 for configuration.

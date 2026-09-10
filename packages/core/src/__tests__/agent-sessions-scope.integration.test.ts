@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
+import { correlationAttributes, withTelemetryContext } from "@catamorphic/otel";
 import type {
   AgentEvent,
   CodingAgentProvider,
@@ -12,6 +13,8 @@ import type {
   StartSessionOpts,
   TurnOptions,
 } from "@catamorphic/sandbox";
+import { context, trace } from "@opentelemetry/api";
+import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
@@ -57,6 +60,7 @@ const unusedSandboxProvider = new Proxy({} as SandboxProvider, {
 class RecordingProvider implements CodingAgentProvider {
   readonly name: string;
   readonly starts: StartSessionOpts[] = [];
+  readonly correlations: ReturnType<typeof correlationAttributes>[] = [];
   readonly turns: Array<TurnOptions | undefined> = [];
   constructor(name: string) {
     this.name = name;
@@ -77,6 +81,7 @@ class RecordingProvider implements CodingAgentProvider {
     opts?: TurnOptions,
   ): AsyncIterable<AgentEvent> {
     this.turns.push(opts);
+    this.correlations.push(correlationAttributes());
     if (message === "partial then fail") {
       yield { type: "text", content: "I finished the useful part." };
       yield { type: "error", content: "Provider connection closed" };
@@ -434,6 +439,57 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
       agentId: csmAgentId,
     });
     expect(switched.model).toBeNull();
+  });
+
+  it("reconstructs each durable turn scope without the drainer caller's workflow or job IDs", async () => {
+    if (!db) throw new Error("unreachable");
+    const provider = new NodeTracerProvider();
+    provider.register();
+    try {
+      const session = await sessions.create(admin, projectId, {
+        agentId: salesAgentId,
+      });
+      const offset = sales.correlations.length;
+      await withTelemetryContext(
+        {
+          attributes: {
+            "catamorphic.run.id": "unrelated-run",
+            "catamorphic.queue.job.id": "unrelated-job",
+            "catamorphic.agent.turn.id": "unrelated-turn",
+          },
+        },
+        async () => {
+          await sessions.sendMessage(admin, projectId, session.id, "one");
+          await sessions.sendMessage(admin, projectId, session.id, "two");
+        },
+      );
+      const turns = await db
+        .selectFrom("agent_turns")
+        .select("id")
+        .where("session_id", "=", session.id)
+        .execute();
+      const observed = sales.correlations.slice(offset);
+      expect(observed).toHaveLength(2);
+      expect(
+        new Set(
+          observed.map((attributes) => attributes["catamorphic.agent.turn.id"]),
+        ),
+      ).toEqual(new Set(turns.map((turn) => turn.id)));
+      for (const attributes of observed) {
+        expect(attributes).toMatchObject({
+          "catamorphic.tenant.id": admin.tenantId,
+          "user.id": admin.externalUserId,
+          "catamorphic.project.id": projectId,
+          "catamorphic.agent.session.id": session.id,
+        });
+        expect(attributes["catamorphic.run.id"]).toBeUndefined();
+        expect(attributes["catamorphic.queue.job.id"]).toBeUndefined();
+      }
+    } finally {
+      await provider.shutdown();
+      trace.disable();
+      context.disable();
+    }
   });
 
   it("keeps partial assistant prose separate from a fatal provider error", async () => {

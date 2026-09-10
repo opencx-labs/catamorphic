@@ -914,12 +914,12 @@ function LayoutSection({
       className="mt-8 flex flex-col gap-3"
       data-settings-layout={title === "Workspace layout" ? "" : undefined}
     >
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-sm font-semibold">{title}</h2>
         {projectId && (
           <select
             aria-label="Settings scope"
-            className="field h-8 rounded-md px-2 text-xs"
+            className="field h-8 min-w-0 max-w-full rounded-md px-2 text-xs"
             value={scope}
             disabled={saving}
             onChange={(event) => setScope(event.target.value as SettingsScope)}
@@ -997,9 +997,9 @@ function LayoutSection({
                 </p>
               </div>
               <div
-                className={`flex shrink-0 items-center gap-3 ${"options" in definition ? "flex-row-reverse justify-end @xl/settings:flex-row" : ""}`}
+                className={`flex min-w-0 max-w-full shrink-0 items-center gap-3 ${"options" in definition ? "flex-row-reverse justify-end @xl/settings:flex-row" : ""}`}
               >
-                <span className="grid text-xs">
+                <span className="grid shrink-0 text-xs">
                   <span
                     aria-hidden="true"
                     className="invisible col-start-1 row-start-1"
@@ -1040,7 +1040,7 @@ function LayoutSection({
                     name={key}
                     disabled={saving}
                     value={String(value)}
-                    className="field h-8 rounded-md px-2 text-sm"
+                    className="field h-8 min-w-0 max-w-full rounded-md px-2 text-sm"
                     onChange={(event) =>
                       void save({ [key]: event.target.value })
                     }

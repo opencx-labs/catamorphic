@@ -147,6 +147,7 @@ export class ConnectionsService {
         name: "connection.authorization.begin",
         attributes: {
           "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
           "catamorphic.project.id": args.projectId,
           "catamorphic.connection.environment": args.environment,
           "catamorphic.connection.alias": args.alias,
@@ -269,6 +270,7 @@ export class ConnectionsService {
           name: "connection.authorization.complete",
           attributes: {
             "catamorphic.tenant.id": args.identity.tenantId,
+            "user.id": args.identity.externalUserId,
             "catamorphic.project.id": attempt.project_id,
             "catamorphic.connection.environment": attempt.environment_name,
             "catamorphic.connection.alias": attempt.alias,
@@ -1099,6 +1101,7 @@ export class ConnectionsService {
             name: "connection.revoke",
             attributes: {
               "catamorphic.tenant.id": args.identity.tenantId,
+              "user.id": args.identity.externalUserId,
               "catamorphic.connection.id": connection.id,
               "catamorphic.connection.provider": connection.provider_kind,
             },
@@ -1192,6 +1195,7 @@ export class ConnectionsService {
           name: "connection.refresh",
           attributes: {
             "catamorphic.tenant.id": args.identity.tenantId,
+            "user.id": args.identity.externalUserId,
             "catamorphic.connection.id": connection.id,
             "catamorphic.connection.provider": connection.provider_kind,
           },

@@ -1,5 +1,5 @@
 import type { DB } from "@catamorphic/db";
-import { getTracer, withSpan } from "@catamorphic/otel";
+import { getTracer, setSpanCorrelation, withSpan } from "@catamorphic/otel";
 import { EXECUTION_TRANSFORM_VERSION } from "@catamorphic/parser";
 import {
   DEPLOYMENT_RUNTIME_VERSION,
@@ -77,7 +77,10 @@ export class DeploymentArtifactsService {
           )
           .returningAll()
           .executeTakeFirstOrThrow();
-        span.setAttribute("catamorphic.deployment_artifact.id", row.id);
+        setSpanCorrelation({
+          span,
+          attributes: { "catamorphic.deployment_artifact.id": row.id },
+        });
         span.setAttribute("catamorphic.deployment_artifact.status", row.status);
         return mapDeploymentArtifact(row);
       },

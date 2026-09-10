@@ -1,4 +1,4 @@
-# 0119 - Persistent project workspaces and a shared chat dock
+# 0121 - Persistent project workspaces and a shared chat dock
 
 - **Status:** Accepted
 - **Date:** 2026-09-10

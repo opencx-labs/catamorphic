@@ -1,4 +1,6 @@
 import type { Identity } from "@catamorphic/core";
+import { setSpanCorrelation } from "@catamorphic/otel";
+import { trace } from "@opentelemetry/api";
 import type { FastifyRequest } from "fastify";
 
 /**
@@ -74,6 +76,15 @@ interface IdentityCarrier {
 /** Stores the resolved identity on the request (plugin-internal). */
 export function attachIdentity(request: FastifyRequest, identity: Identity) {
   (request as unknown as IdentityCarrier)[IDENTITY_KEY] = identity;
+  const span = trace.getActiveSpan();
+  if (span)
+    setSpanCorrelation({
+      span,
+      attributes: {
+        "catamorphic.tenant.id": identity.tenantId,
+        "user.id": identity.externalUserId,
+      },
+    });
 }
 
 /** The attached identity, or null on a public route with no session. */

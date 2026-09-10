@@ -1,5 +1,13 @@
 import { knownPoolSize } from "@catamorphic/db";
-import { getTracer, type SpanAttributes, withSpan } from "@catamorphic/otel";
+import {
+  emitLog,
+  getTracer,
+  markSpanError,
+  SeverityNumber,
+  type SpanAttributes,
+  withSpan,
+  withTelemetryContext,
+} from "@catamorphic/otel";
 import type {
   ExecutionJob,
   ExecutionJobKind,
@@ -336,17 +344,7 @@ export class ExecutionWorkerService {
     leaseSeconds: number;
     signal: AbortSignal;
   }): Promise<void> {
-    await withSpan(
-      {
-        tracer,
-        name: "queue.process",
-        attributes: executionJobAttributes(args),
-      },
-      async (span) => {
-        const disposition = await this.runClaimedJob(args);
-        span.setAttribute("catamorphic.queue.job.outcome", disposition.outcome);
-      },
-    ).catch(() => undefined);
+    await this.runClaimedJob(args).catch(() => undefined);
   }
 
   /**
@@ -356,6 +354,41 @@ export class ExecutionWorkerService {
    * detach — by simply not claiming the next job — at the first wait.
    */
   async runClaimedJob(args: {
+    job: ExecutionJob;
+    workerId: string;
+    leaseSeconds: number;
+    signal: AbortSignal;
+  }): Promise<ClaimedJobDisposition> {
+    // A telemetry lookup failure must not prevent execution or leak a caller's scope.
+    const persisted = await this.jobs
+      .correlationForJob({ job: args.job })
+      .catch(() => ({}));
+    const attributes = { ...persisted, ...executionJobAttributes(args) };
+    return withTelemetryContext({ attributes, reset: true }, () =>
+      withSpan({ tracer, name: "queue.process", attributes }, async (span) => {
+        const disposition = await this.runClaimedJobInner(args);
+        span.setAttribute("catamorphic.queue.job.outcome", disposition.outcome);
+        if (disposition.outcome === "failed") {
+          markSpanError({ span, errorType: "job_failed" });
+          span.setAttribute(
+            "catamorphic.queue.job.exhausted",
+            disposition.exhausted,
+          );
+          emitLog({
+            scope: "@catamorphic/core",
+            body: "Execution job failed",
+            severity: SeverityNumber.ERROR,
+            attributes: {
+              "catamorphic.queue.job.exhausted": disposition.exhausted,
+            },
+          });
+        }
+        return disposition;
+      }),
+    );
+  }
+
+  private async runClaimedJobInner(args: {
     job: ExecutionJob;
     workerId: string;
     leaseSeconds: number;
@@ -521,6 +554,8 @@ function executionJobAttributes(args: {
     "catamorphic.queue.job.kind": args.job.kind,
     "catamorphic.queue.job.attempt": args.job.attempt,
     "catamorphic.run.id": args.job.workflowRunId,
+    "catamorphic.workflow.step.attempt.id":
+      args.job.workflowStepAttemptId ?? undefined,
   };
 }
 

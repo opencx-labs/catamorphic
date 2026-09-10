@@ -4,7 +4,7 @@ import {
   type CloneSource as GitCloneSource,
   type ProjectManager,
 } from "@catamorphic/git";
-import { getTracer, withSpan } from "@catamorphic/otel";
+import { getTracer, setSpanCorrelation, withSpan } from "@catamorphic/otel";
 import {
   executionFiles,
   prepareWorkflowExecution,
@@ -1026,47 +1026,99 @@ export class RunsService {
   }
 
   async cancel(args: CancelRunInput): Promise<Run> {
-    await this.assertBuilderForRun(args.identity, args.runId);
-    const run = await this.get(args);
-    const allocationRuntime = run.allocationId
-      ? await this.runtimeForAllocation({
-          identity: args.identity,
-          allocationId: run.allocationId,
-        }).catch(() => undefined)
-      : undefined;
-    const invocations = await this.deps.coordinator.cancel(args);
-    const deploymentRuntime =
-      allocationRuntime?.runtime ?? this.deps.deploymentRuntime;
-    await Promise.all(
-      invocations.map((invocation) =>
-        deploymentRuntime?.cancel(invocation).catch(() => {}),
-      ),
+    return withSpan(
+      {
+        tracer,
+        name: "workflow.cancel",
+        attributes: {
+          "catamorphic.run.id": args.runId,
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+        },
+      },
+      async () => {
+        await this.assertBuilderForRun(args.identity, args.runId);
+        const run = await this.get(args);
+        const allocationRuntime = run.allocationId
+          ? await this.runtimeForAllocation({
+              identity: args.identity,
+              allocationId: run.allocationId,
+            }).catch(() => undefined)
+          : undefined;
+        const invocations = await this.deps.coordinator.cancel(args);
+        const deploymentRuntime =
+          allocationRuntime?.runtime ?? this.deps.deploymentRuntime;
+        await Promise.all(
+          invocations.map((invocation) =>
+            deploymentRuntime?.cancel(invocation).catch(() => {}),
+          ),
+        );
+        return this.get(args);
+      },
     );
-    return this.get(args);
   }
 
   async pause(args: PauseRunInput): Promise<Run> {
-    await this.assertBuilderForRun(args.identity, args.runId);
-    const outcome = await this.deps.coordinator.pauseOperator(args);
-    if (outcome === "unavailable") {
-      throw new RunCapabilityError("pauseProcessing", "pause");
-    }
-    return this.get(args);
+    return withSpan(
+      {
+        tracer,
+        name: "workflow.pause",
+        attributes: {
+          "catamorphic.run.id": args.runId,
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+        },
+      },
+      async () => {
+        await this.assertBuilderForRun(args.identity, args.runId);
+        const outcome = await this.deps.coordinator.pauseOperator(args);
+        if (outcome === "unavailable") {
+          throw new RunCapabilityError("pauseProcessing", "pause");
+        }
+        return this.get(args);
+      },
+    );
   }
 
   async resume(args: ResumeRunInput): Promise<Run> {
-    await this.assertBuilderForRun(args.identity, args.runId);
-    const outcome = await this.deps.coordinator.resumeOperator(args);
-    if (outcome === "unavailable") {
-      throw new RunCapabilityError("resumeProcessing", "resume");
-    }
-    return this.get(args);
+    return withSpan(
+      {
+        tracer,
+        name: "workflow.resume",
+        attributes: {
+          "catamorphic.run.id": args.runId,
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+        },
+      },
+      async () => {
+        await this.assertBuilderForRun(args.identity, args.runId);
+        const outcome = await this.deps.coordinator.resumeOperator(args);
+        if (outcome === "unavailable") {
+          throw new RunCapabilityError("resumeProcessing", "resume");
+        }
+        return this.get(args);
+      },
+    );
   }
 
   async resumePause(args: ResumeRunPauseInput): Promise<Run> {
-    await this.assertBuilderForRun(args.identity, args.runId);
-    await this.deps.coordinator.resumePause(args);
-    return this.get(args);
+    return withSpan(
+      {
+        tracer,
+        name: "workflow.resume_pause",
+        attributes: {
+          "catamorphic.run.id": args.runId,
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+        },
+      },
+      async () => {
+        await this.assertBuilderForRun(args.identity, args.runId);
+        await this.deps.coordinator.resumePause(args);
+        return this.get(args);
+      },
+    );
   }
 
   /**
@@ -1388,137 +1440,156 @@ export class RunsService {
     timeoutSeconds?: number;
     signal?: AbortSignal;
   }): Promise<RuntimeInvocationReceipt> {
-    args.signal?.throwIfAborted();
-    const selected = await this.runtimeForAllocation({
-      identity: args.identity,
-      allocationId: args.allocationId,
-    });
-    const provider = selected.provider;
-    const deploymentRuntime = selected.runtime;
-    if (!provider?.deploymentRuntime || !deploymentRuntime) {
-      throw new SandboxProviderNotConfiguredError();
-    }
-    const [source, plugins, artifact] = await Promise.all([
-      this.prepareProductionSource(args),
-      this.loadPlugins(args.identity, args.projectId, args.workflowName),
-      this.deps.deploymentArtifacts.get({ artifactId: args.artifactId }),
-    ]);
-    const runtimePackagesForArtifact = runtimePackages({
-      plugins: plugins?.plugins,
-      workflowPackage: source.workflowPackage,
-    });
-    if (
-      !artifact ||
-      !(await this.deps.deploymentArtifacts.verify({
-        artifact,
-        projectId: args.projectId,
-        commitSha: args.commitSha,
-        files: source.files,
-        plugins: runtimePackagesForArtifact,
-      }))
-    ) {
-      throw new Error(
-        `Deployment artifact '${args.artifactId}' does not match run`,
-      );
-    }
-    const runtime = await deploymentRuntime.ensure({
-      projectId: args.projectId,
-      artifact,
-      files: source.files,
-      originalFiles: source.originalFiles,
-      cloneSource: source.cloneSource,
-      plugins: runtimePackagesForArtifact,
-    });
-    const base = {
-      protocolVersion: RUNTIME_PROTOCOL_VERSION,
-      runtimeId: runtime.runtimeId,
-      invocationId: args.invocationId,
-      deploymentArtifactId: artifact.id,
-      artifactDigest: artifact.artifactDigest,
-      transformVersion: artifact.transformVersion,
-      runtimeVersion: artifact.runtimeVersion,
-      input: args.input,
-      attempt: args.attempt,
-      deadlineAt: new Date(
-        Date.now() + (args.timeoutSeconds ?? 300) * 1_000,
-      ).toISOString(),
-      env: plugins?.secrets,
-      signal: args.signal,
-    } as const;
-    const targetBase = {
-      modulePath: args.modulePath ?? source.workflowFile,
-      exportName: args.exportName ?? args.workflowName,
-    };
-    if (args.kind === "durable-boundary") {
-      const receipt = await provider.deploymentRuntime.invoke({
-        ...base,
-        kind: args.kind,
-        target: { ...targetBase, stepIndex: requireStepIndex(args.stepIndex) },
-      });
-      args.signal?.throwIfAborted();
-      return receipt;
-    }
-    if (args.kind === "batch-source") {
-      const operation = args.operation;
-      if (operation !== "initialize" && operation !== "readPage") {
-        throw new Error("Invalid batch source operation");
-      }
-      const receipt = await provider.deploymentRuntime.invoke({
-        ...base,
-        kind: args.kind,
-        target: {
-          ...targetBase,
-          stepIndex: requireStepIndex(args.stepIndex),
-          operation,
+    return withSpan(
+      {
+        tracer,
+        name: "workflow.invoke_production_runtime",
+        attributes: {
+          "catamorphic.workflow.name": args.workflowName,
+          "catamorphic.commit.sha": args.commitSha,
+          "catamorphic.deployment_artifact.id": args.artifactId,
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+          "catamorphic.project.id": args.projectId,
         },
-      });
-      args.signal?.throwIfAborted();
-      return receipt;
-    }
-    if (args.kind === "batch-step") {
-      if (args.operation === "run") {
+      },
+      async () => {
+        args.signal?.throwIfAborted();
+        const selected = await this.runtimeForAllocation({
+          identity: args.identity,
+          allocationId: args.allocationId,
+        });
+        const provider = selected.provider;
+        const deploymentRuntime = selected.runtime;
+        if (!provider?.deploymentRuntime || !deploymentRuntime) {
+          throw new SandboxProviderNotConfiguredError();
+        }
+        const [source, plugins, artifact] = await Promise.all([
+          this.prepareProductionSource(args),
+          this.loadPlugins(args.identity, args.projectId, args.workflowName),
+          this.deps.deploymentArtifacts.get({ artifactId: args.artifactId }),
+        ]);
+        const runtimePackagesForArtifact = runtimePackages({
+          plugins: plugins?.plugins,
+          workflowPackage: source.workflowPackage,
+        });
+        if (
+          !artifact ||
+          !(await this.deps.deploymentArtifacts.verify({
+            artifact,
+            projectId: args.projectId,
+            commitSha: args.commitSha,
+            files: source.files,
+            plugins: runtimePackagesForArtifact,
+          }))
+        ) {
+          throw new Error(
+            `Deployment artifact '${args.artifactId}' does not match run`,
+          );
+        }
+        const runtime = await deploymentRuntime.ensure({
+          projectId: args.projectId,
+          artifact,
+          files: source.files,
+          originalFiles: source.originalFiles,
+          cloneSource: source.cloneSource,
+          plugins: runtimePackagesForArtifact,
+        });
+        const base = {
+          protocolVersion: RUNTIME_PROTOCOL_VERSION,
+          runtimeId: runtime.runtimeId,
+          invocationId: args.invocationId,
+          deploymentArtifactId: artifact.id,
+          artifactDigest: artifact.artifactDigest,
+          transformVersion: artifact.transformVersion,
+          runtimeVersion: artifact.runtimeVersion,
+          input: args.input,
+          attempt: args.attempt,
+          deadlineAt: new Date(
+            Date.now() + (args.timeoutSeconds ?? 300) * 1_000,
+          ).toISOString(),
+          env: plugins?.secrets,
+          signal: args.signal,
+        } as const;
+        const targetBase = {
+          modulePath: args.modulePath ?? source.workflowFile,
+          exportName: args.exportName ?? args.workflowName,
+        };
+        if (args.kind === "durable-boundary") {
+          const receipt = await provider.deploymentRuntime.invoke({
+            ...base,
+            kind: args.kind,
+            target: {
+              ...targetBase,
+              stepIndex: requireStepIndex(args.stepIndex),
+            },
+          });
+          args.signal?.throwIfAborted();
+          return receipt;
+        }
+        if (args.kind === "batch-source") {
+          const operation = args.operation;
+          if (operation !== "initialize" && operation !== "readPage") {
+            throw new Error("Invalid batch source operation");
+          }
+          const receipt = await provider.deploymentRuntime.invoke({
+            ...base,
+            kind: args.kind,
+            target: {
+              ...targetBase,
+              stepIndex: requireStepIndex(args.stepIndex),
+              operation,
+            },
+          });
+          args.signal?.throwIfAborted();
+          return receipt;
+        }
+        if (args.kind === "batch-step") {
+          if (args.operation === "run") {
+            const receipt = await provider.deploymentRuntime.invoke({
+              ...base,
+              kind: args.kind,
+              target: { ...targetBase, operation: "run" },
+            });
+            args.signal?.throwIfAborted();
+            return receipt;
+          }
+          if (args.operation !== "process")
+            throw new Error("Invalid batch step operation");
+          const receipt = await provider.deploymentRuntime.invoke({
+            ...base,
+            kind: args.kind,
+            target: {
+              ...targetBase,
+              stepIndex: requireStepIndex(args.stepIndex),
+              operation: "process",
+            },
+          });
+          args.signal?.throwIfAborted();
+          return receipt;
+        }
+        const operation = args.operation;
+        if (
+          operation !== "inspect" &&
+          operation !== "initialize" &&
+          operation !== "writeBatch" &&
+          operation !== "finalize"
+        ) {
+          throw new Error("Invalid batch sink operation");
+        }
         const receipt = await provider.deploymentRuntime.invoke({
           ...base,
           kind: args.kind,
-          target: { ...targetBase, operation: "run" },
+          target: {
+            ...targetBase,
+            stepIndex: requireStepIndex(args.stepIndex),
+            operation,
+          },
         });
         args.signal?.throwIfAborted();
         return receipt;
-      }
-      if (args.operation !== "process")
-        throw new Error("Invalid batch step operation");
-      const receipt = await provider.deploymentRuntime.invoke({
-        ...base,
-        kind: args.kind,
-        target: {
-          ...targetBase,
-          stepIndex: requireStepIndex(args.stepIndex),
-          operation: "process",
-        },
-      });
-      args.signal?.throwIfAborted();
-      return receipt;
-    }
-    const operation = args.operation;
-    if (
-      operation !== "inspect" &&
-      operation !== "initialize" &&
-      operation !== "writeBatch" &&
-      operation !== "finalize"
-    ) {
-      throw new Error("Invalid batch sink operation");
-    }
-    const receipt = await provider.deploymentRuntime.invoke({
-      ...base,
-      kind: args.kind,
-      target: {
-        ...targetBase,
-        stepIndex: requireStepIndex(args.stepIndex),
-        operation,
       },
-    });
-    args.signal?.throwIfAborted();
-    return receipt;
+    );
   }
 
   private async runtimeForAllocation(args: {
@@ -1591,9 +1662,12 @@ export class RunsService {
         tracer,
         name: "workflow.run",
         attributes: {
+          // This call creates/resolves its own run; do not label it with a caller's run/job.
+          "catamorphic.run.id": undefined,
           "catamorphic.project.id": args.projectId,
           "catamorphic.workflow.name": args.workflowName,
           "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
         },
       },
       async (span) => {
@@ -1608,7 +1682,10 @@ export class RunsService {
           });
         }
         const run = await this.triggerInner(args);
-        span.setAttribute("catamorphic.run.id", run.id);
+        setSpanCorrelation({
+          span,
+          attributes: { "catamorphic.run.id": run.id },
+        });
         span.setAttribute("catamorphic.run.status", run.status);
         return run;
       },

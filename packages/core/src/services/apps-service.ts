@@ -1,6 +1,6 @@
 import type { DB } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
-import { getTracer, withSpan } from "@catamorphic/otel";
+import { getTracer, markSpanError, withSpan } from "@catamorphic/otel";
 import {
   APP_SOURCE_ROOT,
   type AppApiSurface,
@@ -232,6 +232,7 @@ export class AppsService {
         name: "app.build",
         attributes: {
           "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
           "catamorphic.project.id": args.projectId,
           "catamorphic.app.name": args.appName,
           "catamorphic.app.build_kind": args.kind,
@@ -345,6 +346,10 @@ export class AppsService {
           await this.pruneOldPreviews({ ...keyArgs });
           return mapVersion(ready, args.appName);
         } catch (error) {
+          markSpanError({
+            span,
+            errorType: error instanceof Error ? error.name : "_OTHER",
+          });
           const failed = await this.db
             .updateTable("app_versions")
             .set({
@@ -377,26 +382,39 @@ export class AppsService {
     projectId: string;
     message: string;
   }): Promise<string> {
-    await this.requireProject(args.identity, args.projectId);
-    await this.deps.devSandboxes.syncBack({
-      identity: args.identity,
-      projectId: args.projectId,
-    });
-    const repo = await this.deps.projectManager.openDev(
-      args.identity.tenantId,
-      args.projectId,
-      args.identity.externalUserId,
+    return withSpan(
+      {
+        tracer,
+        name: "app.commit_dev_tree",
+        attributes: {
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+          "catamorphic.project.id": args.projectId,
+        },
+      },
+      async () => {
+        await this.requireProject(args.identity, args.projectId);
+        await this.deps.devSandboxes.syncBack({
+          identity: args.identity,
+          projectId: args.projectId,
+        });
+        const repo = await this.deps.projectManager.openDev(
+          args.identity.tenantId,
+          args.projectId,
+          args.identity.externalUserId,
+        );
+        try {
+          const status = await repo.status();
+          if (!status.dirty) return await repo.resolveRef("HEAD");
+          return await repo.commit(args.message, {
+            name: "catamorphic",
+            email: "agent@catamorphic.dev",
+          });
+        } finally {
+          await repo.dispose();
+        }
+      },
     );
-    try {
-      const status = await repo.status();
-      if (!status.dirty) return await repo.resolveRef("HEAD");
-      return await repo.commit(args.message, {
-        name: "catamorphic",
-        email: "agent@catamorphic.dev",
-      });
-    } finally {
-      await repo.dispose();
-    }
   }
 
   /** Makes a ready published version the live one, atomically replacing any predecessor. */
@@ -405,40 +423,53 @@ export class AppsService {
     projectId: string;
     versionId: string;
   }): Promise<AppVersion> {
-    await this.requireProject(args.identity, args.projectId);
-    const policy = await this.deps.policies.get(args.identity.tenantId);
-    if (!policy.appsEnabled) {
-      throw new AppsDisabledError(args.identity.tenantId);
-    }
-    return this.db.transaction().execute(async (trx) => {
-      const version = await trx
-        .selectFrom("app_versions")
-        .innerJoin("apps", "apps.id", "app_versions.app_id")
-        .where("app_versions.id", "=", args.versionId)
-        .where("apps.project_id", "=", args.projectId)
-        .selectAll("app_versions")
-        .select("apps.name as app_name")
-        .executeTakeFirst();
-      if (!version) throw new AppVersionNotFoundError(args.versionId);
-      if (version.kind !== "published" || version.status !== "ready") {
-        throw new AppPublishStateError(
-          "Only a ready published build can be made active",
-        );
-      }
-      await trx
-        .updateTable("app_versions")
-        .set({ is_active: false })
-        .where("app_id", "=", version.app_id)
-        .where("is_active", "=", true)
-        .execute();
-      const active = await trx
-        .updateTable("app_versions")
-        .set({ is_active: true, published_at: new Date() })
-        .where("id", "=", args.versionId)
-        .returningAll()
-        .executeTakeFirstOrThrow();
-      return mapVersion(active, version.app_name);
-    });
+    return withSpan(
+      {
+        tracer,
+        name: "app.publish",
+        attributes: {
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+          "catamorphic.project.id": args.projectId,
+        },
+      },
+      async () => {
+        await this.requireProject(args.identity, args.projectId);
+        const policy = await this.deps.policies.get(args.identity.tenantId);
+        if (!policy.appsEnabled) {
+          throw new AppsDisabledError(args.identity.tenantId);
+        }
+        return this.db.transaction().execute(async (trx) => {
+          const version = await trx
+            .selectFrom("app_versions")
+            .innerJoin("apps", "apps.id", "app_versions.app_id")
+            .where("app_versions.id", "=", args.versionId)
+            .where("apps.project_id", "=", args.projectId)
+            .selectAll("app_versions")
+            .select("apps.name as app_name")
+            .executeTakeFirst();
+          if (!version) throw new AppVersionNotFoundError(args.versionId);
+          if (version.kind !== "published" || version.status !== "ready") {
+            throw new AppPublishStateError(
+              "Only a ready published build can be made active",
+            );
+          }
+          await trx
+            .updateTable("app_versions")
+            .set({ is_active: false })
+            .where("app_id", "=", version.app_id)
+            .where("is_active", "=", true)
+            .execute();
+          const active = await trx
+            .updateTable("app_versions")
+            .set({ is_active: true, published_at: new Date() })
+            .where("id", "=", args.versionId)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+          return mapVersion(active, version.app_name);
+        });
+      },
+    );
   }
 
   async listVersions(args: {
@@ -488,28 +519,41 @@ export class AppsService {
     projectId: string;
     versionId: string;
   }): Promise<AppBundle> {
-    await this.requireProject(args.identity, args.projectId);
-    const version = await this.db
-      .selectFrom("app_versions")
-      .innerJoin("apps", "apps.id", "app_versions.app_id")
-      .where("app_versions.id", "=", args.versionId)
-      .where("apps.project_id", "=", args.projectId)
-      .select(["app_versions.bundle_key", "app_versions.css_key"])
-      .executeTakeFirst();
-    if (!version?.bundle_key || !version.css_key) {
-      throw new AppVersionNotFoundError(args.versionId);
-    }
-    const [code, css] = await Promise.all([
-      this.deps.bundleStore.get(version.bundle_key),
-      this.deps.bundleStore.get(version.css_key),
-    ]);
-    if (!code || !css) throw new AppVersionNotFoundError(args.versionId);
-    const decoder = new TextDecoder();
-    return {
-      code: decoder.decode(code.data),
-      css: decoder.decode(css.data),
-      etag: `"${args.versionId}"`,
-    };
+    return withSpan(
+      {
+        tracer,
+        name: "app.get_bundle",
+        attributes: {
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+          "catamorphic.project.id": args.projectId,
+        },
+      },
+      async () => {
+        await this.requireProject(args.identity, args.projectId);
+        const version = await this.db
+          .selectFrom("app_versions")
+          .innerJoin("apps", "apps.id", "app_versions.app_id")
+          .where("app_versions.id", "=", args.versionId)
+          .where("apps.project_id", "=", args.projectId)
+          .select(["app_versions.bundle_key", "app_versions.css_key"])
+          .executeTakeFirst();
+        if (!version?.bundle_key || !version.css_key) {
+          throw new AppVersionNotFoundError(args.versionId);
+        }
+        const [code, css] = await Promise.all([
+          this.deps.bundleStore.get(version.bundle_key),
+          this.deps.bundleStore.get(version.css_key),
+        ]);
+        if (!code || !css) throw new AppVersionNotFoundError(args.versionId);
+        const decoder = new TextDecoder();
+        return {
+          code: decoder.decode(code.data),
+          css: decoder.decode(css.data),
+          etag: `"${args.versionId}"`,
+        };
+      },
+    );
   }
 
   /**

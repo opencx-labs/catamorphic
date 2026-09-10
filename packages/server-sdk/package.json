@@ -25,10 +25,10 @@
   },
   "dependencies": {
     "@catamorphic/core": "workspace:*",
+    "@catamorphic/otel": "workspace:*",
     "@catamorphic/db": "workspace:*",
     "@catamorphic/git": "workspace:*",
     "@catamorphic/github": "workspace:*",
-    "@catamorphic/otel": "workspace:*",
     "@catamorphic/plugins": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
     "croner": "^10.0.1",
@@ -38,6 +38,8 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/sdk-trace-node": "^2.9.0",
     "@types/node": "^26.1.1",
     "@types/pg": "^8.20.0",
     "@types/web-push": "^3.6.4",

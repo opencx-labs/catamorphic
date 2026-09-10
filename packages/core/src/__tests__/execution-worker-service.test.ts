@@ -35,6 +35,7 @@ function job(id: string): ExecutionJob {
 
 describe("execution worker retention sweep", () => {
   const idleJobs = {
+    correlationForJob: async () => ({}),
     requeueExpired: async () => 0,
     claimExhausted: async () => [],
     claim: async () => [],
@@ -89,6 +90,7 @@ describe("execution worker resilience", () => {
     let claimCalls = 0;
     const processed: string[] = [];
     const jobs = {
+      correlationForJob: async () => ({}),
       requeueExpired: async () => 0,
       claimExhausted: async () => [],
       claim: async () => {
@@ -128,6 +130,7 @@ describe("execution worker resilience", () => {
     let remaining = [exhausted];
     const handled: string[] = [];
     const jobs = {
+      correlationForJob: async () => ({}),
       requeueExpired: async () => 0,
       // Models the atomic claim: whichever loop asks first takes the row, and
       // every later caller sees an empty set.
@@ -160,6 +163,7 @@ describe("execution worker resilience", () => {
     const released: string[] = [];
     let claims = 0;
     const jobs = {
+      correlationForJob: async () => ({}),
       requeueExpired: async () => 0,
       claimExhausted: async () => {
         claims += 1;
@@ -191,6 +195,7 @@ describe("execution worker resilience", () => {
 
   it("surfaces no unhandled rejection when a poll fails", async () => {
     const jobs = {
+      correlationForJob: async () => ({}),
       requeueExpired: async () => {
         throw new Error("pool timeout");
       },

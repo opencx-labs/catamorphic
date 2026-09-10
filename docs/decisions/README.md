@@ -131,4 +131,6 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0116](0116-bookmark-library-and-pins.md) | Bookmark library and pins | Accepted |
 | [0117](0117-optional-github-cli-connection.md) | Optional GitHub CLI connection | Accepted |
 | [0118](0118-review-navigation-and-code-rendering.md) | Review navigation and code rendering | Accepted |
-| [0119](0119-project-workspaces-and-shared-chat-dock.md) | Persistent project workspaces and a shared chat dock | Accepted |
+| [0119](0119-three-signal-observability.md) | Three-signal observability | Accepted |
+| [0120](0120-telemetry-correlation-context.md) | Telemetry correlation context | Accepted |
+| [0121](0121-project-workspaces-and-shared-chat-dock.md) | Persistent project workspaces and a shared chat dock | Accepted |

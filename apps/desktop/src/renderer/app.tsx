@@ -5913,7 +5913,10 @@ export function App({
       <AgentWizard
         variant="modal"
         open={wizardModalOpen}
-        onClose={() => setWizardModalOpen(false)}
+        onClose={() => {
+          setWizardModalOpen(false);
+          setSidebarCustomization(null);
+        }}
         onDone={() => setWizardModalOpen(false)}
       />
 

@@ -9,7 +9,10 @@ import {
 } from "@catamorphic/core";
 import type { DB } from "@catamorphic/db";
 import { DEFAULT_SCHEMA } from "@catamorphic/db";
-import { catamorphicPlugin } from "@catamorphic/fastify-plugin";
+import {
+  catamorphicPlugin,
+  instrumentHttpServer,
+} from "@catamorphic/fastify-plugin";
 import { MicrosandboxSandboxProvider } from "@catamorphic/microsandbox";
 import {
   type Catamorphic,
@@ -1016,6 +1019,7 @@ export async function startEmbeddedServer(
       );
     } else done(null, payload);
   });
+  instrumentHttpServer(app);
   registerWorkspaceMcpRoute(
     app,
     async ({ projectId, sessionId, agentId, authorization }) => {

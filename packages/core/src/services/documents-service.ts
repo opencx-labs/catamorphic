@@ -482,10 +482,23 @@ export class DocumentsService {
     path: string;
     version?: number;
   }): Promise<DocumentContent> {
-    const content = await this.readBytes(args);
-    const { bytes, ...rest } = content;
-    const text = bytes ? textOf(bytes, content.contentType) : undefined;
-    return { ...rest, ...(text !== undefined ? { text } : {}) };
+    return withSpan(
+      {
+        tracer,
+        name: "document.read",
+        attributes: {
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+          "catamorphic.project.id": args.projectId,
+        },
+      },
+      async () => {
+        const content = await this.readBytes(args);
+        const { bytes, ...rest } = content;
+        const text = bytes ? textOf(bytes, content.contentType) : undefined;
+        return { ...rest, ...(text !== undefined ? { text } : {}) };
+      },
+    );
   }
 
   /** Metadata + raw bytes of one document (a version, for store paths). */
@@ -495,74 +508,87 @@ export class DocumentsService {
     path: string;
     version?: number;
   }): Promise<DocumentContent & { bytes: Uint8Array }> {
-    await this.requireProject(args.identity, args.projectId);
-    const path = normalizeDocumentPath(args.path);
-    this.assertAccess(args.identity, args.projectId, path, "read");
+    return withSpan(
+      {
+        tracer,
+        name: "document.read_bytes",
+        attributes: {
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+          "catamorphic.project.id": args.projectId,
+        },
+      },
+      async () => {
+        await this.requireProject(args.identity, args.projectId);
+        const path = normalizeDocumentPath(args.path);
+        this.assertAccess(args.identity, args.projectId, path, "read");
 
-    if (!isStorePath(path)) {
-      if (!(await this.programVisible(args)))
-        throw new DocumentNotFoundError(path);
-      const bytes = await withProgram(
-        this.projectManager,
-        args.identity.tenantId,
-        args.projectId,
-        (repo, ref) => readProgramBytes(repo, ref, path),
-        { workingTree: args.identity.scope === undefined },
-      );
-      if (bytes === null) throw new DocumentNotFoundError(path);
-      return {
-        path,
-        source: "program",
-        contentType: contentTypeFor(path),
-        size: bytes.byteLength,
-        bytes,
-      };
-    }
+        if (!isStorePath(path)) {
+          if (!(await this.programVisible(args)))
+            throw new DocumentNotFoundError(path);
+          const bytes = await withProgram(
+            this.projectManager,
+            args.identity.tenantId,
+            args.projectId,
+            (repo, ref) => readProgramBytes(repo, ref, path),
+            { workingTree: args.identity.scope === undefined },
+          );
+          if (bytes === null) throw new DocumentNotFoundError(path);
+          return {
+            path,
+            source: "program",
+            contentType: contentTypeFor(path),
+            size: bytes.byteLength,
+            bytes,
+          };
+        }
 
-    if (args.version === undefined) {
-      await this.refreshLocal({ ...args, path });
-      const root = await this.projectManager.localPath({
-        tenantId: args.identity.tenantId,
-        projectId: args.projectId,
-      });
-      if (
-        root &&
-        !(await fs.stat(await localDocumentPath(root, path)).then(
-          () => true,
-          () => false,
-        ))
-      )
-        throw new DocumentNotFoundError(path);
-    }
+        if (args.version === undefined) {
+          await this.refreshLocal({ ...args, path });
+          const root = await this.projectManager.localPath({
+            tenantId: args.identity.tenantId,
+            projectId: args.projectId,
+          });
+          if (
+            root &&
+            !(await fs.stat(await localDocumentPath(root, path)).then(
+              () => true,
+              () => false,
+            ))
+          )
+            throw new DocumentNotFoundError(path);
+        }
 
-    const doc = await this.db
-      .selectFrom("store_documents")
-      .where("project_id", "=", args.projectId)
-      .where("path", "=", path)
-      .selectAll()
-      .executeTakeFirst();
-    if (!doc) throw new DocumentNotFoundError(path);
-    if (args.version === undefined) {
-      if (doc.deleted) throw new DocumentNotFoundError(path);
-      return { ...this.entryOf(doc), bytes: await this.bytesOf(doc) };
-    }
-    const version = await this.db
-      .selectFrom("store_document_versions")
-      .where("document_id", "=", doc.id)
-      .where("version", "=", args.version)
-      .selectAll()
-      .executeTakeFirst();
-    if (!version || version.deleted) throw new DocumentNotFoundError(path);
-    return {
-      path,
-      source: "store",
-      contentType: version.content_type,
-      size: Number(version.size),
-      version: version.version,
-      writtenBy: version.written_by,
-      writtenAt: version.written_at.toISOString(),
-      bytes: await this.bytesOf(version),
-    };
+        const doc = await this.db
+          .selectFrom("store_documents")
+          .where("project_id", "=", args.projectId)
+          .where("path", "=", path)
+          .selectAll()
+          .executeTakeFirst();
+        if (!doc) throw new DocumentNotFoundError(path);
+        if (args.version === undefined) {
+          if (doc.deleted) throw new DocumentNotFoundError(path);
+          return { ...this.entryOf(doc), bytes: await this.bytesOf(doc) };
+        }
+        const version = await this.db
+          .selectFrom("store_document_versions")
+          .where("document_id", "=", doc.id)
+          .where("version", "=", args.version)
+          .selectAll()
+          .executeTakeFirst();
+        if (!version || version.deleted) throw new DocumentNotFoundError(path);
+        return {
+          path,
+          source: "store",
+          contentType: version.content_type,
+          size: Number(version.size),
+          version: version.version,
+          writtenBy: version.written_by,
+          writtenAt: version.written_at.toISOString(),
+          bytes: await this.bytesOf(version),
+        };
+      },
+    );
   }
 
   /**
@@ -585,6 +611,7 @@ export class DocumentsService {
         attributes: {
           "catamorphic.project.id": args.projectId,
           "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
         },
       },
       async () => {
@@ -747,16 +774,29 @@ export class DocumentsService {
     path: string;
     ifVersion?: number;
   }): Promise<{ version: number }> {
-    await this.requireProject(args.identity, args.projectId);
-    const path = normalizeDocumentPath(args.path);
-    if (!isStorePath(path)) {
-      throw new DocumentPathError(
-        `Only paths under ${STORE_ROOT}/ can be deleted here`,
-      );
-    }
-    this.assertAccess(args.identity, args.projectId, path, "write");
-    await this.refreshLocal({ ...args, path });
-    return this.deleteInner({ ...args, path });
+    return withSpan(
+      {
+        tracer,
+        name: "document.delete",
+        attributes: {
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+          "catamorphic.project.id": args.projectId,
+        },
+      },
+      async () => {
+        await this.requireProject(args.identity, args.projectId);
+        const path = normalizeDocumentPath(args.path);
+        if (!isStorePath(path)) {
+          throw new DocumentPathError(
+            `Only paths under ${STORE_ROOT}/ can be deleted here`,
+          );
+        }
+        this.assertAccess(args.identity, args.projectId, path, "write");
+        await this.refreshLocal({ ...args, path });
+        return this.deleteInner({ ...args, path });
+      },
+    );
   }
 
   private async deleteInner(
@@ -877,95 +917,118 @@ export class DocumentsService {
     prefix?: string;
     limit?: number;
   }): Promise<DocumentMatch[]> {
-    await this.requireProject(args.identity, args.projectId);
-    const query = args.query.trim();
-    if (!query) return [];
-    const mode = args.mode ?? "grep";
-    const prefix = args.prefix ? `${normalizeDocumentPath(args.prefix)}/` : "";
-    const limit = Math.max(1, Math.min(args.limit ?? 50, 200));
-    if (!this.mayReadAnythingUnder(args.identity, args.projectId, prefix)) {
-      return [];
-    }
-    const matches: DocumentMatch[] = [];
-    const matcher = mode === "grep" ? grepMatcher(query) : textMatcher(query);
-
-    // Program side: read the files under the prefix and match in process.
-    if (
-      !isStorePath(prefix.replace(/\/$/, "")) &&
-      (await this.programVisible(args))
-    ) {
-      const files = await withProgram(
-        this.projectManager,
-        args.identity.tenantId,
-        args.projectId,
-        (repo, ref) => readProgramFiles(repo, ref, prefix),
-        { workingTree: args.identity.scope === undefined },
-      );
-      for (const [path, content] of Object.entries(files)) {
-        if (matches.length >= limit) break;
-        if (isStorePath(path) || !isTextType(contentTypeFor(path))) continue;
-        if (
-          !documentAccessAllowed(args.identity, args.projectId, path, "read")
-        ) {
-          continue;
+    return withSpan(
+      {
+        tracer,
+        name: "document.search",
+        attributes: {
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+          "catamorphic.project.id": args.projectId,
+        },
+      },
+      async () => {
+        await this.requireProject(args.identity, args.projectId);
+        const query = args.query.trim();
+        if (!query) return [];
+        const mode = args.mode ?? "grep";
+        const prefix = args.prefix
+          ? `${normalizeDocumentPath(args.prefix)}/`
+          : "";
+        const limit = Math.max(1, Math.min(args.limit ?? 50, 200));
+        if (!this.mayReadAnythingUnder(args.identity, args.projectId, prefix)) {
+          return [];
         }
-        const lines = matcher(content);
-        if (lines.length > 0) matches.push({ path, source: "program", lines });
-      }
-    }
+        const matches: DocumentMatch[] = [];
+        const matcher =
+          mode === "grep" ? grepMatcher(query) : textMatcher(query);
 
-    const localEntries = (await this.projectManager.localPath({
-      tenantId: args.identity.tenantId,
-      projectId: args.projectId,
-    }))
-      ? new Set(
-          (await this.list({ ...args, source: "store" })).map(
-            (entry) => entry.path,
-          ),
-        )
-      : null;
-
-    // Store side: let Postgres narrow, then compute lines from the text.
-    if (matches.length < limit) {
-      const storePrefix = prefix.startsWith(`${STORE_ROOT}/`)
-        ? prefix
-        : `${STORE_ROOT}/`;
-      let q = this.db
-        .selectFrom("store_documents")
-        .where("project_id", "=", args.projectId)
-        .where("deleted", "=", false)
-        .where("text_content", "is not", null)
-        .where("path", "like", `${escapeLike(storePrefix)}%`);
-      q =
-        mode === "grep"
-          ? q.where("text_content", "ilike", `%${escapeLike(query)}%`)
-          : q.where(
-              sql<boolean>`search_vector @@ plainto_tsquery('simple', ${query})`,
-            );
-      const rows = await q
-        .select(["path", "text_content"])
-        .orderBy("path", "asc")
-        .limit(limit * 4)
-        .execute();
-      for (const row of rows) {
-        if (localEntries && !localEntries.has(row.path)) continue;
-        if (matches.length >= limit) break;
+        // Program side: read the files under the prefix and match in process.
         if (
-          !documentAccessAllowed(
-            args.identity,
+          !isStorePath(prefix.replace(/\/$/, "")) &&
+          (await this.programVisible(args))
+        ) {
+          const files = await withProgram(
+            this.projectManager,
+            args.identity.tenantId,
             args.projectId,
-            row.path,
-            "read",
-          )
-        ) {
-          continue;
+            (repo, ref) => readProgramFiles(repo, ref, prefix),
+            { workingTree: args.identity.scope === undefined },
+          );
+          for (const [path, content] of Object.entries(files)) {
+            if (matches.length >= limit) break;
+            if (isStorePath(path) || !isTextType(contentTypeFor(path)))
+              continue;
+            if (
+              !documentAccessAllowed(
+                args.identity,
+                args.projectId,
+                path,
+                "read",
+              )
+            ) {
+              continue;
+            }
+            const lines = matcher(content);
+            if (lines.length > 0)
+              matches.push({ path, source: "program", lines });
+          }
         }
-        const lines = matcher(row.text_content ?? "");
-        if (lines.length > 0)
-          matches.push({ path: row.path, source: "store", lines });
-      }
-    }
-    return matches;
+
+        const localEntries = (await this.projectManager.localPath({
+          tenantId: args.identity.tenantId,
+          projectId: args.projectId,
+        }))
+          ? new Set(
+              (await this.list({ ...args, source: "store" })).map(
+                (entry) => entry.path,
+              ),
+            )
+          : null;
+
+        // Store side: let Postgres narrow, then compute lines from the text.
+        if (matches.length < limit) {
+          const storePrefix = prefix.startsWith(`${STORE_ROOT}/`)
+            ? prefix
+            : `${STORE_ROOT}/`;
+          let q = this.db
+            .selectFrom("store_documents")
+            .where("project_id", "=", args.projectId)
+            .where("deleted", "=", false)
+            .where("text_content", "is not", null)
+            .where("path", "like", `${escapeLike(storePrefix)}%`);
+          q =
+            mode === "grep"
+              ? q.where("text_content", "ilike", `%${escapeLike(query)}%`)
+              : q.where(
+                  sql<boolean>`search_vector @@ plainto_tsquery('simple', ${query})`,
+                );
+          const rows = await q
+            .select(["path", "text_content"])
+            .orderBy("path", "asc")
+            .limit(limit * 4)
+            .execute();
+          for (const row of rows) {
+            if (localEntries && !localEntries.has(row.path)) continue;
+            if (matches.length >= limit) break;
+            if (
+              !documentAccessAllowed(
+                args.identity,
+                args.projectId,
+                row.path,
+                "read",
+              )
+            ) {
+              continue;
+            }
+            const lines = matcher(row.text_content ?? "");
+            if (lines.length > 0)
+              matches.push({ path: row.path, source: "store", lines });
+          }
+        }
+        return matches;
+      },
+    );
   }
 
   private assertAccess(

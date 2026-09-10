@@ -1,4 +1,7 @@
 import type { CatamorphicCore, Identity } from "@catamorphic/core";
+import { correlationAttributes, withTelemetryContext } from "@catamorphic/otel";
+import { context, trace } from "@opentelemetry/api";
+import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { describe, expect, it, vi } from "vitest";
 import { Catamorphic } from "./catamorphic.js";
 import { ScopedClient } from "./scoped-client.js";
@@ -224,4 +227,62 @@ describe("Catamorphic execution lifecycle", () => {
     expect(scoped.tenantId).toBe("tenant-1");
     expect(scoped.externalUserId).toBe("user-1");
   });
+});
+
+it("binds identity per SDK invocation and isolates concurrent callers from ambient work", async () => {
+  const provider = new NodeTracerProvider();
+  provider.register();
+  try {
+    const { core, projects } = createCoreMock();
+    projects.get.mockImplementation(async (identity: Identity) => {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      expect(correlationAttributes()).toEqual({
+        "catamorphic.tenant.id": identity.tenantId,
+        "user.id": identity.externalUserId,
+      });
+      return {};
+    });
+    await withTelemetryContext(
+      {
+        attributes: {
+          "catamorphic.project.id": "ambient",
+          "catamorphic.agent.turn.id": "ambient-turn",
+        },
+      },
+      async () => {
+        await Promise.all(
+          ["one", "two"].map((user) =>
+            new ScopedClient(core, {
+              tenantId: user,
+              externalUserId: user,
+            }).projects.get({ projectId: "target" }),
+          ),
+        );
+        expect(correlationAttributes()["catamorphic.agent.turn.id"]).toBe(
+          "ambient-turn",
+        );
+      },
+    );
+    projects.get.mockImplementation(async () => {
+      expect(correlationAttributes()["catamorphic.agent.turn.id"]).toBe(
+        "same-actor-turn",
+      );
+      return {};
+    });
+    await withTelemetryContext(
+      {
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.agent.turn.id": "same-actor-turn",
+        },
+      },
+      () =>
+        new ScopedClient(core, identity).projects.get({ projectId: "target" }),
+    );
+  } finally {
+    await provider.shutdown();
+    trace.disable();
+    context.disable();
+  }
 });

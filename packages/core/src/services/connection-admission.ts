@@ -29,6 +29,7 @@ export class ConnectionAdmissionService {
         name: "connection.admit",
         attributes: {
           "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
           "catamorphic.project.id": args.projectId,
           "catamorphic.connection.environment": args.environment,
           "catamorphic.connection.requirement_count":

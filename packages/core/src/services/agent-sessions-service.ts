@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { DB, Json, JsonObject } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
-import { getTracer, withSpan } from "@catamorphic/otel";
+import {
+  getTracer,
+  markSpanError,
+  withSpan,
+  withTelemetryContext,
+} from "@catamorphic/otel";
 import type { PluginResolver } from "@catamorphic/plugins";
 import {
   type AgentAttachment,
@@ -1299,6 +1304,7 @@ export class AgentSessionsService {
         attributes: {
           "catamorphic.project.id": projectId,
           "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
           ...(input.agentId ? { "catamorphic.agent.id": input.agentId } : {}),
         },
       },
@@ -1657,7 +1663,7 @@ export class AgentSessionsService {
         name: "agent.session.mirror",
         attributes: {
           "catamorphic.project.id": projectId,
-          "catamorphic.session.id": sessionId,
+          "catamorphic.agent.session.id": sessionId,
         },
       },
       async () => {
@@ -2149,115 +2155,133 @@ export class AgentSessionsService {
     sessionId: string,
     input: { messageId?: string } = {},
   ): Promise<AgentSession> {
-    const session = await this.requireSession(identity, projectId, sessionId);
-    const messages = await this.db
-      .selectFrom("agent_messages")
-      .where("session_id", "=", sessionId)
-      .selectAll()
-      .orderBy("seq", "asc")
-      .execute();
-
-    let copied = messages;
-    if (input.messageId) {
-      const cut = messages.findIndex(
-        (message) => message.id === input.messageId,
-      );
-      if (cut === -1) {
-        throw new AgentSessionNotFoundError(input.messageId);
-      }
-      copied = messages.slice(0, cut + 1);
-    }
-    // Only settled content forks: an in-flight or failed tail would give
-    // the new conversation a phantom turn.
-    copied = copied.filter((message) => {
-      const status = (message.metadata as JsonObject | null)?.status;
-      return status !== "in_progress" && status !== "failed";
-    });
-
-    const forkTitle = session.title ? `${session.title} (fork)` : null;
-    // Marker rows never reach the harness (transcriptHistory drops them),
-    // so the fork's self-awareness travels in its system prompt: the
-    // first anchored turn already knows it's on a tangent.
-    const forkNote = `This conversation is a fork of ${
-      session.title
-        ? `the conversation "${session.title}"`
-        : "another conversation"
-    }: it starts from a copy of that transcript up to the fork point. Its immediate parent is Catamorphic session ${sessionId}; use the ordinary project-session tools to read or message it. The user is exploring a tangent here; the original conversation continues separately, so don't refer to this one as if it were the original.`;
-    const forkSystemPrompt = [session.system_prompt, forkNote]
-      .filter((part): part is string => Boolean(part))
-      .join("\n\n");
-    const row = await this.db.transaction().execute(async (trx) => {
-      const fork = await trx
-        .insertInto("agent_sessions")
-        .values({
-          project_id: projectId,
-          external_user_id: identity.externalUserId,
-          provider: session.provider,
-          source: session.source,
-          provider_session_id: null,
-          agent_id: session.agent_id,
-          model: session.model,
-          model_effort: session.model_effort,
-          system_prompt: forkSystemPrompt,
-          sandbox_id: null,
-          status: "active",
-          base_commit_sha: session.base_commit_sha,
-          icon: session.icon,
-          parent_session_id: sessionId,
-          forked_from_session_id: sessionId,
-          title: forkTitle,
-          authority_host_id: this.hostId,
-          authority_revision: 1,
-        })
-        .returningAll()
-        .executeTakeFirstOrThrow();
-      await trx
-        .insertInto("agent_session_views")
-        .values({
-          session_id: fork.id,
-          tenant_id: identity.tenantId,
-          external_user_id: identity.externalUserId,
-          visibility: "promoted",
-          previous_visibility: "promoted",
-        })
-        .execute();
-      for (const message of copied) {
-        await trx
-          .insertInto("agent_messages")
-          .values({
-            session_id: fork.id,
-            role: message.role,
-            content: message.content,
-            commit_sha: message.commit_sha,
-            metadata: message.metadata,
-            author_kind: message.author_kind,
-            author_payload: message.author_payload,
-            delivery_mode: message.delivery_mode,
-            idempotency_key: message.idempotency_key,
-          })
+    return withSpan(
+      {
+        tracer,
+        name: "agent.session.fork",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+          "catamorphic.agent.session.id": sessionId,
+        },
+      },
+      async () => {
+        const session = await this.requireSession(
+          identity,
+          projectId,
+          sessionId,
+        );
+        const messages = await this.db
+          .selectFrom("agent_messages")
+          .where("session_id", "=", sessionId)
+          .selectAll()
+          .orderBy("seq", "asc")
           .execute();
-      }
-      // The divider that tells both the user and the agent where this
-      // conversation came from.
-      await trx
-        .insertInto("agent_messages")
-        .values({
-          session_id: fork.id,
-          role: "system",
-          content: session.title
-            ? `Forked from "${session.title}"`
-            : "Forked from another conversation",
-          author_kind: "system",
-          author_payload: { kind: "system", code: "session_fork" },
-          delivery_mode: "message_only",
-          metadata: {
-            marker: { kind: "fork", parentSessionId: sessionId },
-          },
-        })
-        .execute();
-      return fork;
-    });
-    return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+
+        let copied = messages;
+        if (input.messageId) {
+          const cut = messages.findIndex(
+            (message) => message.id === input.messageId,
+          );
+          if (cut === -1) {
+            throw new AgentSessionNotFoundError(input.messageId);
+          }
+          copied = messages.slice(0, cut + 1);
+        }
+        // Only settled content forks: an in-flight or failed tail would give
+        // the new conversation a phantom turn.
+        copied = copied.filter((message) => {
+          const status = (message.metadata as JsonObject | null)?.status;
+          return status !== "in_progress" && status !== "failed";
+        });
+
+        const forkTitle = session.title ? `${session.title} (fork)` : null;
+        // Marker rows never reach the harness (transcriptHistory drops them),
+        // so the fork's self-awareness travels in its system prompt: the
+        // first anchored turn already knows it's on a tangent.
+        const forkNote = `This conversation is a fork of ${
+          session.title
+            ? `the conversation "${session.title}"`
+            : "another conversation"
+        }: it starts from a copy of that transcript up to the fork point. Its immediate parent is Catamorphic session ${sessionId}; use the ordinary project-session tools to read or message it. The user is exploring a tangent here; the original conversation continues separately, so don't refer to this one as if it were the original.`;
+        const forkSystemPrompt = [session.system_prompt, forkNote]
+          .filter((part): part is string => Boolean(part))
+          .join("\n\n");
+        const row = await this.db.transaction().execute(async (trx) => {
+          const fork = await trx
+            .insertInto("agent_sessions")
+            .values({
+              project_id: projectId,
+              external_user_id: identity.externalUserId,
+              provider: session.provider,
+              source: session.source,
+              provider_session_id: null,
+              agent_id: session.agent_id,
+              model: session.model,
+              model_effort: session.model_effort,
+              system_prompt: forkSystemPrompt,
+              sandbox_id: null,
+              status: "active",
+              base_commit_sha: session.base_commit_sha,
+              icon: session.icon,
+              parent_session_id: sessionId,
+              forked_from_session_id: sessionId,
+              title: forkTitle,
+              authority_host_id: this.hostId,
+              authority_revision: 1,
+            })
+            .returningAll()
+            .executeTakeFirstOrThrow();
+          await trx
+            .insertInto("agent_session_views")
+            .values({
+              session_id: fork.id,
+              tenant_id: identity.tenantId,
+              external_user_id: identity.externalUserId,
+              visibility: "promoted",
+              previous_visibility: "promoted",
+            })
+            .execute();
+          for (const message of copied) {
+            await trx
+              .insertInto("agent_messages")
+              .values({
+                session_id: fork.id,
+                role: message.role,
+                content: message.content,
+                commit_sha: message.commit_sha,
+                metadata: message.metadata,
+                author_kind: message.author_kind,
+                author_payload: message.author_payload,
+                delivery_mode: message.delivery_mode,
+                idempotency_key: message.idempotency_key,
+              })
+              .execute();
+          }
+          // The divider that tells both the user and the agent where this
+          // conversation came from.
+          await trx
+            .insertInto("agent_messages")
+            .values({
+              session_id: fork.id,
+              role: "system",
+              content: session.title
+                ? `Forked from "${session.title}"`
+                : "Forked from another conversation",
+              author_kind: "system",
+              author_payload: { kind: "system", code: "session_fork" },
+              delivery_mode: "message_only",
+              metadata: {
+                marker: { kind: "fork", parentSessionId: sessionId },
+              },
+            })
+            .execute();
+          return fork;
+        });
+        return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+      },
+    );
   }
 
   /** Create a durable child session through one of the source agent's grants. */
@@ -2634,80 +2658,101 @@ export class AgentSessionsService {
       idempotencyKey?: string;
     } = {},
   ): Promise<SessionDeliveryReceipt> {
-    const session = await this.requireSession(identity, projectId, sessionId);
-    if (session.status !== "active") {
-      throw new AgentSessionClosedError(sessionId);
-    }
-    if (session.handoff_status === "pending") {
-      throw new AgentSessionHandoffPendingError(sessionId);
-    }
-    if (
-      session.authority_host_id !== "unassigned" &&
-      session.authority_host_id !== this.hostId
-    ) {
-      throw new AgentSessionAuthorityRequiredError(
-        sessionId,
-        session.authority_host_id,
-        Number(session.authority_revision),
-      );
-    }
-    await this.claimLocalAuthority(session);
-    const activeTurn = (await this.turns.listPending({ sessionId })).find(
-      (turn) => turn.status === "running",
-    );
-    const deliveryMode =
-      input.deliveryMode ??
-      (session.parent_session_id && activeTurn ? "interrupt" : "next_turn");
-    const receipt = await this.db.transaction().execute(async (transaction) => {
-      const current = await transaction
-        .selectFrom("agent_sessions")
-        .selectAll()
-        .where("id", "=", sessionId)
-        .forUpdate()
-        .executeTakeFirstOrThrow();
-      if (current.status !== "active") {
-        throw new AgentSessionClosedError(sessionId);
-      }
-      if (current.handoff_status === "pending") {
-        throw new AgentSessionHandoffPendingError(sessionId);
-      }
-      if (current.authority_host_id !== this.hostId) {
-        throw new AgentSessionAuthorityRequiredError(
+    return withSpan(
+      {
+        tracer,
+        name: "agent.session.enqueue_message",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+          "catamorphic.agent.session.id": sessionId,
+        },
+      },
+      async () => {
+        const session = await this.requireSession(
+          identity,
+          projectId,
           sessionId,
-          current.authority_host_id,
-          Number(current.authority_revision),
         );
-      }
-      return this.turns.deliver({
-        sessionId,
-        content: message,
-        author: { kind: "user", externalUserId: identity.externalUserId },
-        mode: deliveryMode,
-        idempotencyKey: input.idempotencyKey,
-        metadata: input.attachments?.length
-          ? {
-              attachments: JSON.parse(JSON.stringify(input.attachments)),
+        if (session.status !== "active") {
+          throw new AgentSessionClosedError(sessionId);
+        }
+        if (session.handoff_status === "pending") {
+          throw new AgentSessionHandoffPendingError(sessionId);
+        }
+        if (
+          session.authority_host_id !== "unassigned" &&
+          session.authority_host_id !== this.hostId
+        ) {
+          throw new AgentSessionAuthorityRequiredError(
+            sessionId,
+            session.authority_host_id,
+            Number(session.authority_revision),
+          );
+        }
+        await this.claimLocalAuthority(session);
+        const activeTurn = (await this.turns.listPending({ sessionId })).find(
+          (turn) => turn.status === "running",
+        );
+        const deliveryMode =
+          input.deliveryMode ??
+          (session.parent_session_id && activeTurn ? "interrupt" : "next_turn");
+        const receipt = await this.db
+          .transaction()
+          .execute(async (transaction) => {
+            const current = await transaction
+              .selectFrom("agent_sessions")
+              .selectAll()
+              .where("id", "=", sessionId)
+              .forUpdate()
+              .executeTakeFirstOrThrow();
+            if (current.status !== "active") {
+              throw new AgentSessionClosedError(sessionId);
             }
-          : undefined,
-        transaction,
-      });
-    });
-    if (!receipt.turnId) throw new Error("A queued send must create a turn");
-    if (receipt.created) {
-      await this.cancelAutoRetry(sessionId);
-      if (session.parent_session_id)
-        await this.promoteSession(identity, sessionId);
-      if (deliveryMode === "interrupt" && activeTurn) {
-        await this.interrupt(identity, projectId, sessionId, {
-          byExternalUserId: identity.externalUserId,
-          expectedTurnId: activeTurn.id,
+            if (current.handoff_status === "pending") {
+              throw new AgentSessionHandoffPendingError(sessionId);
+            }
+            if (current.authority_host_id !== this.hostId) {
+              throw new AgentSessionAuthorityRequiredError(
+                sessionId,
+                current.authority_host_id,
+                Number(current.authority_revision),
+              );
+            }
+            return this.turns.deliver({
+              sessionId,
+              content: message,
+              author: { kind: "user", externalUserId: identity.externalUserId },
+              mode: deliveryMode,
+              idempotencyKey: input.idempotencyKey,
+              metadata: input.attachments?.length
+                ? {
+                    attachments: JSON.parse(JSON.stringify(input.attachments)),
+                  }
+                : undefined,
+              transaction,
+            });
+          });
+        if (!receipt.turnId)
+          throw new Error("A queued send must create a turn");
+        if (receipt.created) {
+          await this.cancelAutoRetry(sessionId);
+          if (session.parent_session_id)
+            await this.promoteSession(identity, sessionId);
+          if (deliveryMode === "interrupt" && activeTurn) {
+            await this.interrupt(identity, projectId, sessionId, {
+              byExternalUserId: identity.externalUserId,
+              expectedTurnId: activeTurn.id,
+            });
+          }
+        }
+        void this.scheduleDrain(identity, projectId, sessionId).catch(() => {
+          // The accepted turn remains durably failed or queued for inspection.
         });
-      }
-    }
-    void this.scheduleDrain(identity, projectId, sessionId).catch(() => {
-      // The accepted turn remains durably failed or queued for inspection.
-    });
-    return receipt;
+        return receipt;
+      },
+    );
   }
 
   /** Deliver an attributed inbox message and optionally schedule an agent turn. */
@@ -2808,21 +2853,43 @@ export class AgentSessionsService {
     sessionId: string,
     input: { expectedAuthorityRevision: number },
   ): Promise<AgentSession> {
-    const session = await this.requireSession(identity, projectId, sessionId);
-    if (session.status !== "active") {
-      throw new AgentSessionClosedError(sessionId);
-    }
-    if (session.authority_host_id === this.hostId) {
-      return mapSession(session, false, this.hostId, this.authorityLeaseMs);
-    }
-    if (
-      Number(session.authority_revision) !== input.expectedAuthorityRevision
-    ) {
-      throw new SessionMirrorDivergedError(sessionId);
-    }
-    await this.claimLocalAuthority(session);
-    const claimed = await this.requireSession(identity, projectId, sessionId);
-    return mapSession(claimed, false, this.hostId, this.authorityLeaseMs);
+    return withSpan(
+      {
+        tracer,
+        name: "agent.session.resume",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+          "catamorphic.agent.session.id": sessionId,
+        },
+      },
+      async () => {
+        const session = await this.requireSession(
+          identity,
+          projectId,
+          sessionId,
+        );
+        if (session.status !== "active") {
+          throw new AgentSessionClosedError(sessionId);
+        }
+        if (session.authority_host_id === this.hostId) {
+          return mapSession(session, false, this.hostId, this.authorityLeaseMs);
+        }
+        if (
+          Number(session.authority_revision) !== input.expectedAuthorityRevision
+        ) {
+          throw new SessionMirrorDivergedError(sessionId);
+        }
+        await this.claimLocalAuthority(session);
+        const claimed = await this.requireSession(
+          identity,
+          projectId,
+          sessionId,
+        );
+        return mapSession(claimed, false, this.hostId, this.authorityLeaseMs);
+      },
+    );
   }
 
   /** Persist the local send barrier before a coordinated desktop handoff. */
@@ -2832,46 +2899,60 @@ export class AgentSessionsService {
     sessionId: string,
     input: { destinationHostId: string },
   ): Promise<AgentSession> {
-    await this.requireSession(identity, projectId, sessionId);
-    const row = await this.db.transaction().execute(async (transaction) => {
-      const session = await transaction
-        .selectFrom("agent_sessions")
-        .selectAll()
-        .where("id", "=", sessionId)
-        .forUpdate()
-        .executeTakeFirstOrThrow();
-      if (session.status !== "active") {
-        throw new AgentSessionClosedError(sessionId);
-      }
-      if (session.authority_host_id !== this.hostId) {
-        throw new AgentSessionAuthorityRequiredError(
-          sessionId,
-          session.authority_host_id,
-          Number(session.authority_revision),
-        );
-      }
-      if (this.runningTurns.has(sessionId)) {
-        throw new AgentTurnInProgressError(sessionId);
-      }
-      const pending = await transaction
-        .selectFrom("agent_turns")
-        .select("id")
-        .where("session_id", "=", sessionId)
-        .where("status", "in", ["queued", "held", "running"])
-        .executeTakeFirst();
-      if (pending) throw new AgentTurnInProgressError(sessionId);
-      return transaction
-        .updateTable("agent_sessions")
-        .set({
-          handoff_status: "pending",
-          handoff_destination_host_id: input.destinationHostId,
-          updated_at: new Date(),
-        })
-        .where("id", "=", sessionId)
-        .returningAll()
-        .executeTakeFirstOrThrow();
-    });
-    return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+    return withSpan(
+      {
+        tracer,
+        name: "agent.session.begin_handoff",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+          "catamorphic.agent.session.id": sessionId,
+        },
+      },
+      async () => {
+        await this.requireSession(identity, projectId, sessionId);
+        const row = await this.db.transaction().execute(async (transaction) => {
+          const session = await transaction
+            .selectFrom("agent_sessions")
+            .selectAll()
+            .where("id", "=", sessionId)
+            .forUpdate()
+            .executeTakeFirstOrThrow();
+          if (session.status !== "active") {
+            throw new AgentSessionClosedError(sessionId);
+          }
+          if (session.authority_host_id !== this.hostId) {
+            throw new AgentSessionAuthorityRequiredError(
+              sessionId,
+              session.authority_host_id,
+              Number(session.authority_revision),
+            );
+          }
+          if (this.runningTurns.has(sessionId)) {
+            throw new AgentTurnInProgressError(sessionId);
+          }
+          const pending = await transaction
+            .selectFrom("agent_turns")
+            .select("id")
+            .where("session_id", "=", sessionId)
+            .where("status", "in", ["queued", "held", "running"])
+            .executeTakeFirst();
+          if (pending) throw new AgentTurnInProgressError(sessionId);
+          return transaction
+            .updateTable("agent_sessions")
+            .set({
+              handoff_status: "pending",
+              handoff_destination_host_id: input.destinationHostId,
+              updated_at: new Date(),
+            })
+            .where("id", "=", sessionId)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+        });
+        return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+      },
+    );
   }
 
   async cancelHandoff(
@@ -2879,28 +2960,46 @@ export class AgentSessionsService {
     projectId: string,
     sessionId: string,
   ): Promise<AgentSession> {
-    const session = await this.requireSession(identity, projectId, sessionId);
-    if (session.handoff_status === "none") {
-      return mapSession(session, false, this.hostId, this.authorityLeaseMs);
-    }
-    if (session.authority_host_id !== this.hostId) {
-      throw new SessionMirrorDivergedError(sessionId);
-    }
-    const row = await this.db
-      .updateTable("agent_sessions")
-      .set({
-        handoff_status: "none",
-        handoff_destination_host_id: null,
-        updated_at: new Date(),
-      })
-      .where("id", "=", session.id)
-      .where("authority_host_id", "=", this.hostId)
-      .where("authority_revision", "=", session.authority_revision)
-      .where("handoff_status", "=", "pending")
-      .returningAll()
-      .executeTakeFirst();
-    if (!row) throw new SessionMirrorDivergedError(sessionId);
-    return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+    return withSpan(
+      {
+        tracer,
+        name: "agent.session.cancel_handoff",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+          "catamorphic.agent.session.id": sessionId,
+        },
+      },
+      async () => {
+        const session = await this.requireSession(
+          identity,
+          projectId,
+          sessionId,
+        );
+        if (session.handoff_status === "none") {
+          return mapSession(session, false, this.hostId, this.authorityLeaseMs);
+        }
+        if (session.authority_host_id !== this.hostId) {
+          throw new SessionMirrorDivergedError(sessionId);
+        }
+        const row = await this.db
+          .updateTable("agent_sessions")
+          .set({
+            handoff_status: "none",
+            handoff_destination_host_id: null,
+            updated_at: new Date(),
+          })
+          .where("id", "=", session.id)
+          .where("authority_host_id", "=", this.hostId)
+          .where("authority_revision", "=", session.authority_revision)
+          .where("handoff_status", "=", "pending")
+          .returningAll()
+          .executeTakeFirst();
+        if (!row) throw new SessionMirrorDivergedError(sessionId);
+        return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+      },
+    );
   }
 
   /** Record a successful remote claim; replay is idempotent after a crash. */
@@ -2910,38 +3009,56 @@ export class AgentSessionsService {
     sessionId: string,
     input: { destinationHostId: string; authorityRevision: number },
   ): Promise<AgentSession> {
-    const session = await this.requireSession(identity, projectId, sessionId);
-    if (
-      session.authority_host_id === input.destinationHostId &&
-      Number(session.authority_revision) === input.authorityRevision
-    ) {
-      return mapSession(session, false, this.hostId, this.authorityLeaseMs);
-    }
-    if (
-      session.handoff_status !== "pending" ||
-      session.authority_host_id !== this.hostId ||
-      input.authorityRevision <= Number(session.authority_revision)
-    ) {
-      throw new SessionMirrorDivergedError(sessionId);
-    }
-    const row = await this.db
-      .updateTable("agent_sessions")
-      .set({
-        authority_host_id: input.destinationHostId,
-        authority_revision: input.authorityRevision,
-        authority_seen_at: new Date(),
-        handoff_status: "none",
-        handoff_destination_host_id: null,
-        updated_at: new Date(),
-      })
-      .where("id", "=", session.id)
-      .where("authority_host_id", "=", this.hostId)
-      .where("authority_revision", "=", session.authority_revision)
-      .where("handoff_status", "=", "pending")
-      .returningAll()
-      .executeTakeFirst();
-    if (!row) throw new SessionMirrorDivergedError(sessionId);
-    return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+    return withSpan(
+      {
+        tracer,
+        name: "agent.session.complete_handoff",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+          "catamorphic.agent.session.id": sessionId,
+        },
+      },
+      async () => {
+        const session = await this.requireSession(
+          identity,
+          projectId,
+          sessionId,
+        );
+        if (
+          session.authority_host_id === input.destinationHostId &&
+          Number(session.authority_revision) === input.authorityRevision
+        ) {
+          return mapSession(session, false, this.hostId, this.authorityLeaseMs);
+        }
+        if (
+          session.handoff_status !== "pending" ||
+          session.authority_host_id !== this.hostId ||
+          input.authorityRevision <= Number(session.authority_revision)
+        ) {
+          throw new SessionMirrorDivergedError(sessionId);
+        }
+        const row = await this.db
+          .updateTable("agent_sessions")
+          .set({
+            authority_host_id: input.destinationHostId,
+            authority_revision: input.authorityRevision,
+            authority_seen_at: new Date(),
+            handoff_status: "none",
+            handoff_destination_host_id: null,
+            updated_at: new Date(),
+          })
+          .where("id", "=", session.id)
+          .where("authority_host_id", "=", this.hostId)
+          .where("authority_revision", "=", session.authority_revision)
+          .where("handoff_status", "=", "pending")
+          .returningAll()
+          .executeTakeFirst();
+        if (!row) throw new SessionMirrorDivergedError(sessionId);
+        return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+      },
+    );
   }
 
   private async claimLocalAuthority(session: SessionRow): Promise<void> {
@@ -3083,26 +3200,30 @@ export class AgentSessionsService {
               .where("id", "=", turn.resultMessageId)
               .executeTakeFirst()
           : undefined;
-        const result = await this.runTurn(
-          identity,
-          projectId,
-          sessionId,
-          modelVisibleDelivery(message.content, message.author),
-          {
-            session,
-            turnId: turn.id,
-            leaseToken,
-            leaseLost: () => leaseLost,
-            attachments,
-            persistedUserMessageId: turn.messageId,
-            requestMetadata: message.metadata,
-            ...(turn.resultMessageId
-              ? { retryOfAssistantId: turn.resultMessageId }
-              : {}),
-            sanitizeReasoning:
-              (previousResult?.metadata as JsonObject | null)?.errorKind ===
-              "model_incompat",
-          },
+        const result = await withTelemetryContext(
+          { attributes: {}, reset: true },
+          () =>
+            this.runTurn(
+              identity,
+              projectId,
+              sessionId,
+              modelVisibleDelivery(message.content, message.author),
+              {
+                session,
+                turnId: turn.id,
+                leaseToken,
+                leaseLost: () => leaseLost,
+                attachments,
+                persistedUserMessageId: turn.messageId,
+                requestMetadata: message.metadata,
+                ...(turn.resultMessageId
+                  ? { retryOfAssistantId: turn.resultMessageId }
+                  : {}),
+                sanitizeReasoning:
+                  (previousResult?.metadata as JsonObject | null)?.errorKind ===
+                  "model_incompat",
+              },
+            ),
         );
         const failed = result.metadata?.status === "failed";
         const retryable =
@@ -3154,56 +3275,76 @@ export class AgentSessionsService {
     projectId: string,
     sessionId: string,
   ): Promise<SessionDeliveryReceipt> {
-    const session = await this.requireSession(identity, projectId, sessionId);
-    if (session.status !== "active") {
-      throw new AgentSessionClosedError(sessionId);
-    }
-    if (this.runningTurns.has(sessionId)) {
-      throw new AgentTurnInProgressError(sessionId);
-    }
+    return withSpan(
+      {
+        tracer,
+        name: "agent.session.retry",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+          "catamorphic.agent.session.id": sessionId,
+        },
+      },
+      async () => {
+        const session = await this.requireSession(
+          identity,
+          projectId,
+          sessionId,
+        );
+        if (session.status !== "active") {
+          throw new AgentSessionClosedError(sessionId);
+        }
+        if (this.runningTurns.has(sessionId)) {
+          throw new AgentTurnInProgressError(sessionId);
+        }
 
-    const messages = await this.db
-      .selectFrom("agent_messages")
-      .where("session_id", "=", sessionId)
-      .selectAll()
-      .orderBy("seq", "desc")
-      .limit(20)
-      .execute();
-    const failed = messages.find((row) => row.role === "assistant");
-    const failedMetadata = failed?.metadata as JsonObject | null;
-    if (!failed || failedMetadata?.status !== "failed") {
-      throw new Error("The last turn did not fail; nothing to retry");
-    }
-    if (
-      session.handoff_status !== "none" ||
-      (session.authority_host_id !== this.hostId &&
-        session.authority_host_id !== "unassigned")
-    ) {
-      throw new AgentSessionAuthorityRequiredError(
-        sessionId,
-        session.authority_host_id,
-        Number(session.authority_revision),
-      );
-    }
-    await this.claimLocalAuthority(session);
-    if (!(await this.turns.retry({ sessionId, resultMessageId: failed.id }))) {
-      throw new Error("The failed turn is no longer retryable");
-    }
-    const turn = await this.db
-      .selectFrom("agent_turns")
-      .selectAll()
-      .where("session_id", "=", sessionId)
-      .where("result_message_id", "=", failed.id)
-      .executeTakeFirstOrThrow();
-    void this.scheduleDrain(identity, projectId, sessionId).catch((error) =>
-      console.warn("[catamorphic] Retried agent turn failed", error),
+        const messages = await this.db
+          .selectFrom("agent_messages")
+          .where("session_id", "=", sessionId)
+          .selectAll()
+          .orderBy("seq", "desc")
+          .limit(20)
+          .execute();
+        const failed = messages.find((row) => row.role === "assistant");
+        const failedMetadata = failed?.metadata as JsonObject | null;
+        if (!failed || failedMetadata?.status !== "failed") {
+          throw new Error("The last turn did not fail; nothing to retry");
+        }
+        if (
+          session.handoff_status !== "none" ||
+          (session.authority_host_id !== this.hostId &&
+            session.authority_host_id !== "unassigned")
+        ) {
+          throw new AgentSessionAuthorityRequiredError(
+            sessionId,
+            session.authority_host_id,
+            Number(session.authority_revision),
+          );
+        }
+        await this.claimLocalAuthority(session);
+        if (
+          !(await this.turns.retry({ sessionId, resultMessageId: failed.id }))
+        ) {
+          throw new Error("The failed turn is no longer retryable");
+        }
+        const turn = await this.db
+          .selectFrom("agent_turns")
+          .selectAll()
+          .where("session_id", "=", sessionId)
+          .where("result_message_id", "=", failed.id)
+          .executeTakeFirstOrThrow();
+        void this.scheduleDrain(identity, projectId, sessionId).catch((error) =>
+          console.warn("[catamorphic] Retried agent turn failed", error),
+        );
+        return {
+          messageId: turn.message_id,
+          turnId: turn.id,
+          mode: turn.delivery_mode === "interrupt" ? "interrupt" : "next_turn",
+          created: false,
+        };
+      },
     );
-    return {
-      messageId: turn.message_id,
-      turnId: turn.id,
-      mode: turn.delivery_mode === "interrupt" ? "interrupt" : "next_turn",
-      created: false,
-    };
   }
 
   /**
@@ -3221,67 +3362,92 @@ export class AgentSessionsService {
       expectedTurnId?: string;
     } = {},
   ): Promise<void> {
-    const session = await this.requireSession(identity, projectId, sessionId);
-    if (
-      session.authority_host_id !== this.hostId &&
-      session.authority_host_id !== "unassigned"
-    ) {
-      throw new AgentSessionAuthorityRequiredError(
-        sessionId,
-        session.authority_host_id,
-        Number(session.authority_revision),
-      );
-    }
-    const active = await this.db
-      .updateTable("agent_turns")
-      .set({ cancellation_requested_at: new Date() })
-      .where("session_id", "=", sessionId)
-      .where("status", "=", "running")
-      .$if(opts.expectedTurnId !== undefined, (query) =>
-        query.where("id", "=", opts.expectedTurnId ?? ""),
-      )
-      .returning("id")
-      .executeTakeFirst();
-    if (opts.expectedTurnId && !active) return;
-    await this.cancelAutoRetry(sessionId);
-    if (active && this.runningTurns.has(sessionId)) {
-      this.interruptedTurns.add(sessionId);
-      try {
-        const agent = await this.resolveAgent(session.agent_id, projectId);
-        // Some harnesses only learn their native id after the stream starts.
-        // The stable Catamorphic id lets them cancel that first turn too.
-        agent.provider.interrupt?.(session.provider_session_id ?? session.id);
-      } catch {
-        // No resolvable agent — nothing to signal; the turn settles alone.
-      }
-    }
-    const delegation = await this.db
-      .selectFrom("agent_delegations")
-      .selectAll()
-      .where("target_session_id", "=", sessionId)
-      .where("status", "=", "running")
-      .executeTakeFirst();
-    if (delegation) {
-      await this.db
-        .updateTable("agent_delegations")
-        .set({
-          status: "interrupted",
-          interrupted_by_external_user_id: opts.byExternalUserId ?? null,
-          completed_at: new Date(),
-        })
-        .where("id", "=", delegation.id)
-        .execute();
-      if (opts.notifyParent !== false) {
-        await this.deliver(identity, projectId, delegation.source_session_id, {
-          content: opts.byExternalUserId
-            ? `Subsession ${sessionId} was interrupted because the user took over that conversation.`
-            : `Subsession ${sessionId} was interrupted.`,
-          author: { kind: "system", code: "subsession_interrupted" },
-          mode: "next_turn",
-          idempotencyKey: `delegation:${delegation.id}:interrupted`,
-        });
-      }
-    }
+    return withSpan(
+      {
+        tracer,
+        name: "agent.session.interrupt",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+          "catamorphic.agent.session.id": sessionId,
+        },
+      },
+      async () => {
+        const session = await this.requireSession(
+          identity,
+          projectId,
+          sessionId,
+        );
+        if (
+          session.authority_host_id !== this.hostId &&
+          session.authority_host_id !== "unassigned"
+        ) {
+          throw new AgentSessionAuthorityRequiredError(
+            sessionId,
+            session.authority_host_id,
+            Number(session.authority_revision),
+          );
+        }
+        const active = await this.db
+          .updateTable("agent_turns")
+          .set({ cancellation_requested_at: new Date() })
+          .where("session_id", "=", sessionId)
+          .where("status", "=", "running")
+          .$if(opts.expectedTurnId !== undefined, (query) =>
+            query.where("id", "=", opts.expectedTurnId ?? ""),
+          )
+          .returning("id")
+          .executeTakeFirst();
+        if (opts.expectedTurnId && !active) return;
+        await this.cancelAutoRetry(sessionId);
+        if (active && this.runningTurns.has(sessionId)) {
+          this.interruptedTurns.add(sessionId);
+          try {
+            const agent = await this.resolveAgent(session.agent_id, projectId);
+            // Some harnesses only learn their native id after the stream starts.
+            // The stable Catamorphic id lets them cancel that first turn too.
+            agent.provider.interrupt?.(
+              session.provider_session_id ?? session.id,
+            );
+          } catch {
+            // No resolvable agent — nothing to signal; the turn settles alone.
+          }
+        }
+        const delegation = await this.db
+          .selectFrom("agent_delegations")
+          .selectAll()
+          .where("target_session_id", "=", sessionId)
+          .where("status", "=", "running")
+          .executeTakeFirst();
+        if (delegation) {
+          await this.db
+            .updateTable("agent_delegations")
+            .set({
+              status: "interrupted",
+              interrupted_by_external_user_id: opts.byExternalUserId ?? null,
+              completed_at: new Date(),
+            })
+            .where("id", "=", delegation.id)
+            .execute();
+          if (opts.notifyParent !== false) {
+            await this.deliver(
+              identity,
+              projectId,
+              delegation.source_session_id,
+              {
+                content: opts.byExternalUserId
+                  ? `Subsession ${sessionId} was interrupted because the user took over that conversation.`
+                  : `Subsession ${sessionId} was interrupted.`,
+                author: { kind: "system", code: "subsession_interrupted" },
+                mode: "next_turn",
+                idempotencyKey: `delegation:${delegation.id}:interrupted`,
+              },
+            );
+          }
+        }
+      },
+    );
   }
 
   private cancelAutoRetry(sessionId: string): Promise<void> {
@@ -3331,718 +3497,764 @@ export class AgentSessionsService {
       requestMetadata?: JsonObject | null;
     },
   ): Promise<AgentMessage> {
-    // Note: no stale-flag clearing needed here — interrupt() only sets the
-    // flag while a turn is marked running, and every turn consumes it on
-    // the way out (success and error paths both delete).
-    const { session } = extras;
-    const attachments = extras.attachments?.length
-      ? extras.attachments
-      : undefined;
+    return withSpan(
+      {
+        tracer,
+        name: "agent.turn",
+        attributes: {
+          "catamorphic.agent.turn.id": extras.turnId,
+          "catamorphic.project.id": projectId,
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.agent.session.id": sessionId,
+        },
+      },
+      async (span) => {
+        // Note: no stale-flag clearing needed here — interrupt() only sets the
+        // flag while a turn is marked running, and every turn consumes it on
+        // the way out (success and error paths both delete).
+        const { session } = extras;
+        const attachments = extras.attachments?.length
+          ? extras.attachments
+          : undefined;
 
-    // Lock the execution row with every transcript write. An expired executor
-    // may return after recovery; it must not overwrite the recovered outcome.
-    const writeOwned = <T>(write: (trx: Transaction<DB>) => Promise<T>) =>
-      this.db.transaction().execute(async (trx) => {
-        // Match the recovery worker's session -> turn lock order, and fence
-        // a host whose authority was explicitly transferred in the meantime.
-        const authority = await trx
-          .selectFrom("agent_sessions")
-          .select("id")
-          .where("id", "=", sessionId)
-          .where("authority_host_id", "=", this.hostId)
-          .where("authority_revision", "=", session.authority_revision)
-          .forUpdate()
-          .executeTakeFirst();
-        const owned = await trx
-          .selectFrom("agent_turns")
-          .select("id")
-          .where("id", "=", extras.turnId)
-          .where("status", "=", "running")
-          .where("lease_token", "=", extras.leaseToken)
-          .where("lease_expires_at", ">", sql<Date>`clock_timestamp()`)
-          .forUpdate()
-          .executeTakeFirst();
-        if (!authority || !owned)
-          throw new Error(
-            "Execution ownership was lost. Check the last actions before retrying.",
+        // Lock the execution row with every transcript write. An expired executor
+        // may return after recovery; it must not overwrite the recovered outcome.
+        const writeOwned = <T>(write: (trx: Transaction<DB>) => Promise<T>) =>
+          this.db.transaction().execute(async (trx) => {
+            // Match the recovery worker's session -> turn lock order, and fence
+            // a host whose authority was explicitly transferred in the meantime.
+            const authority = await trx
+              .selectFrom("agent_sessions")
+              .select("id")
+              .where("id", "=", sessionId)
+              .where("authority_host_id", "=", this.hostId)
+              .where("authority_revision", "=", session.authority_revision)
+              .forUpdate()
+              .executeTakeFirst();
+            const owned = await trx
+              .selectFrom("agent_turns")
+              .select("id")
+              .where("id", "=", extras.turnId)
+              .where("status", "=", "running")
+              .where("lease_token", "=", extras.leaseToken)
+              .where("lease_expires_at", ">", sql<Date>`clock_timestamp()`)
+              .forUpdate()
+              .executeTakeFirst();
+            if (!authority || !owned)
+              throw new Error(
+                "Execution ownership was lost. Check the last actions before retrying.",
+              );
+            return write(trx);
+          });
+
+        // Persist the user message and the in-progress placeholder BEFORE the
+        // (potentially slow) provider/sandbox anchoring: the turn is then
+        // visible and crash-recoverable from the moment it starts — a process
+        // death during anchoring settles as an interrupted turn instead of a
+        // silently vanished message. Retries reuse the failed assistant row —
+        // the conversation continues in place, no duplicate user message.
+        let assistantMessageId: string;
+        if (extras.retryOfAssistantId) {
+          assistantMessageId = extras.retryOfAssistantId;
+          await writeOwned((trx) =>
+            trx
+              .updateTable("agent_messages")
+              .set({ content: "Thinking...", metadata: progressMetadata([]) })
+              .where("id", "=", assistantMessageId)
+              .execute(),
           );
-        return write(trx);
-      });
-
-    // Persist the user message and the in-progress placeholder BEFORE the
-    // (potentially slow) provider/sandbox anchoring: the turn is then
-    // visible and crash-recoverable from the moment it starts — a process
-    // death during anchoring settles as an interrupted turn instead of a
-    // silently vanished message. Retries reuse the failed assistant row —
-    // the conversation continues in place, no duplicate user message.
-    let assistantMessageId: string;
-    if (extras.retryOfAssistantId) {
-      assistantMessageId = extras.retryOfAssistantId;
-      await writeOwned((trx) =>
-        trx
-          .updateTable("agent_messages")
-          .set({ content: "Thinking...", metadata: progressMetadata([]) })
-          .where("id", "=", assistantMessageId)
-          .execute(),
-      );
-    } else {
-      assistantMessageId = await writeOwned(async (trx) => {
-        if (!extras.persistedUserMessageId) {
-          await trx
-            .insertInto("agent_messages")
-            .values({
-              session_id: sessionId,
-              role: "user",
-              content: message,
-              author_kind: "user",
-              author_payload: {
-                kind: "user",
-                externalUserId: identity.externalUserId,
-              },
-              delivery_mode: "next_turn",
-              ...(attachments
-                ? {
-                    metadata: {
-                      attachments: JSON.parse(
-                        JSON.stringify(attachments),
-                      ) as JsonObject[],
-                    },
-                  }
-                : {}),
-            })
-            .execute();
+        } else {
+          assistantMessageId = await writeOwned(async (trx) => {
+            if (!extras.persistedUserMessageId) {
+              await trx
+                .insertInto("agent_messages")
+                .values({
+                  session_id: sessionId,
+                  role: "user",
+                  content: message,
+                  author_kind: "user",
+                  author_payload: {
+                    kind: "user",
+                    externalUserId: identity.externalUserId,
+                  },
+                  delivery_mode: "next_turn",
+                  ...(attachments
+                    ? {
+                        metadata: {
+                          attachments: JSON.parse(
+                            JSON.stringify(attachments),
+                          ) as JsonObject[],
+                        },
+                      }
+                    : {}),
+                })
+                .execute();
+            }
+            const assistant = await trx
+              .insertInto("agent_messages")
+              .values({
+                session_id: sessionId,
+                role: "assistant",
+                content: "Thinking...",
+                author_kind: "agent",
+                author_payload: {
+                  kind: "agent",
+                  sessionId,
+                  agentId: session.agent_id,
+                },
+                delivery_mode: "message_only",
+                metadata: progressMetadata([]),
+              })
+              .returning("id")
+              .executeTakeFirstOrThrow();
+            await trx
+              .updateTable("agent_turns")
+              .set({ result_message_id: assistant.id })
+              .where("id", "=", extras.turnId)
+              .execute();
+            return assistant.id;
+          });
         }
-        const assistant = await trx
-          .insertInto("agent_messages")
-          .values({
-            session_id: sessionId,
-            role: "assistant",
-            content: "Thinking...",
-            author_kind: "agent",
-            author_payload: {
-              kind: "agent",
-              sessionId,
-              agentId: session.agent_id,
-            },
-            delivery_mode: "message_only",
-            metadata: progressMetadata([]),
-          })
-          .returning("id")
-          .executeTakeFirstOrThrow();
-        await trx
-          .updateTable("agent_turns")
-          .set({ result_message_id: assistant.id })
-          .where("id", "=", extras.turnId)
-          .execute();
-        return assistant.id;
-      });
-    }
 
-    const events: AgentEvent[] = [];
-    // Events since the last flushed preamble — each assistant message keeps
-    // only its own segment's events.
-    let segmentEvents: AgentEvent[] = [];
-    // The provider yields text at tool-call boundaries (preambles) and once
-    // at the end (the answer). A segment is held until we know which it is:
-    // more work following it makes it a preamble, pushed immediately as its
-    // own completed message with a fresh in-progress placeholder after it.
-    let heldText: string | undefined;
-    let providerFinished = false;
-    let lastFlushed: { id: string; events: AgentEvent[] } | undefined;
-    const flushHeldText = async () => {
-      if (heldText === undefined) return;
-      const metadata: JsonObject = {
-        status: "completed",
-        events: stepLogEvents(segmentEvents),
-      };
-      const settledContent = heldText;
-      // One transaction: a client poll must never observe the settled
-      // preamble without its follow-up placeholder — that half-state
-      // reads as "turn over" for a tick (activity line and working
-      // indicators flicker off and back mid-turn).
-      const next = await writeOwned(async (trx) => {
-        await trx
-          .updateTable("agent_messages")
-          .set({ content: settledContent, metadata })
-          .where("id", "=", assistantMessageId)
-          .execute();
-        const next = await trx
-          .insertInto("agent_messages")
-          .values({
-            session_id: sessionId,
-            role: "assistant",
-            content: "Thinking...",
-            author_kind: "agent",
-            author_payload: {
-              kind: "agent",
-              sessionId,
-              agentId: session.agent_id,
-            },
-            delivery_mode: "message_only",
-            metadata: progressMetadata([]),
-          })
-          .returning("id")
-          .executeTakeFirstOrThrow();
-        await trx
-          .updateTable("agent_turns")
-          .set({ result_message_id: next.id })
-          .where("id", "=", extras.turnId)
-          .execute();
-        return next;
-      });
-      lastFlushed = { id: assistantMessageId, events: segmentEvents };
-      heldText = undefined;
-      segmentEvents = [];
-      assistantMessageId = next.id;
-    };
-    const continuesTurn = (event: AgentEvent): boolean =>
-      event.type === "text" ||
-      event.type === "tool_call" ||
-      event.type === "command" ||
-      event.type === "file_edit" ||
-      event.type === "subagent" ||
-      event.type === "background";
+        const events: AgentEvent[] = [];
+        // Events since the last flushed preamble — each assistant message keeps
+        // only its own segment's events.
+        let segmentEvents: AgentEvent[] = [];
+        // The provider yields text at tool-call boundaries (preambles) and once
+        // at the end (the answer). A segment is held until we know which it is:
+        // more work following it makes it a preamble, pushed immediately as its
+        // own completed message with a fresh in-progress placeholder after it.
+        let heldText: string | undefined;
+        let providerFinished = false;
+        let lastFlushed: { id: string; events: AgentEvent[] } | undefined;
+        const flushHeldText = async () => {
+          if (heldText === undefined) return;
+          const metadata: JsonObject = {
+            status: "completed",
+            events: stepLogEvents(segmentEvents),
+          };
+          const settledContent = heldText;
+          // One transaction: a client poll must never observe the settled
+          // preamble without its follow-up placeholder — that half-state
+          // reads as "turn over" for a tick (activity line and working
+          // indicators flicker off and back mid-turn).
+          const next = await writeOwned(async (trx) => {
+            await trx
+              .updateTable("agent_messages")
+              .set({ content: settledContent, metadata })
+              .where("id", "=", assistantMessageId)
+              .execute();
+            const next = await trx
+              .insertInto("agent_messages")
+              .values({
+                session_id: sessionId,
+                role: "assistant",
+                content: "Thinking...",
+                author_kind: "agent",
+                author_payload: {
+                  kind: "agent",
+                  sessionId,
+                  agentId: session.agent_id,
+                },
+                delivery_mode: "message_only",
+                metadata: progressMetadata([]),
+              })
+              .returning("id")
+              .executeTakeFirstOrThrow();
+            await trx
+              .updateTable("agent_turns")
+              .set({ result_message_id: next.id })
+              .where("id", "=", extras.turnId)
+              .execute();
+            return next;
+          });
+          lastFlushed = { id: assistantMessageId, events: segmentEvents };
+          heldText = undefined;
+          segmentEvents = [];
+          assistantMessageId = next.id;
+        };
+        const continuesTurn = (event: AgentEvent): boolean =>
+          event.type === "text" ||
+          event.type === "tool_call" ||
+          event.type === "command" ||
+          event.type === "file_edit" ||
+          event.type === "subagent" ||
+          event.type === "background";
 
-    try {
-      const agent = await this.resolveAgent(session.agent_id, projectId);
-      const runtime = await this.resolveExecutionRuntime(
-        identity,
-        projectId,
-        session,
-        agent,
-      );
-      const callerLayers = await this.callerToolPolicies(
-        identity,
-        projectId,
-        session.agent_id,
-      );
-      const turnOptions: TurnOptions = {
-        ...agent.defaults,
-        ...(session.model ? { model: session.model } : {}),
-        ...(session.model_effort
-          ? { effort: session.model_effort as AgentEffort }
-          : {}),
-        ...(attachments ? { attachments } : {}),
-        toolPolicies: callerLayers ?? {},
-      };
-      const anchor = await this.ensureAnchor(
-        identity,
-        projectId,
-        session,
-        agent,
-        runtime,
-      );
-      if (this.agentCapabilities) {
-        turnOptions.context = await this.agentCapabilities.prompt({
-          allocationId: session.allocation_id ?? undefined,
-          identity,
-          projectId,
-          sessionId,
-          workingDirectory: anchor.providerSession.workingDirectory,
-        });
-        turnOptions.capabilities = this.agentCapabilities.forSession({
-          identity,
-          projectId,
-          sessionId,
-          allocationId: session.allocation_id ?? undefined,
-        });
-      }
-      // The caller's view of the store, in the folder the agent works in
-      // (ADR 0055): pulled before the turn, shipped after it.
-      const storeDir = await this.storeSyncDir(
-        identity,
-        projectId,
-        anchor,
-        sessionId,
-      );
-      if (storeDir) {
-        await syncRemoteProject(
-          storeDir,
-          documentsClientFor(this.storeSync!.documents, identity, projectId, {
-            source: "store",
-          }),
-        ).catch((error) => {
-          console.warn(
-            `[catamorphic] store pull before turn failed: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
+        try {
+          const agent = await this.resolveAgent(session.agent_id, projectId);
+          const runtime = await this.resolveExecutionRuntime(
+            identity,
+            projectId,
+            session,
+            agent,
           );
-        });
-      }
-
-      if (anchor.sandboxProviderId && runtime.provider) {
-        const workingDirectory = this.projectDir(runtime.provider);
-        const batchSkillStaged = await ensureBatchWorkflowSkill({
-          sandboxProvider: runtime.provider,
-          sandboxProviderId: anchor.sandboxProviderId,
-          projectDir: workingDirectory,
-          seedFiles: this.seedFiles,
-        });
-        const durableSkillStaged = await ensureDurableWorkflowSkill({
-          sandboxProvider: runtime.provider,
-          sandboxProviderId: anchor.sandboxProviderId,
-          projectDir: workingDirectory,
-          seedFiles: this.seedFiles,
-        });
-        const stagedSkillPaths = [
-          ...(batchSkillStaged ? [BATCH_WORKFLOW_SKILL_PATH] : []),
-          ...(durableSkillStaged ? [DURABLE_WORKFLOW_SKILL_PATH] : []),
-        ];
-        if (stagedSkillPaths.length > 0) {
-          await this.commitWorkflowSkillBaseline(
-            runtime.provider,
-            anchor.sandboxProviderId,
-            stagedSkillPaths,
+          const callerLayers = await this.callerToolPolicies(
+            identity,
+            projectId,
+            session.agent_id,
           );
-        }
-      }
+          const turnOptions: TurnOptions = {
+            ...agent.defaults,
+            ...(session.model ? { model: session.model } : {}),
+            ...(session.model_effort
+              ? { effort: session.model_effort as AgentEffort }
+              : {}),
+            ...(attachments ? { attachments } : {}),
+            toolPolicies: callerLayers ?? {},
+          };
+          const anchor = await this.ensureAnchor(
+            identity,
+            projectId,
+            session,
+            agent,
+            runtime,
+          );
+          if (this.agentCapabilities) {
+            turnOptions.context = await this.agentCapabilities.prompt({
+              allocationId: session.allocation_id ?? undefined,
+              identity,
+              projectId,
+              sessionId,
+              workingDirectory: anchor.providerSession.workingDirectory,
+            });
+            turnOptions.capabilities = this.agentCapabilities.forSession({
+              identity,
+              projectId,
+              sessionId,
+              allocationId: session.allocation_id ?? undefined,
+            });
+          }
+          // The caller's view of the store, in the folder the agent works in
+          // (ADR 0055): pulled before the turn, shipped after it.
+          const storeDir = await this.storeSyncDir(
+            identity,
+            projectId,
+            anchor,
+            sessionId,
+          );
+          if (storeDir) {
+            await syncRemoteProject(
+              storeDir,
+              documentsClientFor(
+                this.storeSync!.documents,
+                identity,
+                projectId,
+                {
+                  source: "store",
+                },
+              ),
+            ).catch((error) => {
+              console.warn(
+                `[catamorphic] store pull before turn failed: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              );
+            });
+          }
 
-      // An interrupt can land while the turn is still anchoring (rows,
-      // sandbox, skills) — before any provider signal exists to abort. The
-      // latched flag catches it here: the turn settles as interrupted
-      // without ever calling the provider. Checked with has() (not
-      // delete()) so the finalization below still reads it as interrupted.
-      if (extras.leaseLost())
-        throw new Error(
-          "Execution ownership was lost. Check the last actions before retrying.",
-        );
-      const preparationOwned = await this.turns.progress({
-        turnId: extras.turnId,
-        leaseToken: extras.leaseToken,
-        phase: "working",
-        activity: "Waiting for agent",
-      });
-      if (!preparationOwned)
-        throw new Error(
-          "Execution ownership was lost. Check the last actions before retrying.",
-        );
-      await this.honorCancellation({ session, turnId: extras.turnId });
-      const stream = this.interruptedTurns.has(sessionId)
-        ? (async function* (): AsyncIterable<AgentEvent> {
-            yield { type: "error", content: "Interrupted." };
-            yield { type: "done" };
-          })()
-        : // Retries prefer the harness's native re-run (no duplicated user
-          // message in its history); harnesses without one get a re-send.
-          // A freshly re-anchored session (host restart, credential rebuild
-          // after a re-auth) gets a re-send too: it was seeded from the
-          // settled transcript, which excludes the failed turn's user
-          // message — the harness has nothing to natively re-run, and
-          // asking it to produced dead "Nothing to retry" failures.
-          extras.retryOfAssistantId &&
-            agent.provider.retryTurn &&
-            !anchor.reanchored
-          ? agent.provider.retryTurn(anchor.providerSession, {
-              ...turnOptions,
-              sanitizeReasoning: extras.sanitizeReasoning,
-            })
-          : agent.provider.sendMessage(
-              anchor.providerSession,
-              message,
-              turnOptions,
+          if (anchor.sandboxProviderId && runtime.provider) {
+            const workingDirectory = this.projectDir(runtime.provider);
+            const batchSkillStaged = await ensureBatchWorkflowSkill({
+              sandboxProvider: runtime.provider,
+              sandboxProviderId: anchor.sandboxProviderId,
+              projectDir: workingDirectory,
+              seedFiles: this.seedFiles,
+            });
+            const durableSkillStaged = await ensureDurableWorkflowSkill({
+              sandboxProvider: runtime.provider,
+              sandboxProviderId: anchor.sandboxProviderId,
+              projectDir: workingDirectory,
+              seedFiles: this.seedFiles,
+            });
+            const stagedSkillPaths = [
+              ...(batchSkillStaged ? [BATCH_WORKFLOW_SKILL_PATH] : []),
+              ...(durableSkillStaged ? [DURABLE_WORKFLOW_SKILL_PATH] : []),
+            ];
+            if (stagedSkillPaths.length > 0) {
+              await this.commitWorkflowSkillBaseline(
+                runtime.provider,
+                anchor.sandboxProviderId,
+                stagedSkillPaths,
+              );
+            }
+          }
+
+          // An interrupt can land while the turn is still anchoring (rows,
+          // sandbox, skills) — before any provider signal exists to abort. The
+          // latched flag catches it here: the turn settles as interrupted
+          // without ever calling the provider. Checked with has() (not
+          // delete()) so the finalization below still reads it as interrupted.
+          if (extras.leaseLost())
+            throw new Error(
+              "Execution ownership was lost. Check the last actions before retrying.",
             );
-      for await (const event of stream) {
-        if (extras.leaseLost())
-          throw new Error(
-            "Execution ownership was lost. Check the last actions before retrying.",
+          const preparationOwned = await this.turns.progress({
+            turnId: extras.turnId,
+            leaseToken: extras.leaseToken,
+            phase: "working",
+            activity: "Waiting for agent",
+          });
+          if (!preparationOwned)
+            throw new Error(
+              "Execution ownership was lost. Check the last actions before retrying.",
+            );
+          await this.honorCancellation({ session, turnId: extras.turnId });
+          const stream = this.interruptedTurns.has(sessionId)
+            ? (async function* (): AsyncIterable<AgentEvent> {
+                yield { type: "error", content: "Interrupted." };
+                yield { type: "done" };
+              })()
+            : // Retries prefer the harness's native re-run (no duplicated user
+              // message in its history); harnesses without one get a re-send.
+              // A freshly re-anchored session (host restart, credential rebuild
+              // after a re-auth) gets a re-send too: it was seeded from the
+              // settled transcript, which excludes the failed turn's user
+              // message — the harness has nothing to natively re-run, and
+              // asking it to produced dead "Nothing to retry" failures.
+              extras.retryOfAssistantId &&
+                agent.provider.retryTurn &&
+                !anchor.reanchored
+              ? agent.provider.retryTurn(anchor.providerSession, {
+                  ...turnOptions,
+                  sanitizeReasoning: extras.sanitizeReasoning,
+                })
+              : agent.provider.sendMessage(
+                  anchor.providerSession,
+                  message,
+                  turnOptions,
+                );
+          for await (const event of stream) {
+            if (extras.leaseLost())
+              throw new Error(
+                "Execution ownership was lost. Check the last actions before retrying.",
+              );
+            // A harness that only learns its native session id once the first
+            // turn starts (Codex) reports it here; persist it so later turns
+            // resume the same thread. Pure anchoring signal — never recorded
+            // as turn content.
+            if (event.type === "session") {
+              if (event.providerSessionId) {
+                anchor.providerSession.providerSessionId =
+                  event.providerSessionId;
+                await writeOwned((trx) =>
+                  trx
+                    .updateTable("agent_sessions")
+                    .set({ provider_session_id: event.providerSessionId })
+                    .where("id", "=", sessionId)
+                    .execute(),
+                );
+              }
+              continue;
+            }
+            if (continuesTurn(event)) await flushHeldText();
+            if (event.type === "error" && !event.errorKind && event.content) {
+              event.errorKind = connectionFailureKind(event.content);
+            }
+            events.push(event);
+            segmentEvents.push(event);
+            if (event.type !== "done" && event.type !== "usage") {
+              const owned = await this.turns.progress({
+                turnId: extras.turnId,
+                leaseToken: extras.leaseToken,
+                phase: event.type === "question" ? "waiting" : "working",
+                activity: activityLabel(event),
+              });
+              if (!owned)
+                throw new Error(
+                  "Execution ownership was lost. Check the last actions before retrying.",
+                );
+            }
+            if (event.type === "text" && event.content) {
+              heldText = event.content;
+            }
+            // Usage is accounting that arrives right before done (ADR 0057) —
+            // never a progress beat, so it must not overwrite the activity line.
+            if (event.type !== "done" && event.type !== "usage") {
+              await writeOwned((trx) =>
+                trx
+                  .updateTable("agent_messages")
+                  .set({
+                    content: activityLabel(event),
+                    metadata: progressMetadata(segmentEvents),
+                  })
+                  .where("id", "=", assistantMessageId)
+                  .execute(),
+              );
+            }
+          }
+
+          if (
+            !events.some(
+              (event) =>
+                event.type === "done" ||
+                event.type === "error" ||
+                event.type === "question",
+            )
+          ) {
+            throw new Error(
+              "Agent stream disconnected before the turn completed",
+            );
+          }
+          // A bookkeeping failure after completion must not replay agent actions.
+          providerFinished = true;
+          const savingOwned = await this.turns.progress({
+            turnId: extras.turnId,
+            leaseToken: extras.leaseToken,
+            phase: "saving",
+            activity: "Saving changes",
+          });
+          if (!savingOwned)
+            throw new Error(
+              "Execution ownership was lost. Check the last actions before retrying.",
+            );
+
+          const settledWorkingDirectory =
+            agent.topology === "native" && this.nativeAgentCheckout
+              ? ((await this.nativeAgentCheckout.resolve({
+                  projectId,
+                  sessionId,
+                  bindingId: runtime.bindingId,
+                  environmentName: runtime.environmentName,
+                })) ?? anchor.providerSession.workingDirectory)
+              : anchor.providerSession.workingDirectory;
+          anchor.providerSession.workingDirectory = settledWorkingDirectory;
+
+          const changedFiles =
+            anchor.sandboxProviderId && runtime.provider
+              ? await this.syncBackChanges(
+                  runtime.provider,
+                  identity,
+                  projectId,
+                  anchor.sandboxProviderId,
+                  this.workerNode ? sessionId : undefined,
+                )
+              : hostChangedFiles(events, settledWorkingDirectory);
+
+          // Ship the turn's `store/` writes as the caller (ADR 0055) before the
+          // checkpoint: store paths are gitignored, so they never enter git.
+          let storeSync: JsonObject | undefined;
+          if (storeDir) {
+            try {
+              const report = await shipRemoteProject(
+                storeDir,
+                documentsClientFor(
+                  this.storeSync!.documents,
+                  identity,
+                  projectId,
+                  {
+                    source: "store",
+                  },
+                ),
+              );
+              if (
+                report.shipped.length +
+                  report.deleted.length +
+                  report.conflicts.length +
+                  report.notShippable.length +
+                  report.failed.length >
+                0
+              ) {
+                storeSync = JSON.parse(JSON.stringify(report)) as JsonObject;
+              }
+            } catch (error) {
+              storeSync = {
+                error: error instanceof Error ? error.message : String(error),
+              };
+            }
+          }
+
+          // Checkpoint commit (ADR 0044): both harness families converge here —
+          // sandbox edits just synced back, host edits are already in the tree.
+          // Sweeps ALL dirty state (host harnesses under-report changed files);
+          // failures log and never break the turn.
+          const commitSha =
+            agent.topology === "native" || changedFiles.length > 0
+              ? await this.checkpointTurn(identity, projectId, message, {
+                  sessionId,
+                  workingDirectory: settledWorkingDirectory,
+                  nativeExecution: agent.topology === "native",
+                })
+              : null;
+
+          const questionEvent = [...events]
+            .reverse()
+            .find((event) => event.type === "question");
+          const interrupted = this.interruptedTurns.delete(sessionId);
+          const failed =
+            interrupted || events.some((event) => event.type === "error");
+
+          // The turn ended right after a flushed preamble (no closing text,
+          // error, or question): that preamble IS the final message. Drop the
+          // dangling placeholder and finalize the flushed row instead.
+          const settleFlushed =
+            heldText === undefined && !failed && !questionEvent && lastFlushed;
+          if (settleFlushed) {
+            await writeOwned(async (trx) => {
+              await trx
+                .updateTable("agent_turns")
+                .set({ result_message_id: settleFlushed.id })
+                .where("id", "=", extras.turnId)
+                .where("lease_token", "=", extras.leaseToken)
+                .execute();
+              await trx
+                .deleteFrom("agent_messages")
+                .where("id", "=", assistantMessageId)
+                .execute();
+            });
+            assistantMessageId = settleFlushed.id;
+            segmentEvents = [...settleFlushed.events, ...segmentEvents];
+          }
+
+          const providerError = events
+            .filter((event) => event.type === "error")
+            .map((event) => event.content)
+            .filter((content): content is string => Boolean(content))
+            .join("\n");
+          const content = settleFlushed
+            ? undefined
+            : failed && !interrupted
+              ? providerError || "Agent failed"
+              : (heldText ??
+                (providerError || (questionEvent ? "" : "(no response)")));
+          const errorKind = interrupted
+            ? undefined
+            : [...events]
+                .reverse()
+                .find((event) => event.type === "error" && event.errorKind)
+                ?.errorKind;
+          // The turn's accounting snapshot (ADR 0057): at most one usage event,
+          // emitted by the harness just before done. It lands as metadata.usage
+          // on the settled reply, where the composer's context meter reads it.
+          const usageEvent = [...events]
+            .reverse()
+            .find((event) => event.type === "usage" && event.usage);
+          const metadata: JsonObject = {
+            status: failed
+              ? "failed"
+              : questionEvent
+                ? "awaiting_input"
+                : "completed",
+            retrySafe:
+              events.some(
+                (event) => event.type === "error" && event.retrySafe === true,
+              ) && !events.some((event) => continuesTurn(event)),
+            events: stepLogEvents(segmentEvents),
+            changedFiles: changedFiles.map((change) => ({ ...change })),
+            ...(usageEvent?.usage
+              ? {
+                  usage: JSON.parse(
+                    JSON.stringify(usageEvent.usage),
+                  ) as JsonObject,
+                }
+              : {}),
+            // What the turn's store/ writes became (ADR 0055): shipped, refused,
+            // conflicted, or outside store/. Hosts render it beside the reply.
+            ...(storeSync ? { storeSync } : {}),
+            ...(errorKind ? { errorKind } : {}),
+            ...(interrupted && failed ? { interrupted: true } : {}),
+            ...(failed && !interrupted && heldText
+              ? { partialContent: heldText }
+              : {}),
+            ...(questionEvent?.questions
+              ? {
+                  questions: JSON.parse(
+                    JSON.stringify(questionEvent.questions),
+                  ) as JsonObject[],
+                }
+              : {}),
+          };
+
+          const row = await writeOwned((trx) =>
+            trx
+              .updateTable("agent_messages")
+              .set({
+                ...(content === undefined ? {} : { content }),
+                ...(commitSha ? { commit_sha: commitSha } : {}),
+                metadata,
+              })
+              .where("id", "=", assistantMessageId)
+              .returningAll()
+              .executeTakeFirstOrThrow(),
           );
-        // A harness that only learns its native session id once the first
-        // turn starts (Codex) reports it here; persist it so later turns
-        // resume the same thread. Pure anchoring signal — never recorded
-        // as turn content.
-        if (event.type === "session") {
-          if (event.providerSessionId) {
-            anchor.providerSession.providerSessionId = event.providerSessionId;
+
+          const requestedNotification = workflowNotification(
+            extras.requestMetadata,
+          );
+          const shouldRequestAttention =
+            (failed && !interrupted) ||
+            (requestedNotification !== undefined &&
+              (metadata.status === "completed" ||
+                metadata.status === "awaiting_input" ||
+                (metadata.status === "failed" &&
+                  errorKind !== "rate_limit" &&
+                  errorKind !== "unavailable" &&
+                  !interrupted)));
+          if (shouldRequestAttention) {
             await writeOwned((trx) =>
               trx
                 .updateTable("agent_sessions")
-                .set({ provider_session_id: event.providerSessionId })
+                .set(({ ref }) => ({
+                  attention_revision: sql`${ref("attention_revision")} + 1`,
+                  updated_at: new Date(),
+                }))
                 .where("id", "=", sessionId)
                 .execute(),
             );
           }
-          continue;
-        }
-        if (continuesTurn(event)) await flushHeldText();
-        if (event.type === "error" && !event.errorKind && event.content) {
-          event.errorKind = connectionFailureKind(event.content);
-        }
-        events.push(event);
-        segmentEvents.push(event);
-        if (event.type !== "done" && event.type !== "usage") {
-          const owned = await this.turns.progress({
-            turnId: extras.turnId,
-            leaseToken: extras.leaseToken,
-            phase: event.type === "question" ? "waiting" : "working",
-            activity: activityLabel(event),
-          });
-          if (!owned)
-            throw new Error(
-              "Execution ownership was lost. Check the last actions before retrying.",
-            );
-        }
-        if (event.type === "text" && event.content) {
-          heldText = event.content;
-        }
-        // Usage is accounting that arrives right before done (ADR 0057) —
-        // never a progress beat, so it must not overwrite the activity line.
-        if (event.type !== "done" && event.type !== "usage") {
+
+          const transientFailure =
+            failed &&
+            metadata.retrySafe === true &&
+            !interrupted &&
+            (errorKind === "rate_limit" || errorKind === "unavailable");
+          if (!transientFailure) {
+            await this.settleDelegation({
+              identity,
+              projectId,
+              sessionId,
+              resultMessageId: assistantMessageId,
+              status: metadata.status as AgentTurnSettledEvent["status"],
+              content: row.content,
+            });
+          }
+
+          if (this.onTurnSettled) {
+            const settled: AgentTurnSettledEvent = {
+              identity,
+              projectId,
+              sessionId,
+              messageId: assistantMessageId,
+              turnId: extras.turnId,
+              status: metadata.status as AgentTurnSettledEvent["status"],
+              interrupted,
+              retrying: transientFailure,
+              ...(shouldRequestAttention
+                ? { notification: requestedNotification }
+                : {}),
+              changedFiles: changedFiles.map((change) => change.path),
+              workingDirectory: settledWorkingDirectory,
+            };
+            void Promise.resolve()
+              .then(() => this.onTurnSettled?.(settled))
+              .catch((error) => {
+                console.warn(
+                  `[catamorphic] onTurnSettled hook failed: ${
+                    error instanceof Error ? error.message : String(error)
+                  }`,
+                );
+              });
+          }
+
+          // The agent's set_title tool wins; otherwise the first user message
+          // seeds a provisional title.
+          const titleEvent = [...events]
+            .reverse()
+            .find((event) => event.type === "title" && event.content);
           await writeOwned((trx) =>
+            trx
+              .updateTable("agent_sessions")
+              .set({
+                updated_at: new Date(),
+                ...(titleEvent?.content
+                  ? { title: truncate(titleEvent.content, 500) }
+                  : session.title === null
+                    ? {
+                        title: truncate(
+                          messageWithAttachmentNames(message, attachments),
+                          500,
+                        ),
+                      }
+                    : {}),
+              })
+              .where("id", "=", sessionId)
+              .execute(),
+          );
+
+          span.setAttribute(
+            "catamorphic.agent.outcome",
+            interrupted ? "cancelled" : failed ? "error" : "completed",
+          );
+          if (failed && !interrupted)
+            markSpanError({ span, errorType: errorKind ?? "_OTHER" });
+          return mapMessage(row);
+        } catch (error) {
+          const interrupted = this.interruptedTurns.delete(sessionId);
+          const content =
+            error instanceof Error ? error.message : String(error);
+          const errorKind =
+            extras.leaseLost() || providerFinished
+              ? undefined
+              : connectionFailureKind(content);
+          const row = await writeOwned((trx) =>
             trx
               .updateTable("agent_messages")
               .set({
-                content: activityLabel(event),
-                metadata: progressMetadata(segmentEvents),
+                content,
+                metadata: {
+                  status: "failed",
+                  ...(interrupted ? { interrupted: true } : {}),
+                  ...(errorKind ? { errorKind } : {}),
+                  ...(heldText ? { partialContent: heldText } : {}),
+                  events: JSON.parse(JSON.stringify(events)) as JsonObject[],
+                },
               })
               .where("id", "=", assistantMessageId)
-              .execute(),
+              .returningAll()
+              .executeTakeFirstOrThrow(),
           );
-        }
-      }
-
-      if (
-        !events.some(
-          (event) =>
-            event.type === "done" ||
-            event.type === "error" ||
-            event.type === "question",
-        )
-      ) {
-        throw new Error("Agent stream disconnected before the turn completed");
-      }
-      // A bookkeeping failure after completion must not replay agent actions.
-      providerFinished = true;
-      const savingOwned = await this.turns.progress({
-        turnId: extras.turnId,
-        leaseToken: extras.leaseToken,
-        phase: "saving",
-        activity: "Saving changes",
-      });
-      if (!savingOwned)
-        throw new Error(
-          "Execution ownership was lost. Check the last actions before retrying.",
-        );
-
-      const settledWorkingDirectory =
-        agent.topology === "native" && this.nativeAgentCheckout
-          ? ((await this.nativeAgentCheckout.resolve({
-              projectId,
-              sessionId,
-              bindingId: runtime.bindingId,
-              environmentName: runtime.environmentName,
-            })) ?? anchor.providerSession.workingDirectory)
-          : anchor.providerSession.workingDirectory;
-      anchor.providerSession.workingDirectory = settledWorkingDirectory;
-
-      const changedFiles =
-        anchor.sandboxProviderId && runtime.provider
-          ? await this.syncBackChanges(
-              runtime.provider,
-              identity,
-              projectId,
-              anchor.sandboxProviderId,
-              this.workerNode ? sessionId : undefined,
-            )
-          : hostChangedFiles(events, settledWorkingDirectory);
-
-      // Ship the turn's `store/` writes as the caller (ADR 0055) before the
-      // checkpoint: store paths are gitignored, so they never enter git.
-      let storeSync: JsonObject | undefined;
-      if (storeDir) {
-        try {
-          const report = await shipRemoteProject(
-            storeDir,
-            documentsClientFor(this.storeSync!.documents, identity, projectId, {
-              source: "store",
-            }),
-          );
-          if (
-            report.shipped.length +
-              report.deleted.length +
-              report.conflicts.length +
-              report.notShippable.length +
-              report.failed.length >
-            0
-          ) {
-            storeSync = JSON.parse(JSON.stringify(report)) as JsonObject;
-          }
-        } catch (error) {
-          storeSync = {
-            error: error instanceof Error ? error.message : String(error),
-          };
-        }
-      }
-
-      // Checkpoint commit (ADR 0044): both harness families converge here —
-      // sandbox edits just synced back, host edits are already in the tree.
-      // Sweeps ALL dirty state (host harnesses under-report changed files);
-      // failures log and never break the turn.
-      const commitSha =
-        agent.topology === "native" || changedFiles.length > 0
-          ? await this.checkpointTurn(identity, projectId, message, {
-              sessionId,
-              workingDirectory: settledWorkingDirectory,
-              nativeExecution: agent.topology === "native",
-            })
-          : null;
-
-      const questionEvent = [...events]
-        .reverse()
-        .find((event) => event.type === "question");
-      const interrupted = this.interruptedTurns.delete(sessionId);
-      const failed =
-        interrupted || events.some((event) => event.type === "error");
-
-      // The turn ended right after a flushed preamble (no closing text,
-      // error, or question): that preamble IS the final message. Drop the
-      // dangling placeholder and finalize the flushed row instead.
-      const settleFlushed =
-        heldText === undefined && !failed && !questionEvent && lastFlushed;
-      if (settleFlushed) {
-        await writeOwned(async (trx) => {
-          await trx
-            .updateTable("agent_turns")
-            .set({ result_message_id: settleFlushed.id })
-            .where("id", "=", extras.turnId)
-            .where("lease_token", "=", extras.leaseToken)
-            .execute();
-          await trx
-            .deleteFrom("agent_messages")
-            .where("id", "=", assistantMessageId)
-            .execute();
-        });
-        assistantMessageId = settleFlushed.id;
-        segmentEvents = [...settleFlushed.events, ...segmentEvents];
-      }
-
-      const providerError = events
-        .filter((event) => event.type === "error")
-        .map((event) => event.content)
-        .filter((content): content is string => Boolean(content))
-        .join("\n");
-      const content = settleFlushed
-        ? undefined
-        : failed && !interrupted
-          ? providerError || "Agent failed"
-          : (heldText ??
-            (providerError || (questionEvent ? "" : "(no response)")));
-      const errorKind = interrupted
-        ? undefined
-        : [...events]
-            .reverse()
-            .find((event) => event.type === "error" && event.errorKind)
-            ?.errorKind;
-      // The turn's accounting snapshot (ADR 0057): at most one usage event,
-      // emitted by the harness just before done. It lands as metadata.usage
-      // on the settled reply, where the composer's context meter reads it.
-      const usageEvent = [...events]
-        .reverse()
-        .find((event) => event.type === "usage" && event.usage);
-      const metadata: JsonObject = {
-        status: failed
-          ? "failed"
-          : questionEvent
-            ? "awaiting_input"
-            : "completed",
-        retrySafe:
-          events.some(
-            (event) => event.type === "error" && event.retrySafe === true,
-          ) && !events.some((event) => continuesTurn(event)),
-        events: stepLogEvents(segmentEvents),
-        changedFiles: changedFiles.map((change) => ({ ...change })),
-        ...(usageEvent?.usage
-          ? {
-              usage: JSON.parse(JSON.stringify(usageEvent.usage)) as JsonObject,
-            }
-          : {}),
-        // What the turn's store/ writes became (ADR 0055): shipped, refused,
-        // conflicted, or outside store/. Hosts render it beside the reply.
-        ...(storeSync ? { storeSync } : {}),
-        ...(errorKind ? { errorKind } : {}),
-        ...(interrupted && failed ? { interrupted: true } : {}),
-        ...(failed && !interrupted && heldText
-          ? { partialContent: heldText }
-          : {}),
-        ...(questionEvent?.questions
-          ? {
-              questions: JSON.parse(
-                JSON.stringify(questionEvent.questions),
-              ) as JsonObject[],
-            }
-          : {}),
-      };
-
-      const row = await writeOwned((trx) =>
-        trx
-          .updateTable("agent_messages")
-          .set({
-            ...(content === undefined ? {} : { content }),
-            ...(commitSha ? { commit_sha: commitSha } : {}),
-            metadata,
-          })
-          .where("id", "=", assistantMessageId)
-          .returningAll()
-          .executeTakeFirstOrThrow(),
-      );
-
-      const requestedNotification = workflowNotification(
-        extras.requestMetadata,
-      );
-      const shouldRequestAttention =
-        (failed && !interrupted) ||
-        (requestedNotification !== undefined &&
-          (metadata.status === "completed" ||
-            metadata.status === "awaiting_input" ||
-            (metadata.status === "failed" &&
-              errorKind !== "rate_limit" &&
-              errorKind !== "unavailable" &&
-              !interrupted)));
-      if (shouldRequestAttention) {
-        await writeOwned((trx) =>
-          trx
-            .updateTable("agent_sessions")
-            .set(({ ref }) => ({
-              attention_revision: sql`${ref("attention_revision")} + 1`,
-              updated_at: new Date(),
-            }))
-            .where("id", "=", sessionId)
-            .execute(),
-        );
-      }
-
-      const transientFailure =
-        failed &&
-        metadata.retrySafe === true &&
-        !interrupted &&
-        (errorKind === "rate_limit" || errorKind === "unavailable");
-      if (!transientFailure) {
-        await this.settleDelegation({
-          identity,
-          projectId,
-          sessionId,
-          resultMessageId: assistantMessageId,
-          status: metadata.status as AgentTurnSettledEvent["status"],
-          content: row.content,
-        });
-      }
-
-      if (this.onTurnSettled) {
-        const settled: AgentTurnSettledEvent = {
-          identity,
-          projectId,
-          sessionId,
-          messageId: assistantMessageId,
-          turnId: extras.turnId,
-          status: metadata.status as AgentTurnSettledEvent["status"],
-          interrupted,
-          retrying: transientFailure,
-          ...(shouldRequestAttention
-            ? { notification: requestedNotification }
-            : {}),
-          changedFiles: changedFiles.map((change) => change.path),
-          workingDirectory: settledWorkingDirectory,
-        };
-        void Promise.resolve()
-          .then(() => this.onTurnSettled?.(settled))
-          .catch((error) => {
-            console.warn(
-              `[catamorphic] onTurnSettled hook failed: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-            );
-          });
-      }
-
-      // The agent's set_title tool wins; otherwise the first user message
-      // seeds a provisional title.
-      const titleEvent = [...events]
-        .reverse()
-        .find((event) => event.type === "title" && event.content);
-      await writeOwned((trx) =>
-        trx
-          .updateTable("agent_sessions")
-          .set({
-            updated_at: new Date(),
-            ...(titleEvent?.content
-              ? { title: truncate(titleEvent.content, 500) }
-              : session.title === null
-                ? {
-                    title: truncate(
-                      messageWithAttachmentNames(message, attachments),
-                      500,
-                    ),
-                  }
-                : {}),
-          })
-          .where("id", "=", sessionId)
-          .execute(),
-      );
-
-      return mapMessage(row);
-    } catch (error) {
-      const interrupted = this.interruptedTurns.delete(sessionId);
-      const content = error instanceof Error ? error.message : String(error);
-      const errorKind =
-        extras.leaseLost() || providerFinished
-          ? undefined
-          : connectionFailureKind(content);
-      const row = await writeOwned((trx) =>
-        trx
-          .updateTable("agent_messages")
-          .set({
-            content,
-            metadata: {
-              status: "failed",
-              ...(interrupted ? { interrupted: true } : {}),
-              ...(errorKind ? { errorKind } : {}),
-              ...(heldText ? { partialContent: heldText } : {}),
-              events: JSON.parse(JSON.stringify(events)) as JsonObject[],
-            },
-          })
-          .where("id", "=", assistantMessageId)
-          .returningAll()
-          .executeTakeFirstOrThrow(),
-      );
-      // An exception cannot establish that the provider rejected the turn.
-      // Replaying an uncertain stream can duplicate commands or external writes.
-      await this.settleDelegation({
-        identity,
-        projectId,
-        sessionId,
-        resultMessageId: assistantMessageId,
-        status: "failed",
-        content,
-      });
-      if (!interrupted)
-        await writeOwned((trx) =>
-          trx
-            .updateTable("agent_sessions")
-            .set(({ ref }) => ({
-              attention_revision: sql`${ref("attention_revision")} + 1`,
-            }))
-            .where("id", "=", sessionId)
-            .execute(),
-        );
-      await Promise.resolve()
-        .then(() =>
-          this.onTurnSettled?.({
+          // An exception cannot establish that the provider rejected the turn.
+          // Replaying an uncertain stream can duplicate commands or external writes.
+          await this.settleDelegation({
             identity,
             projectId,
             sessionId,
-            messageId: assistantMessageId,
-            turnId: extras.turnId,
+            resultMessageId: assistantMessageId,
             status: "failed",
-            interrupted,
-            retrying: false,
-            changedFiles: [],
-            workingDirectory: "",
-          }),
-        )
-        .catch((hookError) =>
-          console.warn("[catamorphic] Failed-turn hook failed", hookError),
-        );
-      return mapMessage(row);
-    }
+            content,
+          });
+          if (!interrupted)
+            await writeOwned((trx) =>
+              trx
+                .updateTable("agent_sessions")
+                .set(({ ref }) => ({
+                  attention_revision: sql`${ref("attention_revision")} + 1`,
+                }))
+                .where("id", "=", sessionId)
+                .execute(),
+            );
+          await Promise.resolve()
+            .then(() =>
+              this.onTurnSettled?.({
+                identity,
+                projectId,
+                sessionId,
+                messageId: assistantMessageId,
+                turnId: extras.turnId,
+                status: "failed",
+                interrupted,
+                retrying: false,
+                changedFiles: [],
+                workingDirectory: "",
+              }),
+            )
+            .catch((hookError) =>
+              console.warn("[catamorphic] Failed-turn hook failed", hookError),
+            );
+          span.setAttribute(
+            "catamorphic.agent.outcome",
+            interrupted ? "cancelled" : "error",
+          );
+          if (!interrupted)
+            markSpanError({
+              span,
+              errorType: error instanceof Error ? error.name : "_OTHER",
+            });
+          return mapMessage(row);
+        }
+      },
+    );
   }
 
   async close(
@@ -4050,55 +4262,74 @@ export class AgentSessionsService {
     projectId: string,
     sessionId: string,
   ): Promise<AgentSession> {
-    const session = await this.requireSession(identity, projectId, sessionId);
-    await this.cancelAutoRetry(sessionId);
-
-    await this.archiveResources?.stop({
-      identity,
-      projectId,
-      sessionIds: [sessionId],
-    });
-
-    if (session.provider_session_id) {
-      const agent = await this.resolveAgent(session.agent_id, projectId).catch(
-        () => undefined,
-      );
-      await agent?.provider
-        .dispose({
-          providerSessionId: session.provider_session_id,
-          sessionId: session.id,
+    return withSpan(
+      {
+        tracer,
+        name: "agent.session.close",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+          "catamorphic.agent.session.id": sessionId,
+        },
+      },
+      async () => {
+        const session = await this.requireSession(
+          identity,
           projectId,
-          sandboxId: "",
-          workingDirectory: "",
-        })
-        .catch(() => {});
-    }
+          sessionId,
+        );
+        await this.cancelAutoRetry(sessionId);
 
-    if (!session.allocation_id) {
-      throw new Error("Agent session has no Environment Allocation");
-    }
-    const allocationId = session.allocation_id;
+        await this.archiveResources?.stop({
+          identity,
+          projectId,
+          sessionIds: [sessionId],
+        });
 
-    const row = await this.db.transaction().execute(async (transaction) => {
-      const closed = await transaction
-        .updateTable("agent_sessions")
-        .set({ status: "closed", updated_at: new Date() })
-        .where("id", "=", sessionId)
-        .returningAll()
-        .executeTakeFirstOrThrow();
-      await this.executionAllocations.release({
-        identity,
-        allocationId,
-        transaction,
-      });
-      return closed;
-    });
+        if (session.provider_session_id) {
+          const agent = await this.resolveAgent(
+            session.agent_id,
+            projectId,
+          ).catch(() => undefined);
+          await agent?.provider
+            .dispose({
+              providerSessionId: session.provider_session_id,
+              sessionId: session.id,
+              projectId,
+              sandboxId: "",
+              workingDirectory: "",
+            })
+            .catch(() => {});
+        }
 
-    await this.connectionGrants?.revokeAllocation({
-      allocationId,
-    });
+        if (!session.allocation_id) {
+          throw new Error("Agent session has no Environment Allocation");
+        }
+        const allocationId = session.allocation_id;
 
-    return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+        const row = await this.db.transaction().execute(async (transaction) => {
+          const closed = await transaction
+            .updateTable("agent_sessions")
+            .set({ status: "closed", updated_at: new Date() })
+            .where("id", "=", sessionId)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+          await this.executionAllocations.release({
+            identity,
+            allocationId,
+            transaction,
+          });
+          return closed;
+        });
+
+        await this.connectionGrants?.revokeAllocation({
+          allocationId,
+        });
+
+        return mapSession(row, false, this.hostId, this.authorityLeaseMs);
+      },
+    );
   }
 
   async archiveImpact(
@@ -5182,51 +5413,71 @@ export class AgentSessionsService {
       nativeExecution: boolean;
     },
   ): Promise<string | null> {
-    try {
-      if (execution.nativeExecution && this.nativeAgentCheckout?.checkpoint) {
-        return await this.nativeAgentCheckout.checkpoint({
-          projectId,
-          sessionId: execution.sessionId,
-          workingDirectory: execution.workingDirectory,
-          message: checkpointMessage(userMessage),
-        });
-      }
-      if (this.workerNode)
-        return await this.projectManager.checkpointSession({
-          tenantId: identity.tenantId,
-          projectId,
-          sessionId: execution.sessionId,
-          message: checkpointMessage(userMessage),
-          author: CHECKPOINT_AUTHOR,
-        });
-      const repo = await this.projectManager.openDev(
-        identity.tenantId,
-        projectId,
-        identity.externalUserId,
-      );
-      try {
-        const status = await repo.status();
-        if (!status.dirty) return null;
-        return await repo.commit(
-          checkpointMessage(userMessage),
-          CHECKPOINT_AUTHOR,
-        );
-      } finally {
-        await repo.dispose();
-      }
-    } catch (error) {
-      console.warn(
-        `[catamorphic] turn checkpoint commit failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      if (this.workerNode)
-        throw new Error(
-          "Session checkpoint could not be saved. Recover the workspace before retrying.",
-          { cause: error },
-        );
-      return null;
-    }
+    return withSpan(
+      {
+        tracer,
+        name: "agent.session.checkpoint_turn",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+        },
+      },
+      async (span) => {
+        try {
+          if (
+            execution.nativeExecution &&
+            this.nativeAgentCheckout?.checkpoint
+          ) {
+            return await this.nativeAgentCheckout.checkpoint({
+              projectId,
+              sessionId: execution.sessionId,
+              workingDirectory: execution.workingDirectory,
+              message: checkpointMessage(userMessage),
+            });
+          }
+          if (this.workerNode)
+            return await this.projectManager.checkpointSession({
+              tenantId: identity.tenantId,
+              projectId,
+              sessionId: execution.sessionId,
+              message: checkpointMessage(userMessage),
+              author: CHECKPOINT_AUTHOR,
+            });
+          const repo = await this.projectManager.openDev(
+            identity.tenantId,
+            projectId,
+            identity.externalUserId,
+          );
+          try {
+            const status = await repo.status();
+            if (!status.dirty) return null;
+            return await repo.commit(
+              checkpointMessage(userMessage),
+              CHECKPOINT_AUTHOR,
+            );
+          } finally {
+            await repo.dispose();
+          }
+        } catch (error) {
+          markSpanError({
+            span,
+            errorType: error instanceof Error ? error.name : "_OTHER",
+          });
+          console.warn(
+            `[catamorphic] turn checkpoint commit failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          if (this.workerNode)
+            throw new Error(
+              "Session checkpoint could not be saved. Recover the workspace before retrying.",
+              { cause: error },
+            );
+          return null;
+        }
+      },
+    );
   }
 
   // --- Plugin docs for the agent ---

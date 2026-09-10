@@ -68,6 +68,7 @@ export class ConnectionBroker {
         name: "connection.invoke",
         attributes: {
           "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
           "catamorphic.allocation.id": args.allocationId,
           "catamorphic.connection.alias": args.alias,
           "catamorphic.connection.action": args.action,

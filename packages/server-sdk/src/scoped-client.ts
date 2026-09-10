@@ -40,6 +40,7 @@ import type {
 } from "@catamorphic/core";
 import type { Json } from "@catamorphic/db";
 import type { GithubRepo, GithubTokenSet } from "@catamorphic/github";
+import { correlationAttributes, withTelemetryContext } from "@catamorphic/otel";
 import type { AgentCapabilityGateway } from "@catamorphic/sandbox";
 import type { TriggerKindDefinition } from "./define-trigger-kind.js";
 
@@ -216,6 +217,22 @@ export interface TriggersResource {
   }): Promise<{ paths: string[]; updated: boolean }>;
 }
 
+function withIdentity<T>(identity: Identity, fn: () => T): T {
+  const parent = correlationAttributes();
+  return withTelemetryContext(
+    {
+      attributes: {
+        "catamorphic.tenant.id": identity.tenantId,
+        "user.id": identity.externalUserId,
+      },
+      reset:
+        parent["catamorphic.tenant.id"] !== identity.tenantId ||
+        parent["user.id"] !== identity.externalUserId,
+    },
+    fn,
+  );
+}
+
 function kindName(kind: TriggerKindRef<unknown, unknown>): string {
   return typeof kind === "string" ? kind : kind.name;
 }
@@ -225,27 +242,35 @@ function buildTriggers(
   identity: Identity,
 ): TriggersResource {
   return {
-    kinds: () => core.triggers.listKinds(),
+    kinds: () => withIdentity(identity, () => core.triggers.listKinds()),
     list: async (args) =>
-      (await core.triggers.list({
+      withIdentity(
         identity,
-        projectId: args.projectId,
-        kind: args.kind === undefined ? undefined : kindName(args.kind),
-      })) as never,
+        async () =>
+          (await core.triggers.list({
+            identity,
+            projectId: args.projectId,
+            kind: args.kind === undefined ? undefined : kindName(args.kind),
+          })) as never,
+      ),
     fire: (args) =>
-      core.triggers.fire({
-        identity,
-        projectId: args.projectId,
-        kind: kindName(args.kind),
-        payload: args.payload as Json,
-        mode: args.mode,
-        workflows: args.workflows,
-        correlationKey: args.correlationKey,
-        onConflict: args.onConflict,
-        budgetMs: args.budgetMs,
-      }),
+      withIdentity(identity, () =>
+        core.triggers.fire({
+          identity,
+          projectId: args.projectId,
+          kind: kindName(args.kind),
+          payload: args.payload as Json,
+          mode: args.mode,
+          workflows: args.workflows,
+          correlationKey: args.correlationKey,
+          onConflict: args.onConflict,
+          budgetMs: args.budgetMs,
+        }),
+      ),
     syncTypes: (args) =>
-      core.triggers.syncTypes({ identity, projectId: args.projectId }),
+      withIdentity(identity, () =>
+        core.triggers.syncTypes({ identity, projectId: args.projectId }),
+      ),
   };
 }
 
@@ -254,12 +279,18 @@ function buildProjects(
   identity: Identity,
 ): ProjectsResource {
   return {
-    create: (args) => core.projects.create(identity, args),
-    list: (args) => core.projects.list(identity, args),
-    get: ({ projectId }) => core.projects.get(identity, projectId),
+    create: (args) =>
+      withIdentity(identity, () => core.projects.create(identity, args)),
+    list: (args) =>
+      withIdentity(identity, () => core.projects.list(identity, args)),
+    get: ({ projectId }) =>
+      withIdentity(identity, () => core.projects.get(identity, projectId)),
     update: ({ projectId, ...input }) =>
-      core.projects.update(identity, projectId, input),
-    delete: ({ projectId }) => core.projects.delete(identity, projectId),
+      withIdentity(identity, () =>
+        core.projects.update(identity, projectId, input),
+      ),
+    delete: ({ projectId }) =>
+      withIdentity(identity, () => core.projects.delete(identity, projectId)),
   };
 }
 
@@ -269,11 +300,15 @@ function buildWorkflows(
 ): WorkflowsResource {
   return {
     list: async (args) =>
-      (await core.workflows.list({ ...args, identity })).map(
-        toPublicWorkflowSummary,
+      withIdentity(identity, async () =>
+        (await core.workflows.list({ ...args, identity })).map(
+          toPublicWorkflowSummary,
+        ),
       ),
     get: async (args) =>
-      toPublicWorkflowDetail(await core.workflows.get({ ...args, identity })),
+      withIdentity(identity, async () =>
+        toPublicWorkflowDetail(await core.workflows.get({ ...args, identity })),
+      ),
   };
 }
 
@@ -294,12 +329,22 @@ function toPublicWorkflowDetail(workflow: CoreWorkflowDetail): WorkflowDetail {
 
 function buildFiles(core: CatamorphicCore, identity: Identity): FilesResource {
   return {
-    list: ({ projectId }) => core.projects.listFiles(identity, projectId),
+    list: ({ projectId }) =>
+      withIdentity(identity, () =>
+        core.projects.listFiles(identity, projectId),
+      ),
     read: ({ projectId, path }) =>
-      core.projects.readFile(identity, projectId, path),
-    readAll: ({ projectId }) => core.projects.readAllFiles(identity, projectId),
+      withIdentity(identity, () =>
+        core.projects.readFile(identity, projectId, path),
+      ),
+    readAll: ({ projectId }) =>
+      withIdentity(identity, () =>
+        core.projects.readAllFiles(identity, projectId),
+      ),
     write: ({ projectId, path, ...input }) =>
-      core.projects.writeFile(identity, projectId, path, input),
+      withIdentity(identity, () =>
+        core.projects.writeFile(identity, projectId, path, input),
+      ),
   };
 }
 
@@ -316,31 +361,57 @@ function buildGithub(
     return core.github;
   };
   return {
-    status: () => github().status(identity),
-    connect: ({ tokens }) => github().connect(identity, tokens),
-    connectWithCode: (args) => github().connectWithCode(identity, args),
-    disconnect: () => github().disconnect(identity),
-    listRepos: () => github().listRepos(identity),
-    importRepo: (args) => github().importRepo(identity, args),
-    pushProject: ({ projectId }) => github().pushProject(identity, projectId),
+    status: () => withIdentity(identity, () => github().status(identity)),
+    connect: ({ tokens }) =>
+      withIdentity(identity, () => github().connect(identity, tokens)),
+    connectWithCode: (args) =>
+      withIdentity(identity, () => github().connectWithCode(identity, args)),
+    disconnect: () =>
+      withIdentity(identity, () => github().disconnect(identity)),
+    listRepos: () => withIdentity(identity, () => github().listRepos(identity)),
+    importRepo: (args) =>
+      withIdentity(identity, () => github().importRepo(identity, args)),
+    pushProject: ({ projectId }) =>
+      withIdentity(identity, () => github().pushProject(identity, projectId)),
   };
 }
 
 function buildRuns(core: CatamorphicCore, identity: Identity): RunsResource {
   return {
     triggerProduction: (args) =>
-      core.runs.triggerProduction({ ...args, identity }),
-    call: (args) => core.runs.call({ ...args, identity }),
-    list: (args) => core.runs.list({ ...args, identity }),
-    get: (args) => core.runs.get({ ...args, identity }),
-    cancel: (args) => core.runs.cancel({ ...args, identity }),
-    signalByKey: (args) => core.runs.signalByKey({ ...args, identity }),
-    cancelByKey: (args) => core.runs.cancelByKey({ ...args, identity }),
-    pauseProcessing: (args) => core.runs.pause({ ...args, identity }),
-    resumeProcessing: (args) => core.runs.resume({ ...args, identity }),
-    submitInput: (args) => core.runs.resumePause({ ...args, identity }),
-    listItems: (args) => core.runs.listItems({ ...args, identity }),
-    listItemSteps: (args) => core.runs.listItemSteps({ ...args, identity }),
+      withIdentity(identity, () =>
+        core.runs.triggerProduction({ ...args, identity }),
+      ),
+    call: (args) =>
+      withIdentity(identity, () => core.runs.call({ ...args, identity })),
+    list: (args) =>
+      withIdentity(identity, () => core.runs.list({ ...args, identity })),
+    get: (args) =>
+      withIdentity(identity, () => core.runs.get({ ...args, identity })),
+    cancel: (args) =>
+      withIdentity(identity, () => core.runs.cancel({ ...args, identity })),
+    signalByKey: (args) =>
+      withIdentity(identity, () =>
+        core.runs.signalByKey({ ...args, identity }),
+      ),
+    cancelByKey: (args) =>
+      withIdentity(identity, () =>
+        core.runs.cancelByKey({ ...args, identity }),
+      ),
+    pauseProcessing: (args) =>
+      withIdentity(identity, () => core.runs.pause({ ...args, identity })),
+    resumeProcessing: (args) =>
+      withIdentity(identity, () => core.runs.resume({ ...args, identity })),
+    submitInput: (args) =>
+      withIdentity(identity, () =>
+        core.runs.resumePause({ ...args, identity }),
+      ),
+    listItems: (args) =>
+      withIdentity(identity, () => core.runs.listItems({ ...args, identity })),
+    listItemSteps: (args) =>
+      withIdentity(identity, () =>
+        core.runs.listItemSteps({ ...args, identity }),
+      ),
   };
 }
 
@@ -349,15 +420,34 @@ function buildWorkflowEnablements(
   identity: Identity,
 ): WorkflowEnablementsResource {
   return {
-    preview: (args) => core.workflowEnablements.preview({ ...args, identity }),
-    create: (args) => core.workflowEnablements.create({ ...args, identity }),
-    list: (args) => core.workflowEnablements.list({ ...args, identity }),
-    get: (args) => core.workflowEnablements.get({ ...args, identity }),
-    disable: (args) => core.workflowEnablements.disable({ ...args, identity }),
+    preview: (args) =>
+      withIdentity(identity, () =>
+        core.workflowEnablements.preview({ ...args, identity }),
+      ),
+    create: (args) =>
+      withIdentity(identity, () =>
+        core.workflowEnablements.create({ ...args, identity }),
+      ),
+    list: (args) =>
+      withIdentity(identity, () =>
+        core.workflowEnablements.list({ ...args, identity }),
+      ),
+    get: (args) =>
+      withIdentity(identity, () =>
+        core.workflowEnablements.get({ ...args, identity }),
+      ),
+    disable: (args) =>
+      withIdentity(identity, () =>
+        core.workflowEnablements.disable({ ...args, identity }),
+      ),
     reenable: (args) =>
-      core.workflowEnablements.reenable({ ...args, identity }),
+      withIdentity(identity, () =>
+        core.workflowEnablements.reenable({ ...args, identity }),
+      ),
     updateDeployment: (args) =>
-      core.workflowEnablements.updateDeployment({ ...args, identity }),
+      withIdentity(identity, () =>
+        core.workflowEnablements.updateDeployment({ ...args, identity }),
+      ),
   };
 }
 

@@ -84,7 +84,7 @@ export interface AppHandle {
   /** Uncaught renderer exceptions, including failures from lazy screens. */
   getRendererErrors: () => string[];
   userDataDir: string;
-  stop: () => Promise<void>;
+  stop: (opts?: { preserveUserData?: boolean }) => Promise<void>;
   /**
    * SIGKILL without cleanup — simulates a crash/quit mid-operation. The
    * userData dir survives so a follow-up launchApp({ userDataDir }) can
@@ -230,7 +230,7 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
       connectToFrame,
       getOutput: () => output,
       userDataDir,
-      stop: async () => {
+      stop: async (opts) => {
         ws.close();
         try {
           if (!killedForRecovery) await terminate(child);
@@ -239,7 +239,7 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
             `${String(error)}\n--- app output ---\n${output.slice(-4000)}`,
           );
         }
-        removeE2eDirectory(userDataDir);
+        if (!opts?.preserveUserData) removeE2eDirectory(userDataDir);
       },
       kill: async () => {
         ws.close();
