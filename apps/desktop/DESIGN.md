@@ -311,3 +311,10 @@ and the [workspace interactions](docs/workspace-interactions.md) contract.
 The desktop exports logs, traces, and metrics through standard OTEL settings.
 Machine settings and committed project defaults select local and remote destinations independently.
 See [OBSERVABILITY.md](../../OBSERVABILITY.md) and ADR 0119 for configuration.
+
+### 2026-09-10: Answer questions while agents keep working
+
+Question batches can be blocking or non-blocking. "Answer when ready" panels stay
+answerable while the agent works; collapsing preserves the draft. Answers reach
+the running built-in, Codex or Claude Code harness as soon as it can accept input.
+Late answers continue an idle session. See ADR 0122.

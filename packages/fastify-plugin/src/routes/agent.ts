@@ -1,6 +1,8 @@
 import {
   AgentDelegationDeniedError,
   AgentNotConfiguredError,
+  AgentRequestAlreadyResolvedError,
+  AgentRuntimeRequestNotFoundError,
   AgentSessionArchiveConfirmationRequiredError,
   AgentSessionAuthorityRequiredError,
   AgentSessionClosedError,
@@ -25,6 +27,7 @@ import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
 import {
   AgentCatalogSchema,
+  AgentQuestionParamsSchema,
   AgentSessionArchiveConfirmationSchema,
   AgentSessionArchiveResultSchema,
   AgentSessionDetailSchema,
@@ -34,6 +37,7 @@ import {
   AgentSubsessionIdParamsSchema,
   AgentSubsessionSchema,
   AgentTurnIdParamsSchema,
+  AnswerAgentQuestionSchema,
   ArchiveAgentSessionSchema,
   AuthenticationRequiredSchema,
   CreateAgentSessionSchema,
@@ -64,6 +68,50 @@ import {
 
 export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
   const typed = app.withTypeProvider<ZodTypeProvider>();
+
+  typed.route({
+    method: "POST",
+    url: "/projects/:projectId/agent/sessions/:sessionId/questions/:requestId/answer",
+    schema: {
+      params: AgentQuestionParamsSchema,
+      body: AnswerAgentQuestionSchema,
+      response: {
+        202: SessionDeliveryReceiptSchema,
+        404: ErrorSchema,
+        409: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      if (!ctx.core?.agentSessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      try {
+        const receipt = await ctx.core.agentSessions.answerQuestion({
+          identity: resolveIdentity(request),
+          ...request.params,
+          answer: request.body.answer,
+        });
+        return reply.status(202).send(receipt);
+      } catch (error) {
+        if (
+          error instanceof AgentRuntimeRequestNotFoundError ||
+          error instanceof AgentSessionNotFoundError ||
+          error instanceof ProjectNotFoundError
+        ) {
+          return reply.status(404).send({ error: "Question not found" });
+        }
+        if (
+          error instanceof AgentRequestAlreadyResolvedError ||
+          error instanceof AgentSessionClosedError ||
+          error instanceof AgentSessionHandoffPendingError ||
+          error instanceof AgentSessionAuthorityRequiredError
+        ) {
+          return reply.status(409).send({ error: error.message });
+        }
+        throw error;
+      }
+    },
+  });
 
   typed.route({
     method: "POST",

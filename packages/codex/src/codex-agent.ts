@@ -337,6 +337,7 @@ export class CodexAgent implements CodingAgentProvider {
       stream = (
         await thread.runStreamed(staged.input, {
           signal: abortController.signal,
+          turnOptions: opts,
         })
       ).events;
     } catch (error) {

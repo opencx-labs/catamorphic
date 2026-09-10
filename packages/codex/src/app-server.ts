@@ -2,7 +2,14 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { setTimeout as delay } from "node:timers/promises";
 import type { ToolPermissionHandler } from "@catamorphic/sandbox";
+import {
+  agentQuestionDescription,
+  agentQuestionInputSchema,
+  agentQuestionJsonSchema,
+  type TurnOptions,
+} from "@catamorphic/sandbox";
 import type {
   CodexOptions,
   ThreadEvent,
@@ -31,6 +38,7 @@ const object = (value: unknown): value is Record<string, unknown> =>
 /** Native bidirectional Codex protocol. Owns MCP children for the session lifetime. */
 export class CodexAppServer {
   private context?: string;
+  private turnOptions?: TurnOptions;
   private running = false;
   private turnEpoch = 0;
   private activeSignal?: AbortSignal;
@@ -199,6 +207,27 @@ export class CodexAppServer {
     const active = () => this.acceptsRequests() && epoch === this.turnEpoch;
     try {
       if (
+        active() &&
+        method === "item/tool/call" &&
+        params.tool === "ask_user" &&
+        this.turnOptions?.askQuestion
+      ) {
+        const input = agentQuestionInputSchema.parse(params.arguments);
+        const text = await this.turnOptions.askQuestion({
+          ...input,
+          requestId: String(params.callId ?? id),
+          signal: this.activeSignal,
+        });
+        this.send({
+          id,
+          result: {
+            contentItems: [{ type: "inputText", text }],
+            success: active(),
+          },
+        });
+        return;
+      }
+      if (
         method === "item/commandExecution/requestApproval" ||
         method === "item/fileChange/requestApproval" ||
         method === "item/permissions/requestApproval"
@@ -317,8 +346,10 @@ export class CodexAppServer {
     return {
       runStreamed: async (
         input: string | UserInput[],
-        run: { signal?: AbortSignal },
-      ) => ({ events: this.run(id, options, input, run.signal) }),
+        run: { signal?: AbortSignal; turnOptions?: TurnOptions },
+      ) => ({
+        events: this.run(id, options, input, run.signal, run.turnOptions),
+      }),
     };
   }
   private async *run(
@@ -326,11 +357,13 @@ export class CodexAppServer {
     options: ThreadOptions,
     input: string | UserInput[],
     signal?: AbortSignal,
+    turnOptions?: TurnOptions,
   ): AsyncGenerator<ThreadEvent> {
     if (this.running)
       throw new Error("A Codex turn is already running in this session.");
     signal?.throwIfAborted();
     this.running = true;
+    this.turnOptions = turnOptions;
     this.turnEpoch++;
     const requestAbort = new AbortController();
     this.requestAbort = requestAbort;
@@ -404,6 +437,7 @@ export class CodexAppServer {
         done = true;
       }
     };
+    let inputPump: Promise<void> | undefined;
     let interruptTimer: ReturnType<typeof setTimeout> | undefined;
     const abort = () => {
       requestAbort.abort();
@@ -423,6 +457,17 @@ export class CodexAppServer {
         id ? "thread/resume" : "thread/start",
         {
           ...(id ? { threadId: id, excludeTurns: true } : {}),
+          ...(turnOptions?.askQuestion
+            ? {
+                dynamicTools: [
+                  {
+                    name: "ask_user",
+                    description: agentQuestionDescription,
+                    inputSchema: agentQuestionJsonSchema,
+                  },
+                ],
+              }
+            : {}),
           cwd: options.workingDirectory,
           model: options.model,
           sandbox: options.sandboxMode,
@@ -462,6 +507,38 @@ export class CodexAppServer {
         throw new Error("Codex returned an invalid turn.");
       turnId = started.turn.id;
       if (signal?.aborted) abort();
+      if (turnOptions?.readPendingMessages) {
+        const expectedTurnId = turnId;
+        const targetThreadId = threadId;
+        inputPump = (async () => {
+          while (!done && !requestAbort.signal.aborted) {
+            const pending = (await turnOptions.readPendingMessages?.()) ?? [];
+            for (const entry of pending) {
+              if (done || requestAbort.signal.aborted) return;
+              try {
+                await this.request("turn/steer", {
+                  threadId: targetThreadId,
+                  expectedTurnId,
+                  input: [
+                    { type: "text", text: entry.content, text_elements: [] },
+                  ],
+                });
+              } catch (error) {
+                // Completion can race a steer. Unaccepted input remains in the durable inbox.
+                if (done || requestAbort.signal.aborted) return;
+                throw error;
+              }
+              await turnOptions.acknowledgeMessages?.({ ids: [entry.id] });
+            }
+            await delay(100, undefined, { signal: requestAbort.signal });
+          }
+        })().catch((error) => {
+          if (!requestAbort.signal.aborted)
+            this.fail(
+              error instanceof Error ? error : new Error(String(error)),
+            );
+        });
+      }
       while (!done || events.length) {
         while (events.length) {
           const event = events.shift();
@@ -477,6 +554,8 @@ export class CodexAppServer {
       requestAbort.abort();
       // Returning early or failing startup must not leave the native turn running.
       if (!done || this.failure) this.close();
+      await inputPump;
+      this.turnOptions = undefined;
       this.requestAbort = undefined;
       this.notify = undefined;
       clearTimeout(interruptTimer);

@@ -11,8 +11,8 @@
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/server --config ../../vitest.config.ts"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^4.0.49",
-    "@ai-sdk/openai": "^4.0.60",
+    "@ai-sdk/anthropic": "^4.0.52",
+    "@ai-sdk/openai": "^4.0.65",
     "@catamorphic/ai-sdk": "workspace:*",
     "@catamorphic/claude-code": "workspace:*",
     "@catamorphic/core": "workspace:*",

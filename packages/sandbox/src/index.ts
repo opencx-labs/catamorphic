@@ -18,6 +18,11 @@ export {
   stagePluginDocs,
 } from "./coding-agent/plugin-staging.js";
 export {
+  agentQuestionDescription,
+  agentQuestionInputSchema,
+  agentQuestionJsonSchema,
+} from "./coding-agent/questions.js";
+export {
   type AgentRuntimeProvider,
   AgentRuntimeUnsupportedError,
 } from "./coding-agent/runtime-provider.js";

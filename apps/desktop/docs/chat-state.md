@@ -69,3 +69,12 @@ Use hook tests for concurrency and scope changes, and native Electron tests for
 paste, focus, link hit targets and surface identity. Neither substitutes for the other.
 
 Queue mutations resolve to `true` only after server confirmation. A `false` result keeps the shared queue editor and its draft open; host callbacks must preserve that outcome.
+
+## Agent questions
+
+Question batches are durable session requests with a `blocking` flag (default true).
+Use `useAnswerAgentQuestion` and the request id to submit an answer. Non-blocking
+questions stay answerable while work continues and after the turn finishes.
+Collapsing a question preserves its draft. The existing inbox delivers answers to
+the current harness or starts a continuation if the turn has already ended.
+See ADR 0122 and the question schemas in `@catamorphic/sandbox`.

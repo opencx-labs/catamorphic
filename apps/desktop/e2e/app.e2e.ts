@@ -992,6 +992,40 @@ describe("question flow", () => {
   });
 });
 
+describe("non-blocking questions", () => {
+  it("keeps working while questions are collapsed and consumes the answer in the same turn", async () => {
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return !!floatingDock();`);
+    await run(`
+      const ta = floatingDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'ask a nonblocking question and keep working');
+      ta.closest('form').requestSubmit(); return true;
+    `);
+    await runWait(
+      `return !!$('section[aria-label="The agent has a question"]') && timelineMessages().some(m => m.text.includes('continuing independent work'));`,
+    );
+    await app.screenshot("/tmp/catamorphic-nonblocking-question.png");
+    await run(`$('button[aria-label="Answer later"]').click(); return true;`);
+    await runWait(
+      `return !$('section[aria-label="The agent has a question"]') && !!byText('button', 'Answer when ready');`,
+    );
+    await run(`byText('button', 'Answer when ready').click(); return true;`);
+    await runWait(
+      `return !!$('section[aria-label="The agent has a question"]');`,
+    );
+    await run(
+      `byText('section[aria-label="The agent has a question"] button', 'Orange').click(); return true;`,
+    );
+    await runWait(
+      `const submit = byText('section[aria-label="The agent has a question"] button', 'Submit'); if (!submit || submit.disabled) return false; submit.click(); return true;`,
+    );
+    await runWait(
+      `return timelineMessages().some(m => m.text.includes('Answer received during the same turn') && m.text.includes('Orange')) && !$('section[aria-label="The agent has a question"]');`,
+      { timeoutMs: 30000 },
+    );
+  });
+});
+
 describe("chat surface shortcuts", () => {
   it("Cmd+M minimizes the floating chat; Cmd+M again restores it", async () => {
     await run(`pressKey('n', { metaKey: true }); return true;`);

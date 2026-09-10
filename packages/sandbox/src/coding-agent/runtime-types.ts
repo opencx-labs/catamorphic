@@ -1,4 +1,5 @@
 import type { AgentCapabilityGateway } from "../agent-capabilities.js";
+import type { AgentQuestion } from "../types.js";
 import type { ToolPermissionRequest } from "./tool-policy.js";
 
 /** Where a provider's agent loop runs. */
@@ -161,6 +162,10 @@ export interface AgentApprovalRequest extends AgentRuntimeRequestBase {
 
 export interface AgentQuestionRequest extends AgentRuntimeRequestBase {
   kind: "question";
+  /** Whether the requesting tool waits for the answer. Defaults to true. */
+  blocking?: boolean;
+  /** All questions in one agent-authored batch. */
+  questions?: AgentQuestion[];
   question: {
     prompt: string;
     options?: readonly AgentQuestionOption[];

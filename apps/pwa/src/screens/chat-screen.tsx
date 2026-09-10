@@ -3,6 +3,7 @@ import {
   useAcknowledgeAgentSessionAttention,
   useAgentCatalog,
   useAgentChat,
+  useAnswerAgentQuestion,
   useToolPermissions,
 } from "@catamorphic/react";
 import {
@@ -157,6 +158,7 @@ function Chat({
   const sendReady = Boolean(
     chat.sessionId || (agent?.available && environment),
   );
+  const answerQuestion = useAnswerAgentQuestion(projectId, chat.sessionId);
   const { messages, activity, questions } = toTimeline(
     chat.messages,
     chat.optimisticMessages,
@@ -418,13 +420,43 @@ function Chat({
                   }
                 />
               ))}
-              {questions && !chat.isSending && (
-                <AgentQuestionPanel
-                  questions={questions}
-                  onSubmit={(answer) => void chat.send(answer)}
-                  onDismiss={() => void chat.send(QUESTIONS_DISMISSED_MESSAGE)}
-                />
+              {chat.session?.questions?.map(
+                (request) =>
+                  request.questions && (
+                    <AgentQuestionPanel
+                      key={request.requestId}
+                      questions={request.questions}
+                      blocking={request.blocking !== false}
+                      disabled={answerQuestion.isPending}
+                      onSubmit={(answer) =>
+                        answerQuestion.mutate({
+                          requestId: request.requestId,
+                          answer,
+                        })
+                      }
+                      onDismiss={() =>
+                        answerQuestion.mutate({
+                          requestId: request.requestId,
+                          answer: QUESTIONS_DISMISSED_MESSAGE,
+                        })
+                      }
+                    />
+                  ),
               )}
+              {answerQuestion.error && (
+                <p role="alert">{answerQuestion.error.message}</p>
+              )}
+              {!chat.session?.questions?.length &&
+                questions &&
+                !chat.isSending && (
+                  <AgentQuestionPanel
+                    questions={questions}
+                    onSubmit={(answer) => void chat.send(answer)}
+                    onDismiss={() =>
+                      void chat.send(QUESTIONS_DISMISSED_MESSAGE)
+                    }
+                  />
+                )}
               {lastFailed && !chat.isWorking && (
                 <div className="flex items-center justify-between gap-2 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[13px]">
                   <span className="min-w-0 truncate text-danger">

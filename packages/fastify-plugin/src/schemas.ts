@@ -1416,7 +1416,31 @@ export const AgentExecutionSchema = z.object({
   cancellationRequested: z.boolean(),
 });
 
+export const PendingAgentQuestionSchema = z.object({
+  requestId: z.string(),
+  blocking: z.boolean().optional(),
+  questions: z
+    .array(
+      z.object({
+        question: z.string(),
+        header: z.string(),
+        multiSelect: z.boolean(),
+        options: z.array(
+          z.object({ label: z.string(), description: z.string() }),
+        ),
+      }),
+    )
+    .optional(),
+});
+export const AgentQuestionParamsSchema = AgentSessionIdParamsSchema.extend({
+  requestId: z.string().min(1),
+});
+export const AnswerAgentQuestionSchema = z.object({
+  answer: z.string().trim().min(1).max(200_000),
+});
+
 export const AgentSessionDetailSchema = AgentSessionSchema.extend({
+  questions: z.array(PendingAgentQuestionSchema).optional(),
   execution: AgentExecutionSchema.nullable(),
   messages: z.array(AgentMessageSchema),
   pendingTurns: z.array(PendingSessionTurnSchema),

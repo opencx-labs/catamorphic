@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   type CanUseTool,
   createSdkMcpServer,
@@ -11,6 +12,7 @@ import {
   type PermissionResult,
   query,
   type SDKMessage,
+  type SDKUserMessage,
   tool as sdkTool,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
@@ -33,6 +35,8 @@ import type {
 } from "@catamorphic/sandbox";
 import {
   agentCapabilityTools,
+  agentQuestionDescription,
+  agentQuestionInputSchema,
   buildPluginsPreamble,
   extraToolResult,
   isMediaAttachment,
@@ -265,6 +269,9 @@ interface SessionState {
  * and the same stream keeps flowing in the answer turn.
  */
 interface LiveTurn {
+  inputAbort?: AbortController;
+  pendingInputs?: Map<string, string>;
+  acknowledgeMessages?: TurnOptions["acknowledgeMessages"];
   /** The query's message stream; never closed while an ask is parked. */
   iterator?: AsyncIterator<SDKMessage>;
   /**
@@ -466,6 +473,11 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     const cwd = state.workingDirectory || undefined;
 
     const live = createLiveTurn(state);
+    live.acknowledgeMessages = opts?.acknowledgeMessages;
+    if (opts?.readPendingMessages) {
+      live.inputAbort = new AbortController();
+      live.pendingInputs = new Map();
+    }
     try {
       // A session we created but never ran creates its transcript now, under
       // the id chosen in startSession; everything else (later turns, sessions
@@ -474,12 +486,21 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         state && !state.transcriptExists
           ? { sessionId: providerSessionId }
           : { resume: providerSessionId };
+      const prompt = await withAttachments(
+        message,
+        opts?.attachments,
+        providerSessionId,
+      );
       const turn = query({
-        prompt: await withAttachments(
-          message,
-          opts?.attachments,
-          providerSessionId,
-        ),
+        prompt:
+          live.inputAbort && opts?.readPendingMessages
+            ? streamUserMessages({
+                prompt,
+                sessionId: providerSessionId,
+                live,
+                read: opts.readPendingMessages,
+              })
+            : prompt,
         options: {
           ...this.buildOptions(
             cwd,
@@ -519,6 +540,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
   ): AsyncIterable<AgentEvent> {
     this.activeAborts.set(providerSessionId, live.abort);
     let done = false;
+    let lastResult: Extract<SDKMessage, { type: "result" }> | undefined;
     try {
       while (live.iterator) {
         live.nextPending ??= live.iterator.next();
@@ -547,6 +569,36 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         live.nextPending = undefined;
         if (next.done) break;
         const sdkMessage = next.value;
+        // The SDK may omit user echoes. Results explicitly identify every
+        // coalesced input consumed by this native turn.
+        const inputUuids =
+          sdkMessage.type === "result"
+            ? [
+                ...(sdkMessage.user_message_uuids ?? []),
+                ...(sdkMessage.user_message_uuid
+                  ? [sdkMessage.user_message_uuid]
+                  : []),
+              ]
+            : [];
+        for (const uuid of new Set(inputUuids)) {
+          const id = live.pendingInputs?.get(uuid);
+          if (id) {
+            await live.acknowledgeMessages?.({ ids: [id] });
+            live.pendingInputs?.delete(uuid);
+          }
+        }
+        if (sdkMessage.type === "result" && live.inputAbort) {
+          // Streaming input can produce intermediate results for steered work.
+          // Keep one host turn and account for the final cumulative usage once.
+          lastResult = sdkMessage;
+          if (
+            sdkMessage.is_error ||
+            ((sdkMessage.queued_turn_count ?? 0) === 0 &&
+              !live.pendingInputs?.size)
+          )
+            live.inputAbort.abort();
+          continue;
+        }
         // The init message means the CLI booted and owns the transcript;
         // from here on this session must be resumed, never re-created.
         if (live.state && sdkMessage.type === "system") {
@@ -559,6 +611,12 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         }
       }
       yield* live.hookEvents.splice(0);
+      if (lastResult) {
+        for (const event of mapMessage(lastResult, live.openSubagents, live)) {
+          if (event.type === "done") done = true;
+          yield event;
+        }
+      }
     } catch (error) {
       // Spawn/auth/stream failures surface as events, mirroring CodexAgent —
       // consumers iterate the stream and must never see a mid-iteration throw.
@@ -570,6 +628,11 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         yield { type: "done" };
       }
     } finally {
+      if (!this.awaitingAnswers.has(providerSessionId) && live.inputAbort) {
+        live.inputAbort.abort();
+        live.abort.abort();
+        await live.iterator?.return?.();
+      }
       this.activeAborts.delete(providerSessionId);
     }
   }
@@ -671,7 +734,24 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
   ): Options {
     // Resumed sessions reconstruct this context from ProviderSession before
     // reaching here, so the host's workspace tools survive app restarts.
-    const extraTools = [
+    const extraTools: ExtraTool[] = [
+      ...(turn?.askQuestion
+        ? [
+            {
+              name: "ask_user",
+              description: agentQuestionDescription,
+              parameters: agentQuestionInputSchema.shape,
+              execute: async (input: Record<string, unknown>) => {
+                const parsed = agentQuestionInputSchema.parse(input);
+                return turn.askQuestion!({
+                  ...parsed,
+                  requestId: crypto.randomUUID(),
+                  signal: live.abort.signal,
+                });
+              },
+            },
+          ]
+        : []),
       ...(toolContext ? (this.opts.extraTools ?? []) : []),
       ...(turn?.capabilities
         ? agentCapabilityTools(turn.capabilities, live.abort.signal)
@@ -814,6 +894,18 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
       // allowlist stays denied.
       canUseTool: async (toolName, input, options) => {
         if (toolName === "AskUserQuestion") {
+          if (turn?.askQuestion) {
+            const answer = await turn.askQuestion({
+              requestId: crypto.randomUUID(),
+              questions: parseAskUserQuestions(input),
+              blocking: true,
+              signal: live.abort.signal,
+            });
+            return {
+              behavior: "allow",
+              updatedInput: askUserAnswerInput(input, answer),
+            };
+          }
           return await new Promise<PermissionResult>((resolve) => {
             live.ask = { input, resolve };
             live.raiseAsk();
@@ -1308,5 +1400,50 @@ function mapContentBlock(block: ContentBlockLike): AgentEvent | null {
     }
     default:
       return null;
+  }
+}
+
+/** Keep SDK stdin open until this turn settles, accepting answers while tools run. */
+async function* streamUserMessages({
+  prompt,
+  sessionId,
+  live,
+  read,
+}: {
+  prompt: string;
+  sessionId: string;
+  live: LiveTurn;
+  read: NonNullable<TurnOptions["readPendingMessages"]>;
+}): AsyncGenerator<SDKUserMessage> {
+  const signal = AbortSignal.any([live.abort.signal, live.inputAbort!.signal]);
+  yield {
+    type: "user",
+    session_id: sessionId,
+    parent_tool_use_id: null,
+    message: { role: "user", content: prompt },
+  };
+  const sent = new Set<string>();
+  try {
+    while (!signal.aborted) {
+      const pending = await read();
+      for (const entry of pending) {
+        if (signal.aborted) return;
+        if (sent.has(entry.id)) continue;
+        const uuid = crypto.randomUUID();
+        live.pendingInputs?.set(uuid, entry.id);
+        sent.add(entry.id);
+        yield {
+          type: "user",
+          priority: "now",
+          uuid,
+          session_id: sessionId,
+          parent_tool_use_id: null,
+          message: { role: "user", content: entry.content },
+        };
+      }
+      await delay(100, undefined, { signal });
+    }
+  } catch (error) {
+    if (!signal.aborted) throw error;
   }
 }

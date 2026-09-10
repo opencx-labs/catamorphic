@@ -1,0 +1,14 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "agent-question-panel",
+  "type": "registry:component",
+  "description": "Tabbed blocking or non-blocking agent questions, with deferred answers and optional host hints.",
+  "dependencies": ["lucide-react"],
+  "registryDependencies": ["@catamorphic/chat-timeline"],
+  "files": [
+    {
+      "path": "components/catamorphic/agent-question-panel.tsx",
+      "type": "registry:component"
+    }
+  ]
+}

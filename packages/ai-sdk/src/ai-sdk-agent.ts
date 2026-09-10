@@ -25,6 +25,7 @@ import type {
 } from "@catamorphic/sandbox";
 import {
   agentCapabilityTools,
+  agentQuestionInputSchema,
   agentToolResult,
   buildPluginsPreamble,
   extraToolResult,
@@ -484,12 +485,34 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       userId: state.userId,
       projectId: state.projectId,
     });
+    let stepMessages: ModelMessage[] = requestMessages;
+    let stepInputIds: string[] = [];
+    const consumedInputIds = new Set<string>();
     const agent = new ToolLoopAgent({
       telemetry: telemetry.settings,
       model,
       instructions: withAgentContext(state.instructions, opts?.context),
       tools: {
         ...state.tools,
+        ...(opts?.askQuestion
+          ? {
+              ask_user: tool({
+                description: state.tools.ask_user.description,
+                inputSchema: agentQuestionInputSchema,
+                execute: async (input, { toolCallId, abortSignal }) => {
+                  const ask = opts.askQuestion;
+                  if (!ask) throw new Error("Question handler is unavailable");
+                  return ask({
+                    requestId: toolCallId,
+                    questions: input.questions,
+                    blocking: input.blocking,
+                    signal: abortSignal,
+                  });
+                },
+              }),
+            }
+          : {}),
+
         ...Object.fromEntries(
           (opts?.capabilities
             ? agentCapabilityTools(opts.capabilities, state.abort.signal)
@@ -503,6 +526,29 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
             }),
           ]),
         ),
+      },
+      prepareStep: async ({ messages }) => {
+        const pending = (await opts?.readPendingMessages?.()) ?? [];
+        const fresh = pending.filter(
+          (entry) => !consumedInputIds.has(entry.id),
+        );
+        stepInputIds = fresh.map((entry) => entry.id);
+        stepMessages = [
+          ...messages,
+          ...fresh.map(
+            (entry): ModelMessage => ({ role: "user", content: entry.content }),
+          ),
+        ];
+        return { messages: stepMessages };
+      },
+      onStepFinish: async (step) => {
+        // responseMessages omits inputs inserted by prepareStep. Preserve the
+        // actual model history, including each input at its original boundary.
+        state.messages = [...stepMessages, ...step.response.messages];
+        if (stepInputIds.length > 0) {
+          await opts?.acknowledgeMessages?.({ ids: stepInputIds });
+          for (const id of stepInputIds) consumedInputIds.add(id);
+        }
       },
       // The AI SDK's default stop condition is stepCountIs(20) — far too
       // small for real coding turns (scaffold a workspace, build, fix,
@@ -538,7 +584,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
             yield { type: "text", content: text };
             text = "";
           }
-          if (part.toolName === "ask_user") {
+          if (part.toolName === "ask_user" && !opts?.askQuestion) {
             askedToolCallId = part.toolCallId;
             askedQuestions = parseAskUserInput(part.input);
             continue;
@@ -584,7 +630,8 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       if (text.trim().length > 0) {
         yield { type: "text", content: text };
       }
-      state.messages = [...requestMessages, ...(await result.responseMessages)];
+      // onStepFinish retains the prepared input as well as each response.
+      await result.responseMessages;
       const usage = turnUsageFromAiSdk(
         await result.totalUsage,
         opts?.model ??
@@ -1154,47 +1201,9 @@ function createTools(
     // No execute: calling it ends the tool loop; the user's answer comes
     // back as the tool result on the next sendMessage.
     ask_user: tool({
-      description: `Ask the user one or more multiple-choice questions and wait for their answers. ALWAYS use this tool instead of writing questions as plain text whenever you are asking the user something and their answer shapes what you do next. Use it when (1) you are blocked on a decision that is genuinely the user's to make — one you cannot resolve from the request, the project, or sensible defaults, e.g. choosing between data sources, schedules, external services, or destructive vs. safe variants of an operation; or (2) the user asks you to interview them, gather their preferences, or otherwise requests that you ask them questions — a request like "ask me some questions" should go through this tool, batching up to 4 questions per call and calling it again for follow-ups. For routine implementation choices, pick a sensible default and state it instead of asking. Each option needs a concise label and a description explaining its effects, implications, or trade-offs; for open-ended questions offer plausible example answers as options — the user can always answer with free text instead of picking one. If you recommend an option, make it the first one and append " (Recommended)" to its label. Do not use it to ask "should I proceed?" or to confirm work you already described.`,
-      inputSchema: z.object({
-        questions: z
-          .array(
-            z.object({
-              question: z
-                .string()
-                .describe(
-                  "The complete question to ask, ending with a question mark",
-                ),
-              header: z
-                .string()
-                .describe(
-                  "Very short label shown as the question's tab (max 12 chars), e.g. 'Data source'",
-                ),
-              multiSelect: z
-                .boolean()
-                .describe(
-                  "Whether the user may select multiple options instead of one",
-                ),
-              options: z
-                .array(
-                  z.object({
-                    label: z
-                      .string()
-                      .describe("Concise display text (1-5 words)"),
-                    description: z
-                      .string()
-                      .describe(
-                        "What this option means or what happens if chosen — effects, implications, trade-offs",
-                      ),
-                  }),
-                )
-                .min(2)
-                .max(4)
-                .describe("2-4 distinct, mutually exclusive choices"),
-            }),
-          )
-          .min(1)
-          .max(4)
-          .describe("Questions to ask the user (1-4)"),
+      description: `Ask the user one or more questions. When the tool allows blocking=false, use it to continue independent work while awaiting answers. ALWAYS use this tool instead of writing questions as plain text whenever you are asking the user something and their answer shapes what you do next. Use it when (1) you are blocked on a decision that is genuinely the user's to make — one you cannot resolve from the request, the project, or sensible defaults, e.g. choosing between data sources, schedules, external services, or destructive vs. safe variants of an operation; or (2) the user asks you to interview them, gather their preferences, or otherwise requests that you ask them questions — a request like "ask me some questions" should go through this tool, batching up to 4 questions per call and calling it again for follow-ups. For routine implementation choices, pick a sensible default and state it instead of asking. Each option needs a concise label and a description explaining its effects, implications, or trade-offs; for open-ended questions offer plausible example answers as options — the user can always answer with free text instead of picking one. If you recommend an option, make it the first one and append " (Recommended)" to its label. Do not use it to ask "should I proceed?" or to confirm work you already described.`,
+      inputSchema: agentQuestionInputSchema.extend({
+        blocking: z.literal(true).default(true),
       }),
     }),
     bash: tool({

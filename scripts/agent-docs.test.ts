@@ -37,6 +37,7 @@ it.each(files)("agent guide links resolve: %s", (file) => {
 it("shared chat registry components match their installed desktop copies", () => {
   for (const name of [
     "agent-chat",
+    "agent-question-panel",
     "chat-queue",
     "tool-permission-card",
     "resource-preview",
@@ -47,6 +48,10 @@ it("shared chat registry components match their installed desktop copies", () =>
         "utf8",
       )
       .replaceAll("../chat-timeline/chat-timeline.js", "./chat-timeline")
+      .replaceAll(
+        "../agent-question-panel/agent-question-panel.js",
+        "./agent-question-panel",
+      )
       .replaceAll("../todo-progress/todo-progress.js", "./todo-progress")
       .replaceAll(
         "../tool-permission-card/tool-permission-card.js",

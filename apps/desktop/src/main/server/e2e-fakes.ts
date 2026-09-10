@@ -247,6 +247,54 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     state.lastTurn = { message, ...(opts ? { opts } : {}) };
     const prompt = message.toLowerCase();
 
+    if (prompt.includes("nonblocking question")) {
+      await opts?.askQuestion?.({
+        requestId: "favorite-color",
+        blocking: false,
+        questions: [
+          {
+            question: "Which accent color should I use?",
+            header: "Color",
+            multiSelect: false,
+            options: [
+              { label: "Orange", description: "Warm and bright" },
+              { label: "Blue", description: "Cool and calm" },
+            ],
+          },
+        ],
+      });
+      yield {
+        type: "text",
+        content: "I am continuing independent work while you decide.",
+      };
+      for (let step = 0; step < 100 && !state.interrupted; step++) {
+        yield {
+          type: "tool_call",
+          toolName: "read",
+          toolInput: { path: "notes.md" },
+        };
+        const input = (await opts?.readPendingMessages?.()) ?? [];
+        if (input.length) {
+          await opts?.acknowledgeMessages?.({
+            ids: input.map((entry) => entry.id),
+          });
+          yield {
+            type: "text",
+            content: `Answer received during the same turn: ${input.map((entry) => entry.content).join("\n")}`,
+          };
+          yield { type: "done" };
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      yield {
+        type: "text",
+        content: "Independent work finished; you can still answer later.",
+      };
+      yield { type: "done" };
+      return;
+    }
+
     // Attachments echo what arrived (exercises the attachment path). Text
     // pills additionally echo their source and content so e2e can assert
     // the model-facing payload, not just the name.

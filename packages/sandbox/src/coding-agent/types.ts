@@ -1,5 +1,5 @@
 import type { AgentCapabilityGateway } from "../agent-capabilities.js";
-import type { AgentEvent, SandboxProvider } from "../types.js";
+import type { AgentEvent, AgentQuestion, SandboxProvider } from "../types.js";
 import type { McpToolPolicyLayers } from "./tool-policy.js";
 
 /**
@@ -223,6 +223,18 @@ export type AgentAttachment = AgentMediaAttachment | AgentTextAttachment;
 
 /** Per-turn overrides; anything unset falls back to the provider's defaults. */
 export interface TurnOptions {
+  /** Host-owned question persistence and answer delivery. */
+  askQuestion?: (input: {
+    requestId: string;
+    questions: AgentQuestion[];
+    blocking: boolean;
+    signal?: AbortSignal;
+  }) => Promise<string>;
+  /** Read durable input at a model-step boundary, without removing it. */
+  readPendingMessages?: () => Promise<Array<{ id: string; content: string }>>;
+  /** Acknowledge input only after the model step incorporating it completes. */
+  acknowledgeMessages?: (input: { ids: string[] }) => Promise<void>;
+
   /** Fresh host facts, separate from user prose. */
   context?: string;
   /** Live session-scoped gateway; remote hosts supply their own transport. */

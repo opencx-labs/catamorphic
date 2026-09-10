@@ -4,6 +4,7 @@ import {
   messageWithAttachmentNames,
   useAgentCatalog,
   useAgentChat,
+  useAnswerAgentQuestion,
   useEnvironments,
   useWatchers,
 } from "@catamorphic/react";
@@ -1462,6 +1463,10 @@ function ChatDockContent({
     const skill = skills.find((entry) => entry.name === match[1]);
     return skill ? skillInvocation(skill.name, match[2]) : message;
   };
+  const answerQuestion = useAnswerAgentQuestion(projectId, chat.sessionId);
+  const pendingQuestion =
+    chat.session?.questions?.find((entry) => entry.blocking !== false) ??
+    chat.session?.questions?.[0];
   const { messages, activity, questions } = toTimeline(
     chat.messages,
     chat.optimisticMessages,
@@ -1865,7 +1870,9 @@ function ChatDockContent({
   // a combined effect's cleanup would fire on every dep change, flapping
   // working false→true and producing phantom "finished" notifications.
   const hasDraft = draft.trim().length > 0 || pillCount > 0;
-  const awaitingInput = Boolean(questions) && !chat.isWorking;
+  const awaitingInput =
+    Boolean(pendingQuestion && pendingQuestion.blocking !== false) ||
+    (Boolean(questions) && !chat.isWorking);
   useEffect(() => {
     onSignalsChange(entry.localId, {
       working: chat.isWorking,
@@ -3177,7 +3184,37 @@ function ChatDockContent({
                 onAuthorized={chat.resumeAfterAuthentication}
               />
             ))}
-            {questions && !chat.isSending && (
+            <div className="max-h-[50vh] overflow-y-auto">
+              {chat.session?.questions?.map(
+                (request) =>
+                  request.questions && (
+                    <AgentQuestionPanel
+                      key={request.requestId}
+                      questions={request.questions}
+                      blocking={request.blocking !== false}
+                      onSubmit={(answer) =>
+                        answerQuestion.mutate({
+                          requestId: request.requestId,
+                          answer,
+                        })
+                      }
+                      onDismiss={() =>
+                        answerQuestion.mutate({
+                          requestId: request.requestId,
+                          answer: QUESTIONS_DISMISSED_MESSAGE,
+                        })
+                      }
+                      disabled={!expanded || answerQuestion.isPending}
+                    />
+                  ),
+              )}
+            </div>
+            {answerQuestion.error && (
+              <p role="alert" className="mx-3 text-xs text-danger">
+                {answerQuestion.error.message}
+              </p>
+            )}
+            {!pendingQuestion && questions && !chat.isSending && (
               <AgentQuestionPanel
                 questions={questions}
                 onSubmit={(answer) => void chat.send(answer)}

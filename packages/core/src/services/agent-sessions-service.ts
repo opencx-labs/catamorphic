@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import type { DB, Json, JsonObject } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import {
@@ -13,6 +14,8 @@ import {
   type AgentEffort,
   type AgentEvent,
   type AgentMcpServerConfig,
+  type AgentQuestionRequest,
+  type AgentRuntimeRequestResponse,
   type AttachedPluginForAgent,
   type McpToolPolicyLayers,
   messageWithAttachmentNames,
@@ -45,6 +48,12 @@ import {
   parseProjectAgentId,
 } from "./agent-definitions-service.js";
 import { startAgentLeaseHeartbeat } from "./agent-lease-heartbeat.js";
+import { sameCanonicalRuntimeJson } from "./agent-runtime-json.js";
+import {
+  AgentRequestAlreadyResolvedError,
+  AgentRuntimeRequestNotFoundError,
+  AgentRuntimeRequestsService,
+} from "./agent-runtime-requests-service.js";
 import { assertAgentSessionAccess } from "./agent-session-access.js";
 import {
   type AgentExecution,
@@ -215,6 +224,7 @@ export interface AgentMessage {
 }
 
 export interface AgentSessionDetail extends AgentSession {
+  questions?: AgentQuestionRequest[];
   execution: AgentExecution | null;
   messages: AgentMessage[];
   pendingTurns: PendingSessionTurn[];
@@ -1016,7 +1026,7 @@ export class AgentSessionsService {
     // Progress and transcript must describe one database snapshot. Otherwise
     // a settling turn can return an old placeholder with "completed" execution,
     // causing clients to stop polling before they receive the final reply.
-    const { row, messages, execution, pendingTurns } = await this.db
+    const { row, messages, execution, pendingTurns, questions } = await this.db
       .transaction()
       .setIsolationLevel("repeatable read")
       .execute(async (trx) => {
@@ -1037,6 +1047,15 @@ export class AgentSessionsService {
           messages,
           execution: await turns.execution({ sessionId }),
           pendingTurns: await turns.listPendingMessages({ sessionId }),
+          questions: (
+            await new AgentRuntimeRequestsService(trx).listPending({
+              identity,
+              sessionId,
+            })
+          ).filter(
+            (request): request is AgentQuestionRequest =>
+              request.kind === "question" && Boolean(request.questions),
+          ),
         };
       });
     const presentation = (await this.presentations(identity, [sessionId])).get(
@@ -1053,6 +1072,7 @@ export class AgentSessionsService {
       messages: messages.map(mapMessage),
       execution,
       pendingTurns,
+      questions,
     };
   }
 
@@ -1066,6 +1086,89 @@ export class AgentSessionsService {
       .where("status", "=", "running")
       .execute();
     return new Set(rows.map((row) => row.session_id));
+  }
+
+  /** Resolve one question batch and durably deliver its answer to its session. */
+  async answerQuestion(args: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    requestId: string;
+    answer: string;
+  }): Promise<SessionDeliveryReceipt> {
+    if (!args.answer.trim() || args.answer.length > 200_000)
+      throw new Error("An answer needs 1 to 200000 characters");
+    await this.requireSession(args.identity, args.projectId, args.sessionId);
+    const receipt = await this.db.transaction().execute(async (transaction) => {
+      const session = await transaction
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("id", "=", args.sessionId)
+        .forUpdate()
+        .executeTakeFirstOrThrow();
+      if (session.status !== "active")
+        throw new AgentSessionClosedError(args.sessionId);
+      if (session.handoff_status === "pending")
+        throw new AgentSessionHandoffPendingError(args.sessionId);
+      if (
+        session.authority_host_id !== "unassigned" &&
+        session.authority_host_id !== this.hostId
+      ) {
+        throw new AgentSessionAuthorityRequiredError(
+          args.sessionId,
+          session.authority_host_id,
+          Number(session.authority_revision),
+        );
+      }
+      const row = await transaction
+        .selectFrom("agent_runtime_requests")
+        .selectAll()
+        .where("session_id", "=", args.sessionId)
+        .where("request_id", "=", args.requestId)
+        .forUpdate()
+        .executeTakeFirst();
+      if (row?.kind !== "question")
+        throw new AgentRuntimeRequestNotFoundError(args.requestId);
+      const request: AgentQuestionRequest = JSON.parse(
+        JSON.stringify(row.payload),
+      );
+      const response = {
+        kind: "question",
+        answers: [args.answer],
+      } satisfies AgentRuntimeRequestResponse;
+      if (row.status === "resolved") {
+        if (!sameCanonicalRuntimeJson(row.response, response))
+          throw new AgentRequestAlreadyResolvedError(args.requestId);
+      } else {
+        await new AgentRuntimeRequestsService(this.db).respond({
+          identity: args.identity,
+          sessionId: args.sessionId,
+          requestId: args.requestId,
+          response,
+          transaction,
+        });
+      }
+      const content = `${(request.questions ?? []).map((question) => question.question).join("\n")}\n\nUser answer:\n${args.answer}`;
+      return this.turns.deliver({
+        sessionId: args.sessionId,
+        content,
+        author: { kind: "user", externalUserId: args.identity.externalUserId },
+        mode: "next_turn",
+        idempotencyKey: `question-answer:${args.requestId}`,
+        metadata: {
+          questionRequestId: args.requestId,
+          inTurn: request.blocking === false,
+        },
+        transaction,
+      });
+    });
+    if (receipt.turnId)
+      void this.scheduleDrain(
+        args.identity,
+        args.projectId,
+        args.sessionId,
+      ).catch(() => {});
+    return receipt;
   }
 
   async updateQueuedTurn(
@@ -3704,6 +3807,107 @@ export class AgentSessionsService {
             ...(attachments ? { attachments } : {}),
             toolPolicies: callerLayers ?? {},
           };
+          turnOptions.askQuestion = async (input) => {
+            const requestId = `${assistantMessageId}:${input.requestId}`;
+            const requests = new AgentRuntimeRequestsService(this.db);
+            input.signal?.throwIfAborted();
+            await writeOwned((transaction) =>
+              requests.create({
+                transaction,
+                identity,
+                request: {
+                  requestId,
+                  kind: "question",
+                  status: "pending",
+                  sessionId,
+                  createdAt: new Date().toISOString(),
+                  blocking: input.blocking,
+                  origin: {
+                    kind: "tool",
+                    id: "ask_user",
+                    displayName: "Ask User",
+                  },
+                  title: input.questions[0]?.header ?? "Question",
+                  question: {
+                    prompt: input.questions[0]?.question ?? "Question",
+                  },
+                  questions: input.questions,
+                },
+              }),
+            );
+            if (!input.blocking)
+              return `Question request ${requestId} is open. Continue independent work. The user's answer will arrive as a message when submitted.`;
+            while (true) {
+              input.signal?.throwIfAborted();
+              const row = await this.db
+                .selectFrom("agent_runtime_requests")
+                .select(["status", "response"])
+                .where("session_id", "=", sessionId)
+                .where("request_id", "=", requestId)
+                .executeTakeFirstOrThrow();
+              if (row.status === "resolved") {
+                const response: { answers: string[] } = JSON.parse(
+                  JSON.stringify(row.response),
+                );
+                // Every answer enters the durable inbox, even when another
+                // server receives it. The waiting tool consumes its own answer;
+                // only non-blocking answers are eligible for native steering.
+                await writeOwned((trx) =>
+                  trx
+                    .updateTable("agent_turns")
+                    .set({
+                      status: "completed",
+                      result_message_id: assistantMessageId,
+                      completed_at: new Date(),
+                    })
+                    .where("session_id", "=", sessionId)
+                    .where("status", "=", "queued")
+                    .where("message_id", "in", (eb) =>
+                      eb
+                        .selectFrom("agent_messages")
+                        .select("id")
+                        .where("session_id", "=", sessionId)
+                        .where(
+                          "idempotency_key",
+                          "=",
+                          `question-answer:${requestId}`,
+                        ),
+                    )
+                    .execute(),
+                );
+                return response.answers.join("\n");
+              }
+              if (row.status !== "pending")
+                throw new Error("Question is no longer pending");
+              await delay(200, undefined, { signal: input.signal });
+            }
+          };
+          turnOptions.readPendingMessages = async () => {
+            const pending = await this.turns.listPendingMessages({ sessionId });
+            return pending
+              .filter(
+                (entry) =>
+                  entry.status === "queued" && entry.metadata?.inTurn === true,
+              )
+              .map((entry) => ({ id: entry.id, content: entry.content }));
+          };
+          turnOptions.acknowledgeMessages = async ({ ids }) => {
+            if (ids.length === 0) return;
+            await writeOwned((trx) =>
+              trx
+                .updateTable("agent_turns")
+                .set({
+                  status: "completed",
+                  result_message_id: assistantMessageId,
+                  completed_at: new Date(),
+                })
+                .where("session_id", "=", sessionId)
+                .where("id", "in", ids)
+                .where("status", "=", "queued")
+                .execute(),
+            );
+          };
+
           const anchor = await this.ensureAnchor(
             identity,
             projectId,

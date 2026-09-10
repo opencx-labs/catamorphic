@@ -1,26 +1,24 @@
-import { Check, PencilLine, X } from "lucide-react";
-import { useLayoutEffect, useRef, useState } from "react";
-import type { AgentQuestion } from "./catamorphic/chat-timeline.js";
+"use client";
 
-/**
- * The desktop's tabbed `ask_user` form (components/agent-question-panel),
- * trimmed for touch: no keyboard shortcuts, same tabs / slide / "Other"
- * free-text / answer formatting so the agent sees identical replies.
- */
-export const QUESTIONS_DISMISSED_MESSAGE =
-  "(The user dismissed the questions without answering.)";
+import { Check, PencilLine, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { AgentQuestion } from "./chat-timeline";
 
 export interface AgentQuestionPanelProps {
   questions: AgentQuestion[];
-  blocking?: boolean;
-  disabled?: boolean;
+  /** Sending the composed answer text back to the agent. */
   onSubmit: (answer: string) => void;
+  /** Dismissing the questions without answering (X button or Escape). */
   onDismiss: () => void;
+  disabled?: boolean;
+  blocking?: boolean;
+  renderDismiss?: (button: React.ReactNode, label: string) => React.ReactNode;
 }
 
 const OTHER = "__other__";
 
 interface Answer {
+  /** Selected option labels, or [OTHER] when free text is chosen. */
   selected: string[];
   otherText: string;
 }
@@ -32,19 +30,29 @@ const isAnswered = (answer: Answer): boolean =>
     ? answer.otherText.trim().length > 0
     : answer.selected.length > 0;
 
+/**
+ * Tabbed question form for agent `ask_user` turns, styled after the Claude
+ * Code VSCode extension: one tab per question, animated slide between them,
+ * options with effect descriptions, and an always-available "Other" free
+ * text answer.
+ */
 export function AgentQuestionPanel({
   questions,
   onSubmit,
   onDismiss,
-  blocking = true,
   disabled = false,
+  blocking = true,
+  renderDismiss = (button) => button,
 }: AgentQuestionPanelProps) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [collapsed, setCollapsed] = useState(false);
   const [answers, setAnswers] = useState<Answer[]>(() =>
     questions.map(emptyAnswer),
   );
-  const questionsKey = questions.map((question) => question.question).join(" ");
+  // New question set (next ask_user turn) resets the form.
+  const questionsKey = questions
+    .map((question) => question.question)
+    .join("\u0000");
   const prevKeyRef = useRef(questionsKey);
   if (prevKeyRef.current !== questionsKey) {
     prevKeyRef.current = questionsKey;
@@ -55,6 +63,9 @@ export function AgentQuestionPanel({
   const safeIndex = Math.min(activeIndex, questions.length - 1);
   const allAnswered = answers.every(isAnswered);
 
+  // Height follows the active panel so the slide never clips or jumps. A
+  // ResizeObserver (not a one-shot measure) because the Other input expands
+  // with a CSS transition — the final height only exists when it ends.
   const panelRefs = useRef<(HTMLDivElement | null)[]>([]);
   const [panelHeight, setPanelHeight] = useState<number>();
   useLayoutEffect(() => {
@@ -74,6 +85,32 @@ export function AgentQuestionPanel({
     onSubmit(formatAnswers(questions, answers));
   };
 
+  const advanceTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  useEffect(() => () => clearTimeout(advanceTimerRef.current), []);
+
+  // Escape dismisses the questions. Capture phase so this wins over the
+  // dock's own Escape-to-minimize handler, which yields via defaultPrevented.
+  const dismiss = () => (blocking ? onDismiss() : setCollapsed(true));
+  const onDismissRef = useRef(dismiss);
+  onDismissRef.current = dismiss;
+  const disabledRef = useRef(disabled);
+  disabledRef.current = disabled;
+  useEffect(() => {
+    const onWindowKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || event.isComposing) return;
+      if (event.defaultPrevented || disabledRef.current || collapsed) return;
+      event.preventDefault();
+      onDismissRef.current();
+    };
+    window.addEventListener("keydown", onWindowKeyDown, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", onWindowKeyDown, {
+        capture: true,
+      });
+  }, [collapsed]);
+
   const setAnswer = (index: number, update: (answer: Answer) => Answer) =>
     setAnswers((current) =>
       current.map((answer, i) => (i === index ? update(answer) : answer)),
@@ -82,25 +119,34 @@ export function AgentQuestionPanel({
   const selectOption = (index: number, label: string) => {
     const question = questions[index];
     if (!question) return;
+    let next: Answer | undefined;
     setAnswer(index, (answer) => {
       if (question.multiSelect && label !== OTHER) {
         const selected = answer.selected.includes(label)
           ? answer.selected.filter((entry) => entry !== label)
           : [...answer.selected.filter((entry) => entry !== OTHER), label];
-        return { ...answer, selected };
-      }
-      if (label === OTHER) {
-        return answer.selected.includes(OTHER)
+        next = { ...answer, selected };
+      } else if (label === OTHER) {
+        next = answer.selected.includes(OTHER)
           ? { ...answer, selected: [] }
           : { ...answer, selected: [OTHER] };
+      } else {
+        next = { ...answer, selected: [label] };
       }
-      return { ...answer, selected: [label] };
+      return next;
     });
+    // Single-select answers glide to the next unanswered question.
     if (!question.multiSelect && label !== OTHER && questions.length > 1) {
-      setTimeout(() => {
-        setActiveIndex((current) =>
-          Math.min(current + 1, questions.length - 1),
-        );
+      clearTimeout(advanceTimerRef.current);
+      advanceTimerRef.current = setTimeout(() => {
+        setActiveIndex((current) => {
+          const unanswered = answers.findIndex(
+            (answer, i) => i !== index && i > current && !isAnswered(answer),
+          );
+          return unanswered === -1
+            ? Math.min(current + 1, questions.length - 1)
+            : unanswered;
+        });
       }, 220);
     }
   };
@@ -109,19 +155,21 @@ export function AgentQuestionPanel({
     return (
       <button
         type="button"
-        className="mx-3 rounded-md border border-border p-3 text-left text-sm"
         onClick={() => setCollapsed(false)}
+        disabled={disabled}
+        className="mx-3 mb-1 rounded-md border border-border px-3 py-2 text-left text-xs text-fg-muted"
       >
-        Answer when ready · {questions.length} questions
+        Answer when ready · {questions.length}{" "}
+        {questions.length === 1 ? "question" : "questions"}
       </button>
     );
 
   return (
     <section
-      className="animate-question-in overflow-hidden rounded-xl border border-accent/35 bg-bg-overlay/60"
+      className="animate-question-in mx-3 mb-1 overflow-hidden rounded-xl border border-accent/35 bg-bg-overlay/60"
       aria-label="The agent has a question"
     >
-      <p className="px-3 pt-2 text-xs text-fg-muted">
+      <p className="px-3 pt-2 text-[11px] text-fg-muted">
         {blocking
           ? "Waiting for your answer"
           : "Answer when ready. The agent can keep working."}
@@ -135,8 +183,7 @@ export function AgentQuestionPanel({
           >
             {questions.map((question, index) => {
               const active = index === safeIndex;
-              const entry = answers[index];
-              const answered = entry !== undefined && isAnswered(entry);
+              const answered = answers[index] && isAnswered(answers[index]);
               return (
                 <button
                   key={question.question}
@@ -145,7 +192,7 @@ export function AgentQuestionPanel({
                   aria-selected={active}
                   onClick={() => setActiveIndex(index)}
                   className={`relative flex shrink-0 cursor-pointer items-center gap-1.5 rounded-t-md px-2.5 pb-2 pt-1 text-[11px] font-semibold transition-colors duration-150 ${
-                    active ? "text-fg" : "text-fg-faint"
+                    active ? "text-fg" : "text-fg-faint hover:text-fg-muted"
                   }`}
                 >
                   <span
@@ -180,14 +227,20 @@ export function AgentQuestionPanel({
             {questions[0]?.header}
           </span>
         )}
-        <button
-          type="button"
-          onClick={() => (blocking ? onDismiss() : setCollapsed(true))}
-          className="mb-2 ml-auto grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-fg-faint"
-          aria-label={blocking ? "Dismiss questions" : "Answer later"}
-        >
-          <X className="size-3.5" />
-        </button>
+        <span className="mb-2 ml-auto">
+          {renderDismiss(
+            <button
+              type="button"
+              onClick={dismiss}
+              disabled={disabled}
+              className="grid size-5 shrink-0 cursor-pointer place-items-center rounded-md text-fg-faint transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+              aria-label={blocking ? "Dismiss questions" : "Answer later"}
+            >
+              <X className="size-3.5" />
+            </button>,
+            blocking ? "Dismiss questions" : "Answer later",
+          )}
+        </span>
       </header>
 
       <div
@@ -218,21 +271,26 @@ export function AgentQuestionPanel({
                   {question.question}
                 </p>
                 <div className="flex flex-col gap-1.5">
-                  {question.options.map((option) => (
-                    <OptionRow
-                      key={option.label}
-                      label={option.label}
-                      description={option.description}
-                      selected={answer.selected.includes(option.label)}
-                      multiSelect={question.multiSelect}
-                      onSelect={() => selectOption(index, option.label)}
-                    />
-                  ))}
+                  {question.options.map((option) => {
+                    const selected = answer.selected.includes(option.label);
+                    return (
+                      <OptionRow
+                        key={option.label}
+                        label={option.label}
+                        description={option.description}
+                        selected={selected}
+                        multiSelect={question.multiSelect}
+                        disabled={disabled}
+                        onSelect={() => selectOption(index, option.label)}
+                      />
+                    );
+                  })}
                   <OptionRow
                     label="Other"
                     description="Answer in your own words instead."
                     selected={answer.selected.includes(OTHER)}
                     multiSelect={false}
+                    disabled={disabled}
                     icon={<PencilLine className="size-3" />}
                     onSelect={() => selectOption(index, OTHER)}
                   />
@@ -246,15 +304,33 @@ export function AgentQuestionPanel({
                     <div className="overflow-hidden">
                       <textarea
                         rows={1}
-                        className="field mt-0.5 w-full resize-none px-2.5 py-1.5 leading-5 outline-none [field-sizing:content] placeholder:text-fg-faint"
+                        className="field mt-0.5 w-full resize-none px-2.5 py-1.5 text-[13px] leading-5 outline-none [field-sizing:content] placeholder:text-fg-faint"
                         placeholder="Type your answer…"
                         value={answer.otherText}
+                        disabled={disabled}
                         onChange={(event) =>
                           setAnswer(index, (current) => ({
                             ...current,
                             otherText: event.target.value,
                           }))
                         }
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && !event.shiftKey) {
+                            event.preventDefault();
+                            if (!answer.otherText.trim()) return;
+                            const pending = answers
+                              .map((entry, i) => ({ entry, i }))
+                              .filter(
+                                ({ entry, i }) =>
+                                  i !== index && !isAnswered(entry),
+                              )
+                              .map(({ i }) => i);
+                            const next =
+                              pending.find((i) => i > index) ?? pending[0];
+                            if (next === undefined) submit();
+                            else setActiveIndex(next);
+                          }
+                        }}
                       />
                     </div>
                   </div>
@@ -269,13 +345,13 @@ export function AgentQuestionPanel({
         <span className="text-[11px] text-fg-faint">
           {questions.length > 1
             ? `${answers.filter(isAnswered).length} of ${questions.length} answered`
-            : "You can also reply below."}
+            : "Submit your answer here."}
         </span>
         <button
           type="button"
           onClick={submit}
           disabled={!allAnswered || disabled}
-          className="h-8 shrink-0 cursor-pointer rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-[opacity,transform] duration-150 active:scale-[0.98] disabled:cursor-default disabled:opacity-35"
+          className="h-7 shrink-0 cursor-pointer rounded-md bg-accent px-3 text-[12px] font-medium text-accent-fg transition-[opacity,transform] duration-150 hover:opacity-90 active:scale-[0.98] disabled:cursor-default disabled:opacity-35"
         >
           {questions.length > 1 ? "Submit answers" : "Submit"}
         </button>
@@ -289,6 +365,7 @@ function OptionRow({
   description,
   selected,
   multiSelect,
+  disabled,
   icon,
   onSelect,
 }: {
@@ -296,6 +373,7 @@ function OptionRow({
   description: string;
   selected: boolean;
   multiSelect: boolean;
+  disabled: boolean;
   icon?: React.ReactNode;
   onSelect: () => void;
 }) {
@@ -303,11 +381,12 @@ function OptionRow({
     <button
       type="button"
       onClick={onSelect}
+      disabled={disabled}
       aria-pressed={selected}
       className={`group flex w-full cursor-pointer items-start gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-[border-color,background-color] duration-150 ${
         selected
           ? "border-accent/60 bg-accent/10"
-          : "border-border bg-bg-raised/40 active:bg-bg-overlay"
+          : "border-border bg-bg-raised/40 hover:border-border-strong hover:bg-bg-overlay"
       }`}
     >
       <span
@@ -316,7 +395,7 @@ function OptionRow({
         } ${
           selected
             ? "border-accent bg-accent text-accent-fg"
-            : "border-border-strong bg-bg-inset text-transparent"
+            : "border-border-strong bg-bg-inset text-transparent group-hover:border-fg-faint"
         }`}
       >
         {icon && !selected ? (

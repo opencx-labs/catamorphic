@@ -3,10 +3,12 @@
 import {
   type UseAgentChatResult,
   useAgentChat,
+  useAnswerAgentQuestion,
   useToolPermissions,
 } from "@catamorphic/react";
 import { ArrowUp, Bot, Maximize2, Minimize2, Plus } from "lucide-react";
 import { type FormEvent, type KeyboardEvent, useState } from "react";
+import { AgentQuestionPanel } from "./agent-question-panel";
 import { ChatTimeline, toTimeline } from "./chat-timeline";
 import { TodoProgress } from "./todo-progress";
 import { ToolPermissionCard } from "./tool-permission-card";
@@ -49,6 +51,7 @@ export function AgentChat({
       enabled: chat.isWorking,
     },
   );
+  const answerQuestion = useAnswerAgentQuestion(projectId, chat.sessionId);
   const isFull = variant === "full";
   const [dockExpanded, setDockExpanded] = useState(false);
   const expanded = isFull || dockExpanded;
@@ -168,6 +171,37 @@ export function AgentChat({
         )}
       </div>
       <ChatDeliveryRecovery chat={chat} />
+      {expanded && (
+        <div className="max-h-[50vh] overflow-y-auto">
+          {chat.session?.questions?.map(
+            (request) =>
+              request.questions && (
+                <AgentQuestionPanel
+                  key={request.requestId}
+                  questions={request.questions}
+                  blocking={request.blocking !== false}
+                  disabled={answerQuestion.isPending}
+                  onSubmit={(answer) =>
+                    answerQuestion.mutate({
+                      requestId: request.requestId,
+                      answer,
+                    })
+                  }
+                  onDismiss={() =>
+                    answerQuestion.mutate({
+                      requestId: request.requestId,
+                      answer:
+                        "The user dismissed these questions. Continue with the available information.",
+                    })
+                  }
+                />
+              ),
+          )}
+        </div>
+      )}
+      {answerQuestion.error && (
+        <p role="alert">{answerQuestion.error.message}</p>
+      )}
       <form
         className={`flex min-h-16 items-center gap-2 border border-border bg-bg-raised/95 p-2 backdrop-blur-xl ${expanded ? "rounded-b-2xl" : "rounded-2xl"}`}
         onSubmit={submit}

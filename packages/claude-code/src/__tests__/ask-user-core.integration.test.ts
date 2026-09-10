@@ -27,22 +27,8 @@ import { FsBackend, ProjectManager } from "@catamorphic/git";
 import { sql } from "kysely";
 import { ClaudeCodeAgent } from "../claude-code-agent.js";
 
-/**
- * Pins the harness ↔ core seam of the ask_user flow for Claude Code
- * sessions — the layer that has regressed repeatedly. The harness unit
- * tests mock query() and stop at AgentEvents; the desktop e2e drives the
- * fake agent, which never touches this harness. This test runs the REAL
- * ClaudeCodeAgent inside the REAL AgentSessionsService against a real
- * Postgres schema, with only the SDK's query() scripted, and asserts the
- * full contract:
- *
- *   AskUserQuestion tool call → parked permission → `question` event →
- *   assistant row persisted as awaiting_input with the questions →
- *   the user's answer turn → parked promise resolved with the answers →
- *   the SAME query stream continues → turn completes.
- *
- * If AskUserQuestion is ever allowlisted past canUseTool again (the last
- * regression), the question event never fires and this fails.
+/** Real core, Postgres and Claude adapter; only the SDK model stream is scripted.
+ * A native blocking question remains durable while the same turn waits for its answer.
  */
 
 const connectionString = process.env.DATABASE_URL ?? "";
@@ -149,7 +135,7 @@ describeIf("ask_user across ClaudeCodeAgent + AgentSessionsService", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("persists awaiting_input with the questions, then resumes the same stream with the answers", async () => {
+  it("persists a blocking question and answers it without starting another turn", async () => {
     let decision: unknown;
     queryMock.mockImplementationOnce((params) => {
       return (async function* () {
@@ -201,34 +187,30 @@ describeIf("ask_user across ClaudeCodeAgent + AgentSessionsService", () => {
 
     const session = await sessions.create(identity, projectId);
 
-    // Turn 1: the question turn must SETTLE as awaiting_input — that is
-    // what makes the panel render and survive an app restart.
-    const asked = await sessions.sendMessage(
+    const turn = sessions.sendMessage(
       identity,
       projectId,
       session.id,
       "Ask me what you need to know",
     );
-    expect(asked.metadata?.status).toBe("awaiting_input");
-    expect(asked.metadata?.questions).toEqual(ASK_INPUT.questions);
-    // Not yet answered: the parked permission is still pending.
+    await vi.waitFor(async () => {
+      const detail = await sessions.get(identity, projectId, session.id);
+      expect(detail.questions?.[0]?.questions).toEqual(ASK_INPUT.questions);
+    });
     expect(decision).toBeUndefined();
-
-    // The persisted read shows the same settled state (refresh safety):
-    // a reload must not settle it as failed or lose the questions.
     const detail = await sessions.get(identity, projectId, session.id);
-    const persisted = detail.messages.at(-1);
-    expect(persisted?.metadata?.status).toBe("awaiting_input");
-    expect(persisted?.metadata?.questions).toEqual(ASK_INPUT.questions);
-
-    // Turn 2: the panel's formatted answer resolves the parked call and
-    // the SAME query stream continues — no second CLI spawn.
-    const answered = await sessions.sendMessage(
+    const request = detail.questions?.[0];
+    if (!request) throw new Error("Missing question");
+    expect(request.blocking).toBe(true);
+    const receipt = await sessions.answerQuestion({
       identity,
       projectId,
-      session.id,
-      "Which database should we use?\n→ PostgreSQL",
-    );
+      sessionId: session.id,
+      requestId: request.requestId,
+      answer: "Which database should we use?\n→ PostgreSQL",
+    });
+    expect(receipt.turnId).not.toBeNull();
+    const answered = await turn;
     expect(answered.metadata?.status).toBe("completed");
     expect(answered.content).toBe("PostgreSQL it is — starting.");
     expect(queryMock).toHaveBeenCalledTimes(1);

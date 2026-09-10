@@ -41,6 +41,7 @@ export {
   type UseAgentSessionsOptions,
   useAgentSessions,
 } from "./hooks/use-agent-sessions.js";
+export { useAnswerAgentQuestion } from "./hooks/use-answer-agent-question.js";
 export {
   type ArchiveAgentSessionInput,
   type ArchiveAgentSessionResult,

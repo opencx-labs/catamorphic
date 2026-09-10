@@ -44,11 +44,12 @@ export class AgentRuntimeRequestsService {
   async create(args: {
     identity: Identity;
     request: AgentRuntimeRequest;
+    transaction?: Transaction<DB>;
   }): Promise<{ inserted: boolean }> {
     if (args.request.status !== "pending") {
       throw new AgentRuntimeRequestConflictError(args.request.requestId);
     }
-    return this.db.transaction().execute(async (trx) => {
+    const create = async (trx: Transaction<DB>) => {
       await requireRuntimeSession({
         db: trx,
         identity: args.identity,
@@ -83,7 +84,10 @@ export class AgentRuntimeRequestsService {
         })
         .execute();
       return { inserted: true };
-    });
+    };
+    return args.transaction
+      ? create(args.transaction)
+      : this.db.transaction().execute(create);
   }
 
   async respond(args: {
@@ -91,6 +95,7 @@ export class AgentRuntimeRequestsService {
     sessionId: string;
     requestId: string;
     response: AgentRuntimeRequestResponse;
+    transaction?: Transaction<DB>;
   }): Promise<void> {
     return withSpan(
       {
@@ -103,7 +108,7 @@ export class AgentRuntimeRequestsService {
         },
       },
       async (span) => {
-        await this.db.transaction().execute(async (trx) => {
+        const respond = async (trx: Transaction<DB>) => {
           const session = await requireRuntimeSession({
             db: trx,
             identity: args.identity,
@@ -158,7 +163,9 @@ export class AgentRuntimeRequestsService {
           if (!resolved) {
             throw new AgentRequestAlreadyResolvedError(args.requestId);
           }
-        });
+        };
+        if (args.transaction) await respond(args.transaction);
+        else await this.db.transaction().execute(respond);
       },
     );
   }

@@ -135,6 +135,120 @@ async function collect(
 }
 
 describe("AiSdkCodingAgent", () => {
+  it("continues after non-blocking questions and incorporates later input in the same turn and future history", async () => {
+    const provider = createProvider();
+    const pending: Array<{ id: string; content: string }> = [];
+    provider.executeCommand = vi.fn(async () => {
+      pending.push({ id: "answer-1", content: "Use the orange theme" });
+      return { exitCode: 0, result: "Independent work completed" };
+    });
+    const model = new MockLanguageModelV4({
+      doStream: [
+        toolCallStream("ask_user", {
+          blocking: false,
+          questions: [
+            {
+              question: "Which theme?",
+              header: "Theme",
+              multiSelect: false,
+              options: [
+                { label: "Orange", description: "Warm" },
+                { label: "Blue", description: "Cool" },
+              ],
+            },
+          ],
+        }),
+        toolCallStream("bash", { command: "echo working" }),
+        textStream("Applied your answer"),
+        textStream("I remember the orange theme"),
+      ],
+    });
+    const agent = new AiSdkCodingAgent({ model, sandboxProvider: provider });
+    const session = await start(agent);
+    const askQuestion = vi.fn(async () => "Question is open. Keep working.");
+    const acknowledgeMessages = vi.fn(async () => {});
+    const events = [];
+    for await (const event of agent.sendMessage(session, "Build it", {
+      askQuestion,
+      readPendingMessages: async () => pending,
+      acknowledgeMessages,
+    }))
+      events.push(event);
+    expect(askQuestion).toHaveBeenCalledWith(
+      expect.objectContaining({ blocking: false, requestId: "tool-1" }),
+    );
+    expect(provider.executeCommand).toHaveBeenCalledOnce();
+    expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).not.toContain(
+      "Use the orange theme",
+    );
+    expect(JSON.stringify(model.doStreamCalls[2]?.prompt)).toContain(
+      "Use the orange theme",
+    );
+    expect(acknowledgeMessages).toHaveBeenCalledExactlyOnceWith({
+      ids: ["answer-1"],
+    });
+    expect(events.filter((event) => event.type === "done")).toHaveLength(1);
+    expect(
+      events.some(
+        (event) => event.type === "question" || event.type === "error",
+      ),
+    ).toBe(false);
+    await collect(agent, session, "What theme did I choose?");
+    expect(
+      JSON.stringify(model.doStreamCalls[3]?.prompt).match(
+        /Use the orange theme/g,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("defaults questions to blocking and waits for the host's answer before the next model step", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: [
+        toolCallStream("ask_user", {
+          questions: [
+            {
+              question: "Which theme?",
+              header: "Theme",
+              multiSelect: false,
+              options: [
+                { label: "Orange", description: "Warm" },
+                { label: "Blue", description: "Cool" },
+              ],
+            },
+          ],
+        }),
+        textStream("Continuing with orange"),
+      ],
+    });
+    const agent = new AiSdkCodingAgent({
+      model,
+      sandboxProvider: createProvider(),
+    });
+    const session = await start(agent);
+    const answer = deferred<string>();
+    const askQuestion = vi.fn(() => answer.promise);
+    const completed = (async () => {
+      const events = [];
+      for await (const event of agent.sendMessage(session, "Ask first", {
+        askQuestion,
+      }))
+        events.push(event);
+      return events;
+    })();
+    try {
+      await vi.waitFor(() => expect(askQuestion).toHaveBeenCalledOnce());
+      expect(askQuestion).toHaveBeenCalledWith(
+        expect.objectContaining({ blocking: true }),
+      );
+      expect(model.doStreamCalls).toHaveLength(1);
+    } finally {
+      answer.resolve("Orange");
+    }
+    const events = await completed;
+    expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain("Orange");
+    expect(events.some((event) => event.type === "error")).toBe(false);
+  });
+
   it("stages plugin docs when starting a session", async () => {
     const provider = createProvider();
     const model = new MockLanguageModelV4({ doStream: textStream("unused") });
@@ -735,3 +849,11 @@ it.each(["host", "mcp"] as const)(
     expect(JSON.stringify(events)).not.toContain(data);
   },
 );
+
+function deferred<T>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => {};
+  const promise = new Promise<T>((accept) => {
+    resolve = accept;
+  });
+  return { promise, resolve };
+}

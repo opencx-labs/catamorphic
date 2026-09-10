@@ -10,6 +10,7 @@ import type {
   ProviderSession,
   SandboxProvider,
   StartSessionOpts,
+  TurnOptions,
 } from "@catamorphic/sandbox";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
@@ -26,6 +27,7 @@ import { testEnvironmentProvider } from "./test-environment.js";
 
 class DeferredProvider implements CodingAgentProvider {
   readonly name = "deferred";
+  questionTurn?: (options: TurnOptions) => AsyncIterable<AgentEvent>;
   private releaseSlow: (() => void) | undefined;
   private transientAttempts = 0;
   private connectionAttempts = 0;
@@ -50,7 +52,12 @@ class DeferredProvider implements CodingAgentProvider {
   async *sendMessage(
     session: ProviderSession,
     message: string,
+    options?: TurnOptions,
   ): AsyncIterable<AgentEvent> {
+    if (message.startsWith("questions:") && this.questionTurn && options) {
+      yield* this.questionTurn(options);
+      return;
+    }
     if (message === "Run command with progress") {
       for (const toolUseId of ["first", "second"]) {
         yield {
@@ -170,6 +177,7 @@ const unusedSandbox = new Proxy(
 describe("agent session coordination", () => {
   let tmpDir: string;
   let sessions: AgentSessionsService;
+  let answerReceiver: AgentSessionsService;
   let projects: ProjectsService;
   let provider: DeferredProvider;
   const checkpointedSessions: string[] = [];
@@ -237,6 +245,17 @@ describe("agent session coordination", () => {
       new ProjectEnvironmentsService(db, projectManager),
       testEnvironmentProvider(unusedSandbox),
     );
+    answerReceiver = new AgentSessionsService(db, {
+      hostId: "coordination-test-host",
+      projectManager,
+      executionEnvironments,
+      executionAllocations: new ExecutionAllocationsService(db),
+      codingAgents: {
+        defaultAgentId: () => "worker",
+        get: (id) => agents.get(id),
+        list: () => [...agents.values()],
+      },
+    });
     sessions = new AgentSessionsService(db, {
       hostId: "coordination-test-host",
       projectManager,
@@ -266,6 +285,224 @@ describe("agent session coordination", () => {
       },
     });
   }, 30_000);
+
+  it("persists non-blocking batches and delivers answers during the running turn exactly once", async () => {
+    const project = await projects.create(identity, {
+      name: "Non-blocking questions",
+    });
+    const session = await sessions.create(identity, project.id);
+    const proceed = deferred<void>();
+    provider.questionTurn = async function* (options) {
+      await options.askQuestion?.({
+        requestId: "theme",
+        blocking: false,
+        questions: [
+          {
+            question: "Which theme?",
+            header: "Theme",
+            multiSelect: false,
+            options: [],
+          },
+          {
+            question: "Which layout?",
+            header: "Layout",
+            multiSelect: false,
+            options: [],
+          },
+        ],
+      });
+      yield { type: "text", content: "Continuing independent work" };
+      yield { type: "tool_call", toolName: "read" };
+      await proceed.promise;
+      const messages = (await options.readPendingMessages?.()) ?? [];
+      expect(messages).toHaveLength(1);
+      expect(messages[0]?.content).toContain("Orange and compact");
+      await options.acknowledgeMessages?.({
+        ids: messages.map((entry) => entry.id),
+      });
+      yield { type: "text", content: "Answer received in the original turn" };
+      yield { type: "done" };
+    };
+    const turn = sessions.sendMessage(
+      identity,
+      project.id,
+      session.id,
+      "questions: keep working",
+    );
+    try {
+      await vi.waitFor(async () =>
+        expect(
+          (await sessions.get(identity, project.id, session.id)).questions,
+        ).toHaveLength(1),
+      );
+      const detail = await sessions.get(identity, project.id, session.id);
+      const request = detail.questions?.[0];
+      if (!request) throw new Error("Question was not persisted");
+      expect(request.blocking).toBe(false);
+      expect(request.questions).toHaveLength(2);
+      const args = {
+        identity,
+        projectId: project.id,
+        sessionId: session.id,
+        requestId: request.requestId,
+        answer: "Orange and compact",
+      };
+      const [first, duplicate] = await Promise.all([
+        sessions.answerQuestion(args),
+        sessions.answerQuestion(args),
+      ]);
+      expect(first.messageId).toBe(duplicate.messageId);
+      await expect(
+        sessions.answerQuestion({ ...args, answer: "A conflicting answer" }),
+      ).rejects.toThrow("no longer pending");
+      expect(
+        (await sessions.get(identity, project.id, session.id)).questions,
+      ).toHaveLength(0);
+    } finally {
+      proceed.resolve();
+    }
+    const result = await turn;
+    expect(result.content).toBe("Answer received in the original turn");
+    expect(
+      (await sessions.get(identity, project.id, session.id)).pendingTurns,
+    ).toHaveLength(0);
+    expect(
+      (await sessions.get(identity, project.id, session.id)).messages.filter(
+        (entry) => entry.content.includes("User answer:"),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("keeps unanswered requests after a turn and continues when a late answer arrives", async () => {
+    const project = await projects.create(identity, { name: "Late answers" });
+    const session = await sessions.create(identity, project.id);
+    provider.questionTurn = async function* (options) {
+      for (const requestId of ["color", "layout"]) {
+        await options.askQuestion?.({
+          requestId,
+          blocking: false,
+          questions: [
+            {
+              question: `Choose ${requestId}`,
+              header: requestId,
+              multiSelect: false,
+              options: [],
+            },
+          ],
+        });
+      }
+      yield { type: "text", content: "Independent work finished" };
+      yield { type: "done" };
+    };
+    await sessions.sendMessage(
+      identity,
+      project.id,
+      session.id,
+      "questions: finish first",
+    );
+    const detail = await sessions.get(identity, project.id, session.id);
+    expect(detail.questions).toHaveLength(2);
+    const request = detail.questions?.[1];
+    if (!request) throw new Error("Question was not persisted");
+    const otherSession = await sessions.create(identity, project.id);
+    await expect(
+      sessions.answerQuestion({
+        identity,
+        projectId: project.id,
+        sessionId: otherSession.id,
+        requestId: request.requestId,
+        answer: "Compact",
+      }),
+    ).rejects.toThrow("not found");
+    const receipt = await sessions.answerQuestion({
+      identity,
+      projectId: project.id,
+      sessionId: session.id,
+      requestId: request.requestId,
+      answer: "Compact",
+    });
+    expect(receipt.turnId).not.toBeNull();
+    await vi.waitFor(async () =>
+      expect(
+        (await sessions.get(identity, project.id, session.id)).pendingTurns,
+      ).toHaveLength(0),
+    );
+    const resumed = await sessions.get(identity, project.id, session.id);
+    expect(resumed.questions?.map((entry) => entry.title)).toEqual(["color"]);
+    expect(
+      resumed.messages.some(
+        (entry) =>
+          entry.role === "user" &&
+          entry.content.includes("Choose layout") &&
+          entry.content.includes("Compact"),
+      ),
+    ).toBe(true);
+  });
+
+  it("consumes a blocking answer received by another service without steering or starting another turn", async () => {
+    const project = await projects.create(identity, {
+      name: "Blocking questions",
+    });
+    const session = await sessions.create(identity, project.id);
+    const continued = vi.fn();
+    provider.questionTurn = async function* (options) {
+      const answer = await options.askQuestion?.({
+        requestId: "choice",
+        blocking: true,
+        questions: [
+          {
+            question: "Choose a theme",
+            header: "Theme",
+            multiSelect: false,
+            options: [],
+          },
+        ],
+      });
+      expect(await options.readPendingMessages?.()).toEqual([]);
+      continued(answer);
+      yield { type: "text", content: `Using ${answer}` };
+      yield { type: "done" };
+    };
+    const turn = sessions.sendMessage(
+      identity,
+      project.id,
+      session.id,
+      "questions: wait",
+    );
+    await vi.waitFor(async () =>
+      expect(
+        (await sessions.get(identity, project.id, session.id)).questions,
+      ).toHaveLength(1),
+    );
+    expect(continued).not.toHaveBeenCalled();
+    const request = (await sessions.get(identity, project.id, session.id))
+      .questions?.[0];
+    if (!request) throw new Error("Question was not persisted");
+    const receipt = await answerReceiver.answerQuestion({
+      identity,
+      projectId: project.id,
+      sessionId: session.id,
+      requestId: request.requestId,
+      answer: "Orange",
+    });
+    expect(receipt.turnId).not.toBeNull();
+    await turn;
+    expect(continued).toHaveBeenCalledExactlyOnceWith("Orange");
+    const detail = await sessions.get(identity, project.id, session.id);
+    expect(detail.pendingTurns).toEqual([]);
+    expect(
+      detail.messages.filter((message) => message.role === "assistant"),
+    ).toHaveLength(1);
+    const delivery = await db
+      .selectFrom("agent_turns")
+      .select(["status", "result_message_id"])
+      .where("id", "=", receipt.turnId!)
+      .executeTakeFirstOrThrow();
+    expect(delivery.status).toBe("completed");
+    expect(delivery.result_message_id).toBe(
+      detail.messages.find((message) => message.role === "assistant")?.id,
+    );
+  });
 
   afterAll(async () => {
     await sql`drop schema if exists ${sql.id(schema)} cascade`.execute(db);
@@ -1247,3 +1484,11 @@ describe("agent session coordination", () => {
     });
   });
 });
+
+function deferred<T>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => {};
+  const promise = new Promise<T>((accept) => {
+    resolve = accept;
+  });
+  return { promise, resolve };
+}
