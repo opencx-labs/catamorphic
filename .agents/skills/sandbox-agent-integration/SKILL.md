@@ -85,7 +85,7 @@ packages/claude-code/src/            -- @catamorphic/claude-code harness
   claude-code-agent.ts      -- Claude Agent SDK adapter
 
 packages/codex/src/                 -- @catamorphic/codex coding-agent plugin
-  codex-agent.ts           -- CodexAgent (Codex SDK implementation)
+  codex-agent.ts           -- CodexAgent (pinned Codex app-server adapter)
 
 packages/microsandbox/src/           -- local sandbox provider
 packages/local-process/src/          -- trusted sandboxless subprocess provider
@@ -252,7 +252,14 @@ interface CodingAgentProvider {
 
 The host chooses by constructing the backend it wants and passing it via `createCatamorphic({ storage })` — there is no env-var switch.
 
-## Native harness model catalogs
+## Native harness transport and model catalogs
+
+Codex turns use the pinned executable's app-server protocol. Keep its process
+and MCP children alive across turns within the session; close them on disposal,
+transport failure, or an abandoned event stream. Pending approval callbacks
+must receive cancellation when their turn ends or disconnects. Browser input,
+native computer access, tool images, and consent follow
+[ADR 0112](../../../docs/decisions/0112-browser-control-and-tool-media.md).
 
 The desktop discovers models on demand through the selected harness and its
 credential context. Claude Code uses `supportedModels`; Codex uses

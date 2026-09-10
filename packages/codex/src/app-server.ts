@@ -34,6 +34,7 @@ export class CodexAppServer {
   private running = false;
   private turnEpoch = 0;
   private activeSignal?: AbortSignal;
+  private requestAbort?: AbortController;
   private idleTimer?: ReturnType<typeof setTimeout>;
   get available() {
     return !this.failure;
@@ -284,6 +285,7 @@ export class CodexAppServer {
   private fail(error: Error) {
     if (this.failure) return;
     this.failure = error;
+    this.requestAbort?.abort();
     for (const request of this.pending.values()) {
       clearTimeout(request.timer);
       request.reject(error);
@@ -330,7 +332,9 @@ export class CodexAppServer {
     signal?.throwIfAborted();
     this.running = true;
     this.turnEpoch++;
-    this.activeSignal = signal;
+    const requestAbort = new AbortController();
+    this.requestAbort = requestAbort;
+    this.activeSignal = requestAbort.signal;
     clearTimeout(this.idleTimer);
     const events: ThreadEvent[] = [];
     let wake: (() => void) | undefined;
@@ -402,6 +406,7 @@ export class CodexAppServer {
     };
     let interruptTimer: ReturnType<typeof setTimeout> | undefined;
     const abort = () => {
+      requestAbort.abort();
       if (threadId && turnId) {
         void this.request("turn/interrupt", { threadId, turnId }).catch(() =>
           this.close(),
@@ -469,13 +474,19 @@ export class CodexAppServer {
       }
     } finally {
       signal?.removeEventListener("abort", abort);
+      requestAbort.abort();
+      // Returning early or failing startup must not leave the native turn running.
+      if (!done || this.failure) this.close();
+      this.requestAbort = undefined;
       this.notify = undefined;
       clearTimeout(interruptTimer);
       this.running = false;
       this.turnEpoch++;
       this.activeSignal = undefined;
-      this.idleTimer = setTimeout(() => this.close(), 5 * 60 * 1000);
-      this.idleTimer.unref();
+      if (!this.failure) {
+        this.idleTimer = setTimeout(() => this.close(), 5 * 60 * 1000);
+        this.idleTimer.unref();
+      }
     }
   }
 }

@@ -151,8 +151,9 @@ export interface UpdateConnectionInput {
   headers?: Record<string, string> | null;
   command?: string;
   args?: string[];
-  cwd?: string;
+  cwd?: string | null;
   envVars?: string[];
+  oauthClient?: McpOAuthClientHint | null;
   /** New env map; omit to keep the stored one, null to clear it. */
   env?: Record<string, string> | null;
   enabled?: boolean;
@@ -268,8 +269,10 @@ export class ConnectionsStore {
     if (patch.url !== undefined) stored.url = patch.url;
     if (patch.command !== undefined) stored.command = patch.command;
     if (patch.args !== undefined) stored.args = patch.args;
-    if (patch.cwd !== undefined) stored.cwd = patch.cwd;
+    if (patch.cwd !== undefined) stored.cwd = patch.cwd ?? undefined;
     if (patch.envVars !== undefined) stored.envVars = patch.envVars;
+    if (patch.oauthClient !== undefined)
+      stored.oauthClient = patch.oauthClient ?? undefined;
     if (patch.enabled !== undefined) stored.enabled = patch.enabled;
     if (patch.ceiling !== undefined)
       stored.ceiling = patch.ceiling ?? undefined;

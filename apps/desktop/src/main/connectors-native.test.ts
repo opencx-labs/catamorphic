@@ -36,7 +36,13 @@ it("imports native Codex in place, preserves assignments and policy on refresh, 
         mcpServers: {
           cua_repl: {
             command: process.execPath,
-            args: ["runtime.mjs"],
+            ...(version === "1.9"
+              ? {
+                  args: ["runtime.mjs"],
+                  cwd: dir,
+                  env_vars: ["OLD_NATIVE_FLAG"],
+                }
+              : {}),
             env: { CUA_REPL_ENABLED_SURFACES: "browser,computer" },
           },
         },
@@ -70,6 +76,9 @@ it("imports native Codex in place, preserves assignments and policy on refresh, 
     expect(service.listInstalled("profile")[0]?.path).toBe(latest);
     expect(service.listInstalled("profile")[0]?.connectionIds).toEqual([id]);
     expect(store.get(id)?.toolPolicy).toEqual({ default: "deny" });
+    expect(store.get(id)?.args).toEqual([]);
+    expect(store.get(id)?.cwd).toBeUndefined();
+    expect(store.get(id)?.envVars).toEqual([]);
     await service.removeConnector("profile", "codex-computer-use");
     expect(store.get(id)).toBeUndefined();
     await expect(fs.access(latest)).resolves.toBeUndefined();

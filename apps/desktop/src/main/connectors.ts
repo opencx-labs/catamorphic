@@ -8,7 +8,6 @@ import {
   isAuthorizationError,
   type MarketplacePluginEntry,
   type McpConnectionProbe,
-  type McpOAuthClientHint,
   type McpOAuthStore,
   type McpRegistryEntry,
   probeMcpServer,
@@ -338,20 +337,18 @@ export class ConnectorsService {
       sanitizeDirName(pluginName),
     );
     await installPluginFromSource(entry.source, targetDir);
-    const info = await readInstalledPlugin(targetDir).catch(() => ({
-      name: pluginName,
-      description: entry.description,
-      version: entry.version,
-      mcpServers: {} as Record<string, AgentMcpServerConfig>,
-      mcpOAuth: {} as Record<string, McpOAuthClientHint>,
-    }));
+    const info = await readInstalledPlugin(targetDir);
 
     return this.registerPlugin(
       profileId,
       marketplace,
       pluginName,
       targetDir,
-      info,
+      {
+        ...info,
+        description: info.description || entry.description,
+        version: info.version ?? entry.version,
+      },
       false,
     );
   }
@@ -445,8 +442,19 @@ export class ConnectorsService {
           : {}),
       };
       const connection =
-        (existing ? connections.update(existing.id, input) : undefined) ??
-        connections.create(input);
+        (existing
+          ? connections.update(existing.id, {
+              ...input,
+              args: config.transport === "stdio" ? (config.args ?? []) : [],
+              cwd: config.transport === "stdio" ? (config.cwd ?? null) : null,
+              envVars:
+                config.transport === "stdio" ? (config.envVars ?? []) : [],
+              env: config.transport === "stdio" ? (config.env ?? null) : null,
+              headers:
+                config.transport === "stdio" ? null : (config.headers ?? null),
+              oauthClient: info.mcpOAuth[serverName] ?? null,
+            })
+          : undefined) ?? connections.create(input);
       if (!existing && pluginName === "codex-computer-use") {
         connections.setToolPolicy(connection.id, {
           default: "deny",

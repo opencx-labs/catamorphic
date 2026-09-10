@@ -5,7 +5,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { CodexAppServer } from "../app-server.js";
 
-it.each(["accept", "decline", "cancel"] as const)(
+it.each(["accept", "decline", "cancel", "disconnect", "abandon"] as const)(
   "pinned CLI forwards %s elicitation, media, and a resumed turn through app-server",
   async (action) => {
     const home = await mkdtemp(
@@ -15,6 +15,7 @@ it.each(["accept", "decline", "cancel"] as const)(
     const requests: unknown[] = [];
     const authorizations: Array<string | undefined> = [];
     const elicitations: unknown[] = [];
+    const approvalSignals: Array<AbortSignal | undefined> = [];
     const server = http.createServer(async (req, res) => {
       authorizations.push(req.headers.authorization);
       const chunks: Buffer[] = [];
@@ -119,10 +120,15 @@ it.each(["accept", "decline", "cancel"] as const)(
           feedback: { enabled: false },
         },
       },
-      async (request) => {
+      async (request, signal) => {
         elicitations.push(request);
+        approvalSignals.push(signal);
+        if (action === "disconnect") client.close();
         if (action === "cancel") abort.abort();
-        return { action: action === "cancel" ? "accept" : action, content: {} };
+        return {
+          action: action === "decline" ? "decline" : "accept",
+          content: {},
+        };
       },
     );
     try {
@@ -137,6 +143,13 @@ it.each(["accept", "decline", "cancel"] as const)(
       const stream = await client
         .startThread(options)
         .runStreamed("Inspect the test window", { signal: abort.signal });
+      if (action === "abandon") {
+        const iterator = stream.events[Symbol.asyncIterator]();
+        expect((await iterator.next()).value?.type).toBe("thread.started");
+        await iterator.return?.(undefined);
+        expect(client.available).toBe(false);
+        return;
+      }
       for await (const event of stream.events) {
         results.push(event);
         if (event.type === "thread.started") threadId = event.thread_id;
@@ -149,7 +162,8 @@ it.each(["accept", "decline", "cancel"] as const)(
           message: "Allow fixture window access?",
         }),
       ]);
-      if (action === "cancel") {
+      if (action === "cancel" || action === "disconnect") {
+        expect(approvalSignals[0]?.aborted).toBe(true);
         expect(results.at(-1)?.type).toBe("turn.failed");
         expect(JSON.stringify(requests)).not.toContain("input_image");
         return;
