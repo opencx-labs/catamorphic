@@ -4,11 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { type IPty, spawn as spawnPty } from "@lydell/node-pty";
 import { BrowserWindow, ipcMain, type WebContents } from "electron";
+import { scanOsc133 } from "../shared/terminal-text.js";
 import type { ServerState } from "./ipc.js";
 import { shellBinShimDir, shellIntegrationEnv } from "./shell-integration.js";
 import { readGhosttyAppearance } from "./terminal-appearance.js";
 import { TerminalLifecycle } from "./terminal-lifecycle.js";
-import { scanOsc133 } from "./terminal-text.js";
 
 /**
  * PTY sessions for terminal tabs. The renderer runs the emulator

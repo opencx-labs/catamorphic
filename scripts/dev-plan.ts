@@ -26,7 +26,7 @@ export function sanitizeInstanceName(input: string): string {
 
 export function createDevPlan(input: {
   rootPath: string;
-  tempPath: string;
+  dataPath: string;
   instanceOverride?: string;
   target: DevTarget;
   ports: DevPorts;
@@ -46,7 +46,7 @@ export function createDevPlan(input: {
     input.instanceOverride !== undefined
       ? sanitizeInstanceName(input.instanceOverride)
       : `${sanitizeInstanceName(path.basename(input.rootPath))}-${rootHash}`;
-  const instanceRoot = path.join(input.tempPath, "catamorphic-dev", instance);
+  const instanceRoot = path.join(input.dataPath, instance);
   const desktopDataDir = path.join(instanceRoot, "desktop");
   const serverDataDir = path.join(instanceRoot, "server");
   const filters =

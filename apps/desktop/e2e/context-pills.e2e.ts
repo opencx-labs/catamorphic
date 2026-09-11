@@ -53,9 +53,9 @@ const helpers = `
   };
   const typeText = (text) => { caretToEnd(); document.execCommand('insertText', false, text); };
   // React derives onMouseEnter/Leave from over/out pairs, so hover is a
-  // bubbling mouseover from outside and unhover a mouseout to the body.
-  const hover = (el) => el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }));
-  const unhover = (el) => el.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }));
+  // bubbling pointerover from outside and unhover a pointerout to the body.
+  const hover = (el) => el.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, relatedTarget: document.body }));
+  const unhover = (el) => el.dispatchEvent(new PointerEvent('pointerout', { bubbles: true, relatedTarget: document.body }));
   const paste = (text) => {
     const dt = new DataTransfer();
     dt.setData('text/plain', text);

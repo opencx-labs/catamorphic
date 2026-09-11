@@ -12,6 +12,11 @@ import type {
   DockSnapshot,
   WorkspaceEvent,
 } from "../shared/desktop-workspace.js";
+import {
+  type DockDrag,
+  type DockSize,
+  dockPosition,
+} from "../shared/dock-position.js";
 import type { WindowProfileRegistry } from "./index.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 
@@ -26,6 +31,11 @@ export class DesktopWorkspaces {
   private readonly activeChats = new Map<string, string>();
   private readonly floating = new Map<string, BrowserWindow>();
   private readonly lastWindows = new Map<string, BrowserWindow>();
+  private readonly dockExpanded = new Map<string, boolean>();
+  private readonly dockDrags = new Map<
+    string,
+    { x: number; left: number; side: "left" | "right" }
+  >();
   private quitting = false;
   private readonly drafts = new Map<string, ChatDraft>();
   private readonly initialProjects = new Map<number, string>();
@@ -244,50 +254,98 @@ export class DesktopWorkspaces {
         } satisfies WorkspaceEvent);
       },
     );
-    ipcMain.handle(
-      "catamorphic:dock-resize",
-      (event, size: { width: number; height: number }) => {
-        const profileId = options.windows.profileFor(event.sender);
-        const window = this.floating.get(profileId);
-        if (
-          !window ||
-          window.webContents !== event.sender ||
-          !Number.isFinite(size.height) ||
-          !Number.isFinite(size.width)
-        )
-          return;
-        const area = screen.getDisplayMatching(window.getBounds()).workArea;
-        const bounds = window.getBounds();
-        const nextHeight = Math.max(
-          64,
-          Math.min(Math.round(size.height), area.height),
-        );
-        const nextWidth = Math.max(
-          100,
-          Math.min(Math.round(size.width), area.width),
-        );
-        const side = options.config.forProfile(profileId).prefs.load().dockSide;
-        window.setBounds({
-          ...bounds,
+    ipcMain.handle("catamorphic:dock-resize", (event, size: DockSize) => {
+      const profileId = options.windows.profileFor(event.sender);
+      const window = this.floating.get(profileId);
+      if (
+        !window ||
+        window.webContents !== event.sender ||
+        !Number.isFinite(size.height) ||
+        !Number.isFinite(size.width)
+      )
+        return;
+      const area = screen.getDisplayMatching(window.getBounds()).workArea;
+      const nextHeight = Math.max(
+        64,
+        Math.min(Math.round(size.height), area.height),
+      );
+      const nextWidth = Math.max(
+        100,
+        Math.min(Math.round(size.width), area.width),
+      );
+      this.dockExpanded.set(profileId, size.expanded === true);
+      const prefs = options.config.forProfile(profileId).prefs.load();
+      window.setBounds({
+        width: nextWidth,
+        height: nextHeight,
+        ...dockPosition({
+          area,
           width: nextWidth,
-          x: Math.max(
-            area.x,
-            Math.min(
-              side === "right" ? bounds.x + bounds.width - nextWidth : bounds.x,
-              area.x + area.width - nextWidth,
-            ),
-          ),
           height: nextHeight,
-          y: Math.max(
-            area.y,
-            Math.min(
-              bounds.y + bounds.height - nextHeight,
-              area.y + area.height - nextHeight,
+          side: prefs.dockSide,
+          centered: prefs.dockAlignment === "center" && size.expanded,
+        }),
+      });
+    });
+    ipcMain.handle("catamorphic:dock-drag", (event, input: DockDrag) => {
+      const profileId = options.windows.profileFor(event.sender);
+      const window = this.floating.get(profileId);
+      if (
+        !window ||
+        window.webContents !== event.sender ||
+        !Number.isFinite(input.screenX)
+      )
+        return;
+      const prefs = options.config.forProfile(profileId).prefs;
+      const bounds = window.getBounds();
+      if (input.phase === "start") {
+        this.dockDrags.set(profileId, {
+          x: input.screenX,
+          left: bounds.x,
+          side: prefs.load().dockSide,
+        });
+        return;
+      }
+      const drag = this.dockDrags.get(profileId);
+      if (!drag) return;
+      const area = screen.getDisplayMatching(bounds).workArea;
+      if (input.phase === "move") {
+        window.setPosition(
+          Math.round(
+            Math.max(
+              area.x,
+              Math.min(
+                area.x + area.width - bounds.width,
+                drag.left + input.screenX - drag.x,
+              ),
             ),
           ),
-        });
-      },
-    );
+          bounds.y,
+        );
+        return;
+      }
+      if (input.phase !== "end" && input.phase !== "cancel") return;
+      const side =
+        input.phase === "cancel"
+          ? drag.side
+          : input.screenX < area.x + area.width / 2
+            ? "left"
+            : "right";
+      const position = dockPosition({
+        area,
+        ...bounds,
+        side,
+        centered:
+          prefs.load().dockAlignment === "center" &&
+          this.dockExpanded.get(profileId) === true,
+      });
+      try {
+        if (prefs.load().dockSide !== side) prefs.save({ dockSide: side });
+      } finally {
+        this.dockDrags.delete(profileId);
+        window.setPosition(position.x, position.y, !input.reducedMotion);
+      }
+    });
   }
 
   /** Empty windows may change profiles; their previous claims cannot follow. */
@@ -444,6 +502,7 @@ export class DesktopWorkspaces {
       detached: prefs.dockDetached,
       multiProject: prefs.dockMultiProject,
       side: prefs.dockSide,
+      alignment: prefs.dockAlignment,
     };
   }
 
@@ -465,18 +524,20 @@ export class DesktopWorkspaces {
     if (existing && !existing.isDestroyed()) {
       const area = screen.getDisplayMatching(existing.getBounds()).workArea;
       const bounds = existing.getBounds();
-      const x =
-        prefs.dockSide === "left"
-          ? area.x + 12
-          : area.x + area.width - bounds.width - 12;
-      if (Math.abs(bounds.x - x) > 1)
-        existing.setPosition(
-          x,
-          Math.max(
-            area.y,
-            Math.min(bounds.y, area.y + area.height - bounds.height),
-          ),
-        );
+      const position = dockPosition({
+        area,
+        ...bounds,
+        side: prefs.dockSide,
+        centered:
+          prefs.dockAlignment === "center" &&
+          this.dockExpanded.get(profileId) === true,
+      });
+      if (
+        !this.dockDrags.has(profileId) &&
+        (Math.abs(bounds.x - position.x) > 1 ||
+          Math.abs(bounds.y - position.y) > 1)
+      )
+        existing.setPosition(position.x, position.y);
       if (this.options.showWindows) existing.showInactive();
       return;
     }
@@ -505,16 +566,6 @@ export class DesktopWorkspaces {
         .forProfile(profileId)
         .prefs.save({ dockDetached: false });
       window.hide();
-    });
-    window.on("moved", () => {
-      const bounds = window.getBounds();
-      const area = screen.getDisplayMatching(bounds).workArea;
-      const side =
-        bounds.x + bounds.width / 2 < area.x + area.width / 2
-          ? "left"
-          : "right";
-      const store = this.options.config.forProfile(profileId).prefs;
-      if (store.load().dockSide !== side) store.save({ dockSide: side });
     });
   }
 }

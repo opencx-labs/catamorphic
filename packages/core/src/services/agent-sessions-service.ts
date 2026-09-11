@@ -1393,6 +1393,7 @@ export class AgentSessionsService {
     input: {
       systemPrompt?: string;
       agentId?: string;
+      model?: string;
       effort?: AgentEffort;
       environment?: string;
       source?: AgentSessionSource;
@@ -1421,6 +1422,7 @@ export class AgentSessionsService {
     input: {
       systemPrompt?: string;
       agentId?: string;
+      model?: string;
       effort?: AgentEffort;
       environment?: string;
       title?: string;
@@ -1453,6 +1455,7 @@ export class AgentSessionsService {
     input: {
       systemPrompt?: string;
       agentId?: string;
+      model?: string;
       effort?: AgentEffort;
       environment?: string;
       title?: string;
@@ -1576,7 +1579,7 @@ export class AgentSessionsService {
             source: input.source ?? "api",
             provider_session_id: null,
             agent_id: selectedAgentId ?? null,
-            model: null,
+            model: input.model || null,
             model_effort: input.effort ?? null,
             system_prompt: systemPrompt || null,
             sandbox_id: null,

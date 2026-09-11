@@ -24,6 +24,7 @@ export interface AppPrefs {
   dockMultiProject: boolean;
   dockDetached: boolean;
   dockSide: "left" | "right";
+  dockAlignment: "edge" | "center";
   /** Soft chime when an agent finishes or asks a question. */
   notificationSounds: boolean;
   /** OS notification for the same events while the app is unfocused. */
@@ -64,6 +65,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   dockMultiProject: false,
   dockDetached: false,
   dockSide: "right",
+  dockAlignment: "edge",
   notificationSounds: true,
   desktopNotifications: true,
   sidebarOpen: true,
@@ -118,6 +120,7 @@ export function normalizePrefs(raw: unknown): AppPrefs {
     dockMultiProject: record.dockMultiProject === true,
     dockDetached: record.dockDetached === true,
     dockSide: record.dockSide === "left" ? "left" : "right",
+    dockAlignment: record.dockAlignment === "center" ? "center" : "edge",
     notificationSounds:
       typeof record.notificationSounds === "boolean"
         ? record.notificationSounds

@@ -358,3 +358,16 @@ backgrounds and gutters by default, and inherit its color scheme inside the diff
 shadow root. Typography and spacing follow the existing app tokens. Explicit code
 palette preferences remain available in the desktop adapter. App mounts resend the
 current theme on every guest load while theme switches preserve the guest's state.
+
+## Dock placement and draft runtime controls (2026-09-11)
+
+ADR 0127 adds centered or edge-aligned expansion without changing the collapsed
+corner. The bubble itself is draggable; dragging never expands it or stores an
+absolute resting position. Use restrained settling motion and honor reduced
+motion. New and established chats share editable runtime controls; draft choices
+apply only to that conversation. Explain unavailable controls beside the control.
+
+Markdown hover previews use the app's rendered reading typography. Composer
+surface chips and expanded group members use the shared resource inspector;
+collapsed groups lead with their plural type and a separate count. Preview
+content and behavior follow [chat state](docs/chat-state.md).

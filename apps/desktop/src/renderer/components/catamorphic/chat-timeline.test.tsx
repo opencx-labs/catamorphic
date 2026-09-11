@@ -179,4 +179,40 @@ describe("ChatTimeline queue editing", () => {
     expect(detail?.textContent).not.toContain('"items"');
     expect(detail?.className).toContain("font-sans");
   });
+  it("preserves a focused resource link when the host refreshes chat callbacks", async () => {
+    const opens = vi.fn();
+    const render = (revision: number) =>
+      root.render(
+        <ChatTimeline
+          messages={[
+            {
+              id: "reply",
+              role: "assistant",
+              content: "[Source](file:source.ts)",
+            },
+          ]}
+          onLinkClick={(url) => opens(revision, url)}
+          renderLink={({ href, children, onOpen }) => (
+            <a
+              href={href}
+              onClick={(event) => {
+                event.preventDefault();
+                onOpen(href, event);
+              }}
+            >
+              {children}
+            </a>
+          )}
+        />,
+      );
+    await act(async () => render(1));
+    const link = container.querySelector("a");
+    if (!link) throw new Error("Missing link");
+    link.focus();
+    await act(async () => render(2));
+    expect(container.querySelector("a")).toBe(link);
+    expect(document.activeElement).toBe(link);
+    await act(async () => link.click());
+    expect(opens).toHaveBeenCalledWith(2, "file:source.ts");
+  });
 });

@@ -142,6 +142,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           {
             systemPrompt: request.body.systemPrompt,
             agentId: request.body.agentId,
+            model: request.body.model,
             effort: request.body.effort,
             environment: request.body.environment,
             source: request.body.source,

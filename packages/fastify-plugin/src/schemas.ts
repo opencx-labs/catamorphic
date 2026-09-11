@@ -1058,6 +1058,7 @@ export const CreateAgentSessionSchema = z.object({
   systemPrompt: z.string().optional(),
   /** Host-registry key of the agent to run this session on. */
   agentId: z.string().optional(),
+  model: z.string().optional(),
   effort: AgentEffortSchema.optional(),
   environment: z.string().min(1).optional(),
   /** Surface creating the session. Provenance only; never grants access. */

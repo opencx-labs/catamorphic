@@ -139,3 +139,6 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0124](0124-session-artifacts.md) | Session artifacts share source ownership and retention | Accepted; review distribution superseded by 0126 |
 | [0125](0125-canonical-app-icons.md) | Canonical semantic app icons | Accepted |
 | [0126](0126-installable-component-packs.md) | Installable component packs | Accepted |
+
+| [0127](0127-dock-placement-and-chat-runtime-choices.md) | Dock placement and chat runtime choices | Accepted |
+| [0128](0128-durable-manual-development-data.md) | Durable manual development data | Accepted |

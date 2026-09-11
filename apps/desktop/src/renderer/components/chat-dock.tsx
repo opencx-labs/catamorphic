@@ -111,22 +111,24 @@ import {
   useRemoteAuthority,
 } from "./project-authority-provider.js";
 import { RemoteMessageConnectionGuard } from "./remote-message-connection-guard.js";
+import { ResourceInspector } from "./resource-inspector";
 import { SessionInspector } from "./session-inspector.js";
 import { ShortcutHint } from "./shortcut-hint";
+import { SurfacePreview } from "./surface-preview";
 
 /** Chips group per kind once a chat collects this many surfaces. */
 const SURFACE_GROUP_THRESHOLD = 3;
 
 const SURFACE_GROUP_LABELS = {
-  browser: "pages",
-  terminal: "terminals",
-  editor: "files",
-  chat: "forks",
-  subagent: "subagents",
-  watcher: "watchers",
-  app: "apps",
-  workflow: "workflows",
-  mcpapp: "app views",
+  browser: "Pages",
+  terminal: "Terminals",
+  editor: "Files",
+  chat: "Chats",
+  subagent: "Subagents",
+  watcher: "Watchers",
+  app: "Apps",
+  workflow: "Workflows",
+  mcpapp: "App views",
 } as const;
 
 const SURFACE_ICONS = {
@@ -645,48 +647,57 @@ function SurfaceChip({
       // agent can glow one on its own chat.
       data-point-key={`chip:${surface.key}`}
     >
-      <OpenResourceButton
-        isResource={!surface.info}
-        type="button"
-        onOpen={(mode) =>
-          surface.mcpApp
-            ? onOpenMcpApp?.(surface.mcpApp, mode)
-            : surface.info
-              ? onToggleInfo(surface.key)
-              : onOpenSurface(surface.key, mode)
-        }
-        className="flex min-w-0 cursor-pointer items-center gap-1.5 py-1 pl-2 pr-2 transition-colors duration-100 hover:text-fg"
+      <ResourceInspector
+        label={`Preview ${surface.label}`}
+        content={<SurfacePreview surface={surface} />}
       >
-        <span className="relative grid size-3 shrink-0 place-items-center">
-          {surface.kind === "browser" && surface.faviconUrl ? (
-            <img
-              src={surface.faviconUrl}
-              alt=""
-              className={`col-start-1 row-start-1 size-3 rounded-[2px] transition-opacity duration-200 ${
-                surface.active ? "opacity-0" : "opacity-100"
-              }`}
-            />
-          ) : (
-            <Icon
-              className={`col-start-1 row-start-1 size-3 transition-opacity duration-200 ${
-                surface.active ? "opacity-0" : "opacity-100"
-              }`}
-            />
-          )}
-          <LoaderCircle
-            className={`col-start-1 row-start-1 size-3 text-accent transition-opacity duration-200 ${
-              surface.active ? "animate-spin opacity-100" : "opacity-0"
-            }`}
-          />
-          {/* Background-opened surface waiting for the user: the unread
+        {({ onClick: dismissPreview, ...previewProps }) => (
+          <OpenResourceButton
+            {...previewProps}
+            isResource={!surface.info}
+            type="button"
+            onOpen={(mode) => {
+              dismissPreview();
+              return surface.mcpApp
+                ? onOpenMcpApp?.(surface.mcpApp, mode)
+                : surface.info
+                  ? onToggleInfo(surface.key)
+                  : onOpenSurface(surface.key, mode);
+            }}
+            className="flex min-w-0 cursor-pointer items-center gap-1.5 py-1 pl-2 pr-2 transition-colors duration-100 hover:text-fg"
+          >
+            <span className="relative grid size-3 shrink-0 place-items-center">
+              {surface.kind === "browser" && surface.faviconUrl ? (
+                <img
+                  src={surface.faviconUrl}
+                  alt=""
+                  className={`col-start-1 row-start-1 size-3 rounded-[2px] transition-opacity duration-200 ${
+                    surface.active ? "opacity-0" : "opacity-100"
+                  }`}
+                />
+              ) : (
+                <Icon
+                  className={`col-start-1 row-start-1 size-3 transition-opacity duration-200 ${
+                    surface.active ? "opacity-0" : "opacity-100"
+                  }`}
+                />
+              )}
+              <LoaderCircle
+                className={`col-start-1 row-start-1 size-3 text-accent transition-opacity duration-200 ${
+                  surface.active ? "animate-spin opacity-100" : "opacity-0"
+                }`}
+              />
+              {/* Background-opened surface waiting for the user: the unread
               dot (accent fill) with the waiting-state pulse, cleared by
               opening the chip. */}
-          {surface.attention && (
-            <span className="absolute -right-0.5 -top-0.5 size-1.5 animate-pulse rounded-full bg-accent" />
-          )}
-        </span>
-        <span className="max-w-36 truncate">{surface.label}</span>
-      </OpenResourceButton>
+              {surface.attention && (
+                <span className="absolute -right-0.5 -top-0.5 size-1.5 animate-pulse rounded-full bg-accent" />
+              )}
+            </span>
+            <span className="max-w-36 truncate">{surface.label}</span>
+          </OpenResourceButton>
+        )}
+      </ResourceInspector>
       {/* The split affordance only exists under the pointer: an overlay
           on the chip's right end that fades over the label's tail (its
           left edge is a gradient into the chip background) instead of
@@ -745,7 +756,9 @@ function GroupChip({
           : "border-border bg-bg-inset text-fg-muted hover:text-fg"
       }`}
       aria-expanded={open}
-      aria-label={`${group.length} ${SURFACE_GROUP_LABELS[kind]}`}
+      aria-label={`${group.length} ${SURFACE_GROUP_LABELS[kind].toLowerCase()}`}
+      data-testid="surface-group"
+      data-kind={kind}
       data-attention={group.some((surface) => surface.attention) || undefined}
     >
       <span className="relative grid size-3 shrink-0 place-items-center">
@@ -760,7 +773,8 @@ function GroupChip({
           <span className="absolute -right-0.5 -top-0.5 size-1.5 animate-pulse rounded-full bg-accent" />
         )}
       </span>
-      {group.length} {SURFACE_GROUP_LABELS[kind]}
+      {SURFACE_GROUP_LABELS[kind]}
+      <span className="text-fg-faint">{group.length}</span>
       <ChevronUp
         className={`size-3 text-fg-faint transition-transform duration-150 ${
           open ? "rotate-180" : ""
@@ -923,6 +937,11 @@ function SurfacesRail({
   useEffect(() => {
     if (!openGroup && !openInfoKey) return;
     const onDocMouseDown = (event: MouseEvent) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest("[data-resource-inspector]")
+      )
+        return;
       if (!railRef.current?.contains(event.target as Node)) {
         setOpenGroup(null);
         setOpenInfoKey(null);
@@ -1003,6 +1022,7 @@ function SurfacesRail({
         )}
       </PopPanel>
       <PopPanel
+        testId="surface-group-members"
         open={Boolean(groupSurfaces)}
         className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-72 overflow-y-auto rounded-lg border border-border bg-bg-raised p-1 shadow-2xl"
       >
@@ -1011,53 +1031,62 @@ function SurfacesRail({
             key={surface.key}
             className="group/chip flex items-center rounded-md text-[12px] text-fg-muted transition-colors duration-100 hover:bg-bg-overlay"
           >
-            <OpenResourceButton
-              isResource={!surface.info}
-              type="button"
-              onOpen={(mode) => {
-                if (surface.mcpApp) {
-                  onOpenMcpApp?.(surface.mcpApp, mode);
-                  setOpenGroup(null);
-                  return;
-                }
-                if (surface.info) {
-                  toggleInfo(surface.key);
-                  return;
-                }
-                onOpenSurface(surface.key, mode);
-                setOpenGroup(null);
-              }}
-              className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 py-1.5 text-left hover:text-fg"
+            <ResourceInspector
+              label={`Preview ${surface.label}`}
+              content={<SurfacePreview surface={surface} />}
             >
-              <span className="relative grid size-3.5 shrink-0 place-items-center">
-                {surface.kind === "browser" && surface.faviconUrl ? (
-                  <img
-                    src={surface.faviconUrl}
-                    alt=""
-                    className={`col-start-1 row-start-1 size-3.5 rounded-[2px] ${surface.active ? "opacity-0" : ""}`}
-                  />
-                ) : (
-                  (() => {
-                    const Icon =
-                      surface.kind === "app"
-                        ? appGlyph(surface.appIcon)
-                        : SURFACE_ICONS[surface.kind];
-                    return (
-                      <Icon
-                        className={`col-start-1 row-start-1 size-3.5 ${surface.active ? "opacity-0" : ""}`}
+              {({ onClick: dismissPreview, ...previewProps }) => (
+                <OpenResourceButton
+                  {...previewProps}
+                  isResource={!surface.info}
+                  type="button"
+                  onOpen={(mode) => {
+                    dismissPreview();
+                    if (surface.mcpApp) {
+                      onOpenMcpApp?.(surface.mcpApp, mode);
+                      setOpenGroup(null);
+                      return;
+                    }
+                    if (surface.info) {
+                      toggleInfo(surface.key);
+                      return;
+                    }
+                    onOpenSurface(surface.key, mode);
+                    setOpenGroup(null);
+                  }}
+                  className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 py-1.5 text-left hover:text-fg"
+                >
+                  <span className="relative grid size-3.5 shrink-0 place-items-center">
+                    {surface.kind === "browser" && surface.faviconUrl ? (
+                      <img
+                        src={surface.faviconUrl}
+                        alt=""
+                        className={`col-start-1 row-start-1 size-3.5 rounded-[2px] ${surface.active ? "opacity-0" : ""}`}
                       />
-                    );
-                  })()
-                )}
-                {surface.active && (
-                  <LoaderCircle className="col-start-1 row-start-1 size-3.5 animate-spin text-accent" />
-                )}
-                {surface.attention && (
-                  <span className="absolute -right-0.5 -top-0.5 size-1.5 animate-pulse rounded-full bg-accent" />
-                )}
-              </span>
-              <span className="truncate">{surface.label}</span>
-            </OpenResourceButton>
+                    ) : (
+                      (() => {
+                        const Icon =
+                          surface.kind === "app"
+                            ? appGlyph(surface.appIcon)
+                            : SURFACE_ICONS[surface.kind];
+                        return (
+                          <Icon
+                            className={`col-start-1 row-start-1 size-3.5 ${surface.active ? "opacity-0" : ""}`}
+                          />
+                        );
+                      })()
+                    )}
+                    {surface.active && (
+                      <LoaderCircle className="col-start-1 row-start-1 size-3.5 animate-spin text-accent" />
+                    )}
+                    {surface.attention && (
+                      <span className="absolute -right-0.5 -top-0.5 size-1.5 animate-pulse rounded-full bg-accent" />
+                    )}
+                  </span>
+                  <span className="truncate">{surface.label}</span>
+                </OpenResourceButton>
+              )}
+            </ResourceInspector>
             {!surface.info && (
               <span className="mr-1 flex shrink-0 items-center opacity-0 transition-opacity duration-100 group-hover/chip:opacity-100">
                 <ShortcutHint label="Open to the right" shortcut="⌘⇧-click">
@@ -1217,6 +1246,8 @@ function ChatDockContent({
   const chat = useAgentChat(projectId, {
     sessionId: entry.sessionId,
     agentId: selectedAgentId,
+    model: entry.model,
+    effort: entry.effort,
     environment: selectedEnvironment,
     source: "desktop",
     idleRefetchIntervalMs: refreshWhileIdle ? 3_000 : false,
@@ -1693,7 +1724,8 @@ function ChatDockContent({
     enabled: inspected && !!activeAgent,
     staleTime: 600_000,
   });
-  const selectedModel = chat.session?.model || activeAgent?.model;
+  const selectedModel =
+    (chat.session ? chat.session.model : entry.model) || activeAgent?.model;
   const reportedModel = latestReportedModel(chat.messages);
   const effortModel = modelCatalog.data?.models.find(
     (model) =>
@@ -2753,7 +2785,7 @@ function ChatDockContent({
                       )?.name ?? "Project agent")
                     : (activeAgent?.name ?? "Default agent")
                 }
-                model={chat.session?.model || activeAgent?.model || "Automatic"}
+                model={selectedModel || "Automatic"}
                 reportedModel={reportedModel}
                 onInspect={() => {
                   setInspected(true);
@@ -2762,21 +2794,37 @@ function ChatDockContent({
                 effort={
                   effectiveEffort(
                     activeAgent,
-                    chat.session?.modelEffort ?? activeAgent?.effort,
+                    chat.session?.modelEffort ??
+                      entry.effort ??
+                      activeAgent?.effort,
                     effortModel,
                   ) ?? "Unavailable"
                 }
                 onEditModel={
-                  !chat.session || chat.session.running || !activeAgent
+                  chat.isSending || chat.session?.running || !activeAgent
                     ? undefined
                     : onEditModel
                 }
                 onEditEffort={
-                  !chat.session ||
-                  chat.session.running ||
+                  chat.isSending ||
+                  chat.session?.running ||
                   supportedEfforts(activeAgent, effortModel).length === 0
                     ? undefined
                     : onEditEffort
+                }
+                modelDisabledReason={
+                  chat.isSending || chat.session?.running
+                    ? "Model can be changed after the current turn finishes."
+                    : !activeAgent
+                      ? "Choose an agent to select a model."
+                      : undefined
+                }
+                effortDisabledReason={
+                  chat.isSending || chat.session?.running
+                    ? "Reasoning can be changed after the current turn finishes."
+                    : supportedEfforts(activeAgent, effortModel).length === 0
+                      ? "This model does not offer a reasoning setting."
+                      : undefined
                 }
                 checkout={checkout}
                 incognito={isIncognito}
@@ -2968,7 +3016,7 @@ function ChatDockContent({
               }
               emptyState={emptyPrompt.empty}
               onLinkClick={onLinkClick}
-              renderLink={renderResponseLink}
+              renderLink={(props) => renderResponseLink({ ...props, surfaces })}
               onFileClick={onFileClick}
               resolveToolIcon={resolveToolIcon}
               onFork={entry.sessionId ? onFork : undefined}
@@ -3011,8 +3059,10 @@ function ChatDockContent({
               (not unmounted) so chip motion state survives the lurk. */}
             {railSurfaces.length > 0 && onOpenSurface && (
               <div
-                className={`shrink-0 overflow-hidden transition-[max-height,opacity] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
-                  lurking ? "max-h-0 opacity-0" : "max-h-12 opacity-100"
+                className={`shrink-0 transition-[max-height,opacity] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+                  lurking
+                    ? "max-h-0 overflow-hidden opacity-0"
+                    : "max-h-12 overflow-visible opacity-100"
                 }`}
                 inert={lurking ? true : undefined}
               >

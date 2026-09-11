@@ -91,3 +91,16 @@ declare their actual dependencies and theme requirements individually.
 The existing builder emits installable items and the host catalog together. Adding
 a pack requires no new tool or runtime API. Host skill hooks can direct agents to
 other packs or registries without changing framework mechanics.
+
+`ResourcePreviewContent` renders host-supplied `ResourcePreview` data from
+`@catamorphic/react`: image, text, Markdown, audio, video, resource summaries,
+or an explicit unavailable state,
+with name, type, size and location. Load bounded content only when a preview opens;
+the component owns no filesystem or network access. Hosts can compose it into
+hover/focus cards through `ChatTimeline.renderLink` (sanitized href, children and
+onOpen callback), while retaining the normal inline anchor fallback. Use plain
+text for active documents such as HTML, and thumbnails for document formats.
+Set text content `format: "markdown"` for Markdown files/attachments. The renderer
+uses GFM and the host's `cat-markdown` reading styles; it never executes raw HTML,
+follows embedded links or fetches embedded images. Keep truncation indicators
+visible and preserve the shared header and location treatment across resources.

@@ -6298,6 +6298,7 @@ export interface paths {
                     "application/json": {
                         systemPrompt?: string;
                         agentId?: string;
+                        model?: string;
                         /** @enum {string} */
                         effort?: "low" | "medium" | "high" | "xhigh" | "max";
                         environment?: string;

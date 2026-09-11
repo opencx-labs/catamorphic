@@ -718,6 +718,11 @@ bun run db:reset    # Drop + recreate the catamorphic schema (dev only)
 bun run db:status   # Show applied / pending migrations
 ```
 
+Manual development profiles live under `~/.catamorphic/dev/<worktree-instance>`.
+The runner assigns separate desktop/server profiles and ports per worktree.
+Legacy temporary profiles are copied on first launch, with the originals retained.
+Do not put manual project databases in the operating system temporary directory.
+
 ## Testing
 
 Tests use **Vitest**, orchestrated by Turborepo. Docker must be running:

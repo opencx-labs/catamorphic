@@ -825,6 +825,7 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
         // ('terminal result', the "terminalId":"..." pattern, and the raw
         // command output) preserved verbatim.
         const resultRecord = result as {
+          key?: string;
           terminalId?: string;
           output?: string;
           commandRunning?: boolean;
@@ -839,7 +840,7 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
           .trim();
         yield {
           type: "text",
-          content: `Ran it in the terminal ("terminalId":"${resultRecord.terminalId ?? "unknown"}"). terminal result:\n\n${cleanOutput}`,
+          content: `Ran it in the terminal ("terminalId":"${resultRecord.terminalId ?? "unknown"}"). terminal result:\n\n${cleanOutput}${resultRecord.key ? `\n\n[Open terminal](${resultRecord.key})` : ""}`,
         };
       } catch (error) {
         yield {
