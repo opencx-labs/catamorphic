@@ -10,6 +10,11 @@ import {
 } from "@pierre/diffs/react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { ReviewStyles } from "./review-styles.js";
+import {
+  REVIEW_CODE_THEME,
+  reviewCodeCss,
+  reviewCodeThemeCss,
+} from "./review-theme.js";
 /** One renderer for local revisions and remote patches, without a network highlighter. */
 export function DiffView({
   path,
@@ -50,13 +55,24 @@ export function DiffView({
   const query = searchQuery ?? localQuery;
   const [match, setMatch] = useState(0);
   const options: CodeViewReactOptions<undefined, undefined> = {
+    theme: REVIEW_CODE_THEME,
     diffStyle: layout,
     overflow: wrap ? "wrap" : "scroll",
     enableLineSelection: true,
     lineDiffType: "word-alt",
-    unsafeCSS:
-      ":host { --diffs-font-family: var(--font-mono, monospace); --diffs-font-size: var(--cat-font-size, 13px); }",
     ...overrides,
+    unsafeCSS: [
+      reviewCodeCss,
+      overrides?.theme === undefined || overrides.theme === REVIEW_CODE_THEME
+        ? reviewCodeThemeCss
+        : "",
+      // Pierre defaults to the OS scheme. Apps follow the containing host;
+      // a caller can still deliberately select a different code appearance.
+      !overrides?.themeType || overrides.themeType === "system"
+        ? ":host { color-scheme: inherit; }"
+        : "",
+      overrides?.unsafeCSS ?? "",
+    ].join("\n"),
   };
   const viewer = useRef<CodeViewHandle<undefined, undefined>>(null);
   const searchInput = useRef<HTMLInputElement>(null);
@@ -244,6 +260,7 @@ export function DiffView({
               </span>
               <button
                 type="button"
+                className="cat-review-control"
                 disabled={!matches.length}
                 data-disabled-reason={
                   !matches.length ? "No matching lines" : undefined

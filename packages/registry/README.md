@@ -52,6 +52,15 @@ Catamorphic provider or Tailwind requirement. Import from the installed
 use immutable file/revision/side/line locations and an `onOpenSource` callback.
 External review actions remain the host's responsibility.
 
+The default diff theme maps syntax, change markers, gutters and backgrounds to the
+host's existing CSS tokens. Its shadow DOM inherits the host's `color-scheme`, so
+custom palettes and live theme switches need no observer or app-side setup. Type
+and spacing use `--cat-font-size` and `--cat-row-h`. An explicit `options.theme`
+(with `options.themeType` when needed) still selects an alternate code palette.
+Outside a Catamorphic guest, supply the same theme tokens and `color-scheme` on the
+containing element. Installed copies only gain these defaults when their source
+is deliberately updated.
+
 The pack targets React 19. Its `docs` field explains an optional exact `shiki`
 bundler alias for small standalone review apps. Keep a host's existing full Shiki
 bundle when other components need additional languages or themes. The desktop does

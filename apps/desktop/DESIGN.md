@@ -358,6 +358,14 @@ and open their actual surfaces. Editable code derives syntax, background, gutter
 selection, cursor, diagnostics and widgets from the current app theme, with bundled
 Shiki grammars. Never ship a preset editor background that ignores the app theme.
 
+### 2026-09-11: Host-themed review packs
+
+Installed review components use the host palette for syntax, change colors,
+backgrounds and gutters by default, and inherit its color scheme inside the diff
+shadow root. Typography and spacing follow the existing app tokens. Explicit code
+palette preferences remain available in the desktop adapter. App mounts resend the
+current theme on every guest load while theme switches preserve the guest's state.
+
 ## Dock placement and draft runtime controls (2026-09-11)
 
 ADR 0127 adds centered or edge-aligned expansion without changing the collapsed

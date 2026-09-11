@@ -120,8 +120,8 @@ export function AppMount({
   // the guest and lose its state); later switches arrive as messages.
   const initialTheme = useRef(theme).current;
 
-  useEffect(() => {
-    if (!theme || theme === initialTheme) return;
+  const sendTheme = useCallback(() => {
+    if (!theme) return;
     frameRef.current?.contentWindow?.postMessage(
       {
         catamorphicApp: APP_PROTOCOL_VERSION,
@@ -130,7 +130,8 @@ export function AppMount({
       } satisfies HostToGuestMessage,
       "*",
     );
-  }, [theme, initialTheme]);
+  }, [theme]);
+  useEffect(sendTheme, [sendTheme]);
 
   useEffect(() => {
     let cancelled = false;
@@ -427,8 +428,9 @@ export function AppMount({
       context,
     };
     frame.contentWindow.postMessage(payload, "*");
+    sendTheme();
     sendDisplay();
-  }, [context, sendDisplay]);
+  }, [context, sendTheme, sendDisplay]);
 
   useEffect(() => {
     const listener = (event: MessageEvent) => {

@@ -18,6 +18,14 @@ const run = <T = unknown>(body: string) =>
 const wait = (body: string) => app.waitFor(`(()=>{${js}\n${body}})()`);
 async function clear() {
   if (await run("return !!preview();")) await app.press("Escape");
+  // Sidebar and outside interactions can park the floating chat. Restore it
+  // before the next preview scenario edits the shared composer.
+  await run(`
+    if (!front()) window.dispatchEvent(new KeyboardEvent('keydown', {
+      key:'m',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true,cancelable:true
+    }));
+  `);
+  await wait(`return !!front();`);
   await run(
     `composer().replaceChildren(); composer().dispatchEvent(new InputEvent('input',{bubbles:true}));`,
   );
