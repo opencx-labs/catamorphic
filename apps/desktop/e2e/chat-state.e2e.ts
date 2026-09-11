@@ -56,9 +56,9 @@ beforeAll(async () => {
   await app.eval(
     `window.catamorphicDesktop.createProject({name:'Chat state',rootPath:${JSON.stringify(`${app.userDataDir}/chat-state`)}})`,
   );
-  await app.eval("window.__beforeChatStateReload = true; location.reload()");
+  await app.reload();
   await app.waitFor(
-    "!window.__beforeChatStateReload && !!document.querySelector('textarea[placeholder*=\"Search or ask\"]')",
+    "!!document.querySelector('textarea[placeholder*=\"Search or ask\"]')",
   );
   await app.eval(
     "window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))",

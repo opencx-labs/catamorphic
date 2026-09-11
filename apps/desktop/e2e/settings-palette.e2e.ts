@@ -44,7 +44,7 @@ beforeAll(async () => {
     `window.catamorphicDesktop.profilesList().then(data => data.profiles.find(profile => profile.projectIds.includes(${JSON.stringify(projectId)}))?.id ?? data.defaultProfileId)`,
   );
   personalFile = `${app.userDataDir}/profiles/${profileId}/settings-projects/${projectId}.json`;
-  await app.eval("location.reload()");
+  await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Settings palette')`);
   // Close the startup New Tab so all following searches use the overlay.
   await app.eval(

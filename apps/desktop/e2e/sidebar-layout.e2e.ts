@@ -455,7 +455,7 @@ it("does not use GitHub CLI for PRs without profile opt-in", async () => {
       "window.catamorphicDesktop.prList('unconfigured-project').then(() => 'unexpected success', error => error.message.includes('[github-cli-disabled]'))",
     ),
   ).toBe(true);
-  await app.eval("location.reload()");
+  await app.reload();
   await app.waitFor("!!window.catamorphicDesktop");
   expect(
     await app.eval(

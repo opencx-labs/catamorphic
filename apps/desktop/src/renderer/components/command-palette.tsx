@@ -866,12 +866,31 @@ export function CommandPalette({
     };
     if (open) {
       reset();
-      const frame = requestAnimationFrame(() => inputRef.current?.focus());
-      return () => cancelAnimationFrame(frame);
+      return;
     }
     const timer = setTimeout(reset, 250);
     return () => clearTimeout(timer);
   }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const frame = requestAnimationFrame(() => inputRef.current?.focus());
+    const cancel = () => cancelAnimationFrame(frame);
+    // The tab can finish mounting behind a newly opened chat. Once another
+    // interaction owns focus, this delayed frame must not take it back.
+    // Overlays intentionally claim focus as soon as they open.
+    if (variant === "tab") {
+      window.addEventListener("focusin", cancel);
+      window.addEventListener("keydown", cancel, true);
+      window.addEventListener("pointerdown", cancel, true);
+    }
+    return () => {
+      cancel();
+      window.removeEventListener("focusin", cancel);
+      window.removeEventListener("keydown", cancel, true);
+      window.removeEventListener("pointerdown", cancel, true);
+    };
+  }, [open, variant]);
 
   // Cmd+P agent commands open the overlay already inside a picker.
   useEffect(() => {

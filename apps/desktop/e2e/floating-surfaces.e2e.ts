@@ -550,7 +550,7 @@ describe("floating surfaces", () => {
       "export const two = 2;\n",
     );
     // The fixture writes outside the app; reload to refresh its file inventory.
-    await app.cdp("Page.reload");
+    await app.reload();
     await app.waitFor(
       "!!document.querySelector('[data-sidebar-widget=files]')",
     );

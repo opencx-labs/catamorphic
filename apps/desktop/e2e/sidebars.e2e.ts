@@ -23,7 +23,7 @@ beforeAll(async () => {
     `window.catamorphicDesktop.createProject({name:'Sidebar studio',rootPath:${JSON.stringify(`${app.userDataDir}/sidebar-studio`)}})`,
   );
   projectId = project.id;
-  await app.eval("location.reload()");
+  await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Sidebar studio')`);
 });
 afterAll(async () => {
@@ -41,9 +41,9 @@ const waitRight = (open: boolean) =>
     `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]')?.getAttribute('aria-hidden') === '${!open}'`,
   );
 const reload = async () => {
-  await app.eval("window.__sidebarReload = true; location.reload()");
+  await app.reload();
   await app.waitFor(
-    `!window.__sidebarReload && !!document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]')`,
+    `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]')`,
   );
 };
 
@@ -200,7 +200,7 @@ describe("tabbed sidebars", () => {
         `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]').getAttribute('aria-hidden')`,
       ),
     ).toBe("false");
-    await app.eval("location.reload()");
+    await app.reload();
     await app.waitFor(
       `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"][aria-selected="true"]')?.getAttribute('aria-label') === 'Pull requests'`,
     );

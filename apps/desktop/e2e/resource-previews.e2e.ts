@@ -81,7 +81,7 @@ beforeAll(async () => {
   wav.write("data", 36);
   wav.writeUInt32LE(16000, 40);
   fs.writeFileSync(path.join(root, "sound.wav"), wav);
-  await app.eval("location.reload()");
+  await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Preview project')`);
   await app.eval(`window.catamorphicDesktop.devWindow('setSize',1100,800)`);
   await app.eval(
