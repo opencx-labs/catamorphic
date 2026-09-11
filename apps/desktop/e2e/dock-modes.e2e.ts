@@ -59,6 +59,26 @@ const runWait = <T = unknown>(
   opts?: { timeoutMs?: number; label?: string },
 ) => app.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
 
+// Native hover follows the isolated desktop's pointer and hit testing.
+const hoverChip = async (selector: string) => {
+  await app.movePointer({ x: 1, y: 1 });
+  const point = await runWait<{ x: number; y: number }>(
+    `
+    const button = frontDock()?.querySelector(${JSON.stringify(selector)});
+    if (!button) return false;
+    const dock = frontDock();
+    if (dock.getAnimations({subtree:true}).some(animation =>
+      animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity)) return false;
+    const bounds = button.getBoundingClientRect();
+    // The chip's trailing split/remove overlay appears on hover. Aim at the
+    // leading icon so that overlay cannot replace the preview's hit target.
+    return { x: bounds.left + 8, y: bounds.top + bounds.height / 2 };
+  `,
+    { label: "surface chip ready for native hover" },
+  );
+  await app.movePointer(point);
+};
+
 describe("dock modes", () => {
   it("boots into a project and opens a floating chat", async () => {
     await runWait(`return !!byText('button', 'New project');`, {
@@ -293,9 +313,7 @@ describe("dock modes", () => {
        return !!pop && members?.children.length >= 4;`,
       { label: "group popover popped in" },
     );
-    await run(
-      `frontDock().querySelector('[data-testid="surface-group-members"] button').dispatchEvent(new PointerEvent('pointerover', {bubbles:true,relatedTarget:document.body})); return true;`,
-    );
+    await hoverChip('[data-testid="surface-group-members"] button');
     await runWait(
       `return document.querySelector('[data-resource-inspector][data-open="true"]')?.textContent.includes('Terminal');`,
       { label: "group member uses shared preview" },
@@ -328,9 +346,7 @@ describe("dock modes", () => {
     );
     expect(overlay.opacity).toBe("0");
     expect(overlay.overlaid).toBe(true);
-    await run(
-      `frontDock().querySelector('[data-testid="surface-chip"][data-kind="browser"] button').dispatchEvent(new PointerEvent('pointerover', {bubbles:true,relatedTarget:document.body})); return true;`,
-    );
+    await hoverChip('[data-testid="surface-chip"][data-kind="browser"] button');
     await runWait(
       `return document.querySelector('[data-resource-inspector][data-open="true"] [data-preview-location]')?.textContent.includes('https://example.org');`,
       { label: "composer surface previews its destination on hover" },
