@@ -20,7 +20,8 @@
     "package": "bun --bun run --cwd ../pwa build && bun --bun electron-vite build && bun --bun electron-builder --publish never",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ../../vitest.config.ts",
     "test:e2e": "bun ../../scripts/desktop-test.ts",
-    "test:eval": "bun --bun electron-vite build && bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ./vitest.eval.config.ts"
+    "test:eval": "bun --bun electron-vite build && bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ./vitest.eval.config.ts",
+    "test:e2e:ci": "bun ../../scripts/desktop-test.ts --native"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.52",

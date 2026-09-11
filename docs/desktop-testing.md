@@ -48,14 +48,19 @@ its cap, additional files increase work per shard. No extra matrix concurrency
 cap is imposed. Each desktop
 shard runs suites serially so apps do not compete for native focus. Vitest
 shards whole files and preserves ordered tests sharing one app. Every file is
-included on both operating systems. Test results are never cached. Dependency
-and Turbo build caches are separated by OS, architecture, and lockfile.
+included on both operating systems. PR CI reuses successful Turbo test tasks
+when their inputs and dependency hashes match; see [test caching](test-caching.md).
+Local commands, main, and manual CI runs execute tests fresh.
 
 The stable `checks` job requires every lane and shard to succeed. Optional
 credentialed model evals remain separate and are excluded from PR checks.
-Desktop logs, screenshots, and JUnit results are uploaded even after failure.
+Desktop logs, screenshots, and JUnit results from executed suites are uploaded
+even after failure. Cache hits have a Turbo summary instead of new diagnostics.
 
-CI runs `bun scripts/desktop-test.ts --native --shard=1/8` after building.
+CI runs the `catamorphic-desktop#test:e2e:ci` Turbo task. It depends on both
+the desktop and mobile guest builds, then invokes
+`bun scripts/desktop-test.ts --native`; `CATAMORPHIC_TEST_SHARD=1/8` selects
+its Vitest file shard without changing build hashes.
 On Linux this starts and owns a new X server; on macOS it requires a dedicated
 GitHub-hosted runner. It must not run on a developer's macOS login session.
 Raw harness launches reject a missing isolation context before spawning Electron.

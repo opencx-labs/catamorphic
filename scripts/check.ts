@@ -39,14 +39,23 @@ async function main(): Promise<void> {
       path.join(repositoryRoot, "packages/db/src/generated/db.ts"),
       generatedTypesBaseline,
     );
-    const phases = checkCommands({ generatedTypesBaseline, ...options });
+    const phases = checkCommands({
+      generatedTypesBaseline,
+      ...options,
+      reuseTests:
+        process.env.GITHUB_ACTIONS === "true" &&
+        process.env.CATAMORPHIC_REUSE_TESTS === "1",
+    });
     await withDisposablePostgres({
       driver: dockerTestPostgresDriver(),
       pid: process.pid,
       nonce,
       task: async (databaseUrl) => {
         const env = testRunEnvironment({
-          source: deterministicTestEnvironment(runtime.env, databaseUrl),
+          source: {
+            ...deterministicTestEnvironment(runtime.env, databaseUrl),
+            CATAMORPHIC_TEST_SHARD: options.shard,
+          },
           resources,
         });
         for (const [index, phase] of phases.entries()) {

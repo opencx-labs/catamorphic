@@ -141,4 +141,5 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0126](0126-installable-component-packs.md) | Installable component packs | Accepted |
 | [0127](0127-dock-placement-and-chat-runtime-choices.md) | Dock placement and chat runtime choices | Accepted |
 | [0128](0128-durable-manual-development-data.md) | Durable manual development data | Accepted |
-| [0129](0129-isolated-desktop-tests-and-ci-sharding.md) | Isolated desktop tests and CI sharding | Accepted |
+| [0129](0129-isolated-desktop-tests-and-ci-sharding.md) | Isolated desktop tests and CI sharding | Accepted; test-cache policy superseded by 0130 |
+| [0130](0130-content-addressed-test-reuse.md) | Content-addressed test reuse | Accepted |
