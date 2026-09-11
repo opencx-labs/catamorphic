@@ -1,10 +1,13 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { assertIsolatedDesktopTestHost } from "../../../scripts/desktop-test-environment.js";
 import { electronLaunchArgs } from "./harness-args.js";
+import { moveNativePointer } from "./native-pointer.js";
 
 /**
  * E2E harness: builds the app (electron-vite), launches the real Electron
@@ -53,6 +56,8 @@ export interface AppHandle {
   processId?: number;
   /** Low-level DevTools instrumentation for performance and lifecycle checks. */
   cdp: (method: string, params?: unknown) => Promise<unknown>;
+  /** Reload the main document and wait for its new load event. */
+  reload: () => Promise<void>;
   /** Evaluate JS in the app window; resolves the JSON-serialized result. */
   eval: <T = unknown>(expression: string) => Promise<T>;
   /** Wait until `expression` evaluates truthy (500ms poll, throws on timeout). */
@@ -69,6 +74,8 @@ export interface AppHandle {
    * `modifiers` is CDP's bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8.
    */
   press: (key: KeyName, modifiers?: number) => Promise<void>;
+  /** Move the OS pointer to renderer coordinates on the isolated desktop. */
+  movePointer: (point: { x: number; y: number }) => Promise<void>;
   /** Insert text through Chromium's real editing path (including Monaco). */
   insertText: (text: string) => Promise<void>;
   /**
@@ -113,6 +120,12 @@ export function removeE2eDirectory(directory: string): void {
 }
 
 export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
+  assertIsolatedDesktopTestHost();
+  const artifactRoot = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR;
+  const artifactDirectory = artifactRoot
+    ? path.join(artifactRoot, `electron-${randomUUID()}`)
+    : undefined;
+  if (artifactDirectory) fs.mkdirSync(artifactDirectory, { recursive: true });
   const userDataDir =
     opts.userDataDir ??
     fs.mkdtempSync(path.join(os.tmpdir(), "catamorphic-e2e-data-"));
@@ -141,10 +154,6 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
         ...process.env,
         ELECTRON_RUN_AS_NODE: undefined,
         CATAMORPHIC_E2E_DATA_DIR: userDataDir,
-        // Hidden is the interruption-free default. The visible command
-        // overrides this for suites that exercise native window semantics.
-        CATAMORPHIC_E2E_WINDOW_MODE:
-          process.env.CATAMORPHIC_E2E_WINDOW_MODE ?? "hidden",
         // Deterministic fake agent by default. Eval-style tests opt out by
         // passing CATAMORPHIC_E2E_FAKE_AGENT: "" (or "0") in opts.env — the
         // spread below wins, and every main-process check treats anything
@@ -176,6 +185,13 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
       "window.catamorphicDesktop && window.catamorphicDesktop.getServerState().then(s=>!!s.url)",
       { timeoutMs: 60_000, label: "embedded server ready" },
     );
+    // Launching a child process is not a user activation on every window
+    // manager. Activate the real page once on this private desktop before
+    // interacting; subsequent focus changes remain entirely native.
+    await client.cdp("Page.bringToFront");
+    await client.waitFor("document.hasFocus()", {
+      label: "launched desktop activated",
+    });
     // App iframes with an opaque origin render out of process; their CDP
     // targets appear on the same /json endpoint as the page. Attach a
     // dedicated WebSocket so tests can evaluate inside the frame.
@@ -229,10 +245,27 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
     return {
       ...client,
       processId: child.pid,
+      movePointer: async ({ x, y }) => {
+        const bounds = await client.eval<{ x: number; y: number }>(
+          "window.catamorphicDesktop.devWindow('get').then(state => state.contentBounds)",
+        );
+        await moveNativePointer({ x: bounds.x + x, y: bounds.y + y });
+      },
       connectToFrame,
       getOutput: () => output,
       userDataDir,
       stop: async (opts) => {
+        if (artifactDirectory) {
+          fs.writeFileSync(
+            path.join(artifactDirectory, "electron.log"),
+            output,
+          );
+          if (!killedForRecovery) {
+            await client
+              .screenshot(path.join(artifactDirectory, "last-frame.png"))
+              .catch(() => {});
+          }
+        }
         ws.close();
         try {
           if (!killedForRecovery) await terminate(child);
@@ -256,6 +289,8 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
       },
     };
   } catch (error) {
+    if (artifactDirectory)
+      fs.writeFileSync(path.join(artifactDirectory, "electron.log"), output);
     await terminate(child).catch((failure: unknown) => {
       output += `\n${String(failure)}`;
     });
@@ -371,12 +406,6 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
   // Frame targets only need Runtime; Page powers the window screenshot.
   if (opts.page !== false) {
     await send("Page.enable");
-    if (process.env.CATAMORPHIC_E2E_WINDOW_MODE === "visible") {
-      // Exercise foreground page behavior without activating the native window.
-      // This also survives reloads and keeps query retries and Monaco input
-      // independent of whichever application the developer is using.
-      await send("Emulation.setFocusEmulationEnabled", { enabled: true });
-    }
   }
 
   const evaluate = async <T>(expression: string): Promise<T> => {
@@ -434,6 +463,30 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
   const insertText = async (text: string): Promise<void> => {
     await send("Input.insertText", { text });
   };
+  const reload = () =>
+    new Promise<void>((resolve, reject) => {
+      const finish = (error?: Error) => {
+        clearTimeout(timeout);
+        ws.removeEventListener("message", loaded);
+        ws.removeEventListener("close", closed);
+        if (error) reject(error);
+        else resolve();
+      };
+      const loaded = (event: MessageEvent) => {
+        const message: { method?: string } = JSON.parse(String(event.data));
+        if (message.method === "Page.loadEventFired") finish();
+      };
+      const closed = () => finish(new Error("CDP closed during reload"));
+      const timeout = setTimeout(
+        () => finish(new Error("Page reload did not finish within 60 seconds")),
+        60_000,
+      );
+      ws.addEventListener("message", loaded);
+      ws.addEventListener("close", closed);
+      void send("Page.reload").catch((error: unknown) =>
+        finish(error instanceof Error ? error : new Error(String(error))),
+      );
+    });
   return {
     cdp: send,
     eval: evaluate,
@@ -441,6 +494,7 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
     screenshot,
     press,
     insertText,
+    reload,
     blockRequests,
     getRendererErrors: () => [...rendererErrors],
   };

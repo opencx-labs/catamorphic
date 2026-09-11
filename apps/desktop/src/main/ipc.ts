@@ -1567,6 +1567,7 @@ export function registerIpcHandlers(
         const bounds = window.getBounds();
         return {
           ...bounds,
+          contentBounds: window.getContentBounds(),
           maximized: window.isMaximized(),
           visible: window.isVisible(),
           focused: window.isFocused(),

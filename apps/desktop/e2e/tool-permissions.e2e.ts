@@ -96,7 +96,7 @@ describe("tool permissions", () => {
       `window.catamorphicDesktop.workspaceStateGet(${JSON.stringify(projectId)}).then(state => state?.chats?.some(chat => 'chat:'+chat.localId===${JSON.stringify(chatKey)} && chat.mode==='tab'))`,
       { label: "chat tab persisted before reload" },
     );
-    await app.eval("location.reload()");
+    await app.reload();
     await runWait(
       `return !!modal() && modal().textContent.includes('post message');`,
       { timeoutMs: 60000, label: "pending consent restored" },

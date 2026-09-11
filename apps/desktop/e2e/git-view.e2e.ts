@@ -50,9 +50,6 @@ beforeAll(async () => {
   app = await launchApp({
     env: {
       CATAMORPHIC_E2E_PICK_FOLDER: root,
-      ...(process.env.CATAMORPHIC_GIT_SCREENSHOT
-        ? { CATAMORPHIC_E2E_WINDOW_MODE: "visible" }
-        : {}),
     },
   });
   await wait(`return !!byText('button','New project');`);

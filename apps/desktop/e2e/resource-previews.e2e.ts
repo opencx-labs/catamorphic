@@ -18,6 +18,14 @@ const run = <T = unknown>(body: string) =>
 const wait = (body: string) => app.waitFor(`(()=>{${js}\n${body}})()`);
 async function clear() {
   if (await run("return !!preview();")) await app.press("Escape");
+  // Sidebar and outside interactions can park the floating chat. Restore it
+  // before the next preview scenario edits the shared composer.
+  await run(`
+    if (!front()) window.dispatchEvent(new KeyboardEvent('keydown', {
+      key:'m',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true,cancelable:true
+    }));
+  `);
+  await wait(`return !!front();`);
   await run(
     `composer().replaceChildren(); composer().dispatchEvent(new InputEvent('input',{bubbles:true}));`,
   );
@@ -81,7 +89,7 @@ beforeAll(async () => {
   wav.write("data", 36);
   wav.writeUInt32LE(16000, 40);
   fs.writeFileSync(path.join(root, "sound.wav"), wav);
-  await app.eval("location.reload()");
+  await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Preview project')`);
   await app.eval(`window.catamorphicDesktop.devWindow('setSize',1100,800)`);
   await app.eval(

@@ -4,18 +4,17 @@ import { type AppHandle, launchApp } from "./harness.js";
 let app: AppHandle;
 
 const click = async (selector: string) => {
-  const target = await app.waitFor<{
-    x: number;
-    y: number;
-  }>(
+  const target = await app.waitFor<{ x: number; y: number }>(
     `(() => {
+    if ([...document.querySelectorAll('[data-sidebar]')].some(sidebar =>
+      sidebar.getAnimations({subtree:true}).some(animation => animation.playState === 'running'))) return false;
     const button = document.querySelector(${JSON.stringify(selector)});
     if (!button) return false;
     const rect = button.getBoundingClientRect();
     const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
     return button.contains(document.elementFromPoint(x, y)) && { x, y };
   })()`,
-    { label: `clickable header control: ${selector}` },
+    { label: `clickable ${selector}` },
   );
   for (const type of ["mousePressed", "mouseReleased"]) {
     await app.cdp("Input.dispatchMouseEvent", {
@@ -82,6 +81,9 @@ describe("empty workspace header", () => {
 
   it("centers customization in a projectless sidebar and shares its chat with the left button", async () => {
     await click('[aria-label="Expand right sidebar"]');
+    await app.waitFor(
+      `document.querySelector('[data-sidebar="right"]')?.getAttribute('aria-hidden') === 'false'`,
+    );
     const action = '[data-sidebar="right"] [aria-label="Customize sidebar"]';
     for (const width of [1200, 800]) {
       await app.cdp("Emulation.setEmulatedMedia", {

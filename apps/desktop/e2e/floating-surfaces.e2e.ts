@@ -98,6 +98,20 @@ describe("floating surfaces", () => {
         },
       ],
     });
+    // Profile writes trigger an asynchronous project-settings refresh. Wait for
+    // the macro to reach the rendered command palette before using its binding.
+    await key("p", { metaKey: true });
+    await app.waitFor(
+      "document.activeElement?.matches('textarea[aria-label=\"Search commands, pages, and more\"]')",
+    );
+    await run("setReactValue(document.activeElement,'Write marker')");
+    await app.waitFor(
+      "!!document.querySelector('[data-item-id=\"macro:test-macro\"]')",
+    );
+    await app.press("Escape");
+    await app.waitFor(
+      "!document.querySelector('[data-item-id=\"macro:test-macro\"]')?.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})",
+    );
     expect(fs.existsSync(marker)).toBe(false);
     await key("g", { ctrlKey: true, altKey: true });
     await app.waitFor(`!!${floating} && window.__terminalIds.length===1`);
@@ -536,7 +550,7 @@ describe("floating surfaces", () => {
       "export const two = 2;\n",
     );
     // The fixture writes outside the app; reload to refresh its file inventory.
-    await app.cdp("Page.reload");
+    await app.reload();
     await app.waitFor(
       "!!document.querySelector('[data-sidebar-widget=files]')",
     );

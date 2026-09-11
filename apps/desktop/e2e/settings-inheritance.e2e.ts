@@ -13,7 +13,7 @@ beforeAll(async () => {
     `window.catamorphicDesktop.createProject({name:'Inherited settings',rootPath:${JSON.stringify(root)}})`,
   );
   projectId = project.id;
-  await app.eval("location.reload()");
+  await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Inherited settings')`);
   await app.eval(`document.querySelector('[aria-label="Settings"]').click()`);
   await app.waitFor(`!!document.querySelector('[data-settings-layout]')`);
@@ -88,7 +88,7 @@ it("shared file edits apply live, reset inherits them, and reload preserves sour
     `document.querySelector('[aria-label="Reset Tab frame to inherited"]').click()`,
   );
   await app.waitFor(`document.querySelector('[name="tabFrame"]').checked`);
-  await app.eval("location.reload()");
+  await app.reload();
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
   expect(
     await app.eval(
@@ -257,7 +257,7 @@ it("edits workspace padding, rounding and dividers independently and persists th
   await app.waitFor(
     "getComputedStyle(document.querySelector('[data-sidebar=right]')).borderLeftWidth === '1px'",
   );
-  await app.eval("location.reload()");
+  await app.reload();
   await app.waitFor(
     "document.querySelector('main') && getComputedStyle(document.querySelector('main')).borderRadius === '0px'",
   );

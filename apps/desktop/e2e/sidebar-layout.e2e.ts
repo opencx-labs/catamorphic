@@ -263,10 +263,9 @@ describe("configurable browser workspace", () => {
     await app.waitFor(
       "!!document.querySelector('button[aria-label=\"Expand sidebar\"]')",
     );
-    // This hidden-window suite checks resting geometry. Chromium can pause
-    // tab-in at its 3px entrance offset; visible motion tests cover the tween.
-    await run(
-      "for (const animation of $('[data-tab-orientation=horizontal]').getAnimations({subtree:true})) { if (animation.animationName === 'tab-in') animation.finish(); }",
+    await app.waitFor(
+      "document.querySelector('[data-tab-orientation=horizontal]').getAnimations({subtree:true}).every(animation => animation.animationName !== 'tab-in' || animation.playState === 'finished')",
+      { label: "tab entrance animation settled" },
     );
     const centers = await run<[number, number]>(
       "return [$('button[aria-label=\"Expand sidebar\"]'), $('[data-tab-orientation=horizontal] > [data-point-key]')].map(e => {const r=e.getBoundingClientRect(); return r.y+r.height/2})",
@@ -343,8 +342,11 @@ describe("configurable browser workspace", () => {
         "return !!document.elementFromPoint(90, 20)?.closest('aside, [data-sidebar-reveal-edge]')",
       ),
     ).toBe(false);
-    await run(
-      "$('[data-sidebar-reveal-edge]').dispatchEvent(new PointerEvent('pointerover', {bubbles:true,clientX:3,clientY:innerHeight/2}))",
+    const pointerY = await app.eval<number>("innerHeight / 2");
+    await app.movePointer({ x: 3, y: pointerY });
+    await app.waitFor(
+      "document.querySelector('aside').dataset.sidebarRevealed === 'true'",
+      { label: "native pointer reveals collapsed sidebar" },
     );
     // The compositor may still send guest entry events while the sidebar
     // animates over it. Those coordinates remain inside the revealed panel.
@@ -372,9 +374,7 @@ describe("configurable browser workspace", () => {
     await run(
       "$('aside input[aria-label=\"Address and search bar\"]').focus()",
     );
-    await run(
-      "$('webview').dispatchEvent(new PointerEvent('pointerover', {bubbles:true,clientX:400,clientY:100}))",
-    );
+    await app.movePointer({ x: 400, y: 100 });
     expect(await run("return $('aside').getAttribute('aria-hidden')")).toBe(
       "false",
     );
@@ -455,7 +455,7 @@ it("does not use GitHub CLI for PRs without profile opt-in", async () => {
       "window.catamorphicDesktop.prList('unconfigured-project').then(() => 'unexpected success', error => error.message.includes('[github-cli-disabled]'))",
     ),
   ).toBe(true);
-  await app.eval("location.reload()");
+  await app.reload();
   await app.waitFor("!!window.catamorphicDesktop");
   expect(
     await app.eval(

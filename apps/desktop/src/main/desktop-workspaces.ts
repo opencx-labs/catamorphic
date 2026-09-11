@@ -44,7 +44,6 @@ export class DesktopWorkspaces {
     private readonly options: {
       windows: WindowProfileRegistry;
       config: ProfileConfigManager;
-      showWindows: boolean;
       profileForProject: (projectId: string) => string;
       createWindow: (
         profileId: string,
@@ -374,10 +373,8 @@ export class DesktopWorkspaces {
     const window = this.lastWindows.get(profileId);
     if (!window || window.isDestroyed()) return false;
     if (window.isMinimized()) window.restore();
-    if (this.options.showWindows) {
-      window.show();
-      window.focus();
-    }
+    window.show();
+    window.focus();
     return true;
   }
 
@@ -477,10 +474,8 @@ export class DesktopWorkspaces {
       target.webContents.once("did-finish-load", send);
     else send();
     if (target.isMinimized()) target.restore();
-    if (this.options.showWindows) {
-      target.show();
-      target.focus();
-    }
+    target.show();
+    target.focus();
     this.lastWindows.set(profileId, target);
   }
 
@@ -538,7 +533,7 @@ export class DesktopWorkspaces {
           Math.abs(bounds.y - position.y) > 1)
       )
         existing.setPosition(position.x, position.y);
-      if (this.options.showWindows) existing.showInactive();
+      existing.showInactive();
       return;
     }
     const window = this.options.createWindow(profileId, true);

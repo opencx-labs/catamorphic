@@ -111,6 +111,42 @@ describe("ResourceInspector", () => {
     expect(dialog?.className).toContain("animate-inspector-in-");
   });
 
+  it("ignores sibling scrolling but dismisses when its ancestor scrolls", async () => {
+    await act(async () => {
+      root.render(
+        <div data-scroll-parent>
+          <div data-transcript />
+          <ResourceInspector
+            label="Terminal"
+            content={<p>Preview</p>}
+            pinOnClick
+          >
+            {(props) => (
+              <button type="button" {...props}>
+                Terminal
+              </button>
+            )}
+          </ResourceInspector>
+        </div>,
+      );
+    });
+    await act(async () => container.querySelector("button")?.click());
+    const dialog = document.querySelector("[data-resource-inspector]");
+    expect(dialog?.getAttribute("data-open")).toBe("true");
+    await act(async () =>
+      container
+        .querySelector("[data-transcript]")
+        ?.dispatchEvent(new Event("scroll")),
+    );
+    expect(dialog?.getAttribute("data-open")).toBe("true");
+    await act(async () =>
+      container
+        .querySelector("[data-scroll-parent]")
+        ?.dispatchEvent(new Event("scroll")),
+    );
+    expect(dialog?.getAttribute("data-open")).toBeNull();
+  });
+
   it("pins on click and dismisses on an outside pointer", async () => {
     await act(async () => {
       root.render(
