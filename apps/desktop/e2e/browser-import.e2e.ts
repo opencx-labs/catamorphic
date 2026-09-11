@@ -16,8 +16,10 @@ describe("browser import IPC", () => {
       reason: string | null;
     }>("window.catamorphicDesktop.browserImportSupport()");
     expect(support.available).toBe(process.platform === "darwin");
-    expect(support.reason).toBe(
-      process.platform === "darwin" ? null : expect.any(String),
+    expect(support.reason).toEqual(
+      process.platform === "darwin"
+        ? null
+        : expect.stringContaining("Direct password import requires macOS"),
     );
   });
   it("rejects unrecognized source profiles before opening Keychain", async () => {
