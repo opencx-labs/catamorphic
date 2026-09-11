@@ -56,6 +56,8 @@ export interface AppHandle {
   processId?: number;
   /** Low-level DevTools instrumentation for performance and lifecycle checks. */
   cdp: (method: string, params?: unknown) => Promise<unknown>;
+  /** Reload the main document and wait for its new load event. */
+  reload: () => Promise<void>;
   /** Evaluate JS in the app window; resolves the JSON-serialized result. */
   eval: <T = unknown>(expression: string) => Promise<T>;
   /** Wait until `expression` evaluates truthy (500ms poll, throws on timeout). */
@@ -454,6 +456,30 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
   const insertText = async (text: string): Promise<void> => {
     await send("Input.insertText", { text });
   };
+  const reload = () =>
+    new Promise<void>((resolve, reject) => {
+      const finish = (error?: Error) => {
+        clearTimeout(timeout);
+        ws.removeEventListener("message", loaded);
+        ws.removeEventListener("close", closed);
+        if (error) reject(error);
+        else resolve();
+      };
+      const loaded = (event: MessageEvent) => {
+        const message: { method?: string } = JSON.parse(String(event.data));
+        if (message.method === "Page.loadEventFired") finish();
+      };
+      const closed = () => finish(new Error("CDP closed during reload"));
+      const timeout = setTimeout(
+        () => finish(new Error("Page reload did not finish within 60 seconds")),
+        60_000,
+      );
+      ws.addEventListener("message", loaded);
+      ws.addEventListener("close", closed);
+      void send("Page.reload").catch((error: unknown) =>
+        finish(error instanceof Error ? error : new Error(String(error))),
+      );
+    });
   return {
     cdp: send,
     eval: evaluate,
@@ -461,6 +487,7 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
     screenshot,
     press,
     insertText,
+    reload,
     blockRequests,
     getRendererErrors: () => [...rendererErrors],
   };

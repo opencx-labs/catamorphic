@@ -129,7 +129,7 @@ describe("session runtime controls", () => {
         `return JSON.stringify(await window.catamorphicDesktop.agentsList()) === JSON.stringify(window.__runtimeTest.agents);`,
       ),
     ).toBe(true);
-    await run(`window.location.reload();`);
+    await app.reload();
     await wait(
       `const chat = $$('button').find(el => el.textContent.trim() === 'Quick chat'); if (!chat) return false; chat.dispatchEvent(new MouseEvent('click', {bubbles:true,cancelable:true,altKey:true})); return true;`,
     );
@@ -386,7 +386,7 @@ it("centers expanded chats on request and drags the collapsed bubble between bot
   await run(`$('[aria-label="Expand chat bubbles"]').focus();`);
   await app.press("ArrowLeft");
   await wait(`return $('[data-dock-host]')?.dataset.dockSide==='left';`);
-  await run(`window.location.reload();`);
+  await app.reload();
   await wait(
     `return $('[data-dock-host]')?.dataset.dockSide==='left' && $('[data-dock-host]')?.dataset.dockAlignment==='edge';`,
   );

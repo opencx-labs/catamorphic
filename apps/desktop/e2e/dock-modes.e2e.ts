@@ -61,6 +61,12 @@ const runWait = <T = unknown>(
 
 // Native hover follows the isolated desktop's pointer and hit testing.
 const hoverChip = async (selector: string) => {
+  await runWait(
+    `return !frontDock()?.querySelector('[data-testid="session-inspector-trigger"]')?.getAttribute('aria-label')?.includes(', Working,');`,
+    {
+      label: "agent turn settled before hovering its surfaces",
+    },
+  );
   await app.movePointer({ x: 1, y: 1 });
   const point = await runWait<{ x: number; y: number }>(
     `
@@ -72,11 +78,18 @@ const hoverChip = async (selector: string) => {
     const bounds = button.getBoundingClientRect();
     // The chip's trailing split/remove overlay appears on hover. Aim at the
     // leading icon so that overlay cannot replace the preview's hit target.
-    return { x: bounds.left + 8, y: bounds.top + bounds.height / 2 };
+    const x = bounds.left + 8, y = bounds.top + bounds.height / 2;
+    return button.contains(document.elementFromPoint(x, y)) && { x, y };
   `,
     { label: "surface chip ready for native hover" },
   );
   await app.movePointer(point);
+  await runWait(
+    `return frontDock()?.querySelector(${JSON.stringify(selector)})?.matches(':hover');`,
+    {
+      label: "native pointer reached the surface chip",
+    },
+  );
 };
 
 describe("dock modes", () => {
