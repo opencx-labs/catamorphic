@@ -1,6 +1,6 @@
 # 0124: Session artifacts share source ownership and retention
 
-- **Status:** Accepted (review-package distribution superseded by 0126)
+- **Status:** Accepted (review-package distribution superseded by 0126; publication refined by 0135)
 - **Date:** 2026-09-11
 - **Refines:** 0035, 0053, 0074, 0076, 0101, 0114
 
@@ -15,7 +15,7 @@ TypeScript on dedicated refs. Apps need the same session lifecycle.
 
 Use one session-artifact source service for temporary apps and workflows. Each
 artifact has a stable id, owning session/user, kind, name, selected source paths,
-and immutable revisions on a Catamorphic-owned git ref. Files use ordinary Bun
+and immutable revisions on Catamorphic-owned git refs (publication follows 0135). Files use ordinary Bun
 workspace layouts. Source snapshots use an isolated ProjectManager checkout;
 they never capture dirty files or modify the user's checkout, index or branch.
 Workflow logic stays TypeScript, not metadata. Conflicting workflow exports

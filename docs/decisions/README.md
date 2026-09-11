@@ -136,7 +136,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0121](0121-project-workspaces-and-shared-chat-dock.md) | Persistent project workspaces and a shared chat dock | Accepted |
 | [0122](0122-blocking-and-nonblocking-agent-questions.md) | Blocking and non-blocking agent questions | Accepted |
 | [0123](0123-desktop-consent-search-and-resource-links.md) | Desktop consent, search and resource links | Accepted |
-| [0124](0124-session-artifacts.md) | Session artifacts share source ownership and retention | Accepted; review distribution superseded by 0126 |
+| [0124](0124-session-artifacts.md) | Session artifacts share source ownership and retention | Accepted; review distribution superseded by 0126; publication refined by 0135 |
 | [0125](0125-canonical-app-icons.md) | Canonical semantic app icons | Accepted |
 | [0126](0126-installable-component-packs.md) | Installable component packs | Accepted |
 | [0127](0127-dock-placement-and-chat-runtime-choices.md) | Dock placement and chat runtime choices | Accepted |
@@ -147,3 +147,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0132](0132-shared-contextual-sidebar-contributions.md) | Shared contextual sidebar contributions | Accepted |
 | [0133](0133-lean-agent-tool-surface.md) | Lean agent tool surface | Accepted |
 | [0134](0134-consent-and-collection-lifecycle.md) | Consent binding and collection lifecycle | Accepted |
+| [0135](0135-artifact-publication-before-admission.md) | Publish artifact candidates before admitting revisions | Accepted |

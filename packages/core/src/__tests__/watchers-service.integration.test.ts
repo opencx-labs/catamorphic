@@ -352,7 +352,9 @@ describe("temporary watchers", () => {
       triggerKinds: ["issue.changed"],
       environment: "edge",
     });
-    expect(watcher.remoteBranch).toBe(`catamorphic/artifacts/${watcher.id}`);
+    expect(watcher.remoteBranch).toMatch(
+      new RegExp(`^catamorphic/artifacts/${watcher.id}-[0-9a-f-]{36}$`),
+    );
     expect(watcher.commitSha).toMatch(/^[0-9a-f]{40}$/);
     const repo = await projectManager.openDev(
       tenantId,

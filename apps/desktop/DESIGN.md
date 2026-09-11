@@ -415,3 +415,17 @@ Repaired the [slash command experience](../../docs/desktop-slash-command-audit.m
 [ADR 0134](../../docs/decisions/0134-consent-and-collection-lifecycle.md) binds deferred
 consent to the approved definition. Sidebar trees own visible branch subscriptions,
 hidden sections probe availability, and built-ins and widgets share session reads.
+
+### 2026-09-12: Explicit orchestration ownership
+
+Sidebar navigation owns its section composition and branch subscriptions. The
+chat surface rail owns grouping, expansion, and resource inspection. Their parent
+app and dock retain workspace and conversation orchestration. Desktop MCP policy
+resolution and permission handling share one owner beneath the agent registry.
+These boundaries preserve existing interactions while making subsequent changes
+local to the capability they affect.
+
+Signed macOS builds verify the browser-import helper's Developer ID identity,
+matching app team, universal architectures, and safe version protocol. The manual
+import smoke uses a disposable Chrome profile and a known test login; macOS
+keeps control of the authentication and Keychain authorization prompts.
