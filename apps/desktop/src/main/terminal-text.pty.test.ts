@@ -10,7 +10,7 @@ import {
   sanitizeTerminalOutput,
   scanOsc133,
   waitForShellReady,
-} from "./terminal-text.js";
+} from "../shared/terminal-text.js";
 
 /**
  * A real PTY capture (zsh 5.9 on macOS, agent shim active) of running a

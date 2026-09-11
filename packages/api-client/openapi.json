@@ -13188,6 +13188,9 @@
                   "agentId": {
                     "type": "string"
                   },
+                  "model": {
+                    "type": "string"
+                  },
                   "effort": {
                     "type": "string",
                     "enum": ["low", "medium", "high", "xhigh", "max"]

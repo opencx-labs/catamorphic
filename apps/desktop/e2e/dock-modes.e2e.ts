@@ -265,6 +265,11 @@ describe("dock modes", () => {
       `return !!frontDock().querySelector('button[aria-label$=" terminals"]');`,
       { timeoutMs: 15_000, label: "collapsed group chip" },
     );
+    expect(
+      await run(
+        `return frontDock().querySelector('[data-testid="surface-group"][data-kind="terminal"]').textContent;`,
+      ),
+    ).toMatch(/^Terminals\d+$/);
     // The group chip ENTERED through the pill vocabulary (its wrapper
     // keeps the class for the element's lifetime).
     expect(
@@ -272,15 +277,28 @@ describe("dock modes", () => {
         `return !!frontDock().querySelector('.animate-pill-in button[aria-label$=" terminals"]');`,
       ),
     ).toBe(true);
+    await runWait(
+      `const button = frontDock().querySelector('[data-testid="surface-group"]'); return button && !button.closest('[inert]');`,
+      { label: "rail is interactive after the turn settles" },
+    );
     // Its popover pops in and back out.
     await run(
       `frontDock().querySelector('button[aria-label$=" terminals"]').click(); return true;`,
     );
     await runWait(
       `const pop = frontDock().querySelector('.animate-pop-in');
-       return !!pop && pop.textContent.includes('Agent terminal');`,
+       const members = pop?.querySelector('[data-testid="surface-group-members"]') ?? frontDock().querySelector('[data-testid="surface-group-members"]');
+       return !!pop && members?.children.length >= 4;`,
       { label: "group popover popped in" },
     );
+    await run(
+      `frontDock().querySelector('[data-testid="surface-group-members"] button').dispatchEvent(new PointerEvent('pointerover', {bubbles:true,relatedTarget:document.body})); return true;`,
+    );
+    await runWait(
+      `return document.querySelector('[data-resource-inspector][data-open="true"]')?.textContent.includes('Terminal');`,
+      { label: "group member uses shared preview" },
+    );
+    await app.press("Escape");
     await run(
       `frontDock().querySelector('button[aria-label$=" terminals"]').click(); return true;`,
     );
@@ -308,6 +326,14 @@ describe("dock modes", () => {
     );
     expect(overlay.opacity).toBe("0");
     expect(overlay.overlaid).toBe(true);
+    await run(
+      `frontDock().querySelector('[data-testid="surface-chip"][data-kind="browser"] button').dispatchEvent(new PointerEvent('pointerover', {bubbles:true,relatedTarget:document.body})); return true;`,
+    );
+    await runWait(
+      `return document.querySelector('[data-resource-inspector][data-open="true"] [data-preview-location]')?.textContent.includes('https://example.org');`,
+      { label: "composer surface previews its destination on hover" },
+    );
+    await app.press("Escape");
   }, 120_000);
 
   // The shim replaces macOS's native `open`; other platforms use their own

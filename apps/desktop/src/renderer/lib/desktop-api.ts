@@ -9,6 +9,7 @@ import type {
   DockSnapshot,
   WorkspaceEvent,
 } from "../../shared/desktop-workspace.js";
+import type { DockDrag, DockSize } from "../../shared/dock-position.js";
 import type { FilePreviewInput } from "../../shared/file-preview.js";
 import type {
   FileSearchInput,
@@ -889,7 +890,8 @@ export interface CatamorphicDesktopApi {
     action: "close" | "minimize" | "send",
     message?: string,
   ) => Promise<void>;
-  dockResize: (size: { width: number; height: number }) => Promise<void>;
+  dockDrag: (input: DockDrag) => Promise<void>;
+  dockResize: (size: DockSize) => Promise<void>;
   onDockSnapshot: (listener: (snapshot: DockSnapshot) => void) => () => void;
   onWorkspaceEvent: (listener: (event: WorkspaceEvent) => void) => () => void;
   windowProfile: () => Promise<string>;

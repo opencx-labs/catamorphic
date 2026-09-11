@@ -198,7 +198,12 @@ export function SettingsScreen({
         <>
           <LayoutSection projectId={projectId} />
           <LayoutSection
-            keys={["dockMultiProject", "dockDetached", "dockSide"]}
+            keys={[
+              "dockMultiProject",
+              "dockDetached",
+              "dockSide",
+              "dockAlignment",
+            ]}
             title="Chat dock"
           />
           <LayoutSection

@@ -9,6 +9,7 @@ import type {
   DockSnapshot,
   WorkspaceEvent,
 } from "../shared/desktop-workspace.js";
+import type { DockDrag, DockSize } from "../shared/dock-position.js";
 import type { FilePreviewInput } from "../shared/file-preview.js";
 import type { FileSearchInput } from "../shared/file-search.js";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
@@ -61,7 +62,9 @@ const api = {
     message?: string,
   ): Promise<void> =>
     ipcRenderer.invoke("catamorphic:dock-action", localId, action, message),
-  dockResize: (size: { width: number; height: number }): Promise<void> =>
+  dockDrag: (input: DockDrag): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:dock-drag", input),
+  dockResize: (size: DockSize): Promise<void> =>
     ipcRenderer.invoke("catamorphic:dock-resize", size),
   onDockSnapshot: (
     listener: (snapshot: DockSnapshot) => void,

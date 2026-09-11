@@ -23,7 +23,7 @@ UI work. Every interaction matters; this is a polished product, not a demo.
 Main-process map (`src/main/`): `server/` embeds core (boot, agent
 registry, project agents ADR 0050, workspace tools, triggers, e2e fakes);
 `agent-bridge.ts` connects agent sessions to renderer surfaces;
-`terminal.ts` + `terminal-text.ts` + `shell-integration.ts` are the PTY
+`terminal.ts` + `shared/terminal-text.ts` + `shell-integration.ts` are the PTY
 stack; `git-view.ts` is the system-git read surface (worktrees, status,
 diffs); `browser*.ts`, `profiles.ts`, `connections-store.ts`,
 `mcp-apps.ts`, `sidebar-config.ts`, `project-manifest.ts`, and

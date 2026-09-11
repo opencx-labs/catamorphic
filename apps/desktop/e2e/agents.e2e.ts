@@ -1056,13 +1056,11 @@ describe("agents and profiles", () => {
       return true;
     `);
     await runWait(
-      `return $$('[role="tab"], button').some((el) =>
-        /Close .*[Tt]erminal/.test(el.getAttribute('aria-label') ?? ''));`,
+      `return !!$('[data-point-key^="terminal:"] button[aria-label^="Close "]');`,
       { label: "terminal open as a tab" },
     );
     await run(`
-      $$('button').find((el) =>
-        /Close .*[Tt]erminal/.test(el.getAttribute('aria-label') ?? '')).click();
+      $('[data-point-key^="terminal:"] button[aria-label^="Close "]').click();
       return true;
     `);
     // Closing an agent-controlled terminal's tab backgrounds it: the tab

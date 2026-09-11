@@ -7,17 +7,17 @@ import type {
 } from "@catamorphic/sandbox";
 import { BrowserWindow, ipcMain, webContents } from "electron";
 import {
+  capOutput,
+  encodeCommand,
+  sanitizeTerminalOutput,
+  waitForShellReady,
+} from "../shared/terminal-text.js";
+import {
   type BrowserAction,
   BrowserDriver,
   browserUrl,
 } from "./browser-driver.js";
 import type { AgentTerminals } from "./terminal.js";
-import {
-  capOutput,
-  encodeCommand,
-  sanitizeTerminalOutput,
-  waitForShellReady,
-} from "./terminal-text.js";
 
 /**
  * The workspace bridge: how chat agents see and drive the app itself.
@@ -542,7 +542,12 @@ export function registerAgentBridge(
         terminalId = created.sessionId;
         const attached = await rpc<{ key: string } | null>(
           "attachAgentTerminal",
-          { projectId, sessionId, terminalId },
+          {
+            projectId,
+            sessionId,
+            terminalId,
+            title: command.replace(/\s+/g, " ").trim().slice(0, 100),
+          },
         );
         key = attached?.key ?? `terminal:${terminalId}`;
         terminalKeys.set(terminalId, key);

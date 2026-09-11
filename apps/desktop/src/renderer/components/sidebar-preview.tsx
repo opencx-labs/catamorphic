@@ -1,12 +1,11 @@
-import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import type { ReactNode } from "react";
 import type { SidebarPreview } from "../lib/desktop-api.js";
 import {
-  computeInspectorPosition,
   InspectorPortal,
+  RESOURCE_INSPECTOR_DELAY_MS,
 } from "./resource-inspector";
 
-export const SIDEBAR_PREVIEW_DELAY_MS = 500;
+export const SIDEBAR_PREVIEW_DELAY_MS = RESOURCE_INSPECTOR_DELAY_MS;
 
 export interface SidebarPreviewAnchor {
   top: number;
@@ -43,57 +42,16 @@ export function SidebarPreviewPopover({
   onMouseLeave: () => void;
   onExited: () => void;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState({
-    left: anchor.right + 8,
-    top: anchor.top,
-  });
-
-  useLayoutEffect(() => {
-    const card = ref.current;
-    if (!card) return;
-    const width = card.offsetWidth;
-    const height = card.offsetHeight;
-    const next = computeInspectorPosition({
-      anchor,
-      width,
-      height,
-      viewportWidth: window.innerWidth,
-      viewportHeight: window.innerHeight,
-    });
-    setPosition({ left: next.left, top: next.top });
-  }, [anchor]);
-
-  if (content !== undefined)
-    return (
-      <InspectorPortal
-        id={id}
-        label={fallbackTitle}
-        anchor={anchor}
-        open={open}
-        onEnter={onMouseEnter}
-        onLeave={onMouseLeave}
-        onExited={onExited}
-      >
-        {content}
-      </InspectorPortal>
-    );
-
-  return createPortal(
-    <div
-      ref={ref}
+  return (
+    <InspectorPortal
       id={id}
-      role="tooltip"
-      data-testid="sidebar-preview"
-      style={position}
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
-      onAnimationEnd={(event) => {
-        if (event.animationName === "pop-out" && !open) onExited();
-      }}
-      className={`pointer-events-auto fixed z-[120] w-72 rounded-lg border border-border bg-bg-overlay p-2.5 shadow-2xl ${
-        open ? "animate-pop-in" : "animate-pop-out"
-      }`}
+      label={fallbackTitle}
+      testId={content === undefined ? "sidebar-preview" : undefined}
+      anchor={anchor}
+      open={open}
+      onEnter={onMouseEnter}
+      onLeave={onMouseLeave}
+      onExited={onExited}
     >
       {content ?? (
         <>
@@ -121,7 +79,6 @@ export function SidebarPreviewPopover({
           )}
         </>
       )}
-    </div>,
-    document.body,
+    </InspectorPortal>
   );
 }

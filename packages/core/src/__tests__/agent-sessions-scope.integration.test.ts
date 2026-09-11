@@ -423,7 +423,19 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
   it("applies per-session model and effort overrides to the harness", async () => {
     const created = await sessions.create(admin, projectId, {
       agentId: salesAgentId,
+      model: "test/model-v1",
+      effort: "medium",
     });
+    expect(created.model).toBe("test/model-v1");
+    expect(created.modelEffort).toBe("medium");
+    await sessions.sendMessage(
+      admin,
+      projectId,
+      created.id,
+      "initial configuration",
+    );
+    expect(sales.turns.at(-1)?.model).toBe("test/model-v1");
+    expect(sales.turns.at(-1)?.effort).toBe("medium");
     const configured = await sessions.update(admin, projectId, created.id, {
       model: "test/model-v2",
       effort: "high",

@@ -350,3 +350,16 @@ Consent appears as a durable question in its chat. Workflow and app links identi
 and open their actual surfaces. Editable code derives syntax, background, gutters,
 selection, cursor, diagnostics and widgets from the current app theme, with bundled
 Shiki grammars. Never ship a preset editor background that ignores the app theme.
+
+## Dock placement and draft runtime controls (2026-09-11)
+
+ADR 0127 adds centered or edge-aligned expansion without changing the collapsed
+corner. The bubble itself is draggable; dragging never expands it or stores an
+absolute resting position. Use restrained settling motion and honor reduced
+motion. New and established chats share editable runtime controls; draft choices
+apply only to that conversation. Explain unavailable controls beside the control.
+
+Markdown hover previews use the app's rendered reading typography. Composer
+surface chips and expanded group members use the shared resource inspector;
+collapsed groups lead with their plural type and a separate count. Preview
+content and behavior follow [chat state](docs/chat-state.md).
