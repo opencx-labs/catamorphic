@@ -40,9 +40,11 @@ const helpers = `
   const send = () => composer().dispatchEvent(new KeyboardEvent('keydown', {
     key: 'Enter', bubbles: true, cancelable: true }));
   ${setReactValueJs}
-  const pressKey = (key, mods = {}) =>
+  const pressKey = (key, mods = {}) => {
     window.dispatchEvent(new KeyboardEvent('keydown', {
       key, bubbles: true, cancelable: true, ...(mods.metaKey && !/Mac/.test(navigator.platform) ? { ...mods, metaKey: false, ctrlKey: true } : mods) }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true }));
+  };
   const dockH = () => frontDock()?.getBoundingClientRect().height ?? 0;
   const hoverDock = () => frontDock().dispatchEvent(
     new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }));
@@ -114,7 +116,13 @@ describe("dock modes", () => {
       label: "workspace ready",
     });
     await run(`pressKey('n', { metaKey: true }); return true;`);
-    await runWait(`return !!composer();`, { label: "floating chat" });
+    await runWait(
+      `const dock = frontDock();
+       return dock && document.activeElement === composer() &&
+         !dock.getAnimations({subtree:true}).some(animation =>
+           animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity);`,
+      { label: "floating chat finished opening with its composer focused" },
+    );
   }, 180_000);
 
   it("the attach button inserts files at the caret, exactly like a paste", async () => {
@@ -142,6 +150,13 @@ describe("dock modes", () => {
     expect(text).toBe("beforepicked.png  after");
     await runWait(`return document.activeElement === composer();`, {
       label: "composer regains focus after attachment insertion",
+    }).catch(async (error: unknown) => {
+      const focus = await run(`return {
+        active: document.activeElement?.outerHTML.slice(0, 1000),
+        windowFocused: document.hasFocus(),
+        inert: !!composer()?.closest('[inert]'),
+      };`);
+      throw new Error(`${String(error)}; focus state: ${JSON.stringify(focus)}`);
     });
     await run(`setComposer(''); return true;`);
     await runWait(
