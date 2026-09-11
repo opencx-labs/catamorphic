@@ -1,6 +1,6 @@
-# 0123: Session artifacts share source ownership and retention
+# 0124: Session artifacts share source ownership and retention
 
-- **Status:** Accepted (review-package distribution superseded by 0125)
+- **Status:** Accepted (review-package distribution superseded by 0126)
 - **Date:** 2026-09-11
 - **Refines:** 0035, 0053, 0074, 0076, 0101, 0114
 

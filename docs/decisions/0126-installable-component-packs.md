@@ -1,8 +1,8 @@
-# 0125: Installable component packs
+# 0126: Installable component packs
 
 - **Status:** Accepted
 - **Date:** 2026-09-11
-- **Supersedes:** The review-package distribution choice in 0123
+- **Supersedes:** The review-package distribution choice in 0124
 
 ## Context
 

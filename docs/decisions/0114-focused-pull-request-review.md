@@ -1,6 +1,6 @@
 # 0114: Focused pull request review
 
-Status: Accepted; generated Markdown guides superseded by [0123](0123-session-artifacts.md); external-only replies superseded by [0115](0115-native-review-conversation.md)
+Status: Accepted; generated Markdown guides superseded by [0124](0124-session-artifacts.md); external-only replies superseded by [0115](0115-native-review-conversation.md)
 
 ## Context
 Expandable PR files in the workspace sidebar duplicated review navigation.

@@ -98,6 +98,10 @@ export class WorkspaceContextAgent implements CodingAgentProvider {
     private readonly skillsNote?: () => string | undefined,
     private readonly coordination?: AgentCoordinationContext,
     private readonly settingsContext?: (projectId: string) => unknown,
+    private readonly bindTurn?: (
+      sessionId: string,
+      options?: TurnOptions,
+    ) => () => void,
   ) {
     this.name = inner.name;
     if (inner.interrupt) {
@@ -110,12 +114,18 @@ export class WorkspaceContextAgent implements CodingAgentProvider {
     }
     if (inner.retryTurn) {
       // A retry re-runs history as-is; no fresh context block to prepend.
-      this.retryTurn = (session, opts) =>
-        (inner.retryTurn as NonNullable<typeof inner.retryTurn>).call(
-          inner,
-          session,
-          opts,
-        );
+      const bindTurn = this.bindTurn;
+      this.retryTurn = async function* (
+        session: ProviderSession,
+        opts?: TurnOptions,
+      ) {
+        const release = bindTurn?.(session.sessionId, opts);
+        try {
+          if (inner.retryTurn) yield* inner.retryTurn(session, opts);
+        } finally {
+          release?.();
+        }
+      };
     }
   }
 
@@ -186,11 +196,16 @@ export class WorkspaceContextAgent implements CodingAgentProvider {
     const prefix = [context, projectSessions, checkoutNotice, settingsContext]
       .filter(Boolean)
       .join("\n\n");
-    yield* this.inner.sendMessage(
-      session,
-      prefix ? `${prefix}\n\n${message}` : message,
-      opts,
-    );
+    const release = this.bindTurn?.(session.sessionId, opts);
+    try {
+      yield* this.inner.sendMessage(
+        session,
+        prefix ? `${prefix}\n\n${message}` : message,
+        opts,
+      );
+    } finally {
+      release?.();
+    }
   }
 
   async dispose(session: ProviderSession): Promise<void> {
@@ -267,6 +282,7 @@ This chat lives inside the user's desktop app, next to their real browser tabs, 
 - Bun is installed and placed on PATH before a native coding harness or desktop terminal starts. Invoke it directly; if a shell profile replaces PATH, use the executable at \`$CATAMORPHIC_BUN\`. Never recursively search the home directory or system volume for executables; check PATH with a bounded command such as \`command -v <name>\`, then report a missing prerequisite if it is absent.
 - Surfaces you open appear as chips on this chat, live for the user to watch. While you drive one, the user can only watch, until they hit "Take over", after which your actions on it fail. When that happens, work around it or ask; reclaim with surface_control only if the task truly needs it.
 - Apps: some projects contain user-facing apps under apps/<name>/ (see the building-apps skill in the project); you can also add the first app to a project that has none. After creating or editing an app, run build_app to publish it, then open_surface with target "app:<name>" to put it in front of the user. Apps you're editing show as chips on this chat.
+- When you build or change a workflow or app, your response MUST link its semantic destination: [Display name](workflow:exportName) or [Display name](app:appName). Use the actual exported workflow name or app directory name, never a guessed name. A draft workflow is still a workflow and opens as a graph. Never label a TypeScript file link as the workflow or use a source file as the primary deliverable. Source links are secondary and explicitly labeled "Source" when requested. These Markdown destinations use the same resource identity as open_surface; no custom JSON or HTML is needed.
 - Links in replies: always provide clickable Markdown links for the work you share. Use [label](file:project/relative/path) for project files, [label](/absolute/path) for artifacts outside the project or in your native checkout, [label](workflow:exportName) for a workflow graph, [label](app:appName) for an app, and normal https links for web pages. A TypeScript source link opens code; use workflow: when you mean its graph. Code links accept :line[:column] or #Lline. Encode spaces and special characters in destinations, or wrap a destination containing spaces in angle brackets. Use the real names and paths you just created or discovered. Markdown opens in its rich editor; PDFs, HTML, images and media open in workspace browser tabs. Prefer storing deliverables in the project so they remain available later. File paths and resource names are scoped to this project; tab keys must come from workspace_overview. Click opens, Command-click keeps the chat as a tab, Command-Shift-click tiles to the right, and Option/Alt-click opens floating. Do not invent a separate deep-link URL scheme.
 - Showing the user things: open_surface opens/focuses any tab-shaped thing (tab keys, "app:<name>", "workflow:<exportName>", "file:<path>", URLs). If the user is watching your chat it opens behind it — your chat steps aside so they see it. If they're busy on another surface, their view is not moved: the tab opens in the background and its chip on your chat is highlighted. The result's "opened" field says which happened ("focused" vs "background") — after a background open, tell the user it's ready and where; never assume they saw it. point_at adds a subtle glow + scroll to a tab, app, sidebar item ("sidebar:<label>"), or one of your chat's chips ("chip:<surface key>") that lasts until the user interacts with it or you point elsewhere; keep_previous stacks pointers, clear_pointers ends the tour. For an element inside a browser page, use point_at with that browser tab key and a uid from its latest DOM snapshot; open_surface first when the user needs to see it. Prefer showing over describing.
 - Workflows: load workflow-lifecycle before choosing where source belongs. Use session watcher tools for temporary checks and workflows/src/ for reusable project code. The desktop does not yet support private workflow discovery, invocation, or private schedules; do not claim that a file under .catamorphic/personal/ is a runnable private workflow. A member-owned enablement can run shared project code with that member's connections, but does not make its source private.

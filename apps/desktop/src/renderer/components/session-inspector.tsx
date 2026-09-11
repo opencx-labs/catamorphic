@@ -3,6 +3,7 @@ import {
   Archive,
   ChevronDown,
   CircleDot,
+  CircleHelp,
   Ghost,
   GitBranch,
   GitFork,
@@ -29,6 +30,7 @@ const SOURCE_LABELS: Record<AgentSession["source"], string> = {
 export function SessionInspector({
   projectId,
   onOpenArtifact,
+  awaitingInput = false,
   session,
   fallbackTitle,
   agentName,
@@ -56,6 +58,7 @@ export function SessionInspector({
 }: {
   projectId?: string;
   onOpenArtifact?: (target: string) => void;
+  awaitingInput?: boolean;
   session: AgentSession | null | undefined;
   fallbackTitle: string;
   agentName: string;
@@ -81,19 +84,22 @@ export function SessionInspector({
   archived?: boolean;
   onOpenParent?: () => void;
 }) {
+  const busy = session?.running && !awaitingInput;
   const state = archived
     ? "Archived"
     : !session
       ? "New"
-      : session.running
-        ? "Working"
-        : session.attentionRequired
-          ? "Needs attention"
-          : session.status === "closed"
-            ? "Archived"
-            : session.resumable
-              ? "Paused"
-              : "Ready";
+      : awaitingInput
+        ? "Waiting for your answer"
+        : session.running
+          ? "Working"
+          : session.attentionRequired
+            ? "Needs attention"
+            : session.status === "closed"
+              ? "Archived"
+              : session.resumable
+                ? "Paused"
+                : "Ready";
   const source = incognito
     ? "This device"
     : session
@@ -162,12 +168,14 @@ export function SessionInspector({
             aria-hidden="true"
           >
             <LoaderCircle
-              className={`col-start-1 row-start-1 size-3 text-accent transition-opacity duration-200 ${session?.running ? "animate-spin opacity-100" : "opacity-0"}`}
+              className={`col-start-1 row-start-1 size-3 text-accent transition-opacity duration-200 ${busy ? "animate-spin opacity-100" : "opacity-0"}`}
             />
             <span
-              className={`col-start-1 row-start-1 transition-[opacity,transform] duration-200 ${session?.running ? "scale-75 opacity-0" : "scale-100 opacity-100"}`}
+              className={`col-start-1 row-start-1 transition-[opacity,transform] duration-200 ${busy ? "scale-75 opacity-0" : "scale-100 opacity-100"}`}
             >
-              {incognito ? (
+              {awaitingInput ? (
+                <CircleHelp className="size-3 text-accent" />
+              ) : incognito ? (
                 <Ghost className="size-3" />
               ) : (
                 <CircleDot className="size-3 text-accent" />

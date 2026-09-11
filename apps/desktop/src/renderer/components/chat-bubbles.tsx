@@ -169,7 +169,11 @@ function Bubble({
           aria-label={expanded ? `Minimize ${label}` : `Open ${label}`}
           aria-expanded={expanded}
         >
-          <SignalGlyph working={signals.working} className="size-4">
+          <SignalGlyph
+            working={signals.working}
+            awaitingInput={signals.awaitingInput}
+            className="size-4"
+          >
             <ChatGlyph icon={icon} fork={fork} className="size-4" />
           </SignalGlyph>
           <span className="absolute -right-0.5 -top-0.5">
@@ -437,7 +441,11 @@ export function ChatBubbles({
             aria-hidden={!collapsed}
             inert={!collapsed ? true : undefined}
           >
-            <SignalGlyph working={aggregate.working} className="size-4">
+            <SignalGlyph
+              working={aggregate.working}
+              awaitingInput={aggregate.awaitingInput}
+              className="size-4"
+            >
               <MessageSquare className="size-4" />
             </SignalGlyph>
             {stripEntries.length > 1 && (

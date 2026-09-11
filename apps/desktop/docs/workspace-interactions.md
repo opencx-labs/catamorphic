@@ -80,3 +80,30 @@ and bubbles retain their project's theme; the new-chat control follows the
 current project. Files, links and session controls route to their owning project,
 using the same resource-opening gestures as other workspace surfaces. Project
 switches use a 180ms, low-opacity accent tint; reduced motion disables it.
+
+## Search and resource references
+
+File discovery uses the command palette exclusively. Searchable sidebar section
+headers put a search button on the right, opening a palette scoped to that
+section's items and current filters. Do not add sidebar search inputs, a second
+file-picker modal, or an editor toolbar search button. Content search remains a
+separate palette mode. The "Ask agent" action names the default agent as secondary
+text and never echoes the draft message.
+
+Default sidebars do not include a project note. Notes are opt-in widgets over
+explicit existing documents, not filler in a new project's right sidebar.
+
+Agent replies use standard Markdown resource destinations:
+
+| Resource | Destination | Opens |
+|---|---|---|
+| Workflow, including drafts | `workflow:<exportName>` | Workflow graph |
+| App | `app:<appName>` | App surface |
+| Document or source | `file:<project-relative-path>` | Appropriate file surface |
+| Existing workspace surface | Its discovered tab key | That same surface |
+| Web page | `https://…` | Browser |
+
+Use actual discovered names and URL-encode destination characters. Agents must
+link workflow/app deliverables as those concepts. Do not label a TypeScript source
+link as the workflow. Source is an explicitly labeled secondary link when useful.
+Keep links aligned with `parseSurfaceLink`, `open_surface` and URL sanitization.

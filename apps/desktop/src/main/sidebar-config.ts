@@ -73,11 +73,10 @@ export const DEFAULT_SIDEBAR_CONFIG: SidebarConfig = {
   right: [
     {
       id: "companion",
-      title: "Activity and notes",
+      title: "Activity",
       icon: "Activity",
       sections: [
         { id: "activity", type: "activity" },
-        { id: "note", type: "note", title: "Project note" },
         { id: "changes", type: "git", hideEmpty: true },
       ],
     },

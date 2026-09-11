@@ -504,6 +504,58 @@ describe("agent session coordination", () => {
     );
   });
 
+  it("withdraws cancelled blocking questions and rejects stale answers", async () => {
+    const project = await projects.create(identity, {
+      name: "Cancelled consent",
+    });
+    const session = await sessions.create(identity, project.id);
+    const abort = new AbortController();
+    provider.questionTurn = async function* (options) {
+      await options.askQuestion?.({
+        requestId: "consent",
+        blocking: true,
+        signal: abort.signal,
+        questions: [
+          {
+            header: "Permission",
+            question: "May I update this file?",
+            multiSelect: false,
+            options: [],
+          },
+        ],
+      });
+      yield { type: "done" };
+    };
+    const turn = sessions.sendMessage(
+      identity,
+      project.id,
+      session.id,
+      "questions: consent",
+    );
+    await vi.waitFor(async () =>
+      expect(
+        (await sessions.get(identity, project.id, session.id)).questions,
+      ).toHaveLength(1),
+    );
+    const request = (await sessions.get(identity, project.id, session.id))
+      .questions?.[0];
+    if (!request) throw new Error("Consent was not persisted");
+    abort.abort();
+    await turn;
+    expect(
+      (await sessions.get(identity, project.id, session.id)).questions,
+    ).toEqual([]);
+    await expect(
+      answerReceiver.answerQuestion({
+        identity,
+        projectId: project.id,
+        sessionId: session.id,
+        requestId: request.requestId,
+        answer: "Allow once",
+      }),
+    ).rejects.toThrow();
+  });
+
   afterAll(async () => {
     await sql`drop schema if exists ${sql.id(schema)} cascade`.execute(db);
     await db.destroy();

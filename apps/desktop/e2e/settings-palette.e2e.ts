@@ -146,7 +146,7 @@ it("offers the actual desktop host skill and lets a project agent edit its scope
   await wait(`return input().placeholder==='Message the agent…'`);
   await type("E2E enable personal tab frame");
   await wait(
-    `return rows()[0]?.textContent.includes('E2E enable personal tab frame')`,
+    `return rows()[0]?.textContent.includes('Ask agent') && !rows()[0]?.textContent.includes('E2E enable personal tab frame')`,
   );
   await run(`key('Enter')`);
   await app.waitFor(

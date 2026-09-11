@@ -1,8 +1,9 @@
 import { GitPullRequest } from "lucide-react";
-import { useEffect, useState } from "react";
+import { type RefObject, useEffect, useState } from "react";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { desktopApi, type PullRequestSummary } from "../lib/desktop-api.js";
 import { useAppPreferences } from "../lib/use-app-preferences.js";
+import type { PaletteItem } from "./command-palette.js";
 import { OpenResourceButton } from "./open-resource-button.js";
 import type { WorkspaceTab } from "./workspace-tabs.js";
 
@@ -12,10 +13,12 @@ const REFRESH_MS = 60_000;
 
 export function PrsNav({
   projectId,
+  searchItems,
   onOpenDiff,
   onEmptyChange,
 }: {
   projectId: string;
+  searchItems?: RefObject<() => Promise<PaletteItem[]>>;
   onOpenDiff: (tab: WorkspaceTab, mode?: OpenMode) => void;
   onOpenUrl: (url: string, mode: OpenMode) => void;
   /** Reports emptiness up so hide-when-empty sections can drop entirely. */
@@ -25,7 +28,6 @@ export function PrsNav({
   const filter = prefs.prDefaultView;
   const setFilter = (prDefaultView: "all" | "for-you" | "created") =>
     void update({ prDefaultView });
-  const [search, setSearch] = useState("");
   const [prs, setPrs] = useState<PullRequestSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
@@ -73,6 +75,38 @@ export function PrsNav({
     };
   }, [projectId, refresh, prefs.githubCliEnabled]);
 
+  const inScope = (items: PullRequestSummary[]) =>
+    items.filter(
+      (pr) =>
+        filter === "all" ||
+        (filter === "created"
+          ? pr.author === pr.viewerLogin
+          : (pr.reviewRequestedForViewer ??
+            pr.requestedReviewers?.includes(pr.viewerLogin ?? ""))),
+    );
+  const filtered = inScope(prs ?? []);
+  const openReview = (pr: PullRequestSummary, mode?: OpenMode) =>
+    onOpenDiff(
+      {
+        kind: "diff",
+        name: `review:${pr.number}`,
+        label: `#${pr.number} ${pr.title}`,
+        projectId,
+        source: { type: "review", prNumber: pr.number },
+      },
+      mode,
+    );
+  if (searchItems)
+    searchItems.current = async () =>
+      inScope(await desktopApi.prList(projectId)).map((pr) => ({
+        id: `pr:${pr.number}`,
+        icon: GitPullRequest,
+        label: `#${pr.number} ${pr.title}`,
+        detail: pr.author,
+        keywords: [],
+        kind: "navigate",
+        run: (mode) => openReview(pr, mode),
+      }));
   if (
     error?.includes("[github-cli-required]") ||
     error?.includes("[github-cli-disabled]")
@@ -131,17 +165,6 @@ export function PrsNav({
   if (prs.length === 0) {
     return <p className="sidebar-empty-state">No open pull requests.</p>;
   }
-  const filtered = prs.filter(
-    (pr) =>
-      (filter === "all" ||
-        (filter === "created"
-          ? pr.author === pr.viewerLogin
-          : (pr.reviewRequestedForViewer ??
-            pr.requestedReviewers?.includes(pr.viewerLogin ?? "")))) &&
-      `${pr.number} ${pr.title} ${pr.author}`
-        .toLowerCase()
-        .includes(search.toLowerCase()),
-  );
   return (
     <div className="flex flex-col gap-2">
       {preferencesError && (
@@ -166,13 +189,6 @@ export function PrsNav({
           </button>
         ))}
       </fieldset>
-      <input
-        aria-label="Find pull requests"
-        placeholder="Find pull requests…"
-        value={search}
-        onChange={(event) => setSearch(event.target.value)}
-        className="field mx-2 min-w-0 rounded-md px-2 py-1 text-xs"
-      />
       {filter === "for-you" &&
         prs.some((pr) => pr.reviewRequestsUnavailable) && (
           <p role="status" className="px-2 text-xs text-warning">
@@ -195,18 +211,7 @@ export function PrsNav({
           <li key={pr.number}>
             <OpenResourceButton
               aria-label={`Open review #${pr.number}: ${pr.title}`}
-              onOpen={(mode) =>
-                onOpenDiff(
-                  {
-                    kind: "diff",
-                    name: `review:${pr.number}`,
-                    label: `#${pr.number} ${pr.title}`,
-                    projectId,
-                    source: { type: "review", prNumber: pr.number },
-                  },
-                  mode,
-                )
-              }
+              onOpen={(mode) => openReview(pr, mode)}
               className="flex w-full min-w-0 items-start gap-2 rounded-md px-2 py-2 text-left hover:bg-bg-overlay"
             >
               <GitPullRequest className="mt-0.5 size-4 shrink-0 text-fg-muted" />

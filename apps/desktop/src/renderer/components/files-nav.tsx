@@ -1,10 +1,8 @@
 import { ChevronRight, File, Folder } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { fileSearchScore } from "../../shared/file-search-score.js";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { useLocalProjectFiles } from "../lib/local-project-files.js";
-import { ActionSearchInput } from "./action-search-input.js";
 import { LazyList } from "./lazy-list.js";
 import { OpenResourceButton } from "./open-resource-button.js";
 
@@ -28,7 +26,6 @@ export function FilesNav({
   onOpen: (path: string, mode?: OpenMode) => void;
   onEmptyChange?: (empty: boolean) => void;
 }) {
-  const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(
     () => new Set(["store"]),
   );
@@ -51,20 +48,6 @@ export function FilesNav({
     [contentOnly, query.data],
   );
   useEffect(() => onEmptyChange?.(tree.length === 0), [tree, onEmptyChange]);
-  const matches = useMemo(
-    () =>
-      !search
-        ? []
-        : (query.data ?? [])
-            .filter((entry) => isVisibleProjectFile(entry.path, contentOnly))
-            .map((entry) => ({
-              ...entry,
-              score: fileSearchScore(entry.path, search),
-            }))
-            .filter((entry) => entry.score > 0)
-            .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path)),
-    [query.data, search, contentOnly],
-  );
   const rows = useMemo(() => {
     const result: { node: FileTreeNode; depth: number }[] = [];
     const visit = (nodes: FileTreeNode[], depth: number) => {
@@ -74,25 +57,12 @@ export function FilesNav({
           visit(node.children, depth + 1);
       }
     };
-    if (search)
-      return matches.map((entry) => ({
-        node: { name: entry.path, path: entry.path },
-        depth: 0,
-      }));
     visit(tree, 0);
     return result;
-  }, [tree, expanded, search, matches]);
+  }, [tree, expanded]);
   if (query.isLoading) return <p className="sidebar-empty-state">Loading…</p>;
   return (
     <div className="flex flex-col gap-2" data-testid="files-nav">
-      <ActionSearchInput
-        action="search-files"
-        aria-label="Find files"
-        placeholder="Find files…"
-        value={search}
-        onChange={(event) => setSearch(event.target.value)}
-        className="field mx-2 min-w-0 rounded-md px-2 py-1 text-xs"
-      />
       <LazyList
         items={rows}
         itemKey={(row) => row.node.path}
@@ -115,9 +85,6 @@ export function FilesNav({
           />
         )}
       />
-      {search && matches.length === 0 && (
-        <p className="sidebar-empty-state">No matching files.</p>
-      )}
     </div>
   );
 }

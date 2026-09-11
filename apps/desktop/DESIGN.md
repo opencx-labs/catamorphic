@@ -1,6 +1,6 @@
 # Catamorphic Desktop — Design System
 
-App identity uses canonical semantic icons (ADR 0124). Review, dashboard,
+App identity uses canonical semantic icons (ADR 0125). Review, dashboard,
 report, tracker, form, and calculator each have one monochrome glyph across
 tabs, lists, and chat surfaces. Agents choose a type through set_app_presentation.
 Unspecified or unknown types retain the grid icon. Icon changes do not rebuild
@@ -334,10 +334,19 @@ use the available viewport and refresh after successful rebuilds.
 
 Review guides are generated apps using the shared review kit. Preserve Osama's
 Overview, Guide, Changes and Discussion hierarchy and use host design tokens.
-Real GitHub actions remain host-owned. See ADR 0123.
+Real GitHub actions remain host-owned. See ADR 0124.
 
-Review components are installed source from the code-review registry pack (ADR 0125).
+Review components are installed source from the code-review registry pack (ADR 0126).
 Agents reuse project components first, then fetch the pack and adapt local source.
 The desktop consumes the same pack; its components.read capability exposes registry items
 and usage notes without changing the project. Temporary reviews retain their pack
 files with the artifact. Future packs use the same registry model.
+### 2026-09-10: Conversation consent and one search surface
+
+[ADR 0123](../../docs/decisions/0123-desktop-consent-search-and-resource-links.md)
+removes default project notes and duplicate file pickers. Sidebar searches open
+scoped palettes from header buttons. "Ask agent" stays short and names the agent.
+Consent appears as a durable question in its chat. Workflow and app links identify
+and open their actual surfaces. Editable code derives syntax, background, gutters,
+selection, cursor, diagnostics and widgets from the current app theme, with bundled
+Shiki grammars. Never ship a preset editor background that ignores the app theme.

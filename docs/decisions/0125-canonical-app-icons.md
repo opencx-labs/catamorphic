@@ -1,4 +1,4 @@
-# 0124: Canonical semantic app icons
+# 0125: Canonical semantic app icons
 
 - **Status:** Accepted
 - **Date:** 2026-09-11

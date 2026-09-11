@@ -152,3 +152,9 @@ and headless hooks; do not move the inspector back into `@catamorphic/ui`
 last valid preview while code is incomplete. The visible
 `e2e/workflows.e2e.ts` suite covers live source polling, graph transitions,
 source access, draft restoration and conflicts, and contextual agent editing.
+
+Search, consent and resource links follow ADR 0123 and the linked workspace/chat
+contracts. Do not add duplicate file pickers, sidebar search inputs, default note
+filler, or global alerts for session approvals. Agent deliverables use semantic
+workflow/app links. Editable code must derive its palette from the resolved host
+theme. Verify waiting requests across tab switches, reload and interruption.

@@ -1,4 +1,4 @@
-import { FileText } from "lucide-react";
+import { AppWindow, FileText, Workflow } from "lucide-react";
 import type { ReactNode } from "react";
 import type { OpenModifiers } from "../../shared/open-mode";
 import { parseSurfaceLink } from "../lib/surface-link";
@@ -17,6 +17,26 @@ export function ResponseLink({
   onOpen: (href: string, modifiers: OpenModifiers) => void;
 }) {
   const target = parseSurfaceLink(href);
+  if (target?.kind === "workflow" || target?.kind === "app") {
+    const Icon = target.kind === "workflow" ? Workflow : AppWindow;
+    return (
+      <a
+        href={href}
+        data-response-link={target.kind}
+        className={`inline-flex max-w-full items-baseline gap-1 px-1.5 align-baseline no-underline ${PILL_SURFACE}`}
+        onClick={(event) => {
+          event.preventDefault();
+          onOpen(href, event);
+        }}
+      >
+        <Icon className="size-3 shrink-0 self-center" />
+        {children}
+        <span className="text-[10px] text-fg-muted">
+          {target.kind === "workflow" ? "Workflow" : "App"}
+        </span>
+      </a>
+    );
+  }
   const file = target?.kind === "file";
   const content = file ? (
     <FilePreview filePath={target.path} />

@@ -2696,6 +2696,7 @@ function ChatDockContent({
               <SessionInspector
                 projectId={projectId}
                 onOpenArtifact={(target) => onLinkClick?.(target, "tab")}
+                awaitingInput={awaitingInput}
                 session={chat.session}
                 fallbackTitle={title}
                 harness={activeAgent?.harness ?? chat.session?.provider}
@@ -2946,7 +2947,9 @@ function ChatDockContent({
               className="min-h-0 flex-1"
               contentClassName={isTab ? "mx-auto w-full max-w-4xl pt-12" : ""}
               messages={messages}
-              activity={chat.connectionLost ? undefined : activity}
+              activity={
+                chat.connectionLost || awaitingInput ? undefined : activity
+              }
               queue={chat.queue}
               onUpdateQueued={chat.updateQueued}
               onRemoveQueued={chat.removeQueued}

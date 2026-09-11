@@ -1,10 +1,10 @@
 # Distribution update
 
-The review-package distribution below is superseded by ADR 0125. Review components now install from the code-review registry pack as editable source.
+The review-package distribution below is superseded by ADR 0126. Review components now install from the code-review registry pack as editable source.
 
 # Session artifacts and generated review apps
 
-Accepted 2026-09-11. Architecture: [ADR 0123](../../decisions/0123-session-artifacts.md).
+Accepted 2026-09-11. Architecture: [ADR 0124](../../decisions/0124-session-artifacts.md).
 
 ## Source and lifecycle
 

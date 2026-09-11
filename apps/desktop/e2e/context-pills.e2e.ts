@@ -594,30 +594,19 @@ describe("context pills", () => {
       }).then((r) => r.status);
     })()`);
     expect(seeded).toBe(200);
-    // Minimize the floating chat so the editor gets the front; open the editor.
+    // Minimize the chat and find the file through the shared palette.
     await run(`pressKey('m', { metaKey: true }); return true;`);
-    await run(`pressKey('p', { metaKey: true }); return true;`);
-    await runWait(`return !!$('textarea[placeholder*="Search or ask"]');`, {
-      label: "palette",
+    await run(
+      `$('[data-sidebar-search="search-files"]').click(); return true;`,
+    );
+    await runWait(`return !!$('textarea[placeholder="Search filenames…"]');`, {
+      label: "Files palette",
     });
     await run(
-      `setReactValue($('textarea[placeholder*="Search or ask"]'), 'new editor'); return true;`,
+      `setReactValue($('textarea[placeholder="Search filenames…"]'), 'sel.md'); return true;`,
     );
     await runWait(
-      `if (!byText('button', 'New editor')) return false;
-       $('textarea[placeholder*="Search or ask"]').dispatchEvent(
-         new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
-       return true;`,
-      { label: "run New editor" },
-    );
-    await runWait(`return !!$('input[placeholder*="Open a file"]');`, {
-      label: "quick-open",
-    });
-    await run(
-      `setReactValue($('input[placeholder*="Open a file"]'), 'sel.md'); return true;`,
-    );
-    await runWait(
-      `const row = byText('li button', 'sel.md'); if (!row) return false; row.click(); return true;`,
+      `const row=byText('[role="option"]','sel.md'); if(!row) return false; row.dispatchEvent(new MouseEvent('mousedown',{button:0,bubbles:true,cancelable:true})); return true;`,
       { label: "sel.md row" },
     );
     await runWait(

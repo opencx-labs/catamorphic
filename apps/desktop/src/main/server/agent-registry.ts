@@ -25,6 +25,7 @@ import type {
   ToolPermissionDecision,
   ToolPermissionHandler,
   ToolPolicyAnnotations,
+  TurnOptions,
 } from "@catamorphic/sandbox";
 import { narrowingLayer, PROJECT_TOOLS_SERVER_KEY } from "@catamorphic/sandbox";
 import type { WorkspaceBridge } from "../agent-bridge.js";
@@ -58,6 +59,7 @@ import {
   PersonaCodingAgent,
   parseProjectAgentId,
 } from "./project-agents.js";
+import { askToolConsent } from "./tool-consent.js";
 import type { ProjectSessionContext } from "./workspace-context-agent.js";
 import { WorkspaceContextAgent } from "./workspace-context-agent.js";
 import {
@@ -546,6 +548,22 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
    * connection's policy (the profile ceiling) so the next provider build
    * and every other agent see it; the asking harness remembers it too.
    */
+  private readonly sessionQuestions = new Map<
+    string,
+    NonNullable<TurnOptions["askQuestion"]>
+  >();
+  private bindSessionQuestions(
+    sessionId: string,
+    options?: TurnOptions,
+  ): () => void {
+    if (options?.askQuestion)
+      this.sessionQuestions.set(sessionId, options.askQuestion);
+    return () => {
+      if (this.sessionQuestions.get(sessionId) === options?.askQuestion)
+        this.sessionQuestions.delete(sessionId);
+    };
+  }
+
   private toolPermissionHandler(
     config: AgentConfig,
     profileId: string,
@@ -555,53 +573,61 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     if (!bridge && !broker) return undefined;
     return async (request, signal) => {
       if (signal?.aborted) return { decision: "deny" };
-      // Race the desktop consent modal against the HTTP broker (remote
-      // companion clients): the first REAL answer wins, and the loser is
-      // withdrawn — the modal via abort, the broker entry via answer().
-      const decision = await new Promise<ToolPermissionDecision>((resolve) => {
-        let settled = false;
-        const abortModal = new AbortController();
-        const ask = broker?.open(request, config.name);
-        const settle = (
-          value: ToolPermissionDecision,
-          source: "bridge" | "broker",
-        ) => {
-          if (settled) return;
-          settled = true;
-          signal?.removeEventListener("abort", cancel);
-          if (source === "bridge" && ask) broker?.answer(ask.id, value);
-          if (source === "broker") abortModal.abort();
-          resolve(value);
-        };
-        const cancel = () => {
-          abortModal.abort();
-          settle({ decision: "deny" }, "bridge");
-        };
-        signal?.addEventListener("abort", cancel, { once: true });
-        if (signal?.aborted) {
-          cancel();
-          return;
-        }
-        void ask?.promise.then((value) => settle(value, "broker"));
-        if (bridge) {
-          void bridge
-            .toolPermission(config.name, request, abortModal.signal)
-            .then((value) => {
-              // Null = no window, cancelled, or timed out. With a broker
-              // present its own timeout produces the deny (and a paired
-              // phone may still answer); without one, deny here, because
-              // a tool call must never hang on a missing UI.
-              if (value) settle(value, "bridge");
-              else if (!ask) settle({ decision: "deny" }, "bridge");
-            })
-            .catch((cause) => {
-              // A throwing bridge must not leave the race unsettled (and
-              // must not surface as an unhandled rejection in main).
-              console.warn("[desktop] tool-permission prompt failed:", cause);
+      // Session consent uses the durable chat question. Sessionless host
+      // requests race the desktop bridge and companion broker; the first
+      // answer withdraws the other prompt.
+      const askQuestion = request.sessionId
+        ? this.sessionQuestions.get(request.sessionId)
+        : undefined;
+      const decision: ToolPermissionDecision = askQuestion
+        ? await askToolConsent({ askQuestion, request, signal })
+        : await new Promise<ToolPermissionDecision>((resolve) => {
+            let settled = false;
+            const abortModal = new AbortController();
+            const ask = broker?.open(request, config.name);
+            const settle = (
+              value: ToolPermissionDecision,
+              source: "bridge" | "broker",
+            ) => {
+              if (settled) return;
+              settled = true;
+              signal?.removeEventListener("abort", cancel);
+              if (source === "bridge" && ask) broker?.answer(ask.id, value);
+              if (source === "broker") abortModal.abort();
+              resolve(value);
+            };
+            const cancel = () => {
+              abortModal.abort();
               settle({ decision: "deny" }, "bridge");
-            });
-        }
-      });
+            };
+            signal?.addEventListener("abort", cancel, { once: true });
+            if (signal?.aborted) {
+              cancel();
+              return;
+            }
+            void ask?.promise.then((value) => settle(value, "broker"));
+            if (bridge) {
+              void bridge
+                .toolPermission(config.name, request, abortModal.signal)
+                .then((value) => {
+                  // Null = no window, cancelled, or timed out. With a broker
+                  // present its own timeout produces the deny (and a paired
+                  // phone may still answer); without one, deny here, because
+                  // a tool call must never hang on a missing UI.
+                  if (value) settle(value, "bridge");
+                  else if (!ask) settle({ decision: "deny" }, "bridge");
+                })
+                .catch((cause) => {
+                  // A throwing bridge must not leave the race unsettled (and
+                  // must not surface as an unhandled rejection in main).
+                  console.warn(
+                    "[desktop] tool-permission prompt failed:",
+                    cause,
+                  );
+                  settle({ decision: "deny" }, "bridge");
+                });
+            }
+          });
       if (signal?.aborted) return { decision: "deny" };
       if (decision.decision === "allow" && decision.remember === "always") {
         const connectionId = this.livePolicies(config, profileId).connectionIds[
@@ -667,7 +693,16 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       context.projectId,
       context.sessionId ?? "",
     );
-    return url ? { [WORKFLOWS_SERVER_KEY]: { transport: "http", url } } : {};
+    // The project endpoint enforces caller scope and capability policy itself.
+    return url
+      ? {
+          [WORKFLOWS_SERVER_KEY]: {
+            transport: "http",
+            url,
+            defaultToolsApprovalMode: "approve",
+          },
+        }
+      : {};
   }
 
   private freshDefaults(config: AgentConfig) {
@@ -1017,6 +1052,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         (projectId) => this.settingsContext(projectId, config),
         this.deps.workspaceBridge?.elicit.bind(this.deps.workspaceBridge),
         this.deps.projectMcpUrl,
+        (sessionId, options) => this.bindSessionQuestions(sessionId, options),
       );
       return {
         id: config.id,
@@ -1172,8 +1208,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                     config,
                     profileId,
                   ),
-                  mcpElicitationForSession: () =>
+                  mcpElicitationForSession: ({ sessionId }) =>
                     createCodexElicitation({
+                      askQuestion: () => this.sessionQuestions.get(sessionId),
                       elicit: this.deps.workspaceBridge?.elicit.bind(
                         this.deps.workspaceBridge,
                       ),
@@ -1283,6 +1320,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           Promise.resolve(null),
       },
       (projectId) => this.settingsContext(projectId, opts.config),
+      (sessionId, options) => this.bindSessionQuestions(sessionId, options),
     );
   }
 
