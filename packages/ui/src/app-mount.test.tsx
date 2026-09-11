@@ -1,6 +1,12 @@
-import { APP_PROTOCOL_VERSION } from "@catamorphic/app";
+import { APP_PROTOCOL_VERSION, type AppHostTheme } from "@catamorphic/app";
 import { CatamorphicProvider } from "@catamorphic/react";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppMount } from "./app-mount.js";
 
@@ -47,16 +53,25 @@ function makeApiClient(overrides?: {
   };
 }
 
-function mount(apiClient: ReturnType<typeof makeApiClient>) {
-  return render(
+function mount(
+  apiClient: ReturnType<typeof makeApiClient>,
+  theme?: AppHostTheme,
+) {
+  const content = (theme?: AppHostTheme) => (
     <CatamorphicProvider apiClient={apiClient as never}>
       <AppMount
         projectId={PROJECT_ID}
         appName="ops-dashboard"
         context={{ tenantId: "t-1", user: { id: "viewer-1" } }}
+        theme={theme}
       />
-    </CatamorphicProvider>,
+    </CatamorphicProvider>
   );
+  const result = render(content(theme));
+  return {
+    ...result,
+    setTheme: (theme: AppHostTheme) => result.rerender(content(theme)),
+  };
 }
 
 /**
@@ -90,6 +105,44 @@ async function mountReadyFrame(apiClient: ReturnType<typeof makeApiClient>) {
 }
 
 describe("AppMount", () => {
+  it("delivers the current theme on load, on switches and when returning to the initial theme", async () => {
+    const initial: AppHostTheme = {
+      appearance: "light",
+      colors: { bg: "#ffffff" },
+    };
+    const changed: AppHostTheme = {
+      appearance: "dark",
+      colors: { bg: "#121212" },
+    };
+    const { container, setTheme } = mount(makeApiClient(), initial);
+    await waitFor(() =>
+      expect(container.querySelector("iframe")).not.toBeNull(),
+    );
+    const frame = container.querySelector("iframe");
+    if (!frame?.contentWindow) throw new Error("no frame window");
+    const src = frame.src;
+    const post = vi.spyOn(frame.contentWindow, "postMessage");
+    setTheme(changed);
+    expect(post).toHaveBeenCalledWith(
+      { catamorphicApp: APP_PROTOCOL_VERSION, kind: "theme", theme: changed },
+      "*",
+    );
+    post.mockClear();
+    // A guest load after the update must not stay on the URL's initial theme.
+    fireEvent.load(frame);
+    expect(post).toHaveBeenCalledWith(
+      { catamorphicApp: APP_PROTOCOL_VERSION, kind: "theme", theme: changed },
+      "*",
+    );
+    post.mockClear();
+    setTheme(initial);
+    expect(post).toHaveBeenCalledWith(
+      { catamorphicApp: APP_PROTOCOL_VERSION, kind: "theme", theme: initial },
+      "*",
+    );
+    expect(frame.src).toBe(src);
+  });
+
   it("navigates the frame to the guest URL with the theme riding along", async () => {
     const apiClient = makeApiClient();
     const { container } = render(
