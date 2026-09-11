@@ -1,4 +1,4 @@
-# 0127 - Isolated desktop tests and CI sharding
+# 0129 - Isolated desktop tests and CI sharding
 
 - **Status:** Accepted
 - **Date:** 2026-09-11

@@ -168,6 +168,22 @@ export class FriendlyAgentErrors implements CodingAgentProvider {
   ): AsyncIterable<AgentEvent> {
     for await (const event of events) {
       if (event.type === "error" && event.content) {
+        // A different native client owns this history. Retrying automatically
+        // or silently re-anchoring it would bypass that client's ownership.
+        if (
+          this.providerLabel === "Codex" &&
+          /^thread [0-9a-f-]+ already has an active writer$/i.test(
+            event.content.trim(),
+          )
+        ) {
+          yield {
+            ...event,
+            errorKind: undefined,
+            content:
+              "This chat is open in another Codex window or process. Close it there, then retry here. Your conversation is saved.",
+          };
+          continue;
+        }
         const kind = event.errorKind ?? classifyAgentError(event.content);
         if (kind) {
           yield {

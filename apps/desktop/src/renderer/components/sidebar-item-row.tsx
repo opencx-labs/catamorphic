@@ -346,11 +346,8 @@ export function SidebarItemRow<
               }`}
               aria-expanded={expanded}
               aria-current={active || undefined}
-              aria-describedby={
-                previewEnabled && !previewContent ? previewId : undefined
-              }
               aria-details={
-                previewContent && previewOpen ? previewId : undefined
+                previewEnabled && previewOpen ? previewId : undefined
               }
             >
               {IconComponent ? (

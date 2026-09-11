@@ -39,6 +39,9 @@ export interface UseAgentChatOptions {
    * sessions are unaffected — switch those via `useUpdateAgentSession`.
    */
   agentId?: string;
+  /** Per-session overrides captured when the first message creates the session. */
+  model?: string;
+  effort?: AgentSessionDetail["modelEffort"];
   /** Logical Environment for a lazily created session. */
   environment?: string;
   /** Surface creating a lazy session. Informational provenance only. */
@@ -303,6 +306,8 @@ export function useAgentChat(
       sessionCreationRef.current = createSession
         .mutateAsync({
           ...(agentIdRef.current ? { agentId: agentIdRef.current } : {}),
+          ...(options.model ? { model: options.model } : {}),
+          ...(options.effort ? { effort: options.effort } : {}),
           ...(options.environment ? { environment: options.environment } : {}),
           ...(options.source ? { source: options.source } : {}),
         })

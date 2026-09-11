@@ -2760,7 +2760,7 @@ export function App({
       ...ws,
       chats: ws.chats.map((candidate) =>
         candidate.localId === chat.localId
-          ? { ...candidate, agentId }
+          ? { ...candidate, agentId, model: undefined }
           : candidate,
       ),
     }));
@@ -2773,6 +2773,17 @@ export function App({
     );
     if (chat?.sessionId) {
       updateSession.mutate({ sessionId: chat.sessionId, model: model || null });
+      return;
+    }
+    if (chat) {
+      updateWorkspace((ws) => ({
+        ...ws,
+        chats: ws.chats.map((candidate) =>
+          candidate.localId === chat.localId
+            ? { ...candidate, model: model || undefined }
+            : candidate,
+        ),
+      }));
       return;
     }
     void desktopApi.agentsUpdate(agentId, { model });
@@ -2811,6 +2822,17 @@ export function App({
     );
     if (chat?.sessionId) {
       updateSession.mutate({ sessionId: chat.sessionId, effort });
+      return;
+    }
+    if (chat) {
+      updateWorkspace((ws) => ({
+        ...ws,
+        chats: ws.chats.map((candidate) =>
+          candidate.localId === chat.localId
+            ? { ...candidate, effort: effort ?? undefined }
+            : candidate,
+        ),
+      }));
       return;
     }
     // No focused session: the effort applies to the effective default
@@ -3863,7 +3885,10 @@ export function App({
           );
           const entry: TerminalEntry = {
             localId,
-            title: "Agent terminal",
+            title:
+              typeof params.title === "string" && params.title
+                ? params.title
+                : "Agent terminal",
             chatLocalId,
             attachSessionId: String(params.terminalId),
             agentControlled: true,
@@ -4423,13 +4448,19 @@ export function App({
         kind: "browser",
         label: entry?.title || entry?.url || "Page",
         faviconUrl: entry?.faviconUrl,
+        url: entry?.url,
       };
     }
     if (key.startsWith("terminal:")) {
       const entry = workspace.terminals.find(
         (terminal) => terminalTabKey(terminal.localId) === key,
       );
-      return { key, kind: "terminal", label: entry?.title || "Terminal" };
+      return {
+        key,
+        kind: "terminal",
+        label: entry?.title || "Terminal",
+        terminalSessionId: entry?.ptySessionId ?? entry?.attachSessionId,
+      };
     }
     if (key.startsWith("editor:")) {
       const entry = workspace.editors.find(
@@ -4439,6 +4470,7 @@ export function App({
         key,
         kind: "editor",
         label: entry?.filePath?.split("/").at(-1) || "Editor",
+        filePath: entry?.filePath ?? undefined,
       };
     }
     if (key.startsWith("chat:")) {
@@ -4502,6 +4534,7 @@ export function App({
           kind: "browser" as const,
           label: browser.title || browser.url || "Page",
           faviconUrl: browser.faviconUrl,
+          url: browser.url,
           active: Boolean(browser.agentControlled),
           removable: true,
         })),
@@ -4511,6 +4544,8 @@ export function App({
           key: terminalTabKey(terminal.localId),
           kind: "terminal" as const,
           label: terminal.title || "Terminal",
+          description: terminal.initialCommand,
+          terminalSessionId: terminal.ptySessionId ?? terminal.attachSessionId,
           // The spinner tracks the COMMAND, not the shell: busy means a
           // foreground process is actually running in there right now.
           active: terminal.busy === true,
@@ -4522,6 +4557,7 @@ export function App({
           key: editorTabKey(editor.localId),
           kind: "editor" as const,
           label: editor.filePath?.split("/").at(-1) || "Editor",
+          filePath: editor.filePath ?? undefined,
           removable: true,
         })),
     ];
@@ -4636,8 +4672,12 @@ export function App({
     focusedChat: focusedChat
       ? {
           agentId: focusedSession?.agentId ?? focusedChat.agentId ?? null,
-          model: focusedSession?.model ?? null,
-          effort: focusedSession?.modelEffort ?? null,
+          model:
+            (focusedSession ? focusedSession.model : focusedChat.model) ?? null,
+          effort:
+            (focusedSession
+              ? focusedSession.modelEffort
+              : focusedChat.effort) ?? null,
         }
       : null,
     onPickDefaultAgent: pickDefaultAgent,

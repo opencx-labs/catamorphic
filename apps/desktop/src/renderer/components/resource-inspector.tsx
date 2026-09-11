@@ -80,8 +80,12 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
   pinOnClick = false,
   openRequest,
   onOpen,
+  disabled = false,
+  testId,
 }: {
   label: string;
+  disabled?: boolean;
+  testId?: string;
   children: (props: ResourceInspectorTriggerProps<T>) => ReactNode;
   content: ReactNode | ((dismiss: () => void) => ReactNode);
   delayMs?: number;
@@ -114,7 +118,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
   }, [open]);
 
   const show = useCallback(() => {
-    if (dragging.current) return;
+    if (dragging.current || disabled) return;
     const rect = triggerRef.current?.getBoundingClientRect();
     if (!rect) return;
     setAnchor({
@@ -125,7 +129,14 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
     });
     setMounted(true);
     setOpen(true);
-  }, []);
+  }, [disabled]);
+  useEffect(() => {
+    if (!disabled) return;
+    clearTimeout(openTimer.current);
+    clearTimeout(closeTimer.current);
+    setOpen(false);
+    setMounted(false);
+  }, [disabled]);
   useEffect(() => {
     const start = () => {
       dragging.current = true;
@@ -285,6 +296,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
       })}
       {mounted && anchor && (
         <InspectorPortal
+          testId={testId}
           id={id}
           label={label}
           anchor={anchor}

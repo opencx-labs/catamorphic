@@ -23,7 +23,7 @@ UI work. Every interaction matters; this is a polished product, not a demo.
 Main-process map (`src/main/`): `server/` embeds core (boot, agent
 registry, project agents ADR 0050, workspace tools, triggers, e2e fakes);
 `agent-bridge.ts` connects agent sessions to renderer surfaces;
-`terminal.ts` + `terminal-text.ts` + `shell-integration.ts` are the PTY
+`terminal.ts` + `shared/terminal-text.ts` + `shell-integration.ts` are the PTY
 stack; `git-view.ts` is the system-git read surface (worktrees, status,
 diffs); `browser*.ts`, `profiles.ts`, `connections-store.ts`,
 `mcp-apps.ts`, `sidebar-config.ts`, `project-manifest.ts`, and
@@ -84,7 +84,7 @@ may omit its setup. Keep teardown through app Quit and require exit code 0.
 SIGKILL is reserved for explicit crash-recovery tests. Never suppress crash alerts
 or disable CrashReporter to hide teardown errors.
 
-Automated tests own a separate desktop (ADR 0127). `test:e2e` builds a cached
+Automated tests own a separate desktop (ADR 0129). `test:e2e` builds a cached
 Linux Docker image from this worktree, then runs all suites on a private Xvfb
 screen with Openbox. Windows are shown, focusable, and accept Chromium input
 normally. No host display or clipboard is connected. Logs and JUnit results

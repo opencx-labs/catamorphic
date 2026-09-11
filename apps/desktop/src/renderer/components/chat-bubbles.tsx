@@ -1,5 +1,11 @@
 import { ChevronsRight, MessageSquare, Plus, X } from "lucide-react";
-import { type CSSProperties, useEffect, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  type DOMAttributes,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import type { ChatSessionMenuEntry } from "../lib/chat-session-actions.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
 import type { ChatDockEntry } from "./chat-dock";
@@ -13,7 +19,9 @@ import { MenuPortal } from "./sidebar-item-row.js";
 const BUBBLE_HINT_DELAY_MS = 100;
 
 export interface ChatBubblesProps {
-  dragOffset?: number;
+  dragLeft?: number | null;
+  alignment?: "edge" | "center";
+  dragHandlers?: DOMAttributes<HTMLButtonElement>;
   newChatProjectName?: string;
   side?: "left" | "right";
   themes?: Record<string, CSSProperties>;
@@ -214,7 +222,9 @@ function Bubble({
  * showing aggregate activity (spinner) and unread indicators.
  */
 export function ChatBubbles({
-  dragOffset = 0,
+  dragLeft = null,
+  alignment = "edge",
+  dragHandlers,
   newChatProjectName,
   side = "right",
   themes,
@@ -342,21 +352,26 @@ export function ChatBubbles({
   };
 
   return (
-    <div
-      style={{ transform: `translateX(${dragOffset}px)` }}
-      className="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex justify-center pb-3"
-    >
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex justify-center pb-3">
       {/* The pill slides between centered (expanded) and right-docked
           (collapsed) via left+transform, both animatable. */}
       <div
-        className={`pointer-events-auto absolute bottom-3 flex items-center rounded-full border border-border bg-bg-raised shadow-2xl transition-[left,translate,padding] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+        data-dock-rail
+        data-dock-collapsed={collapsed}
+        data-dock-dragging={dragLeft !== null || undefined}
+        style={
+          dragLeft === null ? undefined : { left: dragLeft, translate: "0" }
+        }
+        className={`pointer-events-auto absolute bottom-3 flex items-center rounded-full border border-border bg-bg-raised shadow-2xl ${dragLeft === null ? "transition-[left,translate,padding] duration-200" : "transition-none"} ease-[cubic-bezier(0.2,0,0,1)] ${
           collapsed
             ? side === "left"
               ? "left-8 p-1"
               : "left-full -translate-x-[calc(100%+32px)] p-1"
-            : side === "left"
-              ? "left-8 gap-1.5 p-1.5"
-              : "left-full -translate-x-[calc(100%+32px)] gap-1.5 p-1.5"
+            : alignment === "center"
+              ? "left-1/2 -translate-x-1/2 gap-1.5 p-1.5"
+              : side === "left"
+                ? "left-8 gap-1.5 p-1.5"
+                : "left-full -translate-x-[calc(100%+32px)] gap-1.5 p-1.5"
         }`}
       >
         {/* Expanded strip content folds its width away when collapsed. */}
@@ -431,13 +446,16 @@ export function ChatBubbles({
         >
           <button
             type="button"
+            {...dragHandlers}
             onClick={() => setCollapseOverride(false)}
-            className={`relative grid cursor-pointer place-items-center overflow-visible rounded-full border border-border bg-bg-overlay text-fg-muted transition-[max-width,opacity,background-color,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] hover:border-border-strong hover:text-fg ${
+            className={`relative grid touch-none cursor-grab active:cursor-grabbing place-items-center overflow-visible rounded-full border border-border bg-bg-overlay text-fg-muted transition-[max-width,opacity,background-color,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] hover:border-border-strong hover:text-fg ${
               collapsed
                 ? "size-9 max-w-9 opacity-100"
                 : "pointer-events-none size-9 max-w-0 border-0 opacity-0"
             }`}
             aria-label="Expand chat bubbles"
+            aria-description="Drag to either bottom corner. Arrow keys move left or right."
+            aria-keyshortcuts="ArrowLeft ArrowRight"
             aria-hidden={!collapsed}
             inert={!collapsed ? true : undefined}
           >

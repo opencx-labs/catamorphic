@@ -63,7 +63,7 @@ Raw harness launches reject a missing isolation context before spawning Electron
 Linux validates real Electron behavior on Linux. macOS shards retain native
 window, menu, and Command-key coverage. Blacksmith macOS support exists, but
 this repository uses GitHub macOS until the organization's macOS entitlement
-is confirmed. See ADR 0127.
+is confirmed. See ADR 0129.
 
 Baseline: GitHub run 34595077215 took approximately 18 minutes, including
 315 seconds of visible and 380 seconds of hidden desktop tests. Measure the

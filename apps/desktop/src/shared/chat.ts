@@ -37,6 +37,11 @@ export interface ChatSurface {
     | "mcpapp";
   label: string;
   faviconUrl?: string | null;
+  /** Host-resolved destinations for lazy, read-only hover previews. */
+  filePath?: string;
+  terminalSessionId?: string;
+  url?: string;
+  description?: string;
   /** The agent is actively working here (spinner on the chip). */
   active?: boolean;
   /**
@@ -87,6 +92,8 @@ export interface ChatDockEntry {
    * the choice.
    */
   agentId?: string;
+  model?: string;
+  effort?: "low" | "medium" | "high" | "xhigh" | "max";
   /**
    * The chat's attached tabs are folded under its tab in the strip
    * (host-managed; only meaningful while the chat is a tab).

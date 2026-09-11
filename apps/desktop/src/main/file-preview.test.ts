@@ -22,6 +22,7 @@ it("reads bounded UTF-8 prefixes without breaking a multibyte character", async 
   const result = await readFilePreview({ filePath });
   expect(result.content).toEqual({
     kind: "text",
+    format: "markdown",
     text: "a".repeat(16383),
     truncated: true,
   });

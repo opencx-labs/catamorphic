@@ -89,8 +89,10 @@ Project themes use the same profile, shared-project and personal-project priorit
 as workspace settings. Missing selections, colors and fonts inherit. Choosing a
 selection replaces inherited color overrides; individual token and font edits
 remain sparse. Theme edits use the shared configuration file validation and
-last-valid-value caches. The three dock preferences are profile choices:
-`dockMultiProject`, `dockDetached`, and `dockSide`.
+last-valid-value caches. The dock preferences are profile choices:
+`dockMultiProject`, `dockDetached`, `dockSide`, and `dockAlignment`.
+The last chooses `edge` (default) or `center` for expanded chats and bubbles;
+`dockSide` always determines the collapsed bottom corner.
 
 ## Workspace frame
 

@@ -188,7 +188,39 @@ it("keeps an unsent draft when detached and reattached, and supports either edge
     },
   );
   await dock.eval(
-    `window.catamorphicDesktop.setPrefs({dockSide:'right',dockDetached:false})`,
+    `window.catamorphicDesktop.setPrefs({dockAlignment:'center'})`,
+  );
+  await dock.waitFor(
+    `Math.abs(screenX + outerWidth / 2 - screen.availLeft - screen.availWidth / 2) < 3`,
+  );
+  await dock.eval(
+    `document.querySelector('[aria-label="Collapse chat bubbles"]').click()`,
+  );
+  await dock.waitFor(
+    `innerWidth <= 112 && document.querySelector('[data-dock-rail]')?.dataset.dockCollapsed === 'true'`,
+  );
+  // Native movement uses the same two resting corners, even with centered expansion.
+  await dock.eval(`(async () => {
+    const api=window.catamorphicDesktop; const start=screenX+innerWidth/2;
+    await api.dockDrag({phase:'start',screenX:start,reducedMotion:true});
+    await api.dockDrag({phase:'move',screenX:screen.availLeft+screen.availWidth-60,reducedMotion:true});
+    await api.dockDrag({phase:'end',screenX:screen.availLeft+screen.availWidth-60,reducedMotion:true});
+  })()`);
+  await dock.waitFor(
+    `document.querySelector('[data-dock-host]')?.dataset.dockSide === 'right' && Math.abs(screenX + outerWidth + 12 - screen.availLeft - screen.availWidth) < 3 && Math.abs(screenY + outerHeight + 12 - screen.availTop - screen.availHeight) < 3`,
+  );
+  await dock.eval(
+    `document.querySelector('[aria-label="Expand chat bubbles"]').click()`,
+  );
+  await dock.waitFor(
+    `Math.abs(screenX + outerWidth / 2 - screen.availLeft - screen.availWidth / 2) < 3`,
+  );
+  await toggleNative();
+  await dock.waitFor(
+    `!!document.querySelector('[data-floating-chat]:not([inert])')`,
+  );
+  await dock.eval(
+    `window.catamorphicDesktop.setPrefs({dockSide:'right',dockDetached:false,dockAlignment:'edge'})`,
   );
   await app.waitFor(
     `document.querySelector('[data-dock-side]')?.dataset.dockSide === 'right'`,

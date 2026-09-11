@@ -158,8 +158,12 @@ bun run check        # 11-phase merge gate
 ```
 
 The development orchestrator assigns each worktree its own data directories
-and loopback ports. Do not override those paths or select a stock-server data
-directory manually. `bun run test` creates one disposable Postgres database
+under `~/.catamorphic/dev/<worktree-instance>` and loopback ports. Manual profiles
+are durable work, never temporary files. Legacy temporary profiles are copied
+only while their runner is stopped, preserving the source backup. Never reset
+an incomplete database to make startup succeed; preserve it and recover into a
+separate clean database. Disposable E2E/test profiles still use temporary storage.
+Do not override those paths or select a stock-server data directory manually. `bun run test` creates one disposable Postgres database
 per invocation and is the default test command. External integrations run
 only when explicitly authorized with `bun run test:external`; credentials in
 the environment are not authority to contact external services. Run `bun run
