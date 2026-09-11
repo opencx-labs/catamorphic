@@ -12,7 +12,10 @@ export interface WorkflowPackagePayload extends PluginPayload {
 
 export async function resolveWorkflowPackageFallback(args: {
   packageJson?: string;
+  /** A committed lockfile is authoritative; never replace its resolved package. */
+  hasLockfile?: boolean;
 }): Promise<WorkflowPackagePayload | undefined> {
+  if (args.hasLockfile) return undefined;
   const declaredVersion = readDeclaredVersion(args.packageJson);
   if (!declaredVersion) return undefined;
 

@@ -1062,6 +1062,23 @@ describe("ClaudeCodeAgentRuntime", () => {
     expect(optionsFromLastQuery().disallowedTools).not.toContain("Bash");
   });
 
+  it("retains native shell while host delegation and todos are deferred", async () => {
+    const runtime = new ClaudeCodeAgentRuntime({
+      hostOwnsTodos: true,
+      hostOwnsSubagents: true,
+    });
+    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
+    const session = await startSession(runtime);
+    await runtime.startTurn({
+      sessionId: session.sessionId,
+      message: { role: "user", content: "Do the work." },
+    });
+    expect(optionsFromLastQuery().disallowedTools).toEqual(
+      expect.arrayContaining(["TodoWrite", "Task", "Agent"]),
+    );
+    expect(optionsFromLastQuery().disallowedTools).not.toContain("Bash");
+  });
+
   it("continues durable event sequencing from the resume cursor", async () => {
     const runtime = new ClaudeCodeAgentRuntime();
     await runtime.resumeSession({

@@ -96,15 +96,12 @@ beforeAll(async () => {
     `window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))`,
   );
   await wait(`return !!front();`);
-  const video = await app.eval<string>(`new Promise(resolve => {
-    const canvas=document.createElement('canvas'); canvas.width=160; canvas.height=90;
-    const context=canvas.getContext('2d'); context.fillStyle='#647cff'; context.fillRect(0,0,160,90);
-    const stream=canvas.captureStream(10); const recorder=new MediaRecorder(stream,{mimeType:'video/webm'}); const chunks=[];
-    recorder.ondataavailable=event=>chunks.push(event.data);
-    recorder.onstop=async()=>{ stream.getTracks().forEach(track=>track.stop()); const bytes=new Uint8Array(await new Blob(chunks).arrayBuffer()); resolve(btoa(String.fromCharCode(...bytes))); };
-    recorder.start(); const ticker=setInterval(()=>context.fillRect(0,0,160,90),50); setTimeout(()=>{clearInterval(ticker);recorder.stop();},600);
-  })`);
-  fs.writeFileSync(path.join(root, "clip.webm"), Buffer.from(video, "base64"));
+  // Use a fixed VP8 clip. Recording a canvas for 600 ms can produce an empty
+  // stream when a busy compositor does not deliver frames before the timer.
+  fs.copyFileSync(
+    new URL("./fixtures/resource-preview.webm", import.meta.url),
+    path.join(root, "clip.webm"),
+  );
 });
 afterAll(async () => {
   await app?.stop();

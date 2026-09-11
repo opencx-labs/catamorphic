@@ -11,6 +11,11 @@ is ordinary exported TypeScript, never a JSON recipe or a second monitor DSL.
 Choose lifetime, source visibility, and execution placement separately. A git
 commit does not by itself mean shared, deployed, enabled, or permanent.
 
+Use discover_capabilities to find watcher or workflow operations when the host
+uses deferred tools, then invoke_capability with the discovered schema. External
+MCP clients may expose the same operations directly. Skills describe procedures;
+use only operations actually offered by this host.
+
 ## Choose the outcome before writing files
 
 | User intent | Source and lifetime | Execution |

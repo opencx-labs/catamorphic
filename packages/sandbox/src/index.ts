@@ -6,6 +6,7 @@ export {
 } from "@catamorphic/runtime";
 export * from "./agent-capabilities.js";
 export { HttpAgentCapabilityGateway } from "./capability-client.js";
+export { capabilityEventPresenter } from "./capability-events.js";
 export * from "./capability-mcp.js";
 export {
   AgentEventBuffer,

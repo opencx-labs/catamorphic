@@ -192,6 +192,8 @@ it("generates an ordinary review app, follows evidence and retains the result", 
   await wait(
     `return !!document.querySelector('iframe[src*="/apps/session-"]');`,
   );
+  // Creation through discovery must set the icon without a second mutation.
+  await wait(`return !!document.querySelector('[data-app-icon="review"]');`);
   const presentation = await app.eval<{
     title: string;
     icon: string;

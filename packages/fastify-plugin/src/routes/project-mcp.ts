@@ -196,7 +196,7 @@ export function registerProjectMcpRoutes(
  * every registered tool kind, from one scan. Name uniqueness is enforced
  * at deploy scan; the throw here is a backstop for pre-validation commits.
  */
-async function loadProjectTools(
+export async function loadProjectTools(
   core: CatamorphicCore,
   identity: Identity,
   projectId: string,
@@ -231,7 +231,7 @@ async function loadProjectTools(
   return [...tools.values()];
 }
 
-function toolDefinition(tool: ProjectTool): Record<string, unknown> {
+export function toolDefinition(tool: ProjectTool): Record<string, unknown> {
   const notes: string[] = [];
   if (tool.wrapped) notes.push('Pass the workflow input as {"input": ...}.');
   if (tool.binding.canSuspend) {
@@ -268,7 +268,7 @@ function toolDefinition(tool: ProjectTool): Record<string, unknown> {
   };
 }
 
-async function callTool(
+export async function callTool(
   core: CatamorphicCore,
   identity: Identity,
   projectId: string,

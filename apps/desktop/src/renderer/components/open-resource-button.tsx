@@ -11,7 +11,7 @@ import {
   type OpenMode,
   openModeFromEvent,
 } from "../../shared/open-mode.js";
-import { parseSurfaceLink } from "../lib/surface-link.js";
+import { parseSurfaceLink } from "../../shared/surface-link.js";
 import { MenuPortal } from "./sidebar-item-row.js";
 
 function useResourceMenu() {

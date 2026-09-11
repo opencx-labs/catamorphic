@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 /**
@@ -1273,6 +1273,19 @@ describe("agents and profiles", () => {
 
   it("opens an agent-shared PDF in a browser surface", async () => {
     await openFreshChat("PDF artifact chat");
+    // The agent must create a real file before asking the host to open it.
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'prepare pdf');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return visibleDock()?.textContent.includes('PDF prepared.');`,
+      {
+        label: "agent-created PDF",
+      },
+    );
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'show: file:artifact.pdf');
@@ -1288,6 +1301,27 @@ describe("agents and profiles", () => {
          !!view && view.plugins === true;`,
       { timeoutMs: 30_000, label: "PDF opened in a browser surface" },
     );
+  });
+
+  it("rejects opening a directory without adding a broken surface", async () => {
+    const before = await run<number>(
+      `return visibleDock().querySelectorAll('[data-testid="surface-chip"]').length;`,
+    );
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'show: file:.');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return visibleDock()?.textContent.includes('This path is a directory.');`,
+      { label: "directory navigation rejected" },
+    );
+    expect(
+      await run<number>(
+        `return visibleDock().querySelectorAll('[data-testid="surface-chip"]').length;`,
+      ),
+    ).toBe(before);
   });
 
   it("centers the surface chip actions vertically", async () => {

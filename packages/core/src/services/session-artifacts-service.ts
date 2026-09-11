@@ -2,17 +2,28 @@ import { randomUUID } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import path from "node:path";
 import type { DB } from "@catamorphic/db";
-import { fetchRemote, type ProjectManager, push } from "@catamorphic/git";
+import {
+  fetchRemote,
+  type ProjectManager,
+  type ProjectRepo,
+  push,
+  type RemoteBackend,
+} from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { parseProject } from "@catamorphic/parser";
 import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
-import type { Kysely, Selectable } from "kysely";
+import type { ControlledTransaction, Kysely, Selectable } from "kysely";
 import { type Identity, identityCovers } from "../identity.js";
 import { appScaffold } from "../seeds.js";
 import { assertAgentSessionAccess } from "./agent-session-access.js";
 import type { AppBundleStore } from "./app-bundle-store.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import { requireTenantProject } from "./projects-service.js";
+
+type SnapshotResources = {
+  repo: ProjectRepo;
+  remote: Pick<RemoteBackend, "withOrigin">;
+};
 
 type ArtifactRow = Selectable<DB["session_artifacts"]>;
 export type SessionArtifactKind = "app" | "workflow";
@@ -259,55 +270,77 @@ export class SessionArtifactsService {
       },
       async () => {
         validateFiles(input.files);
-        return this.db.transaction().execute(async (trx) => {
-          const row = await this.row(input, trx, true);
-          if (!row.session_id) throw new SessionArtifactNotFoundError();
-          await this.assertSession(
-            { ...input, sessionId: row.session_id },
-            trx,
+        await this.row(input);
+        let transaction: ControlledTransaction<DB> | undefined;
+        try {
+          const result = await this.withSnapshotResources(
+            input,
+            async (resources) => {
+              const trx = await this.db.startTransaction().execute();
+              transaction = trx;
+              const row = await this.row(input, trx, true);
+              if (!row.session_id) throw new SessionArtifactNotFoundError();
+              await this.assertSession(
+                { ...input, sessionId: row.session_id },
+                trx,
+              );
+              if (row.revision !== input.revision)
+                throw new SessionArtifactConflictError(
+                  "Artifact changed. Read the latest revision before editing.",
+                );
+              const snapshot = await this.snapshot({
+                ...input,
+                kind: artifactKind(row.kind),
+                name: row.name,
+                sourcePath: row.source_path,
+                remoteBranch: row.remote_branch,
+                previousSha: row.commit_sha,
+                resources,
+              });
+              const paths = [
+                ...new Set(
+                  [...pathsOf(row.source_paths), ...snapshot.paths].filter(
+                    (path) => input.files[path] !== null,
+                  ),
+                ),
+              ];
+              await trx
+                .insertInto("session_artifact_revisions")
+                .values({
+                  artifact_id: row.id,
+                  commit_sha: snapshot.commitSha,
+                  source_paths: JSON.stringify(paths),
+                })
+                .onConflict((conflict) => conflict.doNothing())
+                .execute();
+              const updated = await trx
+                .updateTable("session_artifacts")
+                .set({
+                  commit_sha: snapshot.commitSha,
+                  revision: row.revision + 1,
+                  source_paths: JSON.stringify(paths),
+                  title: input.title ?? row.title,
+                  updated_at: new Date(),
+                })
+                .where("id", "=", row.id)
+                .returningAll()
+                .executeTakeFirstOrThrow();
+              return present(updated);
+            },
           );
-          if (row.revision !== input.revision)
-            throw new SessionArtifactConflictError(
-              "Artifact changed. Read the latest revision before editing.",
-            );
-          const snapshot = await this.snapshot({
-            ...input,
-            kind: artifactKind(row.kind),
-            name: row.name,
-            sourcePath: row.source_path,
-            remoteBranch: row.remote_branch,
-            previousSha: row.commit_sha,
-          });
-          const paths = [
-            ...new Set(
-              [...pathsOf(row.source_paths), ...snapshot.paths].filter(
-                (path) => input.files[path] !== null,
-              ),
-            ),
-          ];
-          await trx
-            .insertInto("session_artifact_revisions")
-            .values({
-              artifact_id: row.id,
-              commit_sha: snapshot.commitSha,
-              source_paths: JSON.stringify(paths),
-            })
-            .onConflict((conflict) => conflict.doNothing())
-            .execute();
-          const updated = await trx
-            .updateTable("session_artifacts")
-            .set({
-              commit_sha: snapshot.commitSha,
-              revision: row.revision + 1,
-              source_paths: JSON.stringify(paths),
-              title: input.title ?? row.title,
-              updated_at: new Date(),
-            })
-            .where("id", "=", row.id)
-            .returningAll()
-            .executeTakeFirstOrThrow();
-          return present(updated);
-        });
+          // withOrigin can publish buffered remote writes after its callback.
+          // Commit the row only once that publication has succeeded.
+          await transaction?.commit().execute();
+          return result;
+        } catch (error) {
+          if (
+            transaction &&
+            !transaction.isCommitted &&
+            !transaction.isRolledBack
+          )
+            await transaction.rollback().execute();
+          throw error;
+        }
       },
     );
   }
@@ -507,116 +540,139 @@ export class SessionArtifactsService {
     sourcePath: string;
     remoteBranch: string;
     previousSha?: string;
+    resources?: SnapshotResources;
   }): Promise<{ commitSha: string; paths: string[] }> {
-    const repo = await this.projectManager.openEphemeral({
-      tenantId: input.identity.tenantId,
-      projectId: input.projectId,
-    });
-    try {
-      if (input.previousSha) {
-        // A previous process may have pushed then died before its DB commit.
-        // The row is locked by update: only its accepted revision is authoritative.
-        const remote = this.projectManager.remoteBackend;
-        if (!remote) throw new Error("Artifact storage is unavailable");
-        await remote.withOrigin(
-          input.identity.tenantId,
-          input.projectId,
-          async (origin) => {
-            const ref = `refs/heads/${input.remoteBranch}`;
-            const head = await origin.resolveRef(ref);
-            if (head && head !== input.previousSha && input.previousSha)
-              await origin.updateRef({
-                ref,
-                sha: input.previousSha,
-                expected: head,
-              });
-          },
-        );
-        await this.fetch(
-          repo,
-          input.identity.tenantId,
-          input.projectId,
-          input.remoteBranch,
-        );
-        await repo.moveBranch("main", input.previousSha);
-        await repo.checkout("main");
-      }
-      const files = { ...input.files };
-      if (
-        input.kind === "workflow" &&
-        !(await repo.listFiles()).includes("package.json") &&
-        !("package.json" in files)
-      ) {
-        files["package.json"] = JSON.stringify({
-          private: true,
-          type: "module",
-          dependencies: { "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION },
-        });
-      }
-      const existingPaths = new Set(await repo.listFiles());
-      for (const [file, content] of Object.entries(files)) {
-        await assertNoSymlink(repo.repoPath, file);
-        if (content === null) {
-          if (existingPaths.has(file)) await repo.deleteFile(file);
-        } else await repo.writeFile(file, content);
-      }
-      const parsed = parseProject(await repo.readAllFiles());
-      // App helpers also execute by export name. A selected helper must not
-      // collide with a workflow elsewhere in the retained project snapshot.
-      const ambiguous = parsed.workflows.find(
-        (workflow) =>
-          workflow.filePath in files &&
-          parsed.workflows.filter(
-            (candidate) => candidate.functionName === workflow.functionName,
-          ).length > 1,
+    if (!input.resources)
+      return this.withSnapshotResources(input, (resources) =>
+        this.snapshot({ ...input, resources }),
       );
-      if (ambiguous && input.kind === "app") {
-        throw new SessionArtifactValidationError(
-          `Workflow export ${ambiguous.functionName} is ambiguous in this snapshot`,
-        );
-      }
-      if (input.kind === "workflow") {
-        if (
-          parsed.errors.length ||
-          !parsed.workflows.some(
-            (workflow) =>
-              workflow.functionName === input.name &&
-              workflow.filePath === input.sourcePath,
-          )
-        ) {
-          throw new SessionArtifactValidationError(
-            `Invalid workflow source: ${parsed.errors.map((error) => error.message).join("\n") || `source must export ${input.name}`}`,
-          );
-        }
-        if (
-          parsed.workflows.some(
-            (workflow) =>
-              workflow.functionName === input.name &&
-              workflow.filePath !== input.sourcePath,
-          )
-        ) {
-          throw new SessionArtifactValidationError(
-            `Workflow name '${input.name}' already exists in committed project source`,
-          );
-        }
-      }
-      const paths = Object.keys(files);
-      const commitSha = await repo.commit(
-        `Update session ${input.kind} ${input.name}`,
-        author,
-        { paths },
+    const { repo, remote } = input.resources;
+    if (input.previousSha) {
+      // A previous process may have pushed then died before its DB commit.
+      // The row is locked by update: only its accepted revision is authoritative.
+      await remote.withOrigin(
+        input.identity.tenantId,
+        input.projectId,
+        async (origin) => {
+          const ref = `refs/heads/${input.remoteBranch}`;
+          const head = await origin.resolveRef(ref);
+          if (head && head !== input.previousSha && input.previousSha)
+            await origin.updateRef({
+              ref,
+              sha: input.previousSha,
+              expected: head,
+            });
+        },
       );
-      const remote = this.projectManager.remoteBackend;
-      if (!remote) throw new Error("Artifact storage is unavailable");
-      await push({
+      await fetchRemote({
         dev: repo,
         remote,
         tenantId: input.identity.tenantId,
         projectId: input.projectId,
         remoteBranch: input.remoteBranch,
-        localSha: commitSha,
       });
-      return { commitSha, paths };
+      await repo.moveBranch("main", input.previousSha);
+      await repo.checkout("main");
+    }
+    const files = { ...input.files };
+    if (
+      input.kind === "workflow" &&
+      !(await repo.listFiles()).includes("package.json") &&
+      !("package.json" in files)
+    ) {
+      files["package.json"] = JSON.stringify({
+        private: true,
+        type: "module",
+        dependencies: { "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION },
+      });
+    }
+    const existingPaths = new Set(await repo.listFiles());
+    for (const [file, content] of Object.entries(files)) {
+      await assertNoSymlink(repo.repoPath, file);
+      if (content === null) {
+        if (existingPaths.has(file)) await repo.deleteFile(file);
+      } else await repo.writeFile(file, content);
+    }
+    const parsed = parseProject(await repo.readAllFiles());
+    // App helpers also execute by export name. A selected helper must not
+    // collide with a workflow elsewhere in the retained project snapshot.
+    const ambiguous = parsed.workflows.find(
+      (workflow) =>
+        workflow.filePath in files &&
+        parsed.workflows.filter(
+          (candidate) => candidate.functionName === workflow.functionName,
+        ).length > 1,
+    );
+    if (ambiguous && input.kind === "app") {
+      throw new SessionArtifactValidationError(
+        `Workflow export ${ambiguous.functionName} is ambiguous in this snapshot`,
+      );
+    }
+    if (input.kind === "workflow") {
+      if (
+        parsed.errors.length ||
+        !parsed.workflows.some(
+          (workflow) =>
+            workflow.functionName === input.name &&
+            workflow.filePath === input.sourcePath,
+        )
+      ) {
+        throw new SessionArtifactValidationError(
+          `Invalid workflow source: ${parsed.errors.map((error) => error.message).join("\n") || `source must export ${input.name}`}`,
+        );
+      }
+      if (
+        parsed.workflows.some(
+          (workflow) =>
+            workflow.functionName === input.name &&
+            workflow.filePath !== input.sourcePath,
+        )
+      ) {
+        throw new SessionArtifactValidationError(
+          `Workflow name '${input.name}' already exists in committed project source`,
+        );
+      }
+    }
+    const paths = Object.keys(files);
+    const commitSha = await repo.commit(
+      `Update session ${input.kind} ${input.name}`,
+      author,
+      { paths },
+    );
+    await push({
+      dev: repo,
+      remote,
+      tenantId: input.identity.tenantId,
+      projectId: input.projectId,
+      remoteBranch: input.remoteBranch,
+      localSha: commitSha,
+    });
+    return { commitSha, paths };
+  }
+
+  /** Resolve host storage before taking the database connection or revision lock. */
+  private async withSnapshotResources<T>(
+    input: { identity: Identity; projectId: string },
+    run: (resources: SnapshotResources) => Promise<T>,
+  ): Promise<T> {
+    const remote = this.projectManager.remoteBackend;
+    if (!remote) throw new Error("Artifact storage is unavailable");
+    const repo = await this.projectManager.openEphemeral({
+      tenantId: input.identity.tenantId,
+      projectId: input.projectId,
+    });
+    try {
+      return await remote.withOrigin(
+        input.identity.tenantId,
+        input.projectId,
+        (origin) =>
+          run({
+            repo,
+            remote: {
+              withOrigin: async (_tenantId, _projectId, use) => use(origin),
+            },
+          }),
+      );
     } finally {
       await repo.dispose();
     }

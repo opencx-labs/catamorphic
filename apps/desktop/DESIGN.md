@@ -2,7 +2,8 @@
 
 App identity uses canonical semantic icons (ADR 0125). Review, dashboard,
 report, tracker, form, and calculator each have one monochrome glyph across
-tabs, lists, and chat surfaces. Agents choose a type through set_app_presentation.
+tabs, lists, and chat surfaces. Agents choose a type at creation or through a
+deferred presentation capability (ADR 0133).
 Unspecified or unknown types retain the grid icon. Icon changes do not rebuild
 or publish an app; temporary app titles come from their retained metadata.
 
@@ -252,6 +253,13 @@ the historical log explains how it arrived here.
 
 ## Design log
 
+### 2026-09-11: Lean agent tool surface
+
+Agent tools follow ADR 0133. Ordinary work uses native execution and
+skills. Infrequent host operations use bounded capability discovery, retaining
+live authorization and a small direct surface for user interaction. App creation
+accepts initial presentation; cosmetic follow-up calls are not mandatory.
+
 ### 2026-09-11: Desktop tests own a separate desktop
 
 Automated desktop tests run in a private Linux display locally and dedicated
@@ -309,7 +317,7 @@ using the machine login. MCP agent tools remain separate (ADR 0117).
 Rich attachment previews share InspectorPortal across composer and conversation. File references use compact pills; web links retain prose styling with destination cards. Content loads only on inspection, and unavailable previews retain useful metadata. See [chat state](docs/chat-state.md).
 
 Browser tools wake only the guest they operate on and restore focus after native
-input. In-page pointers use the same `point_at`/`clear_pointers` contract as shell
+input. In-page pointers use the same `point_at` contract (null target clears pointers) as shell
 pointers. Native computer access is an optional profile connector with the
 existing queued consent UI; cancellation withdraws the request. See
 [Computer use](docs/computer-use.md) and ADR 0112.
@@ -372,7 +380,7 @@ current theme on every guest load while theme switches preserve the guest's stat
 
 ## Dock placement and draft runtime controls (2026-09-11)
 
-ADR 0127 adds centered or edge-aligned expansion without changing the collapsed
+ADR 0133 adds centered or edge-aligned expansion without changing the collapsed
 corner. The bubble itself is draggable; dragging never expands it or stores an
 absolute resting position. Use restrained settling motion and honor reduced
 motion. New and established chats share editable runtime controls; draft choices

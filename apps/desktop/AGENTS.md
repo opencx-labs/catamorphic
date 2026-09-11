@@ -153,6 +153,15 @@ and project agent examples in `src/main/sidebar-authoring.ts` synchronized with
 changes; the settings skill and default configuration consume that single guide.
 Inline actions, overflow menus, and right-click menus are independent placements.
 
+## Agent tool admission
+
+Follow ADR 0133 and [Agent tool surface](docs/agent-tools.md). Prefer native
+files/code and skills for ordinary work. Host-owned operations enter the existing
+capability registry. A permanent tool needs evidence of an interaction benefit,
+an explicit exposure policy, and scenario coverage; do not mount another broad
+MCP catalog into project sessions. Keep recipes in skills and preserve native
+execution, live authorization, media, and user takeover across projections.
+
 ## Workflow authoring
 
 The desktop owns workflow details, source editing, draft protection, and run or

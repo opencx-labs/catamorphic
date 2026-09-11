@@ -1,9 +1,12 @@
+import { stat } from "node:fs/promises";
+import path from "node:path";
 import type { ExtraTool } from "@catamorphic/sandbox";
 import { z } from "zod";
 import {
   CHAT_ICON_COLOR_IDS,
   CHAT_ICON_NAMES,
 } from "../../shared/chat-icons.js";
+import { parseSurfaceLink } from "../../shared/surface-link.js";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 
 /**
@@ -165,14 +168,21 @@ export interface CheckoutBridge {
     sessionId: string,
     checkoutPath: string,
   ): Promise<{ path: string; kind?: string; branch?: string | null }>;
-  usePrimary(
+  returnToPrimary(
     projectId: string,
     sessionId: string,
   ): Promise<{ path: string; kind?: string; branch?: string | null }>;
 }
 
+export interface WorkspaceTool extends ExtraTool {
+  effect: "read" | "write";
+  readOnly: boolean;
+  nativeOnly: boolean;
+  eager: boolean;
+}
+
 export interface WorkspaceToolkit {
-  tools: ExtraTool[];
+  tools: WorkspaceTool[];
   /** Late-bound: the chat store exists only after the server boots. */
   setChatTranscriptReader(reader: ChatTranscriptReader): void;
   /** Late-bound for the same reason. */
@@ -192,6 +202,61 @@ export interface WorkspaceToolkit {
 const TRANSCRIPT_MESSAGE_CAP = 40;
 const TRANSCRIPT_CHARS_CAP = 24_000;
 
+type WorkspaceToolPolicy = Pick<
+  WorkspaceTool,
+  "effect" | "readOnly" | "nativeOnly" | "eager"
+>;
+const read: WorkspaceToolPolicy = {
+  effect: "read",
+  readOnly: true,
+  nativeOnly: false,
+  eager: false,
+};
+const write: WorkspaceToolPolicy = {
+  effect: "write",
+  readOnly: false,
+  nativeOnly: false,
+  eager: false,
+};
+const presentation: WorkspaceToolPolicy = { ...write, readOnly: true };
+const checkout: WorkspaceToolPolicy = { ...write, nativeOnly: true };
+
+/** Every operation declares policy. Missing declarations fail toolkit creation. */
+export const WORKSPACE_TOOL_POLICY: Readonly<
+  Record<string, WorkspaceToolPolicy>
+> = {
+  list_project_sessions: read,
+  read_project_session: read,
+  send_project_session_message: write,
+  spawn_subsession: write,
+  wait_for_subsessions: read,
+  interrupt_subsession: write,
+  request_user_attention: presentation,
+  set_session_activity: presentation,
+  read_todo_list: read,
+  update_todo_list: { ...presentation, eager: true },
+  list_worktrees: { ...read, nativeOnly: true },
+  create_worktree: checkout,
+  use_worktree: checkout,
+  build_app: write,
+  open_surface: { ...presentation, eager: true },
+  point_at: presentation,
+  set_chat_icon: presentation,
+  workspace_overview: { ...read, eager: true },
+  read_tab: read,
+  open_browser: presentation,
+  browser_snapshot: read,
+  browser_act: write,
+  run_terminal: write,
+  read_terminal: read,
+  write_terminal: write,
+  sync_project: write,
+  create_pull_request: write,
+  request_connection: write,
+  read_skill: read,
+  surface_control: write,
+};
+
 export function buildWorkspaceToolkit(
   bridge: WorkspaceBridge,
 ): WorkspaceToolkit {
@@ -205,18 +270,25 @@ export function buildWorkspaceToolkit(
   let checkouts: CheckoutBridge | null = null;
   let sessionVisible: SessionVisibility = async () => true;
 
-  const tools: ExtraTool[] = [
+  const definitions: ExtraTool[] = [
     {
       name: "list_project_sessions",
       description:
-        "List other agent sessions in this project, including subsessions and archived sessions, with their hierarchy, visibility, current task, activity, running state, and checkout.",
-      parameters: {},
-      execute: async (_input, ctx) => {
+        "List other agent sessions in this project, including subsessions and archived sessions, with their hierarchy, visibility, task, running state and checkout.",
+      parameters: {
+        children_only: z
+          .boolean()
+          .optional()
+          .describe("Only this session's direct children"),
+      },
+      execute: async (input, ctx) => {
         if (!ctx.sessionId) throw new Error("This turn has no chat session.");
         if (!sessionCoordination) {
           throw new Error("Session coordination is not available yet.");
         }
-        return sessionCoordination.list(ctx.projectId, ctx.sessionId);
+        return input.children_only
+          ? sessionCoordination.listSubsessions(ctx.projectId, ctx.sessionId)
+          : sessionCoordination.list(ctx.projectId, ctx.sessionId);
       },
     },
     {
@@ -293,22 +365,6 @@ export function buildWorkspaceToolkit(
           contextMode: input.context_mode as "fresh" | "inherit",
           ...(input.title ? { title: String(input.title) } : {}),
         });
-      },
-    },
-    {
-      name: "list_subsessions",
-      description:
-        "List direct child sessions created by this session, including their task, state, and session metadata.",
-      parameters: {},
-      execute: async (_input, ctx) => {
-        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
-        if (!sessionCoordination) {
-          throw new Error("Session coordination is not available yet.");
-        }
-        return sessionCoordination.listSubsessions(
-          ctx.projectId,
-          ctx.sessionId,
-        );
       },
     },
     {
@@ -475,34 +531,26 @@ export function buildWorkspaceToolkit(
       description:
         "Assign this session to an existing Git worktree created by Catamorphic or another harness. The path must belong to this project's Git repository.",
       parameters: {
-        path: z.string().min(1).describe("Absolute worktree path"),
+        path: z
+          .string()
+          .min(1)
+          .nullable()
+          .describe(
+            "Absolute worktree path, or null for the primary project checkout",
+          ),
       },
       execute: async (input, ctx) => {
         if (!ctx.sessionId) throw new Error("This turn has no chat session.");
         if (!checkouts)
           throw new Error("Worktree management is not available.");
-        const checkout = await checkouts.use(
-          ctx.projectId,
-          ctx.sessionId,
-          String(input.path),
-        );
-        ctx.workingDirectory = checkout.path;
-        return checkoutResult(checkout);
-      },
-    },
-    {
-      name: "use_project_checkout",
-      description:
-        "Return this session to the project's primary checkout. This only changes the session assignment and never removes a worktree.",
-      parameters: {},
-      execute: async (_input, ctx) => {
-        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
-        if (!checkouts)
-          throw new Error("Worktree management is not available.");
-        const checkout = await checkouts.usePrimary(
-          ctx.projectId,
-          ctx.sessionId,
-        );
+        const checkout =
+          input.path === null
+            ? await checkouts.returnToPrimary(ctx.projectId, ctx.sessionId)
+            : await checkouts.use(
+                ctx.projectId,
+                ctx.sessionId,
+                String(input.path),
+              );
         ctx.workingDirectory = checkout.path;
         return checkoutResult(checkout);
       },
@@ -510,7 +558,7 @@ export function buildWorkspaceToolkit(
     {
       name: "build_app",
       description:
-        "Build a project app (a React frontend under apps/<name>/ that calls workflows through the typed app contract) and publish it so the user can open it. Run this after creating or editing an app's files — publishing is what makes your changes visible. Pass publish: false to only compile a preview (checks for build errors without changing what the user sees). On success, show the result with open_surface target 'app:<name>'.",
+        "Build a project app preview from apps/<name>/. Set publish: true only when publication is requested. Preview is the default and can be opened with open_surface target app:<name>. Load building-apps for authoring.",
       parameters: {
         name: z
           .string()
@@ -519,14 +567,14 @@ export function buildWorkspaceToolkit(
         publish: z
           .boolean()
           .optional()
-          .describe("Publish after building (default true)"),
+          .describe("Publish after building (default false)"),
       },
       execute: async (input, ctx) => {
         if (!buildApp) throw new Error("App building is not available yet.");
         const result = await buildApp(
           ctx.projectId,
           String(input.name),
-          input.publish !== false,
+          input.publish === true,
         );
         if (result.status === "failed") {
           throw new Error(result.error ?? "App build failed");
@@ -543,7 +591,7 @@ export function buildWorkspaceToolkit(
     {
       name: "open_surface",
       description:
-        "Open (or focus) something tab-shaped in the user's workspace. Targets: an existing tab key from workspace_overview, 'app:<name>' (a published project app), 'workflow:<exportName>' (workflow graph), 'file:<path>' (code editor or rich Markdown editor; PDFs, HTML, images and media use the browser), or an http(s) URL (browser tab). Use it to show the user something: an app you built, a file you changed, a page. If the user is watching your chat, the tab opens behind it (your chat steps down to its floating dock); if they're busy on another surface, their view is NOT moved — the tab opens in the background and its chip on your chat is highlighted instead. The result's `opened` field says which happened ('focused' vs 'background'); after a background open, tell the user it's ready and where — never assume they saw it.",
+        "Show a tab, app:<name>, workflow:<exportName>, file:<path>, or web URL. The result reports focused or background opening; tell the user where it is if they did not see it. Load desktop-workspace for interaction guidance.",
       parameters: {
         target: z
           .string()
@@ -551,20 +599,36 @@ export function buildWorkspaceToolkit(
             "Tab key, 'app:<name>', 'workflow:<exportName>', 'file:<path>', or an http(s) URL",
           ),
       },
-      execute: (input, ctx) =>
-        bridge.openTarget(
+      execute: async (input, ctx) => {
+        const target = String(input.target);
+        const link = parseSurfaceLink(target);
+        if (
+          link?.kind === "file" &&
+          (ctx.workingDirectory || path.isAbsolute(link.path))
+        ) {
+          const filePath = path.resolve(ctx.workingDirectory ?? "", link.path);
+          if ((await stat(filePath)).isDirectory()) {
+            throw new Error(
+              "This path is a directory. Open a file inside it or use workflow:<exportName> for a workflow graph.",
+            );
+          }
+        }
+        const result = await bridge.openTarget(
           ctx.projectId,
           ctx.sessionId ?? "",
-          String(input.target),
-        ),
+          target,
+        );
+        return result;
+      },
     },
     {
       name: "point_at",
       description:
-        "Point the user's attention at a UI element with a subtle glow and scroll it into view. The glow stays until the user interacts with that element or you point at something else (pass keep_previous to stack pointers instead of replacing them). For an element inside a browser page, pass its browser tab key as target and its snapshot uid. Targets: a workspace tab key from workspace_overview (glows that tab), 'app:<name>', 'sidebar:<item label>' (glows that sidebar entry), or 'chip:<surface key>' (glows that surface's chip on your own chat, e.g. 'chip:terminal:<id>'). Use clear_pointers when nothing should be highlighted anymore.",
+        "Point the user's attention at a UI element with a subtle glow and scroll it into view. The glow stays until the user interacts with that element or you point at something else (pass keep_previous to stack pointers instead of replacing them). For an element inside a browser page, pass its browser tab key as target and its snapshot uid. Targets: a workspace tab key from workspace_overview (glows that tab), 'app:<name>', 'sidebar:<item label>' (glows that sidebar entry), or 'chip:<surface key>' (glows that surface's chip on your own chat, e.g. 'chip:terminal:<id>'). Pass target: null to clear highlighting.",
       parameters: {
         target: z
           .string()
+          .nullable()
           .describe(
             "Tab key, 'app:<name>', 'sidebar:<item label>', or 'chip:<surface key>'",
           ),
@@ -584,6 +648,10 @@ export function buildWorkspaceToolkit(
           .describe("Keep earlier pointers glowing too (default false)"),
       },
       execute: async (input, ctx) => {
+        if (input.target === null) {
+          await bridge.clearPointers(ctx.projectId);
+          return { ok: true };
+        }
         const result = await bridge.pointAt(
           ctx.projectId,
           String(input.target),
@@ -598,18 +666,8 @@ export function buildWorkspaceToolkit(
       },
     },
     {
-      name: "clear_pointers",
-      description:
-        "Remove every glow you placed with point_at. Use it when the tour is over or the highlights no longer apply.",
-      parameters: {},
-      execute: async (_input, ctx) => {
-        await bridge.clearPointers(ctx.projectId);
-        return { ok: true };
-      },
-    },
-    {
       name: "set_chat_icon",
-      description: `Set this conversation's icon, shown on its tab, bubble, and sidebar entry (like picking a team icon in Linear). Choose the icon and color that best capture what the conversation is about; do it once when the topic is clear (around when the conversation gets its title), and again only if the topic changes substantially. Icons: ${CHAT_ICON_NAMES.join(", ")}. Colors: ${CHAT_ICON_COLOR_IDS.join(", ")}.`,
+      description: `Set this conversation's icon, shown on its tab, bubble, and sidebar entry (like picking a team icon in Linear). Optional: choose an icon and color when useful or requested. Icons: ${CHAT_ICON_NAMES.join(", ")}. Colors: ${CHAT_ICON_COLOR_IDS.join(", ")}.`,
       parameters: {
         icon: z
           .enum(CHAT_ICON_NAMES)
@@ -994,6 +1052,13 @@ export function buildWorkspaceToolkit(
       },
     },
   ];
+
+  const tools = definitions.map((tool): WorkspaceTool => {
+    const policy = WORKSPACE_TOOL_POLICY[tool.name];
+    if (!policy)
+      throw new Error(`Workspace tool lacks an exposure policy: ${tool.name}`);
+    return { ...tool, ...policy };
+  });
 
   return {
     tools,

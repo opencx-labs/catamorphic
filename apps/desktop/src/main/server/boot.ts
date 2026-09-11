@@ -47,8 +47,8 @@ import { userSkillFiles, userSkillInfos } from "../user-skills.js";
 import { syncProfileMcpWorkflowConnections } from "../workflow-mcp-connections.js";
 import { DesktopAgentRegistry } from "./agent-registry.js";
 import { componentRegistryCapability } from "./component-registry.js";
-
 import { validateDatabaseFiles } from "./database-files.js";
+import { desktopCapabilitySource } from "./desktop-capabilities.js";
 import { DESKTOP_SETTINGS_SKILL } from "./desktop-settings-skill.js";
 import { E2eLocalSandboxProvider } from "./e2e-fakes.js";
 import { FileGithubTokenStore, GITHUB_APP } from "./github.js";
@@ -74,6 +74,7 @@ import {
   workspaceMcpAuthorizationMatches,
   workspaceMcpCapability,
 } from "./workspace-mcp.js";
+import { DESKTOP_WORKSPACE_SKILL } from "./workspace-skill.js";
 import { WorkspaceStateStore } from "./workspace-state.js";
 
 /** The desktop app is single-tenant: one fixed identity for the machine. */
@@ -330,14 +331,6 @@ export async function startEmbeddedServer(
     workspaceBridge,
     toolPermissions,
     connectors,
-    // Each chat session gets its project's workflow-tools MCP server, so
-    // agents can call ai.tool-call workflows like any other MCP tool. The
-    // embedded server defaults desktop identity headers, so no auth rides
-    // the URL.
-    projectMcpUrl: (projectId, sessionId) =>
-      apiBaseUrl
-        ? `${apiBaseUrl}/api/projects/${projectId}/mcp?sessionId=${encodeURIComponent(sessionId)}`
-        : undefined,
     workspaceMcpServer: (projectId, sessionId, agentId) =>
       apiBaseUrl
         ? {
@@ -384,6 +377,7 @@ export async function startEmbeddedServer(
     hostSkills: (defaults) => ({
       ...defaults,
       "configuring-catamorphic-desktop/SKILL.md": DESKTOP_SETTINGS_SKILL,
+      "desktop-workspace/SKILL.md": DESKTOP_WORKSPACE_SKILL,
     }),
     hostId,
     toolPermissions,
@@ -466,7 +460,19 @@ export async function startEmbeddedServer(
     },
     triggerKinds: DESKTOP_TRIGGER_KINDS,
     mcpToolKinds: DESKTOP_MCP_TOOL_KINDS,
-    agentCapabilities: { capabilities: [componentRegistryCapability] },
+    agentCapabilities: {
+      capabilities: [componentRegistryCapability],
+      sources: [
+        desktopCapabilitySource({
+          core: () => catamorphic.core,
+          agents: agentRegistry,
+          mcpApps,
+          workingDirectory: async ({ projectId, sessionId }) =>
+            (await sessionCheckouts.resolve({ projectId, sessionId })) ??
+            undefined,
+        }),
+      ],
+    },
     projectHooks: [
       {
         onProjectCreated: async () => syncWorkflowConnections(),
@@ -791,7 +797,7 @@ export async function startEmbeddedServer(
           });
         },
       }),
-    usePrimary: (projectId, sessionId) =>
+    returnToPrimary: (projectId, sessionId) =>
       sessionCheckouts.withAssignmentLock({
         projectId,
         operation: async () => {

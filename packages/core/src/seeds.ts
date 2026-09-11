@@ -861,7 +861,7 @@ explicit artifact snapshot instead of changing the project. For code reviews,
 consult session-artifacts and fetch the code-review pack unless suitable components
 are already installed. More packs follow the same install-and-adapt process.
 
-After creating an app, use set_app_presentation when available to choose a canonical
+Choose a canonical icon at creation, or discover set_app_presentation to change its
 type: review, dashboard, report, tracker, form, or calculator. All code reviews
 use review. When no type clearly fits, use default (the ordinary grid icon).
 The same tool accepts title. Use a short, descriptive title for the app's
@@ -872,7 +872,7 @@ publish the app. Do not invent custom glyphs or colors for common app types.
 
 Generated interactive results, including code reviews, use ordinary apps.
 For a temporary or session-owned result, load the session-artifacts skill and
-use session_artifact when the host provides it. It supplies the same scaffold,
+discover session_artifact when the host provides capability discovery (or use the direct MCP tool). It supplies the same scaffold,
 retains source with the session and builds immediately without publication.
 The project-file steps below apply when the result belongs in the project.
 

@@ -238,7 +238,7 @@ it("captures model images and points inside a page, follows scrolling and clears
     uid: await uid("Destination"),
     note: "Edit destination",
   });
-  await tool("clear_pointers", {});
+  await tool("point_at", { target: null });
   expect(
     await guest.eval(`!!document.querySelector('[data-catamorphic-pointer]')`),
   ).toBe(false);

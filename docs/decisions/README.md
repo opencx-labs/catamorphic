@@ -145,3 +145,5 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0130](0130-macos-browser-password-import.md) | Prebuilt macOS browser password import helper | Accepted |
 | [0131](0131-content-addressed-test-reuse.md) | Content-addressed test reuse | Accepted |
 | [0132](0132-shared-contextual-sidebar-contributions.md) | Shared contextual sidebar contributions | Accepted |
+
+| [0133](0133-lean-agent-tool-surface.md) | Lean agent tool surface | Accepted |

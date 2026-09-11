@@ -37,12 +37,41 @@ let approvedInput: unknown;
 let outputText = "";
 let cancelOnStart: AbortController | undefined;
 let revokeOnStart = false;
+let dynamicVisible = true;
+let dynamicRevision = 1;
+let revokeDynamicDuringApproval = false;
 const events: string[] = [];
 const alice: Identity = {
   tenantId: crypto.randomUUID(),
   externalUserId: "alice",
 };
 const options: AgentCapabilityOptions = {
+  sources: [
+    (_context, selection) =>
+      selection.name && !selection.name.startsWith("dynamic.")
+        ? []
+        : [
+            defineAgentCapability({
+              name: "dynamic.live",
+              description: "A session-specific host operation",
+              effect: "write",
+              inputSchema: z.object({ value: z.number() }).strict(),
+              outputSchema: z.object({
+                revision: z.number(),
+                value: z.number(),
+              }),
+              authorize: () => dynamicVisible,
+              beforeInvoke: async () => {
+                dynamicRevision++;
+                if (revokeDynamicDuringApproval) dynamicVisible = false;
+              },
+              execute: async (_invocation, input) => {
+                executions++;
+                return { revision: dynamicRevision, value: input.value };
+              },
+            }),
+          ],
+  ],
   currentUser: async () => ({
     displayName: "Alice",
     timeZone: "Asia/Amman",
@@ -215,6 +244,34 @@ beforeEach(() => {
   outputText = "";
   cancelOnStart = undefined;
   revokeOnStart = false;
+  dynamicVisible = true;
+  dynamicRevision = 1;
+  revokeDynamicDuringApproval = false;
+});
+
+it("re-resolves dynamic entries after their own approval and never executes a revoked operation", async () => {
+  expect(
+    (await gateway.discover({ query: "dynamic" })).items.map(
+      (item) => item.name,
+    ),
+  ).toEqual(["dynamic.live"]);
+  expect(
+    await gateway.invoke({
+      name: "dynamic.live",
+      input: { value: 7 },
+      requestId: "live",
+    }),
+  ).toEqual({ revision: 2, value: 7 });
+  revokeDynamicDuringApproval = true;
+  await expect(
+    gateway.invoke({
+      name: "dynamic.live",
+      input: { value: 8 },
+      requestId: "revoked-live",
+    }),
+  ).rejects.toThrow();
+  expect(executions).toBe(1);
+  expect((await gateway.discover({ query: "dynamic" })).items).toEqual([]);
 });
 
 it("keeps context small and excludes other users, credentials, and permission lists", async () => {

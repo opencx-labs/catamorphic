@@ -2308,6 +2308,7 @@ async function prepareSource(args: {
     commitSha: args.commitSha,
     workflowPackage: await resolveWorkflowPackageFallback({
       packageJson: workflowPackageJson(files),
+      hasLockfile: "bun.lock" in files || "bun.lockb" in files,
     }),
   };
 }

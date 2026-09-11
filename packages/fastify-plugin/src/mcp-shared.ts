@@ -135,6 +135,7 @@ export const POLL_RUN_TOOL = MCP_POLL_RUN_TOOL;
 /** The poll tool served beside the real tools on both MCP endpoints. */
 export const POLL_RUN_TOOL_DEFINITION: Record<string, unknown> = {
   name: POLL_RUN_TOOL,
+  annotations: { readOnlyHint: true },
   description:
     "Poll a workflow run by its runId — one started asynchronously or one " +
     "that detached mid-call. Returns the run's status, output (once " +
