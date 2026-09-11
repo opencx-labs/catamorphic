@@ -119,7 +119,6 @@ export {
   type AgentTurnSettledEvent,
   type ArchiveSessionResourcesHandler,
   type NativeAgentCheckout,
-  SessionMirrorDivergedError,
   type SyncedFileChange,
   UnsupportedAgentTopologyError,
 } from "./services/agent-sessions-service.js";
@@ -498,6 +497,7 @@ export {
   type SessionMailboxItem,
   SessionMailboxNotFoundError,
 } from "./services/session-mailboxes-service.js";
+export { SessionMirrorDivergedError } from "./services/session-mirror.js";
 export {
   type SessionSyncIntent,
   SessionSyncLeaseError,

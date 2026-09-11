@@ -12,7 +12,7 @@ import {
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { parseProject } from "@catamorphic/parser";
 import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
-import type { ControlledTransaction, Kysely, Selectable } from "kysely";
+import { type Kysely, type Selectable, sql } from "kysely";
 import { type Identity, identityCovers } from "../identity.js";
 import { appScaffold } from "../seeds.js";
 import { assertAgentSessionAccess } from "./agent-session-access.js";
@@ -114,7 +114,7 @@ export class SessionArtifactsService {
           input.kind === "app"
             ? `apps/${input.name}/src/App.tsx`
             : `workflows/src/artifacts/${id}.ts`;
-        const remoteBranch = `catamorphic/artifacts/${id}`;
+        const remoteBranch = artifactCandidateBranch(id);
         const defaults =
           input.kind === "app"
             ? {
@@ -270,77 +270,75 @@ export class SessionArtifactsService {
       },
       async () => {
         validateFiles(input.files);
-        await this.row(input);
-        let transaction: ControlledTransaction<DB> | undefined;
-        try {
-          const result = await this.withSnapshotResources(
-            input,
-            async (resources) => {
-              const trx = await this.db.startTransaction().execute();
-              transaction = trx;
-              const row = await this.row(input, trx, true);
-              if (!row.session_id) throw new SessionArtifactNotFoundError();
-              await this.assertSession(
-                { ...input, sessionId: row.session_id },
-                trx,
-              );
-              if (row.revision !== input.revision)
-                throw new SessionArtifactConflictError(
-                  "Artifact changed. Read the latest revision before editing.",
-                );
-              const snapshot = await this.snapshot({
-                ...input,
-                kind: artifactKind(row.kind),
-                name: row.name,
-                sourcePath: row.source_path,
-                remoteBranch: row.remote_branch,
-                previousSha: row.commit_sha,
-                resources,
-              });
-              const paths = [
-                ...new Set(
-                  [...pathsOf(row.source_paths), ...snapshot.paths].filter(
-                    (path) => input.files[path] !== null,
-                  ),
-                ),
-              ];
-              await trx
-                .insertInto("session_artifact_revisions")
-                .values({
-                  artifact_id: row.id,
-                  commit_sha: snapshot.commitSha,
-                  source_paths: JSON.stringify(paths),
-                })
-                .onConflict((conflict) => conflict.doNothing())
-                .execute();
-              const updated = await trx
-                .updateTable("session_artifacts")
-                .set({
-                  commit_sha: snapshot.commitSha,
-                  revision: row.revision + 1,
-                  source_paths: JSON.stringify(paths),
-                  title: input.title ?? row.title,
-                  updated_at: new Date(),
-                })
-                .where("id", "=", row.id)
-                .returningAll()
-                .executeTakeFirstOrThrow();
-              return present(updated);
-            },
+        const previous = await this.row(input);
+        if (!previous.session_id) throw new SessionArtifactNotFoundError();
+        await this.assertSession({ ...input, sessionId: previous.session_id });
+        if (previous.revision !== input.revision)
+          throw new SessionArtifactConflictError(
+            "Artifact changed. Read the latest revision before editing.",
           );
-          // withOrigin can publish buffered remote writes after its callback.
-          // Commit the row only once that publication has succeeded.
-          await transaction?.commit().execute();
-          return result;
-        } catch (error) {
+        // Each writer publishes its own immutable candidate. Neither a stale
+        // writer nor crash recovery can rewind a ref another writer accepted.
+        const remoteBranch = artifactCandidateBranch(previous.id);
+        const snapshot = await this.snapshot({
+          ...input,
+          kind: artifactKind(previous.kind),
+          name: previous.name,
+          sourcePath: previous.source_path,
+          remoteBranch,
+          previous: {
+            sha: previous.commit_sha,
+            branch: previous.remote_branch,
+          },
+        });
+        const paths = [
+          ...new Set(
+            [...pathsOf(previous.source_paths), ...snapshot.paths].filter(
+              (path) => input.files[path] !== null,
+            ),
+          ),
+        ];
+        // Publication (including buffered remote writes) has finished. This
+        // transaction owns only authorization, revision fencing and metadata.
+        // Losing/crashed candidates are retained until artifact reclamation.
+        return this.db.transaction().execute(async (trx) => {
+          const row = await this.row(input, trx, true);
+          if (!row.session_id) throw new SessionArtifactNotFoundError();
+          await this.assertSession(
+            { ...input, sessionId: row.session_id },
+            trx,
+          );
           if (
-            transaction &&
-            !transaction.isCommitted &&
-            !transaction.isRolledBack
+            row.revision !== input.revision ||
+            row.commit_sha !== previous.commit_sha
           )
-            await transaction.rollback().execute();
-          throw error;
-        }
+            throw new SessionArtifactConflictError(
+              "Artifact changed. Read the latest revision before editing.",
+            );
+          await trx
+            .insertInto("session_artifact_revisions")
+            .values({
+              artifact_id: row.id,
+              commit_sha: snapshot.commitSha,
+              source_paths: JSON.stringify(paths),
+            })
+            .onConflict((conflict) => conflict.doNothing())
+            .execute();
+          const updated = await trx
+            .updateTable("session_artifacts")
+            .set({
+              commit_sha: snapshot.commitSha,
+              remote_branch: remoteBranch,
+              revision: row.revision + 1,
+              source_paths: JSON.stringify(paths),
+              title: input.title ?? row.title,
+              updated_at: new Date(),
+            })
+            .where("id", "=", row.id)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+          return present(updated);
+        });
       },
     );
   }
@@ -396,7 +394,6 @@ export class SessionArtifactsService {
           eb("artifact.session_id", "is", null),
         ]),
       )
-      .where("artifact.ref_deleted_at", "is", null)
       .where(({ not, exists, selectFrom }) =>
         not(
           exists(
@@ -428,6 +425,10 @@ export class SessionArtifactsService {
         "artifact.remote_branch",
         "projects.tenant_id",
       ])
+      // Revisit tombstones: an update may publish after discard reclaimed its
+      // earlier refs, or die before it notices the discarded row. Rotate the
+      // sweep so late candidates are reclaimed without starving new retirees.
+      .orderBy(sql`artifact.ref_deleted_at asc nulls first`)
       .limit(50)
       .execute();
     for (const row of rows) {
@@ -446,7 +447,27 @@ export class SessionArtifactsService {
           .deleteFrom("apps")
           .where("session_artifact_id", "=", row.id)
           .execute();
-        await this.removeRef(row.tenant_id, row.project_id, row.remote_branch);
+        const remote = this.projectManager.remoteBackend;
+        if (!remote) throw new Error("Artifact storage is unavailable");
+        await remote.withOrigin(
+          row.tenant_id,
+          row.project_id,
+          async (origin) => {
+            const prefix = `refs/heads/catamorphic/artifacts/${row.id}`;
+            // Backends support listing the heads namespace, not arbitrary
+            // string prefixes. Filter locally so flat candidate refs are found
+            // consistently in filesystem, checkout and object-store origins.
+            const refs = (await origin.listRefs("refs/heads/")).filter(
+              ({ ref }) => ref === prefix || ref.startsWith(`${prefix}-`),
+            );
+            // Include the recorded ref as well as unaccepted crash candidates.
+            for (const ref of new Set([
+              `refs/heads/${row.remote_branch}`,
+              ...refs.map((entry) => entry.ref),
+            ]))
+              await origin.deleteRef({ ref });
+          },
+        );
         await this.db
           .updateTable("session_artifacts")
           .set({ ref_deleted_at: new Date(), last_error: null })
@@ -539,7 +560,7 @@ export class SessionArtifactsService {
     files: Record<string, string | null>;
     sourcePath: string;
     remoteBranch: string;
-    previousSha?: string;
+    previous?: { sha: string; branch: string };
     resources?: SnapshotResources;
   }): Promise<{ commitSha: string; paths: string[] }> {
     if (!input.resources)
@@ -547,31 +568,15 @@ export class SessionArtifactsService {
         this.snapshot({ ...input, resources }),
       );
     const { repo, remote } = input.resources;
-    if (input.previousSha) {
-      // A previous process may have pushed then died before its DB commit.
-      // The row is locked by update: only its accepted revision is authoritative.
-      await remote.withOrigin(
-        input.identity.tenantId,
-        input.projectId,
-        async (origin) => {
-          const ref = `refs/heads/${input.remoteBranch}`;
-          const head = await origin.resolveRef(ref);
-          if (head && head !== input.previousSha && input.previousSha)
-            await origin.updateRef({
-              ref,
-              sha: input.previousSha,
-              expected: head,
-            });
-        },
-      );
+    if (input.previous) {
       await fetchRemote({
         dev: repo,
         remote,
         tenantId: input.identity.tenantId,
         projectId: input.projectId,
-        remoteBranch: input.remoteBranch,
+        remoteBranch: input.previous.branch,
       });
-      await repo.moveBranch("main", input.previousSha);
+      await repo.moveBranch("main", input.previous.sha);
       await repo.checkout("main");
     }
     const files = { ...input.files };
@@ -650,7 +655,7 @@ export class SessionArtifactsService {
     return { commitSha, paths };
   }
 
-  /** Resolve host storage before taking the database connection or revision lock. */
+  /** Keep storage acquisition, parsing and publication outside database transactions. */
   private async withSnapshotResources<T>(
     input: { identity: Identity; projectId: string },
     run: (resources: SnapshotResources) => Promise<T>,
@@ -700,6 +705,11 @@ export class SessionArtifactsService {
       origin.deleteRef({ ref: `refs/heads/${remoteBranch}` }),
     );
   }
+}
+
+// Flat candidate refs avoid git file/directory collisions with existing refs.
+function artifactCandidateBranch(artifactId: string): string {
+  return `catamorphic/artifacts/${artifactId}-${randomUUID()}`;
 }
 
 function pathsOf(value: unknown): string[] {

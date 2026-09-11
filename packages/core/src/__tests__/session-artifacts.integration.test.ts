@@ -22,6 +22,7 @@ const identity = { tenantId: randomUUID(), externalUserId: "owner" };
 const projectId = randomUUID();
 const sessionId = randomUUID();
 let rejectPublication = false;
+let afterPublication: (() => Promise<void>) | undefined;
 class PublicationBackend extends FsRemoteBackend {
   override async withOrigin<T>(
     tenantId: string,
@@ -30,12 +31,13 @@ class PublicationBackend extends FsRemoteBackend {
   ): Promise<T> {
     const result = await super.withOrigin(tenantId, projectId, fn);
     if (
-      rejectPublication &&
       typeof result === "object" &&
       result !== null &&
-      "revision" in result
-    )
-      throw new Error("Remote publication failed");
+      "commitSha" in result
+    ) {
+      await afterPublication?.();
+      if (rejectPublication) throw new Error("Remote publication failed");
+    }
     return result;
   }
 }
@@ -167,6 +169,58 @@ suite("session artifact source lifecycle", () => {
     ).rejects.toThrow("Not authorized");
   });
 
+  it("updates an existing flat ref without colliding with its git namespace", async () => {
+    const artifact = await artifacts.create({
+      identity,
+      projectId,
+      sessionId,
+      kind: "app",
+      name: "existing-ref",
+      source,
+    });
+    const remote = manager.remoteBackend;
+    if (!remote) throw new Error("Missing origin");
+    const originalBranch = `catamorphic/artifacts/${artifact.id}`;
+    await remote.withOrigin(identity.tenantId, projectId, async (origin) => {
+      await origin.updateRef({
+        ref: `refs/heads/${originalBranch}`,
+        sha: artifact.commitSha,
+      });
+      await origin.deleteRef({ ref: `refs/heads/${artifact.remoteBranch}` });
+    });
+    await db
+      .updateTable("session_artifacts")
+      .set({ remote_branch: originalBranch })
+      .where("id", "=", artifact.id)
+      .execute();
+    const address = { identity, projectId, artifactId: artifact.id };
+    const updated = await artifacts.update({
+      ...address,
+      revision: 1,
+      files: { [artifact.sourcePath]: source.replace("First", "Second") },
+    });
+    expect(updated.revision).toBe(2);
+    expect((await artifacts.files(address))[artifact.sourcePath]).toContain(
+      "Second",
+    );
+    expect(
+      (await artifacts.files({ ...address, commitSha: artifact.commitSha }))[
+        artifact.sourcePath
+      ],
+    ).toBe(source);
+    await artifacts.discard(address);
+    await artifacts.cleanup();
+    await remote.withOrigin(identity.tenantId, projectId, async (origin) => {
+      expect(
+        await origin.resolveRef(`refs/heads/${originalBranch}`),
+      ).toBeNull();
+      expect(
+        await origin.resolveRef(`refs/heads/${updated.remoteBranch}`),
+      ).toBeNull();
+      expect(await origin.resolveRef("refs/heads/main")).not.toBeNull();
+    });
+  });
+
   it("rolls back a revision when buffered remote publication fails, then recovers", async () => {
     const artifact = await artifacts.create({
       identity,
@@ -199,6 +253,143 @@ suite("session artifact source lifecycle", () => {
     expect((await artifacts.files(address))[artifact.sourcePath]).toContain(
       "Recovered",
     );
+  });
+
+  it("leaves the single database connection free during remote publication", async () => {
+    const artifact = await artifacts.create({
+      identity,
+      projectId,
+      sessionId,
+      kind: "app",
+      name: "nonblocking",
+      source,
+    });
+    afterPublication = async () => {
+      await sql`select 1`.execute(db);
+      expect(
+        (await artifacts.get({ identity, projectId, artifactId: artifact.id }))
+          .revision,
+      ).toBe(1);
+    };
+    try {
+      const updated = await artifacts.update({
+        identity,
+        projectId,
+        artifactId: artifact.id,
+        revision: 1,
+        files: { [artifact.sourcePath]: source.replace("First", "Second") },
+      });
+      expect(updated.revision).toBe(2);
+      expect(updated.remoteBranch).not.toBe(artifact.remoteBranch);
+    } finally {
+      afterPublication = undefined;
+    }
+  });
+
+  it("fences concurrent candidates without rewinding the accepted ref", async () => {
+    const artifact = await artifacts.create({
+      identity,
+      projectId,
+      sessionId,
+      kind: "app",
+      name: "concurrent",
+      source,
+    });
+    const address = { identity, projectId, artifactId: artifact.id };
+    let release = () => {};
+    let published = () => {};
+    const ready = new Promise<void>((resolve) => {
+      published = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    afterPublication = async () => {
+      afterPublication = undefined;
+      published();
+      await gate;
+    };
+    const first = artifacts.update({
+      ...address,
+      revision: 1,
+      files: { [artifact.sourcePath]: source.replace("First", "Loser") },
+    });
+    const rejected = expect(first).rejects.toThrow("Artifact changed");
+    try {
+      await ready;
+      const winner = await artifacts.update({
+        ...address,
+        revision: 1,
+        files: { [artifact.sourcePath]: source.replace("First", "Winner") },
+      });
+      release();
+      await rejected;
+      expect((await artifacts.get(address)).commitSha).toBe(winner.commitSha);
+      expect((await artifacts.files(address))[artifact.sourcePath]).toContain(
+        "Winner",
+      );
+      expect(
+        (await artifacts.files({ ...address, commitSha: artifact.commitSha }))[
+          artifact.sourcePath
+        ],
+      ).toBe(source);
+    } finally {
+      afterPublication = undefined;
+      release();
+      await rejected;
+    }
+  });
+
+  it("reclaims a candidate published after discard already swept its refs", async () => {
+    const artifact = await artifacts.create({
+      identity,
+      projectId,
+      sessionId,
+      kind: "app",
+      name: "discardrace",
+      source,
+    });
+    const address = { identity, projectId, artifactId: artifact.id };
+    afterPublication = async () => {
+      afterPublication = undefined;
+      await artifacts.discard(address);
+      await artifacts.cleanup();
+      // A remote worker finishing after the sweep can leave a candidate ref.
+      await manager.remoteBackend!.withOrigin(
+        identity.tenantId,
+        projectId,
+        async (origin) => {
+          await origin.updateRef({
+            ref: `refs/heads/catamorphic/artifacts/${artifact.id}-late`,
+            sha: artifact.commitSha,
+          });
+        },
+      );
+    };
+    try {
+      await expect(
+        artifacts.update({
+          ...address,
+          revision: 1,
+          files: { [artifact.sourcePath]: source.replace("First", "Late") },
+        }),
+      ).rejects.toThrow("unavailable");
+      const inventory = () =>
+        manager.remoteBackend!.withOrigin(
+          identity.tenantId,
+          projectId,
+          (origin) => origin.listRefs("refs/heads/"),
+        );
+      const prefix = `refs/heads/catamorphic/artifacts/${artifact.id}`;
+      const before = await inventory();
+      expect(before.some(({ ref }) => ref === `${prefix}-late`)).toBe(true);
+      await artifacts.cleanup();
+      const refs = await inventory();
+      expect(refs.filter(({ ref }) => ref.startsWith(prefix))).toEqual([]);
+      expect(refs).toEqual(before.filter(({ ref }) => !ref.startsWith(prefix)));
+    } finally {
+      afterPublication = undefined;
+    }
   });
 
   it("uses the same lifecycle for workflows and keeps closed-session results readable", async () => {
