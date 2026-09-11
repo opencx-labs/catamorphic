@@ -6,8 +6,10 @@ export interface CheckCommand {
 
 export function checkCommands(input: {
   generatedTypesBaseline: string;
+  lane?: "validation" | "workspace";
+  shard?: string;
 }): readonly CheckCommand[] {
-  return [
+  const commands = [
     { label: "lint", command: "bun", args: ["run", "lint"] },
     {
       label: "root orchestration typecheck",
@@ -50,7 +52,21 @@ export function checkCommands(input: {
     {
       label: "deterministic workspace tests",
       command: "bun",
-      args: ["run", "test:workspace"],
+      // Invoke the pinned runner directly for shards: bun run consumes the
+      // first `--`, but Turbo needs it to forward flags to each Vitest task.
+      args: input.shard
+        ? [
+            "scripts/tool-runtime.ts",
+            "turbo",
+            "run",
+            "test",
+            "--no-daemon",
+            "--concurrency=2",
+            "--",
+            `--shard=${input.shard}`,
+            "--passWithNoTests",
+          ]
+        : ["run", "test:workspace"],
     },
     {
       label: "PWA E2E",
@@ -58,14 +74,46 @@ export function checkCommands(input: {
       args: ["run", "--cwd", "apps/pwa", "test:e2e"],
     },
     {
-      label: "desktop visible E2E",
-      command: "bun",
-      args: ["run", "--cwd", "apps/desktop", "test:e2e:visible"],
-    },
-    {
-      label: "desktop hidden E2E",
+      label: "desktop E2E",
       command: "bun",
       args: ["run", "--cwd", "apps/desktop", "test:e2e"],
     },
   ];
+  if (input.lane === "validation") return commands.slice(0, 8);
+  if (input.lane === "workspace")
+    return commands.filter(
+      (phase) => phase.label === "deterministic workspace tests",
+    );
+  return commands;
+}
+
+export function checkOptions(args: readonly string[]): {
+  lane?: "validation" | "workspace";
+  shard?: string;
+} {
+  const lane = args.find((arg) => arg.startsWith("--lane="))?.slice(7);
+  const shard = args.find((arg) => arg.startsWith("--shard="))?.slice(8);
+  if (
+    args.some(
+      (arg) => !arg.startsWith("--lane=") && !arg.startsWith("--shard="),
+    ) ||
+    (lane !== undefined && lane !== "validation" && lane !== "workspace")
+  ) {
+    throw new Error(
+      "Usage: bun run check [--lane=validation|workspace] [--shard=index/total]",
+    );
+  }
+  if (shard !== undefined) {
+    const [index, total] = shard.split("/").map(Number);
+    if (
+      lane !== "workspace" ||
+      !/^[1-9]\d*\/[1-9]\d*$/.test(shard) ||
+      !index ||
+      !total ||
+      index > total
+    ) {
+      throw new Error("A valid --shard=index/total requires --lane=workspace");
+    }
+  }
+  return { lane, shard };
 }

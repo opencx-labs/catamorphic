@@ -48,30 +48,159 @@ jobs:
             core.info(`${username} has ${permission} permission; full CI allowed: ${allowed}`);
             core.setOutput("allowed", String(allowed));
 
-  checks:
+  shards:
+    name: Plan test shards
     needs: access
     if: needs.access.outputs.allowed == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      MODEL_EVAL_AVAILABLE: ${{ (secrets.ANTHROPIC_API_KEY != '' || secrets.OPENAI_API_KEY != '') && '1' || '' }}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 5
+    outputs:
+      workspace: ${{ steps.plan.outputs.workspace }}
+      desktop_linux: ${{ steps.plan.outputs.desktop_linux }}
+      desktop_macos: ${{ steps.plan.outputs.desktop_macos }}
     steps:
       - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/test-setup
         with:
-          bun-version: 1.3.14
-      - uses: actions/setup-node@v7
+          cache-suffix: shards
+      - id: plan
+        run: bun scripts/ci-shards.ts "$GITHUB_OUTPUT"
+
+  validation:
+    needs: access
+    if: needs.access.outputs.allowed == 'true'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/test-setup
         with:
-          node-version: 24.13.0
-      - run: bun install --frozen-lockfile
-      - name: Install desktop test window manager
+          cache-suffix: validation
+      - run: bun run check --lane=validation
+
+  workspace:
+    needs: [access, shards]
+    if: needs.access.outputs.allowed == 'true'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.shards.outputs.workspace) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/test-setup
+        with:
+          cache-suffix: workspace-${{ matrix.shard }}
+      - run: bun run check --lane=workspace --shard=${{ matrix.shard }}/${{ matrix.total }}
+
+  pwa:
+    needs: access
+    if: needs.access.outputs.allowed == 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/test-setup
+        with:
+          cache-suffix: pwa
+      - run: bun scripts/tool-runtime.ts turbo run build --filter=catamorphic-pwa...
+      - run: bun run --cwd apps/pwa test:e2e
+
+  desktop-linux:
+    needs: [access, shards]
+    if: needs.access.outputs.allowed == 'true'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.shards.outputs.desktop_linux) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/test-setup
+        with:
+          cache-suffix: desktop-linux-${{ matrix.shard }}
+      - name: Install private desktop
         run: |
           sudo apt-get update
-          sudo apt-get install --yes openbox
-      - name: Complete deterministic check
-        run: >-
-          xvfb-run -a --server-args="-screen 0 1440x900x24"
-          bash -c 'openbox >/dev/null 2>&1 & CATAMORPHIC_E2E_VIRTUAL_DISPLAY=1 exec bun run check'
+          sudo apt-get install --yes xvfb xauth x11-utils xdotool openbox
+      - name: Build desktop and mobile guest
+        run: bun scripts/tool-runtime.ts turbo run build --concurrency=2 --filter=catamorphic-desktop... --filter=catamorphic-pwa...
+      - name: Test on a private desktop
+        run: bun scripts/desktop-test.ts --native --shard=${{ matrix.shard }}/${{ matrix.total }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-linux-${{ matrix.shard }}
+          path: test-results/
+          retention-days: 7
+
+  desktop-macos:
+    needs: [access, shards]
+    if: needs.access.outputs.allowed == 'true'
+    # Keep native Cocoa/menu/Command-key coverage on a dedicated Apple desktop.
+    # Blacksmith is already enabled for Linux in this org; macOS remains on
+    # GitHub until the org's Blacksmith macOS entitlement is confirmed.
+    runs-on: macos-15
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.shards.outputs.desktop_macos) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/test-setup
+        with:
+          cache-suffix: desktop-macos-${{ matrix.shard }}
+      - name: Build desktop and mobile guest
+        run: bun scripts/tool-runtime.ts turbo run build --concurrency=2 --filter=catamorphic-desktop... --filter=catamorphic-pwa...
+      - name: Test native macOS desktop
+        run: bun scripts/desktop-test.ts --native --shard=${{ matrix.shard }}/${{ matrix.total }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-macos-${{ matrix.shard }}
+          path: test-results/
+          retention-days: 7
+
+  checks:
+    name: checks
+    needs: [access, shards, validation, workspace, pwa, desktop-linux, desktop-macos]
+    if: always() && needs.access.outputs.allowed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every verification lane
+        env:
+          ALLOWED: ${{ needs.access.outputs.allowed }}
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          test "$ALLOWED" = true
+          echo "$RESULTS" | jq -e 'to_entries | all(.value.result == "success")'
+
+  eval:
+    needs: checks
+    if: github.event_name != 'pull_request'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 30
+    env:
+      MODEL_EVAL_AVAILABLE: ${{ (secrets.ANTHROPIC_API_KEY != '' || secrets.OPENAI_API_KEY != '') && '1' || '' }}
+      CATAMORPHIC_E2E_ARTIFACTS_DIR: ${{ github.workspace }}/test-results/eval
+    steps:
+      - uses: actions/checkout@v7
+        if: env.MODEL_EVAL_AVAILABLE == '1'
+      - uses: ./.github/actions/test-setup
+        if: env.MODEL_EVAL_AVAILABLE == '1'
+        with:
+          cache-suffix: eval
+      - name: Prepare eval desktop
+        if: env.MODEL_EVAL_AVAILABLE == '1'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes xvfb xauth x11-utils xdotool openbox
+          mkdir -p "$CATAMORPHIC_E2E_ARTIFACTS_DIR"
+          bun run build
       - name: Publish packages to the local eval registry
         if: github.event_name != 'pull_request' && env.MODEL_EVAL_AVAILABLE == '1'
         run: ./infra/local-registry/publish.sh
@@ -94,4 +223,4 @@ jobs:
           CLOUDFLARE_SANDBOX_API_URL: ${{ secrets.CLOUDFLARE_SANDBOX_API_URL }}
           CLOUDFLARE_SANDBOX_API_KEY: ${{ secrets.CLOUDFLARE_SANDBOX_API_KEY }}
           CF_SANDBOX_INTEGRATION: ${{ secrets.CLOUDFLARE_SANDBOX_API_URL != '' && '1' || '' }}
-        run: xvfb-run -a --server-args="-screen 0 1440x900x24" bun run --cwd apps/desktop test:eval
+        run: xvfb-run -a --server-args="-screen 0 1440x900x24 -nolisten tcp" bash scripts/desktop-test-display.sh bun run --cwd apps/desktop test:eval

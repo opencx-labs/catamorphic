@@ -154,7 +154,7 @@ bun run dev:server   # Stock-server-focused variant of the same orchestrator
 bun run dev:infra    # Optional shared observability and sandbox-bridge services
 bun run test         # Deterministic root and Postgres-complete workspace tests
 bun run test:external # Explicit opt-in for credentialed external integrations
-bun run check        # 12-phase merge gate
+bun run check        # 11-phase merge gate
 ```
 
 The development orchestrator assigns each worktree its own data directories
@@ -163,7 +163,7 @@ directory manually. `bun run test` creates one disposable Postgres database
 per invocation and is the default test command. External integrations run
 only when explicitly authorized with `bun run test:external`; credentials in
 the environment are not authority to contact external services. Run `bun run
-check` before completing engineering work. Its 12 phases include root and
+check` before completing engineering work. Its 11 phases include root and
 workspace typechecks and tests, plus the PWA and desktop checks. Docker must
 be running for `bun run test` and `bun run check` so they can create disposable
 Postgres databases.

@@ -27,11 +27,7 @@ async function checkFromPalette() {
 
 describe("project loading and update access", () => {
   beforeAll(async () => {
-    app = await launchApp(
-      process.env.CATAMORPHIC_REOPEN_SCREENSHOT
-        ? { env: { CATAMORPHIC_E2E_WINDOW_MODE: "visible" } }
-        : {},
-    );
+    app = await launchApp();
   });
   afterAll(async () => {
     await app?.stop();

@@ -1,10 +1,13 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { assertIsolatedDesktopTestHost } from "../../../scripts/desktop-test-environment.js";
 import { electronLaunchArgs } from "./harness-args.js";
+import { moveNativePointer } from "./native-pointer.js";
 
 /**
  * E2E harness: builds the app (electron-vite), launches the real Electron
@@ -69,6 +72,8 @@ export interface AppHandle {
    * `modifiers` is CDP's bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8.
    */
   press: (key: KeyName, modifiers?: number) => Promise<void>;
+  /** Move the OS pointer to renderer coordinates on the isolated desktop. */
+  movePointer: (point: { x: number; y: number }) => Promise<void>;
   /** Insert text through Chromium's real editing path (including Monaco). */
   insertText: (text: string) => Promise<void>;
   /**
@@ -113,6 +118,12 @@ export function removeE2eDirectory(directory: string): void {
 }
 
 export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
+  assertIsolatedDesktopTestHost();
+  const artifactRoot = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR;
+  const artifactDirectory = artifactRoot
+    ? path.join(artifactRoot, `electron-${randomUUID()}`)
+    : undefined;
+  if (artifactDirectory) fs.mkdirSync(artifactDirectory, { recursive: true });
   const userDataDir =
     opts.userDataDir ??
     fs.mkdtempSync(path.join(os.tmpdir(), "catamorphic-e2e-data-"));
@@ -141,10 +152,6 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
         ...process.env,
         ELECTRON_RUN_AS_NODE: undefined,
         CATAMORPHIC_E2E_DATA_DIR: userDataDir,
-        // Hidden is the interruption-free default. The visible command
-        // overrides this for suites that exercise native window semantics.
-        CATAMORPHIC_E2E_WINDOW_MODE:
-          process.env.CATAMORPHIC_E2E_WINDOW_MODE ?? "hidden",
         // Deterministic fake agent by default. Eval-style tests opt out by
         // passing CATAMORPHIC_E2E_FAKE_AGENT: "" (or "0") in opts.env — the
         // spread below wins, and every main-process check treats anything
@@ -229,10 +236,27 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
     return {
       ...client,
       processId: child.pid,
+      movePointer: async ({ x, y }) => {
+        const bounds = await client.eval<{ x: number; y: number }>(
+          "window.catamorphicDesktop.devWindow('get').then(state => state.contentBounds)",
+        );
+        await moveNativePointer({ x: bounds.x + x, y: bounds.y + y });
+      },
       connectToFrame,
       getOutput: () => output,
       userDataDir,
       stop: async (opts) => {
+        if (artifactDirectory) {
+          fs.writeFileSync(
+            path.join(artifactDirectory, "electron.log"),
+            output,
+          );
+          if (!killedForRecovery) {
+            await client
+              .screenshot(path.join(artifactDirectory, "last-frame.png"))
+              .catch(() => {});
+          }
+        }
         ws.close();
         try {
           if (!killedForRecovery) await terminate(child);
@@ -256,6 +280,8 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
       },
     };
   } catch (error) {
+    if (artifactDirectory)
+      fs.writeFileSync(path.join(artifactDirectory, "electron.log"), output);
     await terminate(child).catch((failure: unknown) => {
       output += `\n${String(failure)}`;
     });
@@ -371,12 +397,6 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
   // Frame targets only need Runtime; Page powers the window screenshot.
   if (opts.page !== false) {
     await send("Page.enable");
-    if (process.env.CATAMORPHIC_E2E_WINDOW_MODE === "visible") {
-      // Exercise foreground page behavior without activating the native window.
-      // This also survives reloads and keeps query retries and Monaco input
-      // independent of whichever application the developer is using.
-      await send("Emulation.setFocusEmulationEnabled", { enabled: true });
-    }
   }
 
   const evaluate = async <T>(expression: string): Promise<T> => {

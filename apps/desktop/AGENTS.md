@@ -60,8 +60,8 @@ watcher in a checkout another session is using.
 ## Verification and debugging
 
 Use the root `bun run check` merge gate before completing engineering work. It
-includes typechecks, builds, deterministic Postgres-backed tests, PWA E2E and both
-desktop modes. Docker must be running. Credentials do not authorize external tests.
+includes typechecks, builds, deterministic Postgres-backed tests, PWA E2E and the isolated
+desktop suite. Docker must be running. Credentials do not authorize external tests.
 
 Focused checks, from the worktree root:
 
@@ -69,10 +69,9 @@ Focused checks, from the worktree root:
 bun run --cwd apps/desktop typecheck
 bun run --cwd apps/desktop test
 bun run --cwd apps/desktop test:e2e
-bun run --cwd apps/desktop test:e2e:visible
 ```
 
-Both Electron modes are required before a commit. Suite membership lives in
+The complete Electron suite is required before a commit. Suite membership lives in
 [vitest.e2e.config.ts](vitest.e2e.config.ts), not a manually copied list here.
 Build changed packages first; desktop resolves them through `dist`. Main-process
 changes require a relaunch; renderer changes hot-reload.
@@ -85,18 +84,23 @@ may omit its setup. Keep teardown through app Quit and require exit code 0.
 SIGKILL is reserved for explicit crash-recovery tests. Never suppress crash alerts
 or disable CrashReporter to hide teardown errors.
 
-Automated windows must not steal focus or accept physical mouse input. The visible
-harness uses shown, non-focusable windows with opacity zero and CDP focus emulation.
-Drive keys/pointers through CDP after input focus and selection settle. A closed
-palette may still exist inside an inert ancestor. Wait for exit motion and focus
-handoff before opening another palette. Native focus behavior needs a dedicated
-scenario; do not remove isolation to make a test pass.
+Automated tests own a separate desktop (ADR 0127). `test:e2e` builds a cached
+Linux Docker image from this worktree, then runs all suites on a private Xvfb
+screen with Openbox. Windows are shown, focusable, and accept Chromium input
+normally. No host display or clipboard is connected. Logs and JUnit results
+are written under root `test-results/`; missing Docker fails without launching
+Electron locally. File filters and `--shard=1/8` pass through to Vitest.
 
-To watch isolated windows explicitly, set `CATAMORPHIC_E2E_REVEAL_WINDOWS=1`.
-Capture screenshots only in visible suites; a hidden Linux window may never
-produce the compositor frame that CDP capture waits for.
-On Linux use a private Xvfb display with Openbox and
-`CATAMORPHIC_E2E_VIRTUAL_DISPLAY=1`; never enable that flag on the user's display.
+CI uses `bun scripts/desktop-test.ts --native` on Linux (creates its own Xvfb)
+or a dedicated GitHub-hosted macOS runner. Do not set isolation flags manually
+on a developer desktop. Native macOS coverage runs in CI. Model evals and
+performance scripts that launch Electron also require an isolated test host.
+
+Keep tests within each file ordered and one suite at a time per display.
+Shard whole files across runners for concurrency. Drive keys/pointers through
+CDP after input focus and selection settle. For native hover tracking, use
+`app.movePointer` so OS and renderer coordinates agree. Wait for exit motion and focus
+handoff before opening another palette; an inert palette may still be mounted.
 
 ## Visual verification
 

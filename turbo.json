@@ -8,6 +8,10 @@
     "@catamorphic/registry#build": {
       "outputs": ["dist/**"]
     },
+    "catamorphic-desktop#build": {
+      "dependsOn": ["^build"],
+      "outputs": ["out/**"]
+    },
     "@catamorphic/api-client#build": {
       "inputs": ["$TURBO_DEFAULT$", "src/schema.d.ts"],
       "outputs": ["dist/**"]
@@ -96,11 +100,13 @@
         "S3_FORCE_PATH_STYLE",
         "S3_REGION",
         "S3_SECRET_ACCESS_KEY"
-      ]
+      ],
+      "cache": false
     },
     "typecheck": {
       "dependsOn": ["^build"]
     },
     "lint": {}
-  }
+  },
+  "globalPassThroughEnv": ["CATAMORPHIC_E2E_ARTIFACTS_DIR"]
 }

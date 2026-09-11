@@ -186,13 +186,11 @@ describe("toolRuntime", () => {
     const pwaScripts = packageScripts("apps/pwa/package.json");
 
     expect(desktopScripts["test:e2e"]).toBe(
-      "bun --bun electron-vite build && CATAMORPHIC_E2E_WINDOW_MODE=hidden bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ./vitest.e2e.config.ts",
+      "bun ../../scripts/desktop-test.ts",
     );
-    expect(desktopScripts["test:e2e:visible"]).toBe(
-      "bun --bun electron-vite build && CATAMORPHIC_E2E_WINDOW_MODE=visible bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ./vitest.e2e.config.ts",
-    );
+    expect(desktopScripts["test:e2e:visible"]).toBeUndefined();
     expect(desktopScripts["test:eval"]).toBe(
-      "bun --bun electron-vite build && CATAMORPHIC_E2E_WINDOW_MODE=hidden bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ./vitest.eval.config.ts",
+      "bun --bun electron-vite build && bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ./vitest.eval.config.ts",
     );
     expect(pwaScripts["test:e2e"]).toBe(
       "bun --bun vite build && bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/pwa --config ./vitest.e2e.config.ts",

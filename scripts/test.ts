@@ -170,7 +170,12 @@ export function testRunEnvironment(input: {
     TMP: input.resources.tempPath,
     TEMP: input.resources.tempPath,
     BUN_INSTALL_CACHE_DIR: input.resources.bunCachePath,
-    TURBO_CACHE_DIR: input.resources.turboCachePath,
+    // Hosted CI owns its checkout. Reuse dependency build outputs there;
+    // test tasks themselves are uncached and each shard owns its database.
+    TURBO_CACHE_DIR:
+      input.source.GITHUB_ACTIONS === "true"
+        ? (input.source.TURBO_CACHE_DIR ?? input.resources.turboCachePath)
+        : input.resources.turboCachePath,
     XDG_CACHE_HOME: input.resources.xdgCachePath,
     TURBO_TELEMETRY_DISABLED: "1",
   };

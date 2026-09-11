@@ -3,11 +3,7 @@ import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 let app: AppHandle;
 beforeAll(async () => {
-  app = await launchApp({
-    env: process.env.CATAMORPHIC_INSPECTOR_SCREENSHOT
-      ? { CATAMORPHIC_E2E_WINDOW_MODE: "visible" }
-      : {},
-  });
+  app = await launchApp();
 });
 afterAll(async () => {
   await app?.stop();
