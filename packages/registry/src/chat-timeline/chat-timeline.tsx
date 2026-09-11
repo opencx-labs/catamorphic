@@ -484,7 +484,6 @@ const TOOL_STEP_LABELS: Record<string, string> = {
   surface_control: "Managed a surface",
   open_surface: "Showed you something",
   point_at: "Pointed at something",
-  clear_pointers: "Stopped pointing",
   build_app: "Built an app",
   sync_project: "Synced the project",
   create_pull_request: "Opened a pull request",
@@ -492,7 +491,6 @@ const TOOL_STEP_LABELS: Record<string, string> = {
   read_project_session: "Read a project chat",
   send_project_session_message: "Messaged a project chat",
   spawn_subsession: "Started a subsession",
-  list_subsessions: "Listed subsessions",
   wait_for_subsessions: "Waited for subsessions",
   interrupt_subsession: "Stopped a subsession",
   request_user_attention: "Requested your attention",
@@ -500,7 +498,6 @@ const TOOL_STEP_LABELS: Record<string, string> = {
   list_worktrees: "Listed worktrees",
   create_worktree: "Created a worktree",
   use_worktree: "Switched worktrees",
-  use_project_checkout: "Switched to the project checkout",
   request_connection: "Requested a connection",
   read_skill: "Read a skill",
 };
@@ -511,7 +508,6 @@ const DESKTOP_STEP_TOOLS = new Set([
   "read_project_session",
   "send_project_session_message",
   "spawn_subsession",
-  "list_subsessions",
   "wait_for_subsessions",
   "interrupt_subsession",
   "request_user_attention",
@@ -521,11 +517,9 @@ const DESKTOP_STEP_TOOLS = new Set([
   "list_worktrees",
   "create_worktree",
   "use_worktree",
-  "use_project_checkout",
   "build_app",
   "open_surface",
   "point_at",
-  "clear_pointers",
   "workspace_overview",
   "read_tab",
   "open_browser",
@@ -548,7 +542,16 @@ const DESKTOP_STEP_TOOLS = new Set([
 const HIDDEN_STEP_TOOLS = new Set(["set_title", "set_chat_icon"]);
 
 /** Human header for a tool step; mono marks an unrecognized raw name. */
-function toolStepLabel(toolName: string): { label: string; mono: boolean } {
+function toolStepLabel(
+  toolName: string,
+  input?: unknown,
+): { label: string; mono: boolean } {
+  if (input && typeof input === "object") {
+    if (toolName === "point_at" && "target" in input && input.target === null)
+      return { label: "Stopped pointing", mono: false };
+    if (toolName === "use_worktree" && "path" in input && input.path === null)
+      return { label: "Switched to the project checkout", mono: false };
+  }
   const known = TOOL_STEP_LABELS[toolName];
   if (known) return { label: known, mono: false };
   const slash = toolName.indexOf("/");
@@ -763,7 +766,7 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
       const toolName =
         typeof event.toolName === "string" ? event.toolName : "tool";
       if (HIDDEN_STEP_TOOLS.has(toolName)) continue;
-      const pretty = toolStepLabel(toolName);
+      const pretty = toolStepLabel(toolName, event.toolInput);
       steps.push({
         kind: "tool",
         label: pretty.label,

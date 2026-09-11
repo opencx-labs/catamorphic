@@ -193,10 +193,13 @@ describeIf("ask_user across ClaudeCodeAgent + AgentSessionsService", () => {
       session.id,
       "Ask me what you need to know",
     );
-    await vi.waitFor(async () => {
-      const detail = await sessions.get(identity, projectId, session.id);
-      expect(detail.questions?.[0]?.questions).toEqual(ASK_INPUT.questions);
-    });
+    await vi.waitFor(
+      async () => {
+        const detail = await sessions.get(identity, projectId, session.id);
+        expect(detail.questions?.[0]?.questions).toEqual(ASK_INPUT.questions);
+      },
+      { timeout: 10_000 },
+    );
     expect(decision).toBeUndefined();
     const detail = await sessions.get(identity, projectId, session.id);
     const request = detail.questions?.[0];

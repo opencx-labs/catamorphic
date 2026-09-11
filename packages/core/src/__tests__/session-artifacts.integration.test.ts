@@ -3,7 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createDatabase, migrateToLatest } from "@catamorphic/db";
-import { FsBackend, FsRemoteBackend, ProjectManager } from "@catamorphic/git";
+import {
+  CheckoutRemoteBackend,
+  FsBackend,
+  FsRemoteBackend,
+  type OriginRepo,
+  ProjectManager,
+} from "@catamorphic/git";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { SessionArtifactsService } from "../services/session-artifacts-service.js";
@@ -11,10 +17,28 @@ import { SessionArtifactsService } from "../services/session-artifacts-service.j
 const connectionString = process.env.DATABASE_URL ?? "";
 const suite = connectionString ? describe : describe.skip;
 const schema = `artifacts_${randomUUID().replaceAll("-", "")}`;
-const db = createDatabase({ connectionString, schema });
+const db = createDatabase({ connectionString, schema, poolSize: 1 });
 const identity = { tenantId: randomUUID(), externalUserId: "owner" };
 const projectId = randomUUID();
 const sessionId = randomUUID();
+let rejectPublication = false;
+class PublicationBackend extends FsRemoteBackend {
+  override async withOrigin<T>(
+    tenantId: string,
+    projectId: string,
+    fn: (origin: OriginRepo) => Promise<T>,
+  ): Promise<T> {
+    const result = await super.withOrigin(tenantId, projectId, fn);
+    if (
+      rejectPublication &&
+      typeof result === "object" &&
+      result !== null &&
+      "revision" in result
+    )
+      throw new Error("Remote publication failed");
+    return result;
+  }
+}
 const source =
   "export default function App() { return <p>First revision</p>; }";
 
@@ -46,7 +70,15 @@ suite("session artifact source lifecycle", () => {
     );
     manager = new ProjectManager(
       new FsBackend(path.join(directory, "dev")),
-      new FsRemoteBackend(path.join(directory, "origin")),
+      // Desktop storage resolves project paths through its single-connection DB.
+      // Artifact updates must resolve it before locking a revision in a transaction.
+      new CheckoutRemoteBackend(
+        async () => {
+          await sql`select 1`.execute(db);
+          return null;
+        },
+        new PublicationBackend(path.join(directory, "origin")),
+      ),
     );
     await manager.create(identity.tenantId, projectId, {
       name: "artifacts",
@@ -133,6 +165,40 @@ suite("session artifact source lifecycle", () => {
     await expect(
       artifacts.get({ ...address, identity: { ...identity, scope: [] } }),
     ).rejects.toThrow("Not authorized");
+  });
+
+  it("rolls back a revision when buffered remote publication fails, then recovers", async () => {
+    const artifact = await artifacts.create({
+      identity,
+      projectId,
+      sessionId,
+      kind: "app",
+      name: "publication",
+      source,
+    });
+    const address = { identity, projectId, artifactId: artifact.id };
+    rejectPublication = true;
+    try {
+      await expect(
+        artifacts.update({
+          ...address,
+          revision: 1,
+          files: { [artifact.sourcePath]: source.replace("First", "Rejected") },
+        }),
+      ).rejects.toThrow("Remote publication failed");
+    } finally {
+      rejectPublication = false;
+    }
+    expect((await artifacts.get(address)).revision).toBe(1);
+    const recovered = await artifacts.update({
+      ...address,
+      revision: 1,
+      files: { [artifact.sourcePath]: source.replace("First", "Recovered") },
+    });
+    expect(recovered.revision).toBe(2);
+    expect((await artifacts.files(address))[artifact.sourcePath]).toContain(
+      "Recovered",
+    );
   });
 
   it("uses the same lifecycle for workflows and keeps closed-session results readable", async () => {

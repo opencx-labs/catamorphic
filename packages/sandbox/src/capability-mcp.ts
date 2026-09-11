@@ -5,6 +5,7 @@ import {
   type AgentCapabilityGateway,
   agentCapabilityTools,
 } from "./agent-capabilities.js";
+import { extraToolResult } from "./coding-agent/tool-result.js";
 
 /** Same bootstrap tools over MCP, for subprocess harnesses and host mounts. */
 export async function capabilityMcpResponse(args: {
@@ -52,7 +53,7 @@ export async function capabilityMcpResponse(args: {
         if (!tool) throw new Error("Unknown capability gateway tool");
         try {
           const value = await tool.execute(input.arguments, { projectId: "" });
-          return { content: [{ type: "text", text: JSON.stringify(value) }] };
+          return extraToolResult(value);
         } catch (error) {
           return {
             isError: true,
@@ -109,7 +110,7 @@ export async function listenAgentCapabilityGateway(
       for await (const chunk of request) {
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         bytes += buffer.length;
-        if (bytes > 1024 * 1024) {
+        if (bytes > 6 * 1024 * 1024) {
           response.writeHead(413).end();
           return;
         }

@@ -1,3 +1,4 @@
+import { APP_ICON_NAMES } from "@catamorphic/app";
 import { SessionArtifactNotFoundError } from "@catamorphic/core";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
@@ -81,6 +82,7 @@ export function registerSessionArtifactRoutes(
         kind: z.enum(["app", "workflow"]),
         name: z.string().min(1).max(100),
         title: z.string().max(200).optional(),
+        icon: z.enum(APP_ICON_NAMES).optional(),
         source: z.string().max(5 * 1024 * 1024),
         files: Files.optional(),
       }),
@@ -112,6 +114,13 @@ export function registerSessionArtifactRoutes(
               kind: "preview",
             })
           : null;
+      if (artifact.appName && request.body.icon && ctx.core.apps)
+        await ctx.core.apps.updatePresentation({
+          identity,
+          projectId: artifact.projectId,
+          appName: artifact.appName,
+          icon: request.body.icon,
+        });
       return reply.status(201).send({ artifact, build });
     },
   });

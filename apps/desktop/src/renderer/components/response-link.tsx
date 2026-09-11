@@ -1,7 +1,7 @@
 import { AppWindow, FileText, Workflow } from "lucide-react";
 import type { ReactNode } from "react";
 import type { OpenModifiers } from "../../shared/open-mode";
-import { parseSurfaceLink } from "../lib/surface-link";
+import { parseSurfaceLink } from "../../shared/surface-link";
 import { PILL_SURFACE } from "./context-pill";
 import { FilePreview } from "./file-preview";
 import { ResourceInspector } from "./resource-inspector";

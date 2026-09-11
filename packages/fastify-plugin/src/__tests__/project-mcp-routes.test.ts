@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { projectToolCapabilities } from "../project-capabilities.js";
 import { createTestApp } from "./test-app.js";
 
 const PROJECT_ID = "a1b2c3d4-e5f6-4890-abcd-ef1234567890";
@@ -110,6 +111,49 @@ async function rpc(
 }
 
 describe("project workflow-tools MCP endpoint", () => {
+  it("projects workflow schemas into the internal registry and calls the same deployed run service", async () => {
+    const core = fakeCore();
+    const context = {
+      identity: { tenantId: "tenant-1", externalUserId: "user-1" },
+      projectId: PROJECT_ID,
+      sessionId: "session",
+      allocationId: "allocation",
+    };
+    const capabilities = await projectToolCapabilities({
+      core: core as never,
+      context,
+    });
+    const weather = capabilities.find(
+      (item) => item.name === "project.lookupWeather",
+    );
+    const digest = capabilities.find(
+      (item) => item.name === "project.daily_digest",
+    );
+    if (!weather || !digest) throw new Error("Workflow projection missing");
+    expect(() => weather.prepare({ city: 42 })).toThrow();
+    const invocation = {
+      ...context,
+      requestId: "weather",
+      progress: async () => {},
+    };
+    expect(
+      await weather.prepare({ city: "Amman" }).execute(invocation),
+    ).toEqual({ temperature: 21 });
+    expect(core.triggers.fire).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflows: ["lookupWeather"],
+        payload: { city: "Amman" },
+      }),
+    );
+    await digest.prepare({ input: "today" }).execute(invocation);
+    expect(core.triggers.fire).toHaveBeenLastCalledWith(
+      expect.objectContaining({ workflows: ["buildDigest"], payload: "today" }),
+    );
+    expect(
+      capabilities.find((item) => item.name === "project.catamorphic_poll_run")
+        ?.effect,
+    ).toBe("read");
+  });
   it("answers initialize as the project server", async () => {
     const app = createTestApp({ core: fakeCore() as never });
     apps.push(app);

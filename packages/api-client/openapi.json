@@ -27759,6 +27759,18 @@
                     "type": "string",
                     "maxLength": 200
                   },
+                  "icon": {
+                    "type": "string",
+                    "enum": [
+                      "default",
+                      "review",
+                      "dashboard",
+                      "report",
+                      "tracker",
+                      "form",
+                      "calculator"
+                    ]
+                  },
                   "source": {
                     "type": "string",
                     "maxLength": 5242880
@@ -29521,7 +29533,7 @@
                   "name": {
                     "type": "string",
                     "minLength": 1,
-                    "maxLength": 120
+                    "maxLength": 200
                   },
                   "input": {
                     "default": {},

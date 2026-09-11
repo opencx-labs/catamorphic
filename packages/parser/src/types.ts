@@ -12,13 +12,12 @@ export const APP_RUNTIME_PACKAGE = "@catamorphic/app";
 
 /**
  * The project's dev-time tooling package (the seeded `scripts/check.ts`
- * imports it). Dev-only: stripped from every sandbox install alongside the
- * app runtime, so `bun install` inside execution and build sandboxes never
- * tries to resolve it.
+ * imports it). Execution production installs omit this dev dependency; unlocked
+ * execution and build manifests strip it alongside the app runtime.
  */
 export const PROJECT_TOOLING_PACKAGE = "@catamorphic/parser";
 
-/** Packages stripped from manifests before any sandbox `bun install`. */
+/** Packages stripped when preparing sandbox manifests without a frozen lock. */
 export const SANDBOX_STRIPPED_PACKAGES: readonly string[] = [
   APP_RUNTIME_PACKAGE,
   PROJECT_TOOLING_PACKAGE,
@@ -30,21 +29,25 @@ export const SANDBOX_STRIPPED_PACKAGES: readonly string[] = [
  * (contracts declares it for types). Apps never execute in a workflow
  * sandbox, so excluding them keeps app edits from invalidating the execution
  * artifact digest and keeps frontend dependencies out of the execution
- * sandbox — including from its `bun install`, where an unresolvable
- * registry-less package would fail the run.
+ * sandbox. Locked snapshots retain unmodified dependency manifests, including
+ * app manifests, so frozen lockfile validation remains sound. A filtered
+ * production install omits their frontend and dev packages. Unlocked snapshots
+ * strip registry-less dependencies before the local package fallback is staged.
  */
 export function executionFiles(
   files: Record<string, string>,
 ): Record<string, string> {
+  const locked = "bun.lock" in files || "bun.lockb" in files;
   return Object.fromEntries(
     Object.entries(files)
       .filter(
         ([filePath]) =>
-          !filePath.replace(/^\/+/, "").startsWith(`${APP_SOURCE_ROOT}/`),
+          !filePath.replace(/^\/+/, "").startsWith(`${APP_SOURCE_ROOT}/`) ||
+          (locked && filePath.endsWith("/package.json")),
       )
       .map(([filePath, content]) => [
         filePath,
-        filePath.endsWith("package.json")
+        !locked && filePath.endsWith("package.json")
           ? stripSandboxUnresolvableDependencies(content)
           : content,
       ]),

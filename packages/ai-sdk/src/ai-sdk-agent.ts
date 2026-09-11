@@ -521,6 +521,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
             definition.name,
             tool({
               description: definition.description,
+              toModelOutput: ({ output }) => mediaModelOutput(output),
               inputSchema: z.object(definition.parameters),
               execute: (input) => definition.execute(input, { projectId: "" }),
             }),

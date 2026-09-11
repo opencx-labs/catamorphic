@@ -17,6 +17,7 @@ import {
   type AgentQuestionRequest,
   type AgentRuntimeRequestResponse,
   type AttachedPluginForAgent,
+  capabilityEventPresenter,
   type McpToolPolicyLayers,
   messageWithAttachmentNames,
   narrowingLayer,
@@ -4066,7 +4067,9 @@ export class AgentSessionsService {
                   message,
                   turnOptions,
                 );
-          for await (const event of stream) {
+          const presentCapability = capabilityEventPresenter();
+          for await (const rawEvent of stream) {
+            const event = presentCapability(rawEvent);
             if (extras.leaseLost())
               throw new Error(
                 "Execution ownership was lost. Check the last actions before retrying.",
@@ -5894,6 +5897,31 @@ export class AgentSessionsService {
       }
     }
     return layers;
+  }
+
+  /** The same live caller ceiling used by harness and deferred host tools. */
+  async toolContextForSession(args: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+  }): Promise<{
+    agentId: string | null;
+    toolPolicies?: Record<string, McpToolPolicyLayers>;
+  }> {
+    // Tool discovery needs the assignment and caller ceiling, never the transcript.
+    const session = await this.requireSession(
+      args.identity,
+      args.projectId,
+      args.sessionId,
+    );
+    return {
+      agentId: session.agent_id,
+      toolPolicies: await this.callerToolPolicies(
+        args.identity,
+        args.projectId,
+        session.agent_id,
+      ),
+    };
   }
 
   /** `caller` + `toolPolicies` for {@link StartSessionOpts}. */

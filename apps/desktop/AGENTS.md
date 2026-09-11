@@ -143,6 +143,15 @@ cards, and `data-disabled-reason` beside each disabled condition. Do not rely on
 native title tooltips. When editing a failure-prone picker, preserve an actionable
 error/retry state and diagnostics that distinguish request failure from no matches.
 
+## Agent tool admission
+
+Follow ADR 0127 and [Agent tool surface](docs/agent-tools.md). Prefer native
+files/code and skills for ordinary work. Host-owned operations enter the existing
+capability registry. A permanent tool needs evidence of an interaction benefit,
+an explicit exposure policy, and scenario coverage; do not mount another broad
+MCP catalog into project sessions. Keep recipes in skills and preserve native
+execution, live authorization, media, and user takeover across projections.
+
 ## Workflow authoring
 
 The desktop owns workflow details, source editing, draft protection, and run or

@@ -62,6 +62,12 @@ import {
   type ProjectExperienceContext,
 } from "../shared/project-experience.js";
 import { sidebarSections, visibleSidebarConfig } from "../shared/sidebar.js";
+import {
+  isBrowserFile,
+  localFileUrl,
+  parseSurfaceLink,
+  resolveProjectFileLocation,
+} from "../shared/surface-link.js";
 import type { TerminalMacro } from "../shared/terminal-macros.js";
 import { findSearchInput } from "./components/action-search-input.js";
 import {
@@ -166,12 +172,6 @@ import {
 import { notifyDesktop, playChime } from "./lib/notify.js";
 import { transitionSidebarUpdate } from "./lib/sidebar-transition.js";
 import { skillInvocation } from "./lib/skills.js";
-import {
-  isBrowserFile,
-  localFileUrl,
-  parseSurfaceLink,
-  resolveProjectFileLocation,
-} from "./lib/surface-link.js";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "./lib/tab-drag.js";
 import { useSidebarReveal } from "./lib/use-sidebar-reveal.js";
 import { NEW_WORKFLOW_PROMPT } from "./lib/workflow-authoring.js";

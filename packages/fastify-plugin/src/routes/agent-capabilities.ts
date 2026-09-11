@@ -62,6 +62,7 @@ export function registerAgentCapabilityRoutes(
   typed.post(
     `${base}/invoke`,
     {
+      bodyLimit: 6 * 1024 * 1024,
       schema: {
         params,
         headers,

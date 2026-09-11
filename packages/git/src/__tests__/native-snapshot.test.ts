@@ -21,6 +21,8 @@ it("applies snapshot selection and budgets through the native checkout adapter",
   );
   try {
     await repo.writeFile("workflow.ts", "export const value = 12345;");
+    expect(await repo.readFileBytes("missing.ts")).toBeNull();
+    expect(await repo.readFileBytes("workflow.ts/index.ts")).toBeNull();
     const head = await repo.commit("source", {
       name: "Test",
       email: "test@example.com",

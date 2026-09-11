@@ -66,6 +66,11 @@ expired leases alone never free capacity.
 
 ## Verify
 
+The stock-server suite uses process workers (`--pool=forks`). Repeated PGlite
+boot/teardown in shared V8 worker threads can crash the pinned Node runtime
+during WebAssembly code reclamation; process isolation keeps each VM lifecycle
+independent.
+
 - `bun run test` from the repository root runs deterministic,
   Postgres-complete workspace tests, including the inject-driven loop
   (boot, project, invite, scoped chat, and revocation). Docker must be

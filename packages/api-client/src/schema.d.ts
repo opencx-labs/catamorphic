@@ -13072,6 +13072,8 @@ export interface paths {
                         kind: "app" | "workflow";
                         name: string;
                         title?: string;
+                        /** @enum {string} */
+                        icon?: "default" | "review" | "dashboard" | "report" | "tracker" | "form" | "calculator";
                         source: string;
                         files?: {
                             [key: string]: string;

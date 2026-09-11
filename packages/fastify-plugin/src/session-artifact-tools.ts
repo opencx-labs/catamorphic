@@ -1,3 +1,4 @@
+import { APP_ICON_NAMES } from "@catamorphic/app";
 import type { CatamorphicCore, Identity } from "@catamorphic/core";
 import { z } from "zod";
 import { toolError, toolValue } from "./mcp-shared.js";
@@ -10,6 +11,7 @@ const Input = z.object({
   kind: z.enum(["app", "workflow"]).optional(),
   name: z.string().max(100).optional(),
   title: z.string().max(200).optional(),
+  icon: z.enum(APP_ICON_NAMES).optional(),
   source: z.string().optional(),
   files: z.record(z.string(), z.string().nullable()).optional(),
   revision: z.number().int().positive().optional(),
@@ -75,6 +77,13 @@ export function sessionArtifactTool(
                   kind: "preview",
                 })
               : null;
+          if (artifact.appName && input.icon && core.apps)
+            await core.apps.updatePresentation({
+              identity,
+              projectId,
+              appName: artifact.appName,
+              icon: input.icon,
+            });
           return toolValue({
             artifact,
             build,

@@ -39,13 +39,19 @@ over apps importing workflow types directly. The alternative required a
 `tsc --emitDeclarationOnly` step purely to strip runtime code, which this
 deletes.
 
-App sources never reach execution. `executionFiles()` drops `apps/**` before
+App sources never reach execution. `executionFiles()` drops app code before
 parsing, before the execution transform, and before the artifact digest is
 computed, so app edits leave the workflow artifact untouched. The parser also
 excludes `apps/**` when discovering workflows and step functions: step functions
 are collected into one flat name-keyed map, so an app-side function sharing a
 name with a step would otherwise override it in both the rendered graph and the
 execution transform.
+
+For a locked project, dependency manifests (including app manifests) remain
+byte-identical beside the lockfile. Bun validates them with a frozen, filtered
+production install that excludes app workspaces and development dependencies.
+Removing dependencies from manifests while retaining their lockfile is invalid.
+Unlocked projects can strip registry-less packages before staging local fallbacks.
 
 The workflow package declaration moves to `workflows/package.json`. Callers that
 resolve it fall back to the repo root so a flat project still works.

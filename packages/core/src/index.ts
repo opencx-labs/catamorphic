@@ -53,6 +53,7 @@ export type {
   AgentCapabilityContext,
   AgentCapabilityInvocation,
   AgentCapabilityOptions,
+  AgentCapabilitySource,
 } from "./services/agent-capabilities-service.js";
 export {
   AgentCapabilitiesService,

@@ -116,7 +116,7 @@ export interface SkillsNoteOpts {
  */
 export function composeSkillsNote(opts: SkillsNoteOpts): string | undefined {
   const load = opts.hasTools
-    ? "Load a skill by name with the read_skill workspace tool (or your native Skill tool when it lists the name)."
+    ? "Use native Skill or read a reachable SKILL.md file. If it is not on your execution filesystem, discover the read_skill capability and invoke it by the declared name."
     : opts.appSkillsDir
       ? `App skills live at \`${opts.appSkillsDir}/<name>/SKILL.md\` — read the file before following one.`
       : undefined;

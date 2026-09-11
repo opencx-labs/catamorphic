@@ -98,6 +98,8 @@ export interface ClaudeCodeAgentOpts {
   disableBash?: boolean;
   /** Use host session watchers instead of private native Monitor tasks. */
   disableNativeMonitors?: boolean;
+  hostOwnsTodos?: boolean;
+  hostOwnsSubagents?: boolean;
   /**
    * External MCP servers for this agent (the host's resolved connection
    * set). Passed to the CLI as native `mcpServers` config and allowlisted
@@ -801,11 +803,13 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     const shellToolsDisabled =
       Boolean(this.opts.disableBash) && workspaceServer !== undefined;
     const hostOwnsTodos =
-      workspaceServer !== undefined &&
-      extraTools.some((tool) => tool.name === "update_todo_list");
+      this.opts.hostOwnsTodos ||
+      (workspaceServer !== undefined &&
+        extraTools.some((tool) => tool.name === "update_todo_list"));
     const hostOwnsSubagents =
-      workspaceServer !== undefined &&
-      extraTools.some((tool) => tool.name === "spawn_subsession");
+      this.opts.hostOwnsSubagents ||
+      (workspaceServer !== undefined &&
+        extraTools.some((tool) => tool.name === "spawn_subsession"));
     const readOnly = this.opts.permissionMode === "plan";
     const disallowedTools = [
       ...(shellToolsDisabled || readOnly ? SHELL_EXECUTION_TOOLS : []),

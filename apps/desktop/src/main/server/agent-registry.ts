@@ -19,7 +19,6 @@ import type {
   AgentPluginConfig,
   CodingAgentProvider,
   ExtraTool,
-  ExtraToolContext,
   McpToolPolicyLayers,
   SandboxProvider,
   ToolPermissionDecision,
@@ -64,6 +63,7 @@ import type { ProjectSessionContext } from "./workspace-context-agent.js";
 import { WorkspaceContextAgent } from "./workspace-context-agent.js";
 import {
   buildWorkspaceToolkit,
+  type WorkspaceTool,
   type WorkspaceToolkit,
 } from "./workspace-tools.js";
 
@@ -85,12 +85,6 @@ export interface DesktopAgentRegistryDeps {
   toolPermissions?: ToolPermissionBroker;
   /** Installed connector plugins (Claude Code loads them natively). */
   connectors?: ConnectorsService;
-  /**
-   * The project's workflow-tools MCP endpoint (`/api/projects/:id/mcp`),
-   * mounted per chat session so agents can call the project's ai.tool-call
-   * workflows. Undefined while the embedded server is still booting.
-   */
-  projectMcpUrl?: (projectId: string, sessionId: string) => string | undefined;
   /** Codex's authenticated loopback access to filtered workspace tools. */
   workspaceMcpServer?: (
     projectId: string,
@@ -182,25 +176,6 @@ const CODEX_SANDBOX_MODES = {
  * is observation (overview, read_tab, read_terminal, snapshots) and
  * pointing — a read-only agent can still show, watch, and explain.
  */
-const MUTATING_WORKSPACE_TOOLS = new Set([
-  "run_terminal",
-  "write_terminal",
-  "browser_act",
-  "build_app",
-  "sync_project",
-  "create_pull_request",
-  "set_session_activity",
-  "create_worktree",
-  "use_worktree",
-  "use_project_checkout",
-]);
-
-const HOST_CHECKOUT_TOOLS = new Set([
-  "create_worktree",
-  "use_worktree",
-  "use_project_checkout",
-]);
-
 /** Server key of the per-project workflow-tools MCP server (session-scoped). */
 export const WORKFLOWS_SERVER_KEY = PROJECT_TOOLS_SERVER_KEY;
 
@@ -236,6 +211,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     {
       key: string;
       profileId: string;
+      config: AgentConfig;
       provider: RegisteredCodingAgent["provider"];
       topology: RegisteredCodingAgent["topology"];
       privilege: RegisteredCodingAgent["privilege"];
@@ -367,7 +343,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     // would drop the built-in agent's in-memory sessions mid-conversation.
     // Connection/connector edits DO rebuild, so the next turn runs with
     // the new server set — but header VALUES are not part of the key:
-    // harnesses read servers live (see liveServers), so a rotated OAuth
+    // the capability connection pool reads live credentials, so a rotated OAuth
     // token or renewed header reaches the next call in place, never
     // rebuilding the provider under a conversation.
     // Policies are deliberately NOT part of the key either: harnesses
@@ -409,6 +385,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     this.cache.set(id, {
       key,
       profileId,
+      config,
       provider,
       topology: built.topology,
       privilege: config.mode ?? "edit",
@@ -656,20 +633,6 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     return this.liveMcp(config, profileId);
   }
 
-  /**
-   * The current server configs for an agent, re-resolved on every read —
-   * headers included, so the bearer a token refresh just wrote reaches
-   * the harness's next connect/spawn/query. The server SET is still part
-   * of the cache key (an added or removed connection rebuilds); only the
-   * values move underneath.
-   */
-  private liveServers(
-    config: AgentConfig,
-    profileId: string,
-  ): Record<string, AgentMcpServerConfig> {
-    return this.liveMcp(config, profileId).servers;
-  }
-
   private liveMcp(config: AgentConfig, profileId: string): ResolvedMcp {
     // The profile store's copy is the live one for profile agents (a
     // cleared policy is a real edit — no fallback to the build-time copy);
@@ -679,30 +642,6 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       this.deps.profileConfig.forProfile(profileId).agents.get(config.id) ??
       config;
     return this.resolveMcp(latest, profileId);
-  }
-
-  /**
-   * Session-scoped MCP servers: the session's project decides the server
-   * set, so this resolves per session start/turn — one "catamorphic"
-   * entry pointing at the project's workflow-tools endpoint.
-   */
-  private sessionMcpServers(
-    context: ExtraToolContext,
-  ): Record<string, AgentMcpServerConfig> {
-    const url = this.deps.projectMcpUrl?.(
-      context.projectId,
-      context.sessionId ?? "",
-    );
-    // The project endpoint enforces caller scope and capability policy itself.
-    return url
-      ? {
-          [WORKFLOWS_SERVER_KEY]: {
-            transport: "http",
-            url,
-            defaultToolsApprovalMode: "approve",
-          },
-        }
-      : {};
   }
 
   private freshDefaults(config: AgentConfig) {
@@ -947,6 +886,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     this.cache.set(id, {
       key,
       profileId,
+      config,
       provider,
       topology: registered.topology,
       privilege: def.mode ?? "edit",
@@ -1047,11 +987,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       const topology = "native";
       const fake = new E2eFakeCodingAgent(
         this.deps.sandboxProvider,
-        this.workspaceTools(config, topology),
+        this.workspaceTools(config, topology, true),
         this.toolPermissionHandler(config, profileId),
         (projectId) => this.settingsContext(projectId, config),
         this.deps.workspaceBridge?.elicit.bind(this.deps.workspaceBridge),
-        this.deps.projectMcpUrl,
         (sessionId, options) => this.bindSessionQuestions(sessionId, options),
       );
       return {
@@ -1096,14 +1035,12 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
               ),
               modelId,
               extraTools: this.workspaceTools(config, "native"),
-              mcpServers: () => this.liveServers(config, profileId),
+              mcpServers: {},
               // Elicitation from this agent's connectors → the front window,
               // labeled with the agent so the user knows who's asking.
               onElicit: bridge
                 ? (request) => bridge.elicit(config.name, request)
                 : undefined,
-              mcpServersForSession: (context) =>
-                this.sessionMcpServers(context),
               mcpPolicies: () => this.livePolicies(config, profileId).policies,
               onToolPermission: this.toolPermissionHandler(config, profileId),
             });
@@ -1164,9 +1101,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                   pathToClaudeCodeExecutable: component.executablePath,
                   extraTools: this.workspaceTools(config, "native"),
                   disableNativeMonitors: true,
-                  mcpServers: () => this.liveServers(config, profileId),
-                  mcpServersForSession: (context) =>
-                    this.sessionMcpServers(context),
+                  hostOwnsTodos: true,
+                  hostOwnsSubagents: true,
+                  mcpServers: {},
                   plugins: mcp.plugins,
                   mcpPolicies: () =>
                     this.livePolicies(config, profileId).policies,
@@ -1234,7 +1171,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                       ? { env: componentEnv }
                       : {}),
                   codexPathOverride: component.executablePath,
-                  mcpServers: () => this.liveServers(config, profileId),
+                  mcpServers: {},
                   mcpServersForSession: (context) => {
                     const workspaceServer = context.sessionId
                       ? this.deps.workspaceMcpServer?.(
@@ -1244,7 +1181,6 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                         )
                       : undefined;
                     return {
-                      ...this.sessionMcpServers(context),
                       ...(workspaceServer
                         ? { workspace: workspaceServer }
                         : {}),
@@ -1363,19 +1299,33 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
    */
   private workspaceTools(
     config: Pick<AgentConfig, "mode">,
-    topology: "native" | "controller",
-  ): ExtraTool[] | undefined {
+    topology: RegisteredCodingAgent["topology"],
+    all = false,
+  ): WorkspaceTool[] | undefined {
     const tools = this.workspaceToolkit?.tools;
     if (!tools) return undefined;
-    return tools.filter((tool) => {
-      if (topology === "controller" && HOST_CHECKOUT_TOOLS.has(tool.name)) {
-        return false;
-      }
-      return !(
-        (config.mode ?? "edit") === "read-only" &&
-        MUTATING_WORKSPACE_TOOLS.has(tool.name)
-      );
-    });
+    return tools.filter(
+      (tool) =>
+        (all || tool.eager) &&
+        (topology === "native" || !tool.nativeOnly) &&
+        ((config.mode ?? "edit") !== "read-only" || tool.readOnly),
+    );
+  }
+
+  /** Live policy/configuration, shared by direct and discovered projections. */
+  capabilitySurface(id: string) {
+    const registered = this.get(id);
+    const found = this.findConfig(id) ?? this.cache.get(id);
+    if (!found || !registered) return undefined;
+    const { config, profileId } = found;
+    const topology = registered.topology;
+    return {
+      tools: this.workspaceTools(config, topology, true) ?? [],
+      readOnly: config.mode === "read-only",
+      profileId,
+      mcp: this.livePolicies(config, profileId),
+      ask: this.toolPermissionHandler(config, profileId),
+    };
   }
 
   /** Filtered host workspace tools for a loopback, session-scoped harness. */

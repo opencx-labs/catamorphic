@@ -26,6 +26,7 @@ const writeSource = (content: string) =>
 afterEach(async (context) => {
   expect(app.getRendererErrors()).toEqual([]);
   if (context.task.result?.state === "fail") {
+    console.error("Workflow failure", context.task.result?.errors);
     console.error("SERVER LOG", app.getOutput());
 
     console.error(
@@ -121,6 +122,35 @@ describe("workflow authoring", { retry: 0 }, () => {
     );
   });
 
+  it("fits a workflow restored in a background tab on its first visible measurement", async () => {
+    await run(
+      `window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',altKey:true,metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true,cancelable:true})); return true;`,
+    );
+    await wait(
+      `return !!$('.workflow-workbench')?.closest('.hidden');`,
+      "workflow in background",
+    );
+    // Reload only after the host has persisted the selected background arrangement.
+    await app.waitFor(
+      `window.catamorphicDesktop.workspaceStateGet('${projectId}').then(state => state?.activeTabKey?.startsWith('browser:'))`,
+      { label: "background tab saved" },
+    );
+    await run(
+      `window.workflowBeforeReload=true; location.reload(); return true;`,
+    );
+    await wait(
+      `return !window.workflowBeforeReload && !!$('.workflow-workbench')?.closest('.hidden') && $$('.react-flow__node').length === 4;`,
+      "background workflow restored",
+    );
+    await run(
+      `$('[data-point-key="workflow:linkedWorkflow"] button').click(); return true;`,
+    );
+    await wait(
+      `const canvas=$('.catamorphic-workflow-canvas[data-viewport-ready="true"]')?.getBoundingClientRect(); const nodes=$$('.react-flow__node').map(node=>node.getBoundingClientRect()); return canvas?.width > 0 && nodes.length === 4 && nodes.every(node=>node.width > 0 && node.left >= canvas.left - 1 && node.right <= canvas.right + 1 && node.top >= canvas.top - 1 && node.bottom <= canvas.bottom + 1);`,
+      "workflow nodes fit visible canvas",
+    );
+  });
+
   it("preserves the canvas and viewport through panel changes and external edits", async () => {
     await run(
       `window.workflowCanvas = $('.react-flow'); window.workflowViewport = $('.react-flow__viewport').style.transform; return true;`,
@@ -153,9 +183,12 @@ describe("workflow authoring", { retry: 0 }, () => {
     expect(await run(`return window.workflowSawMotion;`)).toBe(true);
     expect(
       await run(
-        `return $('.react-flow')===window.workflowCanvas && $('.react-flow__viewport').style.transform===window.workflowViewport;`,
+        `return { retainedCanvas: $('.react-flow')===window.workflowCanvas, viewport: $('.react-flow__viewport').style.transform };`,
       ),
-    ).toBe(true);
+    ).toEqual({
+      retainedCanvas: true,
+      viewport: await run(`return window.workflowViewport;`),
+    });
     await run(
       `window.workflowMotionObserver.disconnect(); button('Write summary').click(); return true;`,
     );

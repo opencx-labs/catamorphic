@@ -7,12 +7,13 @@ description: Create temporary generated UI, code reviews, reports, prototypes, o
 
 Use apps for generated interactive UI. Temporary results belong to the current
 session and do not require adding files to the user's project or publishing an
-app. Use the session_artifact tool when available. Project-owned instructions
+app. Discover session_artifact and invoke its returned capability. External MCP hosts may offer the same operation directly. Project-owned instructions
 and component libraries take precedence over these defaults.
 
 ## Create and iterate
 
 - For an app, call action create with kind app, a lowercase name, a clear title,
+  icon (review, dashboard, report, tracker, form, calculator or default),
   and source containing a React component with a default export. The host creates
   the ordinary apps/<name> scaffold and builds it. A static app needs no workflow
   contract. Do not create a second HTML renderer or inject UI into host chrome.
@@ -26,11 +27,9 @@ and component libraries take precedence over these defaults.
   source and rebuild. The last successful build remains available.
 - Open the returned app target with open_surface and link it in the conversation
   using Markdown, for example [Review](app:the-returned-appName). Never invent ids.
-- After creating an app, use set_app_presentation with its returned appName and a clear
-  canonical type: review, dashboard, report, tracker, form, or calculator.
-  Every code review uses review. Use default when no type clearly fits.
-  Title and icon changes are presentation-only and do not require a rebuild
-  or source update. Use the same tool with title to rename an app.
+- Set the initial semantic icon during creation. Every code review uses review;
+  use default when no type clearly fits. Later title/icon edits use the discovered
+  set_app_presentation capability and do not require rebuilding or publishing.
 - Give apps short, descriptive titles that identify their purpose or subject.
   Follow the user's language and keep the title stable as you iterate. Avoid
   generic labels such as Session app and unnecessary status/version suffixes.

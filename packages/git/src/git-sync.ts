@@ -28,7 +28,7 @@ const SYSTEM_AUTHOR = {
 
 export interface PushOpts {
   dev: ProjectRepo;
-  remote: RemoteBackend;
+  remote: Pick<RemoteBackend, "withOrigin">;
   tenantId: string;
   projectId: string;
   /** Branch on the remote to push to. Defaults to `main`. */
@@ -39,7 +39,7 @@ export interface PushOpts {
 
 export interface FetchOpts {
   dev: ProjectRepo;
-  remote: RemoteBackend;
+  remote: Pick<RemoteBackend, "withOrigin">;
   tenantId: string;
   projectId: string;
   remoteBranch?: string;

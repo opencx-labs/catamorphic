@@ -4,9 +4,38 @@ import {
   type AgentCapabilityGateway,
   agentCapabilityTools,
 } from "./agent-capabilities.js";
-import { listenAgentCapabilityGateway } from "./capability-mcp.js";
+import {
+  capabilityMcpResponse,
+  listenAgentCapabilityGateway,
+} from "./capability-mcp.js";
+import { agentToolResult } from "./coding-agent/tool-result.js";
 
 describe("capability transport", () => {
+  it("returns actual model media rather than JSON-encoded screenshot bytes", async () => {
+    const content = [
+      { type: "image" as const, data: "AA==", mimeType: "image/png" as const },
+    ];
+    const result = await capabilityMcpResponse({
+      gateway: {
+        discover: async () => ({ items: [] }),
+        invoke: async () => agentToolResult({ content }),
+      },
+      body: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "invoke_capability",
+          arguments: {
+            name: "workspace.browser_snapshot",
+            input: {},
+            requestId: "image",
+          },
+        },
+      },
+    });
+    expect(result).toEqual({ jsonrpc: "2.0", id: 1, result: { content } });
+  });
   it("keeps schemas deferred and protects the subprocess bridge", async () => {
     const gateway: AgentCapabilityGateway = {
       discover: vi.fn(async () => ({ items: [] })),

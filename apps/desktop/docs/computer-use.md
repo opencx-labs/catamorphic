@@ -16,7 +16,7 @@ are pictures of the page and are not a redaction boundary.
 `point_at({target: browserKey, uid, note})` highlights an element inside the page.
 Show the tab first when the user needs to see the pointer. Notes are plain text.
 Pointers follow layout/scroll, dismiss when the target is used, and clear through
-`clear_pointers`. Existing sidebar/tab pointing uses the same tool without `uid`.
+`point_at` with `target: null`. Existing sidebar/tab pointing uses the same tool without `uid`.
 
 The driver serializes operations per guest, wakes hidden guests only during an
 operation, and restores focus without activating the native window. Chromium

@@ -5,6 +5,7 @@ import {
   type AgentCapabilityGateway,
   CapabilityPageSchema,
   DiscoverCapabilitiesSchema,
+  extraToolResult,
   InvokeCapabilitySchema,
 } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
@@ -114,6 +115,7 @@ export interface AgentCapability {
   /** Validate once, retaining the typed input for approval and execution. */
   prepare(input: unknown): {
     input: unknown;
+    beforeInvoke?(context: AgentCapabilityInvocation): Promise<void>;
     execute(context: AgentCapabilityInvocation): Promise<unknown>;
   };
 }
@@ -128,26 +130,43 @@ export function defineAgentCapability<
   inputSchema: I;
   outputSchema: O;
   authorize(context: AgentCapabilityContext): boolean | Promise<boolean>;
+  beforeInvoke?(
+    context: AgentCapabilityInvocation,
+    input: z.output<I>,
+  ): Promise<void>;
   execute(
     context: AgentCapabilityInvocation,
     input: z.output<I>,
   ): Promise<z.input<O>>;
 }): AgentCapability {
-  const { execute, ...definition } = args;
+  const { execute, beforeInvoke, ...definition } = args;
   return {
     ...definition,
     prepare: (input) => {
       const value = args.inputSchema.parse(input);
       return {
         input: value,
+        ...(beforeInvoke
+          ? {
+              beforeInvoke: (context: AgentCapabilityInvocation) =>
+                beforeInvoke(context, value),
+            }
+          : {}),
         execute: (context) => execute(context, value),
       };
     },
   };
 }
+/** Live, session-specific entries in the same registry as static capabilities. */
+export type AgentCapabilitySource = (
+  context: AgentCapabilityContext,
+  selection: { query?: string; name?: string },
+) => readonly AgentCapability[] | Promise<readonly AgentCapability[]>;
+
 export interface AgentCapabilityOptions {
   /** Each capability supplies ordinary live host authorization. Duplicate names fail boot. */
   capabilities?: readonly AgentCapability[];
+  sources?: readonly AgentCapabilitySource[];
   /** Optional host profile; no email, groups, tokens, or directory inferred by core. */
   currentUser?(
     context: AgentCapabilityContext,
@@ -216,7 +235,7 @@ export class AgentCapabilitiesService {
           DiscoverCapabilitiesSchema.parse(input);
         const context = await this.context(args);
         const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-        const matching = [...this.registry.values()]
+        const matching = [...(await this.resolve(context, { query })).values()]
           .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
           .filter(
             (item) =>
@@ -245,8 +264,10 @@ export class AgentCapabilitiesService {
       },
       invoke: async (input) => {
         const command = InvokeCapabilitySchema.parse(input);
-        const capability = this.registry.get(command.name);
         let context = await this.context(args);
+        const capability = (
+          await this.resolve(context, { name: command.name })
+        ).get(command.name);
         if (!capability || !(await capability.authorize(context)))
           throw new AccessDeniedError();
         const prepared = capability.prepare(command.input);
@@ -293,6 +314,7 @@ export class AgentCapabilitiesService {
               effect: capability.effect,
               input: prepared.input,
             });
+            await prepared.beforeInvoke?.(invocation());
             await event("started");
             try {
               // Activity sinks may await IO too. Recheck after every host hook
@@ -301,17 +323,38 @@ export class AgentCapabilitiesService {
                 ...args,
                 allocationId: context.allocationId,
               });
-              if (!(await capability.authorize(context)))
+              const current = (
+                await this.resolve(context, { name: command.name })
+              ).get(command.name);
+              if (!current || !(await current.authorize(context)))
                 throw new AccessDeniedError();
               input.signal?.throwIfAborted();
-              const result = capability.outputSchema.parse(
-                await prepared.execute(invocation()),
+              const execution =
+                current === capability
+                  ? prepared
+                  : current.prepare(command.input);
+              if (
+                JSON.stringify(execution.input) !==
+                JSON.stringify(prepared.input)
+              )
+                throw new Error(
+                  "Capability input changed during approval; discover its current schema and retry",
+                );
+              const result = current.outputSchema.parse(
+                await execution.execute(invocation()),
               );
               // JSON is the contract across in-process and remote transports alike.
               const wire = json.parse(result);
-              if (Buffer.byteLength(JSON.stringify(wire), "utf8") > 1024 * 1024)
+              const media =
+                typeof wire === "object" &&
+                wire !== null &&
+                !Array.isArray(wire) &&
+                wire.kind === "agent-tool-result";
+              if (media) extraToolResult(wire); // Validate the explicit media envelope.
+              const limit = (media ? 8 : 1) * 1024 * 1024;
+              if (Buffer.byteLength(JSON.stringify(wire), "utf8") > limit)
                 throw new Error(
-                  "Capability result exceeds 1 MiB; use a bounded query or resource reference",
+                  `Capability result exceeds ${media ? 8 : 1} MiB; use a bounded query or resource reference`,
                 );
               await event("completed");
               return wire;
@@ -323,6 +366,26 @@ export class AgentCapabilitiesService {
         );
       },
     };
+  }
+
+  private async resolve(
+    context: AgentCapabilityContext,
+    selection: { query?: string; name?: string },
+  ): Promise<Map<string, AgentCapability>> {
+    const entries = new Map(this.registry);
+    for (const source of this.deps.options?.sources ?? []) {
+      for (const entry of await source(context, selection)) {
+        if (
+          !/^[a-z][a-zA-Z0-9_.:%-]{0,199}$/.test(entry.name) ||
+          entries.has(entry.name)
+        )
+          throw new Error(
+            `Invalid or duplicate agent capability: ${entry.name}`,
+          );
+        entries.set(entry.name, entry);
+      }
+    }
+    return entries;
   }
 
   private async context(args: {

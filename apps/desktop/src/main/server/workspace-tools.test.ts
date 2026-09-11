@@ -1,7 +1,18 @@
-import type { ExtraToolContext } from "@catamorphic/sandbox";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import {
+  agentCapabilityTools,
+  type ExtraToolContext,
+} from "@catamorphic/sandbox";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import type { WorkspaceBridge } from "../agent-bridge.js";
-import { buildWorkspaceToolkit } from "./workspace-tools.js";
+import { WORKSPACE_TOOLS_PLAYBOOK } from "./workspace-context-agent.js";
+import {
+  buildWorkspaceToolkit,
+  WORKSPACE_TOOL_POLICY,
+} from "./workspace-tools.js";
 
 const context: ExtraToolContext = {
   projectId: "project",
@@ -9,6 +20,80 @@ const context: ExtraToolContext = {
 };
 
 describe("workspace coordination tools", () => {
+  it("keeps the eager surface explicit, complete, and small", () => {
+    const toolkit = buildWorkspaceToolkit({} as WorkspaceBridge);
+    expect(toolkit.tools.map((tool) => tool.name).sort()).toEqual(
+      Object.keys(WORKSPACE_TOOL_POLICY).sort(),
+    );
+    expect(
+      toolkit.tools
+        .filter((tool) => tool.eager)
+        .map((tool) => tool.name)
+        .sort(),
+    ).toEqual(["open_surface", "update_todo_list", "workspace_overview"]);
+    expect(WORKSPACE_TOOLS_PLAYBOOK.length).toBeLessThan(1800);
+    const eager = [
+      ...toolkit.tools.filter((tool) => tool.eager),
+      ...agentCapabilityTools({
+        discover: async () => ({ items: [] }),
+        invoke: async () => null,
+      }),
+    ];
+    const wire = eager.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: z.toJSONSchema(
+        z.object(
+          z.record(z.string(), z.instanceof(z.ZodType)).parse(tool.parameters),
+        ),
+      ),
+    }));
+    expect(Buffer.byteLength(JSON.stringify(wire))).toBeLessThan(6000);
+    expect(
+      toolkit.tools.every(
+        (tool) =>
+          typeof tool.nativeOnly === "boolean" &&
+          typeof tool.readOnly === "boolean",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects directory links before creating a broken editor tab", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "workspace-target-"));
+    const opened: string[] = [];
+    const toolkit = buildWorkspaceToolkit({
+      openTarget: async (_project, _session, target) => {
+        opened.push(target);
+        return { key: "editor:1", opened: "focused" };
+      },
+    } as WorkspaceBridge);
+    try {
+      await expect(
+        toolkit.tools
+          .find((tool) => tool.name === "open_surface")
+          ?.execute(
+            { target: "file:.:1" },
+            { ...context, workingDirectory: directory },
+          ),
+      ).rejects.toThrow("directory");
+      expect(opened).toEqual([]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("previews apps by default and publishes only on an explicit request", async () => {
+    const toolkit = buildWorkspaceToolkit({} as WorkspaceBridge);
+    const published: boolean[] = [];
+    toolkit.setAppBuilder(async (_project, _name, publish) => {
+      published.push(publish);
+      return { status: publish ? "published" : "preview_ready" };
+    });
+    const build = toolkit.tools.find((tool) => tool.name === "build_app");
+    await build?.execute({ name: "dashboard" }, context);
+    await build?.execute({ name: "dashboard", publish: true }, context);
+    expect(published).toEqual([false, true]);
+  });
   it("reads and atomically replaces the session todo list", async () => {
     const toolkit = buildWorkspaceToolkit({} as WorkspaceBridge);
     const stored = [
@@ -143,7 +228,7 @@ describe("workspace coordination tools", () => {
       context_mode: "fresh",
       title: "API review",
     });
-    await execute("list_subsessions");
+    await execute("list_project_sessions", { children_only: true });
     await execute("wait_for_subsessions", {
       session_ids: ["child"],
       timeout_ms: 25,
@@ -210,7 +295,7 @@ describe("workspace coordination tools", () => {
         active = "external";
         return { kind: "external", path: checkoutPath };
       },
-      usePrimary: async () => {
+      returnToPrimary: async () => {
         active = "primary";
         return { kind: "primary", path: "/primary" };
       },
@@ -235,8 +320,8 @@ describe("workspace coordination tools", () => {
     expect(terminalDirectories).toEqual(["/managed", "/external"]);
     expect(
       await toolkit.tools
-        .find((tool) => tool.name === "use_project_checkout")
-        ?.execute({}, checkoutContext),
+        .find((tool) => tool.name === "use_worktree")
+        ?.execute({ path: null }, checkoutContext),
     ).toMatchObject({ kind: "primary" });
     await toolkit.tools
       .find((tool) => tool.name === "run_terminal")
