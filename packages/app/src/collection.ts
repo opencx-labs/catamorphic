@@ -41,16 +41,17 @@ type Listener = () => void;
  */
 export function createCollection<T extends CollectionItem>({
   source,
-  structureKey,
 }: {
   source: CollectionSource<T>;
-  /** Fields that affect a presentation projection, such as grouping or sorting. */
-  structureKey?: (item: T) => unknown;
 }) {
   const items = new Map<string, T>();
   const branches = new Map<string | null, CollectionBranch>();
   const itemListeners = new Map<string, Set<Listener>>();
   const listeners = new Set<Listener>();
+  const snapshotListeners = new Set<Listener>();
+  const branchReferences = new Map<string | null, number>();
+  let previewReferences = 0;
+  const retainedCounts = new Map<string | null, number>();
   const requests = new Map<string | null, AbortController>();
   const dirty = new Set<string>();
   let structural = false;
@@ -58,6 +59,7 @@ export function createCollection<T extends CollectionItem>({
   let references = 0;
   let unsubscribe: (() => void) | undefined;
   let revision = 0;
+  let snapshotRevision = 0;
   let mutation = 0;
   const changedAt = new Map<string, number>();
   const invalidated = new Set<string | null>();
@@ -82,6 +84,10 @@ export function createCollection<T extends CollectionItem>({
       if (changed) {
         revision += 1;
         for (const listener of listeners) listener();
+      }
+      if (changed || ids.length) {
+        snapshotRevision += 1;
+        for (const listener of snapshotListeners) listener();
       }
       for (const id of ids)
         for (const listener of itemListeners.get(id) ?? []) listener();
@@ -118,12 +124,7 @@ export function createCollection<T extends CollectionItem>({
     items.set(item.id, item);
     notify({
       id: item.id,
-      structure:
-        before?.hasChildren !== item.hasChildren ||
-        Boolean(
-          structureKey &&
-            (!before || !Object.is(structureKey(before), structureKey(item))),
-        ),
+      structure: before?.hasChildren !== item.hasChildren,
     });
   };
 
@@ -137,10 +138,17 @@ export function createCollection<T extends CollectionItem>({
     if (requests.has(parentId)) return;
     const before = branch(parentId);
     if (more && !before.cursor) return;
+    const preview =
+      parentId === null &&
+      previewReferences > 0 &&
+      branchReferences.get(null) === previewReferences;
+    const retainedCount = preview
+      ? 0
+      : Math.max(retainedCounts.get(parentId) ?? 0, before.ids.length);
     const startedAt = mutation;
     const controller = new AbortController();
     requests.set(parentId, controller);
-    if (!before.ids.length)
+    if (before.status === "idle")
       setBranch(parentId, { ...before, status: "loading", error: undefined });
     try {
       const loaded: T[] = [];
@@ -158,7 +166,7 @@ export function createCollection<T extends CollectionItem>({
         if (cursor && seenCursors.has(cursor))
           throw new Error("Collection source repeated a cursor");
         if (cursor) seenCursors.add(cursor);
-      } while (!more && cursor && loaded.length < before.ids.length);
+      } while (!more && cursor && loaded.length < retainedCount);
       const page = { items: loaded, cursor };
       if (controller.signal.aborted || requests.get(parentId) !== controller)
         return;
@@ -186,6 +194,7 @@ export function createCollection<T extends CollectionItem>({
           ...current.ids.filter((id) => (changedAt.get(id) ?? 0) > startedAt),
         ]),
       ];
+      if (!preview) retainedCounts.set(parentId, ids.length);
       setBranch(parentId, { ids, status: "ready", cursor: page.cursor });
     } catch (cause) {
       if (!controller.signal.aborted)
@@ -197,7 +206,8 @@ export function createCollection<T extends CollectionItem>({
     } finally {
       if (requests.get(parentId) === controller) {
         requests.delete(parentId);
-        if (invalidated.delete(parentId) && references) void load({ parentId });
+        if (invalidated.delete(parentId) && branchReferences.has(parentId))
+          void load({ parentId });
       }
     }
   };
@@ -212,7 +222,7 @@ export function createCollection<T extends CollectionItem>({
         invalidated.add(parentId);
         return;
       }
-      if (references) void load({ parentId });
+      if (branchReferences.has(parentId)) void load({ parentId });
       else setBranch(parentId, { ...branch(parentId), status: "idle" });
       return;
     }
@@ -241,6 +251,7 @@ export function createCollection<T extends CollectionItem>({
         items.delete(id);
         abort(id);
         branches.delete(id);
+        retainedCounts.delete(id);
         notify({ id });
       }
       for (const [parentId, value] of branches) {
@@ -276,6 +287,13 @@ export function createCollection<T extends CollectionItem>({
     getItem: (id: string) => items.get(id),
     getBranch: branch,
     getRevision: () => revision,
+    getSnapshotRevision: () => snapshotRevision,
+    subscribeSnapshot: (listener: Listener) => {
+      snapshotListeners.add(listener);
+      return () => {
+        snapshotListeners.delete(listener);
+      };
+    },
     isAcquired: () => references > 0,
     subscribe: (listener: Listener) => {
       listeners.add(listener);
@@ -292,17 +310,59 @@ export function createCollection<T extends CollectionItem>({
         if (!set.size) itemListeners.delete(id);
       };
     },
-    acquire: () => {
+    acquire: ({
+      parentId = null,
+      mode = "full",
+    }: {
+      parentId?: string | null;
+      mode?: "full" | "preview";
+    } = {}) => {
+      if (mode === "preview" && parentId !== null)
+        throw new Error("Preview leases only acquire the root page");
+      const wasPreview =
+        parentId === null &&
+        previewReferences > 0 &&
+        branchReferences.get(null) === previewReferences;
+      if (mode === "preview") previewReferences += 1;
       references += 1;
       if (references === 1) {
         unsubscribe = source.subscribe?.(publish);
-        void load();
+      }
+      const owners = branchReferences.get(parentId) ?? 0;
+      branchReferences.set(parentId, owners + 1);
+      if (!owners || (wasPreview && mode === "full")) {
+        abort(parentId);
+        void load({ parentId });
       }
       let released = false;
       return () => {
         if (released) return;
         released = true;
         references -= 1;
+        if (mode === "preview") previewReferences -= 1;
+        const owners = (branchReferences.get(parentId) ?? 1) - 1;
+        if (owners) {
+          branchReferences.set(parentId, owners);
+          if (
+            parentId === null &&
+            mode === "full" &&
+            owners === previewReferences
+          ) {
+            abort(parentId);
+            void load({ parentId });
+          }
+        } else {
+          branchReferences.delete(parentId);
+          invalidated.delete(parentId);
+          if (requests.has(parentId)) {
+            abort(parentId);
+            const current = branch(parentId);
+            setBranch(parentId, {
+              ...current,
+              status: current.ids.length ? "ready" : "idle",
+            });
+          }
+        }
         if (references) return;
         unsubscribe?.();
         unsubscribe = undefined;

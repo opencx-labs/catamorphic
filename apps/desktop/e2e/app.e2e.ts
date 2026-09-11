@@ -894,19 +894,18 @@ describe("chat tab activity indicators", () => {
     );
     await runWait(`return !(${tabDotOn});`, { label: "dot cleared on open" });
     // Leave a clean slate: close the chat tab and the extra palette tab.
-    const tabsBeforeClose = await run<number>(
-      `return $$('[data-point-key]').length;`,
-    );
+    // Sidebar rows and activity chips also have pointer keys and can update
+    // independently while the session settles. Count only workspace tabs.
+    const tabItems = `$$('[data-tab-orientation] [data-point-key]')`;
+    const tabsBeforeClose = await run<number>(`return ${tabItems}.length;`);
     await run(`pressKey('w', { metaKey: true }); return true;`);
-    await runWait(
-      `return $$('[data-point-key]').length === ${tabsBeforeClose - 1};`,
-      { label: "chat tab closed before the next close" },
-    );
+    await runWait(`return ${tabItems}.length === ${tabsBeforeClose - 1};`, {
+      label: "chat tab closed before the next close",
+    });
     await run(`pressKey('w', { metaKey: true }); return true;`);
-    await runWait(
-      `return $$('[data-point-key]').length === ${tabsBeforeClose - 2};`,
-      { label: "extra palette tab closed" },
-    );
+    await runWait(`return ${tabItems}.length === ${tabsBeforeClose - 2};`, {
+      label: "extra palette tab closed",
+    });
   });
 
   it("closing a chat mid-turn clears its activity", async () => {

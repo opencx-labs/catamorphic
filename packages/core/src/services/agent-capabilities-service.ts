@@ -107,6 +107,10 @@ export interface AgentCapabilityInvocation extends AgentCapabilityContext {
 }
 export interface AgentCapability {
   name: string;
+  /** Host-local version of execution semantics. Never sent to agents. */
+  revision: string;
+  /** Version of required consent. Omit when the operation needs no approval. */
+  consent?: string;
   description: string;
   effect: "read" | "write";
   inputSchema: z.ZodType;
@@ -125,6 +129,9 @@ export function defineAgentCapability<
   O extends z.ZodType,
 >(args: {
   name: string;
+  revision: string;
+  /** Version of required consent. Omit when the operation needs no approval. */
+  consent?: string;
   description: string;
   effect: "read" | "write";
   inputSchema: I;
@@ -210,6 +217,7 @@ export class AgentCapabilitiesService {
       ...(deps.options?.capabilities ?? []),
     ]) {
       if (
+        !capability.revision ||
         !/^[a-z][a-z0-9_.]{0,119}$/.test(capability.name) ||
         this.registry.has(capability.name)
       )
@@ -271,6 +279,15 @@ export class AgentCapabilitiesService {
         if (!capability || !(await capability.authorize(context)))
           throw new AccessDeniedError();
         const prepared = capability.prepare(command.input);
+        const approvalDefinition = (entry: AgentCapability) =>
+          JSON.stringify({
+            revision: entry.revision,
+            effect: entry.effect,
+            inputSchema: z.toJSONSchema(entry.inputSchema),
+            outputSchema: z.toJSONSchema(entry.outputSchema),
+          });
+        const approvedDefinition = approvalDefinition(capability);
+        const approvedConsent = capability.consent;
         const event = async (
           type: "started" | "completed" | "failed" | "progress",
           progress?: { message: string; current?: number; total?: number },
@@ -329,6 +346,14 @@ export class AgentCapabilitiesService {
               if (!current || !(await current.authorize(context)))
                 throw new AccessDeniedError();
               input.signal?.throwIfAborted();
+              if (
+                approvalDefinition(current) !== approvedDefinition ||
+                (current.consent !== undefined &&
+                  current.consent !== approvedConsent)
+              )
+                throw new Error(
+                  "Capability definition or consent policy changed during approval; discover it again and retry",
+                );
               const execution =
                 current === capability
                   ? prepared
@@ -376,6 +401,7 @@ export class AgentCapabilitiesService {
     for (const source of this.deps.options?.sources ?? []) {
       for (const entry of await source(context, selection)) {
         if (
+          !entry.revision ||
           !/^[a-z][a-zA-Z0-9_.:%-]{0,199}$/.test(entry.name) ||
           entries.has(entry.name)
         )
@@ -540,6 +566,7 @@ export class AgentCapabilitiesService {
   private builtins(): AgentCapability[] {
     return [
       defineAgentCapability({
+        revision: "1",
         name: "context.read",
         description:
           "Read current user, project, session, Allocation and execution facts.",
@@ -550,6 +577,7 @@ export class AgentCapabilitiesService {
         execute: (context) => this.snapshot(context),
       }),
       defineAgentCapability({
+        revision: "1",
         name: "environments.list",
         description:
           "List project environments this caller is permitted to use for agents. Availability does not reserve a machine.",
@@ -580,6 +608,7 @@ export class AgentCapabilitiesService {
         },
       }),
       defineAgentCapability({
+        revision: "1",
         name: "assignments.current",
         description:
           "Inspect this session's pinned environment assignment and resource reservation. Does not list other users' machines or grant execution authority.",

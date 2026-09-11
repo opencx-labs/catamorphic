@@ -37,6 +37,10 @@ export function desktopCapabilitySource(deps: {
       : undefined;
     if (!surface) return [];
     const callerPolicies = session?.toolPolicies;
+    const revision = JSON.stringify([
+      surface.revision,
+      surface.mcp.connectionIds,
+    ]);
     const layers = (server: string) => {
       const values = [
         ...(surface.mcp.policies[server] ?? []),
@@ -50,6 +54,14 @@ export function desktopCapabilitySource(deps: {
       annotations?: ToolPolicyAnnotations,
     ) =>
       resolveToolPermissionAcross(layers(server), name, annotations) !== "deny";
+    const consent = (
+      server: string,
+      name: string,
+      annotations?: ToolPolicyAnnotations,
+    ) =>
+      resolveToolPermissionAcross(layers(server), name, annotations) === "ask"
+        ? JSON.stringify([layers(server), annotations])
+        : undefined;
     const approve = async (args: {
       server: string;
       name: string;
@@ -73,6 +85,7 @@ export function desktopCapabilitySource(deps: {
       for (const tool of surface.tools.filter((tool) => !tool.eager)) {
         capabilities.push(
           defineAgentCapability({
+            revision,
             name: `workspace.${tool.name}`,
             description: tool.description,
             effect: tool.effect,
@@ -101,6 +114,9 @@ export function desktopCapabilitySource(deps: {
         ...(await projectToolCapabilities({
           core,
           context,
+          revision,
+          consent: ({ name, effect }) =>
+            consent("catamorphic", name, { readOnlyHint: effect === "read" }),
           allow: ({ name, effect }) =>
             !["list_skills", "read_skill", "send_agent_message"].includes(
               name,
@@ -136,6 +152,8 @@ export function desktopCapabilitySource(deps: {
           continue;
         const make = (tool: McpToolInfo): AgentCapability =>
           defineAgentCapability({
+            revision: JSON.stringify([revision, connectionId, tool]),
+            consent: consent(server, tool.name, tool.annotations),
             name: `${prefix}${encodeURIComponent(tool.name)}`,
             description: `${server}: ${tool.description}`,
             effect: tool.annotations?.readOnlyHint ? "read" : "write",
@@ -225,6 +243,7 @@ export function desktopCapabilitySource(deps: {
         if (specific) capabilities.push(...(await load()).map(make));
         capabilities.push(
           defineAgentCapability({
+            revision,
             name: catalogName,
             description: `List permitted tools and schemas for the ${server} connection. Search by topic before calling one.`,
             effect: "read",

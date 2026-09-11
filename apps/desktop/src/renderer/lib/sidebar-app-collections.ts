@@ -12,7 +12,10 @@ import type { SidebarSurface } from "../../shared/sidebar.js";
 import { buildTree, isVisibleProjectFile } from "../components/files-nav.js";
 import type { WorkspaceTab } from "../components/workspace-tabs.js";
 import { desktopApi } from "./desktop-api.js";
-import { subscribeSidebarSessions } from "./sidebar-sessions.js";
+import {
+  readSidebarSessionPage,
+  subscribeSidebarSessions,
+} from "./sidebar-sessions.js";
 
 export function useSidebarAppCollections({
   projectId,
@@ -96,30 +99,23 @@ export function useSidebarAppCollections({
             parentId ??
             (source === "subsessions" ? surface.sessionId : undefined);
           if (source === "subsessions" && !parent) return { items: [] };
-          const response = await apiClient.GET(
-            "/api/projects/{projectId}/agent/sessions",
-            {
-              params: {
-                path: { projectId },
-                query: {
-                  limit: 50,
-                  offset,
-                  ...(source === "chats"
-                    ? { visibility: "promoted" as const }
-                    : {}),
-                  ...(parent
-                    ? { parentSessionId: parent }
-                    : source === "activity"
-                      ? {}
-                      : { rootsOnly: "true" }),
-                },
-              },
-              signal,
+          const page = await readSidebarSessionPage({
+            apiClient,
+            client: queryClient,
+            projectId,
+            signal,
+            query: {
+              limit: 50,
+              offset,
+              ...(source === "chats" ? { visibility: "promoted" } : {}),
+              ...(parent
+                ? { parentSessionId: parent }
+                : source === "activity"
+                  ? {}
+                  : { rootsOnly: "true" }),
             },
-          );
-          if (!response.data)
-            throw new Error(response.error?.error ?? "Could not load sessions");
-          items = response.data.items
+          });
+          items = page.items
             .filter(
               (session) =>
                 session.visibility !== "archived" &&
@@ -154,8 +150,8 @@ export function useSidebarAppCollections({
                 },
               };
             });
-          if (offset + response.data.items.length < response.data.total)
-            next = String(offset + response.data.items.length);
+          if (offset + page.items.length < page.total)
+            next = String(offset + page.items.length);
         } else if (source === "files") {
           const files = await queryClient.fetchQuery({
             queryKey: ["desktop", "local-files", projectId],

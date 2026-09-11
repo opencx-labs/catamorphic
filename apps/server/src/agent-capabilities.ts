@@ -14,6 +14,7 @@ export function stockAgentCapabilities(args: {
   custom?: AgentCapabilityOptions;
 }): AgentCapabilityOptions {
   const directory = defineAgentCapability({
+    revision: "1",
     name: "people.search",
     description:
       "Find project members by user ID and read their display names. Uses ordinary membership-management permission. No email addresses or tenant-wide directory are returned.",

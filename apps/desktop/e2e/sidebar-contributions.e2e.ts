@@ -217,6 +217,45 @@ it("discovers children lazily and updates a hidden contextual section", async ()
   expect(app.getRendererErrors()).toEqual([]);
 });
 
+it("suspends expanded child IO when the whole section is collapsed", async () => {
+  const response = await fetch(base, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: "Nested research",
+      parentSessionId: childId,
+      source: "desktop",
+    }),
+  });
+  expect(response.status).toBe(201);
+  await app.eval(
+    "performance.setResourceTimingBufferSize(5000); performance.clearResourceTimings()",
+  );
+  const branchReads = `performance.getEntriesByType('resource').filter(entry => new URL(entry.name).searchParams.get('parentSessionId') === ${JSON.stringify(childId)}).length`;
+  await app.waitFor(
+    `!!document.querySelector('[data-sidebar-widget="subsessions"] [aria-label="Expand Research child"]')`,
+  );
+  await app.eval(
+    `document.querySelector('[data-sidebar-widget="subsessions"] [aria-label="Expand Research child"]').click()`,
+  );
+  await app.waitFor(
+    `document.querySelector('[data-sidebar-widget="subsessions"]').textContent.includes('Nested research') && ${branchReads} > 0`,
+  );
+  await app.eval(
+    `document.querySelector('[data-sidebar-widget="subsessions"] .sidebar-section > div > button').click()`,
+  );
+  const before = await app.eval<number>(branchReads);
+  await app.eval("new Promise(resolve => setTimeout(resolve, 2200))");
+  expect(await app.eval<number>(branchReads)).toBe(before);
+  await app.eval(
+    `document.querySelector('[data-sidebar-widget="subsessions"] .sidebar-section > div > button').click()`,
+  );
+  await app.waitFor(
+    `${branchReads} > ${before} && document.querySelector('[data-sidebar-widget="subsessions"]').textContent.includes('Nested research')`,
+  );
+  expect(app.getRendererErrors()).toEqual([]);
+});
+
 it("mounts the real Codex-authored live widget through the sandboxed app bridge", async () => {
   const source = fs.readFileSync(file, "utf8");
   fs.writeFileSync(

@@ -283,3 +283,78 @@ describe("shared collections", () => {
     expect(stop).toHaveBeenCalledTimes(1);
   });
 });
+
+it("refreshes only acquired branches and shares child ownership across trees", async () => {
+  const pending: { parentId: string | null; signal: AbortSignal }[] = [];
+  const collection = createCollection<Item>({
+    source: {
+      load: ({ parentId, signal }) => {
+        pending.push({ parentId, signal });
+        return parentId
+          ? new Promise(() => {})
+          : Promise.resolve({ items: [] });
+      },
+    },
+  });
+  const root = collection.acquire();
+  const first = collection.acquire({ parentId: "child" });
+  const second = collection.acquire({ parentId: "child" });
+  expect(
+    pending.filter((request) => request.parentId === "child"),
+  ).toHaveLength(1);
+  first();
+  expect(pending[1]?.signal.aborted).toBe(false);
+  second();
+  expect(pending[1]?.signal.aborted).toBe(true);
+  collection.publish({ type: "invalidate", parentId: "child" });
+  expect(pending).toHaveLength(2);
+  const resume = collection.acquire({ parentId: "child" });
+  expect(pending).toHaveLength(3);
+  resume();
+  root();
+});
+
+it("uses one content snapshot for preview and full owners, retaining loaded depth", async () => {
+  let empty = false;
+  const load = vi.fn(async ({ cursor }) =>
+    empty
+      ? { items: [] }
+      : cursor
+        ? { items: [{ id: "second", label: "Second" }] }
+        : { items: [{ id: "first", label: "First" }], cursor: "next" },
+  );
+  const collection = createCollection<Item>({ source: { load } });
+  const visible = collection.acquire();
+  await flush();
+  await collection.load({ more: true });
+  expect(collection.getBranch(null).ids).toEqual(["first", "second"]);
+  visible();
+  const preview = collection.acquire({ mode: "preview" });
+  await flush();
+  expect(collection.getBranch(null).ids).toEqual(["first"]);
+  expect(collection.getItem("second")).toBeDefined();
+  const calls = load.mock.calls.length;
+  await collection.load();
+  expect(load).toHaveBeenCalledTimes(calls + 1);
+  // Promoting an existing preview lease restores the full previously loaded depth.
+  const restored = collection.acquire();
+  await flush();
+  await flush();
+  expect(collection.getBranch(null).ids).toEqual(["first", "second"]);
+  preview();
+  empty = true;
+  await collection.load();
+  expect(collection.getBranch(null)).toMatchObject({
+    status: "ready",
+    ids: [],
+  });
+  restored();
+  const emptyPreview = collection.acquire({ mode: "preview" });
+  // An empty ready snapshot never becomes loading just because it refreshes.
+  expect(collection.getBranch(null)).toMatchObject({
+    status: "ready",
+    ids: [],
+  });
+  await flush();
+  emptyPreview();
+});
