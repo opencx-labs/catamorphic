@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { cp, lstat, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { cp, lstat, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { writeCliError } from "./cli-error.js";
@@ -59,9 +59,11 @@ async function main(): Promise<void> {
   // Native execution is reserved for Linux's private display and hosted macOS.
   // Ordinary invocations always enter Docker, including on a Linux workstation.
   if (native && process.platform !== "linux") assertIsolatedDesktopTestHost();
-  const artifacts =
+  const artifacts = path.resolve(
+    root,
     process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ??
-    path.join(root, "test-results", `desktop-${randomUUID()}`);
+      path.join("test-results", `desktop-${randomUUID()}`),
+  );
   await mkdir(artifacts, { recursive: true });
   const signals = new TestSignalController();
   const container = `catamorphic-desktop-test-${randomUUID()}`;
@@ -143,7 +145,18 @@ async function main(): Promise<void> {
         path.join(root, "infra/desktop-tests/Dockerfile"),
         path.join(context, "Dockerfile"),
       );
-      await run("docker", ["build", "--tag", image, context]);
+      const imageFile = path.join(context, "image-id");
+      await run("docker", [
+        "build",
+        "--tag",
+        image,
+        "--iidfile",
+        imageFile,
+        context,
+      ]);
+      // Another invocation can replace the cache tag after this build finishes.
+      // Run this invocation's immutable image, never whatever the tag names later.
+      const imageId = (await readFile(imageFile, "utf8")).trim();
       await run("docker", [
         "run",
         "--rm",
@@ -153,12 +166,12 @@ async function main(): Promise<void> {
         "--shm-size=1g",
         "--mount",
         `type=bind,source=${artifacts},target=/artifacts`,
-        image,
+        imageId,
         ...args,
       ]);
       const inspect = execFileSync(
         "docker",
-        ["image", "inspect", image, "--format", "{{.Size}}"],
+        ["image", "inspect", imageId, "--format", "{{.Size}}"],
         { encoding: "utf8" },
       );
       console.log(
