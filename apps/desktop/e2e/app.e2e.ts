@@ -592,15 +592,20 @@ describe("chat flows", () => {
       { timeoutMs: 30_000, label: "session menu row in the sidebar" },
     );
 
-    // The dock bubble opens the same menu and can mark the session unread.
-    await run(`
+    // Sidebar and dock titles settle independently. Open the dock's menu only
+    // once its own bubble reflects the session title.
+    await runWait(
+      `
       const bubble = [...document.querySelectorAll('[data-chat-bubble][data-session-id]')]
         .find((row) => !row.closest('aside') && row.querySelector('button[aria-label*="Session menu"]'));
+      if (!bubble) return false;
       bubble.querySelector('button[aria-label*="Session menu"]').dispatchEvent(
         new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 420, clientY: 500 }),
       );
       return true;
-    `);
+    `,
+      { label: "dock session bubble ready to open its menu" },
+    );
     await runWait(
       `const labels = $$('[role="menuitem"]').map((item) => item.textContent.trim());
        return labels.join('|') === 'New subsession|Mark as unread|Archive';`,
