@@ -44,6 +44,19 @@ const reload = async () => {
     `!window.__sidebarReload && !!document.querySelector('[data-sidebar="right"]')`,
   );
 };
+const selectProject = async (id: string) => {
+  // Match project selection in the app: the window's workspace and its saved
+  // preference must agree before reload restores the active project.
+  await app.eval(
+    `window.catamorphicDesktop.setPrefs({lastProjectId:${JSON.stringify(id)}})`,
+  );
+  await app.eval(
+    `window.catamorphicDesktop.workspaceNavigate(${JSON.stringify(id)})`,
+  );
+  await app.waitFor(
+    `document.querySelector('[data-workspace-visible="true"]')?.dataset.projectRuntime === ${JSON.stringify(id)}`,
+  );
+};
 
 describe("tabbed sidebars", () => {
   it("hides the default left tab strip and keeps the footer below customized tabs", async () => {
@@ -248,9 +261,7 @@ describe("tabbed sidebars", () => {
       `${root}/.catamorphic/sidebar.js`,
       `module.exports = ${JSON.stringify({ ...DEFAULT_SIDEBAR_CONFIG, right: [] })};\n`,
     );
-    await app.eval(
-      `window.catamorphicDesktop.setPrefs({lastProjectId:${JSON.stringify(project.id)}})`,
-    );
+    await selectProject(project.id);
     await reload();
     await app.waitFor(
       `document.querySelector('[data-sidebar="right"]')?.textContent.includes('Customize sidebar')`,
@@ -261,9 +272,7 @@ describe("tabbed sidebars", () => {
         "window.catamorphicDesktop.getPrefs().then(p => p.rightSidebarOpen)",
       ),
     ).toBe(true);
-    await app.eval(
-      `window.catamorphicDesktop.setPrefs({lastProjectId:${JSON.stringify(projectId)}})`,
-    );
+    await selectProject(projectId);
     await reload();
     await app.waitFor(
       `!!document.querySelector('[data-sidebar="right"] [role="tab"]')`,
