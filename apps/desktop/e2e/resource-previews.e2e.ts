@@ -27,6 +27,17 @@ async function inspect(name: string) {
   await clear();
   await run(`paste(${JSON.stringify(path.join(root, name))});`);
   await wait(`return !!pill();`);
+  // Finish layout motion and scrolling before hovering. A resize can scroll
+  // the compact composer after a synthetic mouseover and dismiss its preview.
+  await run(`
+    pill().scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});
+    return Promise.all(front().getAnimations({subtree:true})
+      .filter(animation=>animation.effect?.getComputedTiming().iterations!==Infinity)
+      .map(animation=>animation.finished.catch(()=>{})));
+  `);
+  await app.eval(
+    `new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`,
+  );
   await run(`hover(pill());`);
   await wait(
     `return !!preview()?.querySelector('[data-resource-preview-kind]');`,
@@ -239,6 +250,7 @@ it("gives AI file references pills and web links inline cards, resolving project
 });
 it("clamps the preview to a compact viewport and dismisses on outside interaction", async () => {
   await app.eval(`window.catamorphicDesktop.devWindow('setSize',720,600)`);
+  await app.waitFor(`innerWidth<=720 && innerHeight<=600`);
   await app.eval(
     `document.querySelector('[aria-label="Collapse sidebar"]')?.click(); document.querySelector('[aria-label="Collapse right sidebar"]')?.click()`,
   );
