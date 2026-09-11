@@ -290,6 +290,9 @@ export function AppMount({
         }
         const controller = new AbortController();
         collectionRequests.current.add(controller);
+        const onAbort = () =>
+          respond(false, "Collection context changed; retry the request");
+        controller.signal.addEventListener("abort", onAbort, { once: true });
         try {
           if (message.operation === "read") {
             if (
@@ -320,8 +323,8 @@ export function AppMount({
             });
             if (!controller.signal.aborted) respond(true);
           } else if (message.operation === "subscribe") {
-            if (!collectionSubscriptions.current.has(message.source)) {
-              if (collectionSubscriptions.current.size >= 32)
+            if (!collectionPublishers.current.has(message.source)) {
+              if (collectionPublishers.current.size >= 32)
                 throw new Error("Too many collection subscriptions");
               const publish: Parameters<
                 NonNullable<AppCollections["subscribe"]>
@@ -354,6 +357,7 @@ export function AppMount({
               cause instanceof Error ? cause.message : String(cause),
             );
         } finally {
+          controller.signal.removeEventListener("abort", onAbort);
           collectionRequests.current.delete(controller);
         }
         return;

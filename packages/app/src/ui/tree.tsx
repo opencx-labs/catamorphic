@@ -485,6 +485,17 @@ export function CollectionTree<T extends CollectionItem>({
 }) {
   const { revision, root } = useCollection({ collection, active });
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  // biome-ignore lint/correctness/useExhaustiveDependencies: revision tracks mutable branch snapshots, including an aborted lazy load becoming idle.
+  useEffect(() => {
+    if (!active) return;
+    for (const parentId of expanded) {
+      if (
+        collection.getItem(parentId)?.hasChildren &&
+        collection.getBranch(parentId).status === "idle"
+      )
+        void collection.load({ parentId });
+    }
+  }, [active, collection, expanded, revision]);
   const items = useMemo(
     () =>
       flattenCollection({ collection, expanded, revision }).flatMap(

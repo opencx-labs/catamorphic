@@ -163,6 +163,55 @@ describe("shared collections", () => {
     release();
   });
 
+  it("preserves live additions and removals when a refresh fails", async () => {
+    let reject: ((error: Error) => void) | undefined;
+    const collection = createCollection<Item>({
+      source: {
+        load: () =>
+          new Promise((_, fail) => {
+            reject = fail;
+          }),
+      },
+    });
+    collection.publish({
+      type: "upsert",
+      items: [{ id: "old", label: "Old" }],
+    });
+    const pending = collection.load();
+    collection.publish({ type: "remove", ids: ["old"] });
+    collection.publish({
+      type: "upsert",
+      items: [{ id: "new", label: "New" }],
+    });
+    reject?.(new Error("Offline"));
+    await pending;
+    expect(collection.getBranch(null)).toMatchObject({
+      ids: ["new"],
+      status: "error",
+      error: "Offline",
+    });
+    expect(collection.getItem("old")).toBeUndefined();
+  });
+
+  it("rejects a load-more response that repeats its input cursor", async () => {
+    const collection = createCollection<Item>({
+      source: {
+        load: async ({ cursor }) => ({
+          items: [{ id: cursor ? "second" : "first", label: "Row" }],
+          cursor: "next",
+        }),
+      },
+    });
+    await collection.load();
+    await collection.load({ more: true });
+    expect(collection.getBranch(null)).toMatchObject({
+      ids: ["first"],
+      status: "error",
+      error: "Collection source repeated a cursor",
+    });
+    expect(collection.getItem("second")).toBeUndefined();
+  });
+
   it("keeps errors separate from empty content and allows retry", async () => {
     const load = vi
       .fn()

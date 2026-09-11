@@ -74,6 +74,7 @@ export function useSidebarAppCollections({
     const sessions = new Map<string, AgentSession>();
     const openers = new Map<string, (mode?: OpenMode) => void>();
     const admitted = new Map<string, Map<string, AppCollectionItem>>();
+    const loadedParents = new Map<string, Set<string | null>>();
     const requireSource = (source: string) => {
       if (!allowed.has(source) || (!builder && ["git", "prs"].includes(source)))
         throw new Error(`Source ${source} is not granted to this widget`);
@@ -370,6 +371,9 @@ export function useSidebarAppCollections({
             : item,
         );
         signal.throwIfAborted();
+        const parents = loadedParents.get(source) ?? new Set<string | null>();
+        parents.add(parentId ?? null);
+        loadedParents.set(source, parents);
         const known = admitted.get(source) ?? new Map();
         for (const item of items) known.set(item.id, item);
         admitted.set(source, known);
@@ -423,7 +427,14 @@ export function useSidebarAppCollections({
       },
       subscribe: ({ source, publish }) => {
         requireSource(source);
-        const refresh = () => publish({ type: "invalidate" });
+        const refresh = () => {
+          for (const parentId of loadedParents.get(source) ?? [null])
+            publish(
+              parentId === null
+                ? { type: "invalidate" }
+                : { type: "invalidate", parentId },
+            );
+        };
         if (source === "tabs") tabListeners.current.add(refresh);
         const native = [
           "git",

@@ -1,4 +1,8 @@
-import { APP_PROTOCOL_VERSION, type AppCollections, type AppHostTheme } from "@catamorphic/app";
+import {
+  APP_PROTOCOL_VERSION,
+  type AppCollections,
+  type AppHostTheme,
+} from "@catamorphic/app";
 import { CatamorphicProvider } from "@catamorphic/react";
 import {
   cleanup,
@@ -531,6 +535,66 @@ describe("compact app slots", () => {
 });
 
 describe("app collection broker", () => {
+  it("bounds subscriptions even when the host has no event subscription adapter", async () => {
+    const apiClient = makeApiClient();
+    const collections: AppCollections = {
+      read: async () => ({ items: [] }),
+      execute: async () => {},
+    };
+    const mounted = render(
+      <CatamorphicProvider apiClient={apiClient as never}>
+        <AppMount
+          projectId={PROJECT_ID}
+          appName="ops-dashboard"
+          collections={collections}
+          context={{ tenantId: "t-1", user: { id: "viewer-1" } }}
+        />
+      </CatamorphicProvider>,
+    );
+    await waitFor(() =>
+      expect(mounted.container.querySelector("iframe")).toBeTruthy(),
+    );
+    const frame = mounted.container.querySelector("iframe");
+    if (!frame?.contentWindow) throw new Error("Missing guest");
+    const messages = vi.spyOn(frame.contentWindow, "postMessage");
+    const send = (source: string, operation = "subscribe") =>
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: frame.contentWindow,
+          data: {
+            catamorphicApp: APP_PROTOCOL_VERSION,
+            kind: "collection",
+            operation,
+            source,
+            callId: `${operation}:${source}`,
+          },
+        }),
+      );
+    await waitFor(() => {
+      send("first");
+      expect(messages).toHaveBeenCalledWith(
+        expect.objectContaining({ ok: true }),
+        "*",
+      );
+    });
+    for (let index = 1; index < 32; index += 1) send(`source-${index}`);
+    send("first");
+    expect(messages).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ok: true }),
+      "*",
+    );
+    send("overflow");
+    expect(messages).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ok: false }),
+      "*",
+    );
+    send("first", "unsubscribe");
+    send("overflow");
+    expect(messages).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ok: true }),
+      "*",
+    );
+  });
   it("rebinds grants and context without remounting and aborts obsolete reads", async () => {
     const apiClient = makeApiClient();
     const disconnect = vi.fn();
@@ -595,9 +659,21 @@ describe("app collection broker", () => {
       parentId: null,
     });
     await waitFor(() => expect(pendingSignal).toBeDefined());
+    const replies = vi.spyOn(frame.contentWindow, "postMessage");
     mounted.rerender(content(second, "second"));
     await waitFor(() => expect(disconnect).toHaveBeenCalledTimes(1));
     expect(pendingSignal?.aborted).toBe(true);
+    expect(replies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "result",
+        callId: "read",
+        ok: false,
+        error: expect.objectContaining({
+          message: "Collection context changed; retry the request",
+        }),
+      }),
+      "*",
+    );
     expect(second.subscribe).toHaveBeenCalledTimes(1);
     expect(mounted.container.querySelector("iframe")).toBe(frame);
     send({ kind: "content-state", state: "empty" });

@@ -264,21 +264,30 @@ describe("browser tabs", () => {
       timeoutMs: 30_000,
       label: "second browser tab navigated",
     });
-    await run(`
-      pressKey('w', { metaKey: true });
-      pressKey('w', { metaKey: true });
-      return true;
+    // Observe before dispatch: the exit can finish between CDP polls on a
+    // live compositor. Freeze either tab presentation to exercise its fallback.
+    const staged = await run<boolean>(`
+      return new Promise((resolve) => {
+        const observer = new MutationObserver(() => {
+          const exiting = $('[data-tab-orientation] .animate-tab-out, [data-tab-orientation] .animate-session-row-out');
+          if (!exiting) return;
+          exiting.getAnimations().forEach((animation) => animation.pause());
+          finish(true);
+        });
+        const timer = setTimeout(() => finish(false), 15000);
+        function finish(value) {
+          observer.disconnect();
+          clearTimeout(timer);
+          resolve(value);
+        }
+        observer.observe(document.body, {
+          subtree: true, childList: true, attributes: true, attributeFilter: ['class'],
+        });
+        pressKey('w', { metaKey: true });
+        pressKey('w', { metaKey: true });
+      });
     `);
-    // Occluded Chromium can pause CSS animations and omit animationend.
-    // Freeze this exit deliberately: the clock fallback must still clear
-    // exactly the one closed tab from the rendered strip.
-    await runWait(
-      `const exiting = $('.animate-tab-out');
-       if (!exiting) return false;
-       exiting.getAnimations().forEach((animation) => animation.pause());
-       return true;`,
-      { label: "outgoing browser tab staged" },
-    );
+    expect(staged).toBe(true);
     const afterClose = await run<{
       webviews: number;
       tabLabels: string[];

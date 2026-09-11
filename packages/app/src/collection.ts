@@ -145,7 +145,7 @@ export function createCollection<T extends CollectionItem>({
     try {
       const loaded: T[] = [];
       let cursor = more ? before.cursor : undefined;
-      const seenCursors = new Set<string>();
+      const seenCursors = new Set<string>(cursor ? [cursor] : []);
       do {
         const part = await source.load({
           parentId,
@@ -190,7 +190,7 @@ export function createCollection<T extends CollectionItem>({
     } catch (cause) {
       if (!controller.signal.aborted)
         setBranch(parentId, {
-          ...before,
+          ...branch(parentId),
           status: "error",
           error: cause instanceof Error ? cause.message : String(cause),
         });

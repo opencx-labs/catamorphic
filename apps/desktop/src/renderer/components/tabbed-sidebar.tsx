@@ -382,7 +382,12 @@ function SidebarSlot({
       inert={!available}
     >
       {(visited || (mounted && relevant)) &&
-        renderSection(section, visible && relevant, onState, relevant)}
+        renderSection(
+          section,
+          visible && relevant && available,
+          onState,
+          relevant,
+        )}
     </div>
   );
 }

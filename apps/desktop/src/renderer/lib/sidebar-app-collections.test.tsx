@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   GET: vi.fn(),
   open: vi.fn(),
   session: vi.fn(),
+  listen: vi.fn((_options: { listener: () => void }) => () => {}),
   query: {
     fetchQuery: vi.fn(),
     getQueryCache: () => ({ subscribe: () => () => {} }),
@@ -19,6 +20,9 @@ vi.mock("@catamorphic/react", () => ({
   useCatamorphic: () => ({ apiClient: mocks }),
 }));
 vi.mock("@tanstack/react-query", () => ({ useQueryClient: () => mocks.query }));
+vi.mock("./sidebar-sessions.js", () => ({
+  subscribeSidebarSessions: mocks.listen,
+}));
 vi.mock("../components/files-nav.js", () => ({
   buildTree: () => [],
   isVisibleProjectFile: () => true,
@@ -102,6 +106,18 @@ it("checks grants and advertised item actions, forwards open modes, and updates 
       signal,
     });
     expect(mocks.session).toHaveBeenCalledWith("child", "mark-read");
+    await current.read({ source: "chats", parentId: "child", signal });
+    const childUpdates = vi.fn();
+    const stopChildren = current.subscribe?.({
+      source: "chats",
+      publish: childUpdates,
+    });
+    mocks.listen.mock.calls.at(-1)?.[0].listener();
+    expect(childUpdates.mock.calls.map(([change]) => change)).toEqual([
+      { type: "invalidate" },
+      { type: "invalidate", parentId: "child" },
+    ]);
+    stopChildren?.();
     const publish = vi.fn();
     const unsubscribe = current.subscribe?.({ source: "tabs", publish });
     await act(async () =>

@@ -1,10 +1,66 @@
 // @vitest-environment jsdom
+
 import { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it } from "vitest";
 import type { SidebarConfig, SidebarSurface } from "../../shared/sidebar.js";
 import type { SidebarContentState } from "./sidebar-contribution.js";
 import { TabbedSidebar } from "./tabbed-sidebar.js";
+
+it("reports an empty section as invisible even when another section keeps its tab selected", async () => {
+  function Empty({
+    visible,
+    report,
+  }: {
+    visible: boolean;
+    report: (state: SidebarContentState) => void;
+  }) {
+    useEffect(() => report("empty"), [report]);
+    return <span data-testid="empty-widget" data-visible={visible} />;
+  }
+  Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+  const node = document.createElement("div");
+  document.body.append(node);
+  const root = createRoot(node);
+  try {
+    await act(async () =>
+      root.render(
+        <TabbedSidebar
+          side="right"
+          scope="empty-test"
+          open
+          tabs={[
+            {
+              id: "shared",
+              title: "Shared",
+              sections: [
+                { id: "empty", type: "app", app: "widget", hideEmpty: true },
+                { id: "other", type: "custom" },
+              ],
+            },
+          ]}
+          onCustomize={() => {}}
+          renderSection={(section, visible, report) =>
+            section.id === "empty" ? (
+              <Empty visible={visible} report={report} />
+            ) : (
+              <span>Other section</span>
+            )
+          }
+        />,
+      ),
+    );
+    expect(
+      node
+        .querySelector("[data-testid=empty-widget]")
+        ?.getAttribute("data-visible"),
+    ).toBe("false");
+    expect(node.textContent).toContain("Other section");
+  } finally {
+    await act(async () => root.unmount());
+    node.remove();
+  }
+});
 
 function Probe({
   state,

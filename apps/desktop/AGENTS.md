@@ -148,7 +148,7 @@ cards, and `data-disabled-reason` beside each disabled condition. Do not rely on
 native title tooltips. When editing a failure-prone picker, preserve an actionable
 error/retry state and diagnostics that distinguish request failure from no matches.
 
-Sidebar built-ins and custom sources follow ADR 0129. Keep the validated contract
+Sidebar built-ins and custom sources follow ADR 0132. Keep the validated contract
 and project agent examples in `src/main/sidebar-authoring.ts` synchronized with
 changes; the settings skill and default configuration consume that single guide.
 Inline actions, overflow menus, and right-click menus are independent placements.
