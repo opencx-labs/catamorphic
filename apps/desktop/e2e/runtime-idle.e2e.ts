@@ -44,6 +44,19 @@ afterAll(async () => {
   );
 });
 
+const waitForFixture = () =>
+  app.waitFor(
+    `(async () => {
+      const view = document.querySelector('webview');
+      if (!view) return false;
+      try {
+        const page = await view.executeJavaScript('({url:location.href, ready:typeof window.framesRun === "number"})');
+        return page.ready && page.url === ${JSON.stringify(`${fixtureUrl}/`)};
+      } catch { return false; }
+    })()`,
+    { label: "browser guest attached and fixture loaded" },
+  );
+
 it("leaves settled chat icons without hidden animation loops or backdrop filters", async () => {
   await app.eval(
     `window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))`,
@@ -78,6 +91,7 @@ it("restores guest visibility and destroys closed browser guests across repeated
         `!![...document.querySelectorAll('button')].find(b=>b.textContent.includes('Idle browser'))`,
       );
       stage = "guest execution";
+      await waitForFixture();
       const page = await app.eval(
         `document.querySelector('webview').executeJavaScript('({url:location.href})')`,
       );
@@ -116,11 +130,9 @@ it("restores guest visibility and destroys closed browser guests across repeated
             `(()=>{window.__recoveringView=document.querySelector('webview');window.__recoveringView.dispatchEvent(new Event('render-process-gone'))})()`,
           );
           await app.waitFor(
-            `document.querySelector('webview')!==window.__recoveringView`,
+            `!!document.querySelector('webview') && document.querySelector('webview')!==window.__recoveringView`,
           );
-          await app.eval(
-            `document.querySelector('webview').executeJavaScript('location.href')`,
-          );
+          await waitForFixture();
         }
         await app.eval(
           `(()=>{window.__recoveringView=document.querySelector('webview');window.__recoveringView.dispatchEvent(new Event('render-process-gone'))})()`,
@@ -138,11 +150,9 @@ it("restores guest visibility and destroys closed browser guests across repeated
           `[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Try again').click()`,
         );
         await app.waitFor(
-          `document.querySelector('webview')!==window.__recoveringView`,
+          `!!document.querySelector('webview') && document.querySelector('webview')!==window.__recoveringView`,
         );
-        await app.eval(
-          `document.querySelector('webview').executeJavaScript('location.href')`,
-        );
+        await waitForFixture();
       }
       stage = "close browser tab";
       await app.eval(

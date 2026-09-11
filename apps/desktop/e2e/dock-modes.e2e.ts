@@ -122,7 +122,16 @@ describe("dock modes", () => {
          !dock.getAnimations({subtree:true}).some(animation =>
            animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity);`,
       { label: "floating chat finished opening with its composer focused" },
-    );
+    ).catch(async (error: unknown) => {
+      const state = await run(`return {
+        active: document.activeElement?.outerHTML.slice(0, 1000),
+        windowFocused: document.hasFocus(),
+        animations: frontDock()?.getAnimations({subtree:true}).map(animation => ({
+          state: animation.playState, timing: animation.effect?.getTiming(),
+        })),
+      };`);
+      throw new Error(`${String(error)}; dock state: ${JSON.stringify(state)}`);
+    });
   }, 180_000);
 
   it("the attach button inserts files at the caret, exactly like a paste", async () => {

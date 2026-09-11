@@ -185,6 +185,13 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
       "window.catamorphicDesktop && window.catamorphicDesktop.getServerState().then(s=>!!s.url)",
       { timeoutMs: 60_000, label: "embedded server ready" },
     );
+    // Launching a child process is not a user activation on every window
+    // manager. Activate the real page once on this private desktop before
+    // interacting; subsequent focus changes remain entirely native.
+    await client.cdp("Page.bringToFront");
+    await client.waitFor("document.hasFocus()", {
+      label: "launched desktop activated",
+    });
     // App iframes with an opaque origin render out of process; their CDP
     // targets appear on the same /json endpoint as the page. Attach a
     // dedicated WebSocket so tests can evaluate inside the frame.
