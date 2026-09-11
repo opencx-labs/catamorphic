@@ -1,6 +1,6 @@
 # 0079 — Desktop browser credential broker
 
-- **Status:** Accepted
+- **Status:** Accepted; CSV-only import superseded by [0083](0130-macos-browser-password-import.md)
 - **Date:** 2026-08-29
 
 ## Context

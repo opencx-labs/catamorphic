@@ -316,6 +316,13 @@ const api = {
     ipcRenderer.invoke("catamorphic:openrouter-models"),
 
   // --- import from other browsers ---
+  browserImportSupport: () =>
+    ipcRenderer.invoke("catamorphic:browser-import-support"),
+  browserImportNativePasswords: (input: {
+    browserId: string;
+    profileId: string;
+  }) =>
+    ipcRenderer.invoke("catamorphic:browser-import-native-passwords", input),
   browserImportList: (): Promise<unknown[]> =>
     ipcRenderer.invoke("catamorphic:browser-import-list"),
   browserImportRun: (input: unknown): Promise<unknown> =>

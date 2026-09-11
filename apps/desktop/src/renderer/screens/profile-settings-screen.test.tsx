@@ -18,6 +18,11 @@ vi.mock("../lib/desktop-api", () => ({
     vaultRemove: vi.fn().mockResolvedValue(undefined),
     vaultCopyPassword: vi.fn().mockResolvedValue(true),
     onVaultChanged: vi.fn().mockReturnValue(() => undefined),
+    browserImportSupport: vi.fn().mockResolvedValue({
+      available: false,
+      reason: "Direct password import requires macOS 11 or later.",
+    }),
+    browserImportNativePasswords: vi.fn(),
     browserImportList: vi.fn().mockResolvedValue([]),
     browserImportRun: vi
       .fn()
