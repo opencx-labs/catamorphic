@@ -8,6 +8,7 @@ export function checkCommands(input: {
   generatedTypesBaseline: string;
   lane?: "validation" | "workspace";
   shard?: string;
+  reuseTests?: boolean;
 }): readonly CheckCommand[] {
   const commands = [
     { label: "lint", command: "bun", args: ["run", "lint"] },
@@ -52,8 +53,8 @@ export function checkCommands(input: {
     {
       label: "deterministic workspace tests",
       command: "bun",
-      // Invoke the pinned runner directly for shards: bun run consumes the
-      // first `--`, but Turbo needs it to forward flags to each Vitest task.
+      // Shard identity is a test-only hashed environment input. Passing it
+      // through Turbo CLI arguments would also invalidate build hashes.
       args: input.shard
         ? [
             "scripts/tool-runtime.ts",
@@ -62,9 +63,9 @@ export function checkCommands(input: {
             "test",
             "--no-daemon",
             "--concurrency=2",
-            "--",
-            `--shard=${input.shard}`,
-            "--passWithNoTests",
+            ...(input.reuseTests ? [] : ["--force"]),
+            "--output-logs=new-only",
+            "--summarize",
           ]
         : ["run", "test:workspace"],
     },

@@ -63,7 +63,9 @@ describe("disposable Postgres", () => {
     expect(args).toContain("--detach");
     expect(args).toContain("--rm");
     expect(args).toContain("127.0.0.1::5432");
-    expect(args).toContain("postgres:17");
+    expect(args).toContain(
+      "postgres:17@sha256:e38411452a464af89e5adadb8d223bf53b898d47d6ef918b2d58c08707350449",
+    );
     expect(args).toContain("max_connections=300");
     expect(args.some((argument) => argument.includes("volume"))).toBe(false);
     expect(args).not.toContain("-v");
@@ -210,6 +212,7 @@ describe("disposable Postgres", () => {
       {
         PATH: "/usr/bin",
         DATABASE_URL: "postgresql://ambient",
+        CATAMORPHIC_TEST_SHARD: "1/4",
         ANTHROPIC_API_KEY: "anthropic",
         CATAMORPHIC_EXTERNAL_INTEGRATIONS: "1",
         CF_SANDBOX_INTEGRATION: "1",

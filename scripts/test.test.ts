@@ -140,6 +140,7 @@ describe("test process orchestration", () => {
           "run",
           "test",
           "--no-daemon",
+          "--force",
           "--concurrency=2",
         ],
         logFileName: "workspace-tests.log",
@@ -231,6 +232,7 @@ describe("test process orchestration", () => {
         "run",
         "test",
         "--no-daemon",
+        "--force",
         "--concurrency=2",
       ],
     );
@@ -244,8 +246,8 @@ describe("test process orchestration", () => {
       "run",
       "test",
       "--no-daemon",
-      "--concurrency=2",
       "--force",
+      "--concurrency=2",
     ]);
   });
 

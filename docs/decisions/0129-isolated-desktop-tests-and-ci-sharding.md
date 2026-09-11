@@ -1,6 +1,6 @@
 # 0129 - Isolated desktop tests and CI sharding
 
-- **Status:** Accepted
+- **Status:** Accepted; test-cache policy superseded by 0131
 - **Date:** 2026-09-11
 
 ## Context
@@ -26,7 +26,8 @@ Run validation, workspace tests, PWA E2E, and desktop E2E as independent jobs.
 Shard Vitest by whole file across runners, preserving ordered tests and one
 Electron suite per display. Each workspace shard owns its disposable Postgres.
 A stable aggregate check requires every lane and shard to succeed. Cache
-dependencies/build outputs, never test successes or databases across shards.
+dependencies/build outputs, never test successes or databases across shards
+(test-success policy superseded by ADR 0131).
 Build each package before testing its own exports. Stock-server tests use
 separate Node processes for PGlite to avoid shared V8 JIT allocation crashes;
 other workspace tests retain worker threads and the same concurrency limits.

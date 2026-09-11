@@ -18,10 +18,22 @@ describe("checkCommands", () => {
       "test",
       "--no-daemon",
       "--concurrency=2",
-      "--",
-      "--shard=2/4",
-      "--passWithNoTests",
+      "--force",
+      "--output-logs=new-only",
+      "--summarize",
     ]);
+  });
+
+  it("reuses tasks only when the CI caller opts in", () => {
+    const args = checkCommands({
+      generatedTypesBaseline: "/tmp/baseline.ts",
+      lane: "workspace",
+      shard: "1/2",
+      reuseTests: true,
+    })[0]?.args;
+    expect(args).not.toContain("--force");
+    expect(args).not.toContain("--shard=1/2");
+    expect(args).toContain("--summarize");
   });
 
   it("rejects invalid shards and unknown lanes before starting infrastructure", () => {

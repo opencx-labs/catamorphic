@@ -766,6 +766,11 @@ pass through. Logs, screenshots, and JUnit results go to `test-results/`.
 `bun run check` includes this isolated suite. Native macOS coverage runs in CI.
 See [desktop testing](docs/desktop-testing.md) for runner and sharding details.
 
+PR checks reuse successful package and shard tasks by content hash. Changing a
+package invalidates its downstream consumers; local commands and main still
+execute tests fresh. See [test caching and selective execution](docs/test-caching.md)
+for cache inputs, failure handling, and execution summaries.
+
 The local development runner uses POSIX process groups and supports macOS and
 Linux. Windows development orchestration is not supported.
 

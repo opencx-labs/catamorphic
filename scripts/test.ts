@@ -170,8 +170,8 @@ export function testRunEnvironment(input: {
     TMP: input.resources.tempPath,
     TEMP: input.resources.tempPath,
     BUN_INSTALL_CACHE_DIR: input.resources.bunCachePath,
-    // Hosted CI owns its checkout. Reuse dependency build outputs there;
-    // test tasks themselves are uncached and each shard owns its database.
+    // Hosted CI owns its checkout and can reuse successful tasks. Each
+    // invocation still owns its temporary files and disposable database.
     TURBO_CACHE_DIR:
       input.source.GITHUB_ACTIONS === "true"
         ? (input.source.TURBO_CACHE_DIR ?? input.resources.turboCachePath)
@@ -294,8 +294,8 @@ export function turboTestArguments(input: {
     "run",
     "test",
     "--no-daemon",
+    "--force",
     `--concurrency=${TURBO_CONCURRENCY}`,
-    ...input.cliArguments,
   ];
 }
 
