@@ -4,17 +4,19 @@ import { type AppHandle, launchApp } from "./harness.js";
 let app: AppHandle;
 
 const click = async (selector: string) => {
-  const target = await app.eval<{
+  const target = await app.waitFor<{
     x: number;
     y: number;
-    hit: boolean;
-  }>(`(() => {
+  }>(
+    `(() => {
     const button = document.querySelector(${JSON.stringify(selector)});
+    if (!button) return false;
     const rect = button.getBoundingClientRect();
     const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
-    return { x, y, hit: button.contains(document.elementFromPoint(x, y)) };
-  })()`);
-  expect(target.hit).toBe(true);
+    return button.contains(document.elementFromPoint(x, y)) && { x, y };
+  })()`,
+    { label: `clickable header control: ${selector}` },
+  );
   for (const type of ["mousePressed", "mouseReleased"]) {
     await app.cdp("Input.dispatchMouseEvent", {
       type,
@@ -66,27 +68,9 @@ describe("empty workspace header", () => {
                 : "Math.abs(header.right - bounds.right - 12) < 1"
             };
           })()`);
-          const target = await app.eval<{
-            x: number;
-            y: number;
-            hit: boolean;
-          }>(`(() => {
-            const toggle = document.querySelector('[aria-label="${rightOpen ? "Collapse" : "Expand"} right sidebar"]');
-            const bounds = toggle.getBoundingClientRect();
-            const x = bounds.left + bounds.width / 2;
-            const y = bounds.top + bounds.height / 2;
-            return {x, y, hit: toggle.contains(document.elementFromPoint(x, y))};
-          })()`);
-          expect(target.hit).toBe(true);
-          for (const type of ["mousePressed", "mouseReleased"]) {
-            await app.cdp("Input.dispatchMouseEvent", {
-              type,
-              x: target.x,
-              y: target.y,
-              button: "left",
-              clickCount: 1,
-            });
-          }
+          await click(
+            `[aria-label="${rightOpen ? "Collapse" : "Expand"} right sidebar"]`,
+          );
           await app.waitFor(
             `document.querySelector('[data-sidebar="right"]')?.getAttribute('aria-hidden') === '${rightOpen}'`,
           );
