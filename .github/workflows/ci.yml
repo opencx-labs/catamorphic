@@ -104,7 +104,7 @@ jobs:
       - uses: ./.github/actions/test-setup
         with:
           cache-suffix: pwa
-      - run: bun scripts/tool-runtime.ts turbo run build --filter=catamorphic-pwa...
+      - run: bun scripts/tool-runtime.ts turbo run build --filter=catamorphic-pwa... --filter=catamorphic-server...
       - run: bun run --cwd apps/pwa test:e2e
 
   desktop-linux:
@@ -156,7 +156,13 @@ jobs:
       - name: Build desktop and mobile guest
         run: bun scripts/tool-runtime.ts turbo run build --concurrency=2 --filter=catamorphic-desktop... --filter=catamorphic-pwa...
       - name: Test native macOS desktop
-        run: bun scripts/desktop-test.ts --native --shard=${{ matrix.shard }}/${{ matrix.total }}
+        # Hosted images disable motion/transparency globally; use the ordinary
+        # desktop settings so animation assertions exercise the actual app.
+        # https://github.com/actions/runner-images/blob/main/images/macos/scripts/build/configure-system.sh
+        run: |
+          defaults write com.apple.universalaccess reduceMotion -bool false
+          defaults write com.apple.universalaccess reduceTransparency -bool false
+          bun scripts/desktop-test.ts --native --shard=${{ matrix.shard }}/${{ matrix.total }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:

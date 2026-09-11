@@ -100,14 +100,16 @@ describe("dock modes", () => {
       input.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     `);
-    const state = await runWait<{ text: string; focused: boolean }>(
+    const text = await runWait<string>(
       `const c = composer();
        if (!c.querySelector('[data-testid="composer-pill"][data-pill-kind="image"]')) return false;
-       return { text: c.textContent, focused: document.activeElement === c };`,
+       return c.textContent;`,
       { label: "picked file as inline pill" },
     );
-    expect(state.text).toBe("beforepicked.png  after");
-    expect(state.focused).toBe(true);
+    expect(text).toBe("beforepicked.png  after");
+    await runWait(`return document.activeElement === composer();`, {
+      label: "composer regains focus after attachment insertion",
+    });
     await run(`setComposer(''); return true;`);
     await runWait(
       `return composer().hasAttribute('data-empty') === false || true;`,

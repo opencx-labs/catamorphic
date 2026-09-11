@@ -83,7 +83,7 @@
       ]
     },
     "test": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["build"],
       "env": [
         "CATAMORPHIC_DB_SCHEMA",
         "CATAMORPHIC_E2E_FAKE_AGENT",
