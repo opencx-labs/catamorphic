@@ -1663,14 +1663,24 @@ function ChatDockContent({
     chat.sessionId,
     checkout?.path,
   ]);
+  const commandsRequest = useMemo(
+    () => ({
+      key: commandsKey,
+      active: catalogActive,
+      refresh: commandsRefresh,
+    }),
+    [commandsKey, catalogActive, commandsRefresh],
+  );
   const [nativeCatalog, setNativeCatalog] = useState<
-    AgentCommandsResult & { key: string; loading: boolean }
-  >({ key: "", commands: [], loading: true });
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refresh reloads native files and plugin configuration
+    AgentCommandsResult & {
+      request?: typeof commandsRequest;
+      loading: boolean;
+    }
+  >({ commands: [], loading: true });
   useEffect(() => {
-    if (!catalogActive || commandsAgentId === null) return;
+    if (!commandsRequest.active || commandsAgentId === null) return;
     let cancelled = false;
-    setNativeCatalog({ key: commandsKey, commands: [], loading: true });
+    setNativeCatalog({ request: commandsRequest, commands: [], loading: true });
     void desktopApi
       .agentCommands({
         projectId,
@@ -1679,12 +1689,16 @@ function ChatDockContent({
       })
       .then((result) => {
         if (!cancelled)
-          setNativeCatalog({ ...result, key: commandsKey, loading: false });
+          setNativeCatalog({
+            ...result,
+            request: commandsRequest,
+            loading: false,
+          });
       })
       .catch(() => {
         if (!cancelled)
           setNativeCatalog({
-            key: commandsKey,
+            request: commandsRequest,
             commands: [],
             loading: false,
             error: "Could not load agent commands. Retry to refresh the list.",
@@ -1693,15 +1707,8 @@ function ChatDockContent({
     return () => {
       cancelled = true;
     };
-  }, [
-    catalogActive,
-    commandsAgentId,
-    commandsKey,
-    projectId,
-    chat.sessionId,
-    commandsRefresh,
-  ]);
-  const nativeCurrent = nativeCatalog.key === commandsKey;
+  }, [commandsRequest, commandsAgentId, projectId, chat.sessionId]);
+  const nativeCurrent = nativeCatalog.request === commandsRequest;
   const commandsLoading =
     catalogActive &&
     (skillCatalog.loading ||

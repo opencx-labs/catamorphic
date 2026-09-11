@@ -336,8 +336,10 @@ it("expands a plural group into every member without clipping the list", async (
   await run(
     `front().querySelector('[data-testid="surface-group-members"] button').focus();`,
   );
+  // The stationary pointer can hover a different member as the group expands.
+  // Assert the focused member's own preview, identified by its ARIA relationship.
   await wait(
-    `return preview()?.querySelector('pre')?.textContent.includes('preview-terminal-output');`,
+    `const panel = document.getElementById(document.activeElement?.getAttribute('aria-details') ?? ''); return panel?.querySelector('pre')?.textContent.includes('preview-terminal-output');`,
   );
   await app.press("Escape");
   await run(

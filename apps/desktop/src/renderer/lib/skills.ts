@@ -1,5 +1,5 @@
 import { useCatamorphic } from "@catamorphic/react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 /**
  * A skill as the palette and composer see it: the tiers merged by core
@@ -35,30 +35,35 @@ export function useProjectSkillCatalog(
   refresh = 0,
 ) {
   const { apiClient } = useCatamorphic();
+  // A reopening is a new request even for the same project. Scope the result
+  // during render so old rows cannot flash before the refresh effect runs.
+  const request = useMemo(
+    () => ({ projectId, active, refresh, apiClient }),
+    [projectId, active, refresh, apiClient],
+  );
   const [catalog, setCatalog] = useState<{
-    projectId?: string;
+    request?: typeof request;
     skills: SkillInfo[];
     loading: boolean;
     error?: string;
   }>({ skills: [], loading: true });
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refresh explicitly reloads the files
   useEffect(() => {
-    if (!active || !projectId) return;
+    if (!request.active || !request.projectId) return;
     let cancelled = false;
-    setCatalog({ projectId, skills: [], loading: true });
-    void apiClient
+    setCatalog({ request, skills: [], loading: true });
+    void request.apiClient
       .GET("/api/projects/{projectId}/skills", {
-        params: { path: { projectId } },
+        params: { path: { projectId: request.projectId } },
       })
       .then((result) => {
         if (!result.data) throw new Error("Could not load skills.");
         if (!cancelled)
-          setCatalog({ projectId, skills: result.data, loading: false });
+          setCatalog({ request, skills: result.data, loading: false });
       })
       .catch(() => {
         if (!cancelled)
           setCatalog({
-            projectId,
+            request,
             skills: [],
             loading: false,
             error: "Could not load skills. Retry to refresh the list.",
@@ -67,8 +72,8 @@ export function useProjectSkillCatalog(
     return () => {
       cancelled = true;
     };
-  }, [active, projectId, apiClient, refresh]);
-  return catalog.projectId === projectId
+  }, [request]);
+  return catalog.request === request
     ? catalog
     : { skills: [], loading: active };
 }

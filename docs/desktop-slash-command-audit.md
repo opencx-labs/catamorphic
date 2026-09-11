@@ -38,6 +38,11 @@ protocol operations and session lifecycle semantics.
 - **Stale data and silent failures.** Removed the five-minute command cache.
   Each slash entry refreshes files. Discovery exposes loading, errors, empty
   results, and Retry. Failed unresolved command submission retains the draft.
+  CI also exposed previous rows briefly reappearing when reopening the palette.
+  Shared and native results now belong to the exact refresh request during
+  render, preventing stale rows before effects run. A regression fails against
+  the previous implementation and passes with the fix; another covers late
+  responses after changing projects.
 - **Native Codex skills were absent.** Read them through the existing app-server
   transport without creating a thread or turn. Resolve them to a skill message
   with the exact file path, consistent with the existing skills-as-messages model.
@@ -123,6 +128,14 @@ Current verification after pulling main:
 - Real-agent screenshots are retained under
   `test-results/slash-manual-2026-09-11/`. The full gate log is copied there as
   `full-check.log`. The implementation was prepared on `codex/slash-command-audit`.
+- Follow-up verification after publication: 548 desktop unit tests and the 21
+  skill/settings-palette E2E cases passed. The complete Electron rerun passed
+  all 39 suites: 291 tests passed and the existing macOS-only test was skipped
+  on Linux. The broad rerun also exposed a
+  terminal-preview assertion reading a different hovered card; it now targets
+  the focused member through `aria-details`, with the expected preview verified
+  in the failure screenshot. The latest main CI-caching update was pulled before
+  publishing the follow-up.
 
 Native protocol references: [Claude SDK skills](https://code.claude.com/docs/en/agent-sdk/slash-commands)
 and [Codex app-server skill discovery](https://learn.chatgpt.com/docs/app-server#skills).
