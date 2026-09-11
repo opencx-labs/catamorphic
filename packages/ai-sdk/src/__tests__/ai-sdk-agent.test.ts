@@ -639,7 +639,7 @@ describe("AiSdkCodingAgent", () => {
     expect(secondPrompt).toContain("Second request");
   });
 
-  it("rejects filesystem paths outside the project", async () => {
+  it("rejects escaping paths while allowing the model to recover", async () => {
     const provider = createProvider();
     const model = new MockLanguageModelV4({
       doStream: [
@@ -654,10 +654,16 @@ describe("AiSdkCodingAgent", () => {
 
     expect(provider.uploadFiles).not.toHaveBeenCalled();
     expect(events).toContainEqual({
-      type: "error",
+      type: "diagnostic",
       content:
         "Tool write failed: Path escapes the project working directory: ../escape.txt",
     });
+    expect(events).toContainEqual({
+      type: "text",
+      content: "The write was rejected.",
+    });
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    expect(events.some((event) => event.type === "done")).toBe(true);
   });
 
   it("does not emit done after a terminal model error", async () => {

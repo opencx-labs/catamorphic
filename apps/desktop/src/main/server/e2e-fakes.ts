@@ -1007,6 +1007,24 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       return;
     }
 
+    // Native Codex discovery supplies a concrete file, outside the shared
+    // read_skill catalog. Exercise the actual file read and argument payload.
+    const nativeSkillRun =
+      /^Use the "native-notes" skill at ("(?:[^"\\]|\\.)*")\.\s*([\s\S]*)$/.exec(
+        message.trim(),
+      );
+    if (nativeSkillRun?.[1]) {
+      const file: unknown = JSON.parse(nativeSkillRun[1]);
+      if (typeof file !== "string")
+        throw new Error("Invalid native skill path");
+      yield {
+        type: "text",
+        content: `native skill loaded: ${fs.readFileSync(file, "utf8").trim()} | ${nativeSkillRun[2]}`,
+      };
+      yield { type: "done" };
+      return;
+    }
+
     // `Use the "<name>" skill` — the EXACT message palette skill rows and
     // composer /commands send — runs the REAL read_skill tool, so skill
     // e2e covers renderer → invocation message → toolkit → core's merged

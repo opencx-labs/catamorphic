@@ -46,7 +46,7 @@ export function serializeComposer<T>(
 ): SerializedComposer<T> {
   let out = "";
   const attachments: T[] = [];
-  const walk = (node: WalkableNode) => {
+  const walk = (node: WalkableNode, last: boolean) => {
     if (node.nodeType === TEXT_NODE) {
       // NBSPs are Chromium's way of keeping edge spaces alive; the message
       // wants ordinary spaces. Zero-width joiners/spaces from caret tricks
@@ -79,14 +79,15 @@ export function serializeComposer<T>(
     const children = node.childNodes;
     for (let index = 0; index < children.length; index += 1) {
       const child = children[index];
-      if (child) walk(child);
+      if (child) walk(child, index === children.length - 1);
     }
-    if (block && !out.endsWith("\n")) out += "\n";
+    // A final paragraph has no implicit trailing line break. Preserve explicit BRs.
+    if (block && !last && !out.endsWith("\n")) out += "\n";
   };
   const children = root.childNodes;
   for (let index = 0; index < children.length; index += 1) {
     const child = children[index];
-    if (child) walk(child);
+    if (child) walk(child, index === children.length - 1);
   }
   const message = options.trim === false ? out : out.trim();
   return {

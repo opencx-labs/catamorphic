@@ -1,4 +1,5 @@
 import type { ResourcePreview } from "@catamorphic/react";
+import type { AgentCommandsResult } from "../../shared/agent-commands.js";
 import type { AppPrefs } from "../../shared/app-prefs.js";
 import type { BookmarkPlacement } from "../../shared/bookmark-target.js";
 import type {
@@ -948,12 +949,11 @@ export interface CatamorphicDesktopApi {
     id: string,
   ) => Promise<{ health: "ok" | "expired" | "missing"; reauth: boolean }>;
   usageSummary: (days: number) => Promise<UsageSummary>;
-  agentCommands: (
-    projectId: string,
-    agentId: string,
-  ) => Promise<
-    Array<{ name: string; description: string; argumentHint: string }>
-  >;
+  agentCommands: (input: {
+    projectId: string;
+    agentId: string;
+    sessionId?: string;
+  }) => Promise<AgentCommandsResult>;
   onAgentAuthMaybeChanged: (listener: () => void) => () => void;
   onAgentsChanged: (listener: (data: AgentsData) => void) => () => void;
   onAgentLoginFinished: (

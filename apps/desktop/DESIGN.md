@@ -386,3 +386,14 @@ supported Macs, beside bookmark import. The action explains macOS authorization,
 shows progress and added/skipped counts, and preserves existing passwords.
 Other platforms retain CSV with a clear macOS support note. A prebuilt helper
 ships only in macOS packages; see ADR 0130.
+
+### 2026-09-11: Slash command composer
+
+Repaired the [slash command experience](../../docs/desktop-slash-command-audit.md).
+  The existing Enter-to-run and Tab-for-arguments interaction uses one send path.
+  Command rows retain a fixed height, argument hints have a stable footer, and a
+  native top-layer menu stays readable in narrow chats. Catalog loading, empty
+  results, errors, retry, and keyboard selection are explicit.
+  A T3 Code comparison further tightened command-name search, guarded selection
+  against fresh input arriving before a render, and moved pointer activation to
+  click release while retaining composer focus.

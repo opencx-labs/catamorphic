@@ -82,7 +82,7 @@ import {
   createPaletteIndex,
   PALETTE_RESULT_LIMIT,
 } from "../lib/palette-search.js";
-import { useProjectSkills } from "../lib/skills.js";
+import { skillsForAgent, useProjectSkills } from "../lib/skills.js";
 import { NEW_WORKFLOW_PROMPT } from "../lib/workflow-authoring.js";
 import { useApps } from "../screens/app-screen.js";
 import { resolveInput } from "../screens/browser-screen.js";
@@ -1103,7 +1103,7 @@ export function CommandPalette({
   // scoped commands), else a new chat that honors the commit mode.
   const skillItems = useMemo<PaletteItem[]>(
     () =>
-      skills.map((skill) => ({
+      skillsForAgent(skills, targetAgent?.skills).map((skill) => ({
         id: `skill:${skill.name}`,
         icon: Sparkles,
         // The pretty title fronts the row; the slug stays a keyword so
@@ -1120,7 +1120,7 @@ export function CommandPalette({
         kind: hasFocusedChat ? ("action" as const) : ("navigate" as const),
         run: (mode) => onRunSkill(skill.name, mode === "tab" ? "tab" : "float"),
       })),
-    [skills, hasFocusedChat, onRunSkill],
+    [skills, targetAgent?.skills, hasFocusedChat, onRunSkill],
   );
 
   const projectItems = useMemo<PaletteItem[]>(

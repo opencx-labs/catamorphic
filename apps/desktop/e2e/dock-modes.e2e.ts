@@ -258,23 +258,26 @@ describe("dock modes", () => {
     );
   }, 60_000);
 
-  it("the slash menu merges the harness's commands under the skills", async () => {
+  it("the built-in slash menu offers shared skills without inventing native commands", async () => {
     await run(`setComposer('/'); return true;`);
     const rows = await runWait<string[]>(
       `const menu = $('[data-testid="slash-menu"]');
-       if (!menu || !menu.querySelector('[data-skill-name="compact"]')) return false;
+       if (!menu || !menu.querySelector('[data-skill-name="writing-workflows"]') ||
+           menu.querySelector('[aria-busy="true"]')) return false;
        return [...menu.querySelectorAll('[role="option"]')].map((el) => el.dataset.skillName);`,
-      { timeoutMs: 15_000, label: "menu with harness commands" },
+      { timeoutMs: 15_000, label: "built-in command catalog" },
     );
-    // The e2e fixture list from main: compact + review, tagged as the
-    // harness's own.
-    expect(rows).toContain("compact");
-    expect(rows).toContain("review");
+    // This chat runs the built-in Fake Agent. Native command fixtures must
+    // follow the selected harness, just like production discovery does.
+    expect(rows).toContain("status");
+    expect(rows).toContain("writing-workflows");
+    expect(rows).not.toContain("compact");
+    expect(rows).not.toContain("review");
     expect(
       await run<boolean>(
         `return $('[data-testid="slash-menu"]').textContent.includes('Claude Code');`,
       ),
-    ).toBe(true);
+    ).toBe(false);
     // The panel pops in (and pops out when the token dissolves).
     expect(
       await run<boolean>(
@@ -285,11 +288,13 @@ describe("dock modes", () => {
     await runWait(`return !$('[data-testid="slash-menu"]');`, {
       label: "menu closed after its exit animation",
     });
-    // Committing a command sends the literal /name to the harness.
-    await run(`setComposer('/compact'); return true;`);
+    // Unknown slash text remains an ordinary message after discovery settles.
+    await run(`setComposer('/unknown-command-zzzz'); return true;`);
     await runWait(
-      `return !!$('[data-testid="slash-menu"] [data-skill-name="compact"]');`,
-      { label: "compact filtered" },
+      `const menu = $('[data-testid="slash-menu"]');
+       return !!menu && menu.textContent.includes('No matching commands') &&
+         !menu.querySelector('[aria-busy="true"]');`,
+      { label: "unknown command after discovery" },
     );
     await run(`
       composer().dispatchEvent(new KeyboardEvent('keydown', {
@@ -297,7 +302,7 @@ describe("dock modes", () => {
       return true;
     `);
     await runWait(
-      `return frontDock().querySelector('[role="log"]').textContent.includes('You said: /compact');`,
+      `return frontDock().querySelector('[role="log"]').textContent.includes('You said: /unknown-command-zzzz');`,
       { timeoutMs: 30_000, label: "harness received the raw command" },
     );
   }, 60_000);

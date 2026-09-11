@@ -28,6 +28,7 @@ import type {
   TurnOptions,
 } from "@catamorphic/sandbox";
 import { narrowingLayer, PROJECT_TOOLS_SERVER_KEY } from "@catamorphic/sandbox";
+import type { AgentCommandsResult } from "../../shared/agent-commands.js";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { AgentConfig } from "../agents-store.js";
 import {
@@ -317,6 +318,120 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     return {
       component,
       environment: { ...environment, CATAMORPHIC_BUN: bun.executablePath },
+    };
+  }
+
+  /** Resolve the same configuration and consent as execution, without starting a session. */
+  async listCommands({
+    projectId,
+    agentId,
+    workingDirectory,
+  }: {
+    projectId: string;
+    agentId: string;
+    workingDirectory: string;
+  }): Promise<AgentCommandsResult> {
+    const ref = parseProjectAgentId(agentId);
+    if (ref && ref.projectId !== projectId)
+      return { commands: [], error: "This agent belongs to another project." };
+    const resolved = ref
+      ? this.resolveProjectConfig(agentId, ref.projectId, ref.slug)
+      : this.findConfig(agentId);
+    if (!resolved)
+      return {
+        commands: [],
+        error: "Select an available agent to load commands.",
+      };
+    if ("error" in resolved) return { commands: [], error: resolved.error };
+    const { config, profileId } = resolved;
+    if (profileId !== this.deps.profiles.profileForProject(projectId).id)
+      return { commands: [], error: "This agent belongs to another profile." };
+    if (config.harness === "ai-sdk") return { commands: [] };
+    if (this.deps.e2eFake) {
+      return {
+        commands:
+          config.harness === "claude-code"
+            ? [
+                {
+                  name: "compact",
+                  description: "Summarize conversation history",
+                  argumentHint: "[instructions]",
+                },
+                {
+                  name: "review",
+                  description: "Review a pull request",
+                  argumentHint: "<pr-number>",
+                },
+              ]
+            : [
+                {
+                  name: "native-notes",
+                  description: "Write notes with Codex",
+                  argumentHint: "[instructions]",
+                  skillPath: path.join(
+                    workingDirectory,
+                    ".codex/skills/native-notes/SKILL.md",
+                  ),
+                },
+              ],
+      };
+    }
+    const { component, environment } = await this.ensureNativeComponents(
+      config.harness,
+    );
+    if (config.harness === "codex") {
+      const { listCodexSkills } = await import("@catamorphic/codex");
+      const skills = await listCodexSkills({
+        executable: component.executablePath,
+        workingDirectory,
+        env: {
+          ...environment,
+          ...(config.auth === "account"
+            ? { CODEX_HOME: this.agentHome(agentId) }
+            : {}),
+        },
+      });
+      return {
+        commands: skills
+          .filter(
+            (skill) =>
+              config.skills?.mode !== "picked" ||
+              config.skills.names.includes(skill.name),
+          )
+          .map((skill) => ({
+            name: skill.name,
+            description: skill.description,
+            argumentHint: "[instructions]",
+            skillPath: skill.path,
+          })),
+      };
+    }
+    const { listClaudeSlashCommands } = await import(
+      "@catamorphic/claude-code"
+    );
+    const hostSkills = this.deps.hostSkills?.();
+    const generatedAliases = new Set(
+      hostSkills?.skills.map(
+        (skill) => `${hostSkills.plugin.name}:${skill.name}`,
+      ),
+    );
+    return {
+      commands: (
+        await listClaudeSlashCommands({
+          workingDirectory,
+          pathToClaudeCodeExecutable: component.executablePath,
+          env: {
+            ...environment,
+            ...(config.auth === "account"
+              ? { CLAUDE_CONFIG_DIR: this.agentHome(agentId) }
+              : {}),
+          },
+          plugins: this.resolveMcp(config, profileId).plugins.map((plugin) => ({
+            type: "local",
+            path: plugin.path,
+          })),
+        })
+      ).filter((command) => !generatedAliases.has(command.name)),
     };
   }
 
@@ -757,15 +872,27 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
    * actionable error — a turn on it errors clearly instead of hanging or
    * disappearing into AgentNotConfiguredError.
    */
-  private getProjectAgent(
+  private resolveProjectConfig(
     id: string,
     projectId: string,
     slug: string,
-  ): RegisteredCodingAgent | undefined {
+  ):
+    | {
+        config: AgentConfig;
+        profileId: string;
+        def: AgentDefinition;
+        persona: string | undefined;
+        source: string;
+        hash: string;
+        rootPath: string;
+      }
+    | { error: string; missing?: boolean } {
     const rootPath = this.deps.projectRootPath?.(projectId);
     if (!rootPath) {
-      this.evict(id);
-      return undefined;
+      return {
+        error: "The project agent is no longer available.",
+        missing: true,
+      };
     }
     const agentsDir = path.join(rootPath, "agents");
     let rawText: string;
@@ -773,8 +900,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       rawText = fs.readFileSync(path.join(agentsDir, `${slug}.json`), "utf-8");
     } catch {
       // No definition file → the agent does not exist.
-      this.evict(id);
-      return undefined;
+      return {
+        error: "The project agent is no longer available.",
+        missing: true,
+      };
     }
     let persona: string | undefined;
     try {
@@ -787,27 +916,24 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     try {
       raw = JSON.parse(rawText);
     } catch {
-      return this.failFast(
-        id,
-        `The project agent file agents/${slug}.json is not valid JSON — fix the file and try again.`,
-      );
+      return {
+        error: `The project agent file agents/${slug}.json is not valid JSON. Fix the file and try again.`,
+      };
     }
     const validated = validateAgentDefinition(raw, {
       allowE2eFake: this.deps.e2eFake,
     });
     if ("error" in validated) {
-      return this.failFast(
-        id,
-        `The project agent definition agents/${slug}.json is invalid (${validated.error}) — fix the file and try again.`,
-      );
+      return {
+        error: `The project agent definition agents/${slug}.json is invalid (${validated.error}). Fix the file and try again.`,
+      };
     }
     const def = validated.definition;
 
     if (def.kind === "acp") {
-      return this.failFast(
-        id,
-        `"${def.name}" is an ACP agent — ACP harness support isn't built yet. Pick another agent for now.`,
-      );
+      return {
+        error: `"${def.name}" is an ACP agent. ACP harness support isn't built yet. Pick another agent for now.`,
+      };
     }
 
     // The security core: a committed definition is collaborator-authored
@@ -827,16 +953,14 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     if (def.kind !== "e2e-fake" && source !== "secret") {
       const binding = stores.agentBindings.get(projectId, slug);
       if (!binding) {
-        return this.failFast(
-          id,
-          `The project agent "${def.name}" needs your approval before it can use your credentials — open the agent picker to review and approve it.`,
-        );
+        return {
+          error: `The project agent "${def.name}" needs your approval before it can use your credentials. Open the agent picker to review and approve it.`,
+        };
       }
       if (binding.consentHash !== hash) {
-        return this.failFast(
-          id,
-          `The definition of the project agent "${def.name}" changed since you approved it — open the agent picker to review and re-approve it.`,
-        );
+        return {
+          error: `The definition of the project agent "${def.name}" changed since you approved it. Open the agent picker to review and re-approve it.`,
+        };
       }
       bindingAuth = binding.auth ?? { mode: "local" };
     }
@@ -886,6 +1010,24 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         : {}),
       ...(def.delegation ? { delegation: def.delegation } : {}),
     };
+    return { config, profileId, def, persona, source, hash, rootPath };
+  }
+
+  private getProjectAgent(
+    id: string,
+    projectId: string,
+    slug: string,
+  ): RegisteredCodingAgent | undefined {
+    const resolved = this.resolveProjectConfig(id, projectId, slug);
+    if ("error" in resolved) {
+      if (resolved.missing) {
+        this.evict(id);
+        return undefined;
+      }
+      return this.failFast(id, resolved.error);
+    }
+    const { config, profileId, def, persona, source, hash, rootPath } =
+      resolved;
     const mcp = this.resolveMcp(config, profileId);
 
     const defaults = {

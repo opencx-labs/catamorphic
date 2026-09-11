@@ -4,7 +4,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { ClaudeSlashCommand } from "@catamorphic/claude-code";
 import {
   definitionHash,
   formatProjectAgentId,
@@ -30,6 +29,7 @@ import {
   shell,
   type WebContents,
 } from "electron";
+import type { AgentCommandsResult } from "../shared/agent-commands.js";
 import type { FilePreviewInput } from "../shared/file-preview.js";
 import type { FileSearchInput } from "../shared/file-search.js";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
@@ -1269,72 +1269,36 @@ export function registerIpcHandlers(
     },
   );
 
-  // The harness's own slash commands (Claude Code only): built-ins,
-  // .claude/commands, plugin and skill commands — probed with a
-  // never-yielding SDK session (no API call) and cached briefly. The
-  // composer's "/" menu merges these under the project's skills.
-  const commandsCache = new Map<
-    string,
-    | { at: number; commands: ClaudeSlashCommand[] }
-    | Promise<ClaudeSlashCommand[]>
-  >();
   ipcMain.handle(
     "catamorphic:agent-commands",
     async (
-      event,
-      projectId: string,
-      agentId: string,
-    ): Promise<ClaudeSlashCommand[]> => {
-      // e2e: a fixed list — the real probe would spawn the actual CLI.
-      if (process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1") {
-        return [
-          {
-            name: "compact",
-            description: "Clear conversation history but keep a summary",
-            argumentHint: "",
-          },
-          {
-            name: "review",
-            description: "Review a pull request",
-            argumentHint: "<pr-number>",
-          },
-        ];
-      }
-      const agent = storesFor(event).agents.get(agentId);
-      if (agent?.harness !== "claude-code") return [];
-      const root = await state.current?.projectRoots.get(projectId);
-      if (!root) return [];
-      const key = `${agentId}\u0000${root}`;
-      const cached = commandsCache.get(key);
-      if (cached instanceof Promise) return cached;
-      if (cached && Date.now() - cached.at < 5 * 60_000) {
-        return cached.commands;
-      }
-      const { listClaudeSlashCommands } = await import(
-        "@catamorphic/claude-code"
-      );
-      const component =
-        await state.current?.agentRegistry.ensureHarnessExecutable(
-          "claude-code",
-        );
-      if (!component) return [];
-      const probe = listClaudeSlashCommands({
-        workingDirectory: root,
-        pathToClaudeCodeExecutable: component.executablePath,
-        ...(agent.auth === "account"
-          ? { env: { CLAUDE_CONFIG_DIR: agentHome(agentId) } }
-          : {}),
-      })
-        .then((commands) => {
-          commandsCache.set(key, { at: Date.now(), commands });
-          return commands;
-        })
-        .catch(() => {
-          commandsCache.delete(key);
-          return [];
+      _event,
+      input: { projectId: string; agentId: string; sessionId?: string },
+    ): Promise<AgentCommandsResult> => {
+      try {
+        const server = state.current;
+        if (!server) throw new Error("The project server is not ready.");
+        const workingDirectory = input.sessionId
+          ? (
+              await server.sessionCheckouts.describe({
+                projectId: input.projectId,
+                sessionId: input.sessionId,
+              })
+            ).path
+          : await server.projectRoots.get(input.projectId);
+        if (!workingDirectory)
+          throw new Error("The project folder is unavailable.");
+        return await server.agentRegistry.listCommands({
+          ...input,
+          workingDirectory,
         });
-      commandsCache.set(key, probe);
-      return probe;
+      } catch {
+        return {
+          commands: [],
+          error:
+            "Could not load agent commands. Check the agent configuration and skill files, then retry.",
+        };
+      }
     },
   );
 
