@@ -156,6 +156,10 @@ jobs:
       - name: Build desktop and mobile guest
         run: bun scripts/tool-runtime.ts turbo run build --concurrency=2 --filter=catamorphic-desktop... --filter=catamorphic-pwa...
       - name: Test native macOS desktop
+        env:
+          # The runner inherits Bash; desktop terminals on macOS use Zsh,
+          # including the real OSC 133 and in-app URL shell integration.
+          SHELL: /bin/zsh
         # Hosted images disable motion/transparency globally; use the ordinary
         # desktop settings so animation assertions exercise the actual app.
         # https://github.com/actions/runner-images/blob/main/images/macos/scripts/build/configure-system.sh

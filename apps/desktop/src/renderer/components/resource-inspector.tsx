@@ -201,6 +201,14 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
       ) {
         return;
       }
+      // A sibling transcript or terminal can scroll while this trigger stays
+      // still. Only scrolling an ancestor can detach the preview's anchor.
+      if (
+        event.target instanceof Element &&
+        !event.target.contains(triggerRef.current)
+      ) {
+        return;
+      }
       // Keyboard focus scrolls offscreen links into view asynchronously. Keep
       // their preview attached instead of immediately dismissing it on that scroll.
       if (triggerRef.current?.contains(document.activeElement)) {

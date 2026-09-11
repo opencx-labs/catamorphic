@@ -27,6 +27,9 @@ Shard Vitest by whole file across runners, preserving ordered tests and one
 Electron suite per display. Each workspace shard owns its disposable Postgres.
 A stable aggregate check requires every lane and shard to succeed. Cache
 dependencies/build outputs, never test successes or databases across shards.
+Build each package before testing its own exports. Stock-server tests use
+separate Node processes for PGlite to avoid shared V8 JIT allocation crashes;
+other workspace tests retain worker threads and the same concurrency limits.
 
 Before matrix expansion, discover files through each workspace's Vitest config
 (or the shared root config) and the desktop E2E config, without importing tests.
