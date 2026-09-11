@@ -358,37 +358,30 @@ describe("terminal tabs", () => {
 });
 
 describe("editor tabs", () => {
-  it("opens an editor tab from the palette and quick-opens a file", async () => {
-    await run(`pressKey('p', { metaKey: true }); return true;`);
-    await runWait(`return !!$('textarea[placeholder*="Search or ask"]');`, {
-      label: "palette overlay",
-    });
-    await run(`
-      const input = $('textarea[placeholder*="Search or ask"]');
-      setReactValue(input, 'new editor');
-      return true;
-    `);
-    await runWait(
-      `const input = $('textarea[placeholder*="Search or ask"]');
-       if (!byText('button', 'New editor')) return false;
-       input.dispatchEvent(new KeyboardEvent('keydown',
-         { key: 'Enter', bubbles: true, cancelable: true }));
-       return true;`,
-      { label: "run New editor action" },
+  it("opens an editor file through the Files palette", async () => {
+    await run(
+      `$('[data-sidebar-search="search-files"]').click(); return true;`,
     );
-    await runWait(`return !!$('input[placeholder*="Open a file"]');`, {
-      label: "editor quick-open",
+    await runWait(`return !!$('textarea[placeholder="Search filenames…"]');`, {
+      label: "Files palette",
     });
-    // Project creation seeds skill files; pick a seeded package.json.
-    await runWait(
-      `const row = byText('button', 'package.json');
-       if (!row) return false; row.click(); return true;`,
-      { label: "package.json in quick-open" },
+    await run(
+      `setReactValue($('textarea[placeholder="Search filenames…"]'), 'package.json'); return true;`,
     );
     await runWait(
-      `return !!$('.monaco-editor') && !!byText('button', 'package.json');`,
+      `const row = byText('[role="option"]', 'package.json');
+       if (!row) return false; row.dispatchEvent(new MouseEvent('mousedown',{button:0,bubbles:true,cancelable:true})); return true;`,
+      { label: "package.json in Files palette" },
+    );
+    await runWait(
+      `return !!$('.monaco-editor') && $('[data-editor-toolbar]')?.textContent.includes('package.json');`,
       { timeoutMs: 60_000, label: "Monaco open on package.json" },
     );
+    expect(
+      await run(
+        `return !!document.querySelector('[data-editor-toolbar] button[aria-label*="file"]');`,
+      ),
+    ).toBe(false);
   });
 
   it("closes the editor tab with the close-tab shortcut", async () => {
@@ -787,8 +780,8 @@ describe("palette intent", () => {
       `setReactValue(${paletteInput}, 'hello from palette mode'); return true;`,
     );
     await runWait(
-      `return ${inDialog('[role="option"]')}[0]?.textContent.includes('Ask agent: hello from palette mode');`,
-      { label: "agent mode row reflects input" },
+      `const row=${inDialog('[role="option"]')}[0]; return row?.textContent.includes('Ask agent') && row.textContent.includes('Fake Agent') && !row.textContent.includes('hello from palette mode');`,
+      { label: "agent row omits the prompt and names the default agent" },
     );
     await run(paletteKey("Enter"));
     await runWait(

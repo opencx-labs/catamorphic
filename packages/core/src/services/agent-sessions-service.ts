@@ -3807,6 +3807,7 @@ export class AgentSessionsService {
             ...(attachments ? { attachments } : {}),
             toolPolicies: callerLayers ?? {},
           };
+          const blockingQuestions = new Set<string>();
           turnOptions.askQuestion = async (input) => {
             const requestId = `${assistantMessageId}:${input.requestId}`;
             const requests = new AgentRuntimeRequestsService(this.db);
@@ -3820,6 +3821,7 @@ export class AgentSessionsService {
                   kind: "question",
                   status: "pending",
                   sessionId,
+                  turnId: extras.turnId,
                   createdAt: new Date().toISOString(),
                   blocking: input.blocking,
                   origin: {
@@ -3837,49 +3839,84 @@ export class AgentSessionsService {
             );
             if (!input.blocking)
               return `Question request ${requestId} is open. Continue independent work. The user's answer will arrive as a message when submitted.`;
-            while (true) {
-              input.signal?.throwIfAborted();
-              const row = await this.db
-                .selectFrom("agent_runtime_requests")
-                .select(["status", "response"])
-                .where("session_id", "=", sessionId)
-                .where("request_id", "=", requestId)
-                .executeTakeFirstOrThrow();
-              if (row.status === "resolved") {
-                const response: { answers: string[] } = JSON.parse(
-                  JSON.stringify(row.response),
-                );
-                // Every answer enters the durable inbox, even when another
-                // server receives it. The waiting tool consumes its own answer;
-                // only non-blocking answers are eligible for native steering.
-                await writeOwned((trx) =>
-                  trx
-                    .updateTable("agent_turns")
-                    .set({
-                      status: "completed",
-                      result_message_id: assistantMessageId,
-                      completed_at: new Date(),
-                    })
-                    .where("session_id", "=", sessionId)
-                    .where("status", "=", "queued")
-                    .where("message_id", "in", (eb) =>
-                      eb
-                        .selectFrom("agent_messages")
-                        .select("id")
-                        .where("session_id", "=", sessionId)
-                        .where(
-                          "idempotency_key",
-                          "=",
-                          `question-answer:${requestId}`,
-                        ),
-                    )
-                    .execute(),
-                );
-                return response.answers.join("\n");
+            blockingQuestions.add(requestId);
+            try {
+              await this.turns.progress({
+                turnId: extras.turnId,
+                leaseToken: extras.leaseToken,
+                phase: "waiting",
+                activity: "Waiting for your answer",
+              });
+              while (true) {
+                input.signal?.throwIfAborted();
+                const row = await this.db
+                  .selectFrom("agent_runtime_requests")
+                  .select(["status", "response"])
+                  .where("session_id", "=", sessionId)
+                  .where("request_id", "=", requestId)
+                  .executeTakeFirstOrThrow();
+                if (row.status === "resolved") {
+                  const response: { answers: string[] } = JSON.parse(
+                    JSON.stringify(row.response),
+                  );
+                  // Every answer enters the durable inbox, even when another
+                  // server receives it. The waiting tool consumes its own answer;
+                  // only non-blocking answers are eligible for native steering.
+                  await writeOwned((trx) =>
+                    trx
+                      .updateTable("agent_turns")
+                      .set({
+                        status: "completed",
+                        result_message_id: assistantMessageId,
+                        completed_at: new Date(),
+                      })
+                      .where("session_id", "=", sessionId)
+                      .where("status", "=", "queued")
+                      .where("message_id", "in", (eb) =>
+                        eb
+                          .selectFrom("agent_messages")
+                          .select("id")
+                          .where("session_id", "=", sessionId)
+                          .where(
+                            "idempotency_key",
+                            "=",
+                            `question-answer:${requestId}`,
+                          ),
+                      )
+                      .execute(),
+                  );
+                  return response.answers.join("\n");
+                }
+                if (row.status !== "pending")
+                  throw new Error("Question is no longer pending");
+                await delay(200, undefined, { signal: input.signal });
               }
-              if (row.status !== "pending")
-                throw new Error("Question is no longer pending");
-              await delay(200, undefined, { signal: input.signal });
+            } finally {
+              blockingQuestions.delete(requestId);
+              // A waiting request cannot survive the native call that owned it.
+              // Answered requests are untouched; interruption withdraws pending UI.
+              await writeOwned((trx) =>
+                trx
+                  .updateTable("agent_runtime_requests")
+                  .set({
+                    status: "cancelled",
+                    resolved_at: new Date(),
+                    updated_at: new Date(),
+                    revision: sql<number>`revision + 1`,
+                  })
+                  .where("session_id", "=", sessionId)
+                  .where("request_id", "=", requestId)
+                  .where("status", "=", "pending")
+                  .execute(),
+              );
+              await this.turns.progress({
+                turnId: extras.turnId,
+                leaseToken: extras.leaseToken,
+                phase: blockingQuestions.size ? "waiting" : "working",
+                activity: blockingQuestions.size
+                  ? "Waiting for your answer"
+                  : "Continuing",
+              });
             }
           };
           turnOptions.readPendingMessages = async () => {
@@ -4062,8 +4099,14 @@ export class AgentSessionsService {
               const owned = await this.turns.progress({
                 turnId: extras.turnId,
                 leaseToken: extras.leaseToken,
-                phase: event.type === "question" ? "waiting" : "working",
-                activity: activityLabel(event),
+                phase:
+                  blockingQuestions.size > 0 || event.type === "question"
+                    ? "waiting"
+                    : "working",
+                activity:
+                  blockingQuestions.size > 0
+                    ? "Waiting for your answer"
+                    : activityLabel(event),
               });
               if (!owned)
                 throw new Error(

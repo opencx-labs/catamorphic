@@ -194,9 +194,16 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       projectId: string,
     ) => ReturnType<typeof desktopSettingsContext>,
     private readonly elicit?: WorkspaceBridge["elicit"],
+    private readonly bindTurn?: (
+      sessionId: string,
+      options?: TurnOptions,
+    ) => () => void,
   ) {}
 
+  private readonly questionAborts = new Map<string, AbortController>();
+
   interrupt(providerSessionId: string): void {
+    this.questionAborts.get(providerSessionId)?.abort();
     const state = this.sessions.get(providerSessionId);
     if (state) state.interrupted = true;
   }
@@ -230,6 +237,42 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
   }
 
   async *sendMessage(
+    session: ProviderSession,
+    message: string,
+    opts?: TurnOptions,
+  ): AsyncIterable<AgentEvent> {
+    const abort = new AbortController();
+    if (session.providerSessionId)
+      this.questionAborts.set(session.providerSessionId, abort);
+    const ask = opts?.askQuestion;
+    const options = {
+      ...opts,
+      ...(ask
+        ? {
+            askQuestion: (
+              input: Parameters<NonNullable<TurnOptions["askQuestion"]>>[0],
+            ) =>
+              ask({
+                ...input,
+                signal: input.signal
+                  ? AbortSignal.any([input.signal, abort.signal])
+                  : abort.signal,
+              }),
+          }
+        : {}),
+    };
+    const release = this.bindTurn?.(session.sessionId, options);
+    try {
+      yield* this.sendMessageWithQuestions(session, message, options);
+    } finally {
+      release?.();
+      abort.abort();
+      if (session.providerSessionId)
+        this.questionAborts.delete(session.providerSessionId);
+    }
+  }
+
+  private async *sendMessageWithQuestions(
     session: ProviderSession,
     message: string,
     opts?: TurnOptions,
@@ -740,7 +783,10 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     }
 
     if (message === "elicitation: app") {
-      const handler = createCodexElicitation({ elicit: this.elicit });
+      const handler = createCodexElicitation({
+        elicit: this.elicit,
+        askQuestion: () => opts?.askQuestion,
+      });
       const request = {
         serverName: "Computer Use",
         mode: "form",

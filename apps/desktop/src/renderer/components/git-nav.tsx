@@ -1,5 +1,12 @@
 import { ChevronRight, GitBranch } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import {
+  type RefObject,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import type { OpenMode } from "../../shared/open-mode.js";
 import {
   desktopApi,
@@ -10,8 +17,8 @@ import {
   type SessionCheckoutInfo,
 } from "../lib/desktop-api.js";
 import { useAppPreferences } from "../lib/use-app-preferences.js";
-import { ActionSearchInput } from "./action-search-input.js";
 import { Collapsible } from "./collapsible.js";
+import type { PaletteItem } from "./command-palette.js";
 import { OpenResourceButton } from "./open-resource-button.js";
 import { WindowedList } from "./windowed-list.js";
 import type { WorkspaceTab } from "./workspace-tabs.js";
@@ -71,12 +78,14 @@ function buildChangeTree(files: GitChangedFile[]): ChangeTreeDir {
 
 export function GitNav({
   projectId,
+  searchItems,
   onOpenDiff,
   activeSessionId,
   visible = true,
   onEmptyChange,
 }: {
   projectId: string;
+  searchItems?: RefObject<() => Promise<PaletteItem[]>>;
   activeSessionId?: string;
   visible?: boolean;
   onOpenDiff: (tab: WorkspaceTab, mode?: OpenMode) => void;
@@ -85,12 +94,24 @@ export function GitNav({
   const [scope, setScope] = useState<string>(
     () => localStorage.getItem(`changes-scope:${projectId}`) ?? "follow",
   );
-  const [query, setQuery] = useState("");
   const { prefs, update, error: preferencesError } = useAppPreferences();
   const flat = prefs.changesFileLayout === "flat";
   const lastSession = useRef(activeSessionId);
   if (activeSessionId) lastSession.current = activeSessionId;
   const followedSession = lastSession.current;
+  const readOverview = useCallback(async () => {
+    const allPaths =
+      scope === "all"
+        ? (await desktopApi.gitOverview(projectId, [])).worktrees.map(
+            (tree) => tree.path,
+          )
+        : undefined;
+    return desktopApi.gitOverview(
+      projectId,
+      scope === "follow" ? undefined : scope === "all" ? allPaths : [scope],
+      scope === "follow" ? followedSession : undefined,
+    );
+  }, [projectId, scope, followedSession]);
   const [overview, setOverview] = useState<GitOverview | null>(null);
   const [owners, setOwners] = useState<SessionCheckoutInfo[]>([]);
   useEffect(() => {
@@ -127,17 +148,7 @@ export function GitNav({
       window.clearTimeout(timer);
       const started = performance.now();
       try {
-        const allPaths =
-          scope === "all"
-            ? (await desktopApi.gitOverview(projectId, [])).worktrees.map(
-                (tree) => tree.path,
-              )
-            : undefined;
-        const next = await desktopApi.gitOverview(
-          projectId,
-          scope === "follow" ? undefined : scope === "all" ? allPaths : [scope],
-          scope === "follow" ? followedSession : undefined,
-        );
+        const next = await readOverview();
         if (!cancelled) {
           setOverview(next);
           setError(null);
@@ -187,7 +198,59 @@ export function GitNav({
       document.removeEventListener("visibilitychange", focus);
       unsubscribe();
     };
-  }, [projectId, scope, followedSession, visible]);
+  }, [projectId, readOverview, visible]);
+  if (searchItems)
+    searchItems.current = async () => {
+      const snapshot = await readOverview();
+      if (snapshot.error) throw new Error(snapshot.error);
+      const groups = await Promise.all(
+        snapshot.worktrees
+          .filter((tree) => tree.loaded !== false)
+          .map(async (tree): Promise<PaletteItem[]> => {
+            if (tree.error || tree.comparisonError)
+              throw new Error(
+                tree.error ?? tree.comparisonError ?? "Could not read changes.",
+              );
+            const entries = await Promise.all(
+              [...tree.changes, ...tree.branchChanges].map(async (file) => {
+                if (file.mode !== "untracked" || !file.path.endsWith("/"))
+                  return { files: [file], truncated: false };
+                return desktopApi.gitUntrackedDirectory({
+                  projectId,
+                  worktreePath: tree.path,
+                  directory: file.path,
+                });
+              }),
+            );
+            const items: PaletteItem[] = entries
+              .flatMap((entry) => entry.files)
+              .map((file) => ({
+                id: JSON.stringify([tree.path, file.mode, file.path]),
+                icon: GitBranch,
+                label: file.path,
+                detail: `${tree.branch ?? "Detached HEAD"} · ${file.mode}`,
+                keywords: [],
+                kind: "navigate",
+                run: (mode) =>
+                  onOpenDiff(changeTab({ projectId, tree, file }), mode),
+              }));
+            if (entries.some((entry) => entry.truncated))
+              items.push({
+                id: `truncated:${tree.path}`,
+                icon: GitBranch,
+                label: "Some untracked folders have more files",
+                detail:
+                  "Showing the first 2,000 per folder. Use Files search to find more.",
+                keywords: [],
+                kind: "action",
+                disabled: true,
+                run: () => {},
+              });
+            return items;
+          }),
+      );
+      return groups.flat();
+    };
   const hasContent = overview?.worktrees.some(
     (tree) =>
       tree.changes.length ||
@@ -241,14 +304,6 @@ export function GitNav({
           ))}
         </select>
         <div className="flex items-center gap-2">
-          <ActionSearchInput
-            action="search-changes"
-            aria-label="Find changed files"
-            placeholder="Find changed files…"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            className="field min-w-0 flex-1 rounded-md px-2 py-1 text-xs"
-          />
           <button
             type="button"
             className="text-xs text-fg-muted"
@@ -275,7 +330,6 @@ export function GitNav({
           <WorktreeSection
             key={`${projectId}:${tree.path}`}
             tree={tree}
-            query={query}
             flat={flat}
             sessionIds={owners
               .filter((owner) => owner.path === tree.path)
@@ -298,12 +352,10 @@ function WorktreeSection({
   sessionIds,
   flat,
   tree,
-  query,
   projectId,
   onOpenDiff,
 }: {
   tree: GitWorktree;
-  query: string;
   sessionIds: string[];
   flat: boolean;
   projectId: string;
@@ -316,9 +368,7 @@ function WorktreeSection({
   const [directoryNotice, setDirectoryNotice] = useState<string | null>(null);
   const [loadingDirectory, setLoadingDirectory] = useState<string | null>(null);
   const contentId = useId();
-  const matchesQuery = (file: GitChangedFile) =>
-    file.path.toLowerCase().includes(query.toLowerCase());
-  const branchFiles = tree.branchChanges.filter(matchesQuery);
+  const branchFiles = tree.branchChanges;
   const count = new Set(
     [...tree.changes, ...tree.branchChanges].map((file) => file.path),
   ).size;
@@ -353,30 +403,7 @@ function WorktreeSection({
         .finally(() => setLoadingDirectory(null));
       return;
     }
-    const label =
-      file.mode === "branch"
-        ? `vs ${tree.baseLabel}`
-        : (GROUPS.find((group) => group.mode === file.mode)?.label ??
-          file.mode);
-    const checkout = tree.branch ?? "Detached HEAD";
-    onOpenDiff(
-      {
-        kind: "diff",
-        name: JSON.stringify([tree.path, file.mode, file.path]),
-        label: file.path.split("/").at(-1) ?? file.path,
-        detail: `${checkout} · ${file.path} (${label})`,
-        projectId,
-        source: {
-          type: "local",
-          worktreePath: tree.path,
-          filePath: file.path,
-          mode: file.mode,
-          previousPath: file.previousPath,
-          baseRef: tree.baseRef,
-        },
-      },
-      mode,
-    );
+    onOpenDiff(changeTab({ projectId, tree, file }), mode);
   };
   return (
     <div className="flex flex-col gap-0.5" data-worktree-path={tree.path}>
@@ -460,12 +487,7 @@ function WorktreeSection({
           {GROUPS.map((group) => {
             const files = tree.changes
               .filter((file) => file.mode === group.mode)
-              .flatMap((file) => directories[file.path] ?? [file])
-              .filter(
-                (file) =>
-                  matchesQuery(file) ||
-                  (file.mode === "untracked" && file.path.endsWith("/")),
-              );
+              .flatMap((file) => directories[file.path] ?? [file]);
             return (
               files.length > 0 && (
                 <div key={group.mode} data-change-group={group.mode}>
@@ -596,4 +618,35 @@ function FileRow({
       </span>
     </OpenResourceButton>
   );
+}
+
+function changeTab({
+  projectId,
+  tree,
+  file,
+}: {
+  projectId: string;
+  tree: GitWorktree;
+  file: GitChangedFile;
+}): WorkspaceTab {
+  const label =
+    file.mode === "branch"
+      ? `vs ${tree.baseLabel}`
+      : (GROUPS.find((group) => group.mode === file.mode)?.label ?? file.mode);
+  const checkout = tree.branch ?? "Detached HEAD";
+  return {
+    kind: "diff",
+    name: JSON.stringify([tree.path, file.mode, file.path]),
+    label: file.path.split("/").at(-1) ?? file.path,
+    detail: `${checkout} · ${file.path} (${label})`,
+    projectId,
+    source: {
+      type: "local",
+      worktreePath: tree.path,
+      filePath: file.path,
+      mode: file.mode,
+      previousPath: file.previousPath,
+      baseRef: tree.baseRef,
+    },
+  };
 }

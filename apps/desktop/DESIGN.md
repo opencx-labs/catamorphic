@@ -318,3 +318,13 @@ Question batches can be blocking or non-blocking. "Answer when ready" panels sta
 answerable while the agent works; collapsing preserves the draft. Answers reach
 the running built-in, Codex or Claude Code harness as soon as it can accept input.
 Late answers continue an idle session. See ADR 0122.
+
+### 2026-09-10: Conversation consent and one search surface
+
+[ADR 0123](../../docs/decisions/0123-desktop-consent-search-and-resource-links.md)
+removes default project notes and duplicate file pickers. Sidebar searches open
+scoped palettes from header buttons. "Ask agent" stays short and names the agent.
+Consent appears as a durable question in its chat. Workflow and app links identify
+and open their actual surfaces. Editable code derives syntax, background, gutters,
+selection, cursor, diagnostics and widgets from the current app theme, with bundled
+Shiki grammars. Never ship a preset editor background that ignores the app theme.

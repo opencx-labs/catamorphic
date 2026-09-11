@@ -183,6 +183,16 @@ it("gives AI file references pills and web links inline cards, resolving project
     `paste('artifact links'); composer().dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));`,
   );
   await wait(`return !!front().querySelector('[data-response-link="file"]');`);
+  expect(
+    await run(
+      `return front().querySelector('[data-response-link="workflow"]')?.textContent;`,
+    ),
+  ).toContain("Workflow");
+  expect(
+    await run(
+      `return front().querySelector('[data-response-link="app"]')?.textContent;`,
+    ),
+  ).toContain("App");
   await run(
     `front().querySelector('a[href="file:linked-source.ts:3"]').focus();`,
   );
@@ -244,4 +254,19 @@ it("clamps the preview to a compact viewport and dismisses on outside interactio
     `document.body.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));`,
   );
   await wait(`return !preview();`);
+});
+
+it("opens a workflow resource pill as a graph", async () => {
+  await clear();
+  await run(
+    `front().querySelector('[data-response-link="workflow"]').click();`,
+  );
+  await wait(
+    `return !!document.querySelector('.workflow-workbench .react-flow__node');`,
+  );
+  expect(
+    await run(
+      `return !!document.querySelector('.workflow-workbench .monaco-editor');`,
+    ),
+  ).toBe(false);
 });

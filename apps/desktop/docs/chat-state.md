@@ -78,3 +78,20 @@ questions stay answerable while work continues and after the turn finishes.
 Collapsing a question preserves its draft. The existing inbox delivers answers to
 the current harness or starts a continuation if the turn has already ended.
 See ADR 0122 and the question schemas in `@catamorphic/sandbox`.
+
+## Consent belongs to the conversation
+
+Session tool approvals and native app-access consent are durable blocking agent
+questions, with concise action, reason and explicit allow/deny choices. Do not
+surface them as global alert dialogs or store their only copy in a mounted tab.
+Navigation, minimizing, project switching and renderer reload must preserve the
+request and its waiting indicator. Answer delivery is keyed to its initiating
+session and request. Only an exact allow response grants access; ambiguous answers,
+cancellation and late responses do not. Remembered app access is limited to the
+same native session, app and risk level.
+
+Withdraw a pending blocking request when its native call ends or is interrupted.
+Do not leave an unanswerable prompt or a spinning tab. Read-only capability
+discovery through host-authorized, session-scoped MCP endpoints needs no duplicate
+native consent. External tool policies and service authorization still apply.
+Connector forms and sign-in requests retain their typed elicitation contract.

@@ -94,6 +94,26 @@ describe("workflow authoring", { retry: 0 }, () => {
       `return !!$('.workflow-workbench .monaco-editor');`,
       "workflow source editor",
     );
+    for (const selection of ["dark", "light"]) {
+      await app.eval(
+        `window.catamorphicDesktop.setTheme({selection:${JSON.stringify(selection)},overrides:{}})`,
+      );
+      await wait(
+        `const editor=$('.monaco-editor'); const probe=document.createElement('span'); probe.style.color='var(--color-bg)'; editor.append(probe); const expected=getComputedStyle(probe).color; probe.remove(); return getComputedStyle(editor).backgroundColor===expected;`,
+        "editor follows host background",
+      );
+      await wait(
+        `const keyword=$$('.monaco-editor .view-lines span').find(el=>el.children.length===0 && el.textContent.trim()==='import'); if(!keyword) return false; const probe=document.createElement('span'); probe.style.color='var(--color-accent)'; keyword.parentElement.append(probe); const expected=getComputedStyle(probe).color; probe.remove(); return getComputedStyle(keyword).color===expected;`,
+        "syntax follows host accent",
+      );
+      await app.waitFor(
+        `!document.getAnimations().some(a => a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity)`,
+      );
+      await app.screenshot(`/tmp/catamorphic-editor-${selection}.png`);
+    }
+    await app.eval(
+      `window.catamorphicDesktop.setTheme({selection:'dark',overrides:{}})`,
+    );
     await run(`button('Details').click(); return true;`);
     await wait(
       `return !!$('[data-testid="workflow-details"]');`,

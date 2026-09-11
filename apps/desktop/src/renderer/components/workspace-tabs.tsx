@@ -40,8 +40,8 @@ import { ShortcutHint } from "./shortcut-hint";
 
 /** The card's status line — most urgent signal first. */
 function tabStatusLine(tab: WorkspaceTab): string | null {
-  if (tab.working) return "Agent is working…";
   if (tab.awaitingInput) return "The agent is waiting for your answer";
+  if (tab.working) return "Agent is working…";
   if (tab.attention) return "Ready for you";
   if (tab.unread) return "New reply";
   if (tab.draft) {
@@ -475,6 +475,7 @@ export function WorkspaceTabBar({
                 <span className="relative grid size-3.5 shrink-0 place-items-center">
                   <SignalGlyph
                     working={tab.working ?? false}
+                    awaitingInput={tab.awaitingInput}
                     className="size-3.5"
                   >
                     {tab.kind === "browser" && tab.faviconUrl ? (

@@ -22,9 +22,7 @@ beforeAll(async () => {
   );
   projectId = project.id;
   await app.eval("location.reload()");
-  await app.waitFor(
-    `document.body?.innerText.includes('Sidebar studio') && !!document.querySelector('[aria-label="Pin a project note"]')`,
-  );
+  await app.waitFor(`document.body?.innerText.includes('Sidebar studio')`);
 });
 afterAll(async () => {
   await app?.stop();
@@ -107,10 +105,10 @@ describe("tabbed sidebars", () => {
       await app.eval(
         `document.querySelector('[data-sidebar="right"] [role="tab"][aria-selected="true"]')?.getAttribute('aria-label')`,
       ),
-    ).toBe("Activity and notes");
+    ).toBe("Activity");
     writeConfig(DEFAULT_SIDEBAR_CONFIG);
     await app.waitFor(
-      `document.querySelector('[data-sidebar="right"] [role="tab"]')?.getAttribute('aria-label') === 'Activity and notes'`,
+      `document.querySelector('[data-sidebar="right"] [role="tab"]')?.getAttribute('aria-label') === 'Activity'`,
     );
   });
 
@@ -126,7 +124,7 @@ describe("tabbed sidebars", () => {
       background: "rgba(0, 0, 0, 0)",
     });
     await app.eval(`(() => {
-      window.__sidebarNote = document.querySelector('[aria-label="Pin a project note"]');
+      window.__sidebarSection = document.querySelector('[data-sidebar="right"] [data-sidebar-widget="activity"] .sidebar-section');
       const tab = document.querySelector('[data-sidebar="right"] [role="tab"]');
       tab.focus(); tab.dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowRight',bubbles:true,cancelable:true}));
     })()`);
@@ -137,11 +135,11 @@ describe("tabbed sidebars", () => {
       `document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'Home',bubbles:true,cancelable:true}))`,
     );
     await app.waitFor(
-      `document.querySelector('[data-sidebar="right"] [role="tab"][aria-selected="true"]')?.getAttribute('aria-label') === 'Activity and notes'`,
+      `document.querySelector('[data-sidebar="right"] [role="tab"][aria-selected="true"]')?.getAttribute('aria-label') === 'Activity'`,
     );
     expect(
       await app.eval(
-        `window.__sidebarNote === document.querySelector('[aria-label="Pin a project note"]')`,
+        `!!window.__sidebarSection && window.__sidebarSection === document.querySelector('[data-sidebar="right"] [data-sidebar-widget="activity"] .sidebar-section')`,
       ),
     ).toBe(true);
     expect(
@@ -167,7 +165,7 @@ describe("tabbed sidebars", () => {
     ).toBe("Work companion");
     expect(
       await app.eval(
-        `window.__sidebarNote === document.querySelector('[aria-label="Pin a project note"]')`,
+        `!!window.__sidebarSection && window.__sidebarSection === document.querySelector('[data-sidebar="right"] [data-sidebar-widget="activity"] .sidebar-section')`,
       ),
     ).toBe(true);
     fs.writeFileSync(configFile, "module.exports = {");

@@ -470,6 +470,7 @@ describe("CodexAgent", () => {
         config: {
           mcp_servers: {
             catamorphic_capabilities: {
+              default_tools_approval_mode: "approve",
               url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:/),
             },
           },

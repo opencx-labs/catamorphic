@@ -24,6 +24,7 @@ import {
   PanelLeft,
   PanelRight,
   Plus,
+  Search,
   Settings as SettingsIcon,
   Share2,
   Sparkles,
@@ -75,7 +76,11 @@ import { ChatGlyph } from "./components/chat-icon.js";
 import { ChatRegistration } from "./components/chat-registration.js";
 import { SignalBadge } from "./components/chat-signals.js";
 import { Collapsible } from "./components/collapsible.js";
-import { CommandPalette } from "./components/command-palette.js";
+import {
+  CommandPalette,
+  type PaletteItem,
+  type PaletteSearchRequest,
+} from "./components/command-palette.js";
 import { ConfigureAgentModal } from "./components/configure-agent-modal.js";
 import { ConnectorsModal } from "./components/connectors-modal.js";
 import { DeleteProjectModal } from "./components/delete-project-modal.js";
@@ -404,6 +409,14 @@ function focusedChatSurfaceId(): string | undefined {
     );
   }
   return lastPointerDownInFloatingChatId;
+}
+
+function findSidebarSearchButton(action: string) {
+  return [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      `button[data-sidebar-search="${action}"]`,
+    ),
+  ].find((element) => !element.closest("[inert]") && element.checkVisibility());
 }
 
 export function App({
@@ -2636,11 +2649,14 @@ export function App({
     setPaletteOpen(true);
     setPickerRequest({ kind, nonce: crypto.randomUUID() });
   };
-  const [searchRequest, setSearchRequest] = useState<{
-    mode: "files" | "content";
-    nonce: string;
-  } | null>(null);
+  const [searchRequest, setSearchRequest] =
+    useState<PaletteSearchRequest | null>(null);
   const focusSearch = (action: string, mode?: "files" | "content") => {
+    const button = findSidebarSearchButton(action);
+    if (button) {
+      button.click();
+      return;
+    }
     const input = findSearchInput(action);
     if (input) {
       input.focus();
@@ -3379,7 +3395,11 @@ export function App({
           (!["search-diff", "search-changes", "search-settings"].includes(
             candidate,
           ) ||
-            (guestId === undefined && Boolean(findSearchInput(candidate)))) &&
+            (guestId === undefined &&
+              Boolean(
+                findSearchInput(candidate) ||
+                  findSidebarSearchButton(candidate),
+              ))) &&
           (candidate !== "dismiss-floating" ||
             (floatingEscapeEnabledRef.current &&
               ![
@@ -4706,6 +4726,10 @@ export function App({
         key={section.id}
         visible={visible}
         onCustomize={() => customizeSidebar("left")}
+        onSearch={(request) => {
+          setSearchRequest({ ...request, nonce: crypto.randomUUID() });
+          setPaletteOpen(true);
+        }}
         section={section}
         pinnedStyle={prefs?.pinnedBookmarks ?? "tiles"}
         tabs={tabsInSidebar ? workspaceTabBar : null}
@@ -5543,9 +5567,7 @@ export function App({
                       navigation={editor.navigation}
                       projectId={projectId}
                       filePath={editor.filePath}
-                      onFileChange={(filePath) =>
-                        onEditorState(editor.localId, { filePath })
-                      }
+                      onFindFile={() => focusSearch("search-files", "files")}
                       onDirtyChange={(dirty) =>
                         onEditorState(editor.localId, { dirty })
                       }
@@ -6078,6 +6100,7 @@ function ConfiguredSection({
   section,
   visible,
   onCustomize,
+  onSearch,
   experienceContext,
   memberShell,
   projectId,
@@ -6107,6 +6130,11 @@ function ConfiguredSection({
   section: SidebarSectionConfig;
   visible: boolean;
   onCustomize: () => void;
+  onSearch: (
+    request:
+      | Omit<Extract<PaletteSearchRequest, { mode: "section" }>, "nonce">
+      | { mode: "files" },
+  ) => void;
   experienceContext: ProjectExperienceContext;
   memberShell: boolean;
   projectId: string;
@@ -6133,6 +6161,32 @@ function ConfiguredSection({
   onPublish: (filePath: string, features: RemoteFeatures | undefined) => void;
   onPropose: (files: string[], features: RemoteFeatures | undefined) => void;
 }) {
+  const searchItems = useRef<() => Promise<PaletteItem[]>>(async () => []);
+  const searchAction = (label: string, files = false) => (
+    <ShortcutHint label={`Search ${label.toLowerCase()}`}>
+      <button
+        type="button"
+        aria-label={`Search ${label.toLowerCase()}`}
+        data-sidebar-search={
+          files
+            ? "search-files"
+            : label === "Changes"
+              ? "search-changes"
+              : "search-prs"
+        }
+        className="grid size-7 shrink-0 place-items-center rounded-md text-fg-muted hover:bg-bg-overlay hover:text-fg"
+        onClick={() =>
+          onSearch(
+            files
+              ? { mode: "files" }
+              : { mode: "section", label, load: () => searchItems.current() },
+          )
+        }
+      >
+        <Search className="size-3.5" />
+      </button>
+    </ShortcutHint>
+  );
   const defaultOpen = !section.collapsed;
   // Hide-when-empty: a section with nothing to list can drop its header
   // entirely. Workflows and Apps default to hidden-until-non-empty (a new
@@ -6278,6 +6332,7 @@ function ConfiguredSection({
         return (
           <SidebarSection
             title={section.title ?? "Files"}
+            action={searchAction("Files", true)}
             defaultOpen={defaultOpen}
           >
             <FilesNav
@@ -6354,10 +6409,13 @@ function ConfiguredSection({
         return (
           <SidebarSection
             title={section.title ?? "Changes"}
+            action={searchAction("Changes")}
+            keepMounted
             defaultOpen={defaultOpen}
           >
             {(expanded) => (
               <GitNav
+                searchItems={searchItems}
                 key={projectId}
                 visible={visible && expanded}
                 activeSessionId={activeChatSessionId}
@@ -6372,9 +6430,11 @@ function ConfiguredSection({
         return (
           <SidebarSection
             title={section.title ?? "Pull Requests"}
+            action={searchAction("Pull requests")}
             defaultOpen={defaultOpen}
           >
             <PrsNav
+              searchItems={searchItems}
               projectId={projectId}
               onOpenDiff={onOpenTab}
               onOpenUrl={onOpenUrl}
@@ -6560,11 +6620,13 @@ function sidebarItemVisible(
 function SidebarSection({
   title,
   defaultOpen = false,
+  keepMounted = false,
   action,
   children,
 }: {
   title: string;
   defaultOpen?: boolean;
+  keepMounted?: boolean;
   action?: ReactNode;
   children: ReactNode | ((expanded: boolean) => ReactNode);
 }) {
@@ -6597,7 +6659,7 @@ function SidebarSection({
       </div>
       <Collapsible open={open}>
         {typeof children === "function"
-          ? (visited || open) && children(open)
+          ? (keepMounted || visited || open) && children(open)
           : children}
       </Collapsible>
     </section>

@@ -2684,6 +2684,7 @@ function ChatDockContent({
             <TodoProgress todos={chat.session?.todos ?? []} />
             <span className="flex items-center gap-0.5 rounded-lg border border-border bg-bg-raised p-0.5">
               <SessionInspector
+                awaitingInput={awaitingInput}
                 session={chat.session}
                 fallbackTitle={title}
                 harness={activeAgent?.harness ?? chat.session?.provider}
@@ -2934,7 +2935,9 @@ function ChatDockContent({
               className="min-h-0 flex-1"
               contentClassName={isTab ? "mx-auto w-full max-w-4xl pt-12" : ""}
               messages={messages}
-              activity={chat.connectionLost ? undefined : activity}
+              activity={
+                chat.connectionLost || awaitingInput ? undefined : activity
+              }
               queue={chat.queue}
               onUpdateQueued={chat.updateQueued}
               onRemoveQueued={chat.removeQueued}

@@ -135,3 +135,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0120](0120-telemetry-correlation-context.md) | Telemetry correlation context | Accepted |
 | [0121](0121-project-workspaces-and-shared-chat-dock.md) | Persistent project workspaces and a shared chat dock | Accepted |
 | [0122](0122-blocking-and-nonblocking-agent-questions.md) | Blocking and non-blocking agent questions | Accepted |
+| [0123](0123-desktop-consent-search-and-resource-links.md) | Desktop consent, search and resource links | Accepted |
