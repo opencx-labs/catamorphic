@@ -20,7 +20,12 @@ import { useAppPreferences } from "../lib/use-app-preferences.js";
 import { Collapsible } from "./collapsible.js";
 import type { PaletteItem } from "./command-palette.js";
 import { OpenResourceButton } from "./open-resource-button.js";
-import { WindowedList } from "./windowed-list.js";
+import {
+  useSidebarContent,
+  useSidebarRefresh,
+} from "./sidebar-contribution.js";
+import { SidebarItemRow } from "./sidebar-item-row.js";
+import { SidebarTree } from "./sidebar-tree.js";
 import type { WorkspaceTab } from "./workspace-tabs.js";
 
 /** Per-checkout changes, with separate index, working-file and committed comparisons.
@@ -82,14 +87,12 @@ export function GitNav({
   onOpenDiff,
   activeSessionId,
   visible = true,
-  onEmptyChange,
 }: {
   projectId: string;
   searchItems?: RefObject<() => Promise<PaletteItem[]>>;
   activeSessionId?: string;
   visible?: boolean;
   onOpenDiff: (tab: WorkspaceTab, mode?: OpenMode) => void;
-  onEmptyChange?: (empty: boolean) => void;
 }) {
   const [scope, setScope] = useState<string>(
     () => localStorage.getItem(`changes-scope:${projectId}`) ?? "follow",
@@ -130,6 +133,9 @@ export function GitNav({
     };
   }, [projectId, visible]);
   const [error, setError] = useState<string | null>(null);
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  useSidebarRefresh(() => setRefreshVersion((value) => value + 1));
+  // biome-ignore lint/correctness/useExhaustiveDependencies: explicit section refresh restarts its scoped read.
   useEffect(() => {
     if (!visible) return;
     let cancelled = false;
@@ -198,7 +204,7 @@ export function GitNav({
       document.removeEventListener("visibilitychange", focus);
       unsubscribe();
     };
-  }, [projectId, readOverview, visible]);
+  }, [projectId, readOverview, visible, refreshVersion]);
   if (searchItems)
     searchItems.current = async () => {
       const snapshot = await readOverview();
@@ -264,9 +270,15 @@ export function GitNav({
     overview?.available !== false &&
     !hasContent &&
     (overview?.worktrees.length ?? 0) <= 1;
-  useEffect(() => {
-    onEmptyChange?.(isEmpty);
-  }, [isEmpty, onEmptyChange]);
+  useSidebarContent(
+    error
+      ? "error"
+      : overview === null
+        ? "loading"
+        : isEmpty
+          ? "empty"
+          : "ready",
+  );
   if (!overview && !error) return null;
   if (overview?.available === false)
     return <p className="sidebar-empty-state">Install git to see changes.</p>;
@@ -530,93 +542,61 @@ function ChangeTree({
   files: GitChangedFile[];
   onOpen: (file: GitChangedFile, mode?: OpenMode) => void;
 }) {
-  const [closed, setClosed] = useState<Set<string>>(new Set());
-  type Row =
-    | { key: string; depth: number; file: GitChangedFile }
-    | { key: string; depth: number; dir: ChangeTreeDir };
-  const rows: Row[] = [];
-  const visit = (node: ChangeTreeDir, prefix: string, depth: number) => {
+  const rows: {
+    id: string;
+    parentId: string | null;
+    name: string;
+    file?: GitChangedFile;
+    hasChildren: boolean;
+  }[] = [];
+  const visit = (node: ChangeTreeDir, parentId: string | null) => {
     for (const dir of node.dirs) {
-      const key = `${prefix}${dir.name}/`;
-      rows.push({ key, depth, dir });
-      if (!closed.has(key)) visit(dir, key, depth + 1);
+      const id = `${parentId ?? ""}${dir.name}/`;
+      rows.push({ id, parentId, name: dir.name, hasChildren: true });
+      visit(dir, id);
     }
-    for (const file of node.files) rows.push({ key: file.path, depth, file });
+    for (const file of node.files)
+      rows.push({
+        id: file.path,
+        parentId,
+        name: file.path.split("/").filter(Boolean).at(-1) ?? file.path,
+        file,
+        hasChildren: false,
+      });
   };
   if (flat)
-    for (const file of files) rows.push({ key: file.path, depth: 0, file });
-  else visit(buildChangeTree(files), "", 0);
+    for (const file of files)
+      rows.push({
+        id: file.path,
+        parentId: null,
+        name: file.path,
+        file,
+        hasChildren: false,
+      });
+  else visit(buildChangeTree(files), null);
   return (
-    <WindowedList
+    <SidebarTree
       items={rows}
-      itemKey={(row) => row.key}
       label="Changed files"
-      renderItem={(row) =>
-        "file" in row ? (
-          <FileRow
-            file={row.file}
-            fullPath={flat}
-            depth={row.depth}
-            onOpen={onOpen}
-          />
-        ) : (
-          <button
-            type="button"
-            aria-expanded={!closed.has(row.key)}
-            onClick={() =>
-              setClosed((current) => {
-                const next = new Set(current);
-                if (next.has(row.key)) next.delete(row.key);
-                else next.add(row.key);
-                return next;
-              })
-            }
-            style={{ paddingLeft: 8 + row.depth * 12 }}
-            className="flex h-7 w-full items-center gap-1 rounded-md pr-2 text-left font-mono text-xs text-fg-muted hover:bg-bg-overlay"
-          >
-            <ChevronRight
-              className={`size-3 shrink-0 ${closed.has(row.key) ? "" : "rotate-90"}`}
-            />
-            <span className="truncate">{row.dir.name}/</span>
-          </button>
-        )
-      }
+      renderItem={(row, tree) => (
+        <SidebarItemRow
+          itemId={row.id}
+          label={row.name}
+          title={row.file?.path}
+          icon={row.file ? "File" : "Folder"}
+          style={{ marginLeft: tree.depth * 12 }}
+          badges={row.file ? [KIND_BADGES[row.file.kind].letter] : undefined}
+          disclosure={
+            tree.hasChildren
+              ? { open: tree.expanded, onToggle: tree.toggle }
+              : undefined
+          }
+          resource={Boolean(row.file)}
+          onOpen={(mode) => (row.file ? onOpen(row.file, mode) : tree.toggle())}
+          onAction={() => {}}
+        />
+      )}
     />
-  );
-}
-
-/** 28px leaf row: basename + kind letter (the tree shows the directory). */
-function FileRow({
-  fullPath = false,
-  file,
-  depth,
-  onOpen,
-}: {
-  file: GitChangedFile;
-  fullPath?: boolean;
-  depth: number;
-  onOpen: (file: GitChangedFile, mode?: OpenMode) => void;
-}) {
-  const base = file.path.split("/").filter(Boolean).at(-1) ?? file.path;
-  const badge = KIND_BADGES[file.kind];
-  return (
-    <OpenResourceButton
-      type="button"
-      onOpen={(mode) => onOpen(file, mode)}
-      title={
-        file.previousPath ? `${file.previousPath} → ${file.path}` : file.path
-      }
-      style={{ paddingLeft: `${8 + depth * 12 + (depth > 0 ? 16 : 0)}px` }}
-      className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md pr-2 text-left font-mono text-xs transition-colors duration-150 hover:bg-bg-overlay/60"
-    >
-      <span className="min-w-0 flex-1 truncate text-fg">
-        {fullPath ? file.path : base}
-        {file.path.endsWith("/") ? " (open folder)" : ""}
-      </span>
-      <span className={`shrink-0 text-[11px] font-semibold ${badge.className}`}>
-        {badge.letter}
-      </span>
-    </OpenResourceButton>
   );
 }
 

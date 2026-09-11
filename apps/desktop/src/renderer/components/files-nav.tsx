@@ -1,135 +1,120 @@
-import { ChevronRight, File, Folder } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { useLocalProjectFiles } from "../lib/local-project-files.js";
-import { LazyList } from "./lazy-list.js";
-import { OpenResourceButton } from "./open-resource-button.js";
+import {
+  useSidebarContent,
+  useSidebarRefresh,
+} from "./sidebar-contribution.js";
+import { SidebarItemRow } from "./sidebar-item-row.js";
+import { SidebarTree } from "./sidebar-tree.js";
 
 interface FileTreeNode {
   name: string;
   path: string;
   children?: FileTreeNode[];
 }
-
 export function FilesNav({
   projectId,
   activePath,
   contentOnly = false,
   onOpen,
-  onEmptyChange,
 }: {
   projectId: string;
   activePath?: string;
-  /** Member shells show work products, not the repository's implementation. */
   contentOnly?: boolean;
   onOpen: (path: string, mode?: OpenMode) => void;
-  onEmptyChange?: (empty: boolean) => void;
 }) {
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(
-    () => new Set(["store"]),
-  );
   const query = useLocalProjectFiles(projectId);
+  useSidebarRefresh(query.refetch);
   const refetch = query.refetch;
   useEffect(
     () =>
       desktopApi.onGitChanged((event) => {
-        if (event.projectId === projectId) void refetch();
+        if (event.projectId === projectId)
+          void refetch({ cancelRefetch: false });
       }),
     [projectId, refetch],
   );
-  const tree = useMemo(
-    () =>
+  const items = useMemo(() => {
+    const result: {
+      id: string;
+      parentId: string | null;
+      name: string;
+      path: string;
+      hasChildren: boolean;
+      collapsed: boolean;
+    }[] = [];
+    const visit = (nodes: FileTreeNode[], parentId: string | null) => {
+      for (const node of nodes) {
+        result.push({
+          id: node.path,
+          parentId,
+          name: node.name,
+          path: node.path,
+          hasChildren: Boolean(node.children),
+          collapsed: node.path !== "store",
+        });
+        if (node.children) visit(node.children, node.path);
+      }
+    };
+    visit(
       buildTree(
         (query.data ?? [])
           .map((entry) => entry.path)
           .filter((path) => isVisibleProjectFile(path, contentOnly)),
       ),
-    [contentOnly, query.data],
-  );
-  useEffect(() => onEmptyChange?.(tree.length === 0), [tree, onEmptyChange]);
-  const rows = useMemo(() => {
-    const result: { node: FileTreeNode; depth: number }[] = [];
-    const visit = (nodes: FileTreeNode[], depth: number) => {
-      for (const node of nodes) {
-        result.push({ node, depth });
-        if (node.children && expanded.has(node.path))
-          visit(node.children, depth + 1);
-      }
-    };
-    visit(tree, 0);
+      null,
+    );
     return result;
-  }, [tree, expanded]);
+  }, [query.data, contentOnly]);
+  useSidebarContent(
+    query.isError
+      ? "error"
+      : query.isLoading
+        ? "loading"
+        : items.length
+          ? "ready"
+          : "empty",
+  );
+  if (query.isError)
+    return (
+      <p role="alert" className="sidebar-empty-state">
+        Could not load files.{" "}
+        <button type="button" onClick={() => void refetch()}>
+          Retry
+        </button>
+      </p>
+    );
   if (query.isLoading) return <p className="sidebar-empty-state">Loading…</p>;
   return (
-    <div className="flex flex-col gap-2" data-testid="files-nav">
-      <LazyList
-        items={rows}
-        itemKey={(row) => row.node.path}
+    <div data-testid="files-nav">
+      <SidebarTree
+        items={items}
         label="Project files"
-        renderItem={({ node, depth }) => (
-          <FileNode
-            node={node}
-            depth={depth}
-            activePath={activePath}
-            onOpen={onOpen}
-            expanded={expanded.has(node.path)}
-            onToggle={() =>
-              setExpanded((current) => {
-                const next = new Set(current);
-                if (next.has(node.path)) next.delete(node.path);
-                else next.add(node.path);
-                return next;
-              })
+        defaultExpanded={false}
+        selectedId={activePath}
+        renderItem={(item, tree) => (
+          <SidebarItemRow
+            itemId={item.id}
+            label={item.name}
+            title={item.path}
+            icon={item.hasChildren ? "Folder" : "File"}
+            style={{ marginLeft: tree.depth * 12 }}
+            disclosure={
+              tree.hasChildren
+                ? { open: tree.expanded, onToggle: tree.toggle }
+                : undefined
             }
+            active={activePath === item.path}
+            resource={!item.hasChildren}
+            onOpen={(mode) =>
+              item.hasChildren ? tree.toggle() : onOpen(item.path, mode)
+            }
+            onAction={() => {}}
           />
         )}
       />
-    </div>
-  );
-}
-
-function FileNode({
-  node,
-  depth,
-  expanded,
-  onToggle,
-  activePath,
-  onOpen,
-}: {
-  node: FileTreeNode;
-  depth: number;
-  expanded: boolean;
-  onToggle: () => void;
-  activePath?: string;
-  onOpen: (path: string, mode?: OpenMode) => void;
-}) {
-  const className = `flex h-7 w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] hover:bg-bg-overlay/60 hover:text-fg ${activePath === node.path ? "bg-bg-overlay text-fg" : "text-fg-muted"}`;
-  return (
-    <div style={{ paddingLeft: depth * 12 }}>
-      {node.children ? (
-        <button
-          type="button"
-          className={className}
-          aria-expanded={expanded}
-          onClick={onToggle}
-        >
-          <ChevronRight
-            className={`size-3 shrink-0 ${expanded ? "rotate-90" : ""}`}
-          />
-          <Folder className="size-3.5 shrink-0" />
-          <span className="truncate">{node.name}</span>
-        </button>
-      ) : (
-        <OpenResourceButton
-          onOpen={(mode) => onOpen(node.path, mode)}
-          className={className}
-          title={node.path}
-        >
-          <File className="size-3.5 shrink-0" />
-          <span className="truncate">{node.name}</span>
-        </OpenResourceButton>
-      )}
     </div>
   );
 }

@@ -126,6 +126,8 @@ interface PreparedSessionCreate {
 }
 
 export interface AgentSession {
+  /** Authorized immediate children, populated by paged navigation queries. */
+  childCount?: number;
   id: string;
   projectId: string;
   externalUserId: string;
@@ -820,7 +822,13 @@ export class AgentSessionsService {
   async list(
     identity: Identity,
     projectId: string,
-    input: { limit?: number; offset?: number } = {},
+    input: {
+      limit?: number;
+      offset?: number;
+      parentSessionId?: string;
+      rootsOnly?: boolean;
+      visibility?: SessionVisibility;
+    } = {},
   ): Promise<{ items: AgentSession[]; total: number }> {
     await this.requireProject(identity, projectId);
     const limit = input.limit ?? 50;
@@ -837,6 +845,84 @@ export class AgentSessionsService {
       query = query
         .where("external_user_id", "=", identity.externalUserId)
         .where("agent_id", "in", agentIds);
+    }
+
+    if (input.visibility) {
+      const visibility = input.visibility;
+      query = query.where((eb) =>
+        eb(
+          eb.fn.coalesce(
+            eb
+              .selectFrom("agent_session_views")
+              .select("visibility")
+              .whereRef("session_id", "=", "agent_sessions.id")
+              .where("tenant_id", "=", identity.tenantId)
+              .where("external_user_id", "=", identity.externalUserId),
+            eb.val("promoted"),
+          ),
+          "=",
+          visibility,
+        ),
+      );
+    }
+
+    if (input.parentSessionId) {
+      await this.requireSession(identity, projectId, input.parentSessionId);
+      query = query.where("parent_session_id", "=", input.parentSessionId);
+    } else if (input.rootsOnly) {
+      const visibility = input.visibility;
+      query = visibility
+        ? query.where((eb) =>
+            eb.or([
+              eb("parent_session_id", "is", null),
+              eb.not(
+                eb.exists(
+                  eb
+                    .selectFrom("agent_sessions as ancestor")
+                    .select("ancestor.id")
+                    .whereRef(
+                      "ancestor.id",
+                      "=",
+                      "agent_sessions.parent_session_id",
+                    )
+                    .where("ancestor.project_id", "=", projectId)
+                    .$if(!isBuilder(identity, projectId), (parent) =>
+                      parent
+                        .where(
+                          "ancestor.external_user_id",
+                          "=",
+                          identity.externalUserId,
+                        )
+                        .where(
+                          "ancestor.agent_id",
+                          "in",
+                          this.coveredAgentIds(identity, projectId),
+                        ),
+                    )
+                    .where((parent) =>
+                      parent(
+                        parent.fn.coalesce(
+                          parent
+                            .selectFrom("agent_session_views")
+                            .select("visibility")
+                            .whereRef("session_id", "=", "ancestor.id")
+                            .where("tenant_id", "=", identity.tenantId)
+                            .where(
+                              "external_user_id",
+                              "=",
+                              identity.externalUserId,
+                            ),
+                          parent.val("promoted"),
+                        ),
+                        "=",
+                        visibility,
+                      ),
+                    ),
+                ),
+              ),
+            ]),
+          )
+        : query.where("parent_session_id", "is", null);
     }
 
     const rows = await query
@@ -857,16 +943,44 @@ export class AgentSessionsService {
     );
     const running = await this.runningSessionIds(rows.map((row) => row.id));
 
+    const children = rows.length
+      ? await query
+          .clearWhere()
+          .where("project_id", "=", projectId)
+          .where(
+            "parent_session_id",
+            "in",
+            rows.map((row) => row.id),
+          )
+          .$if(!isBuilder(identity, projectId), (builder) =>
+            builder
+              .where("external_user_id", "=", identity.externalUserId)
+              .where(
+                "agent_id",
+                "in",
+                this.coveredAgentIds(identity, projectId),
+              ),
+          )
+          .select(["parent_session_id"])
+          .select((eb) => eb.fn.countAll<number>().as("count"))
+          .groupBy("parent_session_id")
+          .execute()
+      : [];
+    const counts = new Map(
+      children.map((row) => [row.parent_session_id, Number(row.count)]),
+    );
+
     return {
-      items: rows.map((row) =>
-        mapSession(
+      items: rows.map((row) => ({
+        ...mapSession(
           row,
           running.has(row.id),
           this.hostId,
           this.authorityLeaseMs,
           presentations.get(row.id),
         ),
-      ),
+        childCount: counts.get(row.id) ?? 0,
+      })),
       total,
     };
   }

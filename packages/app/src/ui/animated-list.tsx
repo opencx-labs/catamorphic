@@ -65,24 +65,8 @@ export function AnimatedList<T>({
   /** Class for every row wrapper (`<li>`). */
   itemClassName?: string;
 }) {
-  const keyOf = (item: T) => String(getKey(item));
   const listRef = useRef<HTMLUListElement>(null);
-  const [entries, setEntries] = useState<Entry<T>[]>(() =>
-    items.map((item) => ({
-      key: keyOf(item),
-      item,
-      entering: false,
-      exiting: false,
-    })),
-  );
-  // Adjust rendered entries when `items` changes — during render, so live
-  // rows never show a stale frame and departing rows never blink out.
-  const [prevItems, setPrevItems] = useState(items);
-  if (prevItems !== items) {
-    setPrevItems(items);
-    setEntries((prev) => reconcile(prev, items, keyOf));
-  }
-
+  const { entries, setEntries } = useAnimatedItems({ items, getKey });
   // One delegated NATIVE animationend listener removes exited rows (React's
   // synthetic animation events don't fire everywhere; same reason Dialog
   // listens natively). Only direct children count — an animation ending
@@ -99,18 +83,7 @@ export function AnimatedList<T>({
     };
     list.addEventListener("animationend", onAnimationEnd);
     return () => list.removeEventListener("animationend", onAnimationEnd);
-  }, []);
-
-  // Clock fallback: drop every exiting row if animationend never arrives
-  // (occluded windows throttle animation events).
-  useEffect(() => {
-    if (!entries.some((entry) => entry.exiting)) return;
-    const timer = setTimeout(
-      () => setEntries((prev) => prev.filter((entry) => !entry.exiting)),
-      EXIT_MS + 70,
-    );
-    return () => clearTimeout(timer);
-  }, [entries]);
+  }, [setEntries]);
 
   return (
     <ul ref={listRef} className={cx("cat-anim-list", className)}>
@@ -134,4 +107,43 @@ export function AnimatedList<T>({
       ))}
     </ul>
   );
+}
+
+/** Shared keyed motion lifecycle, including virtualized collection rows. */
+export function useAnimatedItems<T>({
+  items,
+  getKey,
+}: {
+  items: readonly T[];
+  getKey: (item: T) => string | number;
+}) {
+  const keyOf = (item: T) => String(getKey(item));
+  const [entries, setEntries] = useState<Entry<T>[]>(() =>
+    items.map((item) => ({
+      key: keyOf(item),
+      item,
+      entering: false,
+      exiting: false,
+    })),
+  );
+  // Adjust rendered entries when `items` changes — during render, so live
+  // rows never show a stale frame and departing rows never blink out.
+  const [prevItems, setPrevItems] = useState(items);
+  if (prevItems !== items) {
+    setPrevItems(items);
+    setEntries((prev) => reconcile(prev, items, keyOf));
+  }
+
+  // Clock fallback: drop every exiting row if animationend never arrives
+  // (occluded windows throttle animation events).
+  useEffect(() => {
+    if (!entries.some((entry) => entry.exiting)) return;
+    const timer = setTimeout(
+      () => setEntries((prev) => prev.filter((entry) => !entry.exiting)),
+      EXIT_MS + 70,
+    );
+    return () => clearTimeout(timer);
+  }, [entries]);
+
+  return { entries, setEntries };
 }

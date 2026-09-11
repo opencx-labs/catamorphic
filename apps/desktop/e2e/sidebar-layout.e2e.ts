@@ -63,7 +63,7 @@ describe("configurable browser workspace", () => {
     await run("button('Settings').click()");
     await app.waitFor("!!document.querySelector('select[name=tabPlacement]')");
     const before = await run<string[]>(
-      "return [...document.querySelectorAll('[data-tab-orientation] > [data-point-key]')].map(e => e.dataset.pointKey)",
+      "return [...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map(e => e.dataset.pointKey)",
     );
     await run(
       "button('Catamorphic Light').click(); setReactValue($('select[name=tabPlacement]'), 'sidebar')",
@@ -73,7 +73,7 @@ describe("configurable browser workspace", () => {
     );
     expect(
       await run(
-        "return [...document.querySelectorAll('[data-tab-orientation] > [data-point-key]')].map(e => e.dataset.pointKey)",
+        "return [...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map(e => e.dataset.pointKey)",
       ),
     ).toEqual(before);
     expect(
@@ -296,7 +296,7 @@ describe("configurable browser workspace", () => {
       "document.querySelector('aside').getBoundingClientRect().width === 260",
     );
     const tabCount = await run<number>(
-      "return document.querySelectorAll('[data-tab-orientation] > [data-point-key]').length",
+      "return document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])').length",
     );
     await run(
       "const row = $('button[aria-label=\"New tab\"]').closest('[data-tab-orientation]').lastElementChild; const r = row.getBoundingClientRect(); const target = document.elementFromPoint(r.right-6,r.y+r.height/2); if (!target?.closest('button[aria-label=\"New tab\"]')) throw new Error('New Tab does not fill its row'); target.click()",
@@ -307,7 +307,7 @@ describe("configurable browser workspace", () => {
     expect(await app.eval("window.__sidebarErrors")).toEqual([]);
     expect(
       await run(
-        "return document.querySelectorAll('[data-tab-orientation] > [data-point-key]').length",
+        "return document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])').length",
       ),
     ).toBe(tabCount + 1);
     await run(

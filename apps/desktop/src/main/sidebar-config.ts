@@ -3,6 +3,7 @@ import path from "node:path";
 import vm from "node:vm";
 import type { OpenMode } from "../shared/open-mode.js";
 import { sanitizeProjectExperienceWhen } from "../shared/project-experience.js";
+import { SIDEBAR_AUTHORING_GUIDE } from "./sidebar-authoring.js";
 
 /**
  * User-customizable sidebar. The config is a real JS file at
@@ -20,11 +21,14 @@ import type {
   SidebarAction,
   SidebarConfig,
   SidebarItem,
+  SidebarItemPresentation,
   SidebarMenuEntry,
   SidebarPreview,
   SidebarPreviewMetadata,
   SidebarSectionConfig,
+  SidebarSource,
   SidebarTabConfig,
+  SidebarWhen,
 } from "../shared/sidebar.js";
 
 export type { SidebarConfig, SidebarSectionConfig } from "../shared/sidebar.js";
@@ -77,6 +81,13 @@ export const DEFAULT_SIDEBAR_CONFIG: SidebarConfig = {
       icon: "Activity",
       sections: [
         { id: "activity", type: "activity" },
+        {
+          id: "subsessions",
+          type: "subsessions",
+          title: "Subsessions",
+          when: { surface: ["chat"], session: true },
+          hideEmpty: true,
+        },
         { id: "changes", type: "git", hideEmpty: true },
       ],
     },
@@ -90,28 +101,9 @@ export const DEFAULT_SIDEBAR_CONFIG: SidebarConfig = {
   ],
 };
 
-export const DEFAULT_SIDEBAR_FILE = `// Catamorphic sidebars. Edit and save to update both sides live.
-// Ask the assistant to add tabs, move widgets, or build an app widget.
-// Each side is an ordered list of tabs: { id, title, icon, sections }.
-// Tabs use bare Lucide icons. Titles are accessible labels and tooltips.
-// Each section needs a stable id, unique across the layout. Preserve ids when editing.
-// Built-ins: workflows, apps, files, chats, bookmarks, remote, git, prs, activity.
-// Section options: title, collapsed, hideEmpty, when: { builder, permissions }.
-// Tabs also accept when. Visibility never grants authority.
-// Both sides may be empty. Profile/settings and the palette remain available.
-//
-// App widget: { id: "renewals", type: "app", app: "renewals", height: 320 }
-// Apps use the normal sandboxed app runtime, storage and host theme.
-// Build a responsive compact view; expand opens the same app in a workspace tab.
-// Note widget: { id: "brief", type: "note", path: "docs/brief.md" }
-// Notes preview an existing project document; open it to edit.
-// Custom links: { id: "docs", type: "custom", title: "Docs", items: [
-//   { label: "Docs", url: "https://example.com", icon: "BookOpen", open: "tab" }
-// ] }
-// Items nest with items: [...], collapsed: true. open: "tab" or "replace".
-// Menus: [{ label, action, danger? }]. Actions: open, open-tab, open-here,
-// copy-url, pin, unpin, rename, remove. menu: [] hides the menu.
-// Hover preview: { title?, description?, metadata?: [{ label, value }] } or false.
+export const DEFAULT_SIDEBAR_FILE = `${SIDEBAR_AUTHORING_GUIDE.split("\n")
+  .map((line) => `// ${line}`)
+  .join("\n")}
 module.exports = ${JSON.stringify(DEFAULT_SIDEBAR_CONFIG, null, 2)};
 `;
 
@@ -120,6 +112,7 @@ const VALID_TYPES = new Set([
   "apps",
   "files",
   "chats",
+  "subsessions",
   "bookmarks",
   "tabs",
   "git",
@@ -143,6 +136,20 @@ const VALID_ACTIONS = new Set<SidebarAction>([
   "rename",
   "edit",
   "remove",
+  "close",
+  "archive",
+  "unarchive",
+  "mark-read",
+  "mark-unread",
+  "stop",
+  "fork",
+  "new-subsession",
+  "history",
+  "publish",
+  "new-chat",
+  "new-workflow",
+  "refresh",
+  "search",
 ]);
 
 const asOpenMode = (value: unknown): OpenMode | undefined =>
@@ -154,23 +161,30 @@ const asOpenMode = (value: unknown): OpenMode | undefined =>
     : undefined;
 
 function sanitizeMenu(raw: unknown): SidebarMenuEntry[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) throw new Error("Actions must be an array.");
   // An explicit [] means "no menu button"; keep it distinct from absent.
   return raw.flatMap((entry): SidebarMenuEntry[] => {
-    if (typeof entry !== "object" || entry === null) return [];
-    const record = entry as Record<string, unknown>;
+    if (!isRecord(entry)) throw new Error("Actions need label and action.");
+    const record = entry;
     if (
       typeof record.label !== "string" ||
       typeof record.action !== "string" ||
       !VALID_ACTIONS.has(record.action as SidebarAction)
     ) {
-      return [];
+      throw new Error("Action needs a label and a supported action name.");
     }
     return [
       {
         label: record.label,
         action: record.action as SidebarAction,
         danger: record.danger === true,
+        icon: typeof record.icon === "string" ? record.icon : undefined,
+        url: typeof record.url === "string" ? record.url : undefined,
+        disabledReason:
+          typeof record.disabledReason === "string"
+            ? record.disabledReason
+            : undefined,
       },
     ];
   });
@@ -213,18 +227,184 @@ function sanitizePreview(raw: unknown): SidebarPreview | false | undefined {
   };
 }
 
-function sanitizeItems(raw: unknown, depth = 0): SidebarItem[] | undefined {
-  if (!Array.isArray(raw) || depth > 20) return undefined;
+function sanitizeSidebarWhen(value: unknown): SidebarWhen | null | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return null;
+  if (
+    Object.keys(value).some(
+      (key) =>
+        ![
+          "builder",
+          "permissions",
+          "surface",
+          "session",
+          "pathPrefix",
+          "selection",
+        ].includes(key),
+    )
+  )
+    return null;
+  const authority = sanitizeProjectExperienceWhen({
+    ...(value.builder !== undefined ? { builder: value.builder } : {}),
+    ...(value.permissions !== undefined
+      ? { permissions: value.permissions }
+      : {}),
+  });
+  if (authority === null) return null;
+  if (
+    value.surface !== undefined &&
+    (!Array.isArray(value.surface) ||
+      value.surface.some((kind) => typeof kind !== "string" || !kind))
+  )
+    return null;
+  if (value.session !== undefined && typeof value.session !== "boolean")
+    return null;
+  if (value.selection !== undefined && typeof value.selection !== "boolean")
+    return null;
+  if (value.pathPrefix !== undefined && typeof value.pathPrefix !== "string")
+    return null;
+  return {
+    ...authority,
+    surface: Array.isArray(value.surface)
+      ? value.surface.filter((kind): kind is string => typeof kind === "string")
+      : undefined,
+    session: typeof value.session === "boolean" ? value.session : undefined,
+    selection:
+      typeof value.selection === "boolean" ? value.selection : undefined,
+    pathPrefix:
+      typeof value.pathPrefix === "string" ? value.pathPrefix : undefined,
+  };
+}
+
+function sanitizeSource(value: unknown): SidebarSource | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || !isSectionType(value.type))
+    throw new Error("Source needs a supported type.");
+  const scope = value.scope;
+  if (
+    scope !== undefined &&
+    scope !== "project" &&
+    scope !== "session" &&
+    scope !== "children"
+  )
+    throw new Error("Unknown source scope.");
+  if (
+    scope &&
+    scope !== "project" &&
+    !["chats", "subsessions"].includes(value.type)
+  )
+    throw new Error(
+      "Session and children scope require a chats or subsessions source.",
+    );
+  const filter: Record<string, string | number | boolean> = {};
+  if (value.filter !== undefined) {
+    if (!isRecord(value.filter))
+      throw new Error("Source filter must be a field/value object.");
+    for (const [key, entry] of Object.entries(value.filter)) {
+      if (
+        typeof entry !== "string" &&
+        typeof entry !== "boolean" &&
+        (typeof entry !== "number" || !Number.isFinite(entry))
+      )
+        throw new Error(
+          "Filter values must be strings, booleans or finite numbers.",
+        );
+      filter[key] = entry;
+    }
+  }
+  const sort = value.sort;
+  if (
+    sort !== undefined &&
+    (!isRecord(sort) ||
+      typeof sort.field !== "string" ||
+      (sort.direction !== undefined &&
+        sort.direction !== "asc" &&
+        sort.direction !== "desc"))
+  )
+    throw new Error("Sort needs field and asc/desc direction.");
+  return {
+    type: value.type,
+    scope,
+    filter,
+    sort:
+      isRecord(sort) && typeof sort.field === "string"
+        ? {
+            field: sort.field,
+            direction: sort.direction === "desc" ? "desc" : "asc",
+          }
+        : undefined,
+    groupBy: typeof value.groupBy === "string" ? value.groupBy : undefined,
+    pageSize:
+      typeof value.pageSize === "number"
+        ? Math.max(1, Math.min(100, Math.floor(value.pageSize)))
+        : undefined,
+    includeLatent: value.includeLatent === true,
+  };
+}
+
+function sanitizePresentation(
+  record: Record<string, unknown>,
+): SidebarItemPresentation {
+  const presentation: SidebarItemPresentation = {
+    label: typeof record.label === "string" ? record.label : undefined,
+    description:
+      typeof record.description === "string" ? record.description : undefined,
+    icon: typeof record.icon === "string" ? record.icon : undefined,
+    badges: Array.isArray(record.badges)
+      ? record.badges.filter(
+          (badge): badge is string => typeof badge === "string",
+        )
+      : undefined,
+    progress:
+      typeof record.progress === "number" && Number.isFinite(record.progress)
+        ? Math.max(0, Math.min(1, record.progress))
+        : undefined,
+    open: asOpenMode(record.open),
+    menu: sanitizeMenu(record.menu),
+    contextMenu: sanitizeMenu(record.contextMenu),
+    actions: sanitizeMenu(record.actions),
+    preview: sanitizePreview(record.preview),
+    hide: typeof record.hide === "boolean" ? record.hide : undefined,
+  };
+  return Object.fromEntries(
+    Object.entries(presentation).filter(([, value]) => value !== undefined),
+  );
+}
+
+function sanitizeItems(
+  raw: unknown,
+  depth = 0,
+  ids = new Set<string>(),
+  parentId = "",
+): SidebarItem[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  if (depth > 20) throw new Error("Custom item trees cannot exceed 20 levels.");
   return raw.flatMap((entry): SidebarItem[] => {
     if (typeof entry !== "object" || entry === null) return [];
     const record = entry as Record<string, unknown>;
-    const when = sanitizeProjectExperienceWhen(record.when);
+    const when = sanitizeSidebarWhen(record.when);
     if (when === null) return [];
     const url = typeof record.url === "string" ? record.url : undefined;
-    const items = sanitizeItems(record.items, depth + 1);
-    if (!url && (!items || items.length === 0)) return [];
+    const id =
+      typeof record.id === "string"
+        ? record.id
+        : `${parentId}/${url ?? record.label ?? "Folder"}`;
+    if (!id || ids.has(id))
+      throw new Error(
+        "Custom items need unique stable IDs within their section.",
+      );
+    ids.add(id);
+    const items = sanitizeItems(record.items, depth + 1, ids, id);
+    if (
+      !url &&
+      (!items || items.length === 0) &&
+      !Array.isArray(record.actions)
+    )
+      return [];
     return [
       {
+        ...sanitizePresentation(record),
+        id,
         label:
           typeof record.label === "string" && record.label
             ? record.label
@@ -293,10 +473,11 @@ function sanitizeTabs({
             );
           }
           sectionIds.add(section.id);
-          const when = sanitizeProjectExperienceWhen(section.when);
+          const when = sanitizeSidebarWhen(section.when);
           if (when === null) return [];
+          const source = sanitizeSource(section.source);
           if (
-            section.type === "app" &&
+            (source?.type ?? section.type) === "app" &&
             (typeof section.app !== "string" ||
               !/^[a-zA-Z0-9_-]+$/.test(section.app))
           )
@@ -311,6 +492,47 @@ function sanitizeTabs({
           return [
             {
               id: section.id,
+              source,
+              collections: Array.isArray(section.collections)
+                ? section.collections.filter(
+                    (name): name is string =>
+                      typeof name === "string" &&
+                      [
+                        "chats",
+                        "subsessions",
+                        "activity",
+                        "files",
+                        "workflows",
+                        "apps",
+                        "git",
+                        "prs",
+                        "bookmarks",
+                        "remote",
+                        "tabs",
+                      ].includes(name),
+                  )
+                : undefined,
+              itemDefaults: isRecord(section.itemDefaults)
+                ? sanitizePresentation(section.itemDefaults)
+                : undefined,
+              itemOverrides: isRecord(section.itemOverrides)
+                ? Object.fromEntries(
+                    Object.entries(section.itemOverrides).map(
+                      ([key, value]) => {
+                        if (!isRecord(value))
+                          throw new Error(`Invalid item override: ${key}`);
+                        return [key, sanitizePresentation(value)];
+                      },
+                    ),
+                  )
+                : undefined,
+              contextMenu: sanitizeMenu(section.contextMenu),
+              actions: sanitizeMenu(section.actions),
+              headerActions: sanitizeMenu(section.headerActions),
+              rowHeight:
+                typeof section.rowHeight === "number"
+                  ? Math.max(28, Math.min(160, section.rowHeight))
+                  : undefined,
               type: section.type,
               title:
                 typeof section.title === "string" ? section.title : undefined,
@@ -334,7 +556,7 @@ function sanitizeTabs({
           ];
         },
       );
-      const when = sanitizeProjectExperienceWhen(tab.when);
+      const when = sanitizeSidebarWhen(tab.when);
       return {
         id: tab.id,
         title: tab.title,

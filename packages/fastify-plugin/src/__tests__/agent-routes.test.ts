@@ -63,6 +63,22 @@ describe("agent routes", () => {
     });
   });
 
+  it("rejects ambiguous or invalid hierarchy list queries", async () => {
+    const app = await buildApp();
+    for (const query of [
+      `rootsOnly=true&parentSessionId=${SESSION_ID}`,
+      "rootsOnly=yes",
+      "parentSessionId=unknown",
+    ]) {
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/projects/${PROJECT_ID}/agent/sessions?${query}`,
+      });
+      expect(response.statusCode).toBe(400);
+    }
+    await app.close();
+  });
+
   describe("GET /api/projects/:projectId/agent/sessions/:sessionId", () => {
     it("responds 503 when no coding agent is configured", async () => {
       const app = await buildApp();

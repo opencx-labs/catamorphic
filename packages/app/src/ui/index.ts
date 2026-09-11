@@ -8,12 +8,17 @@
  * else — no CSS imports, no theme plumbing. Every color flows through the
  * host theme's `--color-*` tokens; light, dark, and user themes come free.
  */
-export { AnimatedList } from "./animated-list.js";
+export { AnimatedList, useAnimatedItems } from "./animated-list.js";
 export { Badge } from "./badge.js";
 export { Button } from "./button.js";
 export { Calendar, type CalendarProps } from "./calendar.js";
 export { Card } from "./card.js";
 export { Checkbox } from "./checkbox.js";
+export {
+  CollectionItemView,
+  type ItemAction,
+  useItemActions,
+} from "./collection-item.js";
 export {
   DataTable,
   type DataTableColumn,
@@ -53,4 +58,12 @@ export { Switch } from "./switch.js";
 export { Tab, TabList, TabPanel, Tabs } from "./tabs.js";
 export { Textarea } from "./textarea.js";
 export { Tooltip } from "./tooltip.js";
+export {
+  CollectionTree,
+  Tree,
+  type TreeItem,
+  type TreeRenderContext,
+  useCollection,
+  useCollectionItem,
+} from "./tree.js";
 export { type AsyncState, useAsync } from "./use-async.js";

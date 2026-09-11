@@ -4,6 +4,7 @@ import { ExternalLink, FileText } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { desktopApi } from "../lib/desktop-api.js";
 import {
+  notifyEditorSelectionChange,
   registerSelectionReader,
   stampSelectionOnClipboard,
 } from "../lib/editor-selection.js";
@@ -222,6 +223,7 @@ export function EditorScreen({
             : selection.endLineNumber,
       };
     };
+    editor.onDidChangeCursorSelection(notifyEditorSelectionChange);
     editor.onDidFocusEditorText(() => publishReader(readMonacoSelection));
     publishReader(readMonacoSelection);
     editor.focus();

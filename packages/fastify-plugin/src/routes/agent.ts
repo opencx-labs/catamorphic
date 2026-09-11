@@ -34,6 +34,7 @@ import {
   AgentSessionIdParamsSchema,
   AgentSessionPeerSchema,
   AgentSessionSchema,
+  AgentSessionsQuerySchema,
   AgentSubsessionIdParamsSchema,
   AgentSubsessionSchema,
   AgentTurnIdParamsSchema,
@@ -50,7 +51,6 @@ import {
   MirrorAgentSessionSchema,
   MirrorConflictSchema,
   OkSchema,
-  PaginationQuerySchema,
   PendingToolPermissionsSchema,
   ProjectAgentEntrySchema,
   ProjectIdParamsSchema,
@@ -471,7 +471,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
     url: "/projects/:projectId/agent/sessions",
     schema: {
       params: ProjectIdParamsSchema,
-      querystring: PaginationQuerySchema,
+      querystring: AgentSessionsQuerySchema,
       response: { 200: ListSchema(AgentSessionSchema), 404: ErrorSchema },
     },
     handler: async (request, reply) => {

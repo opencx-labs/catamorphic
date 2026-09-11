@@ -4,7 +4,13 @@ import type { OpenMode } from "../../shared/open-mode.js";
 import { desktopApi, type PullRequestSummary } from "../lib/desktop-api.js";
 import { useAppPreferences } from "../lib/use-app-preferences.js";
 import type { PaletteItem } from "./command-palette.js";
-import { OpenResourceButton } from "./open-resource-button.js";
+import {
+  useSidebarContent,
+  useSidebarContribution,
+  useSidebarRefresh,
+} from "./sidebar-contribution.js";
+import { SidebarItemRow } from "./sidebar-item-row.js";
+import { SidebarTree } from "./sidebar-tree.js";
 import type { WorkspaceTab } from "./workspace-tabs.js";
 
 /** The project PR inbox opens each review directly in the workspace. */
@@ -15,15 +21,14 @@ export function PrsNav({
   projectId,
   searchItems,
   onOpenDiff,
-  onEmptyChange,
 }: {
   projectId: string;
   searchItems?: RefObject<() => Promise<PaletteItem[]>>;
   onOpenDiff: (tab: WorkspaceTab, mode?: OpenMode) => void;
   onOpenUrl: (url: string, mode: OpenMode) => void;
   /** Reports emptiness up so hide-when-empty sections can drop entirely. */
-  onEmptyChange?: (empty: boolean) => void;
 }) {
+  const visible = useSidebarContribution()?.visible ?? true;
   const { prefs, update, error: preferencesError } = useAppPreferences();
   const filter = prefs.prDefaultView;
   const setFilter = (prDefaultView: "all" | "for-you" | "created") =>
@@ -31,10 +36,11 @@ export function PrsNav({
   const [prs, setPrs] = useState<PullRequestSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
-  const isEmpty = !error && (!prs || prs.length === 0);
-  useEffect(() => {
-    onEmptyChange?.(isEmpty);
-  }, [isEmpty, onEmptyChange]);
+  useSidebarRefresh(() => setRefresh((value) => value + 1));
+  const isEmpty = !error && prs !== null && prs.length === 0;
+  useSidebarContent(
+    error ? "error" : prs === null ? "loading" : isEmpty ? "empty" : "ready",
+  );
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reconnect and Retry invalidate remote data
   useEffect(() => {
@@ -62,7 +68,13 @@ export function PrsNav({
         });
     };
     load();
-    const timer = window.setInterval(load, REFRESH_MS);
+    if (!visible)
+      return () => {
+        cancelled = true;
+      };
+    const timer = window.setInterval(() => {
+      if (!document.hidden) load();
+    }, REFRESH_MS);
     window.addEventListener("focus", load);
     const unsubscribe = desktopApi.onGitChanged((change) => {
       if (change.projectId === projectId) load();
@@ -73,7 +85,7 @@ export function PrsNav({
       window.removeEventListener("focus", load);
       unsubscribe();
     };
-  }, [projectId, refresh, prefs.githubCliEnabled]);
+  }, [projectId, refresh, prefs.githubCliEnabled, visible]);
 
   const inScope = (items: PullRequestSummary[]) =>
     items.filter(
@@ -202,32 +214,23 @@ export function PrsNav({
             : "No matching pull requests."}
         </p>
       )}
-      <ul
-        // biome-ignore lint/a11y/noRedundantRoles: Preserve list semantics when CSS removes markers.
-        role="list"
-        className="flex flex-col gap-1 px-1"
-      >
-        {filtered.map((pr) => (
-          <li key={pr.number}>
-            <OpenResourceButton
-              aria-label={`Open review #${pr.number}: ${pr.title}`}
-              onOpen={(mode) => openReview(pr, mode)}
-              className="flex w-full min-w-0 items-start gap-2 rounded-md px-2 py-2 text-left hover:bg-bg-overlay"
-            >
-              <GitPullRequest className="mt-0.5 size-4 shrink-0 text-fg-muted" />
-              <div className="min-w-0 flex-1">
-                <p className="line-clamp-2 text-xs font-medium text-fg">
-                  {pr.title}
-                </p>
-                <p className="mt-1 truncate text-[11px] text-fg-muted">
-                  #{pr.number} · {pr.author}
-                  {pr.draft ? " · Draft" : ""}
-                </p>
-              </div>
-            </OpenResourceButton>
-          </li>
-        ))}
-      </ul>
+      <SidebarTree
+        items={filtered.map((pr) => ({ ...pr, id: String(pr.number) }))}
+        label="Pull requests"
+        rowHeight={40}
+        renderItem={(pr) => (
+          <SidebarItemRow
+            itemId={pr.id}
+            label={pr.title}
+            description={`#${pr.number} · ${pr.author}`}
+            icon="GitPullRequest"
+            badges={pr.draft ? ["Draft"] : undefined}
+            resource
+            onOpen={(mode) => openReview(pr, mode)}
+            onAction={() => {}}
+          />
+        )}
+      />
     </div>
   );
 }

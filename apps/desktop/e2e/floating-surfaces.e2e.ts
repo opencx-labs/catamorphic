@@ -496,7 +496,7 @@ describe("floating surfaces", () => {
       "[...document.querySelectorAll('aside [data-point-key^=\"browser:\"]')].find(e=>e.textContent.includes('Anchor page')).querySelector('button').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:100,clientY:200}))",
     );
     await app.waitFor(
-      "document.querySelectorAll('[data-sidebar-menu] [role=menuitem]').length===4",
+      "document.querySelectorAll('[data-sidebar-menu] [role=menuitem]').length===5",
     );
     expect(
       await run(
@@ -507,6 +507,7 @@ describe("floating surfaces", () => {
       "Open in new tab",
       "Open to the side",
       "Open floating",
+      "Close Anchor page",
     ]);
     await run(
       "[...document.querySelectorAll('[data-sidebar-menu] [role=menuitem]')].find(el=>el.textContent.trim()==='Open floating').click()",
@@ -558,10 +559,10 @@ describe("floating surfaces", () => {
       "const section=$('[data-sidebar-widget=files]');const toggle=section.querySelector('button[aria-expanded=false]');toggle?.click()",
     );
     await app.waitFor(
-      "!!document.querySelector('[data-testid=files-nav] button[title=\"placement-one.ts\"]')",
+      "!!document.querySelector('[data-testid=files-nav] [data-sidebar-item-id=\"placement-one.ts\"] [data-tree-primary]')",
     );
     await run(
-      "$('[data-testid=files-nav] button[title=\"placement-one.ts\"]').dispatchEvent(new MouseEvent('click',{bubbles:true,altKey:true}))",
+      "$('[data-testid=files-nav] [data-sidebar-item-id=\"placement-one.ts\"] [data-tree-primary]').dispatchEvent(new MouseEvent('click',{bubbles:true,altKey:true}))",
     );
     await app.waitFor(`!!${floating}?.querySelector('.monaco-editor')`);
     await app.waitFor(
@@ -571,7 +572,7 @@ describe("floating surfaces", () => {
       `${floating}.getAttribute('data-floating-surface')`,
     );
     await run(
-      "$('[data-testid=files-nav] button[title=\"placement-two.ts\"]').click()",
+      "$('[data-testid=files-nav] [data-sidebar-item-id=\"placement-two.ts\"] [data-tree-primary]').click()",
     );
     await app.waitFor(
       `!!${floating}?.querySelector('.view-lines')?.textContent.replace(/\\s/g,'').includes('exportconsttwo')`,
