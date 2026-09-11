@@ -49,6 +49,8 @@ function errorCode(error: unknown): string | undefined {
 }
 
 function processGroupTarget(processGroupId: number): number {
+  if (!Number.isSafeInteger(processGroupId) || processGroupId <= 0)
+    throw new Error("Process group ID must be a positive integer");
   return process.platform === "win32" ? processGroupId : -processGroupId;
 }
 
@@ -90,9 +92,17 @@ async function settleProcessGroup(input: {
   }
   if (!processGroupIsLive(input.processGroupId)) return;
   signalProcessGroup(input.processGroupId, "SIGKILL");
-  while (processGroupIsLive(input.processGroupId)) {
+  const killDeadline = Date.now() + PROCESS_GROUP_GRACE_MS;
+  while (
+    processGroupIsLive(input.processGroupId) &&
+    Date.now() < killDeadline
+  ) {
     await delay(20);
   }
+  if (processGroupIsLive(input.processGroupId))
+    throw new Error(
+      `Test process group ${input.processGroupId} did not exit after SIGKILL`,
+    );
 }
 
 export class TestSignalController {
@@ -113,6 +123,7 @@ export class TestSignalController {
   }
 
   activate(processGroupId: number): void {
+    processGroupTarget(processGroupId);
     this.activeProcessGroupId = processGroupId;
     if (this.forwardedSignal) {
       signalProcessGroup(processGroupId, this.forwardedSignal);
@@ -263,7 +274,20 @@ export async function runLoggedProcess(input: {
         input.signals.clear(processGroupId);
       }
     }
-    await closeCompletion;
+    const closed = await new Promise<boolean>((resolve) => {
+      const timeout = setTimeout(() => resolve(false), PROCESS_GROUP_GRACE_MS);
+      void closeCompletion.then(() => {
+        clearTimeout(timeout);
+        resolve(true);
+      });
+    });
+    if (!closed) {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      cleanupError ??= new Error(
+        `Test subprocess ${processGroupId} left output pipes open after cleanup`,
+      );
+    }
     try {
       await closeLog(log);
     } catch (error) {

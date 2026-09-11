@@ -26,6 +26,12 @@ export async function projectToolCapabilities(args: {
   core: CatamorphicCore;
   context: AgentCapabilityContext;
   features?: SurfaceFeatures;
+  /** Host execution version, composed with the project tool definition. */
+  revision?: string;
+  consent?: (tool: {
+    name: string;
+    effect: "read" | "write";
+  }) => string | undefined;
   allow?: (tool: { name: string; effect: "read" | "write" }) => boolean;
   beforeCall?: (tool: {
     name: string;
@@ -40,7 +46,8 @@ export async function projectToolCapabilities(args: {
     context.identity,
     context.projectId,
   );
-  const taken = new Set(workflows.map((tool) => tool.name));
+  const targets = new Map(workflows.map((tool) => [tool.name, tool.binding]));
+  const taken = new Set(targets.keys());
   const tools = [
     ...surfaceTools(
       core,
@@ -66,6 +73,12 @@ export async function projectToolCapabilities(args: {
     if (args.allow && !args.allow({ name: definition.name, effect })) return [];
     return [
       defineAgentCapability({
+        revision: JSON.stringify([
+          args.revision,
+          tool.definition,
+          targets.get(definition.name),
+        ]),
+        consent: args.consent?.({ name: definition.name, effect }),
         name: `project.${definition.name}`,
         description: definition.description,
         effect,

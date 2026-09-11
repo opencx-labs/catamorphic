@@ -380,7 +380,7 @@ current theme on every guest load while theme switches preserve the guest's stat
 
 ## Dock placement and draft runtime controls (2026-09-11)
 
-ADR 0133 adds centered or edge-aligned expansion without changing the collapsed
+ADR 0127 adds centered or edge-aligned expansion without changing the collapsed
 corner. The bubble itself is draggable; dragging never expands it or stores an
 absolute resting position. Use restrained settling motion and honor reduced
 motion. New and established chats share editable runtime controls; draft choices
@@ -409,3 +409,9 @@ Repaired the [slash command experience](../../docs/desktop-slash-command-audit.m
   A T3 Code comparison further tightened command-name search, guarded selection
   against fresh input arriving before a render, and moved pointer activation to
   click release while retaining composer focus.
+
+### 2026-09-11: Consent and collection lifecycle
+
+[ADR 0134](../../docs/decisions/0134-consent-and-collection-lifecycle.md) binds deferred
+consent to the approved definition. Sidebar trees own visible branch subscriptions,
+hidden sections probe availability, and built-ins and widgets share session reads.

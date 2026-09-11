@@ -53,6 +53,7 @@ export async function readComponentRegistry({ name }: { name?: string }) {
 }
 
 export const componentRegistryCapability = defineAgentCapability({
+  revision: "1",
   name: "components.read",
   description:
     "List the host's installable component registry, or fetch a pack by name with editable source, dependencies and usage notes. For code reviews fetch code-review unless suitable project components already exist. Follow user/project registry instructions first. Copy and adapt files into a project or a temporary app's explicit source snapshot. This only reads shipped public components; it does not install, build or publish.",

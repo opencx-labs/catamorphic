@@ -77,6 +77,8 @@ export async function listClaudeSlashCommands(opts: {
   } finally {
     clearTimeout(timeout);
     abort.abort();
-    turn.close();
+    // close() initiates cleanup but returns before the CLI exits. Await the
+    // iterator cleanup so callers can safely release its working directory.
+    await turn.return();
   }
 }

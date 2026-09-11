@@ -63,6 +63,7 @@ import { defineAgentCapability } from "@catamorphic/core";
 import { z } from "zod";
 
 const listAssignments = defineAgentCapability({
+  revision: "1",
   name: "assignments.search",
   description: "Search assignments visible to the current project member.",
   effect: "read",
@@ -181,3 +182,14 @@ from the bounded JSON results of deferred capabilities above.
 Desktop browser and OS control are host extensions, not core capabilities. See
 [Computer use](apps/desktop/docs/computer-use.md). Native Codex elicitation uses
 the host's existing permission UI through its bidirectional app-server transport.
+
+Capability `revision` versions execution semantics. Static definitions can use a
+fixed version; live sources change it when the target or implementation changes.
+A `consent` key versions required approval: set it when approval is required,
+change it when those requirements change, and omit it when no approval is needed.
+Both values remain host-local, outside discovery and events. Core re-resolves the
+capability after approval/activity hooks and compares the execution revision,
+effect, schemas, normalized input, and any remaining consent requirement. A new
+or changed requirement fails before execution and requires a fresh call. Removing
+a requirement, including choosing “Always allow”, preserves the approved call.
+Live identity, allocation and authorization checks still run.

@@ -30,6 +30,56 @@ export interface TreeRenderContext {
   toggle: () => void;
 }
 
+function indexTree({
+  items,
+  expanded,
+}: {
+  items: readonly TreeItem[];
+  expanded: ReadonlySet<string>;
+}) {
+  const byId = new Set(items.map((item) => item.id));
+  const children = new Map<string | null, string[]>();
+  for (const item of items) {
+    const parentId =
+      item.parentId && byId.has(item.parentId) ? item.parentId : null;
+    const list = children.get(parentId) ?? [];
+    list.push(item.id);
+    children.set(parentId, list);
+  }
+  const rows: {
+    id: string;
+    parentId: string | null;
+    depth: number;
+    position: number;
+    siblings: number;
+  }[] = [];
+  const seen = new Set<string>();
+  const push = (parentId: string | null, depth: number) =>
+    (children.get(parentId) ?? [])
+      .map((id, index, siblings) => ({
+        id,
+        parentId,
+        depth,
+        position: index + 1,
+        siblings: siblings.length,
+      }))
+      .reverse();
+  const stack = push(null, 0);
+  while (stack.length) {
+    const row = stack.pop();
+    if (!row || seen.has(row.id)) continue;
+    seen.add(row.id);
+    rows.push(row);
+    if (expanded.has(row.id))
+      for (const child of push(row.id, row.depth + 1)) stack.push(child);
+  }
+  return {
+    rows,
+    children,
+    indexById: new Map(rows.map((row, index) => [row.id, index])),
+  };
+}
+
 /**
  * One virtual viewport for a whole tree. Source items can be paginated and have
  * unloaded children. Identity, focus and expansion survive reordering and updates.
@@ -103,48 +153,7 @@ export function Tree<T extends TreeItem>({
       ),
     [controlled, items, overrides, defaultExpanded],
   );
-  const tree = useMemo(() => {
-    const children = new Map<string | null, string[]>();
-    for (const item of items) {
-      const parentId =
-        item.parentId && byId.has(item.parentId) ? item.parentId : null;
-      const list = children.get(parentId) ?? [];
-      list.push(item.id);
-      children.set(parentId, list);
-    }
-    const rows: {
-      id: string;
-      parentId: string | null;
-      depth: number;
-      position: number;
-      siblings: number;
-    }[] = [];
-    const seen = new Set<string>();
-    const push = (parentId: string | null, depth: number) =>
-      (children.get(parentId) ?? [])
-        .map((id, index, siblings) => ({
-          id,
-          parentId,
-          depth,
-          position: index + 1,
-          siblings: siblings.length,
-        }))
-        .reverse();
-    const stack = push(null, 0);
-    while (stack.length) {
-      const row = stack.pop();
-      if (!row || seen.has(row.id)) continue;
-      seen.add(row.id);
-      rows.push(row);
-      if (expanded.has(row.id))
-        for (const child of push(row.id, row.depth + 1)) stack.push(child);
-    }
-    return {
-      rows,
-      children,
-      indexById: new Map(rows.map((row, index) => [row.id, index])),
-    };
-  }, [items, byId, expanded]);
+  const tree = useMemo(() => indexTree({ items, expanded }), [items, expanded]);
   const toggle = (id: string) => {
     const next = new Set(expanded);
     if (next.has(id)) next.delete(id);
@@ -431,18 +440,24 @@ export function Tree<T extends TreeItem>({
 export function useCollection<T extends CollectionItem>({
   collection,
   active = true,
+  projected = false,
+  mode = "full",
 }: {
   collection: Collection<T>;
   active?: boolean;
+  /** Projections depend on item values as well as topology. */
+  projected?: boolean;
+  /** Preview owners refresh only the first root page until a full view returns. */
+  mode?: "full" | "preview";
 }) {
   useEffect(
-    () => (active ? collection.acquire() : undefined),
-    [collection, active],
+    () => (active ? collection.acquire({ mode }) : undefined),
+    [collection, active, mode],
   );
   const revision = useSyncExternalStore(
-    collection.subscribe,
-    collection.getRevision,
-    collection.getRevision,
+    projected ? collection.subscribeSnapshot : collection.subscribe,
+    projected ? collection.getSnapshotRevision : collection.getRevision,
+    projected ? collection.getSnapshotRevision : collection.getRevision,
   );
   return { revision, root: collection.getBranch(null) };
 }
@@ -483,19 +498,16 @@ export function CollectionTree<T extends CollectionItem>({
   project?: (items: readonly T[]) => readonly T[];
   renderItem: (item: T, context: TreeRenderContext) => ReactNode;
 }) {
-  const { revision, root } = useCollection({ collection, active });
+  const { revision, root } = useCollection({
+    collection,
+    active,
+    projected: Boolean(project || groupBy),
+  });
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  // biome-ignore lint/correctness/useExhaustiveDependencies: revision tracks mutable branch snapshots, including an aborted lazy load becoming idle.
-  useEffect(() => {
-    if (!active) return;
-    for (const parentId of expanded) {
-      if (
-        collection.getItem(parentId)?.hasChildren &&
-        collection.getBranch(parentId).status === "idle"
-      )
-        void collection.load({ parentId });
-    }
-  }, [active, collection, expanded, revision]);
+  const branches = useMemo(
+    () => ({ collection, releases: new Map<string, () => void>() }),
+    [collection],
+  );
   const items = useMemo(
     () =>
       flattenCollection({ collection, expanded, revision }).flatMap(
@@ -522,6 +534,35 @@ export function CollectionTree<T extends CollectionItem>({
     });
     return [...groups.values(), ...rows];
   }, [items, groupBy, project, collection]);
+  const visibleBranches = useMemo(
+    () =>
+      indexTree({ items: entries, expanded })
+        .rows.filter(
+          ({ id }) => expanded.has(id) && collection.getItem(id)?.hasChildren,
+        )
+        .map(({ id }) => id),
+    [entries, expanded, collection],
+  );
+  useEffect(() => {
+    const wanted = new Set(active ? visibleBranches : []);
+    for (const [id, release] of branches.releases) {
+      if (!wanted.has(id)) {
+        release();
+        branches.releases.delete(id);
+      }
+    }
+    for (const parentId of wanted) {
+      if (!branches.releases.has(parentId))
+        branches.releases.set(parentId, collection.acquire({ parentId }));
+    }
+  }, [active, collection, visibleBranches, branches]);
+  useEffect(
+    () => () => {
+      for (const release of branches.releases.values()) release();
+      branches.releases.clear();
+    },
+    [branches],
+  );
   return (
     <>
       {root.status === "error" && (
@@ -544,13 +585,6 @@ export function CollectionTree<T extends CollectionItem>({
         motionClasses={motionClasses}
         expanded={expanded}
         onExpandedChange={setExpanded}
-        loadChildren={(id) => {
-          if (
-            !id.startsWith("collection-group:") &&
-            collection.getBranch(id).status === "idle"
-          )
-            void collection.load({ parentId: id });
-        }}
         onLoadMore={
           root.cursor ? () => void collection.load({ more: true }) : undefined
         }
@@ -572,7 +606,7 @@ export function CollectionTree<T extends CollectionItem>({
           )
         }
       />
-      {[...expanded].map((id) => {
+      {visibleBranches.map((id) => {
         const branch = collection.getBranch(id);
         return branch.status === "error" ? (
           <p key={id} role="alert">

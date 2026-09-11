@@ -1462,6 +1462,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const { config, profileId } = found;
     const topology = registered.topology;
     return {
+      revision: JSON.stringify([id, config.mode, profileId, topology]),
       tools: this.workspaceTools(config, topology, true) ?? [],
       readOnly: config.mode === "read-only",
       profileId,

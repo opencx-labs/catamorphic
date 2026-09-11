@@ -151,11 +151,16 @@ export default function AgentMonitor() {
   const [collection] = React.useState(() =>
     createHostCollection({ source: "subsessions" }),
   );
-  // The sole lease owner stays mounted even when the host hides empty content.
-  const { root } = useCollection({ collection, active: true });
   const [display, setDisplay] = React.useState<AppDisplay>({
     mode: "compact",
     visible: true,
+  });
+  // One collection owns both availability and the full tree. Hidden leases
+  // refresh only the first page; the visible tree restores loaded depth.
+  const { root } = useCollection({
+    collection,
+    active: !display.visible,
+    mode: "preview",
   });
   const [selectedId, setSelectedId] = React.useState<string>();
 
@@ -191,11 +196,10 @@ export default function AgentMonitor() {
           No subsessions in this chat.
         </p>
       )}
-      {/* Always mounted: the tree preserves expansion; its lease is held above.
-          The kit supplies loading/error/retry and pagination presentations. */}
+      {/* Always mounted to preserve expansion; only a visible tree owns IO. */}
       <CollectionTree
         collection={collection}
-        active={false}
+        active={display.visible}
         label="Current chat subsessions"
         height={display.mode === "compact" ? 168 : 320}
         rowHeight={ROW_HEIGHT}

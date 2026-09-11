@@ -1,25 +1,87 @@
 import { type Collection, createCollection } from "@catamorphic/app";
+import { useCollection } from "@catamorphic/app/ui";
 import { useCatamorphic } from "@catamorphic/react";
 import type { AgentSession } from "@catamorphic/react/types";
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import type { SidebarSectionConfig } from "../../shared/sidebar.js";
-import { projectSidebarItems } from "../components/sidebar-contribution.js";
+import {
+  projectSidebarItems,
+  sidebarItemPresentation,
+} from "../components/sidebar-contribution.js";
 
 export interface SessionTreeItem extends AgentSession {
   parentId: string | null;
   hasChildren: boolean;
 }
+type ApiClient = ReturnType<typeof useCatamorphic>["apiClient"];
+const sessionPageKey = (projectId: string) => [
+  "desktop",
+  "sidebar",
+  "agent",
+  projectId,
+  "page",
+];
+
+/** Built-ins, availability probes and guest widgets share authorized page IO. */
+export async function readSidebarSessionPage({
+  apiClient,
+  client,
+  projectId,
+  query,
+  signal,
+}: {
+  apiClient: ApiClient;
+  client: QueryClient;
+  projectId: string;
+  query: {
+    limit: number;
+    offset: number;
+    visibility?: "promoted";
+    parentSessionId?: string;
+    rootsOnly?: "true" | "false";
+  };
+  signal: AbortSignal;
+}) {
+  signal.throwIfAborted();
+  const page = await client.fetchQuery({
+    queryKey: [...sessionPageKey(projectId), query],
+    staleTime: 1000,
+    gcTime: 60_000,
+    queryFn: async ({ signal }) => {
+      const response = await apiClient.GET(
+        "/api/projects/{projectId}/agent/sessions",
+        {
+          params: { path: { projectId }, query },
+          signal,
+        },
+      );
+      if (!response.data)
+        throw new Error(response.error?.error ?? "Could not load sessions");
+      return response.data;
+    },
+  });
+  // Releasing one view cannot cancel another view's shared request.
+  signal.throwIfAborted();
+  return page;
+}
+
 const stores = new WeakMap<
   QueryClient,
   Map<string, Collection<SessionTreeItem>>
 >();
 
-/** One project wakeup fanout, regardless of how many session views subscribe. */
 const updates = new WeakMap<
   QueryClient,
-  Map<string, { listeners: Set<() => void>; dispose: () => void }>
+  Map<
+    string,
+    {
+      listeners: Set<() => void>;
+      dispose: () => void;
+    }
+  >
 >();
+/** One project wakeup fanout, regardless of how many session views subscribe. */
 export function subscribeSidebarSessions({
   client,
   projectId,
@@ -35,7 +97,12 @@ export function subscribeSidebarSessions({
   if (!entry) {
     const listeners = new Set<() => void>();
     const refresh = () => {
-      if (!document.hidden) for (const notify of listeners) notify();
+      if (document.hidden) return;
+      void client.invalidateQueries({
+        queryKey: sessionPageKey(projectId),
+        refetchType: "none",
+      });
+      for (const notify of listeners) notify();
     };
     const timer = window.setInterval(refresh, 2000);
     window.addEventListener("focus", refresh);
@@ -48,7 +115,8 @@ export function subscribeSidebarSessions({
         event.type === "updated" &&
         event.action.type === "invalidate" &&
         event.query.queryKey.includes(projectId) &&
-        event.query.queryKey.includes("agent")
+        event.query.queryKey.includes("agent") &&
+        !event.query.queryKey.includes("sidebar")
       )
         refresh();
     });
@@ -80,105 +148,117 @@ export function useSidebarSessions({
   projectId,
   sessionId,
   section,
+  visible,
+  relevant,
 }: {
   projectId: string;
   sessionId?: string;
   section: SidebarSectionConfig;
-}): Collection<SessionTreeItem> {
+  visible: boolean;
+  relevant: boolean;
+}) {
   const { apiClient } = useCatamorphic();
   const client = useQueryClient();
-  const sourceKey = JSON.stringify(section.source ?? {});
+  const sourceKey = JSON.stringify([
+    section.source ?? {},
+    section.itemDefaults?.hide,
+    Object.entries(section.itemOverrides ?? {}).flatMap(([id, item]) =>
+      item.hide === undefined ? [] : [[id, item.hide]],
+    ),
+  ]);
   const childrenOnly =
-    section.type === "subsessions" || section.source?.scope === "children";
+    (section.source?.type ?? section.type) === "subsessions" ||
+    section.source?.scope === "children";
   const currentOnly = section.source?.scope === "session";
-  // biome-ignore lint/correctness/useExhaustiveDependencies: sourceKey includes the complete source definition; presentation changes retain the shared store.
-  return useMemo(() => {
-    const key = JSON.stringify([
-      projectId,
-      childrenOnly || currentOnly ? sessionId : null,
-      childrenOnly,
-      currentOnly,
-      sourceKey,
-    ]);
+  const key = JSON.stringify([
+    projectId,
+    childrenOnly || currentOnly ? sessionId : null,
+    childrenOnly,
+    currentOnly,
+    sourceKey,
+  ]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: key includes every source option; presentation changes keep the store.
+  const collection = useMemo(() => {
     const cache =
       stores.get(client) ?? new Map<string, Collection<SessionTreeItem>>();
     stores.set(client, cache);
     const existing = cache.get(key);
     if (existing) return existing;
     const parents = new Set<string | null>();
+    const load = async ({
+      parentId,
+      cursor,
+      signal,
+    }: {
+      parentId: string | null;
+      cursor?: string;
+      signal: AbortSignal;
+    }) => {
+      parents.add(parentId);
+      if ((childrenOnly || currentOnly) && !sessionId) return { items: [] };
+      if (currentOnly && parentId === null && sessionId) {
+        const response = await apiClient.GET(
+          "/api/projects/{projectId}/agent/sessions/{sessionId}",
+          {
+            params: { path: { projectId, sessionId } },
+            signal,
+          },
+        );
+        if (!response.data)
+          throw new Error(response.error?.error ?? "Could not read session");
+        return {
+          items: projectSidebarItems([response.data], section)
+            .filter(
+              (item) => !sidebarItemPresentation({ section, id: item.id }).hide,
+            )
+            .map((item) => ({
+              ...item,
+              parentId: null,
+              hasChildren: Boolean(item.childCount),
+            })),
+        };
+      }
+      const limit = section.source?.pageSize ?? 50;
+      let offset = cursor ? Number(cursor) : 0;
+      for (;;) {
+        const parent = parentId ?? (childrenOnly ? sessionId : undefined);
+        const page = await readSidebarSessionPage({
+          apiClient,
+          client,
+          projectId,
+          signal,
+          query: {
+            limit,
+            offset,
+            ...(!childrenOnly && !section.source?.includeLatent
+              ? { visibility: "promoted" }
+              : {}),
+            ...(parent ? { parentSessionId: parent } : { rootsOnly: "true" }),
+          },
+        });
+        const items = projectSidebarItems(page.items, section)
+          .filter(
+            (session) =>
+              !sidebarItemPresentation({ section, id: session.id }).hide &&
+              session.visibility !== "archived" &&
+              (childrenOnly ||
+                section.source?.includeLatent ||
+                session.visibility === "promoted"),
+          )
+          .map((session) => ({
+            ...session,
+            parentId,
+            hasChildren: Boolean(session.childCount),
+          }));
+        offset += page.items.length;
+        const next = offset < page.total ? String(offset) : undefined;
+        if (items.length || !next || !page.items.length)
+          return { items, cursor: next };
+      }
+    };
     const collection = createCollection<SessionTreeItem>({
-      structureKey: (session) =>
-        JSON.stringify([
-          section.source?.groupBy
-            ? Object.entries(session).find(
-                ([field]) => field === section.source?.groupBy,
-              )?.[1]
-            : undefined,
-        ]),
       source: {
-        load: async ({ parentId, cursor, signal }) => {
-          parents.add(parentId);
-          if ((childrenOnly || currentOnly) && !sessionId) return { items: [] };
-          if (currentOnly && parentId === null && sessionId) {
-            const response = await apiClient.GET(
-              "/api/projects/{projectId}/agent/sessions/{sessionId}",
-              { params: { path: { projectId, sessionId } }, signal },
-            );
-            if (!response.data)
-              throw new Error(
-                response.error?.error ?? "Could not read session",
-              );
-            return {
-              items: [{ ...response.data, parentId: null, hasChildren: true }],
-            };
-          }
-          const limit = section.source?.pageSize ?? 50;
-          let offset = cursor ? Number(cursor) : 0;
-          for (;;) {
-            const parent = parentId ?? (childrenOnly ? sessionId : undefined);
-            const response = await apiClient.GET(
-              "/api/projects/{projectId}/agent/sessions",
-              {
-                params: {
-                  path: { projectId },
-                  query: {
-                    limit,
-                    offset,
-                    ...(!childrenOnly && !section.source?.includeLatent
-                      ? { visibility: "promoted" as const }
-                      : {}),
-                    ...(parent
-                      ? { parentSessionId: parent }
-                      : { rootsOnly: "true" }),
-                  },
-                },
-                signal,
-              },
-            );
-            if (!response.data)
-              throw new Error(
-                response.error?.error ?? "Could not load sessions",
-              );
-            const items = projectSidebarItems(response.data.items, section)
-              .filter(
-                (session) =>
-                  session.visibility !== "archived" &&
-                  (childrenOnly ||
-                    section.source?.includeLatent ||
-                    session.visibility === "promoted"),
-              )
-              .map((session) => ({
-                ...session,
-                parentId,
-                hasChildren: (session.childCount ?? 0) > 0,
-              }));
-            offset += response.data.items.length;
-            const next =
-              offset < response.data.total ? String(offset) : undefined;
-            if (items.length || !next || response.data.items.length === 0)
-              return { items, cursor: next };
-          }
-        },
+        load,
         subscribe: (publish) =>
           subscribeSidebarSessions({
             client,
@@ -191,19 +271,17 @@ export function useSidebarSessions({
       },
     });
     cache.set(key, collection);
-    // Bounded retained snapshots; active views retain their store independently.
     if (cache.size > 100) {
       const oldest = [...cache].find(([, entry]) => !entry.isAcquired())?.[0];
       if (oldest) cache.delete(oldest);
     }
     return collection;
-  }, [
-    apiClient,
-    client,
-    projectId,
-    sessionId,
-    childrenOnly,
-    currentOnly,
-    sourceKey,
-  ]);
+  }, [apiClient, client, key]);
+  const { root } = useCollection({
+    collection,
+    active: relevant && !visible,
+    mode: "preview",
+    projected: true,
+  });
+  return { collection, root };
 }

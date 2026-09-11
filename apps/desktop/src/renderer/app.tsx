@@ -1,8 +1,4 @@
-import {
-  CollectionTree,
-  useCollection,
-  useItemActions,
-} from "@catamorphic/app/ui";
+import { CollectionTree, useItemActions } from "@catamorphic/app/ui";
 import {
   useAcknowledgeAgentSessionAttention,
   useAgentSessions,
@@ -6863,6 +6859,10 @@ function SidebarSection({
     setOpen(defaultOpen);
     if (defaultOpen) setVisited(true);
   }, [defaultOpen]);
+  const content =
+    typeof children === "function"
+      ? (keepMounted || visited || open) && children(open)
+      : children;
   return (
     <section className="sidebar-section pb-2">
       <div className="flex items-center">
@@ -6927,9 +6927,15 @@ function SidebarSection({
         </p>
       )}
       <Collapsible open={open}>
-        {typeof children === "function"
-          ? (keepMounted || visited || open) && children(open)
-          : children}
+        {contribution ? (
+          <SidebarContribution
+            value={{ ...contribution, visible: contribution.visible && open }}
+          >
+            {content}
+          </SidebarContribution>
+        ) : (
+          content
+        )}
       </Collapsible>
     </section>
   );
@@ -7065,31 +7071,31 @@ function SessionsNav({
   onSessionAction: (sessionId: string, action: ChatSessionAction) => void;
 }) {
   const contribution = useSidebarContribution();
-  const collection = useSidebarSessions({
+  const visible = contribution?.visible ?? true;
+  const { collection, root } = useSidebarSessions({
     projectId,
     sessionId: contribution?.surface.sessionId,
     section: contribution?.section ?? { id: "chats", type: "chats" },
+    visible,
+    relevant: contribution?.relevant ?? true,
   });
   useSidebarRefresh(collection.load);
-  const { root } = useCollection({
-    collection,
-    active: contribution?.relevant ?? true,
-  });
+  const contentStatus = root.status;
+  const contentIds = root.ids;
+  const count = contentIds.filter(
+    (id) =>
+      !sidebarItemPresentation({ section: contribution?.section, id }).hide,
+  ).length;
   useSidebarContent(
-    root.status === "error"
+    contentStatus === "error"
       ? "error"
-      : root.status === "idle" || root.status === "loading"
+      : contentStatus === "idle" || contentStatus === "loading"
         ? "loading"
-        : root.ids.length
+        : count
           ? "ready"
           : "empty",
   );
-  useSidebarItemCount(
-    root.ids.filter(
-      (id) =>
-        !sidebarItemPresentation({ section: contribution?.section, id }).hide,
-    ).length,
-  );
+  useSidebarItemCount(count);
   const checkoutQuery = useQuery({
     queryKey: ["desktop", "session-checkouts", projectId],
     queryFn: () => desktopApi.sessionCheckouts(projectId),
@@ -7139,7 +7145,7 @@ function SessionsNav({
             }).hide,
         )
       }
-      active={false}
+      active={visible}
       selectedId={activeSessionId}
       rowHeight={contribution?.section.rowHeight}
       label={contribution?.section.title ?? "Chats"}

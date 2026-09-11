@@ -12,7 +12,13 @@ const mocks = vi.hoisted(() => ({
   session: vi.fn(),
   listen: vi.fn((_options: { listener: () => void }) => () => {}),
   query: {
-    fetchQuery: vi.fn(),
+    fetchQuery: vi.fn(
+      async ({
+        queryFn,
+      }: {
+        queryFn: (context: { signal: AbortSignal }) => Promise<unknown>;
+      }) => queryFn({ signal: new AbortController().signal }),
+    ),
     getQueryCache: () => ({ subscribe: () => () => {} }),
   },
 }));
@@ -20,7 +26,8 @@ vi.mock("@catamorphic/react", () => ({
   useCatamorphic: () => ({ apiClient: mocks }),
 }));
 vi.mock("@tanstack/react-query", () => ({ useQueryClient: () => mocks.query }));
-vi.mock("./sidebar-sessions.js", () => ({
+vi.mock("./sidebar-sessions.js", async (original) => ({
+  ...(await original<typeof import("./sidebar-sessions.js")>()),
   subscribeSidebarSessions: mocks.listen,
 }));
 vi.mock("../components/files-nav.js", () => ({

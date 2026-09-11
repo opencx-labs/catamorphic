@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   supportedCommands: vi.fn(),
   close: vi.fn(),
+  return: vi.fn(),
   query: vi.fn(),
 }));
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({ query: mocks.query }));
@@ -17,6 +18,7 @@ const setup = () =>
   mocks.query.mockReturnValue({
     supportedCommands: mocks.supportedCommands,
     close: mocks.close,
+    return: mocks.return,
   });
 it("uses session settings and plugins, closes discovery without a model prompt", async () => {
   setup();
@@ -39,7 +41,7 @@ it("uses session settings and plugins, closes discovery without a model prompt",
     persistSession: false,
     env: { CLAUDE_CONFIG_DIR: "/account" },
   });
-  expect(mocks.close).toHaveBeenCalled();
+  expect(mocks.return).toHaveBeenCalled();
 });
 it("bounds a hung supportedCommands call even when the SDK ignores abort", async () => {
   vi.useFakeTimers();
@@ -51,6 +53,7 @@ it("bounds a hung supportedCommands call even when the SDK ignores abort", async
   await vi.advanceTimersByTimeAsync(20);
   await result;
   expect(mocks.close).toHaveBeenCalled();
+  expect(mocks.return).toHaveBeenCalled();
 });
 it("propagates discovery failures and still closes the subprocess", async () => {
   setup();
@@ -58,5 +61,23 @@ it("propagates discovery failures and still closes the subprocess", async () => 
   await expect(
     listClaudeSlashCommands({ workingDirectory: "/checkout" }),
   ).rejects.toThrow("broken");
-  expect(mocks.close).toHaveBeenCalled();
+  expect(mocks.return).toHaveBeenCalled();
+});
+
+it("does not finish discovery while subprocess cleanup is pending", async () => {
+  setup();
+  mocks.supportedCommands.mockResolvedValue([]);
+  let releaseCleanup = () => {};
+  const cleanup = new Promise<void>((resolve) => {
+    releaseCleanup = resolve;
+  });
+  mocks.return.mockReturnValueOnce(cleanup);
+  const finished = vi.fn();
+  const discovery = listClaudeSlashCommands({ workingDirectory: "/checkout" });
+  void discovery.then(finished);
+  await vi.waitFor(() => expect(mocks.return).toHaveBeenCalled());
+  expect(finished).not.toHaveBeenCalled();
+  releaseCleanup();
+  await discovery;
+  expect(finished).toHaveBeenCalledOnce();
 });

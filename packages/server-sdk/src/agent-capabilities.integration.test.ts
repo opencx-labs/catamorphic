@@ -40,6 +40,12 @@ let revokeOnStart = false;
 let dynamicVisible = true;
 let dynamicRevision = 1;
 let revokeDynamicDuringApproval = false;
+let dynamicPolicy: "allow" | "ask" = "allow";
+let dynamicConsentChecks = 0;
+let rememberConsent = false;
+let tightenPolicyAt: "host" | "capability" | "started" | undefined;
+let replaceOnStart = false;
+let executionTarget = "original";
 const events: string[] = [];
 const alice: Identity = {
   tenantId: crypto.randomUUID(),
@@ -47,11 +53,15 @@ const alice: Identity = {
 };
 const options: AgentCapabilityOptions = {
   sources: [
-    (_context, selection) =>
-      selection.name && !selection.name.startsWith("dynamic.")
+    (_context, selection) => {
+      const policy = dynamicPolicy;
+      const target = executionTarget;
+      return selection.name && !selection.name.startsWith("dynamic.")
         ? []
         : [
             defineAgentCapability({
+              revision: target,
+              consent: policy === "ask" ? "ask-policy" : undefined,
               name: "dynamic.live",
               description: "A session-specific host operation",
               effect: "write",
@@ -62,6 +72,11 @@ const options: AgentCapabilityOptions = {
               }),
               authorize: () => dynamicVisible,
               beforeInvoke: async () => {
+                if (policy === "ask") {
+                  dynamicConsentChecks++;
+                  if (rememberConsent) dynamicPolicy = "allow";
+                }
+                if (tightenPolicyAt === "capability") dynamicPolicy = "ask";
                 dynamicRevision++;
                 if (revokeDynamicDuringApproval) dynamicVisible = false;
               },
@@ -70,7 +85,8 @@ const options: AgentCapabilityOptions = {
                 return { revision: dynamicRevision, value: input.value };
               },
             }),
-          ],
+          ];
+    },
   ],
   currentUser: async () => ({
     displayName: "Alice",
@@ -79,17 +95,21 @@ const options: AgentCapabilityOptions = {
   }),
   beforeInvoke: async ({ input }) => {
     approvedInput = input;
+    if (tightenPolicyAt === "host") dynamicPolicy = "ask";
     if (revokeDuringApproval) permitted = false;
   },
   onEvent: (event) => {
     events.push(event.type);
     if (event.type === "started") {
+      if (tightenPolicyAt === "started") dynamicPolicy = "ask";
+      if (replaceOnStart) executionTarget = "replacement";
       cancelOnStart?.abort();
       if (revokeOnStart) permitted = false;
     }
   },
   capabilities: [
     defineAgentCapability({
+      revision: "1",
       name: "test.normalize",
       description: "Normalize input once before approval and execution",
       effect: "read",
@@ -104,6 +124,7 @@ const options: AgentCapabilityOptions = {
       execute: async (_context, input) => input,
     }),
     defineAgentCapability({
+      revision: "1",
       name: "test.output",
       description: "Return test output for the wire limit",
       effect: "read",
@@ -113,6 +134,7 @@ const options: AgentCapabilityOptions = {
       execute: async () => outputText,
     }),
     defineAgentCapability({
+      revision: "1",
       name: "people.search",
       description: "Search the permitted project directory",
       effect: "read",
@@ -247,6 +269,12 @@ beforeEach(() => {
   dynamicVisible = true;
   dynamicRevision = 1;
   revokeDynamicDuringApproval = false;
+  dynamicPolicy = "allow";
+  dynamicConsentChecks = 0;
+  rememberConsent = false;
+  tightenPolicyAt = undefined;
+  replaceOnStart = false;
+  executionTarget = "original";
 });
 
 it("re-resolves dynamic entries after their own approval and never executes a revoked operation", async () => {
@@ -272,6 +300,56 @@ it("re-resolves dynamic entries after their own approval and never executes a re
   ).rejects.toThrow();
   expect(executions).toBe(1);
   expect((await gateway.discover({ query: "dynamic" })).items).toEqual([]);
+});
+
+it.each(["host", "capability", "started"] as const)(
+  "does not transfer approval when policy tightens in the %s hook",
+  async (stage) => {
+    tightenPolicyAt = stage;
+    await expect(
+      gateway.invoke({
+        name: "dynamic.live",
+        input: { value: 7 },
+        requestId: "stale-consent",
+      }),
+    ).rejects.toThrow("consent policy changed");
+    expect(executions).toBe(0);
+    expect(dynamicConsentChecks).toBe(0);
+
+    tightenPolicyAt = undefined;
+    await gateway.invoke({
+      name: "dynamic.live",
+      input: { value: 7 },
+      requestId: "fresh-consent",
+    });
+    expect(dynamicConsentChecks).toBe(1);
+    expect(executions).toBe(1);
+  },
+);
+
+it("completes an approved request when remembered consent removes the requirement", async () => {
+  dynamicPolicy = "ask";
+  rememberConsent = true;
+  await gateway.invoke({
+    name: "dynamic.live",
+    input: { value: 7 },
+    requestId: "remembered",
+  });
+  expect(dynamicConsentChecks).toBe(1);
+  expect(executions).toBe(1);
+  expect(dynamicPolicy).toBe("allow");
+});
+
+it("rejects a replacement execution target with the same name and schema", async () => {
+  replaceOnStart = true;
+  await expect(
+    gateway.invoke({
+      name: "dynamic.live",
+      input: { value: 7 },
+      requestId: "replacement",
+    }),
+  ).rejects.toThrow("definition or consent policy changed");
+  expect(executions).toBe(0);
 });
 
 it("keeps context small and excludes other users, credentials, and permission lists", async () => {

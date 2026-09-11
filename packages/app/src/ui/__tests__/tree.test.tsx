@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { type CollectionPage, createCollection } from "../../collection.js";
 import { CollectionItemView } from "../collection-item.js";
@@ -168,4 +174,89 @@ describe("public collection presentation", () => {
     );
     expect(document.activeElement).toBe(screen.getByRole("textbox"));
   });
+});
+
+it("reorders loaded siblings when a sort field changes across pages", async () => {
+  let title = "D";
+  const collection = createCollection({
+    source: {
+      load: async ({ cursor }) =>
+        cursor
+          ? {
+              items: [
+                { id: "c", title: "C" },
+                { id: "d", title: "E" },
+              ],
+            }
+          : {
+              items: [
+                { id: "a", title: "A" },
+                { id: "b", title },
+              ],
+              cursor: "2",
+            },
+    },
+  });
+  render(
+    <CollectionTree
+      collection={collection}
+      label="Sorted"
+      project={(items) =>
+        [...items].sort((a, b) => a.title.localeCompare(b.title))
+      }
+      renderItem={(item) => <span>{item.title}</span>}
+    />,
+  );
+  await screen.findByText("A");
+  await act(() => collection.load({ more: true }));
+  const labels = () =>
+    screen.getAllByRole("treeitem").map((row) => row.textContent);
+  await waitFor(() => expect(labels()).toEqual(["A", "C", "D", "E"]));
+  title = "B";
+  await act(() => collection.load());
+  await waitFor(() => expect(labels()).toEqual(["A", "B", "C", "E"]));
+});
+
+it("releases descendants of a collapsed group and resumes them when reopened", async () => {
+  const children: AbortSignal[] = [];
+  const collection = createCollection<{
+    id: string;
+    hasChildren?: boolean;
+    team: string;
+  }>({
+    source: {
+      load: async ({ parentId, signal }) => {
+        if (!parentId)
+          return { items: [{ id: "parent", team: "Team", hasChildren: true }] };
+        children.push(signal);
+        return new Promise(() => {});
+      },
+    },
+  });
+  render(
+    <CollectionTree
+      collection={collection}
+      label="Grouped"
+      groupBy={(item) => item.team}
+      renderItem={(item, context) => (
+        <button type="button" onClick={context.toggle}>
+          {item.id}
+        </button>
+      )}
+    />,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Expand Team" }));
+  const parent = await screen.findByRole("button", { name: "parent" });
+  await act(async () => {
+    fireEvent.click(parent);
+  });
+  expect(children).toHaveLength(1);
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Collapse Team" }));
+  });
+  expect(children[0]?.aborted).toBe(true);
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Expand Team" }));
+  });
+  expect(children).toHaveLength(2);
 });

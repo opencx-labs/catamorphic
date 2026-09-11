@@ -81,6 +81,10 @@ live {mode,visible,surface}; unsubscribe in effect cleanup and pause expensive w
 when hidden. reportContentState("loading"|"empty"|"ready"|"error"|"unavailable")
 controls availability without unmounting the app. An app that reports empty must
 retain a lightweight subscription so it can report ready when content arrives.
+Pass display.visible to CollectionTree.active; the tree owns root and expanded
+branch leases. For hidden availability, useCollection({collection,active:!display.visible,mode:"preview"})
+refreshes only the first root page. The same hook observes content while the
+visible tree owns full-depth leases. Never expand branches in preview mode.
 For custom live data use createCollection({source:{load,subscribe}}). load receives
 {parentId,cursor,signal} and returns {items,cursor?}. subscribe publishes upsert,
 remove or invalidate changes and returns cleanup. Identity is stable; never use
