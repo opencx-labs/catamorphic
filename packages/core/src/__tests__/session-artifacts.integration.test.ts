@@ -208,6 +208,17 @@ suite("session artifact source lifecycle", () => {
         artifact.sourcePath
       ],
     ).toBe(source);
+    await artifacts.discard(address);
+    await artifacts.cleanup();
+    await remote.withOrigin(identity.tenantId, projectId, async (origin) => {
+      expect(
+        await origin.resolveRef(`refs/heads/${originalBranch}`),
+      ).toBeNull();
+      expect(
+        await origin.resolveRef(`refs/heads/${updated.remoteBranch}`),
+      ).toBeNull();
+      expect(await origin.resolveRef("refs/heads/main")).not.toBeNull();
+    });
   });
 
   it("rolls back a revision when buffered remote publication fails, then recovers", async () => {
@@ -363,14 +374,19 @@ suite("session artifact source lifecycle", () => {
           files: { [artifact.sourcePath]: source.replace("First", "Late") },
         }),
       ).rejects.toThrow("unavailable");
+      const inventory = () =>
+        manager.remoteBackend!.withOrigin(
+          identity.tenantId,
+          projectId,
+          (origin) => origin.listRefs("refs/heads/"),
+        );
+      const prefix = `refs/heads/catamorphic/artifacts/${artifact.id}`;
+      const before = await inventory();
+      expect(before.some(({ ref }) => ref === `${prefix}-late`)).toBe(true);
       await artifacts.cleanup();
-      const refs = await manager.remoteBackend!.withOrigin(
-        identity.tenantId,
-        projectId,
-        (origin) =>
-          origin.listRefs(`refs/heads/catamorphic/artifacts/${artifact.id}`),
-      );
-      expect(refs).toEqual([]);
+      const refs = await inventory();
+      expect(refs.filter(({ ref }) => ref.startsWith(prefix))).toEqual([]);
+      expect(refs).toEqual(before.filter(({ ref }) => !ref.startsWith(prefix)));
     } finally {
       afterPublication = undefined;
     }

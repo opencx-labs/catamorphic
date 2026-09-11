@@ -454,7 +454,12 @@ export class SessionArtifactsService {
           row.project_id,
           async (origin) => {
             const prefix = `refs/heads/catamorphic/artifacts/${row.id}`;
-            const refs = await origin.listRefs(prefix);
+            // Backends support listing the heads namespace, not arbitrary
+            // string prefixes. Filter locally so flat candidate refs are found
+            // consistently in filesystem, checkout and object-store origins.
+            const refs = (await origin.listRefs("refs/heads/")).filter(
+              ({ ref }) => ref === prefix || ref.startsWith(`${prefix}-`),
+            );
             // Include the recorded ref as well as unaccepted crash candidates.
             for (const ref of new Set([
               `refs/heads/${row.remote_branch}`,
