@@ -156,7 +156,9 @@ describe("dock modes", () => {
         windowFocused: document.hasFocus(),
         inert: !!composer()?.closest('[inert]'),
       };`);
-      throw new Error(`${String(error)}; focus state: ${JSON.stringify(focus)}`);
+      throw new Error(
+        `${String(error)}; focus state: ${JSON.stringify(focus)}`,
+      );
     });
     await run(`setComposer(''); return true;`);
     await runWait(
