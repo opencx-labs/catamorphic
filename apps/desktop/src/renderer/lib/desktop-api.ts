@@ -401,16 +401,31 @@ export interface OpenRouterCatalog {
   bestFreeModelId: string | null;
 }
 
+export interface PasswordImportSupport {
+  available: boolean;
+  reason: string | null;
+}
+
+export interface NativePasswordImportResult {
+  imported: number;
+  existing: number;
+  invalid: number;
+  failed: number;
+  cancelled: boolean;
+}
+
 export interface ImportableProfile {
   id: string;
   name: string;
   bookmarkCount: number;
+  hasPasswords?: boolean;
 }
 
 export interface ImportableBrowser {
   id: string;
   label: string;
   profiles: ImportableProfile[];
+  supportsPasswordImport?: boolean;
 }
 
 export interface BrowserImportRequest {
@@ -1008,6 +1023,11 @@ export interface CatamorphicDesktopApi {
   ) => Promise<Record<string, unknown>>;
 
   openrouterModels: () => Promise<OpenRouterCatalog>;
+  browserImportSupport: () => Promise<PasswordImportSupport>;
+  browserImportNativePasswords: (input: {
+    browserId: string;
+    profileId: string;
+  }) => Promise<NativePasswordImportResult>;
   browserImportList: () => Promise<ImportableBrowser[]>;
   browserImportRun: (
     input: BrowserImportRequest,

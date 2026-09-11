@@ -370,3 +370,11 @@ Markdown hover previews use the app's rendered reading typography. Composer
 surface chips and expanded group members use the shared resource inspector;
 collapsed groups lead with their plural type and a separate count. Preview
 content and behavior follow [chat state](docs/chat-state.md).
+
+### 2026-09-11: Direct browser password imports on macOS
+
+Profile settings offers direct password import per detected browser profile on
+supported Macs, beside bookmark import. The action explains macOS authorization,
+shows progress and added/skipped counts, and preserves existing passwords.
+Other platforms retain CSV with a clear macOS support note. A prebuilt helper
+ships only in macOS packages; see ADR 0130.

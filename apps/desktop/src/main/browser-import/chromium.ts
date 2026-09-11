@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type {
   BrowserImporter,
+  BrowserPasswordSource,
   ImportableBrowser,
   ImportableProfile,
   ImportedBookmark,
@@ -32,6 +33,9 @@ export interface ChromiumImporterOptions {
   win32Dir?: string;
   /** Absolute path override for tests / portable installs. */
   baseDirOverride?: string;
+  /** macOS Safe Storage identity, queried only after the user starts import. */
+  keychainService?: string;
+  keychainAccount?: string;
 }
 
 const EMPTY: ImportedBookmarks = { folders: [], bookmarks: [] };
@@ -91,10 +95,11 @@ function profilesFromScan(
     return [];
   }
   const profiles: Array<{ id: string; name: string }> = [];
+  if (hasProfileData(baseDir)) profiles.push({ id: ".", name: "Default" });
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     try {
-      if (fs.existsSync(path.join(baseDir, entry.name, "Bookmarks"))) {
+      if (hasProfileData(path.join(baseDir, entry.name))) {
         profiles.push({ id: entry.name, name: entry.name });
       }
     } catch {
@@ -102,6 +107,25 @@ function profilesFromScan(
     }
   }
   return profiles;
+}
+
+function hasProfileData(directory: string): boolean {
+  return ["Bookmarks", "Login Data", "Login Data For Account"].some((file) =>
+    fs.existsSync(path.join(directory, file)),
+  );
+}
+
+function profileDirectory(baseDir: string, profileId: string): string | null {
+  if (!profileId || profileId === ".." || /[/\\\0]/.test(profileId))
+    return null;
+  try {
+    const base = fs.realpathSync(baseDir);
+    const directory = fs.realpathSync(path.join(baseDir, profileId));
+    if (directory !== base && path.dirname(directory) !== base) return null;
+    return directory;
+  } catch {
+    return null;
+  }
 }
 
 function isHttpUrl(url: string): boolean {
@@ -184,13 +208,36 @@ export function chromiumImporter(
   const readBookmarks = (profileId: string): ImportedBookmarks => {
     const baseDir = resolveBaseDir(options);
     if (!baseDir) return EMPTY;
-    // Refuse path-traversal-ish profile ids; they can only come from us.
-    if (profileId.includes("/") || profileId.includes("\\")) return EMPTY;
+    const directory = profileDirectory(baseDir, profileId);
+    if (!directory) return EMPTY;
     try {
-      return readBookmarksFile(path.join(baseDir, profileId, "Bookmarks"));
+      return readBookmarksFile(path.join(directory, "Bookmarks"));
     } catch {
       return EMPTY;
     }
+  };
+
+  const passwordSource = (profileId: string): BrowserPasswordSource | null => {
+    if (!options.keychainService || !options.keychainAccount) return null;
+    const baseDir = resolveBaseDir(options);
+    const directory = baseDir && profileDirectory(baseDir, profileId);
+    if (!directory) return null;
+    const files = ["Login Data", "Login Data For Account"]
+      .map((name) => path.join(directory, name))
+      .filter((file) => {
+        try {
+          return fs.lstatSync(file).isFile();
+        } catch {
+          return false;
+        }
+      });
+    return files.length
+      ? {
+          files,
+          keychainService: options.keychainService,
+          keychainAccount: options.keychainAccount,
+        }
+      : null;
   };
 
   return {
@@ -207,14 +254,27 @@ export function chromiumImporter(
       }
       const found =
         profilesFromLocalState(baseDir) ?? profilesFromScan(baseDir);
+      // Opera can store its default profile directly under the browser root.
+      if (hasProfileData(baseDir) && !found.some(({ id }) => id === ".")) {
+        found.unshift({ id: ".", name: "Default" });
+      }
       const profiles: ImportableProfile[] = found.map(({ id, name }) => ({
         id,
         name,
         bookmarkCount: readBookmarks(id).bookmarks.length,
+        ...(options.keychainService
+          ? { hasPasswords: passwordSource(id) !== null }
+          : {}),
       }));
-      return { id: options.id, label: options.label, profiles };
+      return {
+        id: options.id,
+        label: options.label,
+        profiles,
+        ...(options.keychainService ? { supportsPasswordImport: true } : {}),
+      };
     },
 
     readBookmarks,
+    passwordSource,
   };
 }

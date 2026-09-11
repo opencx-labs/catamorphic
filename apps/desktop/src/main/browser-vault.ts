@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { safeStorage, systemPreferences } from "electron";
@@ -164,7 +164,13 @@ export class PasswordVault {
 
   private async persist(vault: OpenVault): Promise<void> {
     const data = await vault.db.save();
-    fs.writeFileSync(vault.file, Buffer.from(data));
+    const temporary = `${vault.file}.${randomUUID()}.tmp`;
+    try {
+      fs.writeFileSync(temporary, Buffer.from(data), { mode: 0o600 });
+      fs.renameSync(temporary, vault.file);
+    } finally {
+      fs.rmSync(temporary, { force: true });
+    }
   }
 
   /**
@@ -254,6 +260,54 @@ export class PasswordVault {
       username: this.fieldText(entry, "UserName"),
       password: this.fieldText(entry, "Password"),
     };
+  }
+
+  /** Import in one write, preserving accounts added or edited during Keychain auth. */
+  async importMissing({
+    profileId,
+    credentials,
+  }: {
+    profileId: string;
+    credentials: Array<{ origin: string; username: string; password: string }>;
+  }): Promise<{ imported: number; existing: number }> {
+    const vault = await this.unlock(profileId);
+    const identities = new Set(
+      this.entries(vault.db).map((entry) =>
+        JSON.stringify([
+          this.originOf(entry),
+          this.fieldText(entry, "UserName"),
+        ]),
+      ),
+    );
+    const group = vault.db.getDefaultGroup();
+    const created: kdbx.KdbxEntry[] = [];
+    let existing = 0;
+    try {
+      for (const input of credentials) {
+        const origin = normalizeCredentialOrigin(input.origin);
+        const identity = JSON.stringify([origin, input.username]);
+        if (identities.has(identity)) {
+          existing++;
+          continue;
+        }
+        const entry = vault.db.createEntry(group);
+        created.push(entry);
+        entry.fields.set("Title", new URL(origin).host);
+        entry.fields.set("URL", origin);
+        entry.fields.set("UserName", input.username);
+        entry.fields.set(
+          "Password",
+          kdbx.ProtectedValue.fromString(input.password),
+        );
+        entry.times.update();
+        identities.add(identity);
+      }
+      if (created.length) await this.persist(vault);
+      return { imported: created.length, existing };
+    } catch (error) {
+      group.entries = group.entries.filter((entry) => !created.includes(entry));
+      throw error;
+    }
   }
 
   /** Create or update (same origin+username ⇒ update), Chrome-style. */
