@@ -52,7 +52,7 @@ jobs:
     name: Plan test shards
     needs: access
     if: needs.access.outputs.allowed == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
       workspace: ${{ steps.plan.outputs.workspace }}
@@ -97,7 +97,7 @@ jobs:
   pwa:
     needs: access
     if: needs.access.outputs.allowed == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -110,7 +110,7 @@ jobs:
   desktop-linux:
     needs: [access, shards]
     if: needs.access.outputs.allowed == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
       fail-fast: false

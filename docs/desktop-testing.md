@@ -32,8 +32,8 @@ The same tests run across independent jobs:
 | --- | --- | --- |
 | Validation | 1 Blacksmith Ubuntu, 8 vCPU | Lint, types, builds, schema sync, root tests |
 | Workspace tests | Auto: 1 per 100 files, up to 16 Blacksmith Ubuntu, 8 vCPU | Vitest file shards, one disposable Postgres per job |
-| PWA | 1 Blacksmith Ubuntu, 4 vCPU | Headless Chromium |
-| Desktop Linux | Auto: 1 per 5 files, up to 32 Blacksmith Ubuntu, 4 vCPU | One private Xvfb + Openbox display per shard |
+| PWA | 1 Blacksmith Ubuntu, 8 vCPU | Headless Chromium |
+| Desktop Linux | Auto: 1 per 5 files, up to 32 Blacksmith Ubuntu, 8 vCPU | One private Xvfb + Openbox display per shard |
 | Desktop macOS | Auto: 1 per 10 files, up to 16 GitHub-hosted macOS runners | One native desktop per shard |
 
 A short planning job runs Vitest file discovery against each workspace's config
