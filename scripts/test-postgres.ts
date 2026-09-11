@@ -75,7 +75,8 @@ export function dockerPostgresRunArgs(input: { name: string }): string[] {
     "5s",
     "--health-retries",
     "240",
-    "postgres:17",
+    // Pin the fixture bytes: successful test hashes include this script.
+    "postgres:17@sha256:e38411452a464af89e5adadb8d223bf53b898d47d6ef918b2d58c08707350449",
     "-c",
     "max_connections=300",
   ];
@@ -99,6 +100,8 @@ export function deterministicTestEnvironment(
     DATABASE_URL: databaseUrl,
   };
   delete environment.CATAMORPHIC_DB_SCHEMA;
+  // A public full run must not inherit a CI shard from its caller.
+  delete environment.CATAMORPHIC_TEST_SHARD;
   for (const variable of EXTERNAL_TEST_VARIABLES) {
     delete environment[variable];
   }

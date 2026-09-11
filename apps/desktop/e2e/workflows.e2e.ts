@@ -71,11 +71,9 @@ describe("workflow authoring", { retry: 0 }, () => {
 
     // Fixture writes happen outside the app's query cache. Reload once before
     // beginning the interaction checks, just as a fresh workspace opens.
-    await run(
-      `window.workflowBeforeReload = true; location.reload(); return true;`,
-    );
+    await app.reload();
     await wait(
-      `return !window.workflowBeforeReload && document.readyState === "complete";`,
+      `return document.readyState === "complete";`,
       "fresh workspace after fixture reload",
     );
     await wait(
@@ -244,11 +242,9 @@ describe("workflow authoring", { retry: 0 }, () => {
       `window.catamorphicDesktop.workspaceStateGet('${projectId}').then(state=>state?.tabs?.some(tab=>tab.workflowDraft?.code.includes('Team report')))`,
       { label: "draft persisted in workspace" },
     );
-    await run(
-      `window.workflowBeforeReload=true; location.reload(); return true;`,
-    );
+    await app.reload();
     await wait(
-      `return !window.workflowBeforeReload && $('.workflow-header h1')?.textContent==='Team report' && !!button('Save') && !button('Save').disabled;`,
+      `return $('.workflow-header h1')?.textContent==='Team report' && !!button('Save') && !button('Save').disabled;`,
       "draft restored after reload",
     );
 

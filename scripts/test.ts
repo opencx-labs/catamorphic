@@ -170,7 +170,12 @@ export function testRunEnvironment(input: {
     TMP: input.resources.tempPath,
     TEMP: input.resources.tempPath,
     BUN_INSTALL_CACHE_DIR: input.resources.bunCachePath,
-    TURBO_CACHE_DIR: input.resources.turboCachePath,
+    // Hosted CI owns its checkout and can reuse successful tasks. Each
+    // invocation still owns its temporary files and disposable database.
+    TURBO_CACHE_DIR:
+      input.source.GITHUB_ACTIONS === "true"
+        ? (input.source.TURBO_CACHE_DIR ?? input.resources.turboCachePath)
+        : input.resources.turboCachePath,
     XDG_CACHE_HOME: input.resources.xdgCachePath,
     TURBO_TELEMETRY_DISABLED: "1",
   };
@@ -289,8 +294,8 @@ export function turboTestArguments(input: {
     "run",
     "test",
     "--no-daemon",
+    "--force",
     `--concurrency=${TURBO_CONCURRENCY}`,
-    ...input.cliArguments,
   ];
 }
 

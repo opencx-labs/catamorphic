@@ -17,7 +17,15 @@ import {
   SquareTerminal,
   Wrench,
 } from "lucide-react";
-import { memo, type ReactNode, useCallback, useEffect, useState } from "react";
+import {
+  createContext,
+  memo,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+} from "react";
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
@@ -26,6 +34,36 @@ import { ContextPill } from "../context-pill";
 import { ShortcutHint } from "../shortcut-hint";
 
 const REMARK_PLUGINS = [remarkGfm];
+
+// Stable component identity keeps focused links and host preview state alive.
+// Context updates callbacks without replacing the Markdown anchor component.
+const LinkContext = createContext<
+  Pick<ChatTimelineProps, "onLinkClick" | "renderLink">
+>({});
+function TimelineLink({
+  href,
+  children,
+}: {
+  href?: string;
+  children?: ReactNode;
+}) {
+  const { onLinkClick, renderLink } = useContext(LinkContext);
+  if (href && onLinkClick && renderLink)
+    return renderLink({ href, children, onOpen: onLinkClick });
+  return (
+    <a
+      href={href}
+      onClick={(event) => {
+        if (!onLinkClick || !href) return;
+        event.preventDefault();
+        onLinkClick(href, event);
+      }}
+    >
+      {children}
+    </a>
+  );
+}
+const LINK_COMPONENTS = { a: TimelineLink };
 
 export type ChatTextSourceView =
   | { type: "paste" }
@@ -644,40 +682,23 @@ function MessageImpl({
         </div>
       ) : (
         <div className="cat-markdown min-w-0 break-words leading-6">
-          <Markdown
-            remarkPlugins={REMARK_PLUGINS}
-            urlTransform={(url, key) =>
-              onLinkClick &&
-              key === "href" &&
-              /^(?:file|workflow|app|artifact|chat|browser|terminal|editor|diff|mcpapp):/i.test(
-                url,
-              )
-                ? url
-                : defaultUrlTransform(url)
-            }
-            components={
-              onLinkClick
-                ? {
-                    a: ({ href, children }) =>
-                      renderLink && href ? (
-                        renderLink({ href, children, onOpen: onLinkClick })
-                      ) : (
-                        <a
-                          href={href}
-                          onClick={(event) => {
-                            event.preventDefault();
-                            if (href) onLinkClick(href, event);
-                          }}
-                        >
-                          {children}
-                        </a>
-                      ),
-                  }
-                : undefined
-            }
-          >
-            {message.content}
-          </Markdown>
+          <LinkContext.Provider value={{ onLinkClick, renderLink }}>
+            <Markdown
+              remarkPlugins={REMARK_PLUGINS}
+              urlTransform={(url, key) =>
+                onLinkClick &&
+                key === "href" &&
+                /^(?:file|workflow|app|artifact|chat|browser|terminal|editor|diff|mcpapp):/i.test(
+                  url,
+                )
+                  ? url
+                  : defaultUrlTransform(url)
+              }
+              components={onLinkClick ? LINK_COMPONENTS : undefined}
+            >
+              {message.content}
+            </Markdown>
+          </LinkContext.Provider>
         </div>
       )}
     </article>

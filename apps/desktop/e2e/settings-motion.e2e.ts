@@ -17,7 +17,7 @@ beforeAll(async () => {
   await app.eval(
     `window.catamorphicDesktop.createProject({name:'Settings preview',rootPath:${JSON.stringify(`${app.userDataDir}/settings-preview`)}})`,
   );
-  await app.eval("location.reload()");
+  await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Settings preview')`);
   await run(`$('[aria-label="Settings"]').click()`);
   await app.waitFor(`!!document.querySelector('[data-settings-scroll]')`);

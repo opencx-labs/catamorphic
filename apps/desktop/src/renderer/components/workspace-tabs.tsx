@@ -1,4 +1,7 @@
 import { tabKey, type WorkspaceTab } from "../lib/workspace-types.js";
+import { useSidebarContent } from "./sidebar-contribution.js";
+import { SidebarItemRow } from "./sidebar-item-row.js";
+import { SidebarTree } from "./sidebar-tree.js";
 
 export {
   type DiffSource,
@@ -199,7 +202,191 @@ export interface TabGroup {
   collapsed: boolean;
 }
 
-export function WorkspaceTabBar({
+export function WorkspaceTabBar(props: Parameters<typeof TabStrip>[0]) {
+  return props.orientation === "vertical" ? (
+    <SidebarWorkspaceTabs {...props} />
+  ) : (
+    <TabStrip {...props} />
+  );
+}
+
+function SidebarWorkspaceTabs({
+  tabs,
+  activeKey,
+  secondaryKey,
+  highlightKey,
+  groups = [],
+  onSelect,
+  onClose,
+  onNew,
+  onToggleGroup,
+  onReorder,
+  onDragStateChange,
+}: Parameters<typeof TabStrip>[0]) {
+  const [dragged, setDragged] = useState<string>();
+  useSidebarContent(tabs.length ? "ready" : "empty");
+  const parents = new Map(
+    groups.flatMap((group) =>
+      group.memberKeys.map((key) => [key, group.parentKey] as const),
+    ),
+  );
+  const items = tabs.map((tab) => ({
+    ...tab,
+    id: tabKey(tab),
+    parentId: parents.get(tabKey(tab)),
+    hasChildren: groups.some((group) => group.parentKey === tabKey(tab)),
+    collapsed: groups.find((group) => group.parentKey === tabKey(tab))
+      ?.collapsed,
+  }));
+  return (
+    <div data-tab-orientation="vertical" className="app-no-drag min-w-0">
+      <SidebarTree
+        items={items}
+        selectedId={activeKey}
+        rowHeight={32}
+        label="Workspace tabs"
+        renderItem={(tab, tree) => {
+          const Icon = TAB_ICONS[tab.kind];
+          const group = groups.find((group) => group.parentKey === tab.id);
+          const toggle = () => {
+            if (group && onToggleGroup)
+              onToggleGroup(group.parentKey.slice("chat:".length));
+            tree.toggle();
+          };
+          return (
+            // biome-ignore lint/a11y/noStaticElementInteractions: drag target; row controls are keyboard reachable.
+            <div
+              data-point-key={tab.id}
+              data-palette-target={highlightKey === tab.id || undefined}
+              className="animate-sidebar-tab-in"
+              draggable={Boolean(onReorder)}
+              onDragStart={(event) => {
+                setDragged(tab.id);
+                onDragStateChange?.(tab.id);
+                event.dataTransfer.setData("text/plain", tab.id);
+                event.dataTransfer.setData(
+                  TAB_DRAG_TYPE,
+                  JSON.stringify({
+                    key: tab.id,
+                    kind: tab.kind,
+                    title: tab.label ?? tab.name,
+                    detail: tab.detail,
+                    bookmarkUrl: tab.bookmarkUrl,
+                  } satisfies TabDragPayload),
+                );
+                event.dataTransfer.effectAllowed = "copyMove";
+              }}
+              onDragOver={(event) => {
+                if (dragged && dragged !== tab.id) event.preventDefault();
+              }}
+              onDrop={(event) => {
+                if (dragged && dragged !== tab.id) {
+                  event.preventDefault();
+                  onReorder?.(dragged, tab.id);
+                }
+                setDragged(undefined);
+                onDragStateChange?.(null);
+              }}
+              onDragEnd={() => {
+                setDragged(undefined);
+                onDragStateChange?.(null);
+              }}
+            >
+              <SidebarItemRow
+                itemId={tab.id}
+                label={tab.label ?? tab.name}
+                style={{ marginLeft: tree.depth * 12 }}
+                active={activeKey === tab.id || secondaryKey === tab.id}
+                resource
+                disclosure={
+                  tree.hasChildren
+                    ? {
+                        open: group ? !group.collapsed : tree.expanded,
+                        onToggle: toggle,
+                      }
+                    : undefined
+                }
+                icon={
+                  <SignalGlyph
+                    working={tab.working ?? false}
+                    awaitingInput={tab.awaitingInput}
+                    className="size-3.5"
+                  >
+                    {tab.kind === "app" ? (
+                      <AppGlyph icon={tab.appIcon} className="size-3.5" />
+                    ) : tab.kind === "chat" ? (
+                      <ChatGlyph
+                        icon={tab.chatIcon}
+                        fork={tab.fork}
+                        className="size-3.5"
+                      />
+                    ) : tab.kind === "browser" && tab.faviconUrl ? (
+                      <img
+                        src={tab.faviconUrl}
+                        alt=""
+                        className="size-3.5 rounded"
+                      />
+                    ) : (
+                      <Icon className="size-3.5" />
+                    )}
+                  </SignalGlyph>
+                }
+                labelContent={<AnimatedTitle text={tab.label ?? tab.name} />}
+                end={
+                  <SignalBadge
+                    signals={{
+                      working: tab.working,
+                      attention: tab.attention,
+                      unread: tab.unread,
+                      draft: tab.draft,
+                      awaitingInput: tab.awaitingInput,
+                    }}
+                    size="sm"
+                  />
+                }
+                actions={[
+                  {
+                    action: "close",
+                    label: `Close ${tab.label ?? tab.name}`,
+                    icon: "X",
+                  },
+                ]}
+                defaultMenu={[
+                  {
+                    action: "close",
+                    label: `Close ${tab.label ?? tab.name}`,
+                    icon: "X",
+                  },
+                ]}
+                preview={{
+                  title: tab.label ?? tab.name,
+                  description: tab.detail,
+                  metadata: tabStatusLine(tab)
+                    ? [{ label: "Status", value: tabStatusLine(tab) ?? "" }]
+                    : undefined,
+                }}
+                onOpen={(mode) => onSelect(tab.id, mode)}
+                onAction={() => onClose(tab.id)}
+              />
+            </div>
+          );
+        }}
+      />
+      {onNew && (
+        <button
+          type="button"
+          aria-label="New tab"
+          className="sidebar-tab"
+          onClick={onNew}
+        >
+          <Plus className="size-3.5" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function TabStrip({
   orientation = "horizontal",
   alignment = "start",
   tabs,

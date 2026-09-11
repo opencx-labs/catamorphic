@@ -1,6 +1,6 @@
 # 0125: Canonical semantic app icons
 
-- **Status:** Accepted; permanent agent tool superseded by [0127](0127-lean-agent-tool-surface.md)
+- **Status:** Accepted; permanent agent tool superseded by [0133](0133-lean-agent-tool-surface.md)
 - **Date:** 2026-09-11
 
 ## Context

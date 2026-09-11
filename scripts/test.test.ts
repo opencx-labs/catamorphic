@@ -140,6 +140,7 @@ describe("test process orchestration", () => {
           "run",
           "test",
           "--no-daemon",
+          "--force",
           "--concurrency=2",
         ],
         logFileName: "workspace-tests.log",
@@ -231,6 +232,7 @@ describe("test process orchestration", () => {
         "run",
         "test",
         "--no-daemon",
+        "--force",
         "--concurrency=2",
       ],
     );
@@ -244,8 +246,8 @@ describe("test process orchestration", () => {
       "run",
       "test",
       "--no-daemon",
-      "--concurrency=2",
       "--force",
+      "--concurrency=2",
     ]);
   });
 
@@ -554,6 +556,21 @@ describe("test process orchestration", () => {
       XDG_CACHE_HOME: resources.xdgCachePath,
       TURBO_TELEMETRY_DISABLED: "1",
     });
+    expect(
+      testRunEnvironment({
+        source: { TURBO_CACHE_DIR: "/shared-cache" },
+        resources,
+      }).TURBO_CACHE_DIR,
+    ).toBe(resources.turboCachePath);
+    expect(
+      testRunEnvironment({
+        source: {
+          GITHUB_ACTIONS: "true",
+          TURBO_CACHE_DIR: "/runner/.turbo/cache",
+        },
+        resources,
+      }).TURBO_CACHE_DIR,
+    ).toBe("/runner/.turbo/cache");
     await Promise.all(
       [
         resources.tempPath,

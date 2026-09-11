@@ -336,6 +336,38 @@ export class CodexAppServer {
     }
     this.fail(new Error("Codex session closed."));
   }
+  /** Read the native skill catalog without creating a thread or model turn. */
+  async listSkills({ workingDirectory }: { workingDirectory: string }) {
+    await this.ready();
+    const result = await this.request("skills/list", {
+      cwds: [workingDirectory],
+      forceReload: true,
+    });
+    if (!object(result) || !Array.isArray(result.data))
+      throw new Error("Codex returned an invalid skill catalog.");
+    const skills: Array<{ name: string; description: string; path: string }> =
+      [];
+    for (const group of result.data) {
+      if (!object(group) || !Array.isArray(group.skills))
+        throw new Error("Codex returned an invalid skill catalog.");
+      if (Array.isArray(group.errors) && group.errors.length > 0)
+        throw new Error(
+          "Codex could not load some skills. Check their SKILL.md files.",
+        );
+      for (const skill of group.skills) {
+        if (!object(skill) || skill.enabled === false) continue;
+        if (typeof skill.name !== "string" || typeof skill.path !== "string")
+          throw new Error("Codex returned an invalid skill.");
+        skills.push({
+          name: skill.name,
+          description:
+            typeof skill.description === "string" ? skill.description : "",
+          path: skill.path,
+        });
+      }
+    }
+    return skills;
+  }
   startThread(options: ThreadOptions) {
     return this.thread(undefined, options);
   }

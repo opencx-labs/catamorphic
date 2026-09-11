@@ -1,6 +1,6 @@
 # Agent tool surface
 
-Accepted in ADR 0127, following the September 2026 audit of desktop tools and
+Accepted in ADR 0133, following the September 2026 audit of desktop tools and
 review apps. The default desktop projection has five fixed host registrations:
 `discover_capabilities`, `invoke_capability`, `workspace_overview`, `open_surface`,
 and `update_todo_list`. Harness-native execution and question adapters are

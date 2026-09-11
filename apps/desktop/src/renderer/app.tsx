@@ -1,4 +1,9 @@
 import {
+  CollectionTree,
+  useCollection,
+  useItemActions,
+} from "@catamorphic/app/ui";
+import {
   useAcknowledgeAgentSessionAttention,
   useAgentSessions,
   useAppPresentations,
@@ -12,11 +17,10 @@ import {
   workflowKeys,
 } from "@catamorphic/react";
 import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronRight,
   Columns2,
-  Folder,
   FolderPlus,
   GitBranch,
   Link2,
@@ -29,7 +33,6 @@ import {
   Share2,
   Sparkles,
   Wand2,
-  Workflow as WorkflowIcon,
 } from "lucide-react";
 import {
   lazy,
@@ -61,7 +64,13 @@ import {
   matchesProjectExperience,
   type ProjectExperienceContext,
 } from "../shared/project-experience.js";
-import { sidebarSections, visibleSidebarConfig } from "../shared/sidebar.js";
+import {
+  matchesSidebarSurface,
+  resolveSidebarSection,
+  type SidebarSurface,
+  sidebarSections,
+  visibleSidebarConfig,
+} from "../shared/sidebar.js";
 import {
   isBrowserFile,
   localFileUrl,
@@ -100,7 +109,6 @@ import { FloatingPanelBar } from "./components/floating-panel-bar.js";
 import { GitNav } from "./components/git-nav.js";
 import { MobilePairingModal } from "./components/mobile-pairing-modal.js";
 import { Modal } from "./components/modal.js";
-import { OpenResourceButton } from "./components/open-resource-button.js";
 import { PendingButton } from "./components/pending-button.js";
 import { ProfileBar } from "./components/profile-bar.js";
 import { ProjectAgentConsentDialog } from "./components/project-agent-consent.js";
@@ -123,11 +131,22 @@ import {
   DisabledControlHints,
   ShortcutHint,
 } from "./components/shortcut-hint.js";
-import { SidebarItemRow } from "./components/sidebar-item-row.js";
+import {
+  projectSidebarItems,
+  type SidebarContentState,
+  SidebarContribution,
+  sidebarItemPresentation,
+  useSidebarContent,
+  useSidebarContribution,
+  useSidebarItemCount,
+  useSidebarRefresh,
+} from "./components/sidebar-contribution.js";
+import { SidebarIcon, SidebarItemRow } from "./components/sidebar-item-row.js";
 import {
   type SessionCommand,
   SidebarSessionInspector,
 } from "./components/sidebar-session-inspector.js";
+import { SidebarTree } from "./components/sidebar-tree.js";
 import { SidebarActivity, SidebarNote } from "./components/sidebar-widgets.js";
 import { SiteFavicon } from "./components/site-favicon.js";
 import { TabbedSidebar } from "./components/tabbed-sidebar.js";
@@ -156,7 +175,6 @@ import {
   type ProfilesData,
   type ProjectAgentInfo,
   type RemoteProjectStatus,
-  type SessionCheckoutInfo,
   type SidebarConfig,
   type SidebarItem,
   type SidebarMenuEntry,
@@ -170,6 +188,8 @@ import {
   useKeybindings,
 } from "./lib/keybindings.js";
 import { notifyDesktop, playChime } from "./lib/notify.js";
+import { useSidebarAppCollections } from "./lib/sidebar-app-collections.js";
+import { useSidebarSessions } from "./lib/sidebar-sessions.js";
 import { transitionSidebarUpdate } from "./lib/sidebar-transition.js";
 import { skillInvocation } from "./lib/skills.js";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "./lib/tab-drag.js";
@@ -2760,7 +2780,7 @@ export function App({
       ...ws,
       chats: ws.chats.map((candidate) =>
         candidate.localId === chat.localId
-          ? { ...candidate, agentId }
+          ? { ...candidate, agentId, model: undefined }
           : candidate,
       ),
     }));
@@ -2773,6 +2793,17 @@ export function App({
     );
     if (chat?.sessionId) {
       updateSession.mutate({ sessionId: chat.sessionId, model: model || null });
+      return;
+    }
+    if (chat) {
+      updateWorkspace((ws) => ({
+        ...ws,
+        chats: ws.chats.map((candidate) =>
+          candidate.localId === chat.localId
+            ? { ...candidate, model: model || undefined }
+            : candidate,
+        ),
+      }));
       return;
     }
     void desktopApi.agentsUpdate(agentId, { model });
@@ -2811,6 +2842,17 @@ export function App({
     );
     if (chat?.sessionId) {
       updateSession.mutate({ sessionId: chat.sessionId, effort });
+      return;
+    }
+    if (chat) {
+      updateWorkspace((ws) => ({
+        ...ws,
+        chats: ws.chats.map((candidate) =>
+          candidate.localId === chat.localId
+            ? { ...candidate, effort: effort ?? undefined }
+            : candidate,
+        ),
+      }));
       return;
     }
     // No focused session: the effort applies to the effective default
@@ -3863,7 +3905,10 @@ export function App({
           );
           const entry: TerminalEntry = {
             localId,
-            title: "Agent terminal",
+            title:
+              typeof params.title === "string" && params.title
+                ? params.title
+                : "Agent terminal",
             chatLocalId,
             attachSessionId: String(params.terminalId),
             agentControlled: true,
@@ -4423,13 +4468,19 @@ export function App({
         kind: "browser",
         label: entry?.title || entry?.url || "Page",
         faviconUrl: entry?.faviconUrl,
+        url: entry?.url,
       };
     }
     if (key.startsWith("terminal:")) {
       const entry = workspace.terminals.find(
         (terminal) => terminalTabKey(terminal.localId) === key,
       );
-      return { key, kind: "terminal", label: entry?.title || "Terminal" };
+      return {
+        key,
+        kind: "terminal",
+        label: entry?.title || "Terminal",
+        terminalSessionId: entry?.ptySessionId ?? entry?.attachSessionId,
+      };
     }
     if (key.startsWith("editor:")) {
       const entry = workspace.editors.find(
@@ -4439,6 +4490,7 @@ export function App({
         key,
         kind: "editor",
         label: entry?.filePath?.split("/").at(-1) || "Editor",
+        filePath: entry?.filePath ?? undefined,
       };
     }
     if (key.startsWith("chat:")) {
@@ -4502,6 +4554,7 @@ export function App({
           kind: "browser" as const,
           label: browser.title || browser.url || "Page",
           faviconUrl: browser.faviconUrl,
+          url: browser.url,
           active: Boolean(browser.agentControlled),
           removable: true,
         })),
@@ -4511,6 +4564,8 @@ export function App({
           key: terminalTabKey(terminal.localId),
           kind: "terminal" as const,
           label: terminal.title || "Terminal",
+          description: terminal.initialCommand,
+          terminalSessionId: terminal.ptySessionId ?? terminal.attachSessionId,
           // The spinner tracks the COMMAND, not the shell: busy means a
           // foreground process is actually running in there right now.
           active: terminal.busy === true,
@@ -4522,6 +4577,7 @@ export function App({
           key: editorTabKey(editor.localId),
           kind: "editor" as const,
           label: editor.filePath?.split("/").at(-1) || "Editor",
+          filePath: editor.filePath ?? undefined,
           removable: true,
         })),
     ];
@@ -4636,8 +4692,12 @@ export function App({
     focusedChat: focusedChat
       ? {
           agentId: focusedSession?.agentId ?? focusedChat.agentId ?? null,
-          model: focusedSession?.model ?? null,
-          effort: focusedSession?.modelEffort ?? null,
+          model:
+            (focusedSession ? focusedSession.model : focusedChat.model) ?? null,
+          effort:
+            (focusedSession
+              ? focusedSession.modelEffort
+              : focusedChat.effort) ?? null,
         }
       : null,
     onPickDefaultAgent: pickDefaultAgent,
@@ -4743,35 +4803,54 @@ export function App({
 
   const sidebarTabs = (side: "left" | "right") => {
     if (side === "right" && !projectId) return [];
-    const tabs = visibleSidebars?.[side] ?? [];
-    if (
-      side !== "left" ||
-      !tabsInSidebar ||
-      tabs.some((tab) =>
-        tab.sections.some((section) => section.type === "tabs"),
-      )
-    )
-      return tabs;
-    // Older customized layouts still need a home for their open workspace tabs.
-    return tabs.map((tab, index) =>
-      index === 0
-        ? {
-            ...tab,
-            sections: [
-              ...tab.sections,
-              { id: "workspace-tabs", type: "tabs" as const },
-            ],
-          }
-        : tab,
-    );
+    return visibleSidebars?.[side] ?? [];
+  };
+  const [sidebarHasSelection, setSidebarHasSelection] = useState(false);
+  useEffect(() => {
+    const update = () =>
+      setSidebarHasSelection(Boolean(readEditorSelection()?.text.trim()));
+    window.addEventListener("catamorphic:editor-selection", update);
+    document.addEventListener("selectionchange", update);
+    return () => {
+      window.removeEventListener("catamorphic:editor-selection", update);
+      document.removeEventListener("selectionchange", update);
+    };
+  }, []);
+  const sidebarSurfaceKey = workspace.floatingKey ?? workspace.activeTabKey;
+  const sidebarChat = workspace.chats.find(
+    (chat) =>
+      chatVisible(workspace, chat) &&
+      (chat.mode === "partial" ||
+        chatTabKey(chat.localId) === sidebarSurfaceKey),
+  );
+  const sidebarEditor = workspace.editors.find(
+    (editor) => editorTabKey(editor.localId) === sidebarSurfaceKey,
+  );
+  const sidebarSurface: SidebarSurface = {
+    kind: sidebarChat
+      ? "chat"
+      : sidebarEditor
+        ? "editor"
+        : (presentedTabs.find((tab) => tabKey(tab) === sidebarSurfaceKey)
+            ?.kind ?? "none"),
+    key: sidebarChat ? chatTabKey(sidebarChat.localId) : sidebarSurfaceKey,
+    projectId,
+    sessionId: sidebarChat?.sessionId ?? undefined,
+    path: sidebarEditor?.filePath ?? undefined,
+    selection: Boolean(sidebarEditor && sidebarHasSelection),
   };
   const renderSidebarSection = (
     section: SidebarSectionConfig,
     visible: boolean,
+    report: (state: SidebarContentState) => void,
+    relevant: boolean,
   ) =>
     projectId ? (
       <ConfiguredSection
         key={section.id}
+        surface={sidebarSurface}
+        relevant={relevant}
+        report={report}
         visible={visible}
         onCustomize={() => customizeSidebar("left")}
         onSearch={(request) => {
@@ -4780,7 +4859,14 @@ export function App({
         }}
         section={section}
         pinnedStyle={prefs?.pinnedBookmarks ?? "tiles"}
-        tabs={tabsInSidebar ? workspaceTabBar : null}
+        tabs={
+          section.source?.type === "tabs"
+            ? renderWorkspaceTabBar("vertical")
+            : tabsInSidebar
+              ? workspaceTabBar
+              : null
+        }
+        sourceTabs={presentedTabs}
         experienceContext={projectExperienceContext}
         memberShell={memberShell}
         projectId={projectId}
@@ -4899,9 +4985,9 @@ export function App({
       )}
     </div>
   );
-  const workspaceTabBar = (
+  const renderWorkspaceTabBar = (orientation: "vertical" | "horizontal") => (
     <WorkspaceTabBar
-      orientation={tabsInSidebar ? "vertical" : "horizontal"}
+      orientation={orientation}
       alignment={prefs?.tabAlignment ?? "start"}
       tabs={allTabs}
       activeKey={focusedTabKey}
@@ -4922,6 +5008,10 @@ export function App({
         if (!key) setDropSideHover(null);
       }}
     />
+  );
+
+  const workspaceTabBar = renderWorkspaceTabBar(
+    tabsInSidebar ? "vertical" : "horizontal",
   );
 
   return (
@@ -5036,6 +5126,7 @@ export function App({
         side="left"
         scope={`${activeProfile?.id}:${projectId}`}
         tabs={sidebarTabs("left")}
+        surface={sidebarSurface}
         open={sidebarVisible}
         sidebarRef={sidebarRef}
         overlay={compactWindow}
@@ -5977,6 +6068,7 @@ export function App({
         }
         scope={`${activeProfile?.id}:${projectId}`}
         tabs={sidebarTabs("right")}
+        surface={sidebarSurface}
         open={rightSidebarOpen}
         error={sidebarError}
         onCustomize={() => customizeSidebar("right")}
@@ -6163,7 +6255,10 @@ export function App({
 
 /** One sidebar section, shaped by the user's sidebar.js config. */
 function ConfiguredSection({
-  section,
+  section: configured,
+  relevant,
+  surface,
+  report,
   visible,
   onCustomize,
   onSearch,
@@ -6173,6 +6268,7 @@ function ConfiguredSection({
   profileId,
   pinnedStyle,
   tabs,
+  sourceTabs,
   activeTab,
   activeChatSessionId,
   activeFilePath,
@@ -6194,6 +6290,9 @@ function ConfiguredSection({
   onPropose,
 }: {
   section: SidebarSectionConfig;
+  relevant: boolean;
+  surface: SidebarSurface;
+  report: (state: SidebarContentState) => void;
   visible: boolean;
   onCustomize: () => void;
   onSearch: (
@@ -6207,6 +6306,7 @@ function ConfiguredSection({
   profileId?: string;
   pinnedStyle: "tiles" | "list";
   tabs: ReactNode;
+  sourceTabs: WorkspaceTab[];
   activeTab?: WorkspaceTab;
   activeChatSessionId?: string;
   activeFilePath?: string;
@@ -6227,6 +6327,74 @@ function ConfiguredSection({
   onPublish: (filePath: string, features: RemoteFeatures | undefined) => void;
   onPropose: (files: string[], features: RemoteFeatures | undefined) => void;
 }) {
+  const section = useMemo(
+    () => resolveSidebarSection(configured),
+    [configured],
+  );
+  const collections = useSidebarAppCollections({
+    projectId,
+    profileId,
+    tabs: sourceTabs,
+    onOpenUrl: (url, mode) => onOpenUrl(url, mode ?? "replace"),
+    granted: section.collections,
+    surface,
+    builder: !memberShell,
+    onOpenSession,
+    onOpenTab,
+    onOpenFile,
+    onSessionAction,
+  });
+  const [contentState, setContentState] =
+    useState<SidebarContentState>("loading");
+  const [itemCounts, setItemCounts] = useState<ReadonlyMap<string, number>>(
+    new Map(),
+  );
+  const reportItems = useCallback((id: string, count: number | null) => {
+    setItemCounts((current) => {
+      if (count === null ? !current.has(id) : current.get(id) === count)
+        return current;
+      const next = new Map(current);
+      if (count === null) next.delete(id);
+      else next.set(id, count);
+      return next;
+    });
+  }, []);
+  useEffect(() => {
+    report(
+      contentState === "ready" &&
+        itemCounts.size &&
+        ![...itemCounts.values()].some(Boolean)
+        ? "empty"
+        : contentState,
+    );
+  }, [report, contentState, itemCounts]);
+  const refreshers = useRef(new Set<() => unknown>());
+  const registerRefresh = useCallback((refresh: () => unknown) => {
+    refreshers.current.add(refresh);
+    return () => {
+      refreshers.current.delete(refresh);
+    };
+  }, []);
+  const commands = new Set([
+    "new-chat",
+    ...(!memberShell ? ["new-workflow"] : []),
+    ...(["git", "prs", "files"].includes(section.type) ? ["search"] : []),
+    ...([
+      "chats",
+      "subsessions",
+      "files",
+      "apps",
+      "workflows",
+      "git",
+      "prs",
+      "bookmarks",
+      "remote",
+      "note",
+      "activity",
+    ].includes(section.type)
+      ? ["refresh"]
+      : []),
+  ]);
   const searchItems = useRef<() => Promise<PaletteItem[]>>(async () => []);
   const searchAction = (label: string, files = false) => (
     <ShortcutHint label={`Search ${label.toLowerCase()}`}>
@@ -6254,18 +6422,6 @@ function ConfiguredSection({
     </ShortcutHint>
   );
   const defaultOpen = !section.collapsed;
-  // Hide-when-empty: a section with nothing to list can drop its header
-  // entirely. Workflows and Apps default to hidden-until-non-empty (a new
-  // project isn't about either until an agent makes it so); any section
-  // opts in or out with `hideEmpty` in sidebar.js. The nav stays mounted
-  // (hidden, not unmounted) so its data fetch is what reveals the section.
-  const hideEmpty =
-    section.hideEmpty ??
-    (section.type === "git" ||
-      section.type === "workflows" ||
-      section.type === "apps" ||
-      section.type === "remote");
-  const [empty, setEmpty] = useState(true);
   const body = (() => {
     switch (section.type) {
       case "activity":
@@ -6328,6 +6484,9 @@ function ConfiguredSection({
                   projectId={projectId}
                   appName={section.app}
                   compact
+                  surface={surface}
+                  collections={collections}
+                  onContentState={setContentState}
                   height={section.height}
                   visible={visible && expanded}
                 />
@@ -6364,7 +6523,6 @@ function ConfiguredSection({
               active={
                 activeTab?.kind === "workflow" ? activeTab.name : undefined
               }
-              onEmptyChange={setEmpty}
               onSelect={(workflow, mode) =>
                 onOpenTab(
                   {
@@ -6387,7 +6545,6 @@ function ConfiguredSection({
             <AppsNav
               projectId={projectId}
               active={activeTab?.kind === "app" ? activeTab.name : undefined}
-              onEmptyChange={setEmpty}
               onSelect={(appName, mode) =>
                 onOpenTab({ kind: "app", name: appName }, mode)
               }
@@ -6405,15 +6562,18 @@ function ConfiguredSection({
               projectId={projectId}
               contentOnly={memberShell}
               activePath={activeFilePath}
-              onEmptyChange={setEmpty}
               onOpen={onOpenFile}
             />
           </SidebarSection>
         );
+      case "subsessions":
       case "chats":
         return (
           <SidebarSection
-            title={section.title ?? "Chats"}
+            title={
+              section.title ??
+              (section.type === "subsessions" ? "Subsessions" : "Chats")
+            }
             defaultOpen={defaultOpen}
             action={
               <ShortcutHint label="New chat" shortcut={keybindingLabel}>
@@ -6430,12 +6590,11 @@ function ConfiguredSection({
           >
             <SessionsNav
               projectId={projectId}
-              activeSessionId={activeChatSessionId}
+              activeSessionId={surface.sessionId ?? activeChatSessionId}
               agentsData={agentsData}
               defaultAgentId={defaultAgentId}
               projectAgentNames={projectAgentNames}
               unreadSessionIds={unreadSessionIds}
-              onEmptyChange={setEmpty}
               onCommand={onSessionCommand}
               onSelect={onOpenSession}
               onSessionAction={onSessionAction}
@@ -6464,7 +6623,6 @@ function ConfiguredSection({
               pinnedStyle={pinnedStyle}
               defaultOpenMode={section.open}
               menuOverride={section.menu}
-              onEmptyChange={setEmpty}
               onOpen={(url, mode) =>
                 onOpenUrl(url, mode ?? section.open ?? "replace")
               }
@@ -6484,10 +6642,9 @@ function ConfiguredSection({
                 searchItems={searchItems}
                 key={projectId}
                 visible={visible && expanded}
-                activeSessionId={activeChatSessionId}
+                activeSessionId={surface.sessionId ?? activeChatSessionId}
                 projectId={projectId}
                 onOpenDiff={onOpenTab}
-                onEmptyChange={setEmpty}
               />
             )}
           </SidebarSection>
@@ -6504,7 +6661,6 @@ function ConfiguredSection({
               projectId={projectId}
               onOpenDiff={onOpenTab}
               onOpenUrl={onOpenUrl}
-              onEmptyChange={setEmpty}
             />
           </SidebarSection>
         );
@@ -6516,7 +6672,6 @@ function ConfiguredSection({
           >
             <RemoteNav
               projectId={projectId}
-              onEmptyChange={setEmpty}
               onOpenFile={onOpenFile}
               onOpenHistory={onOpenHistory}
               onPublish={onPublish}
@@ -6534,7 +6689,6 @@ function ConfiguredSection({
               section={section}
               experienceContext={experienceContext}
               onOpenUrl={onOpenUrl}
-              onEmptyChange={setEmpty}
             />
           </SidebarSection>
         );
@@ -6542,9 +6696,48 @@ function ConfiguredSection({
         return null;
     }
   })();
+  const hasBody = Boolean(body);
+  useEffect(() => {
+    if (!hasBody) setContentState("unavailable");
+  }, [hasBody]);
   if (!body) return null;
-  if (!hideEmpty) return body;
-  return <div className={empty ? "hidden" : undefined}>{body}</div>;
+  return (
+    <SidebarContribution
+      value={{
+        section,
+        surface,
+        visible,
+        relevant,
+        report: setContentState,
+        reportItems,
+        open: onOpenUrl,
+        commands,
+        registerRefresh,
+        command: async (action) => {
+          if (!commands.has(action))
+            throw new Error("This section does not support this action");
+          if (action === "new-chat") onNewChat();
+          else if (action === "new-workflow") onNewWorkflow();
+          else if (action === "search")
+            onSearch(
+              section.type === "files"
+                ? { mode: "files" }
+                : {
+                    mode: "section",
+                    label: section.title ?? section.type,
+                    load: () => searchItems.current(),
+                  },
+            );
+          else if (action === "refresh")
+            await Promise.all(
+              [...refreshers.current].map((refresh) => refresh()),
+            );
+        },
+      }}
+    >
+      {body}
+    </SidebarContribution>
+  );
 }
 
 /**
@@ -6556,121 +6749,86 @@ function CustomItems({
   section,
   experienceContext,
   onOpenUrl,
-  onEmptyChange,
 }: {
   section: SidebarSectionConfig;
   experienceContext: ProjectExperienceContext;
   onOpenUrl: (url: string, mode: CommitMode) => void;
-  onEmptyChange?: (empty: boolean) => void;
 }) {
-  const items = (section.items ?? []).filter((item) =>
-    sidebarItemVisible(item, experienceContext),
-  );
-  const isEmpty = items.length === 0;
-  useEffect(() => {
-    onEmptyChange?.(isEmpty);
-  }, [isEmpty, onEmptyChange]);
-  if (items.length === 0) {
-    return <p className="sidebar-empty-state">No items yet.</p>;
-  }
+  const contribution = useSidebarContribution();
+  const items = useMemo(() => {
+    const result: (SidebarItem & {
+      id: string;
+      parentId: string | null;
+      hasChildren: boolean;
+    })[] = [];
+    const visit = (entries: SidebarItem[], parentId: string | null) => {
+      for (const item of entries) {
+        if (
+          !sidebarItemVisible(item, experienceContext) ||
+          !matchesSidebarSurface(
+            item.when,
+            contribution?.surface ?? { kind: "none" },
+          )
+        )
+          continue;
+        const id =
+          item.id ?? `${parentId ?? section.id}/${item.url ?? item.label}`;
+        result.push({
+          ...item,
+          id,
+          parentId,
+          hasChildren: Boolean(item.items?.length),
+        });
+        visit(item.items ?? [], id);
+      }
+    };
+    visit(section.items ?? [], null);
+    return result;
+  }, [section.items, section.id, experienceContext, contribution?.surface]);
+  useSidebarContent(items.length ? "ready" : "empty");
   return (
-    <ul className="flex flex-col gap-0.5">
-      {items.map((item) => (
-        <CustomItem
-          key={JSON.stringify(item)}
-          item={item}
-          section={section}
-          experienceContext={experienceContext}
-          onOpenUrl={onOpenUrl}
-        />
-      ))}
-    </ul>
-  );
-}
-
-function CustomItem({
-  item,
-  section,
-  experienceContext,
-  onOpenUrl,
-}: {
-  item: SidebarItem;
-  section: SidebarSectionConfig;
-  experienceContext: ProjectExperienceContext;
-  onOpenUrl: (url: string, mode: CommitMode) => void;
-}) {
-  const [open, setOpen] = useState(item.collapsed !== true);
-  const children = (item.items ?? []).filter((child) =>
-    sidebarItemVisible(child, experienceContext),
-  );
-  const mode = item.open ?? section.open ?? "replace";
-  const openItem = (intent: CommitMode = mode) => {
-    if (item.url) onOpenUrl(item.url, intent);
-    else if (children.length > 0) setOpen((value) => !value);
-  };
-  return (
-    <li>
-      <SidebarItemRow
-        label={item.label}
-        title={item.url}
-        icon={
-          item.icon ??
-          (item.url ? (
-            <SiteFavicon url={item.url} />
-          ) : (
-            <Folder className="size-3.5 shrink-0 text-fg-faint" />
-          ))
-        }
-        menu={
-          item.url
-            ? (item.menu ?? section.menu ?? DEFAULT_CUSTOM_MENU)
-            : (item.menu ?? [])
-        }
-        preview={item.preview}
-        disclosure={
-          children.length > 0
-            ? { open, onToggle: () => setOpen((value) => !value) }
-            : undefined
-        }
-        resource={Boolean(item.url)}
-        defaultOpenMode={mode}
-        onOpen={openItem}
-        onAction={(entry) => {
-          if (!item.url) return;
-          switch (entry.action) {
-            case "open":
-              onOpenUrl(item.url, mode);
-              break;
-            case "open-tab":
-              onOpenUrl(item.url, "tab");
-              break;
-            case "open-here":
-              onOpenUrl(item.url, "replace");
-              break;
-            case "copy-url":
-              void navigator.clipboard.writeText(item.url);
-              break;
-            default:
-              break;
-          }
-        }}
-      />
-      {children.length > 0 && (
-        <Collapsible open={open}>
-          <ul className="ml-5 flex flex-col gap-0.5">
-            {children.map((child) => (
-              <CustomItem
-                key={JSON.stringify(child)}
-                item={child}
-                section={section}
-                experienceContext={experienceContext}
-                onOpenUrl={onOpenUrl}
-              />
-            ))}
-          </ul>
-        </Collapsible>
-      )}
-    </li>
+    <SidebarTree
+      items={items}
+      label={section.title ?? "Custom items"}
+      renderItem={(item, tree) => {
+        const mode = item.open ?? section.open ?? "replace";
+        return (
+          <SidebarItemRow
+            itemId={item.id}
+            label={item.label}
+            title={item.url}
+            style={{ marginLeft: tree.depth * 14 }}
+            icon={
+              item.icon ??
+              (item.url ? <SiteFavicon url={item.url} /> : "Folder")
+            }
+            description={item.description}
+            badges={item.badges}
+            progress={item.progress}
+            supportedActions={item.url ? ["copy-url"] : []}
+            menu={item.menu ?? (item.url ? DEFAULT_CUSTOM_MENU : [])}
+            contextMenu={item.contextMenu}
+            actions={item.actions}
+            preview={item.preview}
+            disclosure={
+              tree.hasChildren
+                ? { open: tree.expanded, onToggle: tree.toggle }
+                : undefined
+            }
+            resource={Boolean(item.url)}
+            defaultOpenMode={mode}
+            onOpen={(intent) =>
+              item.url ? onOpenUrl(item.url, intent) : tree.toggle()
+            }
+            onAction={(entry) => {
+              if (entry.url) onOpenUrl(entry.url, mode);
+              else if (entry.action === "copy-url" && item.url)
+                void navigator.clipboard.writeText(item.url);
+            }}
+          />
+        );
+      }}
+    />
   );
 }
 
@@ -6678,8 +6836,8 @@ function sidebarItemVisible(
   item: SidebarItem,
   context: ProjectExperienceContext,
 ): boolean {
-  if (!matchesProjectExperience(item.when, context)) return false;
-  if (item.url) return true;
+  if (item.hide || !matchesProjectExperience(item.when, context)) return false;
+  if (item.url || item.actions?.length) return true;
   return (item.items ?? []).some((child) => sidebarItemVisible(child, context));
 }
 
@@ -6696,6 +6854,9 @@ function SidebarSection({
   action?: ReactNode;
   children: ReactNode | ((expanded: boolean) => ReactNode);
 }) {
+  const contribution = useSidebarContribution();
+  const headerActions = contribution?.section.headerActions;
+  const actionState = useItemActions();
   const [open, setOpen] = useState(defaultOpen);
   const [visited, setVisited] = useState(defaultOpen);
   useEffect(() => {
@@ -6721,8 +6882,50 @@ function SidebarSection({
             }`}
           />
         </button>
-        {action}
+        {headerActions === undefined
+          ? action
+          : headerActions.map((entry) => (
+              <ShortcutHint
+                key={`${entry.action}:${entry.label}:${entry.url ?? ""}`}
+                label={entry.disabledReason ?? entry.label}
+              >
+                <button
+                  type="button"
+                  aria-label={entry.label}
+                  disabled={
+                    Boolean(entry.disabledReason) ||
+                    Boolean(actionState.pending) ||
+                    (!entry.url && !contribution?.commands?.has(entry.action))
+                  }
+                  data-disabled-reason={
+                    entry.disabledReason ??
+                    (!entry.url && !contribution?.commands?.has(entry.action)
+                      ? "This section does not support this action"
+                      : undefined)
+                  }
+                  className="grid size-7 place-items-center rounded text-fg-muted hover:bg-bg-overlay"
+                  onClick={() =>
+                    void actionState.run({
+                      id: entry.action,
+                      label: entry.label,
+                      disabledReason: entry.disabledReason,
+                      run: () =>
+                        entry.url
+                          ? contribution?.open(entry.url, "replace")
+                          : contribution?.command?.(entry.action),
+                    })
+                  }
+                >
+                  <SidebarIcon name={entry.icon} />
+                </button>
+              </ShortcutHint>
+            ))}
       </div>
+      {actionState.error && (
+        <p role="alert" className="sidebar-empty-state">
+          {actionState.error}
+        </p>
+      )}
       <Collapsible open={open}>
         {typeof children === "function"
           ? (keepMounted || visited || open) && children(open)
@@ -6735,98 +6938,108 @@ function SidebarSection({
 function WorkflowsNav({
   projectId,
   active,
-  onEmptyChange,
   onSelect,
 }: {
   projectId: string;
   active?: string;
-  /** Reports emptiness up so hide-when-empty sections can drop entirely. */
-  onEmptyChange?: (empty: boolean) => void;
   onSelect: (
     workflow: { name: string; displayName?: string },
     mode?: CommitMode,
   ) => void;
 }) {
-  const workflowsQuery = useWorkflows(projectId);
-  const workflows = workflowsQuery.data ?? [];
-  const isEmpty = workflows.length === 0;
-  useEffect(() => {
-    onEmptyChange?.(isEmpty);
-  }, [isEmpty, onEmptyChange]);
-  if (workflows.length === 0) {
-    return <p className="sidebar-empty-state">Ask the agent to create one.</p>;
-  }
+  const query = useWorkflows(projectId);
+  useSidebarRefresh(query.refetch);
+  const items = (query.data ?? []).map((item) => ({ ...item, id: item.name }));
+  useSidebarContent(
+    query.isError
+      ? "error"
+      : query.isLoading
+        ? "loading"
+        : items.length
+          ? "ready"
+          : "empty",
+  );
+  if (query.isError)
+    return (
+      <p role="alert" className="sidebar-empty-state">
+        Could not load workflows.{" "}
+        <button type="button" onClick={() => void query.refetch()}>
+          Retry
+        </button>
+      </p>
+    );
   return (
-    <ul className="flex flex-col gap-0.5">
-      {workflows.map((workflow) => (
-        <li key={workflow.name}>
-          <OpenResourceButton
-            type="button"
-            onOpen={(mode) =>
-              onSelect(
-                {
-                  name: workflow.name,
-                  displayName: workflow.displayName ?? undefined,
-                },
-                mode,
-              )
-            }
-            className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${
-              workflow.name === active
-                ? "bg-bg-overlay text-fg"
-                : "text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
-            }`}
-          >
-            <WorkflowIcon className="size-3.5 shrink-0" />
-            <span className="truncate">
-              {workflow.displayName ?? workflow.name}
-            </span>
-          </OpenResourceButton>
-        </li>
-      ))}
-    </ul>
+    <SidebarTree
+      items={items}
+      label="Workflows"
+      selectedId={active}
+      renderItem={(item) => (
+        <SidebarItemRow
+          itemId={item.id}
+          label={item.displayName ?? item.name}
+          icon="Workflow"
+          active={active === item.name}
+          resource
+          onOpen={(mode) =>
+            onSelect(
+              { name: item.name, displayName: item.displayName ?? undefined },
+              mode,
+            )
+          }
+          onAction={() => {}}
+        />
+      )}
+    />
   );
 }
 
 function AppsNav({
   projectId,
   active,
-  onEmptyChange,
   onSelect,
 }: {
   projectId: string;
   active?: string;
-  onEmptyChange?: (empty: boolean) => void;
-  onSelect: (appName: string, mode?: CommitMode) => void;
+  onSelect: (name: string, mode?: CommitMode) => void;
 }) {
-  const appsQuery = useApps(projectId);
-  const apps = appsQuery.data ?? [];
-  const isEmpty = apps.length === 0;
-  useEffect(() => {
-    onEmptyChange?.(isEmpty);
-  }, [isEmpty, onEmptyChange]);
-  if (apps.length === 0) {
-    return <p className="sidebar-empty-state">Ask the agent to build one.</p>;
-  }
+  const query = useApps(projectId);
+  useSidebarRefresh(query.refetch);
+  const items = (query.data ?? []).map((item) => ({ ...item, id: item.name }));
+  useSidebarContent(
+    query.isError
+      ? "error"
+      : query.isLoading
+        ? "loading"
+        : items.length
+          ? "ready"
+          : "empty",
+  );
+  if (query.isError)
+    return (
+      <p role="alert" className="sidebar-empty-state">
+        Could not load apps.{" "}
+        <button type="button" onClick={() => void query.refetch()}>
+          Retry
+        </button>
+      </p>
+    );
   return (
-    <ul className="flex flex-col gap-0.5">
-      {apps.map((app) => (
-        <li key={app.name} data-point-key={`app:${app.name}`}>
-          <OpenResourceButton
-            type="button"
-            onOpen={(mode) => onSelect(app.name, mode)}
-            className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${
-              app.name === active
-                ? "bg-bg-overlay text-fg"
-                : "text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
-            }`}
-          >
-            <AppGlyph icon={app.icon} className="size-3.5 shrink-0" />
-            <span className="truncate">{app.title}</span>
-          </OpenResourceButton>
-        </li>
-      ))}
-    </ul>
+    <SidebarTree
+      items={items}
+      label="Apps"
+      selectedId={active}
+      renderItem={(item) => (
+        <SidebarItemRow
+          itemId={item.id}
+          label={item.title}
+          icon={<AppGlyph icon={item.icon} className="size-3.5" />}
+          active={active === item.name}
+          resource
+          onOpen={(mode) => onSelect(item.name, mode)}
+          onAction={() => {}}
+        />
+      )}
+    />
   );
 }
 
@@ -6837,7 +7050,6 @@ function SessionsNav({
   defaultAgentId,
   projectAgentNames,
   unreadSessionIds,
-  onEmptyChange,
   onCommand,
   onSelect,
   onSessionAction,
@@ -6848,235 +7060,226 @@ function SessionsNav({
   defaultAgentId: string | null;
   projectAgentNames: Record<string, string>;
   unreadSessionIds: ReadonlySet<string>;
-  onEmptyChange?: (empty: boolean) => void;
   onCommand: (session: AgentSession, command: SessionCommand) => void;
   onSelect: (session: AgentSession, mode?: CommitMode) => void;
   onSessionAction: (sessionId: string, action: ChatSessionAction) => void;
 }) {
-  const sessionsQuery = useAgentSessions(projectId, { limit: 100 });
-  const sessions = useMemo(
+  const contribution = useSidebarContribution();
+  const collection = useSidebarSessions({
+    projectId,
+    sessionId: contribution?.surface.sessionId,
+    section: contribution?.section ?? { id: "chats", type: "chats" },
+  });
+  useSidebarRefresh(collection.load);
+  const { root } = useCollection({
+    collection,
+    active: contribution?.relevant ?? true,
+  });
+  useSidebarContent(
+    root.status === "error"
+      ? "error"
+      : root.status === "idle" || root.status === "loading"
+        ? "loading"
+        : root.ids.length
+          ? "ready"
+          : "empty",
+  );
+  useSidebarItemCount(
+    root.ids.filter(
+      (id) =>
+        !sidebarItemPresentation({ section: contribution?.section, id }).hide,
+    ).length,
+  );
+  const checkoutQuery = useQuery({
+    queryKey: ["desktop", "session-checkouts", projectId],
+    queryFn: () => desktopApi.sessionCheckouts(projectId),
+    staleTime: 2000,
+    enabled: contribution?.visible ?? true,
+  });
+  const client = useQueryClient();
+  useEffect(
     () =>
-      (sessionsQuery.data?.items ?? []).filter(
-        (session) => session.visibility === "promoted",
-      ),
-    [sessionsQuery.data?.items],
+      desktopApi.onGitChanged((event) => {
+        if (event.projectId === projectId)
+          void client.invalidateQueries({
+            queryKey: ["desktop", "session-checkouts", projectId],
+          });
+      }),
+    [client, projectId],
   );
-  const [renderedSessions, setRenderedSessions] = useState<
-    Array<{ session: AgentSession; exiting: boolean }>
-  >([]);
-  useEffect(() => {
-    const currentById = new Map(
-      sessions.map((session) => [session.id, session]),
-    );
-    setRenderedSessions((current) => {
-      const currentIds = new Set(current.map((entry) => entry.session.id));
-      return [
-        ...current.map((entry) => ({
-          session: currentById.get(entry.session.id) ?? entry.session,
-          exiting: !currentById.has(entry.session.id),
-        })),
-        ...sessions
-          .filter((session) => !currentIds.has(session.id))
-          .map((session) => ({ session, exiting: false })),
-      ];
-    });
-    const timer = window.setTimeout(() => {
-      setRenderedSessions((current) =>
-        current.filter((entry) => currentById.has(entry.session.id)),
-      );
-    }, 180);
-    return () => window.clearTimeout(timer);
-  }, [sessions]);
-  const [collapsedParents, setCollapsedParents] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const [checkouts, setCheckouts] = useState<SessionCheckoutInfo[]>([]);
-  useEffect(() => {
-    const load = () => {
-      void desktopApi.sessionCheckouts(projectId).then(setCheckouts);
-    };
-    load();
-    return desktopApi.onGitChanged((event) => {
-      if (event.projectId === projectId) load();
-    });
-  }, [projectId]);
   const checkoutBySession = new Map(
-    checkouts.map((checkout) => [checkout.sessionId, checkout]),
+    (checkoutQuery.data ?? []).map((checkout) => [
+      checkout.sessionId,
+      checkout,
+    ]),
   );
-  const isEmpty = sessions.length === 0;
-  useEffect(() => {
-    onEmptyChange?.(isEmpty);
-  }, [isEmpty, onEmptyChange]);
-  if (sessions.length === 0 && renderedSessions.length === 0) {
-    return <p className="sidebar-empty-state">No chats yet.</p>;
-  }
-  const renderedByParent = new Map<string | null, typeof renderedSessions>();
-  const renderedIds = new Set(
-    renderedSessions.map((entry) => entry.session.id),
-  );
-  for (const entry of renderedSessions) {
-    const parentId =
-      entry.session.parentSessionId &&
-      renderedIds.has(entry.session.parentSessionId)
-        ? entry.session.parentSessionId
-        : null;
-    const siblings = renderedByParent.get(parentId) ?? [];
-    siblings.push(entry);
-    renderedByParent.set(parentId, siblings);
-  }
-  const renderBranch = (parentId: string | null, depth: number): ReactNode =>
-    (renderedByParent.get(parentId) ?? []).map(({ session, exiting }) => {
-      const checkout = checkoutBySession.get(session.id);
-      const children = renderedByParent.get(session.id) ?? [];
-      const collapsed = collapsedParents.has(session.id);
-      const agentId = session.agentId ?? defaultAgentId;
-      const agentName =
-        agentsData?.agents.find((agent) => agent.id === agentId)?.name ??
-        (agentId ? projectAgentNames[agentId] : undefined) ??
-        "Default";
-      const checkoutLabel = checkout
-        ? checkout.kind === "external"
-          ? "External"
-          : (checkout.branch ?? "Worktree")
-        : undefined;
-      return (
-        <li
-          key={session.id}
-          data-session-id={session.id}
-          draggable
-          onDragStart={(event) => {
-            const url = chatBookmarkUrl({ projectId, sessionId: session.id });
-            event.dataTransfer.setData(
-              TAB_DRAG_TYPE,
-              JSON.stringify({
-                key: `session:${session.id}`,
-                kind: "chat",
-                title: sessionLabel(session),
-                bookmarkUrl: url,
-              } satisfies TabDragPayload),
-            );
-            event.dataTransfer.setData("text/uri-list", url);
-            event.dataTransfer.effectAllowed = "copy";
-          }}
-          className={
-            exiting ? "animate-session-row-out" : "animate-session-row-in"
-          }
-        >
-          <SidebarItemRow
-            style={{ marginLeft: depth * 14 }}
-            label={sessionLabel(session)}
-            disclosure={
-              children.length > 0
-                ? {
-                    open: !collapsed,
-                    onToggle: () =>
-                      setCollapsedParents((current) => {
-                        const next = new Set(current);
-                        if (next.has(session.id)) next.delete(session.id);
-                        else next.add(session.id);
-                        return next;
-                      }),
-                  }
-                : undefined
-            }
-            icon={
-              <ChatGlyph
-                icon={session.icon}
-                fork={Boolean(session.parentSessionId)}
-                className="size-3.5 shrink-0"
-              />
-            }
-            active={session.id === activeSessionId}
-            labelContent={
-              <>
-                <AnimatedTitle text={sessionLabel(session)} />
-                {session.attentionRequired ? (
-                  <span className="sr-only">Ready for you</span>
-                ) : unreadSessionIds.has(session.id) ? (
-                  <span className="sr-only">Unread</span>
-                ) : null}
-              </>
-            }
-            menu={chatSessionMenu({
-              unread: unreadSessionIds.has(session.id),
-              archived: false,
-            })}
-            preview={{
-              title: sessionLabel(session),
-              description: session.activity ?? undefined,
-              metadata: [
-                { label: "Agent", value: agentName },
-                {
-                  label: "Environment",
-                  value: session.environment ?? "Default",
-                },
-                {
-                  label: "Status",
-                  value: session.running
-                    ? "Working"
-                    : session.status === "closed"
-                      ? "Closed"
-                      : "Ready",
-                },
-                ...(checkoutLabel
-                  ? [{ label: "Checkout", value: checkoutLabel }]
-                  : []),
-              ],
+  return (
+    <CollectionTree
+      collection={collection}
+      motionClasses={{
+        enter: "animate-session-row-in",
+        exit: "animate-session-row-out",
+      }}
+      groupBy={
+        contribution?.section.source?.groupBy
+          ? (session) =>
+              String(
+                Object.entries(session).find(
+                  ([field]) => field === contribution.section.source?.groupBy,
+                )?.[1] ?? "Other",
+              )
+          : undefined
+      }
+      project={(items) =>
+        projectSidebarItems(items, contribution?.section).filter(
+          (item) =>
+            !sidebarItemPresentation({
+              section: contribution?.section,
+              id: item.id,
+            }).hide,
+        )
+      }
+      active={false}
+      selectedId={activeSessionId}
+      rowHeight={contribution?.section.rowHeight}
+      label={contribution?.section.title ?? "Chats"}
+      height={contribution?.section.height}
+      renderItem={(session, { depth, expanded, hasChildren, toggle }) => {
+        const checkout = checkoutBySession.get(session.id);
+        const agentId = session.agentId ?? defaultAgentId;
+        const agentName =
+          agentsData?.agents.find((agent) => agent.id === agentId)?.name ??
+          (agentId ? projectAgentNames[agentId] : undefined) ??
+          "Default";
+        const checkoutLabel = checkout
+          ? checkout.kind === "external"
+            ? "External"
+            : (checkout.branch ?? "Worktree")
+          : undefined;
+        return (
+          // biome-ignore lint/a11y/noStaticElementInteractions: treeitem semantics and keyboard actions belong to the enclosing public Tree row.
+          <div
+            key={session.id}
+            data-session-id={session.id}
+            draggable
+            onDragStart={(event) => {
+              const url = chatBookmarkUrl({ projectId, sessionId: session.id });
+              event.dataTransfer.setData(
+                TAB_DRAG_TYPE,
+                JSON.stringify({
+                  key: `session:${session.id}`,
+                  kind: "chat",
+                  title: sessionLabel(session),
+                  bookmarkUrl: url,
+                } satisfies TabDragPayload),
+              );
+              event.dataTransfer.setData("text/uri-list", url);
+              event.dataTransfer.effectAllowed = "copy";
             }}
-            previewContent={
-              <SidebarSessionInspector
-                projectId={projectId}
-                session={session}
-                agent={agentsData?.agents.find((agent) => agent.id === agentId)}
-                agentName={agentName}
-                checkout={checkout ?? null}
-                onCommand={(command) => onCommand(session, command)}
-                onArchive={() => onSessionAction(session.id, "archive")}
-              />
-            }
-            end={
-              <>
-                {(session.attentionRequired ||
-                  unreadSessionIds.has(session.id)) && (
-                  <span
-                    data-testid={
-                      session.attentionRequired
-                        ? "session-attention"
-                        : "session-unread"
-                    }
-                    className="grid size-3 shrink-0 place-items-center"
-                    aria-hidden="true"
-                  >
-                    <SignalBadge
-                      signals={{
-                        attention: session.attentionRequired,
-                        unread: unreadSessionIds.has(session.id),
-                      }}
-                      size="sm"
-                    />
-                  </span>
-                )}
-                {checkoutLabel ? (
-                  <span className="ml-auto flex max-w-28 shrink-0 items-center gap-1 truncate rounded bg-bg-inset px-1.5 py-0.5 text-[10px] text-fg-faint">
-                    <GitBranch className="size-2.5 shrink-0" />
-                    <span className="truncate">{checkoutLabel}</span>
-                  </span>
-                ) : null}
-              </>
-            }
-            resource
-            onOpen={(mode) => onSelect(session, mode)}
-            onAction={(entry) => onSessionAction(session.id, entry.action)}
-          />
-          {children.length > 0 && (
-            <Collapsible open={!collapsed}>
-              <ul>{renderBranch(session.id, depth + 1)}</ul>
-            </Collapsible>
-          )}
-        </li>
-      );
-    });
-  return <ul className="flex flex-col gap-0.5">{renderBranch(null, 0)}</ul>;
+          >
+            <SidebarItemRow
+              itemId={session.id}
+              style={{ marginLeft: depth * 14 }}
+              label={sessionLabel(session)}
+              disclosure={
+                hasChildren ? { open: expanded, onToggle: toggle } : undefined
+              }
+              icon={
+                <ChatGlyph
+                  icon={session.icon}
+                  fork={Boolean(session.parentSessionId)}
+                  className="size-3.5 shrink-0"
+                />
+              }
+              active={session.id === activeSessionId}
+              labelContent={
+                <>
+                  <AnimatedTitle text={sessionLabel(session)} />
+                  {session.attentionRequired ? (
+                    <span className="sr-only">Ready for you</span>
+                  ) : unreadSessionIds.has(session.id) ? (
+                    <span className="sr-only">Unread</span>
+                  ) : null}
+                </>
+              }
+              defaultMenu={chatSessionMenu({
+                unread: unreadSessionIds.has(session.id),
+                archived: false,
+              })}
+              preview={{
+                title: sessionLabel(session),
+                description: session.activity ?? undefined,
+                metadata: [
+                  { label: "Agent", value: agentName },
+                  {
+                    label: "Environment",
+                    value: session.environment ?? "Default",
+                  },
+                  {
+                    label: "Status",
+                    value: session.running
+                      ? "Working"
+                      : session.status === "closed"
+                        ? "Closed"
+                        : "Ready",
+                  },
+                  ...(checkoutLabel
+                    ? [{ label: "Checkout", value: checkoutLabel }]
+                    : []),
+                ],
+              }}
+              previewContent={
+                <SidebarSessionInspector
+                  projectId={projectId}
+                  session={session}
+                  agent={agentsData?.agents.find(
+                    (agent) => agent.id === agentId,
+                  )}
+                  agentName={agentName}
+                  checkout={checkout ?? null}
+                  onCommand={(command) => onCommand(session, command)}
+                  onArchive={() => onSessionAction(session.id, "archive")}
+                />
+              }
+              end={
+                <>
+                  {(session.attentionRequired ||
+                    unreadSessionIds.has(session.id)) && (
+                    <span
+                      data-testid={
+                        session.attentionRequired
+                          ? "session-attention"
+                          : "session-unread"
+                      }
+                      className="grid size-3 shrink-0 place-items-center"
+                      aria-hidden="true"
+                    >
+                      <SignalBadge
+                        signals={{
+                          attention: session.attentionRequired,
+                          unread: unreadSessionIds.has(session.id),
+                        }}
+                        size="sm"
+                      />
+                    </span>
+                  )}
+                  {checkoutLabel ? (
+                    <span className="ml-auto flex max-w-28 shrink-0 items-center gap-1 truncate rounded bg-bg-inset px-1.5 py-0.5 text-[10px] text-fg-faint">
+                      <GitBranch className="size-2.5 shrink-0" />
+                      <span className="truncate">{checkoutLabel}</span>
+                    </span>
+                  ) : null}
+                </>
+              }
+              resource
+              onOpen={(mode) => onSelect(session, mode)}
+              onAction={(entry) => onSessionAction(session.id, entry.action)}
+            />
+          </div>
+        );
+      }}
+    />
+  );
 }
 
 function sessionLabel(session: AgentSession): string {

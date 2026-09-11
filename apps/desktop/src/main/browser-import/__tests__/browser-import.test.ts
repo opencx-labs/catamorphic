@@ -195,6 +195,7 @@ describe("index", () => {
       "arc",
       "aside",
       "chromium",
+      "opera",
       "firefox",
     ]);
   });

@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SidebarItemRow } from "./sidebar-item-row.js";
+import { SIDEBAR_PREVIEW_DELAY_MS } from "./sidebar-preview";
 
 Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
 
@@ -75,11 +76,11 @@ describe("SidebarItemRow hover preview", () => {
     act(() =>
       row.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })),
     );
-    act(() => vi.advanceTimersByTime(499));
-    expect(document.querySelector('[role="tooltip"]')).toBeNull();
+    act(() => vi.advanceTimersByTime(SIDEBAR_PREVIEW_DELAY_MS - 1));
+    expect(document.querySelector("[data-resource-inspector]")).toBeNull();
 
     act(() => vi.advanceTimersByTime(1));
-    const preview = document.querySelector('[role="tooltip"]');
+    const preview = document.querySelector("[data-resource-inspector]");
     expect(preview?.textContent).toContain("Production deployments");
     expect(preview?.textContent).toContain("Release health at a glance");
     expect(preview?.textContent).toContain("Owner");
@@ -94,11 +95,11 @@ describe("SidebarItemRow hover preview", () => {
     const button = container.querySelector("button");
 
     act(() => button?.focus());
-    act(() => vi.advanceTimersByTime(500));
+    act(() => vi.advanceTimersByTime(SIDEBAR_PREVIEW_DELAY_MS));
 
-    expect(document.querySelector('[role="tooltip"]')?.textContent).toContain(
-      "Production deployments",
-    );
+    expect(
+      document.querySelector("[data-resource-inspector]")?.textContent,
+    ).toContain("Production deployments");
   });
 
   it("keeps the preview open while the pointer moves onto the card", () => {
@@ -109,8 +110,8 @@ describe("SidebarItemRow hover preview", () => {
     act(() =>
       row.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })),
     );
-    act(() => vi.advanceTimersByTime(500));
-    const preview = document.querySelector('[role="tooltip"]');
+    act(() => vi.advanceTimersByTime(SIDEBAR_PREVIEW_DELAY_MS));
+    const preview = document.querySelector("[data-resource-inspector]");
     expect(preview).not.toBeNull();
 
     act(() => {
@@ -121,7 +122,7 @@ describe("SidebarItemRow hover preview", () => {
         }),
       );
       preview?.dispatchEvent(
-        new MouseEvent("mouseover", {
+        new MouseEvent("pointerover", {
           bubbles: true,
           relatedTarget: document.body,
         }),
@@ -129,7 +130,7 @@ describe("SidebarItemRow hover preview", () => {
       vi.advanceTimersByTime(200);
     });
 
-    expect(preview?.classList.contains("animate-pop-in")).toBe(true);
+    expect(preview?.getAttribute("data-open")).toBe("true");
   });
 
   it("dismisses a focused preview when Escape is pressed", () => {
@@ -138,15 +139,17 @@ describe("SidebarItemRow hover preview", () => {
     const button = container.querySelector("button");
 
     act(() => button?.focus());
-    act(() => vi.advanceTimersByTime(500));
-    const preview = document.querySelector('[role="tooltip"]');
-    expect(preview?.classList.contains("animate-pop-in")).toBe(true);
+    act(() => vi.advanceTimersByTime(SIDEBAR_PREVIEW_DELAY_MS));
+    const preview = document.querySelector("[data-resource-inspector]");
+    expect(preview?.getAttribute("data-open")).toBe("true");
 
     act(() =>
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
     );
 
-    expect(preview?.classList.contains("animate-pop-out")).toBe(true);
+    expect(preview?.getAttribute("aria-hidden")).toBe("true");
+    act(() => vi.advanceTimersByTime(180));
+    expect(document.querySelector("[data-resource-inspector]")).toBeNull();
   });
 });
 

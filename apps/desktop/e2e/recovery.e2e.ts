@@ -95,7 +95,7 @@ describe("interrupted turn recovery", () => {
     const { userDataDir } = app;
     await app.kill();
 
-    // Relaunch on the same data dir and reopen the orphaned session.
+    // Relaunch on the same data dir and explicitly reopen the orphaned session in the dock.
     app = await launchApp({ userDataDir });
     await runWait(
       `return window.catamorphicDesktop &&
@@ -103,9 +103,17 @@ describe("interrupted turn recovery", () => {
       { timeoutMs: 60_000, label: "embedded server ready after relaunch" },
     );
     await runWait(
-      `const chat = document.querySelector('[data-session-id="${sessionId}"] button');
-       if (!chat) return false; chat.click(); return true;`,
+      `const chat = document.querySelector('aside [data-session-id="${sessionId}"] [data-tree-primary]');
+       if (!chat) return false; chat.focus(); return document.activeElement === chat;`,
       { timeoutMs: 30_000, label: "orphaned session in the sidebar" },
+    );
+    // Explicitly open the dock through Chromium input and verify it is visible.
+    // A click alone is not evidence of reopening during startup; the later
+    // orphan notification can render a transcript in a minimized dock.
+    await app.press("Enter", 1); // Alt+Enter opens floating on both platforms.
+    await runWait(
+      `return !!visibleDock()?.querySelector('[data-composer-input]');`,
+      { label: "orphaned session opened for continuation" },
     );
 
     // The dead turn reads as a finished, interrupted message — not an

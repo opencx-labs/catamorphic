@@ -6189,6 +6189,9 @@ export interface paths {
                 query?: {
                     limit?: number;
                     offset?: number;
+                    visibility?: "promoted" | "latent" | "archived";
+                    parentSessionId?: string;
+                    rootsOnly?: "true" | "false";
                 };
                 header?: never;
                 path: {
@@ -6206,6 +6209,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             items: {
+                                childCount?: number;
                                 /** Format: uuid */
                                 id: string;
                                 /** Format: uuid */
@@ -6298,6 +6302,7 @@ export interface paths {
                     "application/json": {
                         systemPrompt?: string;
                         agentId?: string;
+                        model?: string;
                         /** @enum {string} */
                         effort?: "low" | "medium" | "high" | "xhigh" | "max";
                         environment?: string;
@@ -6317,6 +6322,7 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            childCount?: number;
                             /** Format: uuid */
                             id: string;
                             /** Format: uuid */
@@ -6573,6 +6579,7 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            childCount?: number;
                             /** Format: uuid */
                             id: string;
                             /** Format: uuid */
@@ -6763,6 +6770,7 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            childCount?: number;
                             /** Format: uuid */
                             id: string;
                             /** Format: uuid */
@@ -6892,6 +6900,7 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            childCount?: number;
                             /** Format: uuid */
                             id: string;
                             /** Format: uuid */
@@ -7088,6 +7097,7 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            childCount?: number;
                             /** Format: uuid */
                             id: string;
                             /** Format: uuid */
@@ -7205,6 +7215,7 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            childCount?: number;
                             /** Format: uuid */
                             id: string;
                             /** Format: uuid */
@@ -7390,6 +7401,7 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            childCount?: number;
                             /** Format: uuid */
                             id: string;
                             /** Format: uuid */
@@ -7598,6 +7610,7 @@ export interface paths {
                             /** @enum {string} */
                             status: "running" | "completed" | "failed" | "interrupted" | "archived";
                             session: {
+                                childCount?: number;
                                 /** Format: uuid */
                                 id: string;
                                 /** Format: uuid */
@@ -7726,6 +7739,7 @@ export interface paths {
                             /** @enum {string} */
                             status: "running" | "completed" | "failed" | "interrupted" | "archived";
                             session: {
+                                childCount?: number;
                                 /** Format: uuid */
                                 id: string;
                                 /** Format: uuid */
@@ -7897,6 +7911,7 @@ export interface paths {
                             /** @enum {string} */
                             status: "running" | "completed" | "failed" | "interrupted" | "archived";
                             session: {
+                                childCount?: number;
                                 /** Format: uuid */
                                 id: string;
                                 /** Format: uuid */
@@ -8093,6 +8108,7 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            childCount?: number;
                             /** Format: uuid */
                             id: string;
                             /** Format: uuid */
@@ -8664,6 +8680,7 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            childCount?: number;
                             /** Format: uuid */
                             id: string;
                             /** Format: uuid */
@@ -9080,6 +9097,7 @@ export interface paths {
                                 requiresConfirmation: boolean;
                             };
                             sessions: {
+                                childCount?: number;
                                 /** Format: uuid */
                                 id: string;
                                 /** Format: uuid */
@@ -9221,6 +9239,7 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            childCount?: number;
                             /** Format: uuid */
                             id: string;
                             /** Format: uuid */

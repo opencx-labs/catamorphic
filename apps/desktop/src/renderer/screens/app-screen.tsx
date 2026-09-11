@@ -1,4 +1,9 @@
-import type { AppIconName } from "@catamorphic/app";
+import type {
+  AppCollections,
+  AppContentState,
+  AppIconName,
+  AppSurface,
+} from "@catamorphic/app";
 import { useCatamorphic } from "@catamorphic/react";
 import { AppMount } from "@catamorphic/ui";
 import { useQuery } from "@tanstack/react-query";
@@ -40,12 +45,18 @@ export function AppScreen({
   compact = false,
   visible = true,
   height = 320,
+  surface,
+  collections,
+  onContentState,
 }: {
   projectId: string;
   appName: string;
   compact?: boolean;
   visible?: boolean;
   height?: number;
+  surface?: AppSurface;
+  collections?: AppCollections;
+  onContentState?: (state: AppContentState) => void;
 }) {
   const theme = useTheme();
   return (
@@ -54,7 +65,9 @@ export function AppScreen({
         key={`${projectId}:${appName}`}
         projectId={projectId}
         appName={appName}
-        display={{ mode: compact ? "compact" : "full", visible }}
+        display={{ mode: compact ? "compact" : "full", visible, surface }}
+        collections={collections}
+        onContentState={onContentState}
         viewportHeight={compact ? height : "fill"}
         refreshIntervalMs={3000}
         context={{

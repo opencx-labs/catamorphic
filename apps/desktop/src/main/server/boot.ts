@@ -47,6 +47,7 @@ import { userSkillFiles, userSkillInfos } from "../user-skills.js";
 import { syncProfileMcpWorkflowConnections } from "../workflow-mcp-connections.js";
 import { DesktopAgentRegistry } from "./agent-registry.js";
 import { componentRegistryCapability } from "./component-registry.js";
+import { validateDatabaseFiles } from "./database-files.js";
 import { desktopCapabilitySource } from "./desktop-capabilities.js";
 import { DESKTOP_SETTINGS_SKILL } from "./desktop-settings-skill.js";
 import { E2eLocalSandboxProvider } from "./e2e-fakes.js";
@@ -128,6 +129,7 @@ export async function startEmbeddedServer(
   incognitoSessions?: IncognitoSessionsStore,
   connectionProviders?: readonly ConnectionProvider[],
 ): Promise<EmbeddedServer> {
+  validateDatabaseFiles(paths.db);
   fs.mkdirSync(paths.db, { recursive: true });
   const hostId = loadOrCreateHostId(path.join(paths.root, "host-id"));
 
@@ -170,7 +172,12 @@ export async function startEmbeddedServer(
   // state (its own PGlite schema), injected into storage as a resolver so
   // the shared catamorphic schema never learns about filesystem paths.
   const projectRoots = new ProjectRootsStore(pglite);
-  await projectRoots.init();
+  const previousDataDir = process.env.CATAMORPHIC_DESKTOP_PREVIOUS_DATA_DIR;
+  await projectRoots.init(
+    previousDataDir
+      ? { from: previousDataDir, to: path.dirname(paths.root) }
+      : undefined,
+  );
   const sessionCheckouts = new SessionCheckouts({
     pglite,
     projectRoot: (projectId) => projectRoots.getSync(projectId),

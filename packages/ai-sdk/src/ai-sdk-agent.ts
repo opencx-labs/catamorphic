@@ -617,8 +617,10 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
           continue;
         }
         if (part.type === "tool-error") {
+          // The model receives this tool result and may recover in the next
+          // step. Only a failed model stream should fail the whole turn.
           yield {
-            type: "error",
+            type: "diagnostic",
             content: `Tool ${part.toolName} failed: ${errorMessage(part.error)}`,
           };
           continue;

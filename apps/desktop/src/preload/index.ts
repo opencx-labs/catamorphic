@@ -1,5 +1,6 @@
 import type { ResourcePreview } from "@catamorphic/react";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import type { AgentCommandsResult } from "../shared/agent-commands.js";
 import type { BookmarkPlacement } from "../shared/bookmark-target.js";
 import type {
   ChatDraft,
@@ -9,6 +10,7 @@ import type {
   DockSnapshot,
   WorkspaceEvent,
 } from "../shared/desktop-workspace.js";
+import type { DockDrag, DockSize } from "../shared/dock-position.js";
 import type { FilePreviewInput } from "../shared/file-preview.js";
 import type { FileSearchInput } from "../shared/file-search.js";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
@@ -61,7 +63,9 @@ const api = {
     message?: string,
   ): Promise<void> =>
     ipcRenderer.invoke("catamorphic:dock-action", localId, action, message),
-  dockResize: (size: { width: number; height: number }): Promise<void> =>
+  dockDrag: (input: DockDrag): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:dock-drag", input),
+  dockResize: (size: DockSize): Promise<void> =>
     ipcRenderer.invoke("catamorphic:dock-resize", size),
   onDockSnapshot: (
     listener: (snapshot: DockSnapshot) => void,
@@ -182,13 +186,13 @@ const api = {
     ipcRenderer.invoke("catamorphic:agent-login", id),
   agentLoginStatus: (id: string): Promise<boolean> =>
     ipcRenderer.invoke("catamorphic:agent-login-status", id),
-  /** The harness's own slash commands (Claude Code), cached in main. */
-  agentCommands: (
-    projectId: string,
-    agentId: string,
-  ): Promise<
-    Array<{ name: string; description: string; argumentHint: string }>
-  > => ipcRenderer.invoke("catamorphic:agent-commands", projectId, agentId),
+  /** Fresh commands for the selected harness and session checkout. */
+  agentCommands: (input: {
+    projectId: string;
+    agentId: string;
+    sessionId?: string;
+  }): Promise<AgentCommandsResult> =>
+    ipcRenderer.invoke("catamorphic:agent-commands", input),
   /**
    * Proactive auth probe: what is knowably wrong before a send, plus
    * main's verdict on whether a one-click re-login flow exists.
@@ -313,6 +317,13 @@ const api = {
     ipcRenderer.invoke("catamorphic:openrouter-models"),
 
   // --- import from other browsers ---
+  browserImportSupport: () =>
+    ipcRenderer.invoke("catamorphic:browser-import-support"),
+  browserImportNativePasswords: (input: {
+    browserId: string;
+    profileId: string;
+  }) =>
+    ipcRenderer.invoke("catamorphic:browser-import-native-passwords", input),
   browserImportList: (): Promise<unknown[]> =>
     ipcRenderer.invoke("catamorphic:browser-import-list"),
   browserImportRun: (input: unknown): Promise<unknown> =>

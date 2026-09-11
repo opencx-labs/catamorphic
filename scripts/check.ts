@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { copyFile, rm } from "node:fs/promises";
 import path from "node:path";
-import { checkCommands } from "./check-plan.js";
+import { checkCommands, checkOptions } from "./check-plan.js";
 import { writeCliError } from "./cli-error.js";
 import {
   createTestRunResources,
@@ -22,6 +22,7 @@ function logFileName(input: { index: number; label: string }): string {
 }
 
 async function main(): Promise<void> {
+  const options = checkOptions(process.argv.slice(2));
   const repositoryRoot = path.resolve(import.meta.dirname, "..");
   const nonce = randomUUID();
   const resources = await createTestRunResources({ pid: process.pid, nonce });
@@ -38,14 +39,23 @@ async function main(): Promise<void> {
       path.join(repositoryRoot, "packages/db/src/generated/db.ts"),
       generatedTypesBaseline,
     );
-    const phases = checkCommands({ generatedTypesBaseline });
+    const phases = checkCommands({
+      generatedTypesBaseline,
+      ...options,
+      reuseTests:
+        process.env.GITHUB_ACTIONS === "true" &&
+        process.env.CATAMORPHIC_REUSE_TESTS === "1",
+    });
     await withDisposablePostgres({
       driver: dockerTestPostgresDriver(),
       pid: process.pid,
       nonce,
       task: async (databaseUrl) => {
         const env = testRunEnvironment({
-          source: deterministicTestEnvironment(runtime.env, databaseUrl),
+          source: {
+            ...deterministicTestEnvironment(runtime.env, databaseUrl),
+            CATAMORPHIC_TEST_SHARD: options.shard,
+          },
           resources,
         });
         for (const [index, phase] of phases.entries()) {

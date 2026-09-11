@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { desktopApi, type GitOverview } from "../lib/desktop-api.js";
 import { GitNav } from "./git-nav.js";
+import { SidebarContribution } from "./sidebar-contribution.js";
 
 vi.mock("../lib/desktop-api.js", () => ({
   desktopApi: {
@@ -63,7 +64,7 @@ it("renders collapsible worktrees, keeps diff identities separate, and passes th
     expect(sections).toHaveLength(2);
     expect(node.textContent).toContain("Committed vs trunk");
     const rows = node.querySelectorAll<HTMLButtonElement>(
-      "[data-change-group] button",
+      "[data-change-group] [data-tree-primary]",
     );
     expect(rows).toHaveLength(3);
     for (const row of rows) await act(async () => row.click());
@@ -106,10 +107,21 @@ it("keeps failures and clean multi-worktree sections visible", async () => {
     });
     await act(async () =>
       root.render(
-        <GitNav projectId="p" onOpenDiff={() => {}} onEmptyChange={empty} />,
+        <SidebarContribution
+          value={{
+            section: { id: "git", type: "git" },
+            surface: { kind: "none" },
+            visible: true,
+            relevant: true,
+            report: empty,
+            open: () => {},
+          }}
+        >
+          <GitNav projectId="p" onOpenDiff={() => {}} />
+        </SidebarContribution>,
       ),
     );
-    expect(empty).toHaveBeenLastCalledWith(false);
+    expect(empty).toHaveBeenLastCalledWith("ready");
     expect(node.querySelectorAll("[data-worktree-path]")).toHaveLength(2);
     vi.mocked(desktopApi.gitOverview).mockRejectedValue(
       new Error("Checkout unavailable"),
@@ -118,7 +130,7 @@ it("keeps failures and clean multi-worktree sections visible", async () => {
     expect(node.querySelector('[role="alert"]')?.textContent).toContain(
       "Checkout unavailable",
     );
-    expect(empty).toHaveBeenLastCalledWith(false);
+    expect(empty).toHaveBeenLastCalledWith("error");
   } finally {
     await act(async () => root.unmount());
   }

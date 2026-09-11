@@ -36,3 +36,7 @@ of registry selection and authoring doctrine through their existing skill hooks.
 Agents can inspect and adapt source using one installation path. Pack updates are
 intentional source changes, not automatic runtime upgrades. Review styling and
 behavior remain consistent by default, while project customization stays possible.
+The review pack's default syntax theme consumes existing host CSS tokens, including
+inside the diff shadow root. Explicit code-theme options remain an override;
+apps need no second theme store or observer. Typography and control spacing consume
+the existing font-size and row-height tokens.

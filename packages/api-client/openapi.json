@@ -13188,6 +13188,9 @@
                   "agentId": {
                     "type": "string"
                   },
+                  "model": {
+                    "type": "string"
+                  },
                   "effort": {
                     "type": "string",
                     "enum": ["low", "medium", "high", "xhigh", "max"]
@@ -13242,6 +13245,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "childCount": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
                     "id": {
                       "type": "string",
                       "format": "uuid",
@@ -13707,6 +13715,34 @@
           {
             "schema": {
               "type": "string",
+              "enum": ["promoted", "latent", "archived"]
+            },
+            "in": "query",
+            "name": "visibility",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "query",
+            "name": "parentSessionId",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["true", "false"]
+            },
+            "in": "query",
+            "name": "rootsOnly",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
               "format": "uuid",
               "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
             },
@@ -13728,6 +13764,11 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "childCount": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
                           "id": {
                             "type": "string",
                             "format": "uuid",
@@ -14264,6 +14305,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "childCount": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
                     "id": {
                       "type": "string",
                       "format": "uuid",
@@ -14754,6 +14800,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "childCount": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
                     "id": {
                       "type": "string",
                       "format": "uuid",
@@ -15112,6 +15163,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "childCount": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
                     "id": {
                       "type": "string",
                       "format": "uuid",
@@ -15572,6 +15628,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "childCount": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
                     "id": {
                       "type": "string",
                       "format": "uuid",
@@ -16205,6 +16266,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "childCount": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
                     "id": {
                       "type": "string",
                       "format": "uuid",
@@ -16516,6 +16582,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "childCount": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
                     "id": {
                       "type": "string",
                       "format": "uuid",
@@ -17042,6 +17113,11 @@
                     "session": {
                       "type": "object",
                       "properties": {
+                        "childCount": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
                         "id": {
                           "type": "string",
                           "format": "uuid",
@@ -17452,6 +17528,11 @@
                       "session": {
                         "type": "object",
                         "properties": {
+                          "childCount": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
                           "id": {
                             "type": "string",
                             "format": "uuid",
@@ -17844,6 +17925,11 @@
                       "session": {
                         "type": "object",
                         "properties": {
+                          "childCount": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
                           "id": {
                             "type": "string",
                             "format": "uuid",
@@ -18284,6 +18370,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "childCount": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
                     "id": {
                       "type": "string",
                       "format": "uuid",
@@ -19408,6 +19499,11 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "childCount": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
                     "id": {
                       "type": "string",
                       "format": "uuid",
@@ -20204,6 +20300,11 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "childCount": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
                           "id": {
                             "type": "string",
                             "format": "uuid",
@@ -20594,6 +20695,11 @@
                   "items": {
                     "type": "object",
                     "properties": {
+                      "childCount": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
                       "id": {
                         "type": "string",
                         "format": "uuid",

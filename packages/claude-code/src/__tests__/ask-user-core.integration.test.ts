@@ -193,6 +193,9 @@ describeIf("ask_user across ClaudeCodeAgent + AgentSessionsService", () => {
       session.id,
       "Ask me what you need to know",
     );
+
+    // Native checkout preparation and durable event writes can exceed the
+    // default one-second wait when integration suites run concurrently.
     await vi.waitFor(
       async () => {
         const detail = await sessions.get(identity, projectId, session.id);

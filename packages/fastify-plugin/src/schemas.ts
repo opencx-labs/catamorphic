@@ -992,7 +992,19 @@ export const AgentSessionSourceSchema = z.enum([
   "api",
 ]);
 
+export const AgentSessionsQuerySchema = PaginationQuerySchema.extend({
+  visibility: z.enum(["promoted", "latent", "archived"]).optional(),
+  parentSessionId: z.string().uuid().optional(),
+  rootsOnly: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .optional(),
+}).refine((value) => !(value.rootsOnly && value.parentSessionId), {
+  message: "Choose rootsOnly or parentSessionId, not both.",
+});
+
 export const AgentSessionSchema = z.object({
+  childCount: z.number().int().nonnegative().optional(),
   id: z.string().uuid(),
   projectId: z.string().uuid(),
   externalUserId: z.string(),
@@ -1058,6 +1070,7 @@ export const CreateAgentSessionSchema = z.object({
   systemPrompt: z.string().optional(),
   /** Host-registry key of the agent to run this session on. */
   agentId: z.string().optional(),
+  model: z.string().optional(),
   effort: AgentEffortSchema.optional(),
   environment: z.string().min(1).optional(),
   /** Surface creating the session. Provenance only; never grants access. */

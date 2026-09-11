@@ -1,6 +1,16 @@
-import { APP_PROTOCOL_VERSION } from "@catamorphic/app";
+import {
+  APP_PROTOCOL_VERSION,
+  type AppCollections,
+  type AppHostTheme,
+} from "@catamorphic/app";
 import { CatamorphicProvider } from "@catamorphic/react";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppMount } from "./app-mount.js";
 
@@ -47,16 +57,25 @@ function makeApiClient(overrides?: {
   };
 }
 
-function mount(apiClient: ReturnType<typeof makeApiClient>) {
-  return render(
+function mount(
+  apiClient: ReturnType<typeof makeApiClient>,
+  theme?: AppHostTheme,
+) {
+  const content = (theme?: AppHostTheme) => (
     <CatamorphicProvider apiClient={apiClient as never}>
       <AppMount
         projectId={PROJECT_ID}
         appName="ops-dashboard"
         context={{ tenantId: "t-1", user: { id: "viewer-1" } }}
+        theme={theme}
       />
-    </CatamorphicProvider>,
+    </CatamorphicProvider>
   );
+  const result = render(content(theme));
+  return {
+    ...result,
+    setTheme: (theme: AppHostTheme) => result.rerender(content(theme)),
+  };
 }
 
 /**
@@ -90,6 +109,44 @@ async function mountReadyFrame(apiClient: ReturnType<typeof makeApiClient>) {
 }
 
 describe("AppMount", () => {
+  it("delivers the current theme on load, on switches and when returning to the initial theme", async () => {
+    const initial: AppHostTheme = {
+      appearance: "light",
+      colors: { bg: "#ffffff" },
+    };
+    const changed: AppHostTheme = {
+      appearance: "dark",
+      colors: { bg: "#121212" },
+    };
+    const { container, setTheme } = mount(makeApiClient(), initial);
+    await waitFor(() =>
+      expect(container.querySelector("iframe")).not.toBeNull(),
+    );
+    const frame = container.querySelector("iframe");
+    if (!frame?.contentWindow) throw new Error("no frame window");
+    const src = frame.src;
+    const post = vi.spyOn(frame.contentWindow, "postMessage");
+    setTheme(changed);
+    expect(post).toHaveBeenCalledWith(
+      { catamorphicApp: APP_PROTOCOL_VERSION, kind: "theme", theme: changed },
+      "*",
+    );
+    post.mockClear();
+    // A guest load after the update must not stay on the URL's initial theme.
+    fireEvent.load(frame);
+    expect(post).toHaveBeenCalledWith(
+      { catamorphicApp: APP_PROTOCOL_VERSION, kind: "theme", theme: changed },
+      "*",
+    );
+    post.mockClear();
+    setTheme(initial);
+    expect(post).toHaveBeenCalledWith(
+      { catamorphicApp: APP_PROTOCOL_VERSION, kind: "theme", theme: initial },
+      "*",
+    );
+    expect(frame.src).toBe(src);
+  });
+
   it("navigates the frame to the guest URL with the theme riding along", async () => {
     const apiClient = makeApiClient();
     const { container } = render(
@@ -474,5 +531,163 @@ describe("compact app slots", () => {
     expect(frame.style.height).toBe("280px");
     rerender(view(true));
     expect(container.querySelector("iframe")).toBe(frame);
+  });
+});
+
+describe("app collection broker", () => {
+  it("bounds subscriptions even when the host has no event subscription adapter", async () => {
+    const apiClient = makeApiClient();
+    const collections: AppCollections = {
+      read: async () => ({ items: [] }),
+      execute: async () => {},
+    };
+    const mounted = render(
+      <CatamorphicProvider apiClient={apiClient as never}>
+        <AppMount
+          projectId={PROJECT_ID}
+          appName="ops-dashboard"
+          collections={collections}
+          context={{ tenantId: "t-1", user: { id: "viewer-1" } }}
+        />
+      </CatamorphicProvider>,
+    );
+    await waitFor(() =>
+      expect(mounted.container.querySelector("iframe")).toBeTruthy(),
+    );
+    const frame = mounted.container.querySelector("iframe");
+    if (!frame?.contentWindow) throw new Error("Missing guest");
+    const messages = vi.spyOn(frame.contentWindow, "postMessage");
+    const send = (source: string, operation = "subscribe") =>
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: frame.contentWindow,
+          data: {
+            catamorphicApp: APP_PROTOCOL_VERSION,
+            kind: "collection",
+            operation,
+            source,
+            callId: `${operation}:${source}`,
+          },
+        }),
+      );
+    await waitFor(() => {
+      send("first");
+      expect(messages).toHaveBeenCalledWith(
+        expect.objectContaining({ ok: true }),
+        "*",
+      );
+    });
+    for (let index = 1; index < 32; index += 1) send(`source-${index}`);
+    send("first");
+    expect(messages).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ok: true }),
+      "*",
+    );
+    send("overflow");
+    expect(messages).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ok: false }),
+      "*",
+    );
+    send("first", "unsubscribe");
+    send("overflow");
+    expect(messages).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ok: true }),
+      "*",
+    );
+  });
+  it("rebinds grants and context without remounting and aborts obsolete reads", async () => {
+    const apiClient = makeApiClient();
+    const disconnect = vi.fn();
+    let pendingSignal: AbortSignal | undefined;
+    const first: AppCollections = {
+      read: ({ signal }) => {
+        pendingSignal = signal;
+        return new Promise(() => {});
+      },
+      execute: vi.fn(async () => {}),
+      subscribe: vi.fn(() => disconnect),
+    };
+    const second: AppCollections = {
+      read: vi.fn(async () => ({ items: [] })),
+      execute: vi.fn(async () => {}),
+      subscribe: vi.fn(() => () => {}),
+    };
+    const state = vi.fn();
+    const content = (collections: AppCollections, sessionId: string) => (
+      <CatamorphicProvider apiClient={apiClient as never}>
+        <AppMount
+          projectId={PROJECT_ID}
+          appName="ops-dashboard"
+          context={{ tenantId: "t-1", user: { id: "viewer-1" } }}
+          collections={collections}
+          onContentState={state}
+          display={{
+            mode: "compact",
+            visible: true,
+            surface: { kind: "chat", sessionId },
+          }}
+        />
+      </CatamorphicProvider>
+    );
+    const mounted = render(content(first, "first"));
+    await waitFor(() =>
+      expect(mounted.container.querySelector("iframe")).toBeTruthy(),
+    );
+    const frame = mounted.container.querySelector("iframe");
+    if (!frame?.contentWindow) throw new Error("Missing guest");
+    const send = (data: object) =>
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: frame.contentWindow,
+          data: { catamorphicApp: APP_PROTOCOL_VERSION, ...data },
+        }),
+      );
+    await waitFor(() => {
+      send({
+        kind: "collection",
+        operation: "subscribe",
+        source: "subsessions",
+        callId: "listen",
+      });
+      expect(first.subscribe).toHaveBeenCalledTimes(1);
+    });
+    send({
+      kind: "collection",
+      operation: "read",
+      source: "subsessions",
+      callId: "read",
+      parentId: null,
+    });
+    await waitFor(() => expect(pendingSignal).toBeDefined());
+    const replies = vi.spyOn(frame.contentWindow, "postMessage");
+    mounted.rerender(content(second, "second"));
+    await waitFor(() => expect(disconnect).toHaveBeenCalledTimes(1));
+    expect(pendingSignal?.aborted).toBe(true);
+    expect(replies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "result",
+        callId: "read",
+        ok: false,
+        error: expect.objectContaining({
+          message: "Collection context changed; retry the request",
+        }),
+      }),
+      "*",
+    );
+    expect(second.subscribe).toHaveBeenCalledTimes(1);
+    expect(mounted.container.querySelector("iframe")).toBe(frame);
+    send({ kind: "content-state", state: "empty" });
+    await waitFor(() => expect(state).toHaveBeenLastCalledWith("empty"));
+    send({ kind: "content-state", state: "invented" });
+    expect(state).toHaveBeenLastCalledWith("empty");
+    send({
+      kind: "collection",
+      operation: "action",
+      source: "subsessions",
+      callId: "bad",
+      itemId: 7,
+      action: "open",
+    });
+    expect(second.execute).not.toHaveBeenCalled();
   });
 });

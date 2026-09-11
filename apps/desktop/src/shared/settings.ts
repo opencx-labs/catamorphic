@@ -31,10 +31,18 @@ export const SETTINGS = {
   },
   dockSide: {
     label: "Dock position",
-    description: "You can also drag the dock handle to either side.",
+    description: "Drag the collapsed bubble to switch bottom corners.",
     scopes: profileScope,
     valid: oneOf("left", "right"),
     options: { left: "Left", right: "Right" },
+  },
+  dockAlignment: {
+    label: "Expanded dock position",
+    description:
+      "Keep open chats and bubbles at the edge or centered in the workspace.",
+    scopes: profileScope,
+    valid: oneOf("edge", "center"),
+    options: { edge: "At the edge", center: "Centered" },
   },
   sidebarDividers: {
     label: "Sidebar dividers",

@@ -457,7 +457,7 @@ describe("remote projects (ADR 0055)", () => {
       { label: "open customer folder" },
     );
     await runWait(
-      `const row = $('[data-testid="files-nav"] button[title="store/customers/acme/brief.md"]');
+      `const row = $('[data-testid="files-nav"] [data-sidebar-item-id="store/customers/acme/brief.md"] [data-tree-primary]');
        if (!row) return false; row.click(); return true;`,
       {
         timeoutMs: 30_000,
@@ -507,7 +507,7 @@ describe("remote projects (ADR 0055)", () => {
     expect(
       await run(
         `return {
-          handbook: !!$('[data-testid="files-nav"] button[title="docs/handbook.md"]'),
+          handbook: !!$('[data-testid="files-nav"] [data-sidebar-item-id="docs/handbook.md"] [data-tree-primary]'),
           sync: !!$('[data-testid="remote-sync"]'),
           propose: !!$('[data-testid="remote-propose"]'),
         };`,

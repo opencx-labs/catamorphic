@@ -53,9 +53,9 @@ const helpers = `
   };
   const typeText = (text) => { caretToEnd(); document.execCommand('insertText', false, text); };
   // React derives onMouseEnter/Leave from over/out pairs, so hover is a
-  // bubbling mouseover from outside and unhover a mouseout to the body.
-  const hover = (el) => el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }));
-  const unhover = (el) => el.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }));
+  // bubbling pointerover from outside and unhover a pointerout to the body.
+  const hover = (el) => el.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, relatedTarget: document.body }));
+  const unhover = (el) => el.dispatchEvent(new PointerEvent('pointerout', { bubbles: true, relatedTarget: document.body }));
   const paste = (text) => {
     const dt = new DataTransfer();
     dt.setData('text/plain', text);
@@ -443,20 +443,34 @@ describe("context pills", () => {
       document.execCommand('delete');
       return true;
     `);
-    const caret = await runWait<{ x: number; y: number; empty: boolean }>(`
+    const caret = await runWait<{
+      x: number;
+      y: number;
+      paddingLeft: number;
+      paddingTop: number;
+      lineHeight: number;
+    }>(`
       const c = composer();
       if (!c.hasAttribute('data-empty')) return false;
       const probe = document.createElement('span');
       getSelection().getRangeAt(0).insertNode(probe);
       const rect = c.getBoundingClientRect();
       const pos = probe.getBoundingClientRect();
+      const style = getComputedStyle(c);
       probe.remove();
-      return { x: Math.round(pos.left - rect.left), y: Math.round(pos.top - rect.top), empty: true };
+      return {
+        x: pos.left - rect.left, y: pos.top - rect.top,
+        paddingLeft: parseFloat(style.paddingLeft),
+        paddingTop: parseFloat(style.paddingTop),
+        lineHeight: parseFloat(style.lineHeight),
+      };
     `);
-    // Padding is 10px/6px: the caret sits at the input's start, not after
-    // the placeholder text.
-    expect(caret.x).toBeLessThanOrEqual(12);
-    expect(caret.y).toBeLessThanOrEqual(10);
+    // The probe's vertical font metrics vary by OS. Require the first line
+    // at the actual input padding; placeholder text must not push it right
+    // or onto a second line.
+    expect(Math.abs(caret.x - caret.paddingLeft)).toBeLessThanOrEqual(1);
+    expect(caret.y).toBeGreaterThanOrEqual(caret.paddingTop - 1);
+    expect(caret.y).toBeLessThan(caret.paddingTop + caret.lineHeight);
     expect(
       await run<string>(
         `return getComputedStyle(composer(), '::before').position;`,

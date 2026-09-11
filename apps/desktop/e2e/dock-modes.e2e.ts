@@ -40,9 +40,11 @@ const helpers = `
   const send = () => composer().dispatchEvent(new KeyboardEvent('keydown', {
     key: 'Enter', bubbles: true, cancelable: true }));
   ${setReactValueJs}
-  const pressKey = (key, mods = {}) =>
+  const pressKey = (key, mods = {}) => {
     window.dispatchEvent(new KeyboardEvent('keydown', {
       key, bubbles: true, cancelable: true, ...(mods.metaKey && !/Mac/.test(navigator.platform) ? { ...mods, metaKey: false, ctrlKey: true } : mods) }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true }));
+  };
   const dockH = () => frontDock()?.getBoundingClientRect().height ?? 0;
   const hoverDock = () => frontDock().dispatchEvent(
     new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }));
@@ -58,6 +60,39 @@ const runWait = <T = unknown>(
   body: string,
   opts?: { timeoutMs?: number; label?: string },
 ) => app.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
+
+// Native hover follows the isolated desktop's pointer and hit testing.
+const hoverChip = async (selector: string) => {
+  await runWait(
+    `return !frontDock()?.querySelector('[data-testid="session-inspector-trigger"]')?.getAttribute('aria-label')?.includes(', Working,');`,
+    {
+      label: "agent turn settled before hovering its surfaces",
+    },
+  );
+  await app.movePointer({ x: 1, y: 1 });
+  const point = await runWait<{ x: number; y: number }>(
+    `
+    const button = frontDock()?.querySelector(${JSON.stringify(selector)});
+    if (!button) return false;
+    const dock = frontDock();
+    if (dock.getAnimations({subtree:true}).some(animation =>
+      animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity)) return false;
+    const bounds = button.getBoundingClientRect();
+    // The chip's trailing split/remove overlay appears on hover. Aim at the
+    // leading icon so that overlay cannot replace the preview's hit target.
+    const x = bounds.left + 8, y = bounds.top + bounds.height / 2;
+    return button.contains(document.elementFromPoint(x, y)) && { x, y };
+  `,
+    { label: "surface chip ready for native hover" },
+  );
+  await app.movePointer(point);
+  await runWait(
+    `return frontDock()?.querySelector(${JSON.stringify(selector)})?.matches(':hover');`,
+    {
+      label: "native pointer reached the surface chip",
+    },
+  );
+};
 
 describe("dock modes", () => {
   it("boots into a project and opens a floating chat", async () => {
@@ -81,7 +116,22 @@ describe("dock modes", () => {
       label: "workspace ready",
     });
     await run(`pressKey('n', { metaKey: true }); return true;`);
-    await runWait(`return !!composer();`, { label: "floating chat" });
+    await runWait(
+      `const dock = frontDock();
+       return dock && document.activeElement === composer() &&
+         !dock.getAnimations({subtree:true}).some(animation =>
+           animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity);`,
+      { label: "floating chat finished opening with its composer focused" },
+    ).catch(async (error: unknown) => {
+      const state = await run(`return {
+        active: document.activeElement?.outerHTML.slice(0, 1000),
+        windowFocused: document.hasFocus(),
+        animations: frontDock()?.getAnimations({subtree:true}).map(animation => ({
+          state: animation.playState, timing: animation.effect?.getTiming(),
+        })),
+      };`);
+      throw new Error(`${String(error)}; dock state: ${JSON.stringify(state)}`);
+    });
   }, 180_000);
 
   it("the attach button inserts files at the caret, exactly like a paste", async () => {
@@ -100,14 +150,25 @@ describe("dock modes", () => {
       input.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     `);
-    const state = await runWait<{ text: string; focused: boolean }>(
+    const text = await runWait<string>(
       `const c = composer();
        if (!c.querySelector('[data-testid="composer-pill"][data-pill-kind="image"]')) return false;
-       return { text: c.textContent, focused: document.activeElement === c };`,
+       return c.textContent;`,
       { label: "picked file as inline pill" },
     );
-    expect(state.text).toBe("beforepicked.png  after");
-    expect(state.focused).toBe(true);
+    expect(text).toBe("beforepicked.png  after");
+    await runWait(`return document.activeElement === composer();`, {
+      label: "composer regains focus after attachment insertion",
+    }).catch(async (error: unknown) => {
+      const focus = await run(`return {
+        active: document.activeElement?.outerHTML.slice(0, 1000),
+        windowFocused: document.hasFocus(),
+        inert: !!composer()?.closest('[inert]'),
+      };`);
+      throw new Error(
+        `${String(error)}; focus state: ${JSON.stringify(focus)}`,
+      );
+    });
     await run(`setComposer(''); return true;`);
     await runWait(
       `return composer().hasAttribute('data-empty') === false || true;`,
@@ -197,23 +258,26 @@ describe("dock modes", () => {
     );
   }, 60_000);
 
-  it("the slash menu merges the harness's commands under the skills", async () => {
+  it("the built-in slash menu offers shared skills without inventing native commands", async () => {
     await run(`setComposer('/'); return true;`);
     const rows = await runWait<string[]>(
       `const menu = $('[data-testid="slash-menu"]');
-       if (!menu || !menu.querySelector('[data-skill-name="compact"]')) return false;
+       if (!menu || !menu.querySelector('[data-skill-name="writing-workflows"]') ||
+           menu.querySelector('[aria-busy="true"]')) return false;
        return [...menu.querySelectorAll('[role="option"]')].map((el) => el.dataset.skillName);`,
-      { timeoutMs: 15_000, label: "menu with harness commands" },
+      { timeoutMs: 15_000, label: "built-in command catalog" },
     );
-    // The e2e fixture list from main: compact + review, tagged as the
-    // harness's own.
-    expect(rows).toContain("compact");
-    expect(rows).toContain("review");
+    // This chat runs the built-in Fake Agent. Native command fixtures must
+    // follow the selected harness, just like production discovery does.
+    expect(rows).toContain("status");
+    expect(rows).toContain("writing-workflows");
+    expect(rows).not.toContain("compact");
+    expect(rows).not.toContain("review");
     expect(
       await run<boolean>(
         `return $('[data-testid="slash-menu"]').textContent.includes('Claude Code');`,
       ),
-    ).toBe(true);
+    ).toBe(false);
     // The panel pops in (and pops out when the token dissolves).
     expect(
       await run<boolean>(
@@ -224,11 +288,13 @@ describe("dock modes", () => {
     await runWait(`return !$('[data-testid="slash-menu"]');`, {
       label: "menu closed after its exit animation",
     });
-    // Committing a command sends the literal /name to the harness.
-    await run(`setComposer('/compact'); return true;`);
+    // Unknown slash text remains an ordinary message after discovery settles.
+    await run(`setComposer('/unknown-command-zzzz'); return true;`);
     await runWait(
-      `return !!$('[data-testid="slash-menu"] [data-skill-name="compact"]');`,
-      { label: "compact filtered" },
+      `const menu = $('[data-testid="slash-menu"]');
+       return !!menu && menu.textContent.includes('No matching commands') &&
+         !menu.querySelector('[aria-busy="true"]');`,
+      { label: "unknown command after discovery" },
     );
     await run(`
       composer().dispatchEvent(new KeyboardEvent('keydown', {
@@ -236,7 +302,7 @@ describe("dock modes", () => {
       return true;
     `);
     await runWait(
-      `return frontDock().querySelector('[role="log"]').textContent.includes('You said: /compact');`,
+      `return frontDock().querySelector('[role="log"]').textContent.includes('You said: /unknown-command-zzzz');`,
       { timeoutMs: 30_000, label: "harness received the raw command" },
     );
   }, 60_000);
@@ -265,6 +331,11 @@ describe("dock modes", () => {
       `return !!frontDock().querySelector('button[aria-label$=" terminals"]');`,
       { timeoutMs: 15_000, label: "collapsed group chip" },
     );
+    expect(
+      await run(
+        `return frontDock().querySelector('[data-testid="surface-group"][data-kind="terminal"]').textContent;`,
+      ),
+    ).toMatch(/^Terminals\d+$/);
     // The group chip ENTERED through the pill vocabulary (its wrapper
     // keeps the class for the element's lifetime).
     expect(
@@ -272,15 +343,26 @@ describe("dock modes", () => {
         `return !!frontDock().querySelector('.animate-pill-in button[aria-label$=" terminals"]');`,
       ),
     ).toBe(true);
+    await runWait(
+      `const button = frontDock().querySelector('[data-testid="surface-group"]'); return button && !button.closest('[inert]');`,
+      { label: "rail is interactive after the turn settles" },
+    );
     // Its popover pops in and back out.
     await run(
       `frontDock().querySelector('button[aria-label$=" terminals"]').click(); return true;`,
     );
     await runWait(
       `const pop = frontDock().querySelector('.animate-pop-in');
-       return !!pop && pop.textContent.includes('Agent terminal');`,
+       const members = pop?.querySelector('[data-testid="surface-group-members"]') ?? frontDock().querySelector('[data-testid="surface-group-members"]');
+       return !!pop && members?.children.length >= 4;`,
       { label: "group popover popped in" },
     );
+    await hoverChip('[data-testid="surface-group-members"] button');
+    await runWait(
+      `return document.querySelector('[data-resource-inspector][data-open="true"]')?.textContent.includes('Terminal');`,
+      { label: "group member uses shared preview" },
+    );
+    await app.press("Escape");
     await run(
       `frontDock().querySelector('button[aria-label$=" terminals"]').click(); return true;`,
     );
@@ -308,6 +390,12 @@ describe("dock modes", () => {
     );
     expect(overlay.opacity).toBe("0");
     expect(overlay.overlaid).toBe(true);
+    await hoverChip('[data-testid="surface-chip"][data-kind="browser"] button');
+    await runWait(
+      `return document.querySelector('[data-resource-inspector][data-open="true"] [data-preview-location]')?.textContent.includes('https://example.org');`,
+      { label: "composer surface previews its destination on hover" },
+    );
+    await app.press("Escape");
   }, 120_000);
 
   // The shim replaces macOS's native `open`; other platforms use their own

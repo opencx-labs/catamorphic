@@ -5,11 +5,82 @@
  * workflow set, so this protocol is a transport, not a trust boundary.
  */
 
+import type {
+  CollectionChange,
+  CollectionItem,
+  CollectionPage,
+} from "./collection.js";
 import type { AppHostTheme } from "./theme.js";
+
+export interface AppSurface {
+  kind: string;
+  key?: string;
+  projectId?: string;
+  sessionId?: string;
+  path?: string;
+  selection?: boolean;
+}
+export type AppContentState =
+  | "loading"
+  | "empty"
+  | "ready"
+  | "error"
+  | "unavailable";
+export interface AppCollectionItem extends CollectionItem {
+  label: string;
+  description?: string;
+  icon?: string;
+  badges?: string[];
+  progress?: number;
+  actions?: {
+    id: string;
+    label: string;
+    icon?: string;
+    disabledReason?: string;
+  }[];
+  data?: Record<string, unknown>;
+}
+export interface AppCollectionRequest {
+  source: string;
+  parentId?: string | null;
+  cursor?: string;
+}
+/** Hosts explicitly inject authorized sources. No guest holds an API credential. */
+export interface AppCollections {
+  read: (
+    request: AppCollectionRequest & { signal: AbortSignal },
+  ) => Promise<CollectionPage<AppCollectionItem>>;
+  execute: (request: {
+    source: string;
+    itemId: string;
+    action: string;
+    signal: AbortSignal;
+  }) => Promise<void>;
+  subscribe?: (request: {
+    source: string;
+    publish: (change: CollectionChange<AppCollectionItem>) => void;
+  }) => () => void;
+}
 
 export const APP_PROTOCOL_VERSION = 1;
 
 export type GuestToHostMessage =
+  | {
+      catamorphicApp: typeof APP_PROTOCOL_VERSION;
+      kind: "content-state";
+      state: AppContentState;
+    }
+  | {
+      catamorphicApp: typeof APP_PROTOCOL_VERSION;
+      kind: "collection";
+      callId: string;
+      operation: "read" | "action" | "subscribe" | "unsubscribe";
+      source: string;
+      parentId?: string | null;
+      cursor?: string;
+      itemId?: string;
+      action?: string;
+    }
   | {
       catamorphicApp: typeof APP_PROTOCOL_VERSION;
       kind: "call";
@@ -43,9 +114,16 @@ export type GuestToHostMessage =
 export interface AppDisplay {
   mode: "full" | "compact";
   visible: boolean;
+  surface?: AppSurface;
 }
 
 export type HostToGuestMessage =
+  | {
+      catamorphicApp: typeof APP_PROTOCOL_VERSION;
+      kind: "collection-change";
+      source: string;
+      change: CollectionChange<AppCollectionItem>;
+    }
   | {
       catamorphicApp: typeof APP_PROTOCOL_VERSION;
       kind: "display";

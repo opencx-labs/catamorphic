@@ -78,9 +78,7 @@ async function main() {
     const dirty = Boolean(
       (await exec("git", ["status", "--porcelain"])).stdout.trim(),
     );
-    const app = await launchApp({
-      env: { CATAMORPHIC_E2E_WINDOW_MODE: "visible" },
-    });
+    const app = await launchApp();
     const samples: Array<{
       elapsed: number;
       phase: string;

@@ -16,13 +16,73 @@ export type SidebarAction =
   | "unpin"
   | "edit"
   | "rename"
-  | "remove";
+  | "close"
+  | "remove"
+  | "archive"
+  | "unarchive"
+  | "mark-read"
+  | "mark-unread"
+  | "stop"
+  | "new-subsession"
+  | "history"
+  | "publish"
+  | "fork"
+  | "new-chat"
+  | "new-workflow"
+  | "refresh"
+  | "search";
 
 export interface SidebarMenuEntry {
   label: string;
   action: SidebarAction;
   /** Render in the danger color (destructive). */
   danger?: boolean;
+  icon?: string;
+  /** A resource destination can be supplied independently of the row. */
+  url?: string;
+  disabledReason?: string;
+}
+
+export interface SidebarSurface {
+  kind: string;
+  key?: string;
+  projectId?: string;
+  sessionId?: string;
+  path?: string;
+  selection?: boolean;
+}
+
+export interface SidebarWhen extends ProjectExperienceWhen {
+  /** Relevance is evaluated even for root users. */
+  surface?: string[];
+  session?: boolean;
+  pathPrefix?: string;
+  selection?: boolean;
+}
+
+export interface SidebarSource {
+  type: SidebarSectionConfig["type"];
+  scope?: "project" | "session" | "children";
+  filter?: Record<string, string | number | boolean>;
+  sort?: { field: string; direction?: "asc" | "desc" };
+  groupBy?: string;
+  pageSize?: number;
+  includeLatent?: boolean;
+}
+
+export interface SidebarItemPresentation {
+  label?: string;
+  description?: string;
+  icon?: string;
+  badges?: string[];
+  progress?: number;
+  open?: OpenMode;
+  menu?: SidebarMenuEntry[];
+  /** Omit to inherit overflow; [] disables the right-click menu. */
+  contextMenu?: SidebarMenuEntry[];
+  actions?: SidebarMenuEntry[];
+  preview?: SidebarPreview | false;
+  hide?: boolean;
 }
 
 export interface SidebarPreviewMetadata {
@@ -37,7 +97,8 @@ export interface SidebarPreview {
   metadata?: SidebarPreviewMetadata[];
 }
 
-export interface SidebarItem {
+export interface SidebarItem extends SidebarItemPresentation {
+  id?: string;
   label: string;
   /** Optional for a folder-only item. */
   url?: string;
@@ -53,11 +114,21 @@ export interface SidebarItem {
   /** Start this item's children collapsed (default open). */
   collapsed?: boolean;
   /** Project-authorized visibility; invalid predicates fail closed. */
-  when?: ProjectExperienceWhen;
+  when?: SidebarWhen;
 }
 
 export interface SidebarSectionConfig {
   id: string;
+  /** Explicit sources made available to this sandboxed app widget. */
+  collections?: string[];
+  /** Reuse any built-in source, independently of the section's preset. */
+  source?: SidebarSource;
+  itemDefaults?: SidebarItemPresentation;
+  itemOverrides?: Record<string, SidebarItemPresentation>;
+  headerActions?: SidebarMenuEntry[];
+  rowHeight?: number;
+  contextMenu?: SidebarMenuEntry[];
+  actions?: SidebarMenuEntry[];
   /** App name for app widgets; project-relative document path for notes. */
   app?: string;
   path?: string;
@@ -67,6 +138,7 @@ export interface SidebarSectionConfig {
     | "apps"
     | "files"
     | "chats"
+    | "subsessions"
     | "tabs"
     | "bookmarks"
     | "git"
@@ -92,7 +164,7 @@ export interface SidebarSectionConfig {
   /** Override the per-item hover menu for the whole section. */
   menu?: SidebarMenuEntry[];
   /** Project-authorized visibility; invalid predicates fail closed. */
-  when?: ProjectExperienceWhen;
+  when?: SidebarWhen;
 }
 
 export interface SidebarTabConfig {
@@ -100,7 +172,7 @@ export interface SidebarTabConfig {
   title: string;
   icon?: string;
   sections: SidebarSectionConfig[];
-  when?: ProjectExperienceWhen;
+  when?: SidebarWhen;
 }
 
 export type SidebarSide = "left" | "right";
@@ -113,6 +185,27 @@ export function sidebarSections(config: SidebarConfig | null | undefined) {
   return [...(config?.left ?? []), ...(config?.right ?? [])].flatMap(
     (tab) => tab.sections,
   );
+}
+
+export function matchesSidebarSurface(
+  when: SidebarWhen | undefined,
+  surface: SidebarSurface,
+): boolean {
+  return (
+    (!when?.surface || when.surface.includes(surface.kind)) &&
+    (when?.session === undefined ||
+      when.session === Boolean(surface.sessionId)) &&
+    (!when?.pathPrefix || Boolean(surface.path?.startsWith(when.pathPrefix))) &&
+    (when?.selection === undefined ||
+      when.selection === Boolean(surface.selection))
+  );
+}
+
+/** Presets are defaults over the same sources, never separate custom renderers. */
+export function resolveSidebarSection(
+  section: SidebarSectionConfig,
+): SidebarSectionConfig {
+  return { ...section, type: section.source?.type ?? section.type };
 }
 
 /** Resolve the same authorized presentation for sidebars, search and agent discovery. */
@@ -130,7 +223,7 @@ export function visibleSidebarConfig({
     entries?.flatMap((entry) => {
       if (!matchesProjectExperience(entry.when, context)) return [];
       const children = items(entry.items);
-      return entry.url || children?.length
+      return entry.url || entry.actions?.length || children?.length
         ? [{ ...entry, items: children }]
         : [];
     });
@@ -143,7 +236,8 @@ export function visibleSidebarConfig({
           .filter(
             (section) =>
               matchesProjectExperience(section.when, context) &&
-              (context.builder || !["git", "prs"].includes(section.type)),
+              (context.builder ||
+                !["git", "prs"].includes(section.source?.type ?? section.type)),
           )
           .map((section) => ({ ...section, items: items(section.items) })),
       }))

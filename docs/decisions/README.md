@@ -139,4 +139,11 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0124](0124-session-artifacts.md) | Session artifacts share source ownership and retention | Accepted; review distribution superseded by 0126 |
 | [0125](0125-canonical-app-icons.md) | Canonical semantic app icons | Accepted |
 | [0126](0126-installable-component-packs.md) | Installable component packs | Accepted |
-| [0127](0127-lean-agent-tool-surface.md) | Lean agent tool surface | Accepted |
+| [0127](0127-dock-placement-and-chat-runtime-choices.md) | Dock placement and chat runtime choices | Accepted |
+| [0128](0128-durable-manual-development-data.md) | Durable manual development data | Accepted |
+| [0129](0129-isolated-desktop-tests-and-ci-sharding.md) | Isolated desktop tests and CI sharding | Accepted; test-cache policy superseded by 0131 |
+| [0130](0130-macos-browser-password-import.md) | Prebuilt macOS browser password import helper | Accepted |
+| [0131](0131-content-addressed-test-reuse.md) | Content-addressed test reuse | Accepted |
+| [0132](0132-shared-contextual-sidebar-contributions.md) | Shared contextual sidebar contributions | Accepted |
+
+| [0133](0133-lean-agent-tool-surface.md) | Lean agent tool surface | Accepted |

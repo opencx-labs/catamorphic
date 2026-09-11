@@ -3,7 +3,7 @@
 App identity uses canonical semantic icons (ADR 0125). Review, dashboard,
 report, tracker, form, and calculator each have one monochrome glyph across
 tabs, lists, and chat surfaces. Agents choose a type at creation or through a
-deferred presentation capability (ADR 0127).
+deferred presentation capability (ADR 0133).
 Unspecified or unknown types retain the grid icon. Icon changes do not rebuild
 or publish an app; temporary app titles come from their retained metadata.
 
@@ -255,10 +255,21 @@ the historical log explains how it arrived here.
 
 ### 2026-09-11: Lean agent tool surface
 
-Agent tools follow ADR 0127. Ordinary work uses native execution and
+Agent tools follow ADR 0133. Ordinary work uses native execution and
 skills. Infrequent host operations use bounded capability discovery, retaining
 live authorization and a small direct surface for user interaction. App creation
 accepts initial presentation; cosmetic follow-up calls are not mandatory.
+
+### 2026-09-11: Desktop tests own a separate desktop
+
+Automated desktop tests run in a private Linux display locally and dedicated
+macOS runners in CI (ADR 0129). They use normal native focus and rendering.
+Testing must never interrupt the developer's keyboard, pointer, or clipboard.
+
+- 2026-09-11: [ADR 0132](../../docs/decisions/0132-shared-contextual-sidebar-contributions.md)
+  unifies built-in and custom sidebar collections, trees, row actions and context.
+  Right-click and overflow menus are independently configurable. Contextual sections
+  retain identity and distinguish empty content from loading and failed requests.
 
 - 2026-09-09: Accepted [ADR 0109](../../docs/decisions/0109-desktop-state-and-settings-contracts.md).
   Workspace transitions and chat delivery have explicit owners. Ordinary appearance
@@ -358,3 +369,43 @@ Consent appears as a durable question in its chat. Workflow and app links identi
 and open their actual surfaces. Editable code derives syntax, background, gutters,
 selection, cursor, diagnostics and widgets from the current app theme, with bundled
 Shiki grammars. Never ship a preset editor background that ignores the app theme.
+
+### 2026-09-11: Host-themed review packs
+
+Installed review components use the host palette for syntax, change colors,
+backgrounds and gutters by default, and inherit its color scheme inside the diff
+shadow root. Typography and spacing follow the existing app tokens. Explicit code
+palette preferences remain available in the desktop adapter. App mounts resend the
+current theme on every guest load while theme switches preserve the guest's state.
+
+## Dock placement and draft runtime controls (2026-09-11)
+
+ADR 0133 adds centered or edge-aligned expansion without changing the collapsed
+corner. The bubble itself is draggable; dragging never expands it or stores an
+absolute resting position. Use restrained settling motion and honor reduced
+motion. New and established chats share editable runtime controls; draft choices
+apply only to that conversation. Explain unavailable controls beside the control.
+
+Markdown hover previews use the app's rendered reading typography. Composer
+surface chips and expanded group members use the shared resource inspector;
+collapsed groups lead with their plural type and a separate count. Preview
+content and behavior follow [chat state](docs/chat-state.md).
+
+### 2026-09-11: Direct browser password imports on macOS
+
+Profile settings offers direct password import per detected browser profile on
+supported Macs, beside bookmark import. The action explains macOS authorization,
+shows progress and added/skipped counts, and preserves existing passwords.
+Other platforms retain CSV with a clear macOS support note. A prebuilt helper
+ships only in macOS packages; see ADR 0130.
+
+### 2026-09-11: Slash command composer
+
+Repaired the [slash command experience](../../docs/desktop-slash-command-audit.md).
+  The existing Enter-to-run and Tab-for-arguments interaction uses one send path.
+  Command rows retain a fixed height, argument hints have a stable footer, and a
+  native top-layer menu stays readable in narrow chats. Catalog loading, empty
+  results, errors, retry, and keyboard selection are explicit.
+  A T3 Code comparison further tightened command-name search, guarded selection
+  against fresh input arriving before a render, and moved pointer activation to
+  click release while retaining composer focus.

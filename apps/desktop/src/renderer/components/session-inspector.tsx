@@ -48,6 +48,8 @@ export function SessionInspector({
   effort = "Default",
   onEditModel,
   onEditEffort,
+  modelDisabledReason,
+  effortDisabledReason,
   moveDisabledReason,
   moveError,
   onMove,
@@ -76,6 +78,8 @@ export function SessionInspector({
   effort?: string;
   onEditModel?: () => void;
   onEditEffort?: () => void;
+  modelDisabledReason?: string;
+  effortDisabledReason?: string;
   moveDisabledReason?: string | null;
   moveError?: string | null;
   onMove?: () => void;
@@ -132,8 +136,24 @@ export function SessionInspector({
             model={model}
             reportedModel={reportedModel}
             effort={effort}
-            onEditModel={onEditModel}
-            onEditEffort={onEditEffort}
+            onEditModel={
+              onEditModel
+                ? () => {
+                    dismiss();
+                    onEditModel();
+                  }
+                : undefined
+            }
+            onEditEffort={
+              onEditEffort
+                ? () => {
+                    dismiss();
+                    onEditEffort();
+                  }
+                : undefined
+            }
+            modelDisabledReason={modelDisabledReason}
+            effortDisabledReason={effortDisabledReason}
             moveDisabledReason={moveDisabledReason}
             moveError={moveError}
             onMove={onMove}
@@ -211,6 +231,8 @@ export function SessionInspectorContent({
   effort = "Default",
   onEditModel,
   onEditEffort,
+  modelDisabledReason,
+  effortDisabledReason,
   moveDisabledReason,
   moveError,
   onMove,
@@ -232,6 +254,8 @@ export function SessionInspectorContent({
   effort?: string;
   onEditModel?: () => void;
   onEditEffort?: () => void;
+  modelDisabledReason?: string;
+  effortDisabledReason?: string;
   moveDisabledReason?: string | null;
   moveError?: string | null;
   onMove?: () => void;
@@ -286,7 +310,12 @@ export function SessionInspectorContent({
 
       <dl className="grid grid-cols-[5.5rem_1fr] gap-x-3 gap-y-2 py-3 text-[11px]">
         <InspectorRow label="Agent" value={agentName} />
-        <InspectorRow label="Model" value={model} onEdit={onEditModel} />
+        <InspectorRow
+          label="Model"
+          value={model}
+          onEdit={onEditModel}
+          disabledReason={modelDisabledReason}
+        />
         {reportedModel && reportedModel !== model ? (
           <InspectorRow label="Last reply" value={reportedModel} />
         ) : null}
@@ -298,6 +327,7 @@ export function SessionInspectorContent({
               : effort.charAt(0).toUpperCase() + effort.slice(1)
           }
           onEdit={onEditEffort}
+          disabledReason={effortDisabledReason}
         />
         <InspectorRow label="Source" value={source} />
         <InspectorRow label="Status" value={state} />
@@ -393,20 +423,23 @@ function InspectorRow({
   label,
   value,
   onEdit,
+  disabledReason,
 }: {
   label: string;
   value: string;
   onEdit?: () => void;
+  disabledReason?: string;
 }) {
   return (
     <>
       <dt className="text-fg-faint">{label}</dt>
-      <dd className="min-w-0 text-fg" title={value}>
-        {onEdit ? (
+      <dd className="min-w-0 text-fg" data-disabled-reason={disabledReason}>
+        {onEdit || disabledReason ? (
           <button
             type="button"
             aria-label={`Change ${label.toLowerCase()}`}
             onClick={onEdit}
+            disabled={Boolean(disabledReason)}
             className="group -mx-1.5 flex w-[calc(100%+0.75rem)] min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-0.5 text-left transition-colors duration-150 ease-[cubic-bezier(0.2,0,0,1)] hover:bg-bg-raised focus-visible:outline-2 focus-visible:outline-accent"
           >
             <span className="min-w-0 flex-1 truncate">{value}</span>

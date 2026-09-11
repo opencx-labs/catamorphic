@@ -74,7 +74,10 @@ new window focuses its existing owner when already open. Closing an occupied
 window hides it; explicit Quit owns shutdown.
 
 The profile can show chats from the current project or all its projects, attach
-or detach the dock, and place it on either edge. Drag its handle to change edges.
+or detach the dock, and choose edge or centered expansion. Drag the collapsed
+bubble or expanded handle horizontally to change bottom corners. Persist only
+left/right, never coordinates. Dragging must not trigger expansion; Escape
+cancels and arrow keys select a corner. Settling respects reduced motion.
 A detached dock stays above other apps and follows macOS desktops. Chat cards
 and bubbles retain their project's theme; the new-chat control follows the
 current project. Files, links and session controls route to their owning project,

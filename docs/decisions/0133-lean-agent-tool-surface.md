@@ -1,4 +1,4 @@
-# 0127: Lean agent tool surface
+# 0133: Lean agent tool surface
 
 - **Status:** Accepted
 - **Date:** 2026-09-11

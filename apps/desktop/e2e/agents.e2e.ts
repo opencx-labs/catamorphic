@@ -1056,13 +1056,11 @@ describe("agents and profiles", () => {
       return true;
     `);
     await runWait(
-      `return $$('[role="tab"], button').some((el) =>
-        /Close .*[Tt]erminal/.test(el.getAttribute('aria-label') ?? ''));`,
+      `return !!$('[data-point-key^="terminal:"] button[aria-label^="Close "]');`,
       { label: "terminal open as a tab" },
     );
     await run(`
-      $$('button').find((el) =>
-        /Close .*[Tt]erminal/.test(el.getAttribute('aria-label') ?? '')).click();
+      $('[data-point-key^="terminal:"] button[aria-label^="Close "]').click();
       return true;
     `);
     // Closing an agent-controlled terminal's tab backgrounds it: the tab
@@ -1217,9 +1215,12 @@ describe("agents and profiles", () => {
         label: "same-turn worktree edit checkpointed before next turn",
       },
     );
+    // Use keyboard activation so the trigger owns focus while the transcript
+    // finishes scrolling. A DOM-only click omits the browser's focus handoff.
     await run(
-      `visibleDock().querySelector('[data-testid="session-inspector-trigger"]').click(); return true;`,
+      `visibleDock().querySelector('[data-testid="session-inspector-trigger"]').focus(); return true;`,
     );
+    await app.press("Enter");
     await runWait(
       `const inspector = $('[data-testid="session-inspector-content"]');
        return inspector?.textContent.includes('Checkout') &&
@@ -1347,12 +1348,20 @@ describe("agents and profiles", () => {
     `);
     if (!key) throw new Error("PDF surface chip has no key");
 
+    // Workspace tabs can be tree rows in a sidebar. Verify the tab exists
+    // before waiting for its removal, so the close cannot race the restore.
+    await runWait(
+      `return $$('[data-tab-orientation] [data-point-key]').some((tab) =>
+         tab.getAttribute('data-point-key') === ${JSON.stringify(key)});`,
+      { label: "PDF workspace tab present" },
+    );
+
     // Park the floating chat so Cmd+W closes the PDF tab, not the chat.
     await run(`pressKey('m', { metaKey: true }); return true;`);
     await runWait(`return !visibleDock();`, { label: "PDF chat parked" });
     await run(`pressKey('w', { metaKey: true }); return true;`);
     await runWait(
-      `return !$$('[role="tab"]').some((tab) =>
+      `return !$$('[data-tab-orientation] [data-point-key]').some((tab) =>
          tab.getAttribute('data-point-key') === ${JSON.stringify(key)});`,
       { label: "PDF workspace tab closed" },
     );
@@ -1367,12 +1376,15 @@ describe("agents and profiles", () => {
       { label: "closed PDF tab remains as a removable chip" },
     );
 
-    await run(`
-      visibleDock().querySelector(
+    await runWait(
+      `const remove = visibleDock()?.querySelector(
         '[data-testid="surface-chip"][data-kind="browser"] button[aria-label^="Remove "]'
-      ).click();
-      return true;
-    `);
+      );
+      if (!remove) return false;
+      remove.click();
+      return true;`,
+      { label: "remove PDF chip from the visible chat" },
+    );
     await runWait(
       `return !visibleDock()?.querySelector(
          '[data-testid="surface-chip"][data-kind="browser"]');`,

@@ -313,6 +313,79 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     expect((await sessions.list(other, projectId)).total).toBe(0);
   });
 
+  it("pages hierarchy branches without leaking foreign parents or child counts", async () => {
+    const parent = await sessions.create(viewer, projectId, {
+      agentId: csmAgentId,
+      title: "Hierarchy parent",
+    });
+    const first = await sessions.create(viewer, projectId, {
+      agentId: csmAgentId,
+      parentSessionId: parent.id,
+      title: "First child",
+    });
+    const second = await sessions.create(viewer, projectId, {
+      agentId: csmAgentId,
+      parentSessionId: parent.id,
+      title: "Second child",
+    });
+    const roots = await sessions.list(viewer, projectId, {
+      rootsOnly: true,
+      limit: 100,
+    });
+    expect(roots.items.every((item) => item.parentSessionId === null)).toBe(
+      true,
+    );
+    expect(roots.items.find((item) => item.id === parent.id)?.childCount).toBe(
+      2,
+    );
+    const page = await sessions.list(viewer, projectId, {
+      parentSessionId: parent.id,
+      limit: 1,
+    });
+    const next = await sessions.list(viewer, projectId, {
+      parentSessionId: parent.id,
+      limit: 1,
+      offset: 1,
+    });
+    expect(page.total).toBe(2);
+    expect(
+      new Set([...page.items, ...next.items].map((item) => item.id)),
+    ).toEqual(new Set([first.id, second.id]));
+    await expect(
+      sessions.list({ ...viewer, externalUserId: "csm-carol" }, projectId, {
+        parentSessionId: parent.id,
+      }),
+    ).rejects.toThrow(AccessDeniedError);
+    const hiddenParent = await sessions.create(viewer, projectId, {
+      agentId: csmAgentId,
+      title: "Latent parent",
+    });
+    if (!db) throw new Error("Missing test database");
+    await db
+      .updateTable("agent_session_views")
+      .set({ visibility: "latent" })
+      .where("session_id", "=", hiddenParent.id)
+      .where("external_user_id", "=", viewer.externalUserId)
+      .execute();
+    const visibleChild = await sessions.create(viewer, projectId, {
+      agentId: csmAgentId,
+      parentSessionId: hiddenParent.id,
+      title: "Promoted child",
+    });
+    const visibleRoots = await sessions.list(viewer, projectId, {
+      rootsOnly: true,
+      visibility: "promoted",
+      limit: 100,
+    });
+    expect(visibleRoots.items.some((item) => item.id === hiddenParent.id)).toBe(
+      false,
+    );
+    expect(visibleRoots.items.some((item) => item.id === visibleChild.id)).toBe(
+      true,
+    );
+    expect(visibleRoots.items.some((item) => item.id === first.id)).toBe(false);
+  });
+
   it("persists an agent-owned todo snapshot with stable item ids", async () => {
     const session = await sessions.create(viewer, projectId, {
       agentId: csmAgentId,
@@ -423,7 +496,19 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
   it("applies per-session model and effort overrides to the harness", async () => {
     const created = await sessions.create(admin, projectId, {
       agentId: salesAgentId,
+      model: "test/model-v1",
+      effort: "medium",
     });
+    expect(created.model).toBe("test/model-v1");
+    expect(created.modelEffort).toBe("medium");
+    await sessions.sendMessage(
+      admin,
+      projectId,
+      created.id,
+      "initial configuration",
+    );
+    expect(sales.turns.at(-1)?.model).toBe("test/model-v1");
+    expect(sales.turns.at(-1)?.effort).toBe("medium");
     const configured = await sessions.update(admin, projectId, created.id, {
       model: "test/model-v2",
       effort: "high",

@@ -849,6 +849,7 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
         // ('terminal result', the "terminalId":"..." pattern, and the raw
         // command output) preserved verbatim.
         const resultRecord = result as {
+          key?: string;
           terminalId?: string;
           output?: string;
           commandRunning?: boolean;
@@ -863,7 +864,7 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
           .trim();
         yield {
           type: "text",
-          content: `Ran it in the terminal ("terminalId":"${resultRecord.terminalId ?? "unknown"}"). terminal result:\n\n${cleanOutput}`,
+          content: `Ran it in the terminal ("terminalId":"${resultRecord.terminalId ?? "unknown"}"). terminal result:\n\n${cleanOutput}${resultRecord.key ? `\n\n[Open terminal](${resultRecord.key})` : ""}`,
         };
       } catch (error) {
         yield {
@@ -1026,6 +1027,24 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       yield {
         type: "text",
         content: "Personal tab frame updated by editing its JSON file.",
+      };
+      yield { type: "done" };
+      return;
+    }
+
+    // Native Codex discovery supplies a concrete file, outside the shared
+    // read_skill catalog. Exercise the actual file read and argument payload.
+    const nativeSkillRun =
+      /^Use the "native-notes" skill at ("(?:[^"\\]|\\.)*")\.\s*([\s\S]*)$/.exec(
+        message.trim(),
+      );
+    if (nativeSkillRun?.[1]) {
+      const file: unknown = JSON.parse(nativeSkillRun[1]);
+      if (typeof file !== "string")
+        throw new Error("Invalid native skill path");
+      yield {
+        type: "text",
+        content: `native skill loaded: ${fs.readFileSync(file, "utf8").trim()} | ${nativeSkillRun[2]}`,
       };
       yield { type: "done" };
       return;

@@ -19,7 +19,6 @@ vi.mock("../lib/desktop-api.js", () => ({
     onGitChanged: vi.fn(() => () => {}),
   },
 }));
-vi.mock("./sidebar-item-row.js", () => ({ MenuPortal: () => null }));
 it("opens a PR review directly without fetching or expanding its files", async () => {
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
   vi.mocked(desktopApi.prList).mockResolvedValue([
@@ -46,9 +45,7 @@ it("opens a PR review directly without fetching or expanding its files", async (
       ),
     );
     await act(async () =>
-      node
-        .querySelector<HTMLButtonElement>('button[aria-label^="Open review"]')
-        ?.click(),
+      node.querySelector<HTMLButtonElement>("[data-tree-primary]")?.click(),
     );
     expect(open.mock.calls[0]?.[0]).toMatchObject({
       name: "review:3",
