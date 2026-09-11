@@ -254,3 +254,33 @@ it("remembers native app consent only after an explicit chat-scoped answer", asy
     `return timeline().includes('app consent: accept,accept') && !modal();`,
   );
 });
+
+// This scenario captures the question panel, so it belongs in the visible suite.
+it("keeps working while questions are collapsed and consumes the answer in the same turn", async () => {
+  await run(`pressKey('n', { metaKey: true }); return true;`);
+  await runWait(`return !!$('[data-floating-chat] [data-composer-input]');`);
+  await run(`
+    const input = $('[data-floating-chat] [data-composer-input]');
+    setReactValue(input, 'ask a nonblocking question and keep working');
+    input.closest('form').requestSubmit(); return true;
+  `);
+  await runWait(
+    `return !!modal() && timeline().includes('continuing independent work');`,
+  );
+  await app.waitFor(
+    `!document.getAnimations().some(a => a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity)`,
+  );
+  await app.screenshot("/tmp/catamorphic-nonblocking-question.png");
+  await run(`$('button[aria-label="Answer later"]').click(); return true;`);
+  await runWait(`return !modal() && !!byText('button', 'Answer when ready');`);
+  await run(`byText('button', 'Answer when ready').click(); return true;`);
+  await runWait(`return !!modal();`);
+  await run(`answer('Orange'); return true;`);
+  await runWait(
+    `const submit = byText('section[aria-label="The agent has a question"] button', 'Submit'); if (!submit || submit.disabled) return false; submit.click(); return true;`,
+  );
+  await runWait(
+    `return [...document.querySelectorAll('[role="log"] article')].some(m => m.textContent.includes('Answer received during the same turn') && m.textContent.includes('Orange')) && !modal();`,
+    { timeoutMs: 30_000 },
+  );
+});
