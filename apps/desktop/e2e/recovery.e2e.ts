@@ -104,8 +104,16 @@ describe("interrupted turn recovery", () => {
     );
     await runWait(
       `const chat = document.querySelector('aside [data-session-id="${sessionId}"] [data-tree-primary]');
-       if (!chat) return false; chat.dispatchEvent(new MouseEvent('click', {bubbles:true,altKey:true})); return true;`,
+       if (!chat) return false; chat.focus(); return document.activeElement === chat;`,
       { timeoutMs: 30_000, label: "orphaned session in the sidebar" },
+    );
+    // Explicitly open the dock through Chromium input and verify it is visible.
+    // A click alone is not evidence of reopening during startup; the later
+    // orphan notification can render a transcript in a minimized dock.
+    await app.press("Enter", 1); // Alt+Enter opens floating on both platforms.
+    await runWait(
+      `return !!visibleDock()?.querySelector('[data-composer-input]');`,
+      { label: "orphaned session opened for continuation" },
     );
 
     // The dead turn reads as a finished, interrupted message — not an

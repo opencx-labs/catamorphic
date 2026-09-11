@@ -136,6 +136,10 @@ Current verification after pulling main:
   the focused member through `aria-details`, with the expected preview verified
   in the failure screenshot. The latest main CI-caching update was pulled before
   publishing the follow-up.
+- Native macOS CI exposed a recovery test proceeding with a minimized chat's
+  mounted transcript. The reopen step now uses Chromium keyboard input to open
+  the session as a floating dock and verifies its visible composer before awaiting the
+  expired worker lease and testing continuation.
 
 Native protocol references: [Claude SDK skills](https://code.claude.com/docs/en/agent-sdk/slash-commands)
 and [Codex app-server skill discovery](https://learn.chatgpt.com/docs/app-server#skills).
