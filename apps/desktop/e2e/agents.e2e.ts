@@ -1331,12 +1331,15 @@ describe("agents and profiles", () => {
       { label: "closed PDF tab remains as a removable chip" },
     );
 
-    await run(`
-      visibleDock().querySelector(
+    await runWait(
+      `const remove = visibleDock()?.querySelector(
         '[data-testid="surface-chip"][data-kind="browser"] button[aria-label^="Remove "]'
-      ).click();
-      return true;
-    `);
+      );
+      if (!remove) return false;
+      remove.click();
+      return true;`,
+      { label: "remove PDF chip from the visible chat" },
+    );
     await runWait(
       `return !visibleDock()?.querySelector(
          '[data-testid="surface-chip"][data-kind="browser"]');`,
