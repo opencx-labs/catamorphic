@@ -40,9 +40,11 @@ const helpers = `
   const send = () => composer().dispatchEvent(new KeyboardEvent('keydown', {
     key: 'Enter', bubbles: true, cancelable: true }));
   ${setReactValueJs}
-  const pressKey = (key, mods = {}) =>
+  const pressKey = (key, mods = {}) => {
     window.dispatchEvent(new KeyboardEvent('keydown', {
       key, bubbles: true, cancelable: true, ...(mods.metaKey && !/Mac/.test(navigator.platform) ? { ...mods, metaKey: false, ctrlKey: true } : mods) }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true }));
+  };
   const dockH = () => frontDock()?.getBoundingClientRect().height ?? 0;
   const hoverDock = () => frontDock().dispatchEvent(
     new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }));
@@ -58,6 +60,39 @@ const runWait = <T = unknown>(
   body: string,
   opts?: { timeoutMs?: number; label?: string },
 ) => app.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
+
+// Native hover follows the isolated desktop's pointer and hit testing.
+const hoverChip = async (selector: string) => {
+  await runWait(
+    `return !frontDock()?.querySelector('[data-testid="session-inspector-trigger"]')?.getAttribute('aria-label')?.includes(', Working,');`,
+    {
+      label: "agent turn settled before hovering its surfaces",
+    },
+  );
+  await app.movePointer({ x: 1, y: 1 });
+  const point = await runWait<{ x: number; y: number }>(
+    `
+    const button = frontDock()?.querySelector(${JSON.stringify(selector)});
+    if (!button) return false;
+    const dock = frontDock();
+    if (dock.getAnimations({subtree:true}).some(animation =>
+      animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity)) return false;
+    const bounds = button.getBoundingClientRect();
+    // The chip's trailing split/remove overlay appears on hover. Aim at the
+    // leading icon so that overlay cannot replace the preview's hit target.
+    const x = bounds.left + 8, y = bounds.top + bounds.height / 2;
+    return button.contains(document.elementFromPoint(x, y)) && { x, y };
+  `,
+    { label: "surface chip ready for native hover" },
+  );
+  await app.movePointer(point);
+  await runWait(
+    `return frontDock()?.querySelector(${JSON.stringify(selector)})?.matches(':hover');`,
+    {
+      label: "native pointer reached the surface chip",
+    },
+  );
+};
 
 describe("dock modes", () => {
   it("boots into a project and opens a floating chat", async () => {
@@ -81,7 +116,22 @@ describe("dock modes", () => {
       label: "workspace ready",
     });
     await run(`pressKey('n', { metaKey: true }); return true;`);
-    await runWait(`return !!composer();`, { label: "floating chat" });
+    await runWait(
+      `const dock = frontDock();
+       return dock && document.activeElement === composer() &&
+         !dock.getAnimations({subtree:true}).some(animation =>
+           animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity);`,
+      { label: "floating chat finished opening with its composer focused" },
+    ).catch(async (error: unknown) => {
+      const state = await run(`return {
+        active: document.activeElement?.outerHTML.slice(0, 1000),
+        windowFocused: document.hasFocus(),
+        animations: frontDock()?.getAnimations({subtree:true}).map(animation => ({
+          state: animation.playState, timing: animation.effect?.getTiming(),
+        })),
+      };`);
+      throw new Error(`${String(error)}; dock state: ${JSON.stringify(state)}`);
+    });
   }, 180_000);
 
   it("the attach button inserts files at the caret, exactly like a paste", async () => {
@@ -100,14 +150,25 @@ describe("dock modes", () => {
       input.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     `);
-    const state = await runWait<{ text: string; focused: boolean }>(
+    const text = await runWait<string>(
       `const c = composer();
        if (!c.querySelector('[data-testid="composer-pill"][data-pill-kind="image"]')) return false;
-       return { text: c.textContent, focused: document.activeElement === c };`,
+       return c.textContent;`,
       { label: "picked file as inline pill" },
     );
-    expect(state.text).toBe("beforepicked.png  after");
-    expect(state.focused).toBe(true);
+    expect(text).toBe("beforepicked.png  after");
+    await runWait(`return document.activeElement === composer();`, {
+      label: "composer regains focus after attachment insertion",
+    }).catch(async (error: unknown) => {
+      const focus = await run(`return {
+        active: document.activeElement?.outerHTML.slice(0, 1000),
+        windowFocused: document.hasFocus(),
+        inert: !!composer()?.closest('[inert]'),
+      };`);
+      throw new Error(
+        `${String(error)}; focus state: ${JSON.stringify(focus)}`,
+      );
+    });
     await run(`setComposer(''); return true;`);
     await runWait(
       `return composer().hasAttribute('data-empty') === false || true;`,
@@ -291,9 +352,7 @@ describe("dock modes", () => {
        return !!pop && members?.children.length >= 4;`,
       { label: "group popover popped in" },
     );
-    await run(
-      `frontDock().querySelector('[data-testid="surface-group-members"] button').dispatchEvent(new PointerEvent('pointerover', {bubbles:true,relatedTarget:document.body})); return true;`,
-    );
+    await hoverChip('[data-testid="surface-group-members"] button');
     await runWait(
       `return document.querySelector('[data-resource-inspector][data-open="true"]')?.textContent.includes('Terminal');`,
       { label: "group member uses shared preview" },
@@ -326,9 +385,7 @@ describe("dock modes", () => {
     );
     expect(overlay.opacity).toBe("0");
     expect(overlay.overlaid).toBe(true);
-    await run(
-      `frontDock().querySelector('[data-testid="surface-chip"][data-kind="browser"] button').dispatchEvent(new PointerEvent('pointerover', {bubbles:true,relatedTarget:document.body})); return true;`,
-    );
+    await hoverChip('[data-testid="surface-chip"][data-kind="browser"] button');
     await runWait(
       `return document.querySelector('[data-resource-inspector][data-open="true"] [data-preview-location]')?.textContent.includes('https://example.org');`,
       { label: "composer surface previews its destination on hover" },

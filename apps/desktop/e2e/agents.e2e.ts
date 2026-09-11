@@ -1215,9 +1215,12 @@ describe("agents and profiles", () => {
         label: "same-turn worktree edit checkpointed before next turn",
       },
     );
+    // Use keyboard activation so the trigger owns focus while the transcript
+    // finishes scrolling. A DOM-only click omits the browser's focus handoff.
     await run(
-      `visibleDock().querySelector('[data-testid="session-inspector-trigger"]').click(); return true;`,
+      `visibleDock().querySelector('[data-testid="session-inspector-trigger"]').focus(); return true;`,
     );
+    await app.press("Enter");
     await runWait(
       `const inspector = $('[data-testid="session-inspector-content"]');
        return inspector?.textContent.includes('Checkout') &&

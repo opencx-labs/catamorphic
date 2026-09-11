@@ -1,0 +1,30 @@
+name: Test dependencies and build cache
+description: Pinned runtimes and cached build outputs; tests always execute.
+inputs:
+  cache-suffix:
+    description: Unique writer for parallel jobs.
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: 1.3.14
+    - uses: actions/setup-node@v7
+      with:
+        node-version: 24.13.0
+    - uses: actions/cache@v5
+      with:
+        path: |
+          ~/.bun/install/cache
+          ~/.cache/electron
+          ~/Library/Caches/electron
+          .turbo/cache
+        key: tests-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}-${{ github.sha }}-${{ inputs.cache-suffix }}
+        restore-keys: |
+          tests-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}-${{ github.sha }}-
+          tests-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}-
+    - shell: bash
+      run: |
+        echo "TURBO_CACHE_DIR=$GITHUB_WORKSPACE/.turbo/cache" >> "$GITHUB_ENV"
+        bun install --frozen-lockfile

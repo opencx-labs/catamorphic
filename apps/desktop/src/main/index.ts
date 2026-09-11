@@ -26,10 +26,7 @@ import {
   desktopApplicationName,
   desktopDataDirFromEnvironment,
 } from "./development-paths.js";
-import {
-  shouldShowWindow,
-  shouldUseE2ePlainTextEncryption,
-} from "./e2e-window-mode.js";
+import { shouldUseE2ePlainTextEncryption } from "./e2e-safe-storage.js";
 import { IncognitoSessionsStore } from "./incognito-sessions.js";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
 import { type Keybindings, toAccelerator } from "./keybindings.js";
@@ -93,10 +90,6 @@ app.userAgentFallback = app.userAgentFallback
 // E2E runs point userData at a throwaway dir so tests never touch real
 // settings/projects/DB, and may run beside a normally-running app.
 const e2eDataDir = process.env.CATAMORPHIC_E2E_DATA_DIR;
-const showWindow = shouldShowWindow({
-  e2eDataDir,
-  e2eWindowMode: process.env.CATAMORPHIC_E2E_WINDOW_MODE,
-});
 if (isolatedDataDir) {
   app.setPath("userData", isolatedDataDir);
 }
@@ -111,10 +104,8 @@ app.on("second-instance", (_event, argv) => {
   const window = BrowserWindow.getAllWindows()[0];
   if (window) {
     if (window.isMinimized()) window.restore();
-    if (!e2eDataDir) {
-      window.show();
-      window.focus();
-    }
+    window.show();
+    window.focus();
   }
   // Windows/Linux deliver a protocol URL as an argv of the second launch.
   const link = argv.find((arg) => arg.startsWith("catamorphic://"));
@@ -142,7 +133,7 @@ function deliverConnectLink(url: string): void {
   if (!window) return;
   window.webContents.send("catamorphic:connect-link", url);
   if (window.isMinimized()) window.restore();
-  if (!e2eDataDir) window.focus();
+  window.focus();
 }
 
 /** The renderer's side of the hand-off (registered here: no ipc.ts cycle). */
@@ -231,7 +222,7 @@ const windows: WindowProfileRegistry = {
   openWindow(profileId) {
     if (desktopWorkspaces?.activateProfile(profileId)) return;
     const window = createWindow(profileId);
-    if (!e2eDataDir) window.focus();
+    window.focus();
   },
 };
 
@@ -276,12 +267,6 @@ function createWindow(
     // Pre-paint background from the profile's theme so open doesn't flash;
     // stay hidden until the renderer has actually painted a frame.
     show: false,
-    opacity:
-      e2eDataDir && process.env.CATAMORPHIC_E2E_REVEAL_WINDOWS !== "1" ? 0 : 1,
-    focusable:
-      e2eDataDir === undefined ||
-      (process.platform === "linux" &&
-        process.env.CATAMORPHIC_E2E_VIRTUAL_DISPLAY === "1"),
     backgroundColor: dock
       ? "#00000000"
       : windowBackgroundColor(stores.theme.resolved()),
@@ -292,15 +277,8 @@ function createWindow(
       sandbox: false,
       // Browser tabs render as <webview> guests (see main/browser.ts).
       webviewTag: true,
-      // E2e runs drive windows that are usually occluded (test runners
-      // stack several instances behind the terminal), and Chromium
-      // throttles rAF/animation events for occluded windows — exit
-      // animations then never fire animationend and the motion suite
-      // reads phantom zombies. Real usage keeps normal throttling.
-      backgroundThrottling: e2eDataDir === undefined,
     },
   });
-  if (e2eDataDir) window.setIgnoreMouseEvents(true);
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url))
       window.webContents.send("catamorphic:browser-open-url", { url });
@@ -312,16 +290,7 @@ function createWindow(
     if (pendingConnectLink) deliverConnectLink(pendingConnectLink);
   });
   window.once("ready-to-show", () => {
-    if (!showWindow) {
-      // On macOS, a never-shown BrowserWindow can remain unavailable to CDP.
-      // Enter the native shown lifecycle without activating the app, then
-      // hide in the same turn so local E2E runs never steal keyboard focus.
-      window.showInactive();
-      if (!dock && saved.maximized) window.maximize();
-      window.hide();
-      return;
-    }
-    if (e2eDataDir || dock) window.showInactive();
+    if (dock) window.showInactive();
     else window.show();
     // Native window managers can ignore zoom requests before the first show.
     if (!dock && saved.maximized) window.maximize();
@@ -485,7 +454,6 @@ function applyMenuForFocusedWindow(): void {
 }
 
 app.whenReady().then(async () => {
-  if (e2eDataDir && process.platform === "darwin") app.dock?.hide();
   // GitHub's Linux runner has no Secret Service. Electron's in-memory key
   // keeps safeStorage-backed flows realistic inside isolated throwaway E2E
   // profiles without weakening normal desktop profiles.
@@ -628,7 +596,6 @@ app.whenReady().then(async () => {
   desktopWorkspaces = new DesktopWorkspaces({
     windows,
     config: profileConfig,
-    showWindows: showWindow,
     profileForProject: (projectId) =>
       profilesStore.profileForProject(projectId).id,
     createWindow,

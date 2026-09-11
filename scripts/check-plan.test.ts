@@ -1,7 +1,44 @@
 import { describe, expect, it } from "vitest";
-import { checkCommands } from "./check-plan.js";
+import { checkCommands, checkOptions } from "./check-plan.js";
 
 describe("checkCommands", () => {
+  it("partitions validation and workspace work without losing or duplicating a phase", () => {
+    const input = { generatedTypesBaseline: "/tmp/baseline.ts" };
+    const phases = [
+      ...checkCommands({ ...input, lane: "validation" }),
+      ...checkCommands({ ...input, lane: "workspace" }),
+    ];
+    expect(phases).toEqual(checkCommands(input).slice(0, 9));
+    expect(
+      checkCommands({ ...input, lane: "workspace", shard: "2/4" })[0]?.args,
+    ).toEqual([
+      "scripts/tool-runtime.ts",
+      "turbo",
+      "run",
+      "test",
+      "--no-daemon",
+      "--concurrency=2",
+      "--",
+      "--shard=2/4",
+      "--passWithNoTests",
+    ]);
+  });
+
+  it("rejects invalid shards and unknown lanes before starting infrastructure", () => {
+    expect(checkOptions(["--lane=workspace", "--shard=2/4"])).toEqual({
+      lane: "workspace",
+      shard: "2/4",
+    });
+    for (const args of [
+      ["--lane=other"],
+      ["--shard=1/4"],
+      ["--lane=workspace", "--shard=5/4"],
+      ["--lane=workspace", "--shard=0/4"],
+      ["--skip-tests"],
+    ]) {
+      expect(() => checkOptions(args)).toThrow();
+    }
+  });
   it("compares generated types against the pre-run file, not the Git index", () => {
     const phase = checkCommands({
       generatedTypesBaseline: "/tmp/baseline.ts",
@@ -31,8 +68,7 @@ describe("checkCommands", () => {
       "root orchestration tests",
       "deterministic workspace tests",
       "PWA E2E",
-      "desktop visible E2E",
-      "desktop hidden E2E",
+      "desktop E2E",
     ]);
   });
 

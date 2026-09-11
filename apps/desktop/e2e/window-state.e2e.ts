@@ -41,18 +41,11 @@ describe("window state", () => {
       { timeoutMs: 10_000, label: "native maximize completed" },
     );
     expect((await geometry()).maximized).toBe(true);
-    // In Linux CI the private display isolates physical input; windows must
-    // remain managed for native maximize/restore behavior to be testable.
-    if (
-      process.platform !== "linux" ||
-      process.env.CATAMORPHIC_E2E_VIRTUAL_DISPLAY !== "1"
-    ) {
-      expect(await geometry()).toMatchObject({
-        focused: false,
-        focusable: false,
-        opacity: process.env.CATAMORPHIC_E2E_REVEAL_WINDOWS === "1" ? 1 : 0,
-      });
-    }
+    expect(await geometry()).toMatchObject({
+      focused: true,
+      focusable: true,
+      opacity: 1,
+    });
     expect(await app.eval("document.hasFocus()")).toBe(true);
     const { userDataDir } = app;
     // This is crash recovery: wait for the debounced state write before SIGKILL.

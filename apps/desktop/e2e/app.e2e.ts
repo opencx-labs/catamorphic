@@ -1043,11 +1043,14 @@ describe("chat surface shortcuts", () => {
       });
       await waitForHeldAnimationFrame();
       await releaseAnimationFrames();
-      const composerAutofocused = await run<boolean>(`
-        return document.activeElement?.matches?.('[data-composer-input]') &&
-          document.activeElement.closest('[data-floating-chat]') !== null;
-      `);
-      expect(composerAutofocused).toBe(true);
+      await settleAnimationFrame();
+      // Releasing a held callback can schedule a subsequent React effect/frame.
+      // Observe the completed handoff before sending the next user input.
+      await runWait(
+        `return document.activeElement?.matches?.('[data-composer-input]') &&
+          document.activeElement.closest('[data-floating-chat]') !== null;`,
+        { label: "composer focused after deferred frames resume" },
+      );
 
       // Keyboard branch: a real Tab after the focus frame was scheduled
       // makes the newly focused browser control authoritative.
@@ -1076,6 +1079,7 @@ describe("chat surface shortcuts", () => {
       `);
       expect(tabMovedFocus).toBe(true);
       await releaseAnimationFrames();
+      await settleAnimationFrame();
       const keyboardFocusPreserved = await run<string>(`
         const active = document.activeElement;
         if (active?.dataset.e2eKeyboardFocus === 'true') return 'keyboard-target';
@@ -1103,6 +1107,7 @@ describe("chat surface shortcuts", () => {
       `);
       expect(assistiveFocusMoved).toBe(true);
       await releaseAnimationFrames();
+      await settleAnimationFrame();
       const assistiveFocusPreserved = await run<boolean>(`
         return document.activeElement?.dataset.e2eAssistiveFocus === 'true';
       `);
@@ -1124,6 +1129,7 @@ describe("chat surface shortcuts", () => {
       `);
       expect(addressFocused).toBe(true);
       await releaseAnimationFrames();
+      await settleAnimationFrame();
       const browserKeptFocus = await run<boolean>(`
         return document.activeElement ===
           $('input[aria-label="Address and search bar"]');

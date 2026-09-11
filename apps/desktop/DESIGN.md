@@ -252,6 +252,13 @@ the historical log explains how it arrived here.
 
 ## Design log
 
+### 2026-09-11: Desktop tests own a separate desktop
+
+Automated desktop tests run in a private Linux display locally and dedicated
+macOS runners in CI (ADR 0129). They use normal native focus and rendering.
+Testing must never interrupt the developer's keyboard, pointer, or clipboard.
+
+
 - 2026-09-09: Accepted [ADR 0109](../../docs/decisions/0109-desktop-state-and-settings-contracts.md).
   Workspace transitions and chat delivery have explicit owners. Ordinary appearance
   settings support per-key inheritance and reset. Current contracts are separated
