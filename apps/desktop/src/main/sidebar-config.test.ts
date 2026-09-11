@@ -409,3 +409,32 @@ describe("tabbed layout reloads", () => {
     );
   });
 });
+
+describe("shared sidebar contributions", () => {
+  it("keeps source options, distinct action placements and sparse overrides", () => {
+    const dir = makeDir();
+    const file = path.join(dir, "sidebar.js");
+    fs.writeFileSync(
+      file,
+      `module.exports = {left:[],right:[{id:"chat",title:"Chat",when:{surface:["chat"],session:true},sections:[{
+      id:"children",type:"custom",source:{type:"subsessions",pageSize:25,groupBy:"agentId"},
+      itemDefaults:{icon:"Bot",menu:[{label:"Open",action:"open-tab"}]},
+      itemOverrides:{abc:{label:"Renamed"}},
+      contextMenu:[],actions:[{label:"Beside",action:"open-side",icon:"Columns2"}]
+    }]}]};`,
+    );
+    const section = loadSidebarConfigFile(file).right[0]?.sections[0];
+    expect(section?.source).toMatchObject({
+      type: "subsessions",
+      pageSize: 25,
+    });
+    expect(section?.contextMenu).toEqual([]);
+    expect(section?.itemOverrides?.abc).toEqual({ label: "Renamed" });
+    expect(section?.itemDefaults?.icon).toBe("Bot");
+    fs.writeFileSync(
+      file,
+      `module.exports={left:[],right:[{id:"chat",title:"Chat",sections:[{id:"children",type:"chats",actions:[{label:"Bad",action:"invented"}]}]}]};`,
+    );
+    expect(loadSidebarConfigFile(file).right[0]?.sections[0]).toEqual(section);
+  });
+});

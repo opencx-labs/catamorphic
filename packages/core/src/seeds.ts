@@ -889,6 +889,31 @@ A project is a bun workspace with three kinds of member:
 \`contracts/\` has no JavaScript to bundle — but respect it in your head
 too: anything an app imports ships to every viewer's browser.
 
+## Collections and compact host widgets
+
+For hierarchies and large lists, import \`createCollection\` from
+\`@catamorphic/app\` and \`CollectionTree\`, \`CollectionItemView\`,
+\`useCollection\`, and \`useCollectionItem\` from \`@catamorphic/app/ui\`.
+Sources load paged roots and lazy children with stable IDs, cursors and an
+AbortSignal. Publish item patches for label/status changes and invalidate only
+changed branches. Use per-item subscriptions instead of one timer per row.
+Acquire a collection while it is needed and release it on cleanup; shared
+collections refcount upstream listeners. Tree row height is explicit and only
+the visible window is mounted. Keep large inspectors outside row geometry.
+The same ItemAction can appear in inline actions, overflow, or right-click menus;
+these placements are independent and an empty menu explicitly disables it.
+
+When a host grants collection capabilities, \`createHostCollection({source})\`
+uses the same store and tree. Execute only advertised actions via
+\`runCollectionAction({source,itemId,action})\`; never reach into the host DOM,
+IPC, or credentials. Read \`subscribeDisplay\` for current surface and visibility,
+and call \`reportContentState\` with loading, ready, empty or error so the host
+can decide whether the widget is useful. Keep the collection acquired for cheap
+availability discovery if the widget should reappear after becoming empty;
+pass \`active: false\` to a second tree subscriber to avoid duplicate ownership.
+Host-specific source names, grants and placement belong in the host's settings
+skill. Read that skill and the installed package declarations before authoring.
+
 ## The contract is the whole data path
 
 1. Declare the shape in \`contracts/src/index.ts\`:

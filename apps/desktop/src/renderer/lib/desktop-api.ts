@@ -1,3 +1,4 @@
+import { shareEvent } from "@catamorphic/app";
 import type { ResourcePreview } from "@catamorphic/react";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
 import type { AppPrefs } from "../../shared/app-prefs.js";
@@ -1358,4 +1359,14 @@ declare global {
   }
 }
 
-export const desktopApi = window.catamorphicDesktop;
+const nativeApi = window.catamorphicDesktop;
+export const desktopApi: CatamorphicDesktopApi = {
+  ...nativeApi,
+  onGitChanged: shareEvent((publish) => nativeApi.onGitChanged(publish)),
+  onBookmarksChanged: shareEvent((publish) =>
+    nativeApi.onBookmarksChanged(publish),
+  ),
+  onSidebarConfigChanged: shareEvent((publish) =>
+    nativeApi.onSidebarConfigChanged(() => publish(undefined)),
+  ),
+};

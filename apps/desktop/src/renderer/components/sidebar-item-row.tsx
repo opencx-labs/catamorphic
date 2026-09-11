@@ -1,3 +1,4 @@
+import { useItemActions } from "@catamorphic/app/ui";
 import * as icons from "lucide-react";
 import { ChevronRight, MoreHorizontal } from "lucide-react";
 import {
@@ -20,6 +21,10 @@ import {
 import type { SidebarMenuEntry, SidebarPreview } from "../lib/desktop-api.js";
 import { ShortcutHint } from "./shortcut-hint";
 import {
+  sidebarItemPresentation,
+  useSidebarContribution,
+} from "./sidebar-contribution.js";
+import {
   SIDEBAR_PREVIEW_DELAY_MS,
   type SidebarPreviewAnchor,
   SidebarPreviewPopover,
@@ -29,6 +34,16 @@ export interface ContextMenuEntry {
   label: string;
   action: string;
   danger?: boolean;
+  icon?: string;
+  url?: string;
+  disabledReason?: string;
+}
+
+const SIDEBAR_ICONS = new Map(Object.entries(icons.icons));
+
+export function SidebarIcon({ name }: { name?: string }) {
+  const Icon = SIDEBAR_ICONS.get(name ?? "") ?? icons.Circle;
+  return <Icon className="size-3.5 shrink-0" aria-hidden="true" />;
 }
 
 /** Optional hover hint (e.g. a bookmark's URL) in the app-standard style. */
@@ -59,6 +74,13 @@ function TitleHint({
 export function SidebarItemRow<
   TMenuEntry extends ContextMenuEntry = SidebarMenuEntry,
 >({
+  itemId,
+  supportedActions,
+  contextMenu,
+  actions,
+  description,
+  badges,
+  progress,
   presentation = "row",
   expanded,
   resource = false,
@@ -67,6 +89,7 @@ export function SidebarItemRow<
   title,
   icon,
   menu,
+  defaultMenu,
   preview,
   previewContent,
   active,
@@ -80,6 +103,13 @@ export function SidebarItemRow<
   onRenameSubmit,
   onRenameCancel,
 }: {
+  itemId?: string;
+  supportedActions?: readonly string[];
+  contextMenu?: readonly TMenuEntry[];
+  actions?: readonly TMenuEntry[];
+  description?: string;
+  badges?: readonly string[];
+  progress?: number;
   presentation?: "row" | "tile";
   expanded?: boolean;
   resource?: boolean;
@@ -90,6 +120,7 @@ export function SidebarItemRow<
   /** lucide-react icon name, or a node to render directly. */
   icon?: string | ReactNode;
   menu?: readonly TMenuEntry[];
+  defaultMenu?: readonly TMenuEntry[];
   preview?: SidebarPreview | false;
   /** Rich inspector body for built-in resources; uses the same hover shell. */
   previewContent?: ReactNode;
@@ -112,18 +143,86 @@ export function SidebarItemRow<
   const buttonRef = useRef<HTMLButtonElement>(null);
   const rowRef = useRef<HTMLDivElement>(null);
   const renameRef = useRef<HTMLInputElement>(null);
-  const pendingActionRef = useRef<
-    TMenuEntry | (typeof OPEN_ACTIONS)[number] | null
-  >(null);
-  const resolvedMenu = resource
-    ? [
-        ...OPEN_ACTIONS,
-        ...(menu ?? []).filter(
-          (entry) =>
-            !openModeForAction(entry.action) && entry.action !== "open",
-        ),
-      ]
-    : menu;
+  const pendingActionRef = useRef<ContextMenuEntry | null>(null);
+  const contribution = useSidebarContribution();
+  const overrides = sidebarItemPresentation({
+    section: contribution?.section,
+    id: itemId,
+  });
+  const [menuKind, setMenuKind] = useState<"overflow" | "context">("overflow");
+  const { error: actionError, pending, run: runItemAction } = useItemActions();
+  const configuredContext = overrides.contextMenu ?? contextMenu;
+  const configuredActions = overrides.actions ?? actions ?? [];
+  const available = (entries: readonly ContextMenuEntry[]) =>
+    entries.map((entry) => ({
+      ...entry,
+      disabledReason:
+        entry.disabledReason ??
+        (entry.url ||
+        (resource &&
+          (openModeForAction(entry.action) || entry.action === "open")) ||
+        (supportedActions
+          ? supportedActions.includes(entry.action)
+          : [
+              ...(defaultMenu ?? []),
+              ...(menu ?? []),
+              ...(contextMenu ?? []),
+              ...(actions ?? []),
+            ].some((original) => original.action === entry.action)) ||
+        (["refresh", "search", "new-chat", "new-workflow"].includes(
+          entry.action,
+        ) &&
+          contribution?.commands?.has(entry.action))
+          ? undefined
+          : "This item does not support this action"),
+    }));
+  const resolvedMenu = available(
+    overrides.menu ??
+      (menu === undefined
+        ? [...(resource ? OPEN_ACTIONS : []), ...(defaultMenu ?? [])]
+        : menu),
+  );
+  const resolvedContext = available(configuredContext ?? resolvedMenu);
+  const inlineActions = available(configuredActions);
+  const activeMenu = menuKind === "context" ? resolvedContext : resolvedMenu;
+  const invoke = (entry: ContextMenuEntry) =>
+    runItemAction({
+      id: entry.action,
+      label: entry.label,
+      disabledReason: entry.disabledReason,
+      run: async () => {
+        const mode = openModeForAction(entry.action);
+        if (entry.url && contribution)
+          contribution.open(
+            entry.url,
+            mode ?? overrides.open ?? defaultOpenMode,
+          );
+        else if (resource && (mode || entry.action === "open"))
+          onOpen(mode ?? overrides.open ?? defaultOpenMode);
+        else {
+          const original = [
+            ...(defaultMenu ?? []),
+            ...(menu ?? []),
+            ...(contextMenu ?? []),
+            ...(actions ?? []),
+          ].find((candidate) => candidate.action === entry.action);
+          if (original) await onAction(original);
+          else if (contribution?.command)
+            await contribution.command(entry.action);
+          else throw new Error("This item does not support this action");
+        }
+      },
+    });
+  if (overrides.label !== undefined) labelContent = undefined;
+  if (overrides.preview !== undefined) previewContent = undefined;
+  label = overrides.label ?? label;
+  icon = overrides.icon ?? icon;
+  description = overrides.description ?? description;
+  badges = overrides.badges ?? badges;
+  progress = overrides.progress ?? progress;
+  preview = overrides.preview ?? preview;
+  if (preview === false) previewContent = undefined;
+  defaultOpenMode = overrides.open ?? defaultOpenMode;
   const previewId = useId();
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
@@ -244,20 +343,15 @@ export function SidebarItemRow<
   }, [renaming]);
 
   const IconComponent =
-    typeof icon === "string"
-      ? (
-          icons as unknown as Record<
-            string,
-            React.ComponentType<{ className?: string }>
-          >
-        )[icon]
-      : undefined;
+    typeof icon === "string" ? SIDEBAR_ICONS.get(icon) : undefined;
 
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: right-click mirrors the row's ⋯ button, which stays keyboard-reachable
     <div
       ref={rowRef}
-      style={style}
+      style={{ ...style, display: overrides.hide ? "none" : style?.display }}
+      data-sidebar-item-id={itemId}
+      data-interacting={open || previewOpen || renaming ? "true" : undefined}
       className={`group relative flex items-center rounded-md transition-colors duration-150 ${presentation === "tile" ? "h-9 border border-border bg-bg-raised" : "h-7"} ${
         active ? "bg-bg-overlay" : "hover:bg-bg-overlay/60"
       }`}
@@ -280,19 +374,36 @@ export function SidebarItemRow<
           deferPreviewClose();
         }
       }}
-      // Right-click = the ⋯ menu, at the cursor. Same entries, same
-      // portal — two paths into one menu, never two menus.
+      // Right-click has its own configuration and shares the menu lifecycle.
       onContextMenu={
-        resolvedMenu && resolvedMenu.length > 0 && !renaming
+        resolvedContext.length > 0 && !renaming
           ? (event) => {
               event.preventDefault();
               if (pendingActionRef.current) return;
               disarmPreview();
+              setMenuKind("context");
               setPosition({ x: event.clientX, y: event.clientY });
               setOpen(true);
             }
-          : undefined
+          : contextMenu || overrides.contextMenu
+            ? (event) => event.preventDefault()
+            : undefined
       }
+      onKeyDown={(event) => {
+        if (
+          (event.key === "ContextMenu" ||
+            (event.shiftKey && event.key === "F10")) &&
+          resolvedContext.length
+        ) {
+          event.preventDefault();
+          const rect = rowRef.current?.getBoundingClientRect();
+          if (rect) {
+            setMenuKind("context");
+            setPosition({ x: rect.left, y: rect.bottom });
+            setOpen(true);
+          }
+        }
+      }}
     >
       {renaming ? (
         <input
@@ -328,6 +439,7 @@ export function SidebarItemRow<
           <TitleHint title={previewEnabled ? undefined : title}>
             <button
               type="button"
+              data-tree-primary
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault();
@@ -344,7 +456,7 @@ export function SidebarItemRow<
               className={`flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 ${disclosure ? "pr-2" : "px-2"} text-left text-[13px] ${presentation === "tile" ? "justify-center" : ""} hover:text-fg ${
                 active ? "text-fg" : "text-fg-muted"
               }`}
-              aria-expanded={expanded}
+              aria-expanded={disclosure?.open ?? expanded}
               aria-current={active || undefined}
               aria-details={
                 previewEnabled && previewOpen ? previewId : undefined
@@ -362,10 +474,57 @@ export function SidebarItemRow<
                   <span className="min-w-0 flex-1 truncate">{label}</span>
                 ))
               )}
+              {description && (
+                <span className="max-w-32 truncate text-[11px] text-fg-faint">
+                  {description}
+                </span>
+              )}
+              {badges?.map((badge) => (
+                <span
+                  key={badge}
+                  className="rounded bg-bg-inset px-1 text-[10px] text-fg-muted"
+                >
+                  {badge}
+                </span>
+              ))}
+              {progress !== undefined && (
+                <progress
+                  aria-label={`${label} progress`}
+                  value={progress}
+                  max={1}
+                  className="h-1 w-12 accent-accent"
+                />
+              )}
               {end}
             </button>
           </TitleHint>
-          {resolvedMenu && resolvedMenu.length > 0 && (
+          {inlineActions.map((entry) => {
+            const Icon =
+              Object.entries(icons.icons).find(
+                ([name]) => name === entry.icon,
+              )?.[1] ?? icons.Circle;
+            return (
+              <ShortcutHint
+                key={`${entry.action}:${entry.label}`}
+                label={entry.disabledReason ?? entry.label}
+              >
+                <button
+                  type="button"
+                  aria-label={entry.label}
+                  disabled={Boolean(entry.disabledReason) || Boolean(pending)}
+                  data-disabled-reason={
+                    entry.disabledReason ?? "Wait for the current action"
+                  }
+                  aria-busy={pending === entry.action}
+                  onClick={() => void invoke(entry)}
+                  className="grid size-6 shrink-0 place-items-center rounded text-fg-muted hover:bg-bg-overlay disabled:opacity-40"
+                >
+                  <Icon className="size-3.5" />
+                </button>
+              </ShortcutHint>
+            );
+          })}
+          {resolvedMenu.length > 0 && (
             <button
               ref={buttonRef}
               type="button"
@@ -376,6 +535,7 @@ export function SidebarItemRow<
                 if (rect) {
                   setPosition({ x: rect.right, y: rect.bottom + 4 });
                 }
+                setMenuKind("overflow");
                 setOpen((value) => !value);
               }}
               className={`grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg ${presentation === "tile" ? "absolute right-0 top-0 bg-bg-raised" : "mr-1"} ${
@@ -393,11 +553,12 @@ export function SidebarItemRow<
         </>
       )}
 
-      {position && resolvedMenu && (
+      {position && (
         <MenuPortal
           open={open}
           position={position}
-          entries={resolvedMenu}
+          entries={activeMenu}
+          onDismiss={() => setOpen(false)}
           onPick={(entry) => {
             pendingActionRef.current = entry;
             setOpen(false);
@@ -406,16 +567,18 @@ export function SidebarItemRow<
             setPosition(null);
             const pendingAction = pendingActionRef.current;
             pendingActionRef.current = null;
-            if (pendingAction) {
-              const mode = openModeForAction(pendingAction.action);
-              if (resource && mode) onOpen(mode);
-              else {
-                const original = menu?.find((entry) => entry === pendingAction);
-                if (original) onAction(original);
-              }
-            }
+            if (pendingAction) void invoke(pendingAction);
+            else
+              rowRef.current
+                ?.querySelector<HTMLElement>("[data-tree-primary]")
+                ?.focus({ preventScroll: true });
           }}
         />
+      )}
+      {actionError && (
+        <span role="alert" className="text-xs text-danger">
+          {actionError}
+        </span>
       )}
       {previewEnabled && previewAnchor && (
         <SidebarPreviewPopover
@@ -450,12 +613,14 @@ export function MenuPortal<TMenuEntry extends ContextMenuEntry>({
   position,
   entries,
   onPick,
+  onDismiss,
   onExited,
 }: {
   open: boolean;
   position: { x: number; y: number };
   entries: readonly TMenuEntry[];
   onPick: (entry: TMenuEntry) => void;
+  onDismiss?: () => void;
   onExited: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -512,6 +677,12 @@ export function MenuPortal<TMenuEntry extends ContextMenuEntry>({
       data-sidebar-menu
       role="menu"
       onKeyDown={(event) => {
+        if (event.key === "Escape" && onDismiss) {
+          event.preventDefault();
+          event.stopPropagation();
+          onDismiss();
+          return;
+        }
         const buttons = menuButtons(ref);
         const activeElement = document.activeElement;
         const current =
@@ -549,6 +720,8 @@ export function MenuPortal<TMenuEntry extends ContextMenuEntry>({
             type="button"
             role="menuitem"
             tabIndex={open ? 0 : -1}
+            disabled={Boolean(entry.disabledReason)}
+            data-disabled-reason={entry.disabledReason}
             onClick={() => onPick(entry)}
             className={`flex h-7 w-full cursor-pointer items-center rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${
               entry.danger
@@ -569,7 +742,8 @@ function menuButtons(
   ref: RefObject<HTMLDivElement | null>,
 ): HTMLButtonElement[] {
   return [
-    ...(ref.current?.querySelectorAll<HTMLButtonElement>("[role=menuitem]") ??
-      []),
+    ...(ref.current?.querySelectorAll<HTMLButtonElement>(
+      "[role=menuitem]:not(:disabled)",
+    ) ?? []),
   ];
 }

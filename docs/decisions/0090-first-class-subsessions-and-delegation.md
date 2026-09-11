@@ -1,6 +1,6 @@
 # 0090: First-class subsessions and explicit delegation grants
 
-- **Status:** Accepted
+- **Status:** Accepted; latent-child sidebar presentation refined by 0129
 - **Date:** 2026-09-04
 - **Builds on:** 0038, 0050, 0054, 0056, 0067, 0074, and 0087
 

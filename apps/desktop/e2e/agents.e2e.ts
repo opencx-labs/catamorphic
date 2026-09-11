@@ -1314,12 +1314,20 @@ describe("agents and profiles", () => {
     `);
     if (!key) throw new Error("PDF surface chip has no key");
 
+    // Workspace tabs can be tree rows in a sidebar. Verify the tab exists
+    // before waiting for its removal, so the close cannot race the restore.
+    await runWait(
+      `return $$('[data-tab-orientation] [data-point-key]').some((tab) =>
+         tab.getAttribute('data-point-key') === ${JSON.stringify(key)});`,
+      { label: "PDF workspace tab present" },
+    );
+
     // Park the floating chat so Cmd+W closes the PDF tab, not the chat.
     await run(`pressKey('m', { metaKey: true }); return true;`);
     await runWait(`return !visibleDock();`, { label: "PDF chat parked" });
     await run(`pressKey('w', { metaKey: true }); return true;`);
     await runWait(
-      `return !$$('[role="tab"]').some((tab) =>
+      `return !$$('[data-tab-orientation] [data-point-key]').some((tab) =>
          tab.getAttribute('data-point-key') === ${JSON.stringify(key)});`,
       { label: "PDF workspace tab closed" },
     );

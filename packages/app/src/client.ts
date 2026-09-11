@@ -1,3 +1,8 @@
+import {
+  type CollectionChange,
+  type CollectionPage,
+  createCollection,
+} from "./collection.js";
 import type { AppClient, RunHandle, TypedRunSnapshot } from "./contract.js";
 import {
   isJsonRpcResponse,
@@ -7,7 +12,11 @@ import {
   toolResultErrorMessage,
   toolResultValue,
 } from "./mcp-host.js";
-import type { AppDisplay } from "./protocol.js";
+import type {
+  AppCollectionItem,
+  AppContentState,
+  AppDisplay,
+} from "./protocol.js";
 import {
   APP_PROTOCOL_VERSION,
   AppCallError,
@@ -25,7 +34,11 @@ type OutboundCall =
       mode: "invoke" | "start";
       input: unknown;
     }
-  | { kind: "poll-run"; runId: string };
+  | { kind: "poll-run"; runId: string }
+  | Omit<
+      Extract<GuestToHostMessage, { kind: "collection" }>,
+      "catamorphicApp" | "callId"
+    >;
 
 const DEFAULT_POLL_INTERVAL_MS = 750;
 const TERMINAL_STATUSES = new Set(["completed", "failed", "canceled"]);
@@ -67,6 +80,10 @@ class GuestBridge {
   private display: AppDisplay = { mode: "full", visible: true };
   private readonly displayListeners = new Set<(display: AppDisplay) => void>();
   private readonly contextWaiters: ((context: AppContext) => void)[] = [];
+  private readonly collectionListeners = new Map<
+    string,
+    Set<(change: CollectionChange<AppCollectionItem>) => void>
+  >();
   private counter = 0;
   private mode: "catamorphic" | "mcp" = "catamorphic";
   private rpcCounter = MCP_INITIALIZE_ID;
@@ -85,6 +102,11 @@ class GuestBridge {
         return;
       }
       if (!isHostMessage(data)) return;
+      if (data.kind === "collection-change") {
+        for (const listener of this.collectionListeners.get(data.source) ?? [])
+          listener(data.change);
+        return;
+      }
       if (data.kind === "display") {
         if (
           (data.display?.mode !== "full" && data.display?.mode !== "compact") ||
@@ -226,6 +248,13 @@ class GuestBridge {
     message: OutboundCall,
     options?: AppClientOptions,
   ): Promise<unknown> {
+    if (message.kind === "collection")
+      return Promise.reject(
+        new AppCallError(
+          "denied",
+          "This host has not granted collection access",
+        ),
+      );
     if (message.kind === "poll-run") {
       return this.callTool(POLL_RUN_TOOL, { runId: message.runId }, options);
     }
@@ -297,6 +326,33 @@ class GuestBridge {
         this.pending.delete(callId);
       };
     }, options);
+  }
+
+  subscribeCollection(
+    source: string,
+    listener: (change: CollectionChange<AppCollectionItem>) => void,
+  ) {
+    const listeners = this.collectionListeners.get(source) ?? new Set();
+    const first = listeners.size === 0;
+    listeners.add(listener);
+    this.collectionListeners.set(source, listeners);
+    if (first)
+      void this.send({
+        kind: "collection",
+        operation: "subscribe",
+        source,
+      }).catch(() => {});
+    return () => {
+      listeners.delete(listener);
+      if (!listeners.size) {
+        this.collectionListeners.delete(source);
+        void this.send({
+          kind: "collection",
+          operation: "unsubscribe",
+          source,
+        }).catch(() => {});
+      }
+    };
   }
 
   reportHeight(height: number): void {
@@ -481,4 +537,67 @@ function waitForHost<T>(
     if (abort) options?.signal?.removeEventListener("abort", abort);
     cleanup?.();
   });
+}
+
+/** A host-granted source uses the identical cache and lazy-tree contract as local data. */
+export function createHostCollection({ source }: { source: string }) {
+  return createCollection<AppCollectionItem>({
+    source: {
+      load: async ({ parentId, cursor, signal }) => {
+        const value = await getBridge().send(
+          { kind: "collection", operation: "read", source, parentId, cursor },
+          { signal },
+        );
+        if (!isCollectionPage(value))
+          throw new AppCallError("internal", "Invalid host collection page");
+        return value;
+      },
+      subscribe: (publish) => getBridge().subscribeCollection(source, publish),
+    },
+  });
+}
+function isCollectionPage(
+  value: unknown,
+): value is CollectionPage<AppCollectionItem> {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !("items" in value) ||
+    !Array.isArray(value.items)
+  )
+    return false;
+  return value.items.every(
+    (item) =>
+      item &&
+      typeof item === "object" &&
+      typeof item.id === "string" &&
+      typeof item.label === "string",
+  );
+}
+export async function runCollectionAction({
+  source,
+  itemId,
+  action,
+}: {
+  source: string;
+  itemId: string;
+  action: string;
+}): Promise<void> {
+  await getBridge().send({
+    kind: "collection",
+    operation: "action",
+    source,
+    itemId,
+    action,
+  });
+}
+export function reportContentState(state: AppContentState): void {
+  window.parent.postMessage(
+    {
+      catamorphicApp: APP_PROTOCOL_VERSION,
+      kind: "content-state",
+      state,
+    } satisfies GuestToHostMessage,
+    "*",
+  );
 }

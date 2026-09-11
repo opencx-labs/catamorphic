@@ -1,4 +1,4 @@
-import { APP_PROTOCOL_VERSION, type AppHostTheme } from "@catamorphic/app";
+import { APP_PROTOCOL_VERSION, type AppCollections, type AppHostTheme } from "@catamorphic/app";
 import { CatamorphicProvider } from "@catamorphic/react";
 import {
   cleanup,
@@ -527,5 +527,91 @@ describe("compact app slots", () => {
     expect(frame.style.height).toBe("280px");
     rerender(view(true));
     expect(container.querySelector("iframe")).toBe(frame);
+  });
+});
+
+describe("app collection broker", () => {
+  it("rebinds grants and context without remounting and aborts obsolete reads", async () => {
+    const apiClient = makeApiClient();
+    const disconnect = vi.fn();
+    let pendingSignal: AbortSignal | undefined;
+    const first: AppCollections = {
+      read: ({ signal }) => {
+        pendingSignal = signal;
+        return new Promise(() => {});
+      },
+      execute: vi.fn(async () => {}),
+      subscribe: vi.fn(() => disconnect),
+    };
+    const second: AppCollections = {
+      read: vi.fn(async () => ({ items: [] })),
+      execute: vi.fn(async () => {}),
+      subscribe: vi.fn(() => () => {}),
+    };
+    const state = vi.fn();
+    const content = (collections: AppCollections, sessionId: string) => (
+      <CatamorphicProvider apiClient={apiClient as never}>
+        <AppMount
+          projectId={PROJECT_ID}
+          appName="ops-dashboard"
+          context={{ tenantId: "t-1", user: { id: "viewer-1" } }}
+          collections={collections}
+          onContentState={state}
+          display={{
+            mode: "compact",
+            visible: true,
+            surface: { kind: "chat", sessionId },
+          }}
+        />
+      </CatamorphicProvider>
+    );
+    const mounted = render(content(first, "first"));
+    await waitFor(() =>
+      expect(mounted.container.querySelector("iframe")).toBeTruthy(),
+    );
+    const frame = mounted.container.querySelector("iframe");
+    if (!frame?.contentWindow) throw new Error("Missing guest");
+    const send = (data: object) =>
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: frame.contentWindow,
+          data: { catamorphicApp: APP_PROTOCOL_VERSION, ...data },
+        }),
+      );
+    await waitFor(() => {
+      send({
+        kind: "collection",
+        operation: "subscribe",
+        source: "subsessions",
+        callId: "listen",
+      });
+      expect(first.subscribe).toHaveBeenCalledTimes(1);
+    });
+    send({
+      kind: "collection",
+      operation: "read",
+      source: "subsessions",
+      callId: "read",
+      parentId: null,
+    });
+    await waitFor(() => expect(pendingSignal).toBeDefined());
+    mounted.rerender(content(second, "second"));
+    await waitFor(() => expect(disconnect).toHaveBeenCalledTimes(1));
+    expect(pendingSignal?.aborted).toBe(true);
+    expect(second.subscribe).toHaveBeenCalledTimes(1);
+    expect(mounted.container.querySelector("iframe")).toBe(frame);
+    send({ kind: "content-state", state: "empty" });
+    await waitFor(() => expect(state).toHaveBeenLastCalledWith("empty"));
+    send({ kind: "content-state", state: "invented" });
+    expect(state).toHaveBeenLastCalledWith("empty");
+    send({
+      kind: "collection",
+      operation: "action",
+      source: "subsessions",
+      callId: "bad",
+      itemId: 7,
+      action: "open",
+    });
+    expect(second.execute).not.toHaveBeenCalled();
   });
 });

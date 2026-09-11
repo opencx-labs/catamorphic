@@ -12,5 +12,6 @@
     "e2e",
     "vitest.e2e.config.ts",
     "vitest.eval.config.ts"
-  ]
+  ],
+  "exclude": ["e2e/fixtures/*.tsx"]
 }

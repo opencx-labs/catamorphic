@@ -1,10 +1,25 @@
 export {
   type AppClientOptions,
   createClient,
+  createHostCollection,
   getContext,
+  reportContentState,
   reportHeight,
+  runCollectionAction,
   subscribeDisplay,
 } from "./client.js";
+export {
+  type Collection,
+  type CollectionBranch,
+  type CollectionChange,
+  type CollectionItem,
+  type CollectionPage,
+  type CollectionSource,
+  type CollectionStatus,
+  createCollection,
+  flattenCollection,
+  type TreeRow,
+} from "./collection.js";
 export type {
   AppClient,
   ClientMethod,
@@ -14,6 +29,7 @@ export type {
   Workflow,
   WorkflowShape,
 } from "./contract.js";
+export { shareEvent } from "./events.js";
 export { appGuestCsp, buildAppGuestDocument } from "./guest-document.js";
 export {
   APP_ICON_DESCRIPTIONS,
@@ -31,8 +47,13 @@ export {
   APP_PROTOCOL_VERSION,
   AppCallError,
   type AppCallErrorCode,
+  type AppCollectionItem,
+  type AppCollectionRequest,
+  type AppCollections,
+  type AppContentState,
   type AppContext,
   type AppDisplay,
+  type AppSurface,
   type GuestToHostMessage,
   type HostToGuestMessage,
   isGuestMessage,

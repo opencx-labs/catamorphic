@@ -258,6 +258,10 @@ Automated desktop tests run in a private Linux display locally and dedicated
 macOS runners in CI (ADR 0129). They use normal native focus and rendering.
 Testing must never interrupt the developer's keyboard, pointer, or clipboard.
 
+- 2026-09-11: [ADR 0132](../../docs/decisions/0132-shared-contextual-sidebar-contributions.md)
+  unifies built-in and custom sidebar collections, trees, row actions and context.
+  Right-click and overflow menus are independently configurable. Contextual sections
+  retain identity and distinguish empty content from loading and failed requests.
 
 - 2026-09-09: Accepted [ADR 0109](../../docs/decisions/0109-desktop-state-and-settings-contracts.md).
   Workspace transitions and chat delivery have explicit owners. Ordinary appearance
