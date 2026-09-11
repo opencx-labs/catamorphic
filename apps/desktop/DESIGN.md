@@ -358,6 +358,14 @@ and open their actual surfaces. Editable code derives syntax, background, gutter
 selection, cursor, diagnostics and widgets from the current app theme, with bundled
 Shiki grammars. Never ship a preset editor background that ignores the app theme.
 
+### 2026-09-11: Host-themed review packs
+
+Installed review components use the host palette for syntax, change colors,
+backgrounds and gutters by default, and inherit its color scheme inside the diff
+shadow root. Typography and spacing follow the existing app tokens. Explicit code
+palette preferences remain available in the desktop adapter. App mounts resend the
+current theme on every guest load while theme switches preserve the guest's state.
+
 ## Dock placement and draft runtime controls (2026-09-11)
 
 ADR 0127 adds centered or edge-aligned expansion without changing the collapsed
@@ -370,3 +378,22 @@ Markdown hover previews use the app's rendered reading typography. Composer
 surface chips and expanded group members use the shared resource inspector;
 collapsed groups lead with their plural type and a separate count. Preview
 content and behavior follow [chat state](docs/chat-state.md).
+
+### 2026-09-11: Direct browser password imports on macOS
+
+Profile settings offers direct password import per detected browser profile on
+supported Macs, beside bookmark import. The action explains macOS authorization,
+shows progress and added/skipped counts, and preserves existing passwords.
+Other platforms retain CSV with a clear macOS support note. A prebuilt helper
+ships only in macOS packages; see ADR 0130.
+
+### 2026-09-11: Slash command composer
+
+Repaired the [slash command experience](../../docs/desktop-slash-command-audit.md).
+  The existing Enter-to-run and Tab-for-arguments interaction uses one send path.
+  Command rows retain a fixed height, argument hints have a stable footer, and a
+  native top-layer menu stays readable in narrow chats. Catalog loading, empty
+  results, errors, retry, and keyboard selection are explicit.
+  A T3 Code comparison further tightened command-name search, guarded selection
+  against fresh input arriving before a render, and moved pointer activation to
+  click release while retaining composer focus.

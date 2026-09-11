@@ -1,4 +1,4 @@
-# 0130 - Content-addressed test reuse
+# 0131 - Content-addressed test reuse
 
 - **Status:** Accepted
 - **Date:** 2026-09-11

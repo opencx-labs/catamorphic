@@ -24,30 +24,63 @@ export interface SkillInfo {
 export function useProjectSkills(
   projectId: string | undefined,
   active: boolean,
-  /** Bump to refetch while `active` stays true (e.g. per palette open). */
   refresh = 0,
 ): SkillInfo[] {
+  return useProjectSkillCatalog(projectId, active, refresh).skills;
+}
+
+export function useProjectSkillCatalog(
+  projectId: string | undefined,
+  active: boolean,
+  refresh = 0,
+) {
   const { apiClient } = useCatamorphic();
-  const [skills, setSkills] = useState<SkillInfo[]>([]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `refresh` is a deliberate retrigger — bumping it refetches with nothing else changed
+  const [catalog, setCatalog] = useState<{
+    projectId?: string;
+    skills: SkillInfo[];
+    loading: boolean;
+    error?: string;
+  }>({ skills: [], loading: true });
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refresh explicitly reloads the files
   useEffect(() => {
     if (!active || !projectId) return;
     let cancelled = false;
+    setCatalog({ projectId, skills: [], loading: true });
     void apiClient
       .GET("/api/projects/{projectId}/skills", {
         params: { path: { projectId } },
       })
       .then((result) => {
-        if (!cancelled && result.data) setSkills(result.data);
+        if (!result.data) throw new Error("Could not load skills.");
+        if (!cancelled)
+          setCatalog({ projectId, skills: result.data, loading: false });
       })
       .catch(() => {
-        if (!cancelled) setSkills([]);
+        if (!cancelled)
+          setCatalog({
+            projectId,
+            skills: [],
+            loading: false,
+            error: "Could not load skills. Retry to refresh the list.",
+          });
       });
     return () => {
       cancelled = true;
     };
   }, [active, projectId, apiClient, refresh]);
-  return skills;
+  return catalog.projectId === projectId
+    ? catalog
+    : { skills: [], loading: active };
+}
+
+/** Shared by both skill launchers; an empty picked set really offers no skills. */
+export function skillsForAgent(
+  skills: SkillInfo[],
+  setting?: { mode: "all" } | { mode: "picked"; names: string[] },
+): SkillInfo[] {
+  return setting?.mode === "picked"
+    ? skills.filter((skill) => setting.names.includes(skill.name))
+    : skills;
 }
 
 /**

@@ -1,4 +1,5 @@
 import type { ResourcePreview } from "@catamorphic/react";
+import type { AgentCommandsResult } from "../../shared/agent-commands.js";
 import type { AppPrefs } from "../../shared/app-prefs.js";
 import type { BookmarkPlacement } from "../../shared/bookmark-target.js";
 import type {
@@ -401,16 +402,31 @@ export interface OpenRouterCatalog {
   bestFreeModelId: string | null;
 }
 
+export interface PasswordImportSupport {
+  available: boolean;
+  reason: string | null;
+}
+
+export interface NativePasswordImportResult {
+  imported: number;
+  existing: number;
+  invalid: number;
+  failed: number;
+  cancelled: boolean;
+}
+
 export interface ImportableProfile {
   id: string;
   name: string;
   bookmarkCount: number;
+  hasPasswords?: boolean;
 }
 
 export interface ImportableBrowser {
   id: string;
   label: string;
   profiles: ImportableProfile[];
+  supportsPasswordImport?: boolean;
 }
 
 export interface BrowserImportRequest {
@@ -933,12 +949,11 @@ export interface CatamorphicDesktopApi {
     id: string,
   ) => Promise<{ health: "ok" | "expired" | "missing"; reauth: boolean }>;
   usageSummary: (days: number) => Promise<UsageSummary>;
-  agentCommands: (
-    projectId: string,
-    agentId: string,
-  ) => Promise<
-    Array<{ name: string; description: string; argumentHint: string }>
-  >;
+  agentCommands: (input: {
+    projectId: string;
+    agentId: string;
+    sessionId?: string;
+  }) => Promise<AgentCommandsResult>;
   onAgentAuthMaybeChanged: (listener: () => void) => () => void;
   onAgentsChanged: (listener: (data: AgentsData) => void) => () => void;
   onAgentLoginFinished: (
@@ -1008,6 +1023,11 @@ export interface CatamorphicDesktopApi {
   ) => Promise<Record<string, unknown>>;
 
   openrouterModels: () => Promise<OpenRouterCatalog>;
+  browserImportSupport: () => Promise<PasswordImportSupport>;
+  browserImportNativePasswords: (input: {
+    browserId: string;
+    profileId: string;
+  }) => Promise<NativePasswordImportResult>;
   browserImportList: () => Promise<ImportableBrowser[]>;
   browserImportRun: (
     input: BrowserImportRequest,
