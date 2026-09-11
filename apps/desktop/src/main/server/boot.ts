@@ -46,6 +46,7 @@ import { shutdownDesktopServices } from "../shutdown.js";
 import { userSkillFiles, userSkillInfos } from "../user-skills.js";
 import { syncProfileMcpWorkflowConnections } from "../workflow-mcp-connections.js";
 import { DesktopAgentRegistry } from "./agent-registry.js";
+import { componentRegistryCapability } from "./component-registry.js";
 import { DESKTOP_SETTINGS_SKILL } from "./desktop-settings-skill.js";
 import { E2eLocalSandboxProvider } from "./e2e-fakes.js";
 import { FileGithubTokenStore, GITHUB_APP } from "./github.js";
@@ -457,6 +458,7 @@ export async function startEmbeddedServer(
     },
     triggerKinds: DESKTOP_TRIGGER_KINDS,
     mcpToolKinds: DESKTOP_MCP_TOOL_KINDS,
+    agentCapabilities: { capabilities: [componentRegistryCapability] },
     projectHooks: [
       {
         onProjectCreated: async () => syncWorkflowConnections(),

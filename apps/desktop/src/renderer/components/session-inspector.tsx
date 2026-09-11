@@ -15,6 +15,7 @@ import type { SessionCheckoutInfo } from "../lib/desktop-api.js";
 import { ChatGlyph } from "./chat-icon.js";
 import { HarnessIcon } from "./harness-icon.js";
 import { ResourceInspector } from "./resource-inspector.js";
+import { SessionArtifacts } from "./session-artifacts.js";
 
 const SOURCE_LABELS: Record<AgentSession["source"], string> = {
   desktop: "Desktop",
@@ -26,6 +27,8 @@ const SOURCE_LABELS: Record<AgentSession["source"], string> = {
 };
 
 export function SessionInspector({
+  projectId,
+  onOpenArtifact,
   session,
   fallbackTitle,
   agentName,
@@ -51,6 +54,8 @@ export function SessionInspector({
   archived = false,
   onOpenParent,
 }: {
+  projectId?: string;
+  onOpenArtifact?: (target: string) => void;
   session: AgentSession | null | undefined;
   fallbackTitle: string;
   agentName: string;
@@ -101,35 +106,47 @@ export function SessionInspector({
       openRequest={openRequest}
       onOpen={onInspect}
       content={(dismiss) => (
-        <SessionInspectorContent
-          session={session}
-          fallbackTitle={fallbackTitle}
-          agentName={agentName}
-          environmentControl={environmentControl}
-          onManageConnections={
-            onManageConnections
-              ? () => {
-                  dismiss();
-                  onManageConnections();
-                }
-              : undefined
-          }
-          checkout={checkout}
-          incognito={incognito}
-          moving={moving}
-          model={model}
-          reportedModel={reportedModel}
-          effort={effort}
-          onEditModel={onEditModel}
-          onEditEffort={onEditEffort}
-          moveDisabledReason={moveDisabledReason}
-          moveError={moveError}
-          onMove={onMove}
-          onFork={onFork}
-          onArchive={onArchive}
-          archived={archived}
-          onOpenParent={onOpenParent}
-        />
+        <>
+          <SessionInspectorContent
+            session={session}
+            fallbackTitle={fallbackTitle}
+            agentName={agentName}
+            environmentControl={environmentControl}
+            onManageConnections={
+              onManageConnections
+                ? () => {
+                    dismiss();
+                    onManageConnections();
+                  }
+                : undefined
+            }
+            checkout={checkout}
+            incognito={incognito}
+            moving={moving}
+            model={model}
+            reportedModel={reportedModel}
+            effort={effort}
+            onEditModel={onEditModel}
+            onEditEffort={onEditEffort}
+            moveDisabledReason={moveDisabledReason}
+            moveError={moveError}
+            onMove={onMove}
+            onFork={onFork}
+            onArchive={onArchive}
+            archived={archived}
+            onOpenParent={onOpenParent}
+          />
+          {projectId && session && onOpenArtifact && (
+            <SessionArtifacts
+              projectId={projectId}
+              sessionId={session.id}
+              onOpen={(target) => {
+                dismiss();
+                onOpenArtifact(target);
+              }}
+            />
+          )}
+        </>
       )}
     >
       {(triggerProps) => (

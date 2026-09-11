@@ -33,6 +33,7 @@ import type { OpenMode } from "../../shared/open-mode.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { AnimatedTitle } from "./animated-title";
+import { AppGlyph } from "./app-icon";
 import { ChatGlyph, hasCustomChatIcon } from "./chat-icon";
 import { SignalBadge, SignalGlyph } from "./chat-signals";
 import { OpenResourceButton } from "./open-resource-button.js";
@@ -110,6 +111,7 @@ function TabHoverCard({
 const TAB_ICONS = {
   workflow: WorkflowIcon,
   app: LayoutGrid,
+  artifact: AppWindow,
   chat: MessageSquare,
   browser: Globe,
   settings: SettingsIcon,
@@ -483,6 +485,8 @@ export function WorkspaceTabBar({
                         alt=""
                         className="size-3.5 rounded-[3px]"
                       />
+                    ) : tab.kind === "app" ? (
+                      <AppGlyph icon={tab.appIcon} className="size-3.5" />
                     ) : tab.kind === "chat" ? (
                       <ChatGlyph
                         icon={tab.chatIcon}

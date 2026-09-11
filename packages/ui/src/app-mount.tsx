@@ -60,7 +60,9 @@ export interface AppMountProps {
   /** Presentation and visibility are host-owned; neither grants capabilities. */
   display?: AppDisplay;
   /** Fixed viewport height for compact slots; the guest scrolls internally. */
-  viewportHeight?: number;
+  viewportHeight?: number | "fill";
+  /** Reload only when a newer successful build is available. */
+  refreshIntervalMs?: number;
 }
 
 interface ViewStateReady {
@@ -104,6 +106,7 @@ export function AppMount({
   className,
   display = { mode: "full", visible: true },
   viewportHeight,
+  refreshIntervalMs,
 }: AppMountProps) {
   const { apiClient } = useCatamorphic();
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -131,37 +134,55 @@ export function AppMount({
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      const response = await apiClient.GET(
-        "/api/projects/{projectId}/apps/{appName}/view-state",
-        {
-          params: {
-            path: { projectId, appName },
-            query: channel ? { channel } : undefined,
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = async () => {
+      try {
+        const response = await apiClient.GET(
+          "/api/projects/{projectId}/apps/{appName}/view-state",
+          {
+            params: {
+              path: { projectId, appName },
+              query: channel ? { channel } : undefined,
+            },
           },
-        },
-      );
-      if (cancelled) return;
-      const data = response.data;
-      if (!data) {
-        setView({ state: "not_found" });
-        return;
+        );
+        if (cancelled) return;
+        const data = response.data;
+        if (data?.state === "ready") {
+          setView((current) =>
+            current.state === "ready" && current.versionId === data.versionId
+              ? current
+              : data,
+          );
+        } else {
+          setView({
+            state:
+              data?.state === "not_published" ? "not_published" : "not_found",
+          });
+        }
+      } catch {
+        if (!cancelled)
+          setView((current) =>
+            current.state === "loading" ? { state: "not_found" } : current,
+          );
+      } finally {
+        if (!cancelled && refreshIntervalMs && display.visible)
+          timer = setTimeout(refresh, Math.max(1000, refreshIntervalMs));
       }
-      switch (data.state) {
-        case "ready":
-          setView(data);
-          return;
-        case "not_published":
-          setView({ state: "not_published" });
-          return;
-        default:
-          setView({ state: "not_found" });
-      }
-    })();
+    };
+    void refresh();
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
-  }, [apiClient, projectId, appName, channel]);
+  }, [
+    apiClient,
+    projectId,
+    appName,
+    channel,
+    refreshIntervalMs,
+    display.visible,
+  ]);
 
   const handleGuestMessage = useCallback(
     async (message: GuestToHostMessage) => {
@@ -258,6 +279,7 @@ export function AppMount({
               projectId,
               appName,
               channel,
+              versionId: view.versionId,
               runId: message.runId,
             });
           } finally {
@@ -285,7 +307,10 @@ export function AppMount({
       async function handleCall(
         message: Extract<GuestToHostMessage, { kind: "call" }>,
       ): Promise<void> {
-        const query = channel ? { channel } : undefined;
+        const query = {
+          channel,
+          versionId: view.state === "ready" ? view.versionId : undefined,
+        };
         // Input was JSON-validated above; the generated body type wants
         // the JsonValueInput shape.
         const body = { input: message.input } as never;
@@ -354,6 +379,7 @@ export function AppMount({
           projectId,
           appName,
           channel,
+          versionId: view.state === "ready" ? view.versionId : undefined,
           runId: settled.runId,
         });
         if (outcome.status === "completed") {
@@ -378,7 +404,7 @@ export function AppMount({
         }
       }
     },
-    [apiClient, projectId, appName, channel, view.state],
+    [apiClient, projectId, appName, channel, view],
   );
 
   const sendDisplay = useCallback(() => {
@@ -447,7 +473,10 @@ export function AppMount({
       style={{
         width: "100%",
         border: "none",
-        height: `${viewportHeight === undefined || !Number.isFinite(viewportHeight) ? height : Math.max(120, Math.min(MAX_HEIGHT_PX, viewportHeight))}px`,
+        height:
+          viewportHeight === "fill"
+            ? "100%"
+            : `${viewportHeight === undefined || !Number.isFinite(viewportHeight) ? height : Math.max(120, Math.min(MAX_HEIGHT_PX, viewportHeight))}px`,
       }}
     />
   );
@@ -547,6 +576,7 @@ interface AppRunAddress {
   appName: string;
   channel?: "published" | "dev";
   runId: string;
+  versionId?: string;
 }
 
 async function fetchRunSnapshot(
@@ -561,7 +591,7 @@ async function fetchRunSnapshot(
           appName: args.appName,
           runId: args.runId,
         },
-        query: args.channel ? { channel: args.channel } : undefined,
+        query: { channel: args.channel, versionId: args.versionId },
       },
     },
   );

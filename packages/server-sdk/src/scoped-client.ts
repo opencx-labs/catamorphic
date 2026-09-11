@@ -463,6 +463,8 @@ export class ScopedClient {
     sessionId: string;
     allocationId?: string;
   }) => AgentCapabilityGateway;
+  readonly sessionArtifacts: ReturnType<typeof buildSessionArtifacts>;
+  readonly apps: ReturnType<typeof buildApps>;
   readonly projects: ProjectsResource;
   readonly workflows: WorkflowsResource;
   readonly workflowEnablements: WorkflowEnablementsResource;
@@ -477,6 +479,8 @@ export class ScopedClient {
   ) {
     this.capabilities = (args) =>
       core.agentCapabilities.forSession({ ...args, identity });
+    this.sessionArtifacts = buildSessionArtifacts(core, identity);
+    this.apps = buildApps(core, identity);
     this.projects = buildProjects(core, identity);
     this.workflows = buildWorkflows(core, identity);
     this.workflowEnablements = buildWorkflowEnablements(core, identity);
@@ -521,4 +525,72 @@ export class TenantScopedClient {
       ...(args.scope === undefined ? {} : { scope: args.scope }),
     });
   }
+}
+
+/** The same session source API is available to hosts without HTTP or MCP. */
+function buildSessionArtifacts(core: CatamorphicCore, identity: Identity) {
+  type Service = CatamorphicCore["sessionArtifacts"];
+  const build = async (artifact: Awaited<ReturnType<Service["get"]>>) => ({
+    artifact,
+    build:
+      artifact.appName && core.apps
+        ? await core.apps.build({
+            identity,
+            projectId: artifact.projectId,
+            appName: artifact.appName,
+            artifactId: artifact.id,
+            kind: "preview",
+          })
+        : null,
+  });
+  return {
+    list: (args: Omit<Parameters<Service["list"]>[0], "identity">) =>
+      core.sessionArtifacts.list({ ...args, identity }),
+    get: (args: Omit<Parameters<Service["get"]>[0], "identity">) =>
+      core.sessionArtifacts.get({ ...args, identity }),
+    files: (args: Omit<Parameters<Service["files"]>[0], "identity">) =>
+      core.sessionArtifacts.files({ ...args, identity }),
+    create: async (
+      args: Omit<Parameters<Service["create"]>[0], "identity">,
+    ) => {
+      if (args.kind === "app" && !core.apps)
+        throw new Error("App building is unavailable");
+      return build(await core.sessionArtifacts.create({ ...args, identity }));
+    },
+    update: async (args: Omit<Parameters<Service["update"]>[0], "identity">) =>
+      build(await core.sessionArtifacts.update({ ...args, identity })),
+    discard: async (
+      args: Omit<Parameters<Service["discard"]>[0], "identity">,
+    ) => {
+      const artifact = await core.sessionArtifacts.discard({
+        ...args,
+        identity,
+      });
+      if (artifact.sessionId)
+        await core.watchers?.stop({
+          identity,
+          projectId: artifact.projectId,
+          sessionId: artifact.sessionId,
+          watcherId: artifact.id,
+        });
+    },
+  };
+}
+
+function buildApps(core: CatamorphicCore, identity: Identity) {
+  type Service = NonNullable<CatamorphicCore["apps"]>;
+  const service = () => {
+    if (!core.apps) throw new Error("Apps are unavailable");
+    return core.apps;
+  };
+  return {
+    list: (args: Omit<Parameters<Service["list"]>[0], "identity">) =>
+      service().list({ ...args, identity }),
+    presentation: (
+      args: Omit<Parameters<Service["presentation"]>[0], "identity">,
+    ) => service().presentation({ ...args, identity }),
+    updatePresentation: (
+      args: Omit<Parameters<Service["updatePresentation"]>[0], "identity">,
+    ) => service().updatePresentation({ ...args, identity }),
+  };
 }

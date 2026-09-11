@@ -1,6 +1,7 @@
 import {
   useAcknowledgeAgentSessionAttention,
   useAgentSessions,
+  useAppPresentations,
   useArchiveAgentSession,
   useCreateAgentSession,
   useForkAgentSession,
@@ -18,7 +19,6 @@ import {
   Folder,
   FolderPlus,
   GitBranch,
-  LayoutGrid,
   Link2,
   MessageSquare,
   PanelLeft,
@@ -69,6 +69,7 @@ import {
 } from "./components/agent-pointers.js";
 import { AgentWizard } from "./components/agent-wizard.js";
 import { AnimatedTitle } from "./components/animated-title.js";
+import { AppGlyph } from "./components/app-icon.js";
 import { BookmarksNav } from "./components/bookmarks-nav.js";
 import type { ChatDockEntry, ChatSurface } from "./components/chat-dock.js";
 import { ChatGlyph } from "./components/chat-icon.js";
@@ -197,6 +198,7 @@ import {
   workspaceLayout,
 } from "./lib/workspace-state.js";
 import { AppScreen, useApps } from "./screens/app-screen.js";
+import { ArtifactScreen } from "./screens/artifact-screen.js";
 import {
   type BrowserCommands,
   type BrowserPageState,
@@ -1586,6 +1588,7 @@ export function App({
     value: string,
     opts: {
       chatLocalId?: string;
+      label?: string;
       side?: boolean;
       background?: boolean;
       newTab?: boolean;
@@ -1656,7 +1659,9 @@ export function App({
         ? editorTabKey(existingEditor?.localId ?? localId)
         : target.kind === "tab"
           ? target.key
-          : target.kind === "workflow" || target.kind === "app"
+          : target.kind === "workflow" ||
+              target.kind === "app" ||
+              target.kind === "artifact"
             ? `${target.kind}:${target.name}`
             : browserTabKey(localId);
     if (
@@ -1717,7 +1722,9 @@ export function App({
                     },
                   ],
             }
-          : target.kind === "workflow" || target.kind === "app"
+          : target.kind === "workflow" ||
+              target.kind === "app" ||
+              target.kind === "artifact"
             ? {
                 tabs: ws.tabs.some((tab) => tabKey(tab) === key)
                   ? ws.tabs
@@ -1726,6 +1733,14 @@ export function App({
                       {
                         kind: target.kind,
                         name: target.name,
+                        label:
+                          opts.label ??
+                          (target.kind === "artifact"
+                            ? "Session artifact"
+                            : target.kind === "app" &&
+                                target.name.startsWith("session-")
+                              ? "Session app"
+                              : undefined),
                         chatLocalId: opts.chatLocalId,
                       },
                     ],
@@ -4193,7 +4208,27 @@ export function App({
     [updateWorkspace],
   );
 
-  const activeTab = workspace.tabs.find(
+  const appPresentations = useAppPresentations(projectId, [
+    ...workspace.tabs
+      .filter((tab) => tab.kind === "app")
+      .map((tab) => tab.name),
+    ...Object.values(chipAttention)
+      .flat()
+      .filter((key) => key.startsWith("app:"))
+      .map((key) => key.slice("app:".length)),
+  ]);
+  const appMetadata = new Map(
+    appPresentations.flatMap((query) =>
+      query.data ? [[query.data.name, query.data] as const] : [],
+    ),
+  );
+  const presentedTabs = workspace.tabs.map((tab) => {
+    const metadata = tab.kind === "app" ? appMetadata.get(tab.name) : undefined;
+    return tab.kind === "app" && metadata
+      ? { ...tab, label: metadata.title, appIcon: metadata.icon }
+      : tab;
+  });
+  const activeTab = presentedTabs.find(
     (tab) => tabKey(tab) === workspace.activeTabKey,
   );
 
@@ -4231,7 +4266,7 @@ export function App({
   // group membership stamped for the grouped styling.
   const tabByKey = new Map<string, WorkspaceTab>(
     [
-      ...workspace.tabs,
+      ...presentedTabs,
       ...browserTabs(workspace),
       ...terminalTabs(workspace),
       ...editorTabs(workspace),
@@ -4350,7 +4385,14 @@ export function App({
    */
   const synthesizedSurface = (key: string): ChatSurface => {
     if (key.startsWith("app:")) {
-      return { key, kind: "app", label: key.slice("app:".length) };
+      const name = key.slice("app:".length);
+      const metadata = appMetadata.get(name);
+      return {
+        key,
+        kind: "app",
+        label: metadata?.title ?? name,
+        appIcon: metadata?.icon,
+      };
     }
     if (key.startsWith("browser:")) {
       const entry = workspace.browsers.find(
@@ -4386,8 +4428,13 @@ export function App({
         label: chatLabels[key.slice("chat:".length)] ?? "Chat",
       };
     }
-    const tab = workspace.tabs.find((candidate) => tabKey(candidate) === key);
-    return { key, kind: "app", label: tab?.label ?? tab?.name ?? key };
+    const tab = presentedTabs.find((candidate) => tabKey(candidate) === key);
+    return {
+      key,
+      kind: "app",
+      label: tab?.label ?? tab?.name ?? key,
+      appIcon: tab?.kind === "app" ? tab.appIcon : undefined,
+    };
   };
 
   /** The agent's working tabs for a chat — its surfaces rail. */
@@ -4418,13 +4465,14 @@ export function App({
             attention: session.attentionRequired,
           };
         }),
-      ...workspace.tabs
+      ...presentedTabs
         .filter((tab) => tab.chatLocalId === chat.localId)
         .map((tab) => ({
           key: tabKey(tab),
           kind:
             tab.kind === "workflow" ? ("workflow" as const) : ("app" as const),
           label: tab.label ?? tab.name,
+          appIcon: tab.kind === "app" ? tab.appIcon : undefined,
           attention: attentionKeys.includes(tabKey(tab)),
         })),
       ...workspace.browsers
@@ -5270,6 +5318,12 @@ export function App({
                           }
                         />
                       </Suspense>
+                    ) : tab.kind === "artifact" ? (
+                      <ArtifactScreen
+                        projectId={projectId}
+                        artifactId={tab.name}
+                        onAskAgent={(message) => sendToAgent(message, "float")}
+                      />
                     ) : tab.kind === "app" ? (
                       <AppScreen projectId={projectId} appName={tab.name} />
                     ) : tab.kind === "mcpapp" ? (
@@ -5319,6 +5373,18 @@ export function App({
                     ) : tab.kind === "diff" ? (
                       <Suspense fallback={<div className="flex-1 bg-bg" />}>
                         <DiffScreen
+                          onOpenArtifact={(target, title) => {
+                            void openLinkedSurface(target, {
+                              label: title,
+                              newTab: true,
+                            }).catch((error: unknown) =>
+                              setLinkError(
+                                error instanceof Error
+                                  ? error.message
+                                  : "Could not open review",
+                              ),
+                            );
+                          }}
                           projectId={tab.projectId}
                           source={tab.source}
                         />
@@ -6693,8 +6759,8 @@ function AppsNav({
                 : "text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
             }`}
           >
-            <LayoutGrid className="size-3.5 shrink-0" />
-            <span className="truncate">{app.name}</span>
+            <AppGlyph icon={app.icon} className="size-3.5 shrink-0" />
+            <span className="truncate">{app.title}</span>
           </OpenResourceButton>
         </li>
       ))}

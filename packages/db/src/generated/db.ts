@@ -174,9 +174,12 @@ export interface AgentTurns {
 
 export interface Apps {
   created_at: Generated<Timestamp>;
+  icon: string | null;
   id: Generated<string>;
   name: string;
   project_id: string;
+  session_artifact_id: string | null;
+  title: string | null;
   updated_at: Generated<Timestamp>;
 }
 
@@ -697,6 +700,34 @@ export interface ScheduleOccurrences {
   updated_at: Generated<Timestamp>;
 }
 
+export interface SessionArtifactRevisions {
+  artifact_id: string;
+  commit_sha: string;
+  created_at: Generated<Timestamp>;
+  source_paths: Json;
+}
+
+export interface SessionArtifacts {
+  commit_sha: string;
+  created_at: Generated<Timestamp>;
+  discarded_at: Timestamp | null;
+  id: Generated<string>;
+  kind: string;
+  last_error: string | null;
+  name: string;
+  owner_external_user_id: string;
+  project_id: string;
+  ref_deleted_at: Timestamp | null;
+  remote_branch: string;
+  revision: Generated<number>;
+  session_id: string | null;
+  source_path: string;
+  source_paths: Generated<Json>;
+  status: Generated<string>;
+  title: string;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface SessionMailboxItems {
   acknowledged_at: Timestamp | null;
   author_kind: string;
@@ -891,7 +922,6 @@ export interface Watchers {
   owner_external_user_id: string;
   owner_identity: Json;
   project_id: string;
-  ref_deleted_at: Timestamp | null;
   remote_branch: string;
   session_id: string;
   source_path: string;
@@ -1023,6 +1053,7 @@ export interface WorkflowRuns {
   project_id: string;
   provenance: Json;
   result: Json | null;
+  session_artifact_id: string | null;
   started_at: Timestamp | null;
   state_version: Generated<Int8>;
   status: Generated<string>;
@@ -1122,6 +1153,8 @@ export interface DB {
   rate_reservation_buckets: RateReservationBuckets;
   schedule_bindings: ScheduleBindings;
   schedule_occurrences: ScheduleOccurrences;
+  session_artifact_revisions: SessionArtifactRevisions;
+  session_artifacts: SessionArtifacts;
   session_mailbox_items: SessionMailboxItems;
   session_sync_intents: SessionSyncIntents;
   stock_project_access_requests: StockProjectAccessRequests;

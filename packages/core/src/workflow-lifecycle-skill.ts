@@ -38,13 +38,13 @@ cron job, native harness monitor, or indefinitely running shell loop.
 - workflowName must equal the exported defineWorkflow name in source. Choose a
   name that does not collide with an existing project workflow.
 - Pass the source string directly. The host creates
-  workflows/src/watchers/<watcher-id>.ts on catamorphic/watchers/<watcher-id> in
+  workflows/src/artifacts/<artifact-id>.ts on catamorphic/artifacts/<artifact-id> in
   an isolated checkout of the committed project origin. You do not need to
   create a worktree, commit, push, or scaffold the user's project for a watcher.
 - That snapshot does not contain this session's uncommitted or unshared helper
   files. Keep temporary source self-contained, or import only dependencies and
   modules already present in the committed origin. Relative imports resolve
-  from workflows/src/watchers/, not from the user's current directory.
+  from workflows/src/artifacts/, not from the user's current directory.
 - Use registered trigger kinds and their actual config/payload types. For a
   schedule, the payload has bindingId, scheduledFor, and firedAt. For an event
   watcher it is the normalized Project Event envelope. Do not copy a fictional
@@ -67,6 +67,7 @@ cron job, native harness monitor, or indefinitely running shell loop.
   future activations. Closing a chat tab alone does not close its session.
 
 Temporary means expiring activation, not secret or instantly erased source.
+Source is retained with the session alongside temporary apps. Discard prevents new use.
 Live runs retain their immutable revision until they settle; old git objects
 may remain until garbage collection. Never put private source or secrets into
 this ref as a workaround for unavailable private storage.

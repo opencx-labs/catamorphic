@@ -42,6 +42,7 @@ export {
   useAgentSessions,
 } from "./hooks/use-agent-sessions.js";
 export { useAnswerAgentQuestion } from "./hooks/use-answer-agent-question.js";
+export { useAppPresentations } from "./hooks/use-app-presentations.js";
 export {
   type ArchiveAgentSessionInput,
   type ArchiveAgentSessionResult,
@@ -193,6 +194,7 @@ export {
   type SendAgentMessageInput,
   useSendAgentMessage,
 } from "./hooks/use-send-agent-message.js";
+export { useSessionArtifacts } from "./hooks/use-session-artifacts.js";
 export {
   type PendingToolPermission,
   type ToolPermissionAnswer,

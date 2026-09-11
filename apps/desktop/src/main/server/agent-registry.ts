@@ -1016,6 +1016,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         this.toolPermissionHandler(config, profileId),
         (projectId) => this.settingsContext(projectId, config),
         this.deps.workspaceBridge?.elicit.bind(this.deps.workspaceBridge),
+        this.deps.projectMcpUrl,
       );
       return {
         id: config.id,

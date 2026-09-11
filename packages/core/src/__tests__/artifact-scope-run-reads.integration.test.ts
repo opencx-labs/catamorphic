@@ -253,4 +253,67 @@ describeIf("scoped identity run reads", () => {
       core.runs.resume({ identity: viewer, runId: allowedRunId }),
     ).rejects.toThrow(AccessDeniedError);
   });
+  it("keeps session results out of same-named project workflow grants", async () => {
+    const sessionId = crypto.randomUUID();
+    const sourceId = crypto.randomUUID();
+    const runId = crypto.randomUUID();
+    await db
+      .insertInto("agent_sessions")
+      .values({
+        id: sessionId,
+        project_id: projectId,
+        external_user_id: builder.externalUserId,
+        provider: "test",
+      })
+      .execute();
+    await db
+      .insertInto("session_artifacts")
+      .values({
+        id: sourceId,
+        project_id: projectId,
+        session_id: sessionId,
+        owner_external_user_id: builder.externalUserId,
+        kind: "app",
+        name: "review",
+        title: "Review",
+        source_path: "apps/review/src/App.tsx",
+        remote_branch: `catamorphic/artifacts/${sourceId}`,
+        commit_sha: commitSha,
+      })
+      .execute();
+    await db
+      .insertInto("workflow_runs")
+      .values({
+        ...productionRun,
+        id: runId,
+        project_id: projectId,
+        workflow_name: "listOrders",
+        deployment_artifact_id: artifactId,
+        session_artifact_id: sourceId,
+        external_user_id: builder.externalUserId,
+      })
+      .execute();
+    const ordinaryViewer: Identity = {
+      ...viewer,
+      scope: [{ kind: "workflow", projectId, name: "listOrders" }],
+    };
+    await expect(
+      core.runs.get({ identity: ordinaryViewer, runId }),
+    ).rejects.toBeInstanceOf(AccessDeniedError);
+    expect(
+      (
+        await core.runs.list({ identity: ordinaryViewer, projectId })
+      ).items.some((run) => run.id === runId),
+    ).toBe(false);
+    const anotherOwner = { tenantId, externalUserId: "another-owner" };
+    await expect(
+      core.runs.get({ identity: anotherOwner, runId }),
+    ).rejects.toBeInstanceOf(AccessDeniedError);
+    expect(
+      (await core.runs.list({ identity: anotherOwner, projectId })).items.some(
+        (run) => run.id === runId,
+      ),
+    ).toBe(false);
+    expect((await core.runs.get({ identity: builder, runId })).id).toBe(runId);
+  });
 });

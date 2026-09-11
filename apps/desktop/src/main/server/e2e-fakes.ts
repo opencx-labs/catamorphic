@@ -21,9 +21,11 @@ import type {
   TurnOptions,
 } from "@catamorphic/sandbox";
 import { inlineAttachmentReferences } from "@catamorphic/sandbox";
+import { z } from "zod";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import { createCodexElicitation } from "./codex-elicitation.js";
 import type { desktopSettingsContext } from "./desktop-settings-context.js";
+import { reviewAppFiles, reviewAppSource } from "./e2e-review-app.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -194,6 +196,10 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       projectId: string,
     ) => ReturnType<typeof desktopSettingsContext>,
     private readonly elicit?: WorkspaceBridge["elicit"],
+    private readonly projectMcpUrl?: (
+      projectId: string,
+      sessionId: string,
+    ) => string | undefined,
   ) {}
 
   interrupt(providerSessionId: string): void {
@@ -338,12 +344,75 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
 
     if (
       process.env.CATAMORPHIC_E2E_REVIEW === "1" &&
-      prompt.includes("create a code-aware review guide")
+      prompt.includes("build an individual interactive code review")
     ) {
+      const url = this.projectMcpUrl?.(session.projectId, session.sessionId);
+      if (!url) throw new Error("Project tools unavailable");
+      const gateway = opts?.capabilities;
+      if (!gateway) throw new Error("Component registry unavailable");
+      const discovered = await gateway.discover({ query: "components" });
+      if (!discovered.items.some((item) => item.name === "components.read"))
+        throw new Error("Component registry was not discoverable");
+      const listed = z.array(z.object({ name: z.string() })).parse(
+        await gateway.invoke({
+          name: "components.read",
+          input: {},
+          requestId: crypto.randomUUID(),
+        }),
+      );
+      if (!listed.some((item) => item.name === "code-review"))
+        throw new Error("Review pack was not listed");
+      const pack = await gateway.invoke({
+        name: "components.read",
+        input: { name: "code-review" },
+        requestId: crypto.randomUUID(),
+      });
+      yield {
+        type: "tool_call",
+        toolName: "invoke_capability",
+        toolInput: { name: "components.read", input: { name: "code-review" } },
+        toolResult: pack,
+      };
+      const input = {
+        action: "create",
+        kind: "app",
+        name: "review",
+        title: "Validate input before processing",
+        source: reviewAppSource,
+        files: reviewAppFiles(pack),
+      };
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: "session_artifact", arguments: input },
+        }),
+      });
+      const body: unknown = await response.json();
+      const result = z
+        .object({
+          result: z.object({
+            structuredContent: z.object({
+              target: z.string(),
+              build: z.object({ status: z.literal("ready") }),
+            }),
+          }),
+        })
+        .safeParse(body);
+      if (!result.success)
+        throw new Error(`Review app creation failed: ${JSON.stringify(body)}`);
+      yield {
+        type: "tool_call",
+        toolName: "session_artifact",
+        toolInput: input,
+        toolResult: body,
+      };
       yield {
         type: "text",
-        content:
-          "<!-- catamorphic-review-guide -->\n## Validate input\nThe [input guard](#file=src%2Fguard.ts) changes from unconditional acceptance to checking input length.\n\n- Check how empty input is handled by callers.\n\n## Check the boundary\nThe patch reads input.length. Verify which input types reach this boundary; the supplied patch does not include caller evidence.\n<!-- /catamorphic-review-guide -->",
+        content: `[Open review](${result.data.result.structuredContent.target})`,
       };
       yield { type: "done" };
       return;

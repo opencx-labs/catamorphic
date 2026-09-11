@@ -31,7 +31,9 @@ beforeAll(async () => {
   await wait("return !!$('[aria-label=\"Pull request details\"]');");
 });
 afterAll(async () => {
+  const errors = app?.getRendererErrors() ?? [];
   await app?.stop();
+  expect(errors).toEqual([]);
 });
 
 it("shows real-shaped CI and people context without expanding files in the workspace sidebar", async () => {
@@ -49,31 +51,98 @@ it("shows real-shaped CI and people context without expanding files in the works
   await app.screenshot("/tmp/catamorphic-review-overview-e2e.png");
 });
 
-it("generates a guide, follows its code link, and preserves it when revisiting", async () => {
+it("generates an ordinary review app, follows evidence and retains the result", {
+  timeout: 660_000,
+  retry: 0,
+}, async () => {
   await run("button('Guide').click();");
   await wait(
     "return !!button('Generate guide') && !button('Generate guide').disabled;",
   );
   await run("button('Generate guide').click();");
-  await wait("return !!button('input guard');");
+  try {
+    // A fresh merge-gate cache performs the real dependency install. Match
+    // the service's bounded install + compile budget; UI errors fail early.
+    await app.waitFor(
+      `(()=>{${helper};return !!button('Open review') || !!document.querySelector('[aria-label="Code review guide"] [role="alert"]');})()`,
+      { timeoutMs: 630_000, label: "review app build" },
+    );
+    expect(
+      await run(
+        "return $('[aria-label=\"Code review guide\"] [role=alert]')?.textContent ?? null;",
+      ),
+    ).toBeNull();
+  } catch (error) {
+    console.error(
+      "Review readiness",
+      await run("return $('[aria-label=\"Code review guide\"]')?.innerText;"),
+      app.getOutput().slice(-6000),
+    );
+    throw error;
+  }
+  await run("button('Open review').click();");
   await wait(
-    "return document.querySelectorAll('[aria-label=\"Guide sections\"] a').length === 2;",
+    `return !!document.querySelector('iframe[src*="/apps/session-"]');`,
   );
+  const presentation = await app.eval<{
+    title: string;
+    icon: string;
+  }>(`(async () => {
+    const guest = new URL(document.querySelector('iframe[src*="/apps/session-"]').src);
+    const response = await fetch(guest.origin + guest.pathname.replace(/\\/guest$/, "/presentation"), {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Input guard review", icon: "review" }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    return response.json();
+  })()`);
+  expect(presentation).toMatchObject({
+    title: "Input guard review",
+    icon: "review",
+  });
+  await wait(
+    `return !!document.querySelector('[data-app-icon="review"]') && document.body.textContent.includes("Input guard review");`,
+  );
+  const frame = await app.connectToFrame("/apps/session-", {
+    timeoutMs: 60000,
+  });
+  try {
+    await frame.waitFor(
+      'document.querySelector(".cat-review-finding")?.textContent.includes("Check the boundary")',
+    );
+    expect(
+      await frame.eval(
+        `document.querySelectorAll('nav[aria-label="Review view"] button').length`,
+      ),
+    ).toBe(4);
+    await app.screenshot("/tmp/catamorphic-review-guide-e2e.png");
+    await frame.eval('document.querySelector(".cat-review-evidence").click()');
+    await frame.waitFor('!!document.querySelector("[data-testid=code-diff]")');
+    await app.screenshot("/tmp/catamorphic-review-app-diff-e2e.png");
+    expect(
+      await frame.eval(
+        `document.querySelector('[aria-label="Diff layout"]').value`,
+      ),
+    ).toBe("unified");
+  } catch (error) {
+    console.error(
+      "Review guest errors",
+      frame.getRendererErrors(),
+      await frame.eval('document.getElementById("root")?.innerHTML'),
+    );
+    await app.screenshot("/tmp/catamorphic-review-guest-failure.png");
+    throw error;
+  } finally {
+    frame.close();
+  }
   await run(
-    "document.querySelectorAll('[aria-label=\"Guide sections\"] a')[1].click();",
+    `document.querySelector('[data-point-key^="diff:"] button').click();`,
   );
-  expect(
-    await run(
-      "return document.activeElement?.tagName === 'H2' && document.activeElement.textContent === 'Check the boundary';",
-    ),
-  ).toBe(true);
-  await app.screenshot("/tmp/catamorphic-review-guide-e2e.png");
-  await run("button('input guard').click();");
-  await wait("return !!$('[data-testid=code-diff]');");
+  await wait("return !!button('Guide');");
   await run("button('Guide').click();");
-  await wait("return !!button('input guard');");
-  expect(await run("return !!button('Regenerate');")).toBe(true);
-  await run("button('input guard').click();");
+  await wait("return !!button('Update review');");
+  await run("button('Changes').click();");
+  await wait("return !!$('[data-testid=code-diff]');");
 });
 
 it("navigates between a file and its thread without losing the parent reply", async () => {

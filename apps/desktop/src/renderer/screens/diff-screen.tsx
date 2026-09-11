@@ -13,13 +13,24 @@ import { ReviewScreen } from "./review-screen.js";
  */
 
 export interface DiffScreenProps {
+  onOpenArtifact?: (target: string, title: string) => void;
   projectId: string;
   source: DiffSource;
 }
 
-export function DiffScreen({ projectId, source }: DiffScreenProps) {
+export function DiffScreen({
+  projectId,
+  source,
+  onOpenArtifact,
+}: DiffScreenProps) {
   if (source.type === "review")
-    return <ReviewScreen projectId={projectId} number={source.prNumber} />;
+    return (
+      <ReviewScreen
+        projectId={projectId}
+        number={source.prNumber}
+        onOpenArtifact={onOpenArtifact}
+      />
+    );
   return source.type === "local" ? (
     <LocalDiff projectId={projectId} source={source} />
   ) : (

@@ -38,6 +38,7 @@ async function freeCdpPort(): Promise<number> {
 }
 
 export interface FrameHandle {
+  getRendererErrors: () => string[];
   /** Evaluate JS inside the frame; resolves the JSON-serialized result. */
   eval: <T = unknown>(expression: string) => Promise<T>;
   waitFor: <T = unknown>(
@@ -209,6 +210,7 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
             return {
               eval: frameClient.eval,
               waitFor: frameClient.waitFor,
+              getRendererErrors: frameClient.getRendererErrors,
               close: () => frameWs.close(),
             };
           }

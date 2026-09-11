@@ -1,3 +1,4 @@
+import { APP_ICON_NAMES } from "@catamorphic/app";
 import {
   RoleDefinitionSchema as CoreRoleDefinitionSchema,
   PROJECT_PERMISSION_PATTERN,
@@ -52,11 +53,19 @@ export const ProjectAppVersionParamsSchema = ProjectIdParamsSchema.extend({
   versionId: z.string().uuid(),
 });
 
+export const AppPresentationSchema = z.object({
+  name: z.string(),
+  title: z.string(),
+  icon: z.enum(APP_ICON_NAMES),
+});
+
 export const AppSummarySchema = z.object({
   name: z.string(),
+  title: z.string(),
   id: z.string().uuid().nullable(),
   activeVersionId: z.string().uuid().nullable(),
   publishedAt: z.string().datetime().nullable(),
+  icon: z.enum(APP_ICON_NAMES),
 });
 
 export const AppVersionSchema = z.object({

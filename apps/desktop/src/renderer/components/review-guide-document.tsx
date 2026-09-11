@@ -1,9 +1,14 @@
-import { useAgentCatalog, useAgentChat } from "@catamorphic/react";
+import {
+  useAgentCatalog,
+  useAgentChat,
+  useCatamorphic,
+  useSessionArtifacts,
+} from "@catamorphic/react";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import type { PullRequestFile } from "../lib/desktop-api.js";
-import { extractGuide, guidePrompt } from "../lib/review-guide-document.js";
-
-import { ReviewGuideContent } from "./review-guide-content.js";
+import { guidePrompt } from "../lib/review-guide-document.js";
+import { AppScreen } from "../screens/app-screen.js";
 
 function stored(key: string) {
   try {
@@ -13,7 +18,7 @@ function stored(key: string) {
   }
 }
 
-/** Agent orchestration stays headless; Markdown is the editable review artifact. */
+/** Generation produces an ordinary session app; no review-only document format. */
 export function ReviewGuideDocument({
   projectId,
   number,
@@ -21,7 +26,7 @@ export function ReviewGuideDocument({
   body,
   files,
   revision,
-  onOpenFile,
+  onOpenArtifact,
 }: {
   projectId: string;
   number: number;
@@ -29,15 +34,13 @@ export function ReviewGuideDocument({
   body: string;
   files: PullRequestFile[];
   revision: string;
-  onOpenFile: (file: PullRequestFile) => void;
+  onOpenArtifact?: (target: string, title: string) => void;
 }) {
-  const key = `review-guide:${projectId}:${number}`;
-  const [document, setDocument] = useState(() => stored(key));
+  const key = `review-app:${projectId}:${number}`;
   const [sessionId, setSessionId] = useState(() => stored(`${key}:session`));
   const [agentId, setAgentId] = useState("");
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
   const [saveError, setSaveError] = useState("");
+  const [inline, setInline] = useState(false);
   const catalog = useAgentCatalog(projectId);
   const chosenId =
     agentId ||
@@ -59,39 +62,62 @@ export function ReviewGuideDocument({
       try {
         localStorage.setItem(`${key}:session`, id);
       } catch {
-        setSaveError("Could not save this guide session.");
+        setSaveError("Could not save this review session.");
       }
     },
   });
   const busy = chat.isSending || chat.isWorking;
-  const latest = chat.messages
-    .filter((message) => message.role === "assistant")
-    .at(-1);
+  const artifacts = useSessionArtifacts(projectId, sessionId || undefined, {
+    refetchInterval: busy ? 2000 : 5000,
+  });
   useEffect(() => {
-    if (busy || !latest || stored(`${key}:message`) === latest.id) return;
-    const result = extractGuide(latest.content);
-    if (!result) return;
-    setDocument(result);
-    try {
-      localStorage.setItem(key, result);
-      localStorage.setItem(`${key}:message`, latest.id);
-      localStorage.setItem(
-        `${key}:revision`,
-        stored(`${key}:pending-revision`),
+    if (sessionId && !busy) void artifacts.refetch();
+  }, [sessionId, busy, artifacts.refetch]);
+  const review = artifacts.data?.find(
+    (item) => item.kind === "app" && item.status === "active",
+  );
+  const { apiClient } = useCatamorphic();
+  const build = useQuery({
+    queryKey: ["cat", projectId, "review-app-build", review?.appName],
+    enabled: Boolean(review?.appName),
+    // Build completion can follow the chat execution-state update. Keep the
+    // visible result fresh independently, like AppMount.
+    refetchInterval: 3000,
+    queryFn: async () => {
+      if (!review?.appName) return null;
+      const result = await apiClient.GET(
+        "/api/projects/{projectId}/apps/{appName}/view-state",
+        {
+          params: {
+            path: { projectId, appName: review.appName },
+            query: { channel: "dev" },
+          },
+        },
       );
-    } catch {
-      setSaveError(
-        "Could not save the guide. Copy your Markdown before closing.",
-      );
-    }
-  }, [latest, busy, key]);
+      if (!result.data) throw new Error("Could not load the review build.");
+      return result.data;
+    },
+  });
+  useEffect(() => {
+    if (review?.appName && !busy) void build.refetch();
+  }, [review?.appName, busy, build.refetch]);
   const generate = () => {
     try {
-      localStorage.setItem(`${key}:pending-revision`, revision);
+      localStorage.setItem(`${key}:revision`, revision);
     } catch {
-      setSaveError("Could not save guide revision.");
+      setSaveError("Could not save the compared revision.");
     }
-    void chat.send(guidePrompt({ title, body, files }));
+    void chat.send(
+      guidePrompt({
+        title,
+        body,
+        files,
+        projectId,
+        number,
+        revision,
+        artifactId: review?.id,
+      }),
+    );
   };
   return (
     <section className="min-w-0" aria-label="Code review guide">
@@ -111,18 +137,6 @@ export function ReviewGuideDocument({
               </option>
             ))}
           </select>
-        )}
-        {document && !busy && (
-          <button
-            type="button"
-            onClick={() => {
-              setDraft(document);
-              setEditing(true);
-            }}
-            className="rounded px-2 py-1 text-xs hover:bg-bg-overlay"
-          >
-            Edit Markdown
-          </button>
         )}
         {busy ? (
           <button
@@ -146,85 +160,68 @@ export function ReviewGuideDocument({
             onClick={generate}
             className="rounded bg-bg-overlay px-3 py-1.5 text-xs font-medium hover:bg-bg-raised disabled:opacity-50"
           >
-            {document ? "Regenerate" : "Generate guide"}
+            {review ? "Update review" : "Generate guide"}
           </button>
         )}
       </header>
-      {(chat.error || saveError || catalog.error) && (
+      {(chat.error ||
+        saveError ||
+        catalog.error ||
+        artifacts.error ||
+        build.error) && (
         <p role="alert" className="mb-4 text-sm text-danger">
-          {saveError || chat.error?.message || catalog.error?.message}
+          {saveError ||
+            chat.error?.message ||
+            catalog.error?.message ||
+            artifacts.error?.message ||
+            build.error?.message}
+        </p>
+      )}
+      {review && !busy && build.data?.state !== "ready" && (
+        <p className="mb-3 text-sm text-fg-muted">
+          The review has no successful build yet. Update it to retry.
         </p>
       )}
       {busy && (
         <p role="status" className="mb-4 text-sm text-fg-muted">
-          {chat.activity ?? "Analyzing the changed code…"}
+          {chat.activity ?? "Building the review…"}
         </p>
       )}
-      {document && stored(`${key}:revision`) !== revision && (
+      {review && stored(`${key}:revision`) !== revision && (
         <p className="mb-4 text-xs text-warning">
-          Changes have updated since this guide was generated. Regenerate to
+          Changes have updated since this review was requested. Update it to
           review the latest patch.
         </p>
       )}
-      {!document && !busy && (
-        <div className="mb-5 text-sm leading-relaxed text-fg-muted">
-          <p>
-            Follow how this change works, with explanations and links to the
-            relevant code.
+      {review?.appName && build.data?.state === "ready" ? (
+        <div className="flex flex-col gap-4">
+          <p className="text-sm text-fg-muted">
+            {review.title}. Saved with this review session.
           </p>
-          <p className="mt-2 text-xs">
-            Uses your configured agent. You can edit the resulting Markdown. The
-            change map below is available without generation.
-          </p>
-          {latest && !extractGuide(latest.content) && (
-            <p className="mt-3 text-warning">
-              The agent did not return a complete guide. Generate again or use
-              the change map.
-            </p>
+          <button
+            type="button"
+            className="self-start rounded bg-bg-overlay px-3 py-2 text-xs"
+            onClick={() =>
+              onOpenArtifact
+                ? onOpenArtifact(`app:${review.appName}`, review.title)
+                : setInline(true)
+            }
+          >
+            Open review
+          </button>
+          {inline && (
+            <div className="flex h-[640px] min-h-0">
+              <AppScreen projectId={projectId} appName={review.appName} />
+            </div>
           )}
         </div>
-      )}
-      {editing ? (
-        <div className="flex flex-col gap-3">
-          <textarea
-            aria-label="Guide Markdown"
-            className="field min-h-96 w-full rounded p-3 font-mono text-xs"
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-          />
-          <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={() => {
-                setDocument(draft);
-                try {
-                  localStorage.setItem(key, draft);
-                  setSaveError("");
-                  setEditing(false);
-                } catch {
-                  setSaveError("Could not save your edits.");
-                }
-              }}
-              className="rounded bg-bg-overlay px-3 py-1.5 text-xs"
-            >
-              Save guide
-            </button>
-            <button
-              type="button"
-              onClick={() => setEditing(false)}
-              className="px-3 py-1.5 text-xs"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
       ) : (
-        document && (
-          <ReviewGuideContent
-            markdown={document}
-            files={files}
-            onOpenFile={onOpenFile}
-          />
+        !busy && (
+          <p className="text-sm leading-relaxed text-fg-muted">
+            Generate an interactive review with explanations, findings and code
+            changes. It uses your configured agent and stays with this session.
+            The change map below is available immediately.
+          </p>
         )
       )}
     </section>

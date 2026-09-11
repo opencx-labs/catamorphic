@@ -92,6 +92,7 @@ export type {
   McpAppRef,
 } from "../../shared/chat.js";
 
+import { appGlyph } from "./app-icon.js";
 import {
   type ComposerAttachment,
   ComposerInput,
@@ -629,7 +630,10 @@ function SurfaceChip({
   onOpenMcpApp?: (view: McpAppRef, mode: OpenMode | "split") => void;
   onToggleInfo: (key: string) => void;
 }) {
-  const Icon = SURFACE_ICONS[surface.kind];
+  const Icon =
+    surface.kind === "app"
+      ? appGlyph(surface.appIcon)
+      : SURFACE_ICONS[surface.kind];
   return (
     <span
       className="group/chip relative flex shrink-0 items-center overflow-hidden rounded-md border border-border bg-bg-inset text-[11px] text-fg-muted"
@@ -972,7 +976,10 @@ function SurfacesRail({
           <>
             <div className="flex items-center gap-1.5 px-1 pb-1.5 text-[11px] font-semibold text-fg">
               {(() => {
-                const Icon = SURFACE_ICONS[infoSurface.kind];
+                const Icon =
+                  infoSurface.kind === "app"
+                    ? appGlyph(infoSurface.appIcon)
+                    : SURFACE_ICONS[infoSurface.kind];
                 return infoSurface.active ? (
                   <LoaderCircle className="size-3 animate-spin text-accent" />
                 ) : (
@@ -1031,7 +1038,10 @@ function SurfacesRail({
                   />
                 ) : (
                   (() => {
-                    const Icon = SURFACE_ICONS[surface.kind];
+                    const Icon =
+                      surface.kind === "app"
+                        ? appGlyph(surface.appIcon)
+                        : SURFACE_ICONS[surface.kind];
                     return (
                       <Icon
                         className={`col-start-1 row-start-1 size-3.5 ${surface.active ? "opacity-0" : ""}`}
@@ -2684,6 +2694,8 @@ function ChatDockContent({
             <TodoProgress todos={chat.session?.todos ?? []} />
             <span className="flex items-center gap-0.5 rounded-lg border border-border bg-bg-raised p-0.5">
               <SessionInspector
+                projectId={projectId}
+                onOpenArtifact={(target) => onLinkClick?.(target, "tab")}
                 session={chat.session}
                 fallbackTitle={title}
                 harness={activeAgent?.harness ?? chat.session?.provider}

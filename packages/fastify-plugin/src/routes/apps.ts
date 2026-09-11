@@ -1,4 +1,5 @@
 import {
+  APP_ICON_NAMES,
   type AppHostTheme,
   appGuestCsp,
   buildAppGuestDocument,
@@ -20,6 +21,7 @@ import { z } from "zod";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
 import {
+  AppPresentationSchema,
   AppSummarySchema,
   AppVersionSchema,
   AppViewStateSchema,
@@ -46,21 +48,94 @@ const AppChannelSchema = z.enum(["published", "dev"]);
  * narrowing is structural (it is the route, not a header the client sends),
  * so there is no claim to validate and nothing to forge.
  */
-function appIdentity(
-  request: FastifyRequest,
-  params: { projectId: string; appName: string },
-  channel?: "published" | "dev",
-): Identity {
-  return narrowIdentity(resolveIdentity(request), {
-    kind: "app",
-    projectId: params.projectId,
-    name: params.appName,
-    ...(channel ? { channel } : {}),
-  });
-}
-
 export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
+  async function appIdentity(
+    request: FastifyRequest,
+    params: { projectId: string; appName: string },
+    channel?: "published" | "dev",
+    versionId?: string,
+  ): Promise<Identity> {
+    const identity = resolveIdentity(request);
+    return ctx.core?.apps
+      ? ctx.core.apps.identityForApp({
+          identity,
+          ...params,
+          channel,
+          versionId,
+        })
+      : narrowIdentity(identity, {
+          kind: "app",
+          projectId: params.projectId,
+          name: params.appName,
+          channel,
+          versionId,
+        });
+  }
+
   const typed = app.withTypeProvider<ZodTypeProvider>();
+
+  typed.route({
+    method: "GET",
+    url: "/projects/:projectId/apps/:appName/presentation",
+    schema: {
+      params: ProjectAppParamsSchema,
+      response: {
+        200: AppPresentationSchema,
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      if (!ctx.core?.apps)
+        return reply.status(503).send({ error: "Apps not configured" });
+      try {
+        return await ctx.core.apps.presentation({
+          ...request.params,
+          identity: resolveIdentity(request),
+        });
+      } catch (error) {
+        if (error instanceof AppNotFoundError)
+          return reply.status(404).send({ error: error.message });
+        throw error;
+      }
+    },
+  });
+  typed.route({
+    method: "PATCH",
+    url: "/projects/:projectId/apps/:appName/presentation",
+    schema: {
+      params: ProjectAppParamsSchema,
+      body: z
+        .object({
+          icon: z.enum(APP_ICON_NAMES).optional(),
+          title: z.string().trim().min(1).max(200).optional(),
+        })
+        .refine(
+          (value) => value.icon !== undefined || value.title !== undefined,
+          "Supply a title or icon",
+        ),
+      response: {
+        200: AppPresentationSchema,
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      if (!ctx.core?.apps)
+        return reply.status(503).send({ error: "Apps not configured" });
+      try {
+        return await ctx.core.apps.updatePresentation({
+          ...request.params,
+          ...request.body,
+          identity: resolveIdentity(request),
+        });
+      } catch (error) {
+        if (error instanceof AppNotFoundError)
+          return reply.status(404).send({ error: error.message });
+        throw error;
+      }
+    },
+  });
 
   typed.route({
     method: "GET",
@@ -177,6 +252,7 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
       params: ProjectAppParamsSchema,
       querystring: z.object({
         channel: AppChannelSchema.optional(),
+        versionId: z.string().uuid().optional(),
       }),
       response: { 200: AppViewStateSchema, 503: ErrorSchema },
     },
@@ -184,10 +260,17 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
       if (!ctx.core?.apps)
         return reply.status(503).send({ error: "Apps not configured" });
       const state = await ctx.core.apps.viewState({
-        identity: appIdentity(request, request.params, request.query.channel),
+        identity: await appIdentity(
+          request,
+          request.params,
+          request.query.channel,
+          request.query.versionId,
+        ),
         projectId: request.params.projectId,
         appName: request.params.appName,
         channel: request.query.channel,
+        versionId: request.query.versionId,
+        metadataOnly: true,
       });
       if (state.state !== "ready") return reply.send(state);
       // The guest URL is origin-absolute (derived from this request) because
@@ -203,6 +286,7 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
       if (request.query.channel) {
         guestUrl.searchParams.set("channel", request.query.channel);
       }
+      guestUrl.searchParams.set("versionId", state.versionId);
       return reply.send({
         state: "ready",
         appId: state.appId,
@@ -233,7 +317,7 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
         return reply.status(503).send({ error: "Apps not configured" });
       try {
         await ctx.core.appStorage.put(
-          appIdentity(request, request.params),
+          await appIdentity(request, request.params),
           request.params.projectId,
           request.params.appName,
           request.body.data,
@@ -260,7 +344,10 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
     url: "/projects/:projectId/apps/:appName/calls/:workflowName",
     schema: {
       params: ProjectAppParamsSchema.extend({ workflowName: z.string() }),
-      querystring: z.object({ channel: AppChannelSchema.optional() }),
+      querystring: z.object({
+        channel: AppChannelSchema.optional(),
+        versionId: z.string().uuid().optional(),
+      }),
       body: CallRunSchema,
       response: {
         200: RunCallOutcomeSchema,
@@ -277,7 +364,12 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
         return reply.status(503).send({ error: "Apps not configured" });
       try {
         const outcome = await ctx.core.runs.call({
-          identity: appIdentity(request, request.params, request.query.channel),
+          identity: await appIdentity(
+            request,
+            request.params,
+            request.query.channel,
+            request.query.versionId,
+          ),
           projectId: request.params.projectId,
           workflowName: request.params.workflowName,
           input: request.body.input,
@@ -303,7 +395,10 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
     url: "/projects/:projectId/apps/:appName/runs/:workflowName",
     schema: {
       params: ProjectAppParamsSchema.extend({ workflowName: z.string() }),
-      querystring: z.object({ channel: AppChannelSchema.optional() }),
+      querystring: z.object({
+        channel: AppChannelSchema.optional(),
+        versionId: z.string().uuid().optional(),
+      }),
       body: TriggerRunSchema,
       response: {
         201: RunSchema,
@@ -320,7 +415,12 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
         return reply.status(503).send({ error: "Apps not configured" });
       try {
         const run = await ctx.core.runs.triggerProduction({
-          identity: appIdentity(request, request.params, request.query.channel),
+          identity: await appIdentity(
+            request,
+            request.params,
+            request.query.channel,
+            request.query.versionId,
+          ),
           projectId: request.params.projectId,
           workflowName: request.params.workflowName,
           input: request.body.input,
@@ -343,7 +443,10 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
     url: "/projects/:projectId/apps/:appName/runs/:runId",
     schema: {
       params: ProjectAppParamsSchema.extend({ runId: z.string().uuid() }),
-      querystring: z.object({ channel: AppChannelSchema.optional() }),
+      querystring: z.object({
+        channel: AppChannelSchema.optional(),
+        versionId: z.string().uuid().optional(),
+      }),
       response: {
         200: RunDetailSchema,
         403: ErrorSchema,
@@ -357,10 +460,11 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
       try {
         return reply.send(
           await ctx.core.runs.get({
-            identity: appIdentity(
+            identity: await appIdentity(
               request,
               request.params,
               request.query.channel,
+              request.query.versionId,
             ),
             runId: request.params.runId,
           }),
@@ -381,6 +485,7 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
       params: ProjectAppParamsSchema,
       querystring: z.object({
         channel: AppChannelSchema.optional(),
+        versionId: z.string().uuid().optional(),
         // JSON-encoded AppHostTheme; validated by parseGuestTheme (a zod
         // transform here would not survive OpenAPI spec generation).
         theme: z.string().max(8192).optional(),
@@ -389,16 +494,18 @@ export function registerAppRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core?.apps)
         return reply.status(503).send({ error: "Apps not configured" });
-      const identity = appIdentity(
+      const identity = await appIdentity(
         request,
         request.params,
         request.query.channel,
+        request.query.versionId,
       );
       const state = await ctx.core.apps.viewState({
         identity,
         projectId: request.params.projectId,
         appName: request.params.appName,
         channel: request.query.channel,
+        versionId: request.query.versionId,
       });
       if (state.state !== "ready") {
         return reply.status(404).send({ error: `App is ${state.state}` });

@@ -1,6 +1,6 @@
 # 0101: Harness capabilities and session monitors
 
-- **Status:** Accepted
+- **Status:** Accepted; source retirement superseded by [0123](0123-session-artifacts.md)
 - **Date:** 2026-09-07
 - **Refines:** 0045, 0074, 0076, 0090, 0091
 
@@ -28,8 +28,8 @@ silent. Placement determines which running host can execute it.
 
 Publish temporary source from an isolated disposable origin checkout. Stop,
 expiry, and session close/archive disable future activations. Existing runs keep
-their immutable ref until they settle; retirement then removes the ref, with
-retry state persisted in Postgres. Closing a chat tab alone does not close the
+their immutable source. Under ADR 0123, results remain with the retained session;
+discard/session deletion removes refs after runs settle, with retry state in Postgres. Closing a chat tab alone does not close the
 session. External polling requires a live, unexpired watcher, uses a bounded
 request, and is aborted and joined on worker shutdown.
 

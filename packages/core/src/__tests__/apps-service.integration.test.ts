@@ -10,8 +10,10 @@ import type { Identity } from "../identity.js";
 import type { AppBundleStore } from "../services/app-bundle-store.js";
 import { AppPoliciesService } from "../services/app-policies-service.js";
 import { AppPublishStateError, AppsService } from "../services/apps-service.js";
+import { resolveScope } from "../services/artifact-scope.js";
 import { DbSandboxStore } from "../services/db-sandbox-store.js";
 import { DevSandboxService } from "../services/dev-sandbox-service.js";
+import { SessionArtifactsService } from "../services/session-artifacts-service.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
 const describeIf = connectionString ? describe : describe.skip;
@@ -85,7 +87,7 @@ class BuildFakeProvider implements SandboxProvider {
       this.installWindows.push({ start, end: this.tick });
       return { exitCode: 0, result: "" };
     }
-    if (command === "bun run build" && this.failBuild) {
+    if (command === "NODE_ENV=production bun run build" && this.failBuild) {
       return { exitCode: 1, result: "error: cannot resolve ./missing" };
     }
     return { exitCode: 0, result: "" };
@@ -112,6 +114,7 @@ class BuildFakeProvider implements SandboxProvider {
 let tempDirectory = "";
 let projectManager: ProjectManager;
 let apps: AppsService;
+let artifacts: SessionArtifactsService;
 let provider: BuildFakeProvider;
 let bundles: MemoryBundleStore;
 let commitSha = "";
@@ -166,7 +169,9 @@ describeIf("AppsService integration", () => {
     }
     provider = new BuildFakeProvider();
     bundles = new MemoryBundleStore();
+    artifacts = new SessionArtifactsService(db, projectManager, bundles);
     apps = new AppsService(db, {
+      artifacts,
       projectManager,
       devSandboxes: new DevSandboxService({
         projectManager,
@@ -193,6 +198,8 @@ describeIf("AppsService integration", () => {
         id: null,
         activeVersionId: null,
         publishedAt: null,
+        icon: "default",
+        title: "ops-dashboard",
       },
     ]);
   });
@@ -220,9 +227,63 @@ describeIf("AppsService integration", () => {
     expect(bundle.css).toContain(".app");
 
     const buildCommand = provider.commands.find(
-      (entry) => entry.command === "bun run build",
+      (entry) => entry.command === "NODE_ENV=production bun run build",
     );
     expect(buildCommand?.cwd).toContain("apps/ops-dashboard");
+  });
+
+  it("persists presentation without rebuilding and keeps the default for unknown icons", async () => {
+    const address = { identity, projectId, appName: "ops-dashboard" };
+    const commands = provider.commands.length;
+    const versions = await apps.listVersions(address);
+    expect(
+      await apps.updatePresentation({
+        ...address,
+        icon: "dashboard",
+        title: "  Operations dashboard  ",
+      }),
+    ).toEqual({
+      name: "ops-dashboard",
+      icon: "dashboard",
+      title: "Operations dashboard",
+    });
+    expect(
+      await apps.updatePresentation({ ...address, title: "Operations" }),
+    ).toMatchObject({ icon: "dashboard", title: "Operations" });
+    expect(provider.commands.length).toBe(commands);
+    expect(await apps.listVersions(address)).toEqual(versions);
+    await expect(
+      apps.updatePresentation({ ...address, title: "   " }),
+    ).rejects.toThrow("title");
+    await expect(
+      apps.updatePresentation({
+        ...address,
+        identity: {
+          tenantId,
+          externalUserId: "viewer",
+          scope: [{ kind: "app", projectId, name: "ops-dashboard" }],
+        },
+        icon: "review",
+      }),
+    ).rejects.toThrow();
+    await expect(
+      apps.presentation({
+        ...address,
+        identity: { tenantId: crypto.randomUUID(), externalUserId: "other" },
+      }),
+    ).rejects.toThrow();
+    await db
+      .updateTable("apps")
+      .set({ icon: "future-icon" })
+      .where("project_id", "=", projectId)
+      .where("name", "=", "ops-dashboard")
+      .execute();
+    expect(await apps.presentation(address)).toMatchObject({ icon: "default" });
+    expect((await apps.list({ identity, projectId }))[0]).toMatchObject({
+      title: "Operations",
+      icon: "default",
+    });
+    await apps.updatePresentation({ ...address, icon: "default" });
   });
 
   it("builds a published version from a pristine commit checkout", async () => {
@@ -434,5 +495,166 @@ describeIf("AppsService integration", () => {
       kind: "preview",
     });
     expect(recovered.status).toBe("ready");
+  });
+  it("builds session apps without publishing and freezes capabilities to the mounted revision", async () => {
+    const sessionId = crypto.randomUUID();
+    await db
+      .insertInto("agent_sessions")
+      .values({
+        id: sessionId,
+        project_id: projectId,
+        external_user_id: identity.externalUserId,
+        provider: "test",
+      })
+      .execute();
+    const source = await artifacts.create({
+      identity,
+      projectId,
+      sessionId,
+      kind: "app",
+      name: "review",
+      source: "export default function App() { return <p>Review</p> }",
+    });
+    if (!source.appName) throw new Error("Missing app name");
+    const args = {
+      identity,
+      projectId,
+      appName: source.appName,
+      artifactId: source.id,
+      kind: "preview" as const,
+    };
+    const first = await apps.build(args);
+    expect(first.status).toBe("ready");
+    expect(first.commitSha).toBe(source.commitSha);
+    expect(first.allowedWorkflows).toEqual([]);
+    const commands = provider.commands.length;
+    expect(
+      await apps.updatePresentation({
+        ...args,
+        title: "Input guard review",
+        icon: "review",
+      }),
+    ).toMatchObject({ title: "Input guard review", icon: "review" });
+    const metadataOnly = await artifacts.get({
+      identity,
+      projectId,
+      artifactId: source.id,
+    });
+    expect(metadataOnly).toMatchObject({
+      title: "Input guard review",
+      revision: source.revision,
+      commitSha: source.commitSha,
+    });
+    expect(provider.commands.length).toBe(commands);
+    await expect(
+      apps.updatePresentation({
+        ...args,
+        identity: { tenantId, externalUserId: "another-user" },
+        icon: "report",
+      }),
+    ).rejects.toThrow();
+    await expect(
+      apps.presentation({
+        ...args,
+        identity: { tenantId, externalUserId: "another-user" },
+      }),
+    ).rejects.toThrow();
+
+    expect(
+      (await apps.list({ identity, projectId })).some(
+        (app) => app.name === source.appName,
+      ),
+    ).toBe(false);
+    const updated = await artifacts.update({
+      identity,
+      projectId,
+      artifactId: source.id,
+      revision: 1,
+      files: {
+        "workflows/src/helper.ts":
+          'import { defineWorkflow } from "@catamorphic/workflow"; export const echo = defineWorkflow(({ defineBoundary }) => ({ steps: [defineBoundary({ run: async () => "ok" })] }));',
+        "workflows/src/app-api.ts":
+          'import { echo } from "./helper"; export const appApi = { echo };',
+      },
+    });
+    const second = await apps.build(args);
+    expect(second.status).toBe("ready");
+    expect(second.allowedWorkflows).toEqual(["echo"]);
+    const oldIdentity = await apps.identityForApp({
+      identity,
+      projectId,
+      appName: source.appName,
+      channel: "dev",
+      versionId: first.id,
+    });
+    expect(
+      (await resolveScope({ db, identity: oldIdentity, projectId }))
+        ?.allowedWorkflows.size,
+    ).toBe(0);
+    const newIdentity = await apps.identityForApp({
+      identity,
+      projectId,
+      appName: source.appName,
+      channel: "dev",
+      versionId: second.id,
+    });
+    expect(
+      (await resolveScope({ db, identity: newIdentity, projectId }))?.sessionApp
+        ?.commitSha,
+    ).toBe(updated.commitSha);
+    const oldView = await apps.viewState({
+      identity: oldIdentity,
+      projectId,
+      appName: source.appName,
+      channel: "dev",
+      versionId: first.id,
+    });
+    expect(oldView.state === "ready" && oldView.versionId).toBe(first.id);
+    provider.failBuild = true;
+    try {
+      expect((await apps.build(args)).status).toBe("failed");
+    } finally {
+      provider.failBuild = false;
+    }
+    const view = await apps.viewState({
+      identity,
+      projectId,
+      appName: source.appName,
+      channel: "dev",
+    });
+    expect(view.state === "ready" && view.versionId).toBe(second.id);
+    const foreign = { ...identity, externalUserId: "another-owner" };
+    expect(
+      (
+        await apps.viewState({
+          identity: foreign,
+          projectId,
+          appName: source.appName,
+          channel: "dev",
+        })
+      ).state,
+    ).toBe("not_found");
+    await artifacts.discard({ identity, projectId, artifactId: source.id });
+    expect(
+      (
+        await apps.viewState({
+          identity,
+          projectId,
+          appName: source.appName,
+          channel: "dev",
+        })
+      ).state,
+    ).toBe("not_found");
+    await artifacts.cleanup();
+    expect(
+      await db
+        .selectFrom("apps")
+        .select("id")
+        .where("id", "=", first.appId)
+        .executeTakeFirst(),
+    ).toBeUndefined();
+    expect(
+      [...bundles.objects.keys()].some((key) => key.includes(first.appId)),
+    ).toBe(false);
   });
 });

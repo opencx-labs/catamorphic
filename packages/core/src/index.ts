@@ -152,6 +152,7 @@ export {
   AppBundleTooLargeError,
   AppContractError,
   AppNotFoundError,
+  type AppPresentation,
   AppPublishStateError,
   type AppSummary,
   AppsService,
@@ -478,6 +479,17 @@ export {
   type SecretStatus,
   SecretsService,
 } from "./services/secrets-service.js";
+export type {
+  SessionArtifact,
+  SessionArtifactAddress,
+  SessionArtifactKind,
+} from "./services/session-artifacts-service.js";
+export {
+  SessionArtifactConflictError,
+  SessionArtifactNotFoundError,
+  SessionArtifactsService,
+  SessionArtifactValidationError,
+} from "./services/session-artifacts-service.js";
 export {
   type SessionAuthority,
   SessionAuthorityMismatchError,

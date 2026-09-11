@@ -15,6 +15,12 @@ export type {
   WorkflowShape,
 } from "./contract.js";
 export { appGuestCsp, buildAppGuestDocument } from "./guest-document.js";
+export {
+  APP_ICON_DESCRIPTIONS,
+  APP_ICON_NAMES,
+  type AppIconName,
+  resolveAppIcon,
+} from "./icons.js";
 export { APP_KIT_CSS } from "./kit-css.js";
 export {
   type McpToolCallResult,

@@ -1,5 +1,11 @@
 # Catamorphic Desktop — Design System
 
+App identity uses canonical semantic icons (ADR 0124). Review, dashboard,
+report, tracker, form, and calculator each have one monochrome glyph across
+tabs, lists, and chat surfaces. Agents choose a type through set_app_presentation.
+Unspecified or unknown types retain the grid icon. Icon changes do not rebuild
+or publish an app; temporary app titles come from their retained metadata.
+
 The desktop app aims for the OpenCode / Obsidian feel: minimal chrome, system-first,
 terminal-editor calm. Everything visual flows from the tokens in
 [`src/renderer/styles.css`](src/renderer/styles.css).
@@ -318,3 +324,20 @@ Question batches can be blocking or non-blocking. "Answer when ready" panels sta
 answerable while the agent works; collapsing preserves the draft. Answers reach
 the running built-in, Codex or Claude Code harness as soon as it can accept input.
 Late answers continue an idle session. See ADR 0122.
+
+### 2026-09-11: Session artifacts and review apps
+
+Generated interactive results use the ordinary app surface. Temporary apps and
+workflows share ownership and retention with their session, and can be reopened
+from its Artifacts list. Closing a tab does not delete an artifact. Full app tabs
+use the available viewport and refresh after successful rebuilds.
+
+Review guides are generated apps using the shared review kit. Preserve Osama's
+Overview, Guide, Changes and Discussion hierarchy and use host design tokens.
+Real GitHub actions remain host-owned. See ADR 0123.
+
+Review components are installed source from the code-review registry pack (ADR 0125).
+Agents reuse project components first, then fetch the pack and adapt local source.
+The desktop consumes the same pack; its components.read capability exposes registry items
+and usage notes without changing the project. Temporary reviews retain their pack
+files with the artifact. Future packs use the same registry model.

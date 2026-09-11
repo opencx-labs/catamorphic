@@ -61,7 +61,8 @@ export type WorkspaceTab = (
       label?: string;
       workflowDraft?: WorkflowDraft;
     }
-  | { kind: "app"; name: string; label?: string }
+  | { kind: "app"; name: string; label?: string; appIcon?: string | null }
+  | { kind: "artifact"; name: string; label?: string }
   | {
       kind: "chat";
       name: string;

@@ -262,7 +262,7 @@ function Message({
             urlTransform={(url, key) =>
               onLinkClick &&
               key === "href" &&
-              /^(?:file|workflow|app|chat|browser|terminal|editor|diff|mcpapp):/i.test(
+              /^(?:file|workflow|app|artifact|chat|browser|terminal|editor|diff|mcpapp):/i.test(
                 url,
               )
                 ? url

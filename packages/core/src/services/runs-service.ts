@@ -23,8 +23,9 @@ import {
   type SandboxProvider,
   type WorkflowPackagePayload,
 } from "@catamorphic/sandbox";
-import type { Kysely, Selectable } from "kysely";
-import type { Identity } from "../identity.js";
+import { type Kysely, type Selectable, sql } from "kysely";
+import { type Identity, identityCovers, isBuilder } from "../identity.js";
+import { assertAgentSessionAccess } from "./agent-session-access.js";
 import { allocationSandboxProvider } from "./allocation-sandbox-provider.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 import {
@@ -556,6 +557,39 @@ export class RunsService {
       if (args.identity.scope) throw new AccessDeniedError();
       throw new RunNotFoundError(args.runId);
     }
+    if (row.session_artifact_id) {
+      const source = await this.db
+        .selectFrom("session_artifacts")
+        .leftJoin(
+          "agent_sessions",
+          "agent_sessions.id",
+          "session_artifacts.session_id",
+        )
+        .where("session_artifacts.id", "=", row.session_artifact_id)
+        .where("session_artifacts.project_id", "=", row.project_id)
+        .where(
+          "session_artifacts.owner_external_user_id",
+          "=",
+          args.identity.externalUserId,
+        )
+        .select(["session_artifacts.id", "agent_sessions.agent_id"])
+        .executeTakeFirst();
+      if (!source) throw new AccessDeniedError();
+      if (
+        !identityCovers(args.identity, {
+          kind: "app",
+          projectId: row.project_id,
+          name: `session-${source.id}`,
+        })
+      ) {
+        assertAgentSessionAccess({
+          identity: args.identity,
+          projectId: row.project_id,
+          externalUserId: args.identity.externalUserId,
+          agentId: source.agent_id,
+        });
+      }
+    }
     if (args.identity.scope) {
       // Run polling mirrors triggering (ADR 0036, 0053): a scoped identity
       // may read only runs of workflows its scope resolves to, within the
@@ -566,6 +600,22 @@ export class RunsService {
         projectId: row.project_id,
         policies: this.deps.appPolicies,
       });
+      if (context?.sessionApp) {
+        const callerScope = Array.isArray(row.caller_scope)
+          ? row.caller_scope
+          : [];
+        if (
+          !callerScope.some(
+            (ref) =>
+              ref &&
+              typeof ref === "object" &&
+              !Array.isArray(ref) &&
+              ref.kind === "app" &&
+              ref.name === context.sessionApp?.name,
+          )
+        )
+          throw new AccessDeniedError();
+      }
       if (context && !context.allowedWorkflows.has(row.workflow_name)) {
         throw new AccessDeniedError();
       }
@@ -748,6 +798,43 @@ export class RunsService {
     let countQuery = this.db
       .selectFrom("workflow_runs")
       .where("project_id", "=", args.projectId);
+    const appNames = (args.identity.scope ?? [])
+      .filter((ref) => ref.projectId === args.projectId && ref.kind === "app")
+      .map((ref) => ("name" in ref ? ref.name : ""));
+    const agentIds = (args.identity.scope ?? [])
+      .filter((ref) => ref.projectId === args.projectId && ref.kind === "agent")
+      .map((ref) =>
+        "name" in ref ? `project:${args.projectId}:${ref.name}` : "",
+      );
+    const retainedAudience = this.db
+      .selectFrom("session_artifacts as source")
+      .leftJoin("agent_sessions as session", "session.id", "source.session_id")
+      .where("source.project_id", "=", args.projectId)
+      .where("source.owner_external_user_id", "=", args.identity.externalUserId)
+      .where(({ or, eb }) =>
+        or([
+          eb.val(isBuilder(args.identity, args.projectId)),
+          ...(appNames.length
+            ? [
+                sql<boolean>`('session-' || source.id::text) in (${sql.join(appNames)})`,
+              ]
+            : []),
+          ...(agentIds.length ? [eb("session.agent_id", "in", agentIds)] : []),
+        ]),
+      )
+      .select("source.id");
+    query = query.where(({ or, eb }) =>
+      or([
+        eb("session_artifact_id", "is", null),
+        eb("session_artifact_id", "in", retainedAudience),
+      ]),
+    );
+    countQuery = countQuery.where(({ or, eb }) =>
+      or([
+        eb("session_artifact_id", "is", null),
+        eb("session_artifact_id", "in", retainedAudience),
+      ]),
+    );
     if (scoped) {
       // Scoped identities see only runs of the workflows their scope resolves to —
       // the read-side mirror of the trigger gate (ADR 0036).
@@ -761,6 +848,19 @@ export class RunsService {
       if (frozen.length === 0) return { items: [], total: 0 };
       query = query.where("workflow_name", "in", frozen);
       countQuery = countQuery.where("workflow_name", "in", frozen);
+      if (scoped.sessionApp) {
+        const appScope = JSON.stringify([
+          {
+            kind: "app",
+            projectId: args.projectId,
+            name: scoped.sessionApp.name,
+          },
+        ]);
+        query = query.where(sql<boolean>`caller_scope @> ${appScope}::jsonb`);
+        countQuery = countQuery.where(
+          sql<boolean>`caller_scope @> ${appScope}::jsonb`,
+        );
+      }
     }
     if (args.workflowName) {
       query = query.where("workflow_name", "=", args.workflowName);
@@ -1681,7 +1781,29 @@ export class RunsService {
             policies: this.deps.appPolicies,
           });
         }
-        const run = await this.triggerInner(args);
+        const scope = await resolveScope({
+          db: this.db,
+          identity: args.identity,
+          projectId: args.projectId,
+          policies: this.deps.appPolicies,
+        });
+        const source = scope?.sessionApp;
+        if (
+          source &&
+          (!source.active ||
+            (args.commitSha && args.commitSha !== source.commitSha) ||
+            (args.remoteBranch && args.remoteBranch !== source.remoteBranch))
+        )
+          throw new AccessDeniedError();
+        const run = await this.triggerInner(
+          source
+            ? {
+                ...args,
+                commitSha: source.commitSha,
+                remoteBranch: source.remoteBranch,
+              }
+            : args,
+        );
         setSpanCorrelation({
           span,
           attributes: { "catamorphic.run.id": run.id },
@@ -1794,6 +1916,44 @@ export class RunsService {
       }
       try {
         await this.db.transaction().execute(async (trx) => {
+          // Enrollment and retirement serialize on the retained source row.
+          // Source preparation may race discard; it must not enqueue work after it.
+          const retained = args.remoteBranch
+            ? await trx
+                .selectFrom("session_artifacts")
+                .selectAll()
+                .where("project_id", "=", args.projectId)
+                .where("remote_branch", "=", args.remoteBranch)
+                .forUpdate()
+                .executeTakeFirst()
+            : undefined;
+          if (args.remoteBranch) {
+            if (retained) {
+              const session = retained.session_id
+                ? await trx
+                    .selectFrom("agent_sessions")
+                    .select("status")
+                    .where("id", "=", retained.session_id)
+                    .executeTakeFirst()
+                : undefined;
+              if (
+                retained.status !== "active" ||
+                session?.status !== "active" ||
+                retained.owner_external_user_id !== args.identity.externalUserId
+              )
+                throw new AccessDeniedError();
+              const revision = await trx
+                .selectFrom("session_artifact_revisions")
+                .select("commit_sha")
+                .where("artifact_id", "=", retained.id)
+                .where("commit_sha", "=", source.commitSha)
+                .executeTakeFirst();
+              if (!revision) throw new AccessDeniedError();
+            } else if (
+              /^catamorphic\/(artifacts|watchers)\//.test(args.remoteBranch)
+            )
+              throw new AccessDeniedError();
+          }
           // A restart replaces a run it already cancelled, so it cannot grow
           // the active set. Counting it would let a cap lowered under existing
           // load strand the subject: cancelled, then refused re-entry.
@@ -1832,6 +1992,7 @@ export class RunsService {
                 capabilities: source.graph.capabilities,
               }),
               deployment_artifact_id: artifact.id,
+              session_artifact_id: retained?.id ?? null,
               workflow_enablement_id: args.workflowEnablementId ?? null,
               external_user_id: args.identity.externalUserId,
               // Who triggered the run, as verified by the host (ADR 0055):

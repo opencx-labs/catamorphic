@@ -11715,6 +11715,128 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{projectId}/apps/{appName}/presentation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    appName: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            name: string;
+                            title: string;
+                            /** @enum {string} */
+                            icon: "default" | "review" | "dashboard" | "report" | "tracker" | "form" | "calculator";
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    appName: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        icon?: "default" | "review" | "dashboard" | "report" | "tracker" | "form" | "calculator";
+                        title?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            name: string;
+                            title: string;
+                            /** @enum {string} */
+                            icon: "default" | "review" | "dashboard" | "report" | "tracker" | "form" | "calculator";
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
     "/api/projects/{projectId}/apps": {
         parameters: {
             query?: never;
@@ -11741,12 +11863,15 @@ export interface paths {
                     content: {
                         "application/json": {
                             name: string;
+                            title: string;
                             /** Format: uuid */
                             id: string | null;
                             /** Format: uuid */
                             activeVersionId: string | null;
                             /** Format: date-time */
                             publishedAt: string | null;
+                            /** @enum {string} */
+                            icon: "default" | "review" | "dashboard" | "report" | "tracker" | "form" | "calculator";
                         }[];
                     };
                 };
@@ -12044,6 +12169,7 @@ export interface paths {
             parameters: {
                 query?: {
                     channel?: "published" | "dev";
+                    versionId?: string;
                 };
                 header?: never;
                 path: {
@@ -12190,6 +12316,7 @@ export interface paths {
             parameters: {
                 query?: {
                     channel?: "published" | "dev";
+                    versionId?: string;
                 };
                 header?: never;
                 path: {
@@ -12324,6 +12451,7 @@ export interface paths {
             parameters: {
                 query?: {
                     channel?: "published" | "dev";
+                    versionId?: string;
                 };
                 header?: never;
                 path: {
@@ -12522,6 +12650,7 @@ export interface paths {
             parameters: {
                 query?: {
                     channel?: "published" | "dev";
+                    versionId?: string;
                 };
                 header?: never;
                 path: {
@@ -12718,6 +12847,7 @@ export interface paths {
             parameters: {
                 query?: {
                     channel?: "published" | "dev";
+                    versionId?: string;
                     theme?: string;
                 };
                 header?: never;
@@ -12813,6 +12943,855 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string;
+                            /** Format: uuid */
+                            sessionId: string | null;
+                            /** @enum {string} */
+                            kind: "app" | "workflow";
+                            name: string;
+                            title: string;
+                            sourcePath: string;
+                            remoteBranch: string;
+                            commitSha: string;
+                            revision: number;
+                            /** @enum {string} */
+                            status: "active" | "discarded";
+                            appName: string | null;
+                            createdAt: string;
+                            updatedAt: string;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        kind: "app" | "workflow";
+                        name: string;
+                        title?: string;
+                        source: string;
+                        files?: {
+                            [key: string]: string;
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            artifact: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                projectId: string;
+                                /** Format: uuid */
+                                sessionId: string | null;
+                                /** @enum {string} */
+                                kind: "app" | "workflow";
+                                name: string;
+                                title: string;
+                                sourcePath: string;
+                                remoteBranch: string;
+                                commitSha: string;
+                                revision: number;
+                                /** @enum {string} */
+                                status: "active" | "discarded";
+                                appName: string | null;
+                                createdAt: string;
+                                updatedAt: string;
+                            };
+                            build: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                appId: string;
+                                appName: string;
+                                /** @enum {string} */
+                                kind: "preview" | "published";
+                                /** @enum {string} */
+                                status: "building" | "ready" | "failed";
+                                commitSha: string | null;
+                                bundleBytes: number | null;
+                                allowedWorkflows: string[] | null;
+                                error: string | null;
+                                isActive: boolean;
+                                /** Format: date-time */
+                                createdAt: string;
+                                /** Format: date-time */
+                                readyAt: string | null;
+                                /** Format: date-time */
+                                publishedAt: string | null;
+                            } | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/session-artifacts/{artifactId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    artifactId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string;
+                            /** Format: uuid */
+                            sessionId: string | null;
+                            /** @enum {string} */
+                            kind: "app" | "workflow";
+                            name: string;
+                            title: string;
+                            sourcePath: string;
+                            remoteBranch: string;
+                            commitSha: string;
+                            revision: number;
+                            /** @enum {string} */
+                            status: "active" | "discarded";
+                            appName: string | null;
+                            createdAt: string;
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    artifactId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": null;
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    artifactId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        revision: number;
+                        title?: string;
+                        files: {
+                            [key: string]: string | null;
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            artifact: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                projectId: string;
+                                /** Format: uuid */
+                                sessionId: string | null;
+                                /** @enum {string} */
+                                kind: "app" | "workflow";
+                                name: string;
+                                title: string;
+                                sourcePath: string;
+                                remoteBranch: string;
+                                commitSha: string;
+                                revision: number;
+                                /** @enum {string} */
+                                status: "active" | "discarded";
+                                appName: string | null;
+                                createdAt: string;
+                                updatedAt: string;
+                            };
+                            build: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                appId: string;
+                                appName: string;
+                                /** @enum {string} */
+                                kind: "preview" | "published";
+                                /** @enum {string} */
+                                status: "building" | "ready" | "failed";
+                                commitSha: string | null;
+                                bundleBytes: number | null;
+                                allowedWorkflows: string[] | null;
+                                error: string | null;
+                                isActive: boolean;
+                                /** Format: date-time */
+                                createdAt: string;
+                                /** Format: date-time */
+                                readyAt: string | null;
+                                /** Format: date-time */
+                                publishedAt: string | null;
+                            } | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/api/projects/{projectId}/session-artifacts/{artifactId}/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    artifactId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/session-artifacts/{artifactId}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    artifactId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        input?: components["schemas"]["JsonValueInput"];
+                        environment?: string;
+                        correlationKey?: string;
+                        /** @enum {string} */
+                        onConflict?: "ignore" | "error" | "restart";
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string;
+                            workflowName: string;
+                            correlationKey: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
+                            capabilities: {
+                                cancel: boolean;
+                                pauseProcessing: boolean;
+                                resumeProcessing: boolean;
+                                submitInput: boolean;
+                                inspectItems: boolean;
+                            };
+                            /** @enum {string} */
+                            status: "pending" | "running" | "waiting" | "paused" | "canceling" | "completed" | "failed" | "canceled";
+                            /** @enum {string} */
+                            phase: "execute" | "boundary" | "source" | "process" | "sink" | "pause" | "child";
+                            currentStepIndex: number | null;
+                            activePause: {
+                                /** Format: uuid */
+                                id: string;
+                                /** @enum {string} */
+                                status: "open" | "resumed" | "timed_out" | "canceled";
+                                state: unknown;
+                                /** Format: date-time */
+                                timeoutAt: string | null;
+                                /** Format: date-time */
+                                createdAt: string;
+                                /** Format: date-time */
+                                resolvedAt: string | null;
+                            } | null;
+                            connectionActionRequired: {
+                                /** Format: uuid */
+                                id: string;
+                                environment: string;
+                                alias: string;
+                                /** @enum {string} */
+                                status: "pending";
+                                /** Format: date-time */
+                                createdAt: string;
+                            } | null;
+                            batchScopes: {
+                                /** Format: uuid */
+                                workflowStepAttemptId: string;
+                                stepIndex: number;
+                                nodeId: string;
+                                attempt: number;
+                                /** @enum {string} */
+                                status: "pending" | "running" | "waiting" | "completed" | "failed" | "canceled";
+                                estimated: number | null;
+                                discovered: number;
+                                succeeded: number;
+                                failed: number;
+                                skipped: number;
+                                sinkCompletedChunks: number;
+                                sinkTotalChunks: number;
+                                artifact: unknown;
+                            }[];
+                            provenance: {
+                                commitSha?: string;
+                            };
+                            artifact?: {
+                                /** Format: uuid */
+                                deploymentArtifactId: string;
+                            };
+                            initiatedBy: string | null;
+                            input: unknown;
+                            result: unknown;
+                            error: string | null;
+                            /** Format: uuid */
+                            parentRunId: string | null;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                            /** Format: date-time */
+                            startedAt: string | null;
+                            /** Format: date-time */
+                            completedAt: string | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;

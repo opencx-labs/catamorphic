@@ -182,9 +182,10 @@ describe("AppMount", () => {
     );
     const init = posts[0]?.init as {
       headers?: Record<string, string>;
-      params: { path: Record<string, string> };
+      params: { path: Record<string, string>; query: { versionId: string } };
     };
     expect(init.headers).toBeUndefined();
+    expect(init.params.query.versionId).toBe(VERSION_ID);
     expect(init.params.path).toEqual({
       projectId: PROJECT_ID,
       appName: "ops-dashboard",

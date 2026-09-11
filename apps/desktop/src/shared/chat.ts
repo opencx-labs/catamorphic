@@ -22,6 +22,7 @@ export type ChatMode = "min" | "partial" | "tab";
  * processes the agent started or left running).
  */
 export interface ChatSurface {
+  appIcon?: string | null;
   /** Workspace tab key ("browser:<id>" / "terminal:<id>" / "chat:<id>"). */
   key: string;
   kind:

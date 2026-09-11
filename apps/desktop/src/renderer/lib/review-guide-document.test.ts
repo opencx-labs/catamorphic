@@ -1,9 +1,5 @@
 import { expect, it } from "vitest";
-import {
-  extractGuide,
-  guideFileTarget,
-  guidePrompt,
-} from "./review-guide-document.js";
+import { guidePrompt } from "./review-guide-document.js";
 
 const files = [
   {
@@ -15,28 +11,30 @@ const files = [
   },
 ];
 
-it("does not publish partial agent output as a completed guide", () => {
-  expect(
-    extractGuide("<!-- catamorphic-review-guide -->\n## Behavior\nUnfinished"),
-  ).toBeUndefined();
-  expect(
-    extractGuide(
-      "Prose\n<!-- catamorphic-review-guide -->\n## Behavior\nExplanation\n<!-- /catamorphic-review-guide -->\nOther text",
-    ),
-  ).toBe("## Behavior\nExplanation");
-});
-
-it("only opens file references present in the current pull request", () => {
-  expect(guideFileTarget("#file=src%2Fa%20b.ts", files)?.path).toBe(
-    "src/a b.ts",
-  );
-  expect(guideFileTarget("#file=..%2Fsecret", files)).toBeUndefined();
-  expect(guideFileTarget("#file=%broken", files)).toBeUndefined();
-  expect(guideFileTarget("https://example.com", files)).toBeUndefined();
+it("produces an ordinary session app with immutable evidence and a shared review kit", () => {
+  const prompt = guidePrompt({
+    projectId: "project",
+    number: 12,
+    title: "Change",
+    body: "Body",
+    revision: "abc123",
+    files,
+    artifactId: "existing",
+  });
+  expect(prompt).toContain("read and update artifact existing");
+  expect(prompt).toContain("components.read");
+  expect(prompt).toContain("code-review");
+  expect(prompt).toContain("temporary app files");
+  expect(prompt).toContain("Do not publish or edit the user's checkout");
+  expect(prompt).toContain('"evidenceFingerprint":"abc123"');
+  expect(prompt).not.toContain("catamorphic-review-guide");
 });
 
 it("bounds large patches without starving later files of evidence", () => {
   const prompt = guidePrompt({
+    projectId: "project",
+    number: 12,
+    revision: "abc123",
     title: "Change",
     body: "Description",
     files: [

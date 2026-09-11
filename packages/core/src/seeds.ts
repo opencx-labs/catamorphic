@@ -1,6 +1,7 @@
 import { APP_THEME_COLOR_TOKENS } from "@catamorphic/app";
 import { PARSER_PACKAGE_VERSION } from "@catamorphic/parser";
 import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
+import { SESSION_ARTIFACTS_SKILL } from "./session-artifacts-skill.js";
 import { WORKFLOW_LIFECYCLE_SKILL } from "./workflow-lifecycle-skill.js";
 
 const SHARED_TSCONFIG = `{
@@ -850,6 +851,31 @@ description: The mechanics of building frontend apps that call this project's wo
 
 # Building Apps
 
+Reuse project-owned components and follow the project's app design guidance first.
+When the user, project or host points to a component registry, fetch the appropriate
+item and read its source, declared dependencies and usage notes. Discover the components.read capability through discover_capabilities when
+available, then invoke it to list or fetch the host's shipped items. Install source into the project,
+then adapt it; do not treat registry components as a hidden runtime dependency.
+Preserve existing customizations. Temporary apps keep installed pack files in their
+explicit artifact snapshot instead of changing the project. For code reviews,
+consult session-artifacts and fetch the code-review pack unless suitable components
+are already installed. More packs follow the same install-and-adapt process.
+
+After creating an app, use set_app_presentation when available to choose a canonical
+type: review, dashboard, report, tracker, form, or calculator. All code reviews
+use review. When no type clearly fits, use default (the ordinary grid icon).
+The same tool accepts title. Use a short, descriptive title for the app's
+purpose or subject, matching the user's language. Keep it stable as you iterate;
+avoid generic labels such as Session app or unnecessary status/version suffixes.
+There is no required title template. Neither title nor icon changes rebuild or
+publish the app. Do not invent custom glyphs or colors for common app types.
+
+Generated interactive results, including code reviews, use ordinary apps.
+For a temporary or session-owned result, load the session-artifacts skill and
+use session_artifact when the host provides it. It supplies the same scaffold,
+retains source with the session and builds immediately without publication.
+The project-file steps below apply when the result belongs in the project.
+
 A project is a bun workspace with three kinds of member:
 
 - \`contracts/\` — **types only, never runtime code.** The one package both
@@ -1583,6 +1609,7 @@ documents — grep is faster and never lies.
 `;
 
 export const HOST_SKILLS: Record<string, string> = {
+  "session-artifacts/SKILL.md": SESSION_ARTIFACTS_SKILL,
   "workflow-lifecycle/SKILL.md": WORKFLOW_LIFECYCLE_SKILL,
   "searching-documents/SKILL.md": SEARCHING_DOCUMENTS_SKILL,
   "publishing-to-github/SKILL.md": `---
