@@ -70,3 +70,31 @@ it("does not remember once-only, cancelled, or arbitrary MCP form answers", asyn
   await handler(form);
   expect(elicit).toHaveBeenCalledTimes(6);
 });
+
+it("uses durable chat questions for consent and keeps remembered access scoped", async () => {
+  const elicit = vi.fn<WorkspaceBridge["elicit"]>();
+  const ask = vi.fn(async () => "Allow for this chat");
+  const handler = createCodexElicitation({ elicit, askQuestion: () => ask });
+  expect(await handler(request)).toEqual({ action: "accept", content: {} });
+  expect(await handler(request)).toEqual({ action: "accept", content: {} });
+  expect(ask).toHaveBeenCalledTimes(1);
+  expect(elicit).not.toHaveBeenCalled();
+  await handler({ ...request, _meta: { ...request._meta, riskLevel: "high" } });
+  expect(ask).toHaveBeenCalledTimes(2);
+  expect(ask).toHaveBeenCalledWith(expect.objectContaining({ blocking: true }));
+});
+
+it("requires explicit consent and rejects a late answer after interruption", async () => {
+  const abort = new AbortController();
+  const ask = vi.fn(async () => "Please explain first");
+  const handler = createCodexElicitation({
+    elicit: undefined,
+    askQuestion: () => ask,
+  });
+  expect(await handler(request)).toEqual({ action: "decline" });
+  ask.mockImplementationOnce(async () => {
+    abort.abort();
+    return "Allow once";
+  });
+  expect(await handler(request, abort.signal)).toEqual({ action: "cancel" });
+});

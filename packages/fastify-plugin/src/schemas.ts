@@ -1,3 +1,4 @@
+import { APP_ICON_NAMES } from "@catamorphic/app";
 import {
   RoleDefinitionSchema as CoreRoleDefinitionSchema,
   PROJECT_PERMISSION_PATTERN,
@@ -52,11 +53,19 @@ export const ProjectAppVersionParamsSchema = ProjectIdParamsSchema.extend({
   versionId: z.string().uuid(),
 });
 
+export const AppPresentationSchema = z.object({
+  name: z.string(),
+  title: z.string(),
+  icon: z.enum(APP_ICON_NAMES),
+});
+
 export const AppSummarySchema = z.object({
   name: z.string(),
+  title: z.string(),
   id: z.string().uuid().nullable(),
   activeVersionId: z.string().uuid().nullable(),
   publishedAt: z.string().datetime().nullable(),
+  icon: z.enum(APP_ICON_NAMES),
 });
 
 export const AppVersionSchema = z.object({
@@ -983,7 +992,19 @@ export const AgentSessionSourceSchema = z.enum([
   "api",
 ]);
 
+export const AgentSessionsQuerySchema = PaginationQuerySchema.extend({
+  visibility: z.enum(["promoted", "latent", "archived"]).optional(),
+  parentSessionId: z.string().uuid().optional(),
+  rootsOnly: z
+    .enum(["true", "false"])
+    .transform((value) => value === "true")
+    .optional(),
+}).refine((value) => !(value.rootsOnly && value.parentSessionId), {
+  message: "Choose rootsOnly or parentSessionId, not both.",
+});
+
 export const AgentSessionSchema = z.object({
+  childCount: z.number().int().nonnegative().optional(),
   id: z.string().uuid(),
   projectId: z.string().uuid(),
   externalUserId: z.string(),
@@ -1049,6 +1070,7 @@ export const CreateAgentSessionSchema = z.object({
   systemPrompt: z.string().optional(),
   /** Host-registry key of the agent to run this session on. */
   agentId: z.string().optional(),
+  model: z.string().optional(),
   effort: AgentEffortSchema.optional(),
   environment: z.string().min(1).optional(),
   /** Surface creating the session. Provenance only; never grants access. */

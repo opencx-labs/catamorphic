@@ -1,6 +1,7 @@
 import {
   type ButtonHTMLAttributes,
   type ReactNode,
+  type Ref,
   useEffect,
   useRef,
   useState,
@@ -10,7 +11,7 @@ import {
   type OpenMode,
   openModeFromEvent,
 } from "../../shared/open-mode.js";
-import { parseSurfaceLink } from "../lib/surface-link.js";
+import { parseSurfaceLink } from "../../shared/surface-link.js";
 import { MenuPortal } from "./sidebar-item-row.js";
 
 function useResourceMenu() {
@@ -68,6 +69,7 @@ function useResourceMenu() {
 /** Resource navigation only: folders and commands keep ordinary buttons. */
 export function OpenResourceButton({
   onOpen,
+  ref,
   defaultOpenMode = "replace",
   isResource = true,
   onKeyDown,
@@ -79,6 +81,7 @@ export function OpenResourceButton({
   "onClick" | "onContextMenu"
 > & {
   onOpen: (mode: OpenMode) => void;
+  ref?: Ref<HTMLButtonElement>;
   defaultOpenMode?: OpenMode;
   isResource?: boolean;
   openOnMouseDown?: boolean;
@@ -88,6 +91,7 @@ export function OpenResourceButton({
     <>
       <button
         {...props}
+        ref={ref}
         type={props.type ?? "button"}
         onKeyDown={(event) => {
           onKeyDown?.(event);

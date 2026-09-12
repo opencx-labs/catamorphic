@@ -44,6 +44,11 @@ asarUnpack:
   - "**/node_modules/@catamorphic/db/migrations/**"
   - "**/node_modules/@catamorphic/runtime/dist/**"
 mac:
+  extraFiles:
+    - from: native/browser-import/bin/browser-keychain
+      to: MacOS/browser-keychain
+  binaries:
+    - Contents/MacOS/browser-keychain
   category: public.app-category.developer-tools
   icon: build/icon.icns
   minimumSystemVersion: "12.0"

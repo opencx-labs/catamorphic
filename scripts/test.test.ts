@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -86,14 +86,25 @@ async function temporaryDirectory(): Promise<string> {
   return directory;
 }
 
-async function waitForFile(filePath: string): Promise<string> {
+async function waitForProcessIds(
+  filePath: string,
+  count: number,
+): Promise<number[]> {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
     try {
-      return await readFile(filePath, "utf8");
+      const text = await readFile(filePath, "utf8");
+      const ids = text.trim().split(" ").map(Number);
+      if (
+        text.endsWith("\n") &&
+        ids.length === count &&
+        ids.every((id) => Number.isSafeInteger(id) && id > 0)
+      )
+        return ids;
     } catch {
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      /* The writer may not have created the marker yet. */
     }
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`Timed out waiting for ${filePath}`);
 }
@@ -117,6 +128,38 @@ function processGroupIsLive(processGroupId: number): boolean {
 }
 
 describe("test process orchestration", () => {
+  it("waits for a complete process marker instead of interpreting an empty file as PID zero", async () => {
+    const directory = await temporaryDirectory();
+    const marker = path.join(directory, "ready");
+    await writeFile(marker, "");
+    let completed = false;
+    const ready = waitForProcessIds(marker, 2).then((ids) => {
+      completed = true;
+      return ids;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(completed).toBe(false);
+    await writeFile(marker, "123 4");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(completed).toBe(false);
+    await writeFile(marker, "123 456\n");
+    expect(await ready).toEqual([123, 456]);
+  });
+
+  it.each([0, -1, NaN, Infinity, 1.5])(
+    "rejects unsafe process group ID %s before signaling",
+    (id) => {
+      const signals = new TestSignalController({
+        source: new RecordingSignalSource(),
+      });
+      try {
+        expect(() => signals.activate(id)).toThrow("positive integer");
+      } finally {
+        signals.close();
+      }
+    },
+  );
+
   it("plans root script tests before the non-recursive workspace Turbo graph", () => {
     expect(testRunCommands({ rootPath: "/repo", cliArguments: [] })).toEqual([
       {
@@ -140,6 +183,7 @@ describe("test process orchestration", () => {
           "run",
           "test",
           "--no-daemon",
+          "--force",
           "--concurrency=2",
         ],
         logFileName: "workspace-tests.log",
@@ -231,6 +275,7 @@ describe("test process orchestration", () => {
         "run",
         "test",
         "--no-daemon",
+        "--force",
         "--concurrency=2",
       ],
     );
@@ -244,8 +289,8 @@ describe("test process orchestration", () => {
       "run",
       "test",
       "--no-daemon",
-      "--concurrency=2",
       "--force",
+      "--concurrency=2",
     ]);
   });
 
@@ -342,10 +387,11 @@ describe("test process orchestration", () => {
     const readyPath = path.join(directory, "orphan-ready.txt");
     const terminatedPath = path.join(directory, "orphan-terminated.txt");
     const signals = new TestSignalController();
-    let processGroupId = 0;
+    let processGroupId: number | undefined;
     const driver = new RecordingPostgresDriver(async () => {
       await access(terminatedPath);
-      expect(processGroupIsLive(processGroupId)).toBe(false);
+      const [groupId] = await waitForProcessIds(markerPath, 1);
+      expect(groupId && processGroupIsLive(groupId)).toBe(false);
     });
     const descendantCode =
       `process.on("SIGTERM",()=>{require("node:fs").writeFileSync(${JSON.stringify(terminatedPath)},"terminated");process.exit(0)});` +
@@ -360,7 +406,7 @@ describe("test process orchestration", () => {
           command: "/bin/sh",
           args: [
             "-c",
-            `${process.execPath} -e '${descendantCode}' & while [ ! -f "${readyPath}" ]; do sleep 0.01; done; printf '%s' "$$" > "${markerPath}"; exit 0`,
+            `${process.execPath} -e '${descendantCode}' & while [ ! -f "${readyPath}" ]; do sleep 0.01; done; printf '%s\\n' "$$" > "${markerPath}"; exit 0`,
           ],
           cwd: directory,
           env: process.env,
@@ -376,12 +422,14 @@ describe("test process orchestration", () => {
       (error: unknown) => ({ success: false as const, error }),
     );
 
-    processGroupId = Number(await waitForFile(markerPath));
+    [processGroupId] = await waitForProcessIds(markerPath, 1);
+    if (!processGroupId) throw new Error("Missing process group ID");
+    const groupId = processGroupId;
     let forcedCleanup = false;
     const fallback = setTimeout(() => {
       forcedCleanup = true;
       try {
-        process.kill(-processGroupId, "SIGTERM");
+        process.kill(-groupId, "SIGTERM");
       } catch {
         // Correct orchestration already terminated the process group.
       }
@@ -404,6 +452,41 @@ describe("test process orchestration", () => {
       if (processGroupIsLive(processGroupId)) {
         process.kill(-processGroupId, "SIGKILL");
       }
+    }
+  });
+
+  it("bounds output draining when a descendant escapes the original process group", async () => {
+    if (process.platform === "win32") return;
+    const directory = await temporaryDirectory();
+    const marker = path.join(directory, "escaped.txt");
+    const signals = new TestSignalController({
+      source: new RecordingSignalSource(),
+    });
+    const childCode = `require("node:fs").writeFileSync(${JSON.stringify(marker)}, String(process.pid) + "\\n");setInterval(()=>{},1000)`;
+    const operation = runLoggedProcess({
+      command: process.execPath,
+      args: [
+        "-e",
+        `const child=require("node:child_process").spawn(process.execPath,["-e",${JSON.stringify(childCode)}],{detached:true,stdio:["ignore",1,2]});child.unref()`,
+      ],
+      cwd: directory,
+      env: process.env,
+      logPath: path.join(directory, "escaped.log"),
+      signals,
+    });
+    const outcome = operation.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    const [escapedPid] = await waitForProcessIds(marker, 1);
+    if (!escapedPid) throw new Error("Missing escaped PID");
+    try {
+      expect(await outcome).toMatchObject({
+        message: expect.stringContaining("left output pipes open"),
+      });
+    } finally {
+      signals.close();
+      if (processIsLive(escapedPid)) process.kill(escapedPid, "SIGTERM");
     }
   });
 
@@ -489,7 +572,7 @@ describe("test process orchestration", () => {
           command: "/bin/sh",
           args: [
             "-c",
-            `sleep 30 & child=$!; printf '%s %s' "$$" "$child" > "${markerPath}"; wait "$child"`,
+            `sleep 30 & child=$!; printf '%s %s\\n' "$$" "$child" > "${markerPath}"; wait "$child"`,
           ],
           cwd: directory,
           env: process.env,
@@ -498,11 +581,9 @@ describe("test process orchestration", () => {
         }),
     });
 
-    const [groupText, descendantText] = (await waitForFile(markerPath)).split(
-      " ",
-    );
-    const processGroupId = Number(groupText);
-    descendantPid = Number(descendantText);
+    const [processGroupId, childId] = await waitForProcessIds(markerPath, 2);
+    if (!processGroupId || !childId) throw new Error("Missing process IDs");
+    descendantPid = childId;
     const fallback = setTimeout(() => {
       try {
         process.kill(-processGroupId, "SIGKILL");
@@ -554,6 +635,21 @@ describe("test process orchestration", () => {
       XDG_CACHE_HOME: resources.xdgCachePath,
       TURBO_TELEMETRY_DISABLED: "1",
     });
+    expect(
+      testRunEnvironment({
+        source: { TURBO_CACHE_DIR: "/shared-cache" },
+        resources,
+      }).TURBO_CACHE_DIR,
+    ).toBe(resources.turboCachePath);
+    expect(
+      testRunEnvironment({
+        source: {
+          GITHUB_ACTIONS: "true",
+          TURBO_CACHE_DIR: "/runner/.turbo/cache",
+        },
+        resources,
+      }).TURBO_CACHE_DIR,
+    ).toBe("/runner/.turbo/cache");
     await Promise.all(
       [
         resources.tempPath,

@@ -1,6 +1,6 @@
 # 0118: Review navigation and code rendering
 
-- **Status:** Accepted
+- **Status:** Accepted; sidebar search and editable-file theme behavior superseded by [0123](0123-desktop-consent-search-and-resource-links.md)
 - **Date:** 2026-09-10
 - **Supersedes:** The editor palette paragraph of 0107
 

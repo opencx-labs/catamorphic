@@ -1327,14 +1327,14 @@ kbd {
   }
 }
 
-[data-dock-side="left"] [data-floating-chat] {
-  align-self: flex-start;
-}
-[data-dock-side="right"] [data-floating-chat] {
-  align-self: flex-end;
-}
 [data-dock-host] [data-floating-chat] {
   max-width: min(100%, 52rem);
+}
+[data-dock-side="left"][data-dock-alignment="edge"] [data-floating-chat] {
+  align-self: flex-start;
+}
+[data-dock-side="right"][data-dock-alignment="edge"] [data-floating-chat] {
+  align-self: flex-end;
 }
 
 [data-native-drag] {
@@ -1348,4 +1348,10 @@ kbd {
 
 html[data-surface="dock"] body {
   background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-dock-rail] {
+    transition: none;
+  }
 }

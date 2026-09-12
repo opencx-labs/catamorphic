@@ -64,6 +64,26 @@ describe("serializeComposer", () => {
     );
   });
 
+  it("keeps live command spaces without inventing a newline for Chromium paragraphs", () => {
+    expect(
+      serializeComposer(el("DIV", [el("DIV", [text("/team")])]), () => null, {
+        trim: false,
+      }).text,
+    ).toBe("/team");
+    expect(
+      serializeComposer(el("DIV", [el("DIV", [text("/team ")])]), () => null, {
+        trim: false,
+      }).text,
+    ).toBe("/team ");
+    expect(
+      serializeComposer(
+        el("DIV", [el("DIV", [text("/team"), el("BR")])]),
+        () => null,
+        { trim: false },
+      ).text,
+    ).toBe("/team\n");
+  });
+
   it("strips literal U+FFFC from prose so pasted text can't forge markers", () => {
     // Word/PDF text flavors carry object-replacement chars; only pill
     // ELEMENTS may produce markers, or positional mapping shifts.

@@ -53,9 +53,9 @@ const helpers = `
   };
   const typeText = (text) => { caretToEnd(); document.execCommand('insertText', false, text); };
   // React derives onMouseEnter/Leave from over/out pairs, so hover is a
-  // bubbling mouseover from outside and unhover a mouseout to the body.
-  const hover = (el) => el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }));
-  const unhover = (el) => el.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }));
+  // bubbling pointerover from outside and unhover a pointerout to the body.
+  const hover = (el) => el.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, relatedTarget: document.body }));
+  const unhover = (el) => el.dispatchEvent(new PointerEvent('pointerout', { bubbles: true, relatedTarget: document.body }));
   const paste = (text) => {
     const dt = new DataTransfer();
     dt.setData('text/plain', text);
@@ -443,20 +443,34 @@ describe("context pills", () => {
       document.execCommand('delete');
       return true;
     `);
-    const caret = await runWait<{ x: number; y: number; empty: boolean }>(`
+    const caret = await runWait<{
+      x: number;
+      y: number;
+      paddingLeft: number;
+      paddingTop: number;
+      lineHeight: number;
+    }>(`
       const c = composer();
       if (!c.hasAttribute('data-empty')) return false;
       const probe = document.createElement('span');
       getSelection().getRangeAt(0).insertNode(probe);
       const rect = c.getBoundingClientRect();
       const pos = probe.getBoundingClientRect();
+      const style = getComputedStyle(c);
       probe.remove();
-      return { x: Math.round(pos.left - rect.left), y: Math.round(pos.top - rect.top), empty: true };
+      return {
+        x: pos.left - rect.left, y: pos.top - rect.top,
+        paddingLeft: parseFloat(style.paddingLeft),
+        paddingTop: parseFloat(style.paddingTop),
+        lineHeight: parseFloat(style.lineHeight),
+      };
     `);
-    // Padding is 10px/6px: the caret sits at the input's start, not after
-    // the placeholder text.
-    expect(caret.x).toBeLessThanOrEqual(12);
-    expect(caret.y).toBeLessThanOrEqual(10);
+    // The probe's vertical font metrics vary by OS. Require the first line
+    // at the actual input padding; placeholder text must not push it right
+    // or onto a second line.
+    expect(Math.abs(caret.x - caret.paddingLeft)).toBeLessThanOrEqual(1);
+    expect(caret.y).toBeGreaterThanOrEqual(caret.paddingTop - 1);
+    expect(caret.y).toBeLessThan(caret.paddingTop + caret.lineHeight);
     expect(
       await run<string>(
         `return getComputedStyle(composer(), '::before').position;`,
@@ -594,30 +608,19 @@ describe("context pills", () => {
       }).then((r) => r.status);
     })()`);
     expect(seeded).toBe(200);
-    // Minimize the floating chat so the editor gets the front; open the editor.
+    // Minimize the chat and find the file through the shared palette.
     await run(`pressKey('m', { metaKey: true }); return true;`);
-    await run(`pressKey('p', { metaKey: true }); return true;`);
-    await runWait(`return !!$('textarea[placeholder*="Search or ask"]');`, {
-      label: "palette",
+    await run(
+      `$('[data-sidebar-search="search-files"]').click(); return true;`,
+    );
+    await runWait(`return !!$('textarea[placeholder="Search filenames…"]');`, {
+      label: "Files palette",
     });
     await run(
-      `setReactValue($('textarea[placeholder*="Search or ask"]'), 'new editor'); return true;`,
+      `setReactValue($('textarea[placeholder="Search filenames…"]'), 'sel.md'); return true;`,
     );
     await runWait(
-      `if (!byText('button', 'New editor')) return false;
-       $('textarea[placeholder*="Search or ask"]').dispatchEvent(
-         new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
-       return true;`,
-      { label: "run New editor" },
-    );
-    await runWait(`return !!$('input[placeholder*="Open a file"]');`, {
-      label: "quick-open",
-    });
-    await run(
-      `setReactValue($('input[placeholder*="Open a file"]'), 'sel.md'); return true;`,
-    );
-    await runWait(
-      `const row = byText('li button', 'sel.md'); if (!row) return false; row.click(); return true;`,
+      `const row=byText('[role="option"]','sel.md'); if(!row) return false; row.dispatchEvent(new MouseEvent('mousedown',{button:0,bubbles:true,cancelable:true})); return true;`,
       { label: "sel.md row" },
     );
     await runWait(

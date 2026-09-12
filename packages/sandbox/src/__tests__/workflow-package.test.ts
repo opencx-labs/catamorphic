@@ -44,6 +44,17 @@ describe("workflow package fallback", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("preserves the package resolved by a committed lockfile", async () => {
+    await expect(
+      resolveWorkflowPackageFallback({
+        packageJson: JSON.stringify({
+          dependencies: { [WORKFLOW_PACKAGE_NAME]: "0.0.2" },
+        }),
+        hasLockfile: true,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("does not stage into blank or wrapper-only projects", async () => {
     await expect(
       resolveWorkflowPackageFallback({

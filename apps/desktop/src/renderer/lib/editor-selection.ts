@@ -26,8 +26,12 @@ let activeReader: SelectionReader | null = null;
 /** Called by an editor pane on mount/focus; returns an unregister. */
 export function registerSelectionReader(reader: SelectionReader): () => void {
   activeReader = reader;
+  notifyEditorSelectionChange();
   return () => {
-    if (activeReader === reader) activeReader = null;
+    if (activeReader === reader) {
+      activeReader = null;
+      notifyEditorSelectionChange();
+    }
   };
 }
 
@@ -91,4 +95,9 @@ export function selectionFromClipboard(
   } catch {
     return null;
   }
+}
+
+/** Notify contextual chrome without copying the selection into any conversation. */
+export function notifyEditorSelectionChange() {
+  window.dispatchEvent(new Event("catamorphic:editor-selection"));
 }

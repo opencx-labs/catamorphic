@@ -1,5 +1,10 @@
 import type { CatamorphicCore } from "@catamorphic/core";
-import { AccessDeniedError } from "@catamorphic/core";
+import {
+  AccessDeniedError,
+  SessionArtifactConflictError,
+  SessionArtifactNotFoundError,
+  SessionArtifactValidationError,
+} from "@catamorphic/core";
 import type { FastifyPluginAsync } from "fastify";
 import {
   serializerCompiler,
@@ -29,6 +34,7 @@ import { registerProjectMcpRoutes } from "./routes/project-mcp.js";
 import { registerProjectRoutes } from "./routes/projects.js";
 import { registerPublicationRoutes } from "./routes/publications.js";
 import { registerRunRoutes } from "./routes/runs.js";
+import { registerSessionArtifactRoutes } from "./routes/session-artifacts.js";
 import { registerSessionMailboxRoutes } from "./routes/session-mailboxes.js";
 import { registerTriggerRoutes } from "./routes/triggers.js";
 import { registerWatcherRoutes } from "./routes/watchers.js";
@@ -124,6 +130,13 @@ export const catamorphicPlugin: FastifyPluginAsync<
     if (err instanceof HttpIdentityError) {
       return reply.status(400).send({ error: err.message });
     }
+    if (
+      err instanceof SessionArtifactNotFoundError ||
+      err instanceof SessionArtifactConflictError ||
+      err instanceof SessionArtifactValidationError
+    ) {
+      return reply.status(err.statusCode).send({ error: err.message });
+    }
     if (err instanceof AccessDeniedError) {
       return reply.status(403).send({ error: err.message });
     }
@@ -191,6 +204,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerDocumentRoutes(app, ctx);
   registerPublicationRoutes(app, ctx);
   registerAppRoutes(app, ctx);
+  registerSessionArtifactRoutes(app, ctx);
   registerAppsMcpRoutes(app, ctx);
   registerProjectMcpRoutes(app, ctx);
   registerAgentCapabilityRoutes(app, ctx);

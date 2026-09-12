@@ -585,6 +585,36 @@ export const appApi = { listOrders: orders.listOrders };
 });
 
 describe("executionFiles", () => {
+  it("preserves locked manifests but never includes frontend source", () => {
+    const files = {
+      "bun.lock": "locked dependency bytes",
+      "package.json": JSON.stringify({
+        devDependencies: { "@catamorphic/parser": "0.0.1" },
+      }),
+      "contracts/package.json": JSON.stringify({
+        devDependencies: { "@catamorphic/app": "0.0.3" },
+      }),
+      "apps/dashboard/package.json": JSON.stringify({
+        name: "dashboard",
+        dependencies: { react: "19.0.0" },
+      }),
+      "apps/dashboard/src/main.tsx": "export default function App() {}",
+      "workflows/src/quote.ts": "export const quote = 1;",
+    };
+    const result = executionFiles(files);
+    expect(result["package.json"]).toBe(files["package.json"]);
+    expect(result["contracts/package.json"]).toBe(
+      files["contracts/package.json"],
+    );
+    expect(result["apps/dashboard/package.json"]).toBe(
+      files["apps/dashboard/package.json"],
+    );
+    expect(result["bun.lock"]).toBe(files["bun.lock"]);
+    expect(result).not.toHaveProperty("apps/dashboard/src/main.tsx");
+    expect(result["workflows/src/quote.ts"]).toBe(
+      files["workflows/src/quote.ts"],
+    );
+  });
   it("drops app sources and strips the frontend-only runtime dependency", () => {
     const files = {
       "package.json": JSON.stringify({

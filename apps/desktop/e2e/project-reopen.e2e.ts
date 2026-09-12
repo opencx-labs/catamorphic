@@ -27,11 +27,7 @@ async function checkFromPalette() {
 
 describe("project loading and update access", () => {
   beforeAll(async () => {
-    app = await launchApp(
-      process.env.CATAMORPHIC_REOPEN_SCREENSHOT
-        ? { env: { CATAMORPHIC_E2E_WINDOW_MODE: "visible" } }
-        : {},
-    );
+    app = await launchApp();
   });
   afterAll(async () => {
     await app?.stop();
@@ -50,7 +46,7 @@ describe("project loading and update access", () => {
       name: 'reopen-project', rootPath: ${JSON.stringify(`${app.userDataDir}/reopen-project`)}
     })`,
     );
-    await app.eval("location.reload()");
+    await app.reload();
     await app.waitFor(`document.body?.innerText.includes('reopen-project')`, {
       timeoutMs: 30_000,
     });
@@ -61,7 +57,7 @@ describe("project loading and update access", () => {
       await app.eval(`window.catamorphicDesktop.getServerState().then(({url}) =>
       fetch(url + '/api/projects').then(response => response.status).catch(() => 'blocked'))`),
     ).toBe("blocked");
-    await app.eval("location.reload()");
+    await app.reload();
     await app.waitFor(
       `!!document.querySelector('[data-testid="project-load-error"]')`,
       {

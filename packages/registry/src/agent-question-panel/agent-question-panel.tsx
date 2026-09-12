@@ -267,7 +267,7 @@ export function AgentQuestionPanel({
                 aria-hidden={!active}
                 inert={active ? undefined : true}
               >
-                <p className="mb-2.5 text-sm font-medium leading-5">
+                <p className="mb-2.5 whitespace-pre-wrap break-words text-sm font-medium leading-5">
                   {question.question}
                 </p>
                 <div className="flex flex-col gap-1.5">

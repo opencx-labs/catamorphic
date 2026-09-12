@@ -1,7 +1,8 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { migrateDevData } from "./dev-data.js";
 import { createDevPlan, type DevTarget } from "./dev-plan.js";
 import {
   type DevChildExit,
@@ -92,7 +93,7 @@ if (import.meta.main) {
   const tempPath = tmpdir();
   const planInput = {
     rootPath,
-    tempPath,
+    dataPath: path.join(homedir(), ".catamorphic", "dev"),
     ...(process.env.CATAMORPHIC_DEV_INSTANCE
       ? { instanceOverride: process.env.CATAMORPHIC_DEV_INSTANCE }
       : {}),
@@ -161,6 +162,14 @@ if (import.meta.main) {
     process.once("SIGTERM", onSigterm);
 
     try {
+      await migrateDevData({
+        legacyRoot: path.join(
+          tempPath,
+          "catamorphic-dev",
+          placeholderPlan.instance,
+        ),
+        destinationRoot: path.dirname(placeholderPlan.lockPath),
+      });
       const started = await runDevStartupAttempts({
         maxAttempts: DEV_STARTUP_ATTEMPTS,
         allocate: async ({ excludedPorts }) => {
@@ -198,6 +207,12 @@ if (import.meta.main) {
           const childEnv: NodeJS.ProcessEnv = {
             ...runtime.env,
             ...plan.env,
+            CATAMORPHIC_DESKTOP_PREVIOUS_DATA_DIR: path.join(
+              tempPath,
+              "catamorphic-dev",
+              plan.instance,
+              "desktop",
+            ),
           };
           delete childEnv.DATABASE_URL;
           const child = spawn(

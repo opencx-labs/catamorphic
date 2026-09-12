@@ -141,7 +141,14 @@ export async function readFilePreview({
         return {
           ...details,
           typeLabel: extension.toUpperCase() || "Text",
-          content: { kind: "text", text, truncated },
+          content: {
+            kind: "text",
+            text,
+            truncated,
+            ...(extension === "md" || extension === "markdown"
+              ? { format: "markdown" }
+              : {}),
+          },
         };
       } catch {
         /* Binary or non-UTF-8 data gets the explicit fallback below. */

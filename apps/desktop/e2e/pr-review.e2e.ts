@@ -1,11 +1,119 @@
+import { APP_PROTOCOL_VERSION } from "@catamorphic/app";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  type FrameHandle,
+  launchApp,
+  setReactValueJs,
+} from "./harness.js";
 
 let app: AppHandle;
 const helper = `${setReactValueJs}; const $ = s => document.querySelector(s); const button = text => [...document.querySelectorAll('button')].find(b => b.textContent.trim() === text);`;
 const run = <T>(body: string) => app.eval<T>(`(()=>{${helper};${body}})()`);
 const wait = (body: string) =>
   app.waitFor(`(()=>{${helper};${body}})()`, { timeoutMs: 60000 });
+
+async function verifyReviewTheme(frame: FrameHandle) {
+  const original = await app.eval("window.catamorphicDesktop.getTheme()");
+  await frame.eval(`(() => {
+    ${setReactValueJs}
+    document.documentElement.dataset.themeProbe = "mounted";
+    setReactValue(document.querySelector('[aria-label="Find in diff"]'), "input");
+  })()`);
+  try {
+    for (const config of [
+      { selection: "light", overrides: {} },
+      { selection: "dark", overrides: {} },
+      {
+        selection: "light",
+        overrides: {
+          bg: "#f5eee3",
+          fg: "#28252b",
+          accent: "#9b2463",
+          success: "#237a42",
+          danger: "#a92b36",
+        },
+      },
+    ]) {
+      const expected = await app.eval<{
+        appearance: string;
+        colors: { bg: string; accent: string };
+      }>(`window.catamorphicDesktop.setTheme(${JSON.stringify(config)})`);
+      await frame.waitFor(
+        `getComputedStyle(document.documentElement).getPropertyValue('--color-bg').trim() === ${JSON.stringify(expected.colors.bg)}`,
+      );
+      await frame.waitFor(`(() => {
+        const host = document.querySelector('diffs-container');
+        const root = host?.shadowRoot;
+        const keyword = [...(root?.querySelectorAll('[data-line] span') ?? [])].find(e => e.textContent === 'export');
+        if (!keyword || !root.querySelector('pre')) return false;
+        const probe = document.createElement('span');
+        probe.style.color = 'var(--color-accent)'; document.body.append(probe);
+        const accent = getComputedStyle(probe).color; probe.remove();
+        return getComputedStyle(keyword).color === accent &&
+          getComputedStyle(root.querySelector('pre')).backgroundColor === getComputedStyle(document.body).backgroundColor &&
+          getComputedStyle(host).colorScheme === ${JSON.stringify(expected.appearance)};
+      })()`);
+      expect(
+        await frame.eval(`(() => {
+        const host=document.querySelector('diffs-container'), root=host.shadowRoot;
+        const color = value => {
+          const probe=document.createElement('span'); probe.style.color=value;
+          root.append(probe); const result=getComputedStyle(probe).color; probe.remove(); return result;
+        };
+        return color('var(--diffs-addition-base)') === color('var(--color-success)') &&
+          color('var(--diffs-deletion-base)') === color('var(--color-danger)') &&
+          getComputedStyle(root.querySelector('[data-line-type="change-addition"]')).backgroundColor !==
+          getComputedStyle(root.querySelector('[data-line-type="change-deletion"]')).backgroundColor;
+      })()`),
+      ).toBe(true);
+      expect(
+        await frame.eval(`document.documentElement.dataset.themeProbe`),
+      ).toBe("mounted");
+      expect(
+        await frame.eval(
+          `document.querySelector('[aria-label="Find in diff"]').value`,
+        ),
+      ).toBe("input");
+      await app.screenshot(
+        `/tmp/catamorphic-review-theme-${Object.keys(config.overrides).length ? "custom" : config.selection}.png`,
+      );
+    }
+    // Another embedder can supply a larger type scale and denser/taller rows.
+    await app.eval(`(async () => {
+      const theme = await window.catamorphicDesktop.getTheme();
+      document.querySelector('iframe[src*="/apps/session-"]').contentWindow.postMessage({
+        catamorphicApp: ${APP_PROTOCOL_VERSION}, kind: "theme",
+        theme: { appearance: theme.appearance, colors: theme.colors, fonts: theme.fonts, baseFontSize: "17px", rowHeight: "36px" },
+      }, '*');
+    })()`);
+    await frame.waitFor(
+      `getComputedStyle(document.querySelector('.cat-review')).fontSize === '17px'`,
+    );
+    expect(
+      await frame.eval(
+        `getComputedStyle(document.querySelector('[aria-label="Diff layout"]')).minHeight`,
+      ),
+    ).toBe("36px");
+    expect(
+      await frame.eval(
+        `getComputedStyle(document.querySelector('diffs-container')).fontSize`,
+      ),
+    ).toBe("17px");
+    await app.screenshot("/tmp/catamorphic-review-theme-large.png");
+
+    // A reload starts from the original URL, then receives the current host theme.
+    await frame.eval("location.reload()");
+    await frame.waitFor(
+      `document.querySelector('.cat-review-finding') && getComputedStyle(document.documentElement).getPropertyValue('--color-bg').trim() === '#f5eee3'`,
+    );
+    expect(frame.getRendererErrors()).toEqual([]);
+  } finally {
+    await app.eval(
+      `window.catamorphicDesktop.setTheme(${JSON.stringify(original)})`,
+    );
+  }
+}
 beforeAll(async () => {
   app = await launchApp({ env: { CATAMORPHIC_E2E_REVIEW: "1" } });
   await wait("return !!button('New project');");
@@ -31,7 +139,9 @@ beforeAll(async () => {
   await wait("return !!$('[aria-label=\"Pull request details\"]');");
 });
 afterAll(async () => {
+  const errors = app?.getRendererErrors() ?? [];
   await app?.stop();
+  expect(errors).toEqual([]);
 });
 
 it("shows real-shaped CI and people context without expanding files in the workspace sidebar", async () => {
@@ -49,31 +159,101 @@ it("shows real-shaped CI and people context without expanding files in the works
   await app.screenshot("/tmp/catamorphic-review-overview-e2e.png");
 });
 
-it("generates a guide, follows its code link, and preserves it when revisiting", async () => {
+it("generates an ordinary review app, follows evidence and retains the result", {
+  timeout: 660_000,
+  retry: 0,
+}, async () => {
   await run("button('Guide').click();");
   await wait(
     "return !!button('Generate guide') && !button('Generate guide').disabled;",
   );
   await run("button('Generate guide').click();");
-  await wait("return !!button('input guard');");
+  try {
+    // A fresh merge-gate cache performs the real dependency install. Match
+    // the service's bounded install + compile budget; UI errors fail early.
+    await app.waitFor(
+      `(()=>{${helper};return !!button('Open review') || !!document.querySelector('[aria-label="Code review guide"] [role="alert"]');})()`,
+      { timeoutMs: 630_000, label: "review app build" },
+    );
+    expect(
+      await run(
+        "return $('[aria-label=\"Code review guide\"] [role=alert]')?.textContent ?? null;",
+      ),
+    ).toBeNull();
+  } catch (error) {
+    console.error(
+      "Review readiness",
+      await run("return $('[aria-label=\"Code review guide\"]')?.innerText;"),
+      app.getOutput().slice(-6000),
+    );
+    throw error;
+  }
+  await run("button('Open review').click();");
   await wait(
-    "return document.querySelectorAll('[aria-label=\"Guide sections\"] a').length === 2;",
+    `return !!document.querySelector('iframe[src*="/apps/session-"]');`,
   );
+  // Creation through discovery must set the icon without a second mutation.
+  await wait(`return !!document.querySelector('[data-app-icon="review"]');`);
+  const presentation = await app.eval<{
+    title: string;
+    icon: string;
+  }>(`(async () => {
+    const guest = new URL(document.querySelector('iframe[src*="/apps/session-"]').src);
+    const response = await fetch(guest.origin + guest.pathname.replace(/\\/guest$/, "/presentation"), {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Input guard review", icon: "review" }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    return response.json();
+  })()`);
+  expect(presentation).toMatchObject({
+    title: "Input guard review",
+    icon: "review",
+  });
+  await wait(
+    `return !!document.querySelector('[data-app-icon="review"]') && document.body.textContent.includes("Input guard review");`,
+  );
+  const frame = await app.connectToFrame("/apps/session-", {
+    timeoutMs: 60000,
+  });
+  try {
+    await frame.waitFor(
+      'document.querySelector(".cat-review-finding")?.textContent.includes("Check the boundary")',
+    );
+    expect(
+      await frame.eval(
+        `document.querySelectorAll('nav[aria-label="Review view"] button').length`,
+      ),
+    ).toBe(4);
+    await app.screenshot("/tmp/catamorphic-review-guide-e2e.png");
+    await frame.eval('document.querySelector(".cat-review-evidence").click()');
+    await frame.waitFor('!!document.querySelector("[data-testid=code-diff]")');
+    await app.screenshot("/tmp/catamorphic-review-app-diff-e2e.png");
+    expect(
+      await frame.eval(
+        `document.querySelector('[aria-label="Diff layout"]').value`,
+      ),
+    ).toBe("unified");
+    await verifyReviewTheme(frame);
+  } catch (error) {
+    console.error(
+      "Review guest errors",
+      frame.getRendererErrors(),
+      await frame.eval('document.getElementById("root")?.innerHTML'),
+    );
+    await app.screenshot("/tmp/catamorphic-review-guest-failure.png");
+    throw error;
+  } finally {
+    frame.close();
+  }
   await run(
-    "document.querySelectorAll('[aria-label=\"Guide sections\"] a')[1].click();",
+    `document.querySelector('[data-point-key^="diff:"] button').click();`,
   );
-  expect(
-    await run(
-      "return document.activeElement?.tagName === 'H2' && document.activeElement.textContent === 'Check the boundary';",
-    ),
-  ).toBe(true);
-  await app.screenshot("/tmp/catamorphic-review-guide-e2e.png");
-  await run("button('input guard').click();");
-  await wait("return !!$('[data-testid=code-diff]');");
+  await wait("return !!button('Guide');");
   await run("button('Guide').click();");
-  await wait("return !!button('input guard');");
-  expect(await run("return !!button('Regenerate');")).toBe(true);
-  await run("button('input guard').click();");
+  await wait("return !!button('Update review');");
+  await run("button('Changes').click();");
+  await wait("return !!$('[data-testid=code-diff]');");
 });
 
 it("navigates between a file and its thread without losing the parent reply", async () => {

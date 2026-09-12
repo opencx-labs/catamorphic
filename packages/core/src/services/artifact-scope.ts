@@ -67,6 +67,12 @@ export interface ResolvedScope {
    * here.
    */
   allowedWorkflows: ReadonlySet<string>;
+  sessionApp?: {
+    name: string;
+    commitSha: string;
+    remoteBranch: string;
+    active: boolean;
+  };
 }
 
 /**
@@ -98,6 +104,7 @@ export async function resolveScope(args: {
   }
 
   const allowed = new Set<string>();
+  let sessionApp: ResolvedScope["sessionApp"];
   const apps = scope.filter(
     (ref): ref is AppRef =>
       ref.kind === "app" && ref.projectId === args.projectId,
@@ -118,11 +125,40 @@ export async function resolveScope(args: {
       .selectFrom("app_versions")
       .innerJoin("apps", "apps.id", "app_versions.app_id")
       .innerJoin("projects", "projects.id", "apps.project_id")
+      .leftJoin(
+        "session_artifacts",
+        "session_artifacts.id",
+        "apps.session_artifact_id",
+      )
+      .leftJoin(
+        "agent_sessions",
+        "agent_sessions.id",
+        "session_artifacts.session_id",
+      )
       .where("apps.project_id", "=", args.projectId)
       .where("apps.name", "=", ref.name)
       .where("projects.tenant_id", "=", args.identity.tenantId)
       .where("app_versions.status", "=", "ready")
-      .select(["app_versions.allowed_workflows"]);
+      .where(({ or, and, eb }) =>
+        or([
+          eb("apps.session_artifact_id", "is", null),
+          and([
+            eb("session_artifacts.status", "=", "active"),
+            eb(
+              "session_artifacts.owner_external_user_id",
+              "=",
+              args.identity.externalUserId,
+            ),
+            eb("session_artifacts.session_id", "is not", null),
+          ]),
+        ]),
+      )
+      .select([
+        "app_versions.allowed_workflows",
+        "app_versions.commit_sha",
+        "session_artifacts.remote_branch",
+        "agent_sessions.status as session_status",
+      ]);
     query =
       ref.channel === "dev"
         ? query
@@ -134,13 +170,33 @@ export async function resolveScope(args: {
             .orderBy("app_versions.created_at", "desc")
             .limit(1)
         : query.where("app_versions.is_active", "=", true);
+    if (ref.versionId)
+      query = query.where("app_versions.id", "=", ref.versionId);
     const row = await query.executeTakeFirst();
     if (!row) continue;
+    if (row.remote_branch && row.commit_sha) {
+      // Each session app carries its own source pin. Combining it with other
+      // grants would allow names from one app to execute against another source.
+      if (
+        apps.length !== 1 ||
+        scope.some(
+          (entry) =>
+            entry.kind === "workflow" && entry.projectId === args.projectId,
+        )
+      )
+        throw new AccessDeniedError();
+      sessionApp = {
+        name: ref.name,
+        commitSha: row.commit_sha,
+        remoteBranch: row.remote_branch,
+        active: row.session_status === "active",
+      };
+    }
     for (const name of parseWorkflowList(row.allowed_workflows)) {
       if (!allowlist || allowlist.includes(name)) allowed.add(name);
     }
   }
-  return { allowedWorkflows: allowed };
+  return { allowedWorkflows: allowed, ...(sessionApp ? { sessionApp } : {}) };
 }
 
 /**

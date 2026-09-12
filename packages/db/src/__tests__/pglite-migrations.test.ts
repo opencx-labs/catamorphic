@@ -52,6 +52,8 @@ describe("PGlite migrations", () => {
       "012_client_runner_workspace.sql",
       "013_workspace_capacity.sql",
       "014_watcher_retirement.sql",
+      "015_session_artifacts.sql",
+      "016_app_icons.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });
@@ -77,7 +79,7 @@ describe("PGlite migrations", () => {
       WHERE table_schema = ${DEFAULT_SCHEMA}
         AND table_type = 'BASE TABLE'
     `.execute(db);
-    expect(tables.rows[0]?.count).toBe(71);
+    expect(tables.rows[0]?.count).toBe(73);
   });
 
   it("supports the runtime primitives core relies on", {

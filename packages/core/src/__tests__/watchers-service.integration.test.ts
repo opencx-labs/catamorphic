@@ -95,6 +95,7 @@ describe("temporary watchers", () => {
         project_id: projectId,
         external_user_id: identity.externalUserId,
         provider: "test",
+        agent_id: `project:${projectId}:reviewer`,
       })
       .execute();
 
@@ -297,7 +298,7 @@ describe("temporary watchers", () => {
         workflowName: "existingWorkflow",
         source: "export const unrelated = true;",
       }),
-    ).rejects.toThrow("Watcher source must export workflow 'existingWorkflow'");
+    ).rejects.toThrow("source must export existingWorkflow");
     await expect(
       watchers.create({
         identity,
@@ -351,7 +352,9 @@ describe("temporary watchers", () => {
       triggerKinds: ["issue.changed"],
       environment: "edge",
     });
-    expect(watcher.remoteBranch).toBe(`catamorphic/watchers/${watcher.id}`);
+    expect(watcher.remoteBranch).toMatch(
+      new RegExp(`^catamorphic/artifacts/${watcher.id}-[0-9a-f-]{36}$`),
+    );
     expect(watcher.commitSha).toMatch(/^[0-9a-f]{40}$/);
     const repo = await projectManager.openDev(
       tenantId,
@@ -682,7 +685,7 @@ describe("temporary watchers", () => {
           projectId,
           (origin) => origin.resolveRef(`refs/heads/${watcher.remote_branch}`),
         ),
-      ).toBeNull();
+      ).toBe(watcher.commit_sha);
       expect(
         (await watchers.list({ identity, projectId, sessionId })).find(
           (item) => item.id === watcher.id,

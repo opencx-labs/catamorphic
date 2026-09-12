@@ -53,6 +53,7 @@ export type {
   AgentCapabilityContext,
   AgentCapabilityInvocation,
   AgentCapabilityOptions,
+  AgentCapabilitySource,
 } from "./services/agent-capabilities-service.js";
 export {
   AgentCapabilitiesService,
@@ -118,7 +119,6 @@ export {
   type AgentTurnSettledEvent,
   type ArchiveSessionResourcesHandler,
   type NativeAgentCheckout,
-  SessionMirrorDivergedError,
   type SyncedFileChange,
   UnsupportedAgentTopologyError,
 } from "./services/agent-sessions-service.js";
@@ -152,6 +152,7 @@ export {
   AppBundleTooLargeError,
   AppContractError,
   AppNotFoundError,
+  type AppPresentation,
   AppPublishStateError,
   type AppSummary,
   AppsService,
@@ -478,6 +479,17 @@ export {
   type SecretStatus,
   SecretsService,
 } from "./services/secrets-service.js";
+export type {
+  SessionArtifact,
+  SessionArtifactAddress,
+  SessionArtifactKind,
+} from "./services/session-artifacts-service.js";
+export {
+  SessionArtifactConflictError,
+  SessionArtifactNotFoundError,
+  SessionArtifactsService,
+  SessionArtifactValidationError,
+} from "./services/session-artifacts-service.js";
 export {
   type SessionAuthority,
   SessionAuthorityMismatchError,
@@ -485,6 +497,7 @@ export {
   type SessionMailboxItem,
   SessionMailboxNotFoundError,
 } from "./services/session-mailboxes-service.js";
+export { SessionMirrorDivergedError } from "./services/session-mirror.js";
 export {
   type SessionSyncIntent,
   SessionSyncLeaseError,

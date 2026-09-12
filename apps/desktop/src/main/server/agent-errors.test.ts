@@ -1,5 +1,9 @@
+import type {
+  CodingAgentProvider,
+  ProviderSession,
+} from "@catamorphic/sandbox";
 import { describe, expect, it } from "vitest";
-import { classifyAgentError } from "./agent-errors.js";
+import { classifyAgentError, FriendlyAgentErrors } from "./agent-errors.js";
 
 describe("classifyAgentError", () => {
   it("classifies CLI OAuth session failures as auth", () => {
@@ -32,4 +36,38 @@ describe("classifyAgentError", () => {
   it("leaves ordinary failures unclassified", () => {
     expect(classifyAgentError("The model refused to answer")).toBeUndefined();
   });
+});
+
+it("explains native writer ownership without classifying it for automatic retry", async () => {
+  const session: ProviderSession = {
+    providerSessionId: "native-test-thread",
+    sessionId: "test-session",
+    projectId: "test-project",
+    sandboxId: "local",
+    workingDirectory: "/test",
+  };
+  const original =
+    "thread 01a090c8-1302-70e3-8055-5a412ec59c75 already has an active writer";
+  const inner: CodingAgentProvider = {
+    name: "codex",
+    async startSession() {
+      return session;
+    },
+    async *sendMessage() {
+      yield { type: "error", content: original };
+      yield { type: "error", content: `Tool read failed: ${original}` };
+    },
+    async dispose() {},
+  };
+  const events = [];
+  for await (const event of new FriendlyAgentErrors(
+    inner,
+    "Codex",
+    "Codex",
+  ).sendMessage(session, "Continue"))
+    events.push(event);
+  expect(events[0]?.content).toContain("Close it there, then retry here");
+  expect(events[0]?.content).not.toContain("01a090c8");
+  expect(events[0]?.errorKind).toBeUndefined();
+  expect(events[1]?.content).toBe(`Tool read failed: ${original}`);
 });

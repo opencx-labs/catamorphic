@@ -194,7 +194,12 @@ export class CodexAgent implements CodingAgentProvider {
         ...this.opts.mcpServersForSession?.(context),
         ...this.sessionMcpServers.get(session.sessionId),
         ...(capabilityServer
-          ? { catamorphic_capabilities: capabilityServer }
+          ? {
+              catamorphic_capabilities: {
+                ...capabilityServer,
+                defaultToolsApprovalMode: "approve",
+              },
+            }
           : {}),
       },
       mergePolicyLayers(own, this.callerPolicies.get(session.sessionId)),

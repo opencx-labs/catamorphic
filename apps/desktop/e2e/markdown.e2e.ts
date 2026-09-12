@@ -98,43 +98,20 @@ describe("markdown editor", () => {
   }, 180_000);
 
   it("opens a .md file in the rich editor, not Monaco", async () => {
-    await run(`pressKey('p', { metaKey: true }); return true;`);
-    await runWait(`return !!$('textarea[placeholder*="Search or ask"]');`, {
-      label: "palette overlay",
-    });
-    await run(`
-      setReactValue($('textarea[placeholder*="Search or ask"]'), 'new editor');
-      return true;
-    `);
-    await runWait(
-      `if (!byText('button', 'New editor')) return false;
-       $('textarea[placeholder*="Search or ask"]').dispatchEvent(
-         new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
-       return true;`,
-      { label: "run New editor action" },
+    await run(
+      `$('[data-sidebar-search="search-files"]').click(); return true;`,
     );
-    await runWait(`return !!$('input[placeholder*="Open a file"]');`, {
-      label: "quick-open",
+    await runWait(`return !!$('textarea[placeholder="Search filenames…"]');`, {
+      label: "Files palette",
     });
     await run(
-      `setReactValue($('input[placeholder*="Open a file"]'), 'plain'); return true;`,
+      `setReactValue($('textarea[placeholder="Search filenames…"]'), 'plain'); return true;`,
     );
-    try {
-      await runWait(
-        `const row = byText('li button', 'plain.md');
-       if (!row) return false; row.click(); return true;`,
-        { timeoutMs: 30_000, label: "plain.md row" },
-      );
-    } catch (error) {
-      const diagnostics = await app.eval(`(async () => {
-        const picker = document.querySelector('[data-testid="editor-file-picker"]');
-        const context = window.__mdE2e;
-        const response = await fetch(context.apiUrl + '/api/projects/' + context.projectId + '/files');
-        return { picker: picker?.outerHTML, visibility: document.visibilityState, activeElement: document.activeElement?.outerHTML, filesStatus: response.status, files: await response.text() };
-      })()`);
-      console.error("Markdown file picker diagnostics", diagnostics);
-      throw error;
-    }
+    await runWait(
+      `const row = byText('[role="option"]', 'plain.md');
+       if (!row) return false; row.dispatchEvent(new MouseEvent('mousedown',{button:0,bubbles:true,cancelable:true})); return true;`,
+      { timeoutMs: 30_000, label: "plain.md in Files palette" },
+    );
 
     await runWait(
       `return !!$('.cat-mdedit .ProseMirror') && !$('.monaco-editor')
@@ -179,24 +156,18 @@ describe("markdown editor", () => {
     expect(content).toContain("# Plain notes");
   }, 60_000);
 
-  it("switching files within the tab keeps documents isolated", async () => {
-    // The pane-header path button (with the Search glyph), NOT the
-    // workspace tab, which also carries the filename in a truncate span.
-    await run(`
-      visible('button').find((b) =>
-        b.querySelector('svg.lucide-search') &&
-        b.querySelector('span.truncate')?.textContent?.includes('plain.md')).click();
-      return true;
-    `);
-    await runWait(`return !!$('input[placeholder*="Open a file"]');`, {
-      label: "quick-open again",
+  it("opening another file through the palette keeps documents isolated", async () => {
+    await run(
+      `$('[data-sidebar-search="search-files"]').click(); return true;`,
+    );
+    await runWait(`return !!$('textarea[placeholder="Search filenames…"]');`, {
+      label: "Files palette",
     });
     await run(
-      `setReactValue($('input[placeholder*="Open a file"]'), 'frontmatter'); return true;`,
+      `setReactValue($('textarea[placeholder="Search filenames…"]'), 'frontmatter'); return true;`,
     );
     await runWait(
-      `const row = byText('li button', 'with-frontmatter.md');
-       if (!row) return false; row.click(); return true;`,
+      `const row=byText('[role="option"]', 'with-frontmatter.md'); if(!row) return false; row.dispatchEvent(new MouseEvent('mousedown',{button:0,bubbles:true,cancelable:true})); return true;`,
       { label: "with-frontmatter.md row" },
     );
     await runWait(

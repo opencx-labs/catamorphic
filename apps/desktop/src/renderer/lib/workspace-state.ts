@@ -401,6 +401,11 @@ function materializeSurface(ws: Workspace, key: string): Workspace {
   const localId = key.slice(key.indexOf(":") + 1);
   if (key.startsWith("app:") && !ws.tabs.some((tab) => tabKey(tab) === key))
     return { ...ws, tabs: [...ws.tabs, { kind: "app", name: localId }] };
+  if (
+    key.startsWith("artifact:") &&
+    !ws.tabs.some((tab) => tabKey(tab) === key)
+  )
+    return { ...ws, tabs: [...ws.tabs, { kind: "artifact", name: localId }] };
   if (key.startsWith("browser:"))
     return {
       ...ws,

@@ -4,7 +4,7 @@ import {
   type Osc133Marker,
   sanitizeTerminalOutput,
   scanOsc133,
-} from "./terminal-text.js";
+} from "../shared/terminal-text.js";
 
 describe("scanOsc133", () => {
   const collect = (chunks: string[]) => {

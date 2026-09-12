@@ -75,6 +75,7 @@ export interface DockSnapshot {
   detached: boolean;
   multiProject: boolean;
   side: "left" | "right";
+  alignment: "edge" | "center";
 }
 export type WorkspaceEvent =
   | { kind: "navigate"; projectId: string }

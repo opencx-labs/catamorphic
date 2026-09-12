@@ -50,9 +50,6 @@ beforeAll(async () => {
   app = await launchApp({
     env: {
       CATAMORPHIC_E2E_PICK_FOLDER: root,
-      ...(process.env.CATAMORPHIC_GIT_SCREENSHOT
-        ? { CATAMORPHIC_E2E_WINDOW_MODE: "visible" }
-        : {}),
     },
   });
   await wait(`return !!byText('button','New project');`);
@@ -81,6 +78,28 @@ beforeAll(async () => {
 afterAll(async () => {
   await app?.stop();
   if (temp) await fs.rm(temp, { recursive: true, force: true });
+});
+it("searches Changes through the palette scoped to the selected checkout", async () => {
+  await run(`$('[data-sidebar-search="search-changes"]').click();`);
+  await wait(`return !!$('textarea[placeholder="Search changes…"]');`);
+  await run(
+    `setReactValue($('textarea[placeholder="Search changes…"]'), 'notes.txt');`,
+  );
+  await wait(
+    `return [...$('textarea[placeholder="Search changes…"]').closest('[role="dialog"]').querySelectorAll('[role="option"]')].some(row => row.textContent.includes('notes.txt'));`,
+  );
+  expect(
+    await run(
+      `return [...$('textarea[placeholder="Search changes…"]').closest('[role="dialog"]').querySelectorAll('[role="option"]')].every(row => row.textContent.includes('feature/review'));`,
+    ),
+  ).toBe(true);
+  await run(
+    `[...$('textarea[placeholder="Search changes…"]').closest('[role="dialog"]').querySelectorAll('[role="option"]')].find(row => row.textContent.includes('branch')).dispatchEvent(new MouseEvent('mousedown',{button:0,bubbles:true,cancelable:true}));`,
+  );
+  await wait(`return diffText().includes('Committed branch document');`);
+  expect(await run(`return diffText();`)).not.toContain(
+    "Working primary document",
+  );
 });
 it("groups worktrees and opens committed versus local diffs without crossing checkouts", async () => {
   expect(

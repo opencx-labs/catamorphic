@@ -264,21 +264,30 @@ describe("browser tabs", () => {
       timeoutMs: 30_000,
       label: "second browser tab navigated",
     });
-    await run(`
-      pressKey('w', { metaKey: true });
-      pressKey('w', { metaKey: true });
-      return true;
+    // Observe before dispatch: the exit can finish between CDP polls on a
+    // live compositor. Freeze either tab presentation to exercise its fallback.
+    const staged = await run<boolean>(`
+      return new Promise((resolve) => {
+        const observer = new MutationObserver(() => {
+          const exiting = $('[data-tab-orientation] .animate-tab-out, [data-tab-orientation] .animate-session-row-out');
+          if (!exiting) return;
+          exiting.getAnimations().forEach((animation) => animation.pause());
+          finish(true);
+        });
+        const timer = setTimeout(() => finish(false), 15000);
+        function finish(value) {
+          observer.disconnect();
+          clearTimeout(timer);
+          resolve(value);
+        }
+        observer.observe(document.body, {
+          subtree: true, childList: true, attributes: true, attributeFilter: ['class'],
+        });
+        pressKey('w', { metaKey: true });
+        pressKey('w', { metaKey: true });
+      });
     `);
-    // Occluded Chromium can pause CSS animations and omit animationend.
-    // Freeze this exit deliberately: the clock fallback must still clear
-    // exactly the one closed tab from the rendered strip.
-    await runWait(
-      `const exiting = $('.animate-tab-out');
-       if (!exiting) return false;
-       exiting.getAnimations().forEach((animation) => animation.pause());
-       return true;`,
-      { label: "outgoing browser tab staged" },
-    );
+    expect(staged).toBe(true);
     const afterClose = await run<{
       webviews: number;
       tabLabels: string[];
@@ -358,37 +367,30 @@ describe("terminal tabs", () => {
 });
 
 describe("editor tabs", () => {
-  it("opens an editor tab from the palette and quick-opens a file", async () => {
-    await run(`pressKey('p', { metaKey: true }); return true;`);
-    await runWait(`return !!$('textarea[placeholder*="Search or ask"]');`, {
-      label: "palette overlay",
-    });
-    await run(`
-      const input = $('textarea[placeholder*="Search or ask"]');
-      setReactValue(input, 'new editor');
-      return true;
-    `);
-    await runWait(
-      `const input = $('textarea[placeholder*="Search or ask"]');
-       if (!byText('button', 'New editor')) return false;
-       input.dispatchEvent(new KeyboardEvent('keydown',
-         { key: 'Enter', bubbles: true, cancelable: true }));
-       return true;`,
-      { label: "run New editor action" },
+  it("opens an editor file through the Files palette", async () => {
+    await run(
+      `$('[data-sidebar-search="search-files"]').click(); return true;`,
     );
-    await runWait(`return !!$('input[placeholder*="Open a file"]');`, {
-      label: "editor quick-open",
+    await runWait(`return !!$('textarea[placeholder="Search filenames…"]');`, {
+      label: "Files palette",
     });
-    // Project creation seeds skill files; pick a seeded package.json.
-    await runWait(
-      `const row = byText('button', 'package.json');
-       if (!row) return false; row.click(); return true;`,
-      { label: "package.json in quick-open" },
+    await run(
+      `setReactValue($('textarea[placeholder="Search filenames…"]'), 'package.json'); return true;`,
     );
     await runWait(
-      `return !!$('.monaco-editor') && !!byText('button', 'package.json');`,
+      `const row = byText('[role="option"]', 'package.json');
+       if (!row) return false; row.dispatchEvent(new MouseEvent('mousedown',{button:0,bubbles:true,cancelable:true})); return true;`,
+      { label: "package.json in Files palette" },
+    );
+    await runWait(
+      `return !!$('.monaco-editor') && $('[data-editor-toolbar]')?.textContent.includes('package.json');`,
       { timeoutMs: 60_000, label: "Monaco open on package.json" },
     );
+    expect(
+      await run(
+        `return !!document.querySelector('[data-editor-toolbar] button[aria-label*="file"]');`,
+      ),
+    ).toBe(false);
   });
 
   it("closes the editor tab with the close-tab shortcut", async () => {
@@ -585,20 +587,25 @@ describe("chat flows", () => {
       return true;
     `);
     await runWait(
-      `return !![...document.querySelectorAll('aside li[data-session-id]')]
+      `return !![...document.querySelectorAll('aside [data-session-id]')]
         .find((row) => row.textContent.includes('Session menu'));`,
       { timeoutMs: 30_000, label: "session menu row in the sidebar" },
     );
 
-    // The dock bubble opens the same menu and can mark the session unread.
-    await run(`
-      const bubble = [...document.querySelectorAll('div[data-session-id]')]
+    // Sidebar and dock titles settle independently. Open the dock's menu only
+    // once its own bubble reflects the session title.
+    await runWait(
+      `
+      const bubble = [...document.querySelectorAll('[data-chat-bubble][data-session-id]')]
         .find((row) => !row.closest('aside') && row.querySelector('button[aria-label*="Session menu"]'));
+      if (!bubble) return false;
       bubble.querySelector('button[aria-label*="Session menu"]').dispatchEvent(
         new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 420, clientY: 500 }),
       );
       return true;
-    `);
+    `,
+      { label: "dock session bubble ready to open its menu" },
+    );
     await runWait(
       `const labels = $$('[role="menuitem"]').map((item) => item.textContent.trim());
        return labels.join('|') === 'New subsession|Mark as unread|Archive';`,
@@ -608,7 +615,7 @@ describe("chat flows", () => {
       `byText('[role="menuitem"]', 'Mark as unread').click(); return true;`,
     );
     await runWait(
-      `const row = [...document.querySelectorAll('aside li[data-session-id]')]
+      `const row = [...document.querySelectorAll('aside [data-session-id]')]
          .find((item) => item.textContent.includes('Session menu'));
        return !!row?.querySelector('[data-testid="session-unread"]');`,
       { label: "manual unread dot in the sidebar" },
@@ -622,7 +629,7 @@ describe("chat flows", () => {
     // The sidebar resource menu adds placement choices to the same current-state
     // session actions. Marking it read removes the shared dot.
     await run(`
-      const row = [...document.querySelectorAll('aside li[data-session-id]')]
+      const row = [...document.querySelectorAll('aside [data-session-id]')]
         .find((item) => item.textContent.includes('Session menu'));
       row.firstElementChild.dispatchEvent(
         new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 210, clientY: 360 }),
@@ -638,7 +645,7 @@ describe("chat flows", () => {
       `byText('[role="menuitem"]', 'Mark as read').click(); return true;`,
     );
     await runWait(
-      `const row = [...document.querySelectorAll('aside li[data-session-id]')]
+      `const row = [...document.querySelectorAll('aside [data-session-id]')]
          .find((item) => item.textContent.includes('Session menu'));
        return !!row && !row.querySelector('[data-testid="session-unread"]');`,
       { label: "session marked read" },
@@ -648,7 +655,7 @@ describe("chat flows", () => {
     // the archived chat searchable and visibly marked, and reopening it
     // provides the way to unarchive it.
     await run(`
-      const bubble = [...document.querySelectorAll('div[data-session-id]')]
+      const bubble = [...document.querySelectorAll('[data-chat-bubble][data-session-id]')]
         .find((row) => !row.closest('aside') && row.querySelector('button[aria-label*="Session menu"]'));
       bubble.querySelector('button[aria-label*="Session menu"]').dispatchEvent(
         new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 420, clientY: 500 }),
@@ -660,9 +667,9 @@ describe("chat flows", () => {
     });
     await run(`byText('[role="menuitem"]', 'Archive').click(); return true;`);
     await runWait(
-      `return ![...document.querySelectorAll('aside li[data-session-id]')]
+      `return ![...document.querySelectorAll('aside [data-session-id]')]
         .some((row) => row.textContent.includes('Session menu')) &&
-        ![...document.querySelectorAll('div[data-session-id]')]
+        ![...document.querySelectorAll('[data-chat-bubble][data-session-id]')]
           .some((row) => !row.closest('aside') && row.querySelector('button[aria-label*="Session menu"]'));`,
       { label: "archived chat removed from the visible workspace" },
     );
@@ -698,12 +705,12 @@ describe("chat flows", () => {
       return true;
     `);
     await runWait(
-      `return !![...document.querySelectorAll('div[data-session-id]')]
+      `return !![...document.querySelectorAll('[data-chat-bubble][data-session-id]')]
       .find((row) => !row.closest('aside') && row.querySelector('button[aria-label*="Session menu"]'));`,
       { label: "archived chat reopened from the palette" },
     );
     await run(`
-      const bubble = [...document.querySelectorAll('div[data-session-id]')]
+      const bubble = [...document.querySelectorAll('[data-chat-bubble][data-session-id]')]
         .find((row) => !row.closest('aside') && row.querySelector('button[aria-label*="Session menu"]'));
       bubble.querySelector('button[aria-label*="Session menu"]').dispatchEvent(
         new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 420, clientY: 500 }),
@@ -715,7 +722,7 @@ describe("chat flows", () => {
     });
     await run(`byText('[role="menuitem"]', 'Unarchive').click(); return true;`);
     await runWait(
-      `return !![...document.querySelectorAll('aside li[data-session-id]')]
+      `return !![...document.querySelectorAll('aside [data-session-id]')]
         .find((row) => row.textContent.includes('Session menu'));`,
       { label: "unarchived chat restored to the sidebar" },
     );
@@ -787,8 +794,8 @@ describe("palette intent", () => {
       `setReactValue(${paletteInput}, 'hello from palette mode'); return true;`,
     );
     await runWait(
-      `return ${inDialog('[role="option"]')}[0]?.textContent.includes('Ask agent: hello from palette mode');`,
-      { label: "agent mode row reflects input" },
+      `const row=${inDialog('[role="option"]')}[0]; return row?.textContent.includes('Ask agent') && row.textContent.includes('Fake Agent') && !row.textContent.includes('hello from palette mode');`,
+      { label: "agent row omits the prompt and names the default agent" },
     );
     await run(paletteKey("Enter"));
     await runWait(
@@ -892,19 +899,18 @@ describe("chat tab activity indicators", () => {
     );
     await runWait(`return !(${tabDotOn});`, { label: "dot cleared on open" });
     // Leave a clean slate: close the chat tab and the extra palette tab.
-    const tabsBeforeClose = await run<number>(
-      `return $$('[data-point-key]').length;`,
-    );
+    // Sidebar rows and activity chips also have pointer keys and can update
+    // independently while the session settles. Count only workspace tabs.
+    const tabItems = `$$('[data-tab-orientation] [data-point-key]')`;
+    const tabsBeforeClose = await run<number>(`return ${tabItems}.length;`);
     await run(`pressKey('w', { metaKey: true }); return true;`);
-    await runWait(
-      `return $$('[data-point-key]').length === ${tabsBeforeClose - 1};`,
-      { label: "chat tab closed before the next close" },
-    );
+    await runWait(`return ${tabItems}.length === ${tabsBeforeClose - 1};`, {
+      label: "chat tab closed before the next close",
+    });
     await run(`pressKey('w', { metaKey: true }); return true;`);
-    await runWait(
-      `return $$('[data-point-key]').length === ${tabsBeforeClose - 2};`,
-      { label: "extra palette tab closed" },
-    );
+    await runWait(`return ${tabItems}.length === ${tabsBeforeClose - 2};`, {
+      label: "extra palette tab closed",
+    });
   });
 
   it("closing a chat mid-turn clears its activity", async () => {
@@ -992,40 +998,6 @@ describe("question flow", () => {
   });
 });
 
-describe("non-blocking questions", () => {
-  it("keeps working while questions are collapsed and consumes the answer in the same turn", async () => {
-    await run(`pressKey('n', { metaKey: true }); return true;`);
-    await runWait(`return !!floatingDock();`);
-    await run(`
-      const ta = floatingDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'ask a nonblocking question and keep working');
-      ta.closest('form').requestSubmit(); return true;
-    `);
-    await runWait(
-      `return !!$('section[aria-label="The agent has a question"]') && timelineMessages().some(m => m.text.includes('continuing independent work'));`,
-    );
-    await app.screenshot("/tmp/catamorphic-nonblocking-question.png");
-    await run(`$('button[aria-label="Answer later"]').click(); return true;`);
-    await runWait(
-      `return !$('section[aria-label="The agent has a question"]') && !!byText('button', 'Answer when ready');`,
-    );
-    await run(`byText('button', 'Answer when ready').click(); return true;`);
-    await runWait(
-      `return !!$('section[aria-label="The agent has a question"]');`,
-    );
-    await run(
-      `byText('section[aria-label="The agent has a question"] button', 'Orange').click(); return true;`,
-    );
-    await runWait(
-      `const submit = byText('section[aria-label="The agent has a question"] button', 'Submit'); if (!submit || submit.disabled) return false; submit.click(); return true;`,
-    );
-    await runWait(
-      `return timelineMessages().some(m => m.text.includes('Answer received during the same turn') && m.text.includes('Orange')) && !$('section[aria-label="The agent has a question"]');`,
-      { timeoutMs: 30000 },
-    );
-  });
-});
-
 describe("chat surface shortcuts", () => {
   it("Cmd+M minimizes the floating chat; Cmd+M again restores it", async () => {
     await run(`pressKey('n', { metaKey: true }); return true;`);
@@ -1084,11 +1056,14 @@ describe("chat surface shortcuts", () => {
       });
       await waitForHeldAnimationFrame();
       await releaseAnimationFrames();
-      const composerAutofocused = await run<boolean>(`
-        return document.activeElement?.matches?.('[data-composer-input]') &&
-          document.activeElement.closest('[data-floating-chat]') !== null;
-      `);
-      expect(composerAutofocused).toBe(true);
+      await settleAnimationFrame();
+      // Releasing a held callback can schedule a subsequent React effect/frame.
+      // Observe the completed handoff before sending the next user input.
+      await runWait(
+        `return document.activeElement?.matches?.('[data-composer-input]') &&
+          document.activeElement.closest('[data-floating-chat]') !== null;`,
+        { label: "composer focused after deferred frames resume" },
+      );
 
       // Keyboard branch: a real Tab after the focus frame was scheduled
       // makes the newly focused browser control authoritative.
@@ -1117,6 +1092,7 @@ describe("chat surface shortcuts", () => {
       `);
       expect(tabMovedFocus).toBe(true);
       await releaseAnimationFrames();
+      await settleAnimationFrame();
       const keyboardFocusPreserved = await run<string>(`
         const active = document.activeElement;
         if (active?.dataset.e2eKeyboardFocus === 'true') return 'keyboard-target';
@@ -1144,6 +1120,7 @@ describe("chat surface shortcuts", () => {
       `);
       expect(assistiveFocusMoved).toBe(true);
       await releaseAnimationFrames();
+      await settleAnimationFrame();
       const assistiveFocusPreserved = await run<boolean>(`
         return document.activeElement?.dataset.e2eAssistiveFocus === 'true';
       `);
@@ -1165,6 +1142,7 @@ describe("chat surface shortcuts", () => {
       `);
       expect(addressFocused).toBe(true);
       await releaseAnimationFrames();
+      await settleAnimationFrame();
       const browserKeptFocus = await run<boolean>(`
         return document.activeElement ===
           $('input[aria-label="Address and search bar"]');

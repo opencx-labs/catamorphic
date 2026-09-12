@@ -55,3 +55,23 @@ it("stops all status animations when a chat settles", () => {
     container.querySelectorAll(".animate-spin, .animate-pulse"),
   ).toHaveLength(0);
 });
+
+it("shows a question instead of a spinner while a running turn awaits input", () => {
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  cleanup = () => act(() => root.unmount());
+  act(() =>
+    root.render(
+      <>
+        <SignalGlyph working awaitingInput>
+          <span>Chat</span>
+        </SignalGlyph>
+        <SignalBadge signals={{ working: true, awaitingInput: true }} />
+      </>,
+    ),
+  );
+  expect(container.querySelector(".animate-spin")).toBeNull();
+  expect(
+    container.querySelector('[aria-hidden="false"]')?.textContent,
+  ).toContain("?");
+});

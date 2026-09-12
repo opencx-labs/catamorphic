@@ -1,4 +1,8 @@
-import { query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import {
+  type Options,
+  query,
+  type SDKUserMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 
 /**
  * A slash command the Claude Code CLI would accept in this project:
@@ -25,6 +29,8 @@ export async function listClaudeSlashCommands(opts: {
   env?: Record<string, string>;
   /** Host-provided CLI path, including an on-demand desktop component. */
   pathToClaudeCodeExecutable?: string;
+  /** Same installed plugins used by the executing session. */
+  plugins?: Options["plugins"];
   /** Give up after this long (default 15s) — a probe is never worth a wait. */
   timeoutMs?: number;
 }): Promise<ClaudeSlashCommand[]> {
@@ -42,14 +48,27 @@ export async function listClaudeSlashCommands(opts: {
       abortController: abort,
       env: { ...process.env, ...opts.env },
       pathToClaudeCodeExecutable: opts.pathToClaudeCodeExecutable,
-      // The probe needs no tools and must never prompt.
-      permissionMode: "bypassPermissions",
-      allowedTools: [],
+      settingSources: ["user", "project", "local"],
+      plugins: opts.plugins,
+      // Discovery must not execute hooks, connect MCP servers, or ask a model.
+      settings: { disableAllHooks: true },
+      strictMcpConfig: true,
+      mcpServers: {},
+      tools: [],
+      permissionMode: "default",
+      persistSession: false,
     },
   });
-  const timeout = setTimeout(() => abort.abort(), opts.timeoutMs ?? 15_000);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error("Command discovery timed out. Try again."));
+      abort.abort();
+      turn.close();
+    }, opts.timeoutMs ?? 15_000);
+  });
   try {
-    const commands = await turn.supportedCommands();
+    const commands = await Promise.race([turn.supportedCommands(), deadline]);
     return commands.map((command) => ({
       name: command.name,
       description: command.description,
@@ -58,5 +77,8 @@ export async function listClaudeSlashCommands(opts: {
   } finally {
     clearTimeout(timeout);
     abort.abort();
+    // close() initiates cleanup but returns before the CLI exits. Await the
+    // iterator cleanup so callers can safely release its working directory.
+    await turn.return();
   }
 }

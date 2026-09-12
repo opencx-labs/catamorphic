@@ -1,0 +1,52 @@
+name: Test dependencies and task cache
+description: Pinned runtimes with successful Turbo tasks restored per platform and lane.
+inputs:
+  cache-suffix:
+    description: Stable lane and shard identity, shared across PR pushes.
+    required: true
+outputs:
+  task-cache-key:
+    description: Save this key after verification, including when another task fails.
+    value: ${{ steps.tasks.outputs.cache-primary-key }}
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: 1.3.14
+    - uses: actions/setup-node@v7
+      with:
+        node-version: 24.13.0
+    - uses: actions/cache@v5
+      with:
+        path: |
+          ~/.bun/install/cache
+          ~/.cache/electron
+          ~/Library/Caches/electron
+        key: dependencies-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}
+        restore-keys: |
+          dependencies-v2-${{ runner.os }}-${{ runner.arch }}-
+    - uses: actions/cache/restore@v5
+      id: tasks
+      with:
+        path: .turbo/cache
+        key: tasks-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-suffix }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          tasks-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-suffix }}-
+    - shell: bash
+      run: |
+        echo "TURBO_RUN_SUMMARY=true" >> "$GITHUB_ENV"
+        echo "TURBO_CACHE_DIR=$GITHUB_WORKSPACE/.turbo/cache" >> "$GITHUB_ENV"
+        chrome_version="absent"
+        for chrome in /usr/bin/google-chrome /usr/bin/chromium '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'; do
+          if test -x "$chrome"; then
+            chrome_version=$("$chrome" --version)
+            break
+          fi
+        done
+        system_packages="runner-image"
+        if command -v dpkg-query >/dev/null; then
+          system_packages=$(dpkg-query -W --showformat='${Package}=${Version}\n' | LC_ALL=C sort | sha256sum | cut -d ' ' -f 1)
+        fi
+        echo "CATAMORPHIC_TEST_RUNTIME=$(uname -smr)|node=$(node --version)|bun=$(bun --version)|image=${ImageOS:-}:${ImageVersion:-}|chrome=$chrome_version|packages=$system_packages" >> "$GITHUB_ENV"
+        bun install --frozen-lockfile

@@ -342,38 +342,47 @@ describe("animate-before-unmount", () => {
       return (async () => {
       const input = $$('textarea[aria-label="Search commands, pages, and more"]')
         .find((el) => !el.closest('[inert]'));
-      setReactValue(input, 'continue on mobile');
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      input.dispatchEvent(new KeyboardEvent('keydown',
-        { key: 'Enter', bubbles: true, cancelable: true }));
       const enter = [];
       let enterTransition = false;
       let loadingLayout = null;
-      const deadline = performance.now() + 400;
-      while (performance.now() < deadline) {
+      // Observe commits before requesting the modal. Its async mount can take
+      // longer than an animation, and a busy frame can miss the loading pose.
+      const sampleEntrance = () => {
         const heading = byText('h2', 'Continue on mobile');
         const overlay = heading?.closest('[aria-hidden]');
-        if (overlay) {
-          enter.push(parseFloat(getComputedStyle(overlay).opacity));
-          enterTransition ||= overlay.getAnimations().some(
-            (animation) => animation instanceof CSSAnimation &&
-              animation.animationName === 'fade-in');
-          const modal = $('[data-testid="mobile-pairing-modal"]');
-          const stage = $('[data-testid="mobile-pairing-qr-stage"]');
-          if (modal?.dataset.state === 'loading' && stage) {
-            const panel = heading.closest('[role="dialog"]');
-            loadingLayout = {
-              height: panel.offsetHeight,
-              stage: { width: stage.offsetWidth, height: stage.offsetHeight },
-            };
-          }
+        if (!overlay) return;
+        enter.push(parseFloat(getComputedStyle(overlay).opacity));
+        enterTransition ||= overlay.getAnimations().some(
+          (animation) => animation instanceof CSSAnimation &&
+            animation.animationName === 'fade-in');
+        const modal = $('[data-testid="mobile-pairing-modal"]');
+        const stage = $('[data-testid="mobile-pairing-qr-stage"]');
+        if (modal?.dataset.state === 'loading' && stage) {
+          const panel = heading.closest('[role="dialog"]');
+          loadingLayout = {
+            height: panel.offsetHeight,
+            stage: { width: stage.offsetWidth, height: stage.offsetHeight },
+          };
         }
-        await new Promise(requestAnimationFrame);
-      }
-      let newCode = byText('button', 'New code');
-      while (!newCode) {
-        await new Promise(requestAnimationFrame);
-        newCode = byText('button', 'New code');
+      };
+      const observer = new MutationObserver(sampleEntrance);
+      observer.observe(document.body, {
+        subtree: true, childList: true, attributes: true,
+        attributeFilter: ['data-state'],
+      });
+      try {
+        setReactValue(input, 'continue on mobile');
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        input.dispatchEvent(new KeyboardEvent('keydown',
+          { key: 'Enter', bubbles: true, cancelable: true }));
+        const deadline = performance.now() + 5000;
+        while (performance.now() < deadline) {
+          sampleEntrance();
+          if ($('[data-testid="mobile-pairing-modal"]')?.dataset.state === 'ready') break;
+          await new Promise(requestAnimationFrame);
+        }
+      } finally {
+        observer.disconnect();
       }
       const modal = $('[data-testid="mobile-pairing-modal"]');
       if (!loadingLayout || modal?.dataset.state !== 'ready') {

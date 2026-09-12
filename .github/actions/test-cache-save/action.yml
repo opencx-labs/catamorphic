@@ -1,0 +1,15 @@
+name: Save successful tasks
+description: Turbo only stores successful tasks, so retain those even if a sibling task failed.
+inputs:
+  key:
+    description: Primary key returned by test-setup.
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: bun scripts/ci-cache-prune.ts
+    - uses: actions/cache/save@v5
+      with:
+        path: .turbo/cache
+        key: ${{ inputs.key }}

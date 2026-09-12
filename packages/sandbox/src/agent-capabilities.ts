@@ -15,7 +15,7 @@ export const DiscoverCapabilitiesSchema = z.object({
   limit: z.number().int().min(1).max(20).default(10),
 });
 export const InvokeCapabilitySchema = z.object({
-  name: z.string().min(1).max(120),
+  name: z.string().min(1).max(200),
   input: z.record(z.string(), z.unknown()).default({}),
   requestId: z.string().min(1).max(200),
 });
@@ -41,7 +41,7 @@ export function agentCapabilityTools(
     {
       name: "discover_capabilities",
       description:
-        "Find permitted host capabilities by topic, such as execution, environments, assignments, people, or services. Returns typed schemas. Visibility is not permission to perform another action.",
+        "Find permitted host capabilities by topic, such as apps, workflows, browser, terminal, sessions, documents, connections, or execution. Returns typed schemas. Visibility is not permission to perform another action.",
       parameters: DiscoverCapabilitiesSchema.shape,
       execute: (input) =>
         gateway.discover(DiscoverCapabilitiesSchema.parse(input)),

@@ -1097,11 +1097,20 @@ describeIf("unified RunsService integration", () => {
       workflowName: "parentFailingChildWorkflow",
       input: { parent: true },
     });
-    await Promise.all([
-      waitForStatus({ runId: successful.id, status: "completed" }),
-      waitForStatus({ runId: failing.id, status: "failed" }),
-    ]);
-    await worker.stop();
+    try {
+      // Both parents wait on a separately claimed child before settling. Allow
+      // the shared database worker time to complete those hops under gate load.
+      await Promise.all([
+        waitForStatus({
+          runId: successful.id,
+          status: "completed",
+          timeout: 15_000,
+        }),
+        waitForStatus({ runId: failing.id, status: "failed", timeout: 15_000 }),
+      ]);
+    } finally {
+      await worker.stop();
+    }
 
     expect(
       (await core.runs.get({ identity, runId: successful.id })).result,

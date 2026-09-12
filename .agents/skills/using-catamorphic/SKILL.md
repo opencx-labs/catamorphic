@@ -585,7 +585,19 @@ The host also owns unsaved-buffer restoration, save/conflict feedback, run setup
 
 ### 6) Component registry — `@catamorphic/registry` (copy-paste UI)
 
-Pre-wired React components (file explorer, git panel, runs panel, plugins/secrets settings, project editor, chat timeline, sessions list, todo progress, tool-permission card, diff drawer, plus a `CatamorphicAppProvider` wrapper) ship as a shadcn-compatible registry. Items are JSON manifests that inline a single `.tsx` file; the component lands in `components/catamorphic/` once installed, and from there imports from `@catamorphic/react` and `@catamorphic/ui` only. There is no runtime dependency on `@catamorphic/registry` itself.
+Host components and app component packs ship as shadcn-compatible registry items.
+Each manifest inlines one or more editable source files, declares dependencies, and
+may include usage notes in docs. Install the source, then adapt the local components.
+There is no guest runtime dependency on @catamorphic/registry itself. Host-facing
+items consume headless Catamorphic hooks; guest packs such as code-review do not
+require a provider.
+
+For code reviews, reuse project components first. Otherwise fetch code-review from
+the user/project's supplied registry or use the desktop's components.read capability through discover_capabilities/invoke_capability.
+Read the pack's docs, preserve existing customizations, and install its dependencies
+and configuration. Temporary apps retain installed files in their explicit artifact
+snapshot; project apps own installed source in the project. The same process applies
+to future packs. Hosts can expose dist/catalog.json through their own agent tooling.
 
 The registry is **served by the host**, not by catamorphic. The built JSON manifests live at `packages/registry/dist/r/<item>.json` after `bun run --filter @catamorphic/registry build`. Install options:
 
@@ -595,7 +607,9 @@ The registry is **served by the host**, not by catamorphic. The built JSON manif
 
 Items currently shipped:
 
-- `catamorphic-provider` — `<CatamorphicAppProvider baseUrl fetch={authenticatedFetch}>` that wires `CatamorphicProvider` + `QueryClientProvider`. Always install this first.
+- `code-review`: ReviewShell, ReviewNavigation, ReviewFinding, DiffView, host-token styles and bounded offline highlighting. Read its docs for the exact bundler alias.
+
+- `catamorphic-provider` — `<CatamorphicAppProvider baseUrl fetch={authenticatedFetch}>` that wires `CatamorphicProvider` + `QueryClientProvider`. Install this first for items that consume Catamorphic hooks.
 - `project-editor` — three-pane scaffold with `renderEditor` (plug in monaco/codemirror), `renderSidebar`, and `renderGitPanel` slots.
 - `file-explorer` — pure file tree.
 - `git-panel` — branch / dirty / commits / deploy panel (`useProjectGit` + `useProjectCommits` + `useDeployProject`).

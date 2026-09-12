@@ -1,4 +1,4 @@
-import { Clock3, Download, Link2, Upload, Users } from "lucide-react";
+import { Download, Upload, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
   desktopApi,
@@ -7,6 +7,13 @@ import {
   type RemoteShipReport,
   type RemoteSyncReport,
 } from "../lib/desktop-api.js";
+import {
+  useSidebarContent,
+  useSidebarContribution,
+  useSidebarRefresh,
+} from "./sidebar-contribution.js";
+import { SidebarItemRow } from "./sidebar-item-row.js";
+import { SidebarTree } from "./sidebar-tree.js";
 
 export type RemoteFeatures = RemoteCapabilities["features"];
 
@@ -24,19 +31,20 @@ const REFRESH_MS = 15_000;
 
 export function RemoteNav({
   projectId,
-  onEmptyChange,
   onOpenFile,
   onOpenHistory,
   onPublish,
   onPropose,
 }: {
   projectId: string;
-  onEmptyChange?: (empty: boolean) => void;
   onOpenFile: (path: string) => void;
   onOpenHistory: (path: string) => void;
   onPublish: (path: string, features: RemoteFeatures | undefined) => void;
   onPropose: (files: string[], features: RemoteFeatures | undefined) => void;
 }) {
+  const visible = useSidebarContribution()?.visible ?? true;
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string>();
   const [status, setStatus] = useState<RemoteProjectStatus | null>(null);
   const [busy, setBusy] = useState<"sync" | "ship" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -46,17 +54,24 @@ export function RemoteNav({
   const refresh = useCallback(async () => {
     try {
       setStatus(await desktopApi.remoteStatus(projectId));
-    } catch {
-      setStatus(null);
+      setError(undefined);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setLoaded(true);
     }
   }, [projectId]);
 
+  useSidebarRefresh(refresh);
   useEffect(() => {
     setSelected([]);
     setMessage(null);
     setStatus(null);
     void refresh();
-    const timer = setInterval(() => void refresh(), REFRESH_MS);
+    if (!visible) return;
+    const timer = setInterval(() => {
+      if (!document.hidden) void refresh();
+    }, REFRESH_MS);
     const unsubscribe = desktopApi.onGitChanged((change) => {
       if (change.projectId === projectId) void refresh();
     });
@@ -64,14 +79,22 @@ export function RemoteNav({
       clearInterval(timer);
       unsubscribe();
     };
-  }, [projectId, refresh]);
+  }, [projectId, refresh, visible]);
 
-  const isEmpty = status === null;
-  useEffect(() => {
-    onEmptyChange?.(isEmpty);
-  }, [isEmpty, onEmptyChange]);
+  const isEmpty = loaded && !error && status === null;
+  useSidebarContent(
+    error ? "error" : !loaded ? "loading" : isEmpty ? "empty" : "ready",
+  );
 
-  if (!status) return null;
+  if (!status)
+    return error ? (
+      <p role="alert" className="sidebar-empty-state">
+        {error}{" "}
+        <button type="button" onClick={() => void refresh()}>
+          Retry
+        </button>
+      </p>
+    ) : null;
 
   const run = async (verb: "sync" | "ship") => {
     setBusy(verb);
@@ -194,50 +217,45 @@ export function RemoteNav({
           Files stay on this device until you select them for upload to {host}.
         </p>
         {localCount > 0 && (
-          <ul className="flex flex-col gap-0.5">
-            {status.local.modified.map((path) => (
+          <SidebarTree
+            items={[
+              ...status.local.modified.map((path) => ({
+                id: path,
+                path,
+                deleted: false,
+              })),
+              ...status.local.deleted.map((path) => ({
+                id: path,
+                path,
+                deleted: true,
+              })),
+            ]}
+            label="Server changes"
+            renderItem={(item) => (
               <ChangeRow
-                key={path}
-                path={path}
-                selected={selected.includes(path)}
+                path={item.path}
+                badge={item.deleted ? "D" : "M"}
+                selected={selected.includes(item.path)}
                 onSelect={() =>
                   setSelected((current) =>
-                    current.includes(path)
-                      ? current.filter((entry) => entry !== path)
-                      : [...current, path],
+                    current.includes(item.path)
+                      ? current.filter((path) => path !== item.path)
+                      : [...current, item.path],
                   )
                 }
                 conflict={status.local.conflicts?.some(
-                  (entry) => entry.path === path,
+                  (entry) => entry.path === item.path,
                 )}
-                badge="M"
-                onOpen={() => onOpenFile(path)}
-                onHistory={() => onOpenHistory(path)}
-                {...(canPublish
-                  ? { onPublish: () => onPublish(path, features) }
-                  : {})}
-              />
-            ))}
-            {status.local.deleted.map((path) => (
-              <ChangeRow
-                key={path}
-                path={path}
-                selected={selected.includes(path)}
-                onSelect={() =>
-                  setSelected((current) =>
-                    current.includes(path)
-                      ? current.filter((entry) => entry !== path)
-                      : [...current, path],
-                  )
+                onOpen={item.deleted ? undefined : () => onOpenFile(item.path)}
+                onHistory={() => onOpenHistory(item.path)}
+                onPublish={
+                  !item.deleted && canPublish
+                    ? () => onPublish(item.path, features)
+                    : undefined
                 }
-                conflict={status.local.conflicts?.some(
-                  (entry) => entry.path === path,
-                )}
-                badge="D"
-                onHistory={() => onOpenHistory(path)}
               />
-            ))}
-          </ul>
+            )}
+          />
         )}
         {status.local.programEdits.length > 0 && (
           <div className="flex items-center gap-2">
@@ -289,7 +307,7 @@ function ChangeRow({
 }) {
   const name = path.split("/").at(-1) ?? path;
   return (
-    <li className="group flex min-h-6 items-center gap-1.5 rounded-md pl-1 pr-0.5 text-xs hover:bg-bg-overlay">
+    <div className="flex items-center gap-1">
       <input
         type="checkbox"
         checked={selected}
@@ -300,53 +318,45 @@ function ChangeRow({
             : `Upload ${name}`
         }
       />
-      {conflict && (
-        <span
-          className="text-warning"
-          title="Selecting this file replaces the server version with your local version"
-        >
-          Keep mine
-        </span>
-      )}
-      <span
-        className={`w-3 shrink-0 text-center font-mono text-[10px] ${
-          badge === "M" ? "text-info" : "text-danger"
-        }`}
-      >
-        {badge}
-      </span>
-      <button
-        type="button"
-        onClick={onOpen}
-        disabled={!onOpen}
-        data-disabled-reason="This file has no view available"
-        title={path}
-        className="min-w-0 flex-1 cursor-pointer truncate text-left text-fg-muted transition-colors duration-150 hover:text-fg disabled:cursor-default"
-      >
-        {name}
-      </button>
-      {onPublish && (
-        <button
-          type="button"
-          onClick={onPublish}
-          title="Share a link"
-          aria-label={`Share a link to ${name}`}
-          data-testid="remote-publish"
-          className="grid size-5 shrink-0 cursor-pointer place-items-center rounded text-fg-faint opacity-0 transition-opacity duration-150 hover:text-fg group-hover:opacity-100 focus-visible:opacity-100"
-        >
-          <Link2 className="size-3" />
-        </button>
-      )}
-      <button
-        type="button"
-        onClick={onHistory}
-        title="History"
-        aria-label={`History of ${name}`}
-        className="grid size-5 shrink-0 cursor-pointer place-items-center rounded text-fg-faint opacity-0 transition-opacity duration-150 hover:text-fg group-hover:opacity-100 focus-visible:opacity-100"
-      >
-        <Clock3 className="size-3" />
-      </button>
-    </li>
+      <div className="min-w-0 flex-1">
+        <SidebarItemRow
+          itemId={path}
+          label={name}
+          title={path}
+          icon="File"
+          resource={Boolean(onOpen)}
+          badges={conflict ? [badge, "Keep mine"] : [badge]}
+          onOpen={() => onOpen?.()}
+          menu={[
+            { action: "history", label: `History of ${name}`, icon: "Clock3" },
+            ...(onPublish
+              ? [
+                  {
+                    action: "publish",
+                    label: `Share a link to ${name}`,
+                    icon: "Link2",
+                  },
+                ]
+              : []),
+          ]}
+          actions={[
+            { action: "history", label: `History of ${name}`, icon: "Clock3" },
+            ...(onPublish
+              ? [
+                  {
+                    action: "publish",
+                    label: `Share a link to ${name}`,
+                    icon: "Link2",
+                  },
+                ]
+              : []),
+          ]}
+          onAction={(entry) =>
+            entry.action === "history" ? onHistory() : onPublish?.()
+          }
+        />
+      </div>
+    </div>
   );
 }
 

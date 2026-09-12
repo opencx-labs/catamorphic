@@ -58,6 +58,64 @@ describe("DeploymentRuntimeService lifecycle", () => {
     expect(provider.deploymentRuntime?.ensureRuntime).not.toHaveBeenCalled();
   });
 
+  it.each(["upload", "install"])(
+    "destroys a new sandbox when %s fails",
+    async (failure) => {
+      const store = new FakeDeploymentRuntimeStore({ runtimes: [] });
+      const provider = createProvider({
+        deploymentRuntime: createRuntimeProvider({}),
+      });
+      vi.mocked(provider.createSandbox).mockResolvedValue({
+        id: "sandbox-new",
+        providerId: "sandbox-new",
+        sandboxType: "execution",
+        status: "started",
+      });
+      if (failure === "upload")
+        vi.mocked(provider.uploadFiles).mockRejectedValue(
+          new Error("Upload failed"),
+        );
+      else
+        vi.mocked(provider.executeCommand).mockResolvedValue({
+          exitCode: 1,
+          result: "Install failed",
+        });
+      const service = createService({ store, provider });
+      await expect(
+        service.ensure({
+          projectId: "project-1",
+          artifact: {
+            id: "artifact-new",
+            projectId: "project-1",
+            commitSha: "a".repeat(40),
+            artifactDigest: "b".repeat(64),
+            pluginDigest: "c".repeat(64),
+            transformVersion: EXECUTION_TRANSFORM_VERSION,
+            runtimeVersion: DEPLOYMENT_RUNTIME_VERSION,
+            status: "ready",
+            createdAt: old.toISOString(),
+            readyAt: old.toISOString(),
+            lastUsedAt: old.toISOString(),
+          },
+          files: { "package.json": "{}", "bun.lock": "locked" },
+          originalFiles: {},
+        }),
+      ).rejects.toThrow(
+        failure === "upload" ? "Upload failed" : "Install failed",
+      );
+      if (failure === "install")
+        expect(provider.executeCommand).toHaveBeenCalledWith(
+          "sandbox-new",
+          expect.stringContaining(
+            "bun install --frozen-lockfile --production --filter '!./apps/*'",
+          ),
+          expect.any(Object),
+        );
+      expect(provider.destroySandbox).toHaveBeenCalledWith("sandbox-new");
+      expect(provider.deploymentRuntime?.ensureRuntime).not.toHaveBeenCalled();
+    },
+  );
+
   it("restarts an idle retired runtime instead of rematerializing it", async () => {
     const store = new FakeDeploymentRuntimeStore({
       runtimes: [

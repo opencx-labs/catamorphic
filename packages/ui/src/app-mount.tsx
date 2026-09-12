@@ -1,4 +1,5 @@
 "use client";
+import type { AppCollections, AppContentState } from "@catamorphic/app";
 
 import {
   APP_PROTOCOL_VERSION,
@@ -32,6 +33,8 @@ const MAX_IN_FLIGHT_POLLS = 16;
 export interface AppMountProps {
   projectId: string;
   appName: string;
+  collections?: AppCollections;
+  onContentState?: (state: AppContentState) => void;
   /**
    * Host-provided context snapshot handed to the guest at mount. Re-mount
    * (change the `key`) when it changes; anything richer is one call away.
@@ -60,7 +63,9 @@ export interface AppMountProps {
   /** Presentation and visibility are host-owned; neither grants capabilities. */
   display?: AppDisplay;
   /** Fixed viewport height for compact slots; the guest scrolls internally. */
-  viewportHeight?: number;
+  viewportHeight?: number | "fill";
+  /** Reload only when a newer successful build is available. */
+  refreshIntervalMs?: number;
 }
 
 interface ViewStateReady {
@@ -104,10 +109,22 @@ export function AppMount({
   className,
   display = { mode: "full", visible: true },
   viewportHeight,
+  refreshIntervalMs,
+  collections,
+  onContentState,
 }: AppMountProps) {
   const { apiClient } = useCatamorphic();
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [view, setView] = useState<ViewState>({ state: "loading" });
+  useEffect(() => {
+    onContentState?.(
+      view.state === "ready"
+        ? "ready"
+        : view.state === "loading"
+          ? "loading"
+          : "error",
+    );
+  }, [view.state, onContentState]);
   const [height, setHeight] = useState(MIN_HEIGHT_PX);
   const inFlightCalls = useRef(0);
   const inFlightPolls = useRef(0);
@@ -116,9 +133,43 @@ export function AppMount({
   // The guest URL carries the mount-time theme (changing it would reload
   // the guest and lose its state); later switches arrive as messages.
   const initialTheme = useRef(theme).current;
-
+  const collectionSubscriptions = useRef(new Map<string, () => void>());
+  const collectionPublishers = useRef(
+    new Map<
+      string,
+      Parameters<NonNullable<AppCollections["subscribe"]>>[0]["publish"]
+    >(),
+  );
+  const collectionRequests = useRef(new Set<AbortController>());
+  const collectionVersion = view.state === "ready" ? view.versionId : undefined;
   useEffect(() => {
-    if (!theme || theme === initialTheme) return;
+    if (!collectionVersion) return;
+    return () => {
+      for (const dispose of collectionSubscriptions.current.values()) dispose();
+      collectionSubscriptions.current.clear();
+      collectionPublishers.current.clear();
+      for (const controller of collectionRequests.current) controller.abort();
+      collectionRequests.current.clear();
+    };
+  }, [collectionVersion]);
+  useEffect(() => {
+    for (const dispose of collectionSubscriptions.current.values()) dispose();
+    collectionSubscriptions.current.clear();
+    for (const controller of collectionRequests.current) controller.abort();
+    collectionRequests.current.clear();
+    for (const [source, publish] of collectionPublishers.current) {
+      try {
+        const dispose = collections?.subscribe?.({ source, publish });
+        if (dispose) collectionSubscriptions.current.set(source, dispose);
+      } catch {
+        /* Revoked grants are reported by the next read. */
+      }
+      publish({ type: "invalidate" });
+    }
+  }, [collections]);
+
+  const sendTheme = useCallback(() => {
+    if (!theme) return;
     frameRef.current?.contentWindow?.postMessage(
       {
         catamorphicApp: APP_PROTOCOL_VERSION,
@@ -127,41 +178,60 @@ export function AppMount({
       } satisfies HostToGuestMessage,
       "*",
     );
-  }, [theme, initialTheme]);
+  }, [theme]);
+  useEffect(sendTheme, [sendTheme]);
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      const response = await apiClient.GET(
-        "/api/projects/{projectId}/apps/{appName}/view-state",
-        {
-          params: {
-            path: { projectId, appName },
-            query: channel ? { channel } : undefined,
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = async () => {
+      try {
+        const response = await apiClient.GET(
+          "/api/projects/{projectId}/apps/{appName}/view-state",
+          {
+            params: {
+              path: { projectId, appName },
+              query: channel ? { channel } : undefined,
+            },
           },
-        },
-      );
-      if (cancelled) return;
-      const data = response.data;
-      if (!data) {
-        setView({ state: "not_found" });
-        return;
+        );
+        if (cancelled) return;
+        const data = response.data;
+        if (data?.state === "ready") {
+          setView((current) =>
+            current.state === "ready" && current.versionId === data.versionId
+              ? current
+              : data,
+          );
+        } else {
+          setView({
+            state:
+              data?.state === "not_published" ? "not_published" : "not_found",
+          });
+        }
+      } catch {
+        if (!cancelled)
+          setView((current) =>
+            current.state === "loading" ? { state: "not_found" } : current,
+          );
+      } finally {
+        if (!cancelled && refreshIntervalMs && display.visible)
+          timer = setTimeout(refresh, Math.max(1000, refreshIntervalMs));
       }
-      switch (data.state) {
-        case "ready":
-          setView(data);
-          return;
-        case "not_published":
-          setView({ state: "not_published" });
-          return;
-        default:
-          setView({ state: "not_found" });
-      }
-    })();
+    };
+    void refresh();
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
-  }, [apiClient, projectId, appName, channel]);
+  }, [
+    apiClient,
+    projectId,
+    appName,
+    channel,
+    refreshIntervalMs,
+    display.visible,
+  ]);
 
   const handleGuestMessage = useCallback(
     async (message: GuestToHostMessage) => {
@@ -174,6 +244,124 @@ export function AppMount({
         frame.contentWindow?.postMessage(payload, "*");
       };
 
+      if (message.kind === "content-state") {
+        if (
+          ["loading", "empty", "ready", "error", "unavailable"].includes(
+            message.state,
+          )
+        )
+          onContentState?.(message.state);
+        return;
+      }
+      if (message.kind === "collection") {
+        const respond = (ok: boolean, value?: unknown) =>
+          reply(
+            ok
+              ? {
+                  catamorphicApp: APP_PROTOCOL_VERSION,
+                  kind: "result",
+                  callId: message.callId,
+                  ok: true,
+                  value,
+                }
+              : {
+                  catamorphicApp: APP_PROTOCOL_VERSION,
+                  kind: "result",
+                  callId: message.callId,
+                  ok: false,
+                  error: {
+                    code: "denied",
+                    message:
+                      typeof value === "string"
+                        ? value
+                        : "Collection access denied",
+                  },
+                },
+          );
+        if (
+          !collections ||
+          typeof message.source !== "string" ||
+          message.source.length > 128 ||
+          JSON.stringify(message).length > MAX_INPUT_BYTES ||
+          collectionRequests.current.size >= MAX_IN_FLIGHT_POLLS
+        ) {
+          respond(false);
+          return;
+        }
+        const controller = new AbortController();
+        collectionRequests.current.add(controller);
+        const onAbort = () =>
+          respond(false, "Collection context changed; retry the request");
+        controller.signal.addEventListener("abort", onAbort, { once: true });
+        try {
+          if (message.operation === "read") {
+            if (
+              (message.parentId != null &&
+                typeof message.parentId !== "string") ||
+              (message.cursor !== undefined &&
+                typeof message.cursor !== "string")
+            )
+              throw new Error("Invalid collection page request");
+            const page = await collections.read({
+              source: message.source,
+              parentId: message.parentId,
+              cursor: message.cursor,
+              signal: controller.signal,
+            });
+            if (!controller.signal.aborted) respond(true, page);
+          } else if (message.operation === "action") {
+            if (
+              typeof message.itemId !== "string" ||
+              typeof message.action !== "string"
+            )
+              throw new Error("Action requires itemId and action");
+            await collections.execute({
+              source: message.source,
+              itemId: message.itemId,
+              action: message.action,
+              signal: controller.signal,
+            });
+            if (!controller.signal.aborted) respond(true);
+          } else if (message.operation === "subscribe") {
+            if (!collectionPublishers.current.has(message.source)) {
+              if (collectionPublishers.current.size >= 32)
+                throw new Error("Too many collection subscriptions");
+              const publish: Parameters<
+                NonNullable<AppCollections["subscribe"]>
+              >[0]["publish"] = (change) =>
+                reply({
+                  catamorphicApp: APP_PROTOCOL_VERSION,
+                  kind: "collection-change",
+                  source: message.source,
+                  change,
+                });
+              const dispose = collections.subscribe?.({
+                source: message.source,
+                publish,
+              });
+              collectionPublishers.current.set(message.source, publish);
+              if (dispose)
+                collectionSubscriptions.current.set(message.source, dispose);
+            }
+            respond(true);
+          } else if (message.operation === "unsubscribe") {
+            collectionSubscriptions.current.get(message.source)?.();
+            collectionSubscriptions.current.delete(message.source);
+            collectionPublishers.current.delete(message.source);
+            respond(true);
+          } else throw new Error("Unknown collection operation");
+        } catch (cause) {
+          if (!controller.signal.aborted)
+            respond(
+              false,
+              cause instanceof Error ? cause.message : String(cause),
+            );
+        } finally {
+          controller.signal.removeEventListener("abort", onAbort);
+          collectionRequests.current.delete(controller);
+        }
+        return;
+      }
       if (message.kind === "resize") {
         setHeight(
           Math.min(MAX_HEIGHT_PX, Math.max(MIN_HEIGHT_PX, message.height)),
@@ -258,6 +446,7 @@ export function AppMount({
               projectId,
               appName,
               channel,
+              versionId: view.versionId,
               runId: message.runId,
             });
           } finally {
@@ -285,7 +474,10 @@ export function AppMount({
       async function handleCall(
         message: Extract<GuestToHostMessage, { kind: "call" }>,
       ): Promise<void> {
-        const query = channel ? { channel } : undefined;
+        const query = {
+          channel,
+          versionId: view.state === "ready" ? view.versionId : undefined,
+        };
         // Input was JSON-validated above; the generated body type wants
         // the JsonValueInput shape.
         const body = { input: message.input } as never;
@@ -354,6 +546,7 @@ export function AppMount({
           projectId,
           appName,
           channel,
+          versionId: view.state === "ready" ? view.versionId : undefined,
           runId: settled.runId,
         });
         if (outcome.status === "completed") {
@@ -378,17 +571,17 @@ export function AppMount({
         }
       }
     },
-    [apiClient, projectId, appName, channel, view.state],
+    [apiClient, projectId, appName, channel, view, collections, onContentState],
   );
 
   const sendDisplay = useCallback(() => {
     const payload: HostToGuestMessage = {
       catamorphicApp: APP_PROTOCOL_VERSION,
       kind: "display",
-      display: { mode: display.mode, visible: display.visible },
+      display,
     };
     frameRef.current?.contentWindow?.postMessage(payload, "*");
-  }, [display.mode, display.visible]);
+  }, [display]);
   useEffect(sendDisplay, [sendDisplay]);
 
   // Hand the guest its context snapshot once it can receive messages.
@@ -401,8 +594,9 @@ export function AppMount({
       context,
     };
     frame.contentWindow.postMessage(payload, "*");
+    sendTheme();
     sendDisplay();
-  }, [context, sendDisplay]);
+  }, [context, sendTheme, sendDisplay]);
 
   useEffect(() => {
     const listener = (event: MessageEvent) => {
@@ -447,7 +641,10 @@ export function AppMount({
       style={{
         width: "100%",
         border: "none",
-        height: `${viewportHeight === undefined || !Number.isFinite(viewportHeight) ? height : Math.max(120, Math.min(MAX_HEIGHT_PX, viewportHeight))}px`,
+        height:
+          viewportHeight === "fill"
+            ? "100%"
+            : `${viewportHeight === undefined || !Number.isFinite(viewportHeight) ? height : Math.max(120, Math.min(MAX_HEIGHT_PX, viewportHeight))}px`,
       }}
     />
   );
@@ -547,6 +744,7 @@ interface AppRunAddress {
   appName: string;
   channel?: "published" | "dev";
   runId: string;
+  versionId?: string;
 }
 
 async function fetchRunSnapshot(
@@ -561,7 +759,7 @@ async function fetchRunSnapshot(
           appName: args.appName,
           runId: args.runId,
         },
-        query: args.channel ? { channel: args.channel } : undefined,
+        query: { channel: args.channel, versionId: args.versionId },
       },
     },
   );

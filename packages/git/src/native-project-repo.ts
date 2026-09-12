@@ -70,7 +70,11 @@ export class NativeProjectRepo extends ProjectRepoImpl {
     assertSafePath(filePath);
     const target = path.join(this.repoPath, filePath);
     const stat = await fs.lstat(target).catch((error: unknown) => {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        (error.code === "ENOENT" || error.code === "ENOTDIR")
+      )
         return null;
       throw error;
     });

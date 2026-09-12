@@ -1,16 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
-/**
- * Tool permissions end to end: an agent reaching for an MCP tool whose
- * policy says "ask" raises the consent modal in the front window; "Always
- * allow" answers the call AND writes an allow rule onto the connection's
- * policy (visible in the connectors modal's Permissions editor); Deny
- * answers deny. Driven through the e2e fake agent's "permission:" prompt,
- * which calls the real host prompt (bridge → renderer → modal).
- */
+/** Session consent is a durable question. Navigation and reload must preserve it. */
 
 let app: AppHandle;
+let projectId: string;
 
 beforeAll(async () => {
   app = await launchApp();
@@ -34,7 +28,9 @@ const helpers = `
       ?.querySelector('[data-composer-input]');
   const send = (text) => { const ta = composer(); setReactValue(ta, text); ta.closest('form').requestSubmit(); };
   const timeline = () => $$('[role="log"]').map((el) => el.textContent).join('\\n');
-  const modal = () => $('[data-testid="tool-permission-modal"]');
+  const modal = () => $('section[aria-label="The agent has a question"]');
+  const answer = label => { byText('section[aria-label="The agent has a question"] button', label).click(); };
+  const submitAnswer = () => byText('section[aria-label="The agent has a question"] button', 'Submit').click();
 `;
 const run = <T>(body: string) =>
   app.eval<T>(`(() => { ${helpers}\n${body} })()`);
@@ -65,6 +61,9 @@ describe("tool permissions", () => {
       timeoutMs: 60_000,
       label: "workspace ready",
     });
+    projectId = await app.eval<string>(
+      `(async()=>{ const {url}=await window.catamorphicDesktop.getServerState(); const projects=await fetch(url+'/api/projects').then(r=>r.json()); return projects.items.find(p=>p.name==='perm-e2e').id; })()`,
+    );
     await app.eval(
       `window.catamorphicDesktop.connectionsCreate({ name: 'fake', transport: 'http', url: 'http://127.0.0.1:1/mcp' })`,
     );
@@ -72,21 +71,65 @@ describe("tool permissions", () => {
     await runWait(`return !!composer();`, { label: "floating chat" });
   }, 180_000);
 
-  it("an 'ask' tool raises the consent modal; Always allow answers and writes the rule", async () => {
+  it("an approval survives tab switches and renderer reload; Always allow writes the rule", async () => {
     await run(`send('permission: fake/post_message'); return true;`);
     await runWait(
-      `const m = modal(); return !!m && m.textContent.includes('post_message') && m.textContent.includes('fake');`,
+      `const m = modal(); return !!m && m.textContent.includes('post message') && m.textContent.includes('fake');`,
       { timeoutMs: 30_000, label: "consent modal" },
     );
-    await run(
-      `modal().querySelector('button[aria-expanded]').click(); return true;`,
+    expect(
+      await run(`return !!$('[data-testid="tool-permission-modal"]');`),
+    ).toBe(false);
+    await run(`$('[aria-label="Open as tab"]').click(); return true;`);
+    await runWait(`return !!$('[data-point-key^="chat:"]');`);
+    const chatKey = await run<string>(
+      `return $('[data-point-key^="chat:"]').dataset.pointKey;`,
     );
-    await runWait(`return !!$('[data-testid="tool-permission-args"]');`, {
-      label: "arguments shown",
-    });
     await run(
-      `$('[data-testid="tool-permission-always"]').click(); return true;`,
+      `byText('[data-point-key] button', 'New Tab').click(); return true;`,
     );
+    await run(
+      `$('[data-point-key="'+${JSON.stringify(chatKey)}+'"]').querySelector('button').click(); return true;`,
+    );
+    await runWait(`return !!modal();`);
+    await app.waitFor(
+      `window.catamorphicDesktop.workspaceStateGet(${JSON.stringify(projectId)}).then(state => state?.chats?.some(chat => 'chat:'+chat.localId===${JSON.stringify(chatKey)} && chat.mode==='tab'))`,
+      { label: "chat tab persisted before reload" },
+    );
+    await app.reload();
+    await runWait(
+      `return !!modal() && modal().textContent.includes('post message');`,
+      { timeoutMs: 60000, label: "pending consent restored" },
+    );
+    await runWait(
+      `return !!$('[data-point-key="'+${JSON.stringify(chatKey)}+'"]');`,
+      { label: "chat tab restored" },
+    );
+    await app.eval(`window.catamorphicDesktop.devWindow('setSize',1300,1000)`);
+    await app.waitFor(
+      `!document.getAnimations().some(a => a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity)`,
+    );
+    expect(
+      await run(
+        `return $('[data-point-key="'+${JSON.stringify(chatKey)}+'"]').querySelectorAll('.animate-spin').length;`,
+      ),
+    ).toBe(0);
+    expect(
+      await run(
+        `return $('[data-testid="session-inspector-trigger"]').getAttribute('aria-label');`,
+      ),
+    ).toContain("Waiting for your answer");
+    expect(
+      await run(
+        `return !!$('[data-testid="session-inspector-trigger"] .animate-spin');`,
+      ),
+    ).toBe(false);
+    await app.screenshot("/tmp/catamorphic-durable-consent.png");
+    await run(`answer('Always allow'); return true;`);
+    await runWait(
+      `const button = byText('section[aria-label="The agent has a question"] button', 'Submit'); return !!button && !button.disabled;`,
+    );
+    await run(`submitAnswer(); return true;`);
     await runWait(
       `return timeline().includes('permission decision: allow (always)');`,
       {
@@ -102,10 +145,10 @@ describe("tool permissions", () => {
     ).toEqual({ post_message: "allow" });
   }, 60_000);
 
-  it("a remote client answers over HTTP; the modal withdraws", async () => {
+  it("another client answers the durable question; the originating chat resumes", async () => {
     await run(`send('permission: fake/upload_file'); return true;`);
     await runWait(
-      `return !!modal() && modal().textContent.includes('upload_file');`,
+      `return !!modal() && modal().textContent.includes('upload file');`,
       { timeoutMs: 30_000, label: "third consent modal" },
     );
     // Act as the companion app: find the pending ask through the embedded
@@ -122,16 +165,16 @@ describe("tool permissions", () => {
           ).then(r => r.json());
           for (const session of sessions.items) {
             const url = base + "/projects/" + project.id +
-              "/agent/sessions/" + session.id + "/permissions";
-            const pending = await fetch(url).then(r => r.ok ? r.json() : { permissions: [] });
-            const ask = pending.permissions.find(p => p.request.tool === "upload_file");
+              "/agent/sessions/" + session.id;
+            const pending = await fetch(url).then(r => r.ok ? r.json() : { questions: [] });
+            const ask = pending.questions?.find(p => p.questions?.[0]?.question.includes("upload file"));
             if (!ask) continue;
-            const posted = await fetch(url + "/" + ask.id, {
+            const posted = await fetch(url + "/questions/" + encodeURIComponent(ask.requestId) + "/answer", {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ decision: "allow" }),
+              body: JSON.stringify({ answer: "Allow once" }),
             });
-            return { ok: posted.ok, detail: "answered " + ask.id };
+            return { ok: posted.ok, detail: "answered " + ask.requestId };
           }
         }
         return { ok: false, detail: "no pending ask found over HTTP" };
@@ -147,15 +190,17 @@ describe("tool permissions", () => {
   it("Deny answers deny; the modal closes", async () => {
     await run(`send('permission: fake/delete_channel'); return true;`);
     await runWait(
-      `return !!modal() && modal().textContent.includes('delete_channel');`,
+      `return !!modal() && modal().textContent.includes('delete channel');`,
       {
         timeoutMs: 30_000,
         label: "second consent modal",
       },
     );
-    await run(
-      `$('[data-testid="tool-permission-deny"]').click(); return true;`,
+    await run(`answer('Deny'); return true;`);
+    await runWait(
+      `const button = byText('section[aria-label="The agent has a question"] button', 'Submit'); return !!button && !button.disabled;`,
     );
+    await run(`submitAnswer(); return true;`);
     await runWait(
       `return !modal() && timeline().includes('permission decision: deny');`,
       {
@@ -194,26 +239,48 @@ it("withdraws native elicitation on cancellation", async () => {
   );
 });
 
-it("remembers native app consent only after the user chooses the chat scope", async () => {
-  await run(`send('elicitation: app');`);
-  await runWait(
-    `return $('[data-testid="elicitation-modal"]')?.textContent.includes('Allow this app for this chat');`,
-  );
-  expect(
-    await run(
-      `return $('[data-testid="elicitation-modal"] input[type="checkbox"]').checked;`,
-    ),
-  ).toBe(false);
-  await runWait(
-    `return document.getAnimations().filter(animation => animation.effect?.getComputedTiming().iterations !== Infinity).every(animation => animation.playState === 'finished');`,
-  );
-  await app.screenshot("/tmp/codex-app-consent.png");
-  await run(
-    `$('[data-testid="elicitation-modal"] input[type="checkbox"]').click();`,
-  );
-  await run(`$('[data-testid="elicitation-modal"] form').requestSubmit();`);
-  await runWait(`return timeline().includes('app consent: accept,accept');`);
+it("remembers native app consent only after an explicit chat-scoped answer", async () => {
+  await run(`send('elicitation: app'); return true;`);
+  await runWait(`return modal()?.textContent.includes('Allow for this chat');`);
   expect(await run(`return !!$('[data-testid="elicitation-modal"]');`)).toBe(
     false,
+  );
+  await run(`answer('Allow for this chat'); return true;`);
+  await runWait(
+    `const button = byText('section[aria-label="The agent has a question"] button', 'Submit'); return !!button && !button.disabled;`,
+  );
+  await run(`submitAnswer(); return true;`);
+  await runWait(
+    `return timeline().includes('app consent: accept,accept') && !modal();`,
+  );
+});
+
+// This scenario captures the question panel, so it belongs in the visible suite.
+it("keeps working while questions are collapsed and consumes the answer in the same turn", async () => {
+  await run(`pressKey('n', { metaKey: true }); return true;`);
+  await runWait(`return !!$('[data-floating-chat] [data-composer-input]');`);
+  await run(`
+    const input = $('[data-floating-chat] [data-composer-input]');
+    setReactValue(input, 'ask a nonblocking question and keep working');
+    input.closest('form').requestSubmit(); return true;
+  `);
+  await runWait(
+    `return !!modal() && timeline().includes('continuing independent work');`,
+  );
+  await app.waitFor(
+    `!document.getAnimations().some(a => a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity)`,
+  );
+  await app.screenshot("/tmp/catamorphic-nonblocking-question.png");
+  await run(`$('button[aria-label="Answer later"]').click(); return true;`);
+  await runWait(`return !modal() && !!byText('button', 'Answer when ready');`);
+  await run(`byText('button', 'Answer when ready').click(); return true;`);
+  await runWait(`return !!modal();`);
+  await run(`answer('Orange'); return true;`);
+  await runWait(
+    `const submit = byText('section[aria-label="The agent has a question"] button', 'Submit'); if (!submit || submit.disabled) return false; submit.click(); return true;`,
+  );
+  await runWait(
+    `return [...document.querySelectorAll('[role="log"] article')].some(m => m.textContent.includes('Answer received during the same turn') && m.textContent.includes('Orange')) && !modal();`,
+    { timeoutMs: 30_000 },
   );
 });

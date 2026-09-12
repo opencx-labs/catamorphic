@@ -1,9 +1,16 @@
 import { GitPullRequest } from "lucide-react";
-import { useEffect, useState } from "react";
+import { type RefObject, useEffect, useState } from "react";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { desktopApi, type PullRequestSummary } from "../lib/desktop-api.js";
 import { useAppPreferences } from "../lib/use-app-preferences.js";
-import { OpenResourceButton } from "./open-resource-button.js";
+import type { PaletteItem } from "./command-palette.js";
+import {
+  useSidebarContent,
+  useSidebarContribution,
+  useSidebarRefresh,
+} from "./sidebar-contribution.js";
+import { SidebarItemRow } from "./sidebar-item-row.js";
+import { SidebarTree } from "./sidebar-tree.js";
 import type { WorkspaceTab } from "./workspace-tabs.js";
 
 /** The project PR inbox opens each review directly in the workspace. */
@@ -12,27 +19,28 @@ const REFRESH_MS = 60_000;
 
 export function PrsNav({
   projectId,
+  searchItems,
   onOpenDiff,
-  onEmptyChange,
 }: {
   projectId: string;
+  searchItems?: RefObject<() => Promise<PaletteItem[]>>;
   onOpenDiff: (tab: WorkspaceTab, mode?: OpenMode) => void;
   onOpenUrl: (url: string, mode: OpenMode) => void;
   /** Reports emptiness up so hide-when-empty sections can drop entirely. */
-  onEmptyChange?: (empty: boolean) => void;
 }) {
+  const visible = useSidebarContribution()?.visible ?? true;
   const { prefs, update, error: preferencesError } = useAppPreferences();
   const filter = prefs.prDefaultView;
   const setFilter = (prDefaultView: "all" | "for-you" | "created") =>
     void update({ prDefaultView });
-  const [search, setSearch] = useState("");
   const [prs, setPrs] = useState<PullRequestSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
-  const isEmpty = !error && (!prs || prs.length === 0);
-  useEffect(() => {
-    onEmptyChange?.(isEmpty);
-  }, [isEmpty, onEmptyChange]);
+  useSidebarRefresh(() => setRefresh((value) => value + 1));
+  const isEmpty = !error && prs !== null && prs.length === 0;
+  useSidebarContent(
+    error ? "error" : prs === null ? "loading" : isEmpty ? "empty" : "ready",
+  );
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reconnect and Retry invalidate remote data
   useEffect(() => {
@@ -60,7 +68,13 @@ export function PrsNav({
         });
     };
     load();
-    const timer = window.setInterval(load, REFRESH_MS);
+    if (!visible)
+      return () => {
+        cancelled = true;
+      };
+    const timer = window.setInterval(() => {
+      if (!document.hidden) load();
+    }, REFRESH_MS);
     window.addEventListener("focus", load);
     const unsubscribe = desktopApi.onGitChanged((change) => {
       if (change.projectId === projectId) load();
@@ -71,8 +85,40 @@ export function PrsNav({
       window.removeEventListener("focus", load);
       unsubscribe();
     };
-  }, [projectId, refresh, prefs.githubCliEnabled]);
+  }, [projectId, refresh, prefs.githubCliEnabled, visible]);
 
+  const inScope = (items: PullRequestSummary[]) =>
+    items.filter(
+      (pr) =>
+        filter === "all" ||
+        (filter === "created"
+          ? pr.author === pr.viewerLogin
+          : (pr.reviewRequestedForViewer ??
+            pr.requestedReviewers?.includes(pr.viewerLogin ?? ""))),
+    );
+  const filtered = inScope(prs ?? []);
+  const openReview = (pr: PullRequestSummary, mode?: OpenMode) =>
+    onOpenDiff(
+      {
+        kind: "diff",
+        name: `review:${pr.number}`,
+        label: `#${pr.number} ${pr.title}`,
+        projectId,
+        source: { type: "review", prNumber: pr.number },
+      },
+      mode,
+    );
+  if (searchItems)
+    searchItems.current = async () =>
+      inScope(await desktopApi.prList(projectId)).map((pr) => ({
+        id: `pr:${pr.number}`,
+        icon: GitPullRequest,
+        label: `#${pr.number} ${pr.title}`,
+        detail: pr.author,
+        keywords: [],
+        kind: "navigate",
+        run: (mode) => openReview(pr, mode),
+      }));
   if (
     error?.includes("[github-cli-required]") ||
     error?.includes("[github-cli-disabled]")
@@ -131,17 +177,6 @@ export function PrsNav({
   if (prs.length === 0) {
     return <p className="sidebar-empty-state">No open pull requests.</p>;
   }
-  const filtered = prs.filter(
-    (pr) =>
-      (filter === "all" ||
-        (filter === "created"
-          ? pr.author === pr.viewerLogin
-          : (pr.reviewRequestedForViewer ??
-            pr.requestedReviewers?.includes(pr.viewerLogin ?? "")))) &&
-      `${pr.number} ${pr.title} ${pr.author}`
-        .toLowerCase()
-        .includes(search.toLowerCase()),
-  );
   return (
     <div className="flex flex-col gap-2">
       {preferencesError && (
@@ -166,13 +201,6 @@ export function PrsNav({
           </button>
         ))}
       </fieldset>
-      <input
-        aria-label="Find pull requests"
-        placeholder="Find pull requests…"
-        value={search}
-        onChange={(event) => setSearch(event.target.value)}
-        className="field mx-2 min-w-0 rounded-md px-2 py-1 text-xs"
-      />
       {filter === "for-you" &&
         prs.some((pr) => pr.reviewRequestsUnavailable) && (
           <p role="status" className="px-2 text-xs text-warning">
@@ -186,43 +214,23 @@ export function PrsNav({
             : "No matching pull requests."}
         </p>
       )}
-      <ul
-        // biome-ignore lint/a11y/noRedundantRoles: Preserve list semantics when CSS removes markers.
-        role="list"
-        className="flex flex-col gap-1 px-1"
-      >
-        {filtered.map((pr) => (
-          <li key={pr.number}>
-            <OpenResourceButton
-              aria-label={`Open review #${pr.number}: ${pr.title}`}
-              onOpen={(mode) =>
-                onOpenDiff(
-                  {
-                    kind: "diff",
-                    name: `review:${pr.number}`,
-                    label: `#${pr.number} ${pr.title}`,
-                    projectId,
-                    source: { type: "review", prNumber: pr.number },
-                  },
-                  mode,
-                )
-              }
-              className="flex w-full min-w-0 items-start gap-2 rounded-md px-2 py-2 text-left hover:bg-bg-overlay"
-            >
-              <GitPullRequest className="mt-0.5 size-4 shrink-0 text-fg-muted" />
-              <div className="min-w-0 flex-1">
-                <p className="line-clamp-2 text-xs font-medium text-fg">
-                  {pr.title}
-                </p>
-                <p className="mt-1 truncate text-[11px] text-fg-muted">
-                  #{pr.number} · {pr.author}
-                  {pr.draft ? " · Draft" : ""}
-                </p>
-              </div>
-            </OpenResourceButton>
-          </li>
-        ))}
-      </ul>
+      <SidebarTree
+        items={filtered.map((pr) => ({ ...pr, id: String(pr.number) }))}
+        label="Pull requests"
+        rowHeight={40}
+        renderItem={(pr) => (
+          <SidebarItemRow
+            itemId={pr.id}
+            label={pr.title}
+            description={`#${pr.number} · ${pr.author}`}
+            icon="GitPullRequest"
+            badges={pr.draft ? ["Draft"] : undefined}
+            resource
+            onOpen={(mode) => openReview(pr, mode)}
+            onAction={() => {}}
+          />
+        )}
+      />
     </div>
   );
 }

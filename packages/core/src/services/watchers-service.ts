@@ -1,9 +1,7 @@
-import { randomUUID } from "node:crypto";
 import type { DB, Json } from "@catamorphic/db";
-import { type ProjectManager, push } from "@catamorphic/git";
+import type { ProjectManager } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import { parseProject } from "@catamorphic/parser";
-import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
+
 import { type Kysely, type Selectable, sql } from "kysely";
 import type { Identity } from "../identity.js";
 import type { AgentSessionsService } from "./agent-sessions-service.js";
@@ -11,9 +9,9 @@ import type { GithubService } from "./github-service.js";
 import type { ProjectEventMonitorsService } from "./project-event-monitors-service.js";
 import type { ProjectEventsService } from "./project-events-service.js";
 import type { RunsService } from "./runs-service.js";
+import { SessionArtifactsService } from "./session-artifacts-service.js";
 import type { TriggersService } from "./triggers-service.js";
 import type { WorkflowEnablementsService } from "./workflow-enablements-service.js";
-import { WORKFLOW_READ_OPTIONS } from "./workflow-source-files.js";
 
 type WatcherRow = Selectable<DB["watchers"]>;
 
@@ -37,6 +35,7 @@ export interface Watcher {
 }
 
 interface WatchersDeps {
+  artifacts?: SessionArtifactsService;
   projectManager: ProjectManager;
   runs: RunsService;
   triggers: TriggersService;
@@ -47,17 +46,17 @@ interface WatchersDeps {
   github?: GithubService;
 }
 
-const WATCHER_AUTHOR = {
-  name: "Catamorphic Watcher",
-  email: "watcher@catamorphic.dev",
-};
 const tracer = getTracer("@catamorphic/core");
 
 export class WatchersService {
   constructor(
     private readonly db: Kysely<DB>,
     private readonly deps: WatchersDeps,
-  ) {}
+  ) {
+    this.artifacts =
+      deps.artifacts ?? new SessionArtifactsService(db, deps.projectManager);
+  }
+  private readonly artifacts: SessionArtifactsService;
 
   async create(input: {
     identity: Identity;
@@ -179,93 +178,20 @@ export class WatchersService {
       .executeTakeFirstOrThrow();
     if (session.status !== "active")
       throw new Error("Cannot create a watcher for a closed session");
-    const watcherId = randomUUID();
-    const sourcePath = `workflows/src/watchers/${watcherId}.ts`;
-    const remoteBranch = `catamorphic/watchers/${watcherId}`;
+    const source = await this.artifacts.create({
+      identity: input.identity,
+      projectId: input.projectId,
+      sessionId: input.sessionId,
+      kind: "workflow",
+      name: input.workflowName,
+      source: input.source,
+    });
+    const watcherId = source.id;
+    const sourcePath = source.sourcePath;
+    const remoteBranch = source.remoteBranch;
+    const commitSha = source.commitSha;
     let enablementId: string | undefined;
     try {
-      const repo = await this.deps.projectManager.openEphemeral({
-        tenantId: input.identity.tenantId,
-        projectId: input.projectId,
-      });
-      let commitSha: string;
-      try {
-        await repo.writeFile(sourcePath, input.source);
-        const files = await repo.readAllFiles(WORKFLOW_READ_OPTIONS);
-        // General-purpose projects need no workspace until they use workflows.
-        // Keep this runtime prerequisite on the temporary revision only.
-        const paths = [sourcePath];
-        if (
-          !("package.json" in files) &&
-          !("workflows/package.json" in files)
-        ) {
-          const manifest = JSON.stringify(
-            {
-              private: true,
-              type: "module",
-              dependencies: {
-                "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION,
-              },
-            },
-            null,
-            2,
-          );
-          await repo.writeFile("package.json", manifest);
-          paths.push("package.json");
-        }
-        const parsed = parseProject(files);
-        const parseErrors = parsed.errors.map((error) =>
-          error.file ? `${error.file}: ${error.message}` : error.message,
-        );
-        if (
-          !parsed.workflows.some(
-            (workflow) =>
-              workflow.functionName === input.workflowName &&
-              workflow.filePath === sourcePath,
-          )
-        ) {
-          parseErrors.push(
-            `Watcher source must export workflow '${input.workflowName}'`,
-          );
-        }
-        if (
-          parsed.workflows.some(
-            (workflow) =>
-              workflow.functionName === input.workflowName &&
-              workflow.filePath !== sourcePath,
-          )
-        ) {
-          parseErrors.push(
-            `Workflow name '${input.workflowName}' already exists in committed project source`,
-          );
-        }
-        if (parseErrors.length > 0) {
-          throw new Error(
-            `Invalid watcher workflow:\n${parseErrors.join("\n")}`,
-          );
-        }
-        commitSha = await repo.commit(
-          `Create watcher ${watcherId}`,
-          WATCHER_AUTHOR,
-          {
-            paths,
-          },
-        );
-        const remote = this.deps.projectManager.remoteBackend;
-        if (!remote)
-          throw new Error("Watchers require durable project storage");
-        await push({
-          dev: repo,
-          remote,
-          tenantId: input.identity.tenantId,
-          projectId: input.projectId,
-          remoteBranch,
-          localSha: commitSha,
-        });
-      } finally {
-        await repo.dispose();
-      }
-
       const bindings = await this.deps.triggers.listAtCommit({
         identity: input.identity,
         projectId: input.projectId,
@@ -353,11 +279,11 @@ export class WatchersService {
           identity: input.identity,
           enablementId,
         });
-      await this.removeRef(
-        input.identity.tenantId,
-        input.projectId,
-        remoteBranch,
-      );
+      await this.artifacts.discard({
+        identity: input.identity,
+        projectId: input.projectId,
+        artifactId: watcherId,
+      });
       throw error;
     }
   }
@@ -432,78 +358,39 @@ export class WatchersService {
     return result.numUpdatedRows === 1n;
   }
 
-  private async removeRef(
-    tenantId: string,
-    projectId: string,
-    remoteBranch: string,
-  ): Promise<void> {
-    const remote = this.deps.projectManager.remoteBackend;
-    if (!remote) throw new Error("Watcher storage is unavailable");
-    await remote.withOrigin(tenantId, projectId, (origin) =>
-      origin.deleteRef({ ref: `refs/heads/${remoteBranch}` }),
-    );
-  }
-
-  /** A queued or running immutable run still needs the published ref. */
+  /** Source retirement belongs to the shared session artifact lifecycle. */
   private async cleanupRetired(): Promise<void> {
-    const rows = await this.db
+    const discarded = await this.db
       .selectFrom("watchers")
+      .innerJoin("session_artifacts", "session_artifacts.id", "watchers.id")
       .innerJoin("projects", "projects.id", "watchers.project_id")
+      .where("session_artifacts.status", "=", "discarded")
+      .where("watchers.status", "in", ["active", "paused"])
       .select([
         "watchers.id",
-        "watchers.project_id",
-        "watchers.remote_branch",
+        "watchers.workflow_enablement_id",
+        "watchers.owner_identity",
+        "watchers.owner_external_user_id",
         "projects.tenant_id",
       ])
-      .where("watchers.status", "in", ["stopped", "expired"])
-      .where("watchers.ref_deleted_at", "is", null)
-      .where(({ not, exists, selectFrom }) =>
-        not(
-          exists(
-            selectFrom("workflow_runs as run")
-              .select("run.id")
-              .whereRef("run.project_id", "=", "watchers.project_id")
-              .where("run.status", "not in", [
-                "completed",
-                "failed",
-                "canceled",
-              ])
-              .where(({ or, eb, exists, selectFrom }) =>
-                or([
-                  eb(
-                    "run.workflow_enablement_id",
-                    "=",
-                    eb.ref("watchers.workflow_enablement_id"),
-                  ),
-                  exists(
-                    selectFrom("watcher_runs as invocation")
-                      .select("invocation.run_id")
-                      .whereRef("invocation.watcher_id", "=", "watchers.id")
-                      .whereRef("invocation.run_id", "=", "run.id"),
-                  ),
-                ]),
-              ),
-          ),
-        ),
-      )
-      .orderBy("watchers.updated_at")
-      .limit(50)
       .execute();
-    for (const row of rows) {
-      try {
-        await this.removeRef(row.tenant_id, row.project_id, row.remote_branch);
-        await this.db
-          .updateTable("watchers")
-          .set({ ref_deleted_at: new Date(), updated_at: new Date() })
-          .where("id", "=", row.id)
-          .execute();
-      } catch (error) {
-        await this.recordFailure(
-          row.id,
-          error instanceof Error ? error.message : String(error),
-        );
-      }
+    for (const row of discarded) {
+      if (row.workflow_enablement_id)
+        await this.deps.workflowEnablements.disable({
+          identity: persistedIdentity(
+            row.owner_identity,
+            row.tenant_id,
+            row.owner_external_user_id,
+          ),
+          enablementId: row.workflow_enablement_id,
+        });
+      await this.db
+        .updateTable("watchers")
+        .set({ status: "stopped", updated_at: new Date() })
+        .where("id", "=", row.id)
+        .execute();
     }
+    await this.artifacts.cleanup();
   }
 
   /** Stop every Watcher owned by a session tree before it is archived. */

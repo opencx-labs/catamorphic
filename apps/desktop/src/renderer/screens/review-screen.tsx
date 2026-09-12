@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CODE_THEMES } from "../../shared/app-prefs.js";
 import type { PrDetails } from "../../shared/pr-details.js";
 import { ActionSearchInput } from "../components/action-search-input.js";
+import { ReviewNavigation } from "../components/catamorphic/code-review.js";
 import { CodeDiff } from "../components/code-diff.js";
 import { ReviewFileTree } from "../components/review-file-tree.js";
 import { ReviewGuideDocument } from "../components/review-guide-document.js";
@@ -27,9 +28,11 @@ import { useAppPreferences } from "../lib/use-app-preferences.js";
 export function ReviewScreen({
   projectId,
   number,
+  onOpenArtifact,
 }: {
   projectId: string;
   number: number;
+  onOpenArtifact?: (target: string, title: string) => void;
 }) {
   const reviewRef = useRef<HTMLElement>(null);
   const [details, setDetails] = useState<PrDetails | null>(null);
@@ -259,33 +262,13 @@ export function ReviewScreen({
         </p>
       )}
       <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-1">
-        <nav
-          aria-label="Review view"
-          className="flex min-w-0 items-center gap-1 overflow-x-auto @max-[700px]/review:w-full"
-        >
-          {(["overview", "guide", "diff", "discussion"] as const).map(
-            (value) => (
-              <button
-                key={value}
-                type="button"
-                aria-current={view === value ? "page" : undefined}
-                onClick={() => {
-                  setDiscussionPath(undefined);
-                  setView(value);
-                }}
-                className={`rounded-md px-3 py-1 text-xs ${view === value ? "bg-bg-overlay text-fg" : "text-fg-muted hover:text-fg"}`}
-              >
-                {value === "overview"
-                  ? "Overview"
-                  : value === "guide"
-                    ? "Guide"
-                    : value === "diff"
-                      ? "Changes"
-                      : "Discussion"}
-              </button>
-            ),
-          )}
-        </nav>
+        <ReviewNavigation
+          value={view}
+          onChange={(value) => {
+            setDiscussionPath(undefined);
+            setView(value);
+          }}
+        />
         <div className="min-w-0 flex-1" />
         {view === "diff" && (
           <button
@@ -516,8 +499,8 @@ export function ReviewScreen({
               title={pr?.title ?? ""}
               body={pr?.body ?? ""}
               files={files}
-              revision={Object.values(fingerprints).join(":")}
-              onOpenFile={openFile}
+              revision={pr?.headSha ?? Object.values(fingerprints).join(":")}
+              onOpenArtifact={onOpenArtifact}
             />
             <section>
               <div className="mb-2 flex items-center justify-between gap-2">
