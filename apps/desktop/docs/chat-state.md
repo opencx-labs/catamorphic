@@ -43,7 +43,9 @@ keeps it open. Native media controls never autoplay and stop on dismissal.
 
 Desktop resolves file content on demand through `main/file-preview.ts`. Relative
 references resolve against the owning chat's project. Images, audio and video are
-limited to 16 MiB; text/code previews read at most 16 KiB and render as plain text,
+limited to 16 MiB; text/code previews read at most 16 KiB. Markdown files
+(`.md`, `.markdown`, or Markdown attachments) render as formatted Markdown with
+GFM tables, lists and code blocks. Other text/code renders as plain text,
 including HTML. PDF and office document thumbnails use the OS thumbnail provider
 on macOS/Windows with a deadline and size limit. Missing, corrupt, oversized or
 unsupported files keep their metadata and an explicit fallback. Inline document
@@ -78,3 +80,68 @@ questions stay answerable while work continues and after the turn finishes.
 Collapsing a question preserves its draft. The existing inbox delivers answers to
 the current harness or starts a continuation if the turn has already ended.
 See ADR 0122 and the question schemas in `@catamorphic/sandbox`.
+
+## Consent belongs to the conversation
+
+Session tool approvals and native app-access consent are durable blocking agent
+questions, with concise action, reason and explicit allow/deny choices. Do not
+surface them as global alert dialogs or store their only copy in a mounted tab.
+Navigation, minimizing, project switching and renderer reload must preserve the
+request and its waiting indicator. Answer delivery is keyed to its initiating
+session and request. Only an exact allow response grants access; ambiguous answers,
+cancellation and late responses do not. Remembered app access is limited to the
+same native session, app and risk level.
+
+Withdraw a pending blocking request when its native call ends or is interrupted.
+Do not leave an unanswerable prompt or a spinning tab. Read-only capability
+discovery through host-authorized, session-scoped MCP endpoints needs no duplicate
+native consent. External tool policies and service authorization still apply.
+Connector forms and sign-in requests retain their typed elicitation contract.
+
+Model and reasoning controls share the same inspector in floating and tabbed
+chats. Before first send, store overrides on the draft and pass them into lazy
+session creation. Do not mutate agent defaults from a conversation picker.
+Existing sessions keep their overrides in core. Busy and unsupported controls
+carry an explicit disabled reason; close the inspector when opening the picker.
+
+Markdown link components must keep stable React identity when chat state or host
+callbacks change. Pass fresh callbacks through context; do not define a new
+anchor component inside each render. Replacing anchors drops keyboard focus and
+closes resource previews even when the visible reply has not changed. Keep the
+registry source and installed desktop/PWA copies aligned.
+
+
+### Unified resource inspection
+
+Use `ResourceInspector` for hover/focus behavior and `InspectorPortal` for every
+rich preview's shell, positioning, motion and dismissal. Composer attachments,
+surface chips (including expanded group members), response links and sidebar
+previews use these primitives. Do not add per-surface hover timers or standalone
+preview modals. A preview opens on keyboard focus, stays open while the pointer
+moves into it, and dismisses on Escape without opening the resource.
+
+Use the installable `ResourcePreviewContent` for bounded file/Markdown/media and
+resource summaries. Keep Markdown's default URL sanitization and raw HTML disabled;
+embedded images and links in previews are inert so hovering never navigates or
+loads remote content. Preserve filenames, locations, truncation and retry states.
+Surface chips carry host-resolved file paths/URLs when available, so they preview
+the same content as a response link to that resource. Terminal previews read a
+bounded recent-output snapshot through the existing terminal buffer API and the
+shared terminal-text sanitizer. Workflow and app previews use catalog metadata;
+hovering never executes a workflow or mounts an app.
+
+Crowded surface groups use the plural type as the label: Terminals, Apps,
+Workflows, Files, Pages, Chats, Subagents, Watchers, or App views. Show the count
+separately. Clicking the group discloses every member; each member retains its
+preview and normal open/remove actions. Never label a group with one member's
+name or silently hide members behind a count.
+
+Agent-created terminal chips use the command as their initial name so grouped
+terminals stay distinguishable. Response links to known workspace surfaces use
+the same preview data as their composer chips; browser tab attachments use the
+shared page preview. Keep opening behavior separate from inspection.
+
+Native session ownership conflicts must explain which client to close and retain
+manual retry. Do not automatically fork history, steal a writer lock, or present
+this as an authentication failure. Local-auth Codex sessions can also be opened
+by the Codex desktop app, which then owns the native writer lock.

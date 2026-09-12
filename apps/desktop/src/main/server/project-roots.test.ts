@@ -68,3 +68,29 @@ it("registers before creation, deduplicates aliases and keeps borrowed files aft
     await fs.rm(temporary, { recursive: true, force: true });
   }
 });
+
+it("relocates only projects inside the copied development profile", async () => {
+  const database = new PGlite();
+  try {
+    const store = new ProjectRootsStore(database);
+    await store.init();
+    const internal = crypto.randomUUID();
+    const external = crypto.randomUUID();
+    const neighbor = crypto.randomUUID();
+    await store.set(internal, "/tmp/old/desktop/Catamorphic/project");
+    await store.set(external, "/Users/test/my-project");
+    await store.set(neighbor, "/tmp/old/desktop-other/project");
+    const reopened = new ProjectRootsStore(database);
+    await reopened.init({
+      from: "/tmp/old/desktop",
+      to: "/Users/test/.catamorphic/dev/desktop",
+    });
+    expect(reopened.getSync(internal)).toBe(
+      "/Users/test/.catamorphic/dev/desktop/Catamorphic/project",
+    );
+    expect(reopened.getSync(external)).toBe("/Users/test/my-project");
+    expect(reopened.getSync(neighbor)).toBe("/tmp/old/desktop-other/project");
+  } finally {
+    await database.close();
+  }
+});

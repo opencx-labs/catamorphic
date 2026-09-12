@@ -22,10 +22,16 @@ import type { TerminalMacro } from "../shared/terminal-macros.js";
 import { BookmarksStore } from "./bookmarks.js";
 import { BrowserHistoryStore } from "./browser-history.js";
 import {
+  BROWSER_IMPORTERS,
   listImportableBrowsers,
   readBrowserBookmarks,
 } from "./browser-import/index.js";
 import { parsePasswordCsv } from "./browser-import/password-csv.js";
+import {
+  importBrowserPasswords,
+  passwordImportSupport,
+  readBrowserKey,
+} from "./browser-import/password-native.js";
 import { PasswordVault } from "./browser-vault.js";
 import type { WindowProfileRegistry } from "./index.js";
 import type { ProfileConfigManager } from "./profile-config.js";
@@ -924,6 +930,85 @@ export function registerBrowserSupport(
   // Detection + parsing lives in ./browser-import (pure, per-browser).
   // Imported bookmarks land in a profile's bookmark library; a source profile
   // can also become a brand-new Catamorphic profile.
+  const passwordHelperPath = app.isPackaged
+    ? path.join(process.resourcesPath, "..", "MacOS", "browser-keychain")
+    : path.join(
+        app.getAppPath(),
+        "native",
+        "browser-import",
+        "bin",
+        "browser-keychain",
+      );
+  const nativeImportSupport = () =>
+    passwordImportSupport({ helperPath: passwordHelperPath });
+  let importingNativePasswords = false;
+  ipcMain.handle("catamorphic:browser-import-support", () =>
+    nativeImportSupport(),
+  );
+  ipcMain.handle(
+    "catamorphic:browser-import-native-passwords",
+    async (event, input: unknown) => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (!window || event.senderFrame !== event.sender.mainFrame)
+        throw new Error("Password imports must start in profile settings.");
+      const support = nativeImportSupport();
+      if (!support.available)
+        throw new Error(support.reason ?? "Password import is unavailable.");
+      if (importingNativePasswords)
+        throw new Error("A password import is already running.");
+      if (
+        !input ||
+        typeof input !== "object" ||
+        !("browserId" in input) ||
+        !("profileId" in input) ||
+        typeof input.browserId !== "string" ||
+        typeof input.profileId !== "string"
+      )
+        throw new Error("Choose a browser profile to import.");
+      const importer = BROWSER_IMPORTERS.find(
+        ({ id }) => id === input.browserId,
+      );
+      const detected = importer?.detect();
+      if (!detected?.profiles.some(({ id }) => id === input.profileId))
+        throw new Error(
+          "The browser profile is no longer available. Scan again.",
+        );
+      const source = importer?.passwordSource?.(input.profileId);
+      if (!source)
+        throw new Error(
+          "Direct password import is unavailable for this browser profile. Use a password CSV instead.",
+        );
+      const profileId = windows.profileFor(event.sender);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      event.sender.once("destroyed", abort);
+      importingNativePasswords = true;
+      try {
+        const result = await importBrowserPasswords({
+          source,
+          existing: await vault.list(profileId),
+          readKey: () =>
+            readBrowserKey({
+              helperPath: passwordHelperPath,
+              source,
+              signal: controller.signal,
+            }),
+          save: async (credentials) => {
+            if (controller.signal.aborted)
+              throw new Error("Password import was cancelled.");
+            return vault.importMissing({ profileId, credentials });
+          },
+        });
+        if (result.imported) vaultChanged(profileId);
+        return result;
+      } finally {
+        importingNativePasswords = false;
+        if (!event.sender.isDestroyed())
+          event.sender.removeListener("destroyed", abort);
+      }
+    },
+  );
+
   ipcMain.handle("catamorphic:browser-import-list", () =>
     listImportableBrowsers(),
   );

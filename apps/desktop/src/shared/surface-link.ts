@@ -2,7 +2,7 @@
 export type SurfaceLink =
   | { kind: "browser"; url: string }
   | { kind: "file"; path: string; line?: number; column?: number }
-  | { kind: "workflow" | "app"; name: string }
+  | { kind: "workflow" | "app" | "artifact"; name: string }
   | { kind: "tab"; key: string };
 
 export function parseSurfaceLink(value: string): SurfaceLink | null {
@@ -12,12 +12,12 @@ export function parseSurfaceLink(value: string): SurfaceLink | null {
     if (/^https?:\/\//i.test(href)) {
       return { kind: "browser", url: new URL(href).href };
     }
-    const resource = /^(workflow|app):(.+)$/i.exec(href);
+    const resource = /^(workflow|app|artifact):(.+)$/i.exec(href);
     if (resource) {
       const kind = resource[1]?.toLowerCase();
       const name = decodeURIComponent(resource[2] ?? "");
       if (
-        (kind === "workflow" || kind === "app") &&
+        (kind === "workflow" || kind === "app" || kind === "artifact") &&
         name &&
         !name.startsWith("//")
       ) {

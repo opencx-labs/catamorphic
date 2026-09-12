@@ -486,6 +486,7 @@ export class RunCoordinator {
             }),
           ),
           deployment_artifact_id: parent.deployment_artifact_id,
+          session_artifact_id: parent.session_artifact_id,
           external_user_id: parent.external_user_id,
           caller_scope:
             parent.caller_scope === null

@@ -82,7 +82,7 @@ import {
   createPaletteIndex,
   PALETTE_RESULT_LIMIT,
 } from "../lib/palette-search.js";
-import { useProjectSkills } from "../lib/skills.js";
+import { skillsForAgent, useProjectSkills } from "../lib/skills.js";
 import { NEW_WORKFLOW_PROMPT } from "../lib/workflow-authoring.js";
 import { useApps } from "../screens/app-screen.js";
 import { resolveInput } from "../screens/browser-screen.js";
@@ -273,7 +273,7 @@ const EFFORT_LEVELS: Array<{
   },
 ];
 
-interface PaletteItem {
+export interface PaletteItem {
   id: string;
   icon: LucideIcon;
   iconNode?: ReactNode;
@@ -326,8 +326,13 @@ const LIST_MAX_HEIGHT = 350;
  * mode as a chip; the input then only feeds that mode. Backspace on empty
  * input pops the chip (cmdk convention).
  */
+export type PaletteSearchRequest = { nonce: string } & (
+  | { mode: "files" | "content" }
+  | { mode: "section"; label: string; load: () => Promise<PaletteItem[]> }
+);
+
 export interface PaletteMode {
-  id: "agent" | "web" | "settings" | "files" | "content";
+  id: "agent" | "web" | "settings" | "files" | "content" | "section";
   /** Typed trigger, matched with or without the leading @. */
   trigger: string;
   /** Alternate typed names that commit the same mode (e.g. "chat"). */
@@ -606,7 +611,7 @@ export function CommandPalette({
   onHighlightTarget?: (target: "chat" | "close" | null) => void;
   /** Overlay only: open straight into a picker (Cmd+P agent commands). */
   pickerRequest?: { kind: PaletteInPicker; nonce: string } | null;
-  searchRequest?: { mode: "files" | "content"; nonce: string } | null;
+  searchRequest?: PaletteSearchRequest | null;
   /** Project policy (ADR 0062): hide the incognito command when false. */
   incognitoAllowed?: boolean;
 }) {
@@ -638,6 +643,37 @@ export function CommandPalette({
     [],
   );
   const [mode, setMode] = useState<PaletteMode | null>(null);
+  const [sectionItems, setSectionItems] = useState<PaletteItem[]>([]);
+  const [sectionError, setSectionError] = useState<string | null>(null);
+  const [sectionLoading, setSectionLoading] = useState(false);
+  const [sectionRetry, setSectionRetry] = useState(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: retry explicitly reloads the same scoped source
+  useEffect(() => {
+    if (!open || searchRequest?.mode !== "section") return;
+    let active = true;
+    setSectionItems([]);
+    setSectionError(null);
+    setSectionLoading(true);
+    void searchRequest
+      .load()
+      .then((items) => {
+        if (active) setSectionItems(items);
+      })
+      .catch((error: unknown) => {
+        if (active)
+          setSectionError(
+            error instanceof Error
+              ? error.message
+              : "Could not load this section.",
+          );
+      })
+      .finally(() => {
+        if (active) setSectionLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [open, searchRequest, sectionRetry]);
   const [fileSearch, setFileSearch] = useState<FileSearchResult | null>(null);
   const [fileSearchError, setFileSearchError] = useState<string | null>(null);
   useEffect(() => {
@@ -830,12 +866,31 @@ export function CommandPalette({
     };
     if (open) {
       reset();
-      const frame = requestAnimationFrame(() => inputRef.current?.focus());
-      return () => cancelAnimationFrame(frame);
+      return;
     }
     const timer = setTimeout(reset, 250);
     return () => clearTimeout(timer);
   }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const frame = requestAnimationFrame(() => inputRef.current?.focus());
+    const cancel = () => cancelAnimationFrame(frame);
+    // The tab can finish mounting behind a newly opened chat. Once another
+    // interaction owns focus, this delayed frame must not take it back.
+    // Overlays intentionally claim focus as soon as they open.
+    if (variant === "tab") {
+      window.addEventListener("focusin", cancel);
+      window.addEventListener("keydown", cancel, true);
+      window.addEventListener("pointerdown", cancel, true);
+    }
+    return () => {
+      cancel();
+      window.removeEventListener("focusin", cancel);
+      window.removeEventListener("keydown", cancel, true);
+      window.removeEventListener("pointerdown", cancel, true);
+    };
+  }, [open, variant]);
 
   // Cmd+P agent commands open the overlay already inside a picker.
   useEffect(() => {
@@ -844,7 +899,18 @@ export function CommandPalette({
   }, [variant, pickerRequest, enterPicker]);
   useEffect(() => {
     if (variant !== "overlay" || !searchRequest) return;
-    const next = PALETTE_MODES.find((mode) => mode.id === searchRequest.mode);
+    const next: PaletteMode | undefined =
+      searchRequest.mode === "section"
+        ? {
+            id: "section",
+            trigger: "",
+            chip: searchRequest.label,
+            label: searchRequest.label,
+            icon: Search,
+            description: "",
+            placeholder: `Search ${searchRequest.label.toLowerCase()}…`,
+          }
+        : PALETTE_MODES.find((mode) => mode.id === searchRequest.mode);
     if (next) enterMode(next);
   }, [variant, searchRequest, enterMode]);
 
@@ -1037,7 +1103,7 @@ export function CommandPalette({
   // scoped commands), else a new chat that honors the commit mode.
   const skillItems = useMemo<PaletteItem[]>(
     () =>
-      skills.map((skill) => ({
+      skillsForAgent(skills, targetAgent?.skills).map((skill) => ({
         id: `skill:${skill.name}`,
         icon: Sparkles,
         // The pretty title fronts the row; the slug stays a keyword so
@@ -1054,7 +1120,7 @@ export function CommandPalette({
         kind: hasFocusedChat ? ("action" as const) : ("navigate" as const),
         run: (mode) => onRunSkill(skill.name, mode === "tab" ? "tab" : "float"),
       })),
-    [skills, hasFocusedChat, onRunSkill],
+    [skills, targetAgent?.skills, hasFocusedChat, onRunSkill],
   );
 
   const projectItems = useMemo<PaletteItem[]>(
@@ -1676,6 +1742,34 @@ export function CommandPalette({
     // Chip mode active: the whole input belongs to that mode. One row —
     // Enter commits it — so typing never drifts into unrelated matches.
     if (mode) {
+      if (mode.id === "section" && searchRequest?.mode === "section") {
+        if (sectionLoading || sectionError)
+          return [
+            {
+              id: "section:status",
+              icon: Search,
+              label: sectionError ?? "Loading…",
+              detail: sectionError ? "Press Enter to retry" : undefined,
+              keywords: [],
+              kind: "action",
+              disabled: !sectionError,
+              run: () => setSectionRetry((value) => value + 1),
+            },
+          ];
+        return sectionItems
+          .map((item) => ({
+            item,
+            score: trimmed
+              ? commandScore(item.label, trimmed, [
+                  item.detail ?? "",
+                  ...item.keywords,
+                ])
+              : 1,
+          }))
+          .filter(({ score }) => score > 0)
+          .sort((a, b) => b.score - a.score)
+          .map(({ item }) => item);
+      }
       if (mode.id === "settings") return searchSettings(trimmed);
       if (mode.id === "files" || mode.id === "content") {
         if (!fileSearch?.matches.length)
@@ -1719,8 +1813,11 @@ export function CommandPalette({
           {
             id: "mode:agent",
             icon: Bot,
-            label: modeQuery ? `Ask agent: ${modeQuery}` : "Ask the agent",
-            detail: modeQuery ? undefined : "Type a message",
+            label: "Ask agent",
+            detail:
+              [...agents, ...projectAgents.map(projectAgentAsInfo)].find(
+                (agent) => agent.id === defaultAgentId,
+              )?.name ?? (modeQuery ? undefined : "Type a message"),
             keywords: [],
             kind: "navigate",
             run: (commitMode) => {
@@ -1843,6 +1940,10 @@ export function CommandPalette({
     return [...scored, ...(webItem ? [webItem] : []), ...sendItems];
   }, [
     trimmed,
+    searchRequest,
+    sectionItems,
+    sectionError,
+    sectionLoading,
     fileSearch,
     fileSearchError,
     searchSettings,
@@ -1953,7 +2054,10 @@ export function CommandPalette({
   ) => {
     // Disabled rows (invalid project agents) are informational only.
     if (item.disabled) return;
-    if (item.id === "pick:model:catalog-status") {
+    if (
+      item.id === "pick:model:catalog-status" ||
+      item.id === "section:status"
+    ) {
       item.run("replace");
       return;
     }

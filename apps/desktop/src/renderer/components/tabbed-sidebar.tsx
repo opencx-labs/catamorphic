@@ -3,17 +3,22 @@ import { Circle, Plus } from "lucide-react";
 import {
   type ReactNode,
   type Ref,
+  useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
 import type {
   SidebarSectionConfig,
   SidebarSide,
+  SidebarSurface,
   SidebarTabConfig,
 } from "../../shared/sidebar.js";
+import { matchesSidebarSurface } from "../../shared/sidebar.js";
 import { ShortcutHint } from "./shortcut-hint.js";
+import type { SidebarContentState } from "./sidebar-contribution.js";
 
 interface LayoutState {
   width: number;
@@ -47,7 +52,8 @@ export function TabbedSidebar({
   sidebarRef,
   overlay = false,
   revealed = false,
-  tabs,
+  tabs: configuredTabs,
+  surface = { kind: "none" },
   open,
   scope,
   header,
@@ -62,6 +68,7 @@ export function TabbedSidebar({
   overlay?: boolean;
   revealed?: boolean;
   tabs: SidebarTabConfig[];
+  surface?: SidebarSurface;
   open: boolean;
   scope: string;
   header?: ReactNode;
@@ -69,7 +76,12 @@ export function TabbedSidebar({
   footer?: ReactNode;
   error?: string;
   onCustomize: () => void;
-  renderSection: (section: SidebarSectionConfig, visible: boolean) => ReactNode;
+  renderSection: (
+    section: SidebarSectionConfig,
+    visible: boolean,
+    report: (state: SidebarContentState) => void,
+    relevant: boolean,
+  ) => ReactNode;
 }) {
   const storageKey = `catamorphic:sidebar:${scope}:${side}`;
   const [layout, setLayout] = useState(() => readLayout(storageKey, side));
@@ -78,8 +90,51 @@ export function TabbedSidebar({
   const [tabMotion, setTabMotion] = useState(false);
   const root = useRef<HTMLElement>(null);
   const id = useId();
+  const [content, setContent] = useState<
+    ReadonlyMap<string, SidebarContentState>
+  >(new Map());
+  const report = useCallback((id: string, state: SidebarContentState) => {
+    setContent((current) =>
+      current.get(id) === state ? current : new Map(current).set(id, state),
+    );
+  }, []);
+  const sectionRelevant = (section: SidebarSectionConfig) =>
+    matchesSidebarSurface(section.when, surface) &&
+    (((section.source?.type ?? section.type) !== "subsessions" &&
+      (!section.source?.scope || section.source.scope === "project")) ||
+      (surface.kind === "chat" && Boolean(surface.sessionId)));
+  const sectionAvailable = (section: SidebarSectionConfig) => {
+    if (!sectionRelevant(section)) return false;
+    const state = content.get(section.id);
+    const hideEmpty =
+      section.hideEmpty ??
+      ["workflows", "apps", "git", "remote", "subsessions"].includes(
+        section.source?.type ?? section.type,
+      );
+    return state !== "unavailable" && !(hideEmpty && state === "empty");
+  };
+  const tabs = configuredTabs.filter(
+    (tab) =>
+      matchesSidebarSurface(tab.when, surface) &&
+      tab.sections.some(sectionAvailable),
+  );
   const selected =
     tabs.find((tab) => tab.id === layout.selected)?.id ?? tabs[0]?.id;
+  const previousSelected = useRef(selected);
+  const focusWithin = useRef(false);
+  useLayoutEffect(() => {
+    if (
+      previousSelected.current !== selected &&
+      focusWithin.current &&
+      selected
+    ) {
+      (
+        document.getElementById(`${id}-tab-${selected}`) ??
+        document.getElementById(`${id}-panel-${selected}`)
+      )?.focus();
+    }
+    previousSelected.current = selected;
+  }, [selected, id]);
   useEffect(() => {
     // Persist the initial tab before the first click. Keep an existing choice
     // while tabs are temporarily filtered during project/permission loading.
@@ -105,6 +160,15 @@ export function TabbedSidebar({
         root.current = element;
         if (typeof sidebarRef === "function") sidebarRef(element);
         else if (sidebarRef) sidebarRef.current = element;
+      }}
+      onFocusCapture={() => {
+        focusWithin.current = true;
+      }}
+      onBlurCapture={(event) => {
+        if (event.relatedTarget instanceof Node)
+          focusWithin.current = Boolean(
+            root.current?.contains(event.relatedTarget),
+          );
       }}
       data-sidebar={side}
       data-tab-motion={tabMotion}
@@ -177,7 +241,7 @@ export function TabbedSidebar({
           </p>
         )}
         <div className="relative min-h-0 flex-1 overflow-hidden">
-          {tabs.map((tab) => (
+          {configuredTabs.map((tab) => (
             <div
               key={tab.id}
               role="tabpanel"
@@ -192,12 +256,25 @@ export function TabbedSidebar({
               inert={selected !== tab.id || !open}
               className="sidebar-tab-panel"
             >
-              {(visited.has(tab.id) || (open && selected === tab.id)) &&
-                tab.sections.map((section) => (
-                  <div key={section.id} data-sidebar-widget={section.id}>
-                    {renderSection(section, open && selected === tab.id)}
-                  </div>
-                ))}
+              {tab.sections.map((section) => (
+                <SidebarSlot
+                  key={section.id}
+                  section={section}
+                  mounted={
+                    visited.has(tab.id) ||
+                    (open && selected === tab.id) ||
+                    section.type !== "app"
+                  }
+                  relevant={
+                    matchesSidebarSurface(tab.when, surface) &&
+                    sectionRelevant(section)
+                  }
+                  available={sectionAvailable(section)}
+                  visible={open && selected === tab.id}
+                  report={report}
+                  renderSection={renderSection}
+                />
+              ))}
             </div>
           ))}
           {tabs.length === 0 && (
@@ -265,5 +342,52 @@ export function TabbedSidebar({
         onLostPointerCapture={() => setResizing(false)}
       />
     </aside>
+  );
+}
+
+function SidebarSlot({
+  section,
+  mounted,
+  relevant,
+  available,
+  visible,
+  report,
+  renderSection,
+}: {
+  section: SidebarSectionConfig;
+  mounted: boolean;
+  relevant: boolean;
+  available: boolean;
+  visible: boolean;
+  report: (id: string, state: SidebarContentState) => void;
+  renderSection: (
+    section: SidebarSectionConfig,
+    visible: boolean,
+    report: (state: SidebarContentState) => void,
+    relevant: boolean,
+  ) => ReactNode;
+}) {
+  const [visited, setVisited] = useState(false);
+  useEffect(() => {
+    if (mounted && relevant) setVisited(true);
+  }, [mounted, relevant]);
+  const onState = useCallback(
+    (state: SidebarContentState) => report(section.id, state),
+    [report, section.id],
+  );
+  return (
+    <div
+      data-sidebar-widget={section.id}
+      hidden={!available}
+      inert={!available}
+    >
+      {(visited || (mounted && relevant)) &&
+        renderSection(
+          section,
+          visible && relevant && available,
+          onState,
+          relevant,
+        )}
+    </div>
   );
 }

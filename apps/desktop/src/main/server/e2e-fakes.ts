@@ -21,9 +21,11 @@ import type {
   TurnOptions,
 } from "@catamorphic/sandbox";
 import { inlineAttachmentReferences } from "@catamorphic/sandbox";
+import { z } from "zod";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import { createCodexElicitation } from "./codex-elicitation.js";
 import type { desktopSettingsContext } from "./desktop-settings-context.js";
+import { reviewAppFiles, reviewAppSource } from "./e2e-review-app.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -134,7 +136,7 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
  * - "subagent" → a delegated worker with nested activity (subagent chip).
  * - "watcher" → a background process event (watcher chip).
  * - "point: <target>" / "point keep: <target>" / "unpoint" → the real
- *   point_at / clear_pointers tools (glow + scroll).
+ *   point_at tool (glow + scroll).
  * - "show: <target>" → the real open_surface tool (tab behind the chat).
  * - "slowly" → a ~4s turn (exercises mid-turn UI: spinners, minimize,
  *   mode flips, kill-and-relaunch recovery).
@@ -153,6 +155,8 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
  * not come back with the rebuilt instance.
  */
 const oneShotFailures = new Set<string>();
+const pdfArtifactSource =
+  "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n5 0 obj\n<< /Length 51 >>\nstream\nBT /F1 18 Tf 30 100 Td (Linked PDF artifact) Tj ET\nendstream\nendobj\nxref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000241 00000 n \n0000000311 00000 n \ntrailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n411\n%%EOF\n";
 
 export class E2eFakeCodingAgent implements CodingAgentProvider {
   readonly name = "e2e-fake";
@@ -194,9 +198,16 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       projectId: string,
     ) => ReturnType<typeof desktopSettingsContext>,
     private readonly elicit?: WorkspaceBridge["elicit"],
+    private readonly bindTurn?: (
+      sessionId: string,
+      options?: TurnOptions,
+    ) => () => void,
   ) {}
 
+  private readonly questionAborts = new Map<string, AbortController>();
+
   interrupt(providerSessionId: string): void {
+    this.questionAborts.get(providerSessionId)?.abort();
     const state = this.sessions.get(providerSessionId);
     if (state) state.interrupted = true;
   }
@@ -234,6 +245,42 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     message: string,
     opts?: TurnOptions,
   ): AsyncIterable<AgentEvent> {
+    const abort = new AbortController();
+    if (session.providerSessionId)
+      this.questionAborts.set(session.providerSessionId, abort);
+    const ask = opts?.askQuestion;
+    const options = {
+      ...opts,
+      ...(ask
+        ? {
+            askQuestion: (
+              input: Parameters<NonNullable<TurnOptions["askQuestion"]>>[0],
+            ) =>
+              ask({
+                ...input,
+                signal: input.signal
+                  ? AbortSignal.any([input.signal, abort.signal])
+                  : abort.signal,
+              }),
+          }
+        : {}),
+    };
+    const release = this.bindTurn?.(session.sessionId, options);
+    try {
+      yield* this.sendMessageWithQuestions(session, message, options);
+    } finally {
+      release?.();
+      abort.abort();
+      if (session.providerSessionId)
+        this.questionAborts.delete(session.providerSessionId);
+    }
+  }
+
+  private async *sendMessageWithQuestions(
+    session: ProviderSession,
+    message: string,
+    opts?: TurnOptions,
+  ): AsyncIterable<AgentEvent> {
     const state = session.providerSessionId
       ? this.sessions.get(session.providerSessionId)
       : undefined;
@@ -245,6 +292,28 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     state.toolContext.workingDirectory = session.workingDirectory;
     state.interrupted = false;
     state.lastTurn = { message, ...(opts ? { opts } : {}) };
+    // Scripted decisions, production tool transport. Every deferred workspace
+    // action in the UI suites discovers and invokes the same live registry.
+    const workspaceTools = this.workspaceTools.map((tool) =>
+      "eager" in tool && tool.eager
+        ? tool
+        : {
+            ...tool,
+            execute: async (input: Record<string, unknown>) => {
+              const gateway = opts?.capabilities;
+              if (!gateway) throw new Error("Capability gateway unavailable");
+              const name = `workspace.${tool.name}`;
+              const page = await gateway.discover({ query: name });
+              if (!page.items.some((item) => item.name === name))
+                throw new Error(`Capability unavailable: ${name}`);
+              return gateway.invoke({
+                name,
+                input,
+                requestId: crypto.randomUUID(),
+              });
+            },
+          },
+    );
     const prompt = message.toLowerCase();
 
     if (prompt.includes("nonblocking question")) {
@@ -338,12 +407,68 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
 
     if (
       process.env.CATAMORPHIC_E2E_REVIEW === "1" &&
-      prompt.includes("create a code-aware review guide")
+      prompt.includes("build an individual interactive code review")
     ) {
+      const gateway = opts?.capabilities;
+      if (!gateway) throw new Error("Component registry unavailable");
+      const discovered = await gateway.discover({ query: "components" });
+      if (!discovered.items.some((item) => item.name === "components.read"))
+        throw new Error("Component registry was not discoverable");
+      const listed = z.array(z.object({ name: z.string() })).parse(
+        await gateway.invoke({
+          name: "components.read",
+          input: {},
+          requestId: crypto.randomUUID(),
+        }),
+      );
+      if (!listed.some((item) => item.name === "code-review"))
+        throw new Error("Review pack was not listed");
+      const pack = await gateway.invoke({
+        name: "components.read",
+        input: { name: "code-review" },
+        requestId: crypto.randomUUID(),
+      });
+      yield {
+        type: "tool_call",
+        toolName: "invoke_capability",
+        toolInput: { name: "components.read", input: { name: "code-review" } },
+        toolResult: pack,
+      };
+      const input = {
+        action: "create",
+        kind: "app",
+        name: "review",
+        title: "Validate input before processing",
+        source: reviewAppSource,
+        files: reviewAppFiles(pack),
+      };
+      const artifacts = await gateway.discover({ query: "session_artifact" });
+      if (
+        !artifacts.items.some(
+          (item) => item.name === "project.session_artifact",
+        )
+      )
+        throw new Error("Session artifacts were not discoverable");
+      const body = await gateway.invoke({
+        name: "project.session_artifact",
+        input: { ...input, icon: "review" },
+        requestId: crypto.randomUUID(),
+      });
+      const result = z
+        .object({
+          target: z.string(),
+          build: z.object({ status: z.literal("ready") }),
+        })
+        .parse(body);
+      yield {
+        type: "tool_call",
+        toolName: "invoke_capability",
+        toolInput: { name: "project.session_artifact", input },
+        toolResult: body,
+      };
       yield {
         type: "text",
-        content:
-          "<!-- catamorphic-review-guide -->\n## Validate input\nThe [input guard](#file=src%2Fguard.ts) changes from unconditional acceptance to checking input length.\n\n- Check how empty input is handled by callers.\n\n## Check the boundary\nThe patch reads input.length. Verify which input types reach this boundary; the supplied patch does not include caller evidence.\n<!-- /catamorphic-review-guide -->",
+        content: `[Open review](${result.target})`,
       };
       yield { type: "done" };
       return;
@@ -352,10 +477,10 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     // "read the editor": overview → active editor tab → read_tab, echoing
     // the live selection the bridge exposes (agent-side selection path).
     if (prompt.includes("read the editor")) {
-      const overviewTool = this.workspaceTools.find(
+      const overviewTool = workspaceTools.find(
         (candidate) => candidate.name === "workspace_overview",
       );
-      const readTool = this.workspaceTools.find(
+      const readTool = workspaceTools.find(
         (candidate) => candidate.name === "read_tab",
       );
       if (!overviewTool || !readTool) {
@@ -405,7 +530,7 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     }
 
     if (prompt.includes("clear todo list")) {
-      const updateTodos = this.workspaceTools.find(
+      const updateTodos = workspaceTools.find(
         (candidate) => candidate.name === "update_todo_list",
       );
       if (!updateTodos) {
@@ -427,7 +552,7 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     }
 
     if (prompt.includes("todo list")) {
-      const updateTodos = this.workspaceTools.find(
+      const updateTodos = workspaceTools.find(
         (candidate) => candidate.name === "update_todo_list",
       );
       if (!updateTodos) {
@@ -545,10 +670,21 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       return;
     }
 
+    if (prompt.includes("prepare pdf")) {
+      await this.sandboxProvider.uploadFiles(
+        state.sandboxId,
+        { "artifact.pdf": pdfArtifactSource },
+        state.workingDirectory,
+      );
+      yield { type: "file_edit", content: "write", filePath: "artifact.pdf" };
+      yield { type: "text", content: "PDF prepared." };
+      yield { type: "done" };
+      return;
+    }
+
     if (prompt.includes("artifact links")) {
       const files = {
-        "artifact.pdf":
-          "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n5 0 obj\n<< /Length 51 >>\nstream\nBT /F1 18 Tf 30 100 Td (Linked PDF artifact) Tj ET\nendstream\nendobj\nxref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000241 00000 n \n0000000311 00000 n \ntrailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n411\n%%EOF\n",
+        "artifact.pdf": pdfArtifactSource,
         "linked-notes.md":
           "# Linked notes\n\nAn artifact opened from an agent reply.\n",
         "linked-source.ts":
@@ -625,10 +761,10 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     }
 
     if (prompt.includes("coordinate worktree")) {
-      const listSessions = this.workspaceTools.find(
+      const listSessions = workspaceTools.find(
         (candidate) => candidate.name === "list_project_sessions",
       );
-      const createWorktree = this.workspaceTools.find(
+      const createWorktree = workspaceTools.find(
         (candidate) => candidate.name === "create_worktree",
       );
       if (!listSessions || !createWorktree) {
@@ -658,10 +794,10 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     }
 
     if (prompt.includes("inspect coordination privacy")) {
-      const listSessions = this.workspaceTools.find(
+      const listSessions = workspaceTools.find(
         (candidate) => candidate.name === "list_project_sessions",
       );
-      const overview = this.workspaceTools.find(
+      const overview = workspaceTools.find(
         (candidate) => candidate.name === "workspace_overview",
       );
       if (!listSessions || !overview) {
@@ -694,7 +830,7 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     );
     if (terminalRun) {
       const [, targetId, command] = terminalRun;
-      const tool = this.workspaceTools.find(
+      const tool = workspaceTools.find(
         (candidate) => candidate.name === "run_terminal",
       );
       if (!tool || !command) {
@@ -713,6 +849,7 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
         // ('terminal result', the "terminalId":"..." pattern, and the raw
         // command output) preserved verbatim.
         const resultRecord = result as {
+          key?: string;
           terminalId?: string;
           output?: string;
           commandRunning?: boolean;
@@ -727,7 +864,7 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
           .trim();
         yield {
           type: "text",
-          content: `Ran it in the terminal ("terminalId":"${resultRecord.terminalId ?? "unknown"}"). terminal result:\n\n${cleanOutput}`,
+          content: `Ran it in the terminal ("terminalId":"${resultRecord.terminalId ?? "unknown"}"). terminal result:\n\n${cleanOutput}${resultRecord.key ? `\n\n[Open terminal](${resultRecord.key})` : ""}`,
         };
       } catch (error) {
         yield {
@@ -740,7 +877,10 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     }
 
     if (message === "elicitation: app") {
-      const handler = createCodexElicitation({ elicit: this.elicit });
+      const handler = createCodexElicitation({
+        elicit: this.elicit,
+        askQuestion: () => opts?.askQuestion,
+      });
       const request = {
         serverName: "Computer Use",
         mode: "form",
@@ -801,7 +941,7 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
 
     if (message.startsWith("E2E workspace tool ")) {
       const request = JSON.parse(message.slice("E2E workspace tool ".length));
-      const tool = this.workspaceTools.find(
+      const tool = workspaceTools.find(
         (candidate) => candidate.name === request.name,
       );
       try {
@@ -832,11 +972,11 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     }
 
     // "point: <target>" / "point keep: <target>" → the REAL point_at
-    // workspace tool (glow + scroll); "unpoint" → clear_pointers.
+    // workspace tool (glow + scroll); "unpoint" → point_at { target: null }.
     const pointRun = /^point(\s+keep)?:\s*(.+)$/s.exec(message.trim());
     if (pointRun) {
       const [, keep, target] = pointRun;
-      const tool = this.workspaceTools.find(
+      const tool = workspaceTools.find(
         (candidate) => candidate.name === "point_at",
       );
       if (!tool || !target) {
@@ -864,10 +1004,11 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       return;
     }
     if (prompt.trim() === "unpoint") {
-      const tool = this.workspaceTools.find(
-        (candidate) => candidate.name === "clear_pointers",
+      const tool = workspaceTools.find(
+        (candidate) => candidate.name === "point_at",
       );
-      if (tool) await tool.execute({}, state.toolContext);
+      if (!tool) throw new Error("point_at unavailable");
+      await tool.execute({ target: null }, state.toolContext);
       yield { type: "text", content: "Cleared the pointers." };
       yield { type: "done" };
       return;
@@ -891,6 +1032,24 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       return;
     }
 
+    // Native Codex discovery supplies a concrete file, outside the shared
+    // read_skill catalog. Exercise the actual file read and argument payload.
+    const nativeSkillRun =
+      /^Use the "native-notes" skill at ("(?:[^"\\]|\\.)*")\.\s*([\s\S]*)$/.exec(
+        message.trim(),
+      );
+    if (nativeSkillRun?.[1]) {
+      const file: unknown = JSON.parse(nativeSkillRun[1]);
+      if (typeof file !== "string")
+        throw new Error("Invalid native skill path");
+      yield {
+        type: "text",
+        content: `native skill loaded: ${fs.readFileSync(file, "utf8").trim()} | ${nativeSkillRun[2]}`,
+      };
+      yield { type: "done" };
+      return;
+    }
+
     // `Use the "<name>" skill` — the EXACT message palette skill rows and
     // composer /commands send — runs the REAL read_skill tool, so skill
     // e2e covers renderer → invocation message → toolkit → core's merged
@@ -898,7 +1057,7 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     const skillRun = /^Use the "([^"]+)" skill[.:]?/.exec(message.trim());
     if (skillRun?.[1]) {
       const name = skillRun[1];
-      const tool = this.workspaceTools.find(
+      const tool = workspaceTools.find(
         (candidate) => candidate.name === "read_skill",
       );
       if (!tool) {
@@ -964,7 +1123,7 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     // resolves with whatever the user (the test) installed before closing.
     const connectRun = /^connect:\s*(.+)$/s.exec(message.trim());
     if (connectRun?.[1]) {
-      const tool = this.workspaceTools.find(
+      const tool = workspaceTools.find(
         (candidate) => candidate.name === "request_connection",
       );
       if (!tool) {
@@ -1001,7 +1160,7 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     if (showRun) {
       const [, later, rawTarget] = showRun;
       const target = rawTarget?.trim() ?? "";
-      const tool = this.workspaceTools.find(
+      const tool = workspaceTools.find(
         (candidate) => candidate.name === "open_surface",
       );
       if (!tool) {

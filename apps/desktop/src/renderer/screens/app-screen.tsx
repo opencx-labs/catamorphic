@@ -1,3 +1,9 @@
+import type {
+  AppCollections,
+  AppContentState,
+  AppIconName,
+  AppSurface,
+} from "@catamorphic/app";
 import { useCatamorphic } from "@catamorphic/react";
 import { AppMount } from "@catamorphic/ui";
 import { useQuery } from "@tanstack/react-query";
@@ -10,9 +16,11 @@ const DESKTOP_USER_ID = "desktop-user";
 
 export interface AppSummary {
   name: string;
+  title: string;
   id: string | null;
   activeVersionId: string | null;
   publishedAt: string | null;
+  icon: AppIconName;
 }
 
 export function useApps(projectId: string | undefined) {
@@ -27,6 +35,7 @@ export function useApps(projectId: string | undefined) {
       return result.data;
     },
     enabled: Boolean(projectId),
+    refetchInterval: 5000,
   });
 }
 
@@ -36,26 +45,31 @@ export function AppScreen({
   compact = false,
   visible = true,
   height = 320,
+  surface,
+  collections,
+  onContentState,
 }: {
   projectId: string;
   appName: string;
   compact?: boolean;
   visible?: boolean;
   height?: number;
+  surface?: AppSurface;
+  collections?: AppCollections;
+  onContentState?: (state: AppContentState) => void;
 }) {
   const theme = useTheme();
   return (
-    <div
-      className={
-        compact ? "min-w-0" : "min-h-0 flex-1 overflow-y-auto bg-bg-inset p-4"
-      }
-    >
+    <div className={compact ? "min-w-0" : "flex min-h-0 flex-1 flex-col bg-bg"}>
       <AppMount
         key={`${projectId}:${appName}`}
         projectId={projectId}
         appName={appName}
-        display={{ mode: compact ? "compact" : "full", visible }}
-        viewportHeight={compact ? height : undefined}
+        display={{ mode: compact ? "compact" : "full", visible, surface }}
+        collections={collections}
+        onContentState={onContentState}
+        viewportHeight={compact ? height : "fill"}
+        refreshIntervalMs={3000}
         context={{
           tenantId: DESKTOP_TENANT_ID,
           user: { id: DESKTOP_USER_ID },
@@ -68,7 +82,7 @@ export function AppScreen({
         className={
           compact
             ? "block w-full bg-bg-raised"
-            : "mx-auto w-full max-w-5xl overflow-hidden rounded-lg border border-border bg-bg-raised"
+            : "block min-h-0 flex-1 w-full bg-bg"
         }
         // The desktop is the owner's surface: show the newest ready build
         // (the version being developed), not just the published one.

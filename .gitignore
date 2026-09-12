@@ -34,3 +34,6 @@ pgdata/
 # Project repos (local dev storage)
 data/
 .claude/worktrees/
+
+# Isolated desktop test diagnostics
+/test-results/

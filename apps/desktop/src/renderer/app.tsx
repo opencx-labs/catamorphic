@@ -1,43 +1,35 @@
 import {
   useAcknowledgeAgentSessionAttention,
   useAgentSessions,
+  useAppPresentations,
   useArchiveAgentSession,
   useCreateAgentSession,
   useForkAgentSession,
   useProjects,
   useUnarchiveAgentSession,
   useUpdateAgentSession,
-  useWorkflows,
   workflowKeys,
 } from "@catamorphic/react";
 import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  ChevronRight,
   Columns2,
-  Folder,
   FolderPlus,
-  GitBranch,
-  LayoutGrid,
   Link2,
   MessageSquare,
   PanelLeft,
   PanelRight,
-  Plus,
   Settings as SettingsIcon,
   Share2,
   Sparkles,
   Wand2,
-  Workflow as WorkflowIcon,
 } from "lucide-react";
 import {
   lazy,
   type MouseEvent as ReactMouseEvent,
-  type ReactNode,
   Suspense,
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
@@ -56,11 +48,18 @@ import {
   type OpenModifiers,
   openModeFromEvent,
 } from "../shared/open-mode.js";
+import type { ProjectExperienceContext } from "../shared/project-experience.js";
 import {
-  matchesProjectExperience,
-  type ProjectExperienceContext,
-} from "../shared/project-experience.js";
-import { sidebarSections, visibleSidebarConfig } from "../shared/sidebar.js";
+  type SidebarSurface,
+  sidebarSections,
+  visibleSidebarConfig,
+} from "../shared/sidebar.js";
+import {
+  isBrowserFile,
+  localFileUrl,
+  parseSurfaceLink,
+  resolveProjectFileLocation,
+} from "../shared/surface-link.js";
 import type { TerminalMacro } from "../shared/terminal-macros.js";
 import { findSearchInput } from "./components/action-search-input.js";
 import {
@@ -68,14 +67,12 @@ import {
   AgentPointers,
 } from "./components/agent-pointers.js";
 import { AgentWizard } from "./components/agent-wizard.js";
-import { AnimatedTitle } from "./components/animated-title.js";
-import { BookmarksNav } from "./components/bookmarks-nav.js";
 import type { ChatDockEntry, ChatSurface } from "./components/chat-dock.js";
-import { ChatGlyph } from "./components/chat-icon.js";
 import { ChatRegistration } from "./components/chat-registration.js";
-import { SignalBadge } from "./components/chat-signals.js";
-import { Collapsible } from "./components/collapsible.js";
-import { CommandPalette } from "./components/command-palette.js";
+import {
+  CommandPalette,
+  type PaletteSearchRequest,
+} from "./components/command-palette.js";
 import { ConfigureAgentModal } from "./components/configure-agent-modal.js";
 import { ConnectorsModal } from "./components/connectors-modal.js";
 import { DeleteProjectModal } from "./components/delete-project-modal.js";
@@ -83,18 +80,14 @@ import {
   ElicitationModal,
   type PendingElicitation,
 } from "./components/elicitation-modal.js";
-import { FilesNav } from "./components/files-nav.js";
 import { FloatingPanelBar } from "./components/floating-panel-bar.js";
-import { GitNav } from "./components/git-nav.js";
 import { MobilePairingModal } from "./components/mobile-pairing-modal.js";
 import { Modal } from "./components/modal.js";
-import { OpenResourceButton } from "./components/open-resource-button.js";
 import { PendingButton } from "./components/pending-button.js";
 import { ProfileBar } from "./components/profile-bar.js";
 import { ProjectAgentConsentDialog } from "./components/project-agent-consent.js";
 import { ProjectModal } from "./components/project-modal.js";
 import { ProjectSwitcher } from "./components/project-switcher.js";
-import { PrsNav } from "./components/prs-nav.js";
 import {
   RemoteProposeModal,
   RemotePublishModal,
@@ -102,7 +95,7 @@ import {
 import { RemoteConnectModal } from "./components/remote-connect-modal.js";
 import { RemoteConnectionIndicator } from "./components/remote-connection-indicator.js";
 import { RemoteHistoryModal } from "./components/remote-history-modal.js";
-import { type RemoteFeatures, RemoteNav } from "./components/remote-nav.js";
+import type { RemoteFeatures } from "./components/remote-nav.js";
 import {
   ArchiveSessionDialog,
   CreateSubsessionDialog,
@@ -111,13 +104,8 @@ import {
   DisabledControlHints,
   ShortcutHint,
 } from "./components/shortcut-hint.js";
-import { SidebarItemRow } from "./components/sidebar-item-row.js";
-import {
-  type SessionCommand,
-  SidebarSessionInspector,
-} from "./components/sidebar-session-inspector.js";
-import { SidebarActivity, SidebarNote } from "./components/sidebar-widgets.js";
-import { SiteFavicon } from "./components/site-favicon.js";
+import type { SidebarContentState } from "./components/sidebar-contribution.js";
+import { ConfiguredSection } from "./components/sidebar-navigation.js";
 import { TabbedSidebar } from "./components/tabbed-sidebar.js";
 import {
   type PendingToolPermission,
@@ -144,10 +132,7 @@ import {
   type ProfilesData,
   type ProjectAgentInfo,
   type RemoteProjectStatus,
-  type SessionCheckoutInfo,
   type SidebarConfig,
-  type SidebarItem,
-  type SidebarMenuEntry,
   type SidebarSectionConfig,
 } from "./lib/desktop-api.js";
 import { readEditorSelection } from "./lib/editor-selection.js";
@@ -158,15 +143,9 @@ import {
   useKeybindings,
 } from "./lib/keybindings.js";
 import { notifyDesktop, playChime } from "./lib/notify.js";
+import { sessionLabel } from "./lib/session-label.js";
 import { transitionSidebarUpdate } from "./lib/sidebar-transition.js";
 import { skillInvocation } from "./lib/skills.js";
-import {
-  isBrowserFile,
-  localFileUrl,
-  parseSurfaceLink,
-  resolveProjectFileLocation,
-} from "./lib/surface-link.js";
-import { TAB_DRAG_TYPE, type TabDragPayload } from "./lib/tab-drag.js";
 import { useSidebarReveal } from "./lib/use-sidebar-reveal.js";
 import { NEW_WORKFLOW_PROMPT } from "./lib/workflow-authoring.js";
 import { useWorkspace } from "./lib/workspace-context.js";
@@ -196,7 +175,8 @@ import {
   type Workspace,
   workspaceLayout,
 } from "./lib/workspace-state.js";
-import { AppScreen, useApps } from "./screens/app-screen.js";
+import { AppScreen } from "./screens/app-screen.js";
+import { ArtifactScreen } from "./screens/artifact-screen.js";
 import {
   type BrowserCommands,
   type BrowserPageState,
@@ -254,12 +234,6 @@ const NO_CHAT_SIGNALS: ChatLiveSignals = {
 
 const fileNameFromPath = (filePath: string) =>
   filePath.split(/[\\/]/).at(-1) || filePath;
-
-/** Offered to config-defined items that don't declare their own menu. */
-const DEFAULT_CUSTOM_MENU: SidebarMenuEntry[] = [
-  { label: "Open in new tab", action: "open-tab" },
-  { label: "Copy link", action: "copy-url" },
-];
 
 const truncateLabel = (value: string): string =>
   value.length <= 40 ? value : `${value.slice(0, 39)}…`;
@@ -404,6 +378,14 @@ function focusedChatSurfaceId(): string | undefined {
     );
   }
   return lastPointerDownInFloatingChatId;
+}
+
+function findSidebarSearchButton(action: string) {
+  return [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      `button[data-sidebar-search="${action}"]`,
+    ),
+  ].find((element) => !element.closest("[inert]") && element.checkVisibility());
 }
 
 export function App({
@@ -1586,6 +1568,7 @@ export function App({
     value: string,
     opts: {
       chatLocalId?: string;
+      label?: string;
       side?: boolean;
       background?: boolean;
       newTab?: boolean;
@@ -1656,7 +1639,9 @@ export function App({
         ? editorTabKey(existingEditor?.localId ?? localId)
         : target.kind === "tab"
           ? target.key
-          : target.kind === "workflow" || target.kind === "app"
+          : target.kind === "workflow" ||
+              target.kind === "app" ||
+              target.kind === "artifact"
             ? `${target.kind}:${target.name}`
             : browserTabKey(localId);
     if (
@@ -1717,7 +1702,9 @@ export function App({
                     },
                   ],
             }
-          : target.kind === "workflow" || target.kind === "app"
+          : target.kind === "workflow" ||
+              target.kind === "app" ||
+              target.kind === "artifact"
             ? {
                 tabs: ws.tabs.some((tab) => tabKey(tab) === key)
                   ? ws.tabs
@@ -1726,6 +1713,14 @@ export function App({
                       {
                         kind: target.kind,
                         name: target.name,
+                        label:
+                          opts.label ??
+                          (target.kind === "artifact"
+                            ? "Session artifact"
+                            : target.kind === "app" &&
+                                target.name.startsWith("session-")
+                              ? "Session app"
+                              : undefined),
                         chatLocalId: opts.chatLocalId,
                       },
                     ],
@@ -2636,11 +2631,14 @@ export function App({
     setPaletteOpen(true);
     setPickerRequest({ kind, nonce: crypto.randomUUID() });
   };
-  const [searchRequest, setSearchRequest] = useState<{
-    mode: "files" | "content";
-    nonce: string;
-  } | null>(null);
+  const [searchRequest, setSearchRequest] =
+    useState<PaletteSearchRequest | null>(null);
   const focusSearch = (action: string, mode?: "files" | "content") => {
+    const button = findSidebarSearchButton(action);
+    if (button) {
+      button.click();
+      return;
+    }
     const input = findSearchInput(action);
     if (input) {
       input.focus();
@@ -2729,7 +2727,7 @@ export function App({
       ...ws,
       chats: ws.chats.map((candidate) =>
         candidate.localId === chat.localId
-          ? { ...candidate, agentId }
+          ? { ...candidate, agentId, model: undefined }
           : candidate,
       ),
     }));
@@ -2742,6 +2740,17 @@ export function App({
     );
     if (chat?.sessionId) {
       updateSession.mutate({ sessionId: chat.sessionId, model: model || null });
+      return;
+    }
+    if (chat) {
+      updateWorkspace((ws) => ({
+        ...ws,
+        chats: ws.chats.map((candidate) =>
+          candidate.localId === chat.localId
+            ? { ...candidate, model: model || undefined }
+            : candidate,
+        ),
+      }));
       return;
     }
     void desktopApi.agentsUpdate(agentId, { model });
@@ -2780,6 +2789,17 @@ export function App({
     );
     if (chat?.sessionId) {
       updateSession.mutate({ sessionId: chat.sessionId, effort });
+      return;
+    }
+    if (chat) {
+      updateWorkspace((ws) => ({
+        ...ws,
+        chats: ws.chats.map((candidate) =>
+          candidate.localId === chat.localId
+            ? { ...candidate, effort: effort ?? undefined }
+            : candidate,
+        ),
+      }));
       return;
     }
     // No focused session: the effort applies to the effective default
@@ -3379,7 +3399,11 @@ export function App({
           (!["search-diff", "search-changes", "search-settings"].includes(
             candidate,
           ) ||
-            (guestId === undefined && Boolean(findSearchInput(candidate)))) &&
+            (guestId === undefined &&
+              Boolean(
+                findSearchInput(candidate) ||
+                  findSidebarSearchButton(candidate),
+              ))) &&
           (candidate !== "dismiss-floating" ||
             (floatingEscapeEnabledRef.current &&
               ![
@@ -3828,7 +3852,10 @@ export function App({
           );
           const entry: TerminalEntry = {
             localId,
-            title: "Agent terminal",
+            title:
+              typeof params.title === "string" && params.title
+                ? params.title
+                : "Agent terminal",
             chatLocalId,
             attachSessionId: String(params.terminalId),
             agentControlled: true,
@@ -4193,7 +4220,27 @@ export function App({
     [updateWorkspace],
   );
 
-  const activeTab = workspace.tabs.find(
+  const appPresentations = useAppPresentations(projectId, [
+    ...workspace.tabs
+      .filter((tab) => tab.kind === "app")
+      .map((tab) => tab.name),
+    ...Object.values(chipAttention)
+      .flat()
+      .filter((key) => key.startsWith("app:"))
+      .map((key) => key.slice("app:".length)),
+  ]);
+  const appMetadata = new Map(
+    appPresentations.flatMap((query) =>
+      query.data ? [[query.data.name, query.data] as const] : [],
+    ),
+  );
+  const presentedTabs = workspace.tabs.map((tab) => {
+    const metadata = tab.kind === "app" ? appMetadata.get(tab.name) : undefined;
+    return tab.kind === "app" && metadata
+      ? { ...tab, label: metadata.title, appIcon: metadata.icon }
+      : tab;
+  });
+  const activeTab = presentedTabs.find(
     (tab) => tabKey(tab) === workspace.activeTabKey,
   );
 
@@ -4231,7 +4278,7 @@ export function App({
   // group membership stamped for the grouped styling.
   const tabByKey = new Map<string, WorkspaceTab>(
     [
-      ...workspace.tabs,
+      ...presentedTabs,
       ...browserTabs(workspace),
       ...terminalTabs(workspace),
       ...editorTabs(workspace),
@@ -4350,7 +4397,14 @@ export function App({
    */
   const synthesizedSurface = (key: string): ChatSurface => {
     if (key.startsWith("app:")) {
-      return { key, kind: "app", label: key.slice("app:".length) };
+      const name = key.slice("app:".length);
+      const metadata = appMetadata.get(name);
+      return {
+        key,
+        kind: "app",
+        label: metadata?.title ?? name,
+        appIcon: metadata?.icon,
+      };
     }
     if (key.startsWith("browser:")) {
       const entry = workspace.browsers.find(
@@ -4361,13 +4415,19 @@ export function App({
         kind: "browser",
         label: entry?.title || entry?.url || "Page",
         faviconUrl: entry?.faviconUrl,
+        url: entry?.url,
       };
     }
     if (key.startsWith("terminal:")) {
       const entry = workspace.terminals.find(
         (terminal) => terminalTabKey(terminal.localId) === key,
       );
-      return { key, kind: "terminal", label: entry?.title || "Terminal" };
+      return {
+        key,
+        kind: "terminal",
+        label: entry?.title || "Terminal",
+        terminalSessionId: entry?.ptySessionId ?? entry?.attachSessionId,
+      };
     }
     if (key.startsWith("editor:")) {
       const entry = workspace.editors.find(
@@ -4377,6 +4437,7 @@ export function App({
         key,
         kind: "editor",
         label: entry?.filePath?.split("/").at(-1) || "Editor",
+        filePath: entry?.filePath ?? undefined,
       };
     }
     if (key.startsWith("chat:")) {
@@ -4386,8 +4447,13 @@ export function App({
         label: chatLabels[key.slice("chat:".length)] ?? "Chat",
       };
     }
-    const tab = workspace.tabs.find((candidate) => tabKey(candidate) === key);
-    return { key, kind: "app", label: tab?.label ?? tab?.name ?? key };
+    const tab = presentedTabs.find((candidate) => tabKey(candidate) === key);
+    return {
+      key,
+      kind: "app",
+      label: tab?.label ?? tab?.name ?? key,
+      appIcon: tab?.kind === "app" ? tab.appIcon : undefined,
+    };
   };
 
   /** The agent's working tabs for a chat — its surfaces rail. */
@@ -4418,13 +4484,14 @@ export function App({
             attention: session.attentionRequired,
           };
         }),
-      ...workspace.tabs
+      ...presentedTabs
         .filter((tab) => tab.chatLocalId === chat.localId)
         .map((tab) => ({
           key: tabKey(tab),
           kind:
             tab.kind === "workflow" ? ("workflow" as const) : ("app" as const),
           label: tab.label ?? tab.name,
+          appIcon: tab.kind === "app" ? tab.appIcon : undefined,
           attention: attentionKeys.includes(tabKey(tab)),
         })),
       ...workspace.browsers
@@ -4434,6 +4501,7 @@ export function App({
           kind: "browser" as const,
           label: browser.title || browser.url || "Page",
           faviconUrl: browser.faviconUrl,
+          url: browser.url,
           active: Boolean(browser.agentControlled),
           removable: true,
         })),
@@ -4443,6 +4511,8 @@ export function App({
           key: terminalTabKey(terminal.localId),
           kind: "terminal" as const,
           label: terminal.title || "Terminal",
+          description: terminal.initialCommand,
+          terminalSessionId: terminal.ptySessionId ?? terminal.attachSessionId,
           // The spinner tracks the COMMAND, not the shell: busy means a
           // foreground process is actually running in there right now.
           active: terminal.busy === true,
@@ -4454,6 +4524,7 @@ export function App({
           key: editorTabKey(editor.localId),
           kind: "editor" as const,
           label: editor.filePath?.split("/").at(-1) || "Editor",
+          filePath: editor.filePath ?? undefined,
           removable: true,
         })),
     ];
@@ -4568,8 +4639,12 @@ export function App({
     focusedChat: focusedChat
       ? {
           agentId: focusedSession?.agentId ?? focusedChat.agentId ?? null,
-          model: focusedSession?.model ?? null,
-          effort: focusedSession?.modelEffort ?? null,
+          model:
+            (focusedSession ? focusedSession.model : focusedChat.model) ?? null,
+          effort:
+            (focusedSession
+              ? focusedSession.modelEffort
+              : focusedChat.effort) ?? null,
         }
       : null,
     onPickDefaultAgent: pickDefaultAgent,
@@ -4675,40 +4750,70 @@ export function App({
 
   const sidebarTabs = (side: "left" | "right") => {
     if (side === "right" && !projectId) return [];
-    const tabs = visibleSidebars?.[side] ?? [];
-    if (
-      side !== "left" ||
-      !tabsInSidebar ||
-      tabs.some((tab) =>
-        tab.sections.some((section) => section.type === "tabs"),
-      )
-    )
-      return tabs;
-    // Older customized layouts still need a home for their open workspace tabs.
-    return tabs.map((tab, index) =>
-      index === 0
-        ? {
-            ...tab,
-            sections: [
-              ...tab.sections,
-              { id: "workspace-tabs", type: "tabs" as const },
-            ],
-          }
-        : tab,
-    );
+    return visibleSidebars?.[side] ?? [];
+  };
+  const [sidebarHasSelection, setSidebarHasSelection] = useState(false);
+  useEffect(() => {
+    const update = () =>
+      setSidebarHasSelection(Boolean(readEditorSelection()?.text.trim()));
+    window.addEventListener("catamorphic:editor-selection", update);
+    document.addEventListener("selectionchange", update);
+    return () => {
+      window.removeEventListener("catamorphic:editor-selection", update);
+      document.removeEventListener("selectionchange", update);
+    };
+  }, []);
+  const sidebarSurfaceKey = workspace.floatingKey ?? workspace.activeTabKey;
+  const sidebarChat = workspace.chats.find(
+    (chat) =>
+      chatVisible(workspace, chat) &&
+      (chat.mode === "partial" ||
+        chatTabKey(chat.localId) === sidebarSurfaceKey),
+  );
+  const sidebarEditor = workspace.editors.find(
+    (editor) => editorTabKey(editor.localId) === sidebarSurfaceKey,
+  );
+  const sidebarSurface: SidebarSurface = {
+    kind: sidebarChat
+      ? "chat"
+      : sidebarEditor
+        ? "editor"
+        : (presentedTabs.find((tab) => tabKey(tab) === sidebarSurfaceKey)
+            ?.kind ?? "none"),
+    key: sidebarChat ? chatTabKey(sidebarChat.localId) : sidebarSurfaceKey,
+    projectId,
+    sessionId: sidebarChat?.sessionId ?? undefined,
+    path: sidebarEditor?.filePath ?? undefined,
+    selection: Boolean(sidebarEditor && sidebarHasSelection),
   };
   const renderSidebarSection = (
     section: SidebarSectionConfig,
     visible: boolean,
+    report: (state: SidebarContentState) => void,
+    relevant: boolean,
   ) =>
     projectId ? (
       <ConfiguredSection
         key={section.id}
+        surface={sidebarSurface}
+        relevant={relevant}
+        report={report}
         visible={visible}
         onCustomize={() => customizeSidebar("left")}
+        onSearch={(request) => {
+          setSearchRequest({ ...request, nonce: crypto.randomUUID() });
+          setPaletteOpen(true);
+        }}
         section={section}
         pinnedStyle={prefs?.pinnedBookmarks ?? "tiles"}
-        tabs={tabsInSidebar ? workspaceTabBar : null}
+        tabs={
+          section.source?.type === "tabs"
+            ? renderWorkspaceTabBar("vertical")
+            : tabsInSidebar
+              ? workspaceTabBar
+              : null
+        }
+        sourceTabs={presentedTabs}
         experienceContext={projectExperienceContext}
         memberShell={memberShell}
         projectId={projectId}
@@ -4827,9 +4932,9 @@ export function App({
       )}
     </div>
   );
-  const workspaceTabBar = (
+  const renderWorkspaceTabBar = (orientation: "vertical" | "horizontal") => (
     <WorkspaceTabBar
-      orientation={tabsInSidebar ? "vertical" : "horizontal"}
+      orientation={orientation}
       alignment={prefs?.tabAlignment ?? "start"}
       tabs={allTabs}
       activeKey={focusedTabKey}
@@ -4850,6 +4955,10 @@ export function App({
         if (!key) setDropSideHover(null);
       }}
     />
+  );
+
+  const workspaceTabBar = renderWorkspaceTabBar(
+    tabsInSidebar ? "vertical" : "horizontal",
   );
 
   return (
@@ -4964,6 +5073,7 @@ export function App({
         side="left"
         scope={`${activeProfile?.id}:${projectId}`}
         tabs={sidebarTabs("left")}
+        surface={sidebarSurface}
         open={sidebarVisible}
         sidebarRef={sidebarRef}
         overlay={compactWindow}
@@ -5270,6 +5380,12 @@ export function App({
                           }
                         />
                       </Suspense>
+                    ) : tab.kind === "artifact" ? (
+                      <ArtifactScreen
+                        projectId={projectId}
+                        artifactId={tab.name}
+                        onAskAgent={(message) => sendToAgent(message, "float")}
+                      />
                     ) : tab.kind === "app" ? (
                       <AppScreen projectId={projectId} appName={tab.name} />
                     ) : tab.kind === "mcpapp" ? (
@@ -5319,6 +5435,18 @@ export function App({
                     ) : tab.kind === "diff" ? (
                       <Suspense fallback={<div className="flex-1 bg-bg" />}>
                         <DiffScreen
+                          onOpenArtifact={(target, title) => {
+                            void openLinkedSurface(target, {
+                              label: title,
+                              newTab: true,
+                            }).catch((error: unknown) =>
+                              setLinkError(
+                                error instanceof Error
+                                  ? error.message
+                                  : "Could not open review",
+                              ),
+                            );
+                          }}
                           projectId={tab.projectId}
                           source={tab.source}
                         />
@@ -5543,9 +5671,7 @@ export function App({
                       navigation={editor.navigation}
                       projectId={projectId}
                       filePath={editor.filePath}
-                      onFileChange={(filePath) =>
-                        onEditorState(editor.localId, { filePath })
-                      }
+                      onFindFile={() => focusSearch("search-files", "files")}
                       onDirtyChange={(dirty) =>
                         onEditorState(editor.localId, { dirty })
                       }
@@ -5889,6 +6015,7 @@ export function App({
         }
         scope={`${activeProfile?.id}:${projectId}`}
         tabs={sidebarTabs("right")}
+        surface={sidebarSurface}
         open={rightSidebarOpen}
         error={sidebarError}
         onCustomize={() => customizeSidebar("right")}
@@ -6071,890 +6198,6 @@ export function App({
       )}
     </div>
   );
-}
-
-/** One sidebar section, shaped by the user's sidebar.js config. */
-function ConfiguredSection({
-  section,
-  visible,
-  onCustomize,
-  experienceContext,
-  memberShell,
-  projectId,
-  profileId,
-  pinnedStyle,
-  tabs,
-  activeTab,
-  activeChatSessionId,
-  activeFilePath,
-  keybindingLabel,
-  agentsData,
-  defaultAgentId,
-  projectAgentNames,
-  unreadSessionIds,
-  onOpenTab,
-  onNewChat,
-  onNewWorkflow,
-  onOpenSession,
-  onSessionCommand,
-  onSessionAction,
-  onOpenUrl,
-  onOpenFile,
-  onOpenHistory,
-  onPublish,
-  onPropose,
-}: {
-  section: SidebarSectionConfig;
-  visible: boolean;
-  onCustomize: () => void;
-  experienceContext: ProjectExperienceContext;
-  memberShell: boolean;
-  projectId: string;
-  profileId?: string;
-  pinnedStyle: "tiles" | "list";
-  tabs: ReactNode;
-  activeTab?: WorkspaceTab;
-  activeChatSessionId?: string;
-  activeFilePath?: string;
-  keybindingLabel: string;
-  agentsData: AgentsData | null;
-  defaultAgentId: string | null;
-  projectAgentNames: Record<string, string>;
-  unreadSessionIds: ReadonlySet<string>;
-  onOpenTab: (tab: WorkspaceTab, mode?: CommitMode) => void;
-  onNewChat: () => void;
-  onNewWorkflow: () => void;
-  onOpenSession: (session: AgentSession, mode?: CommitMode) => void;
-  onSessionCommand: (session: AgentSession, command: SessionCommand) => void;
-  onSessionAction: (sessionId: string, action: ChatSessionAction) => void;
-  onOpenUrl: (url: string, mode: CommitMode) => void;
-  onOpenFile: (filePath: string, mode?: CommitMode) => void;
-  onOpenHistory: (filePath: string) => void;
-  onPublish: (filePath: string, features: RemoteFeatures | undefined) => void;
-  onPropose: (files: string[], features: RemoteFeatures | undefined) => void;
-}) {
-  const defaultOpen = !section.collapsed;
-  // Hide-when-empty: a section with nothing to list can drop its header
-  // entirely. Workflows and Apps default to hidden-until-non-empty (a new
-  // project isn't about either until an agent makes it so); any section
-  // opts in or out with `hideEmpty` in sidebar.js. The nav stays mounted
-  // (hidden, not unmounted) so its data fetch is what reveals the section.
-  const hideEmpty =
-    section.hideEmpty ??
-    (section.type === "git" ||
-      section.type === "workflows" ||
-      section.type === "apps" ||
-      section.type === "remote");
-  const [empty, setEmpty] = useState(true);
-  const body = (() => {
-    switch (section.type) {
-      case "activity":
-        return (
-          <SidebarSection
-            title={section.title ?? "Activity"}
-            defaultOpen={defaultOpen}
-          >
-            {(expanded) => (
-              <SidebarActivity
-                projectId={projectId}
-                visible={visible && expanded}
-                onOpenSession={onOpenSession}
-                onOpenTab={onOpenTab}
-              />
-            )}
-          </SidebarSection>
-        );
-      case "note":
-        return (
-          <SidebarSection
-            title={section.title ?? "Project note"}
-            defaultOpen={defaultOpen}
-          >
-            {(expanded) => (
-              <SidebarNote
-                key={`${profileId}:${projectId}:${section.id}`}
-                projectId={projectId}
-                scope={`${profileId}:${projectId}:${section.id}`}
-                path={section.path}
-                visible={visible && expanded}
-                onOpenFile={onOpenFile}
-              />
-            )}
-          </SidebarSection>
-        );
-      case "app":
-        return (
-          <SidebarSection
-            title={section.title ?? section.app ?? "App"}
-            defaultOpen={defaultOpen}
-            action={
-              <ShortcutHint label="Open app in tab">
-                <button
-                  type="button"
-                  aria-label="Open app in tab"
-                  className="sidebar-tab"
-                  onClick={() =>
-                    section.app && onOpenTab({ kind: "app", name: section.app })
-                  }
-                >
-                  <PanelRight className="size-3.5" />
-                </button>
-              </ShortcutHint>
-            }
-          >
-            {(expanded) =>
-              section.app ? (
-                <AppScreen
-                  projectId={projectId}
-                  appName={section.app}
-                  compact
-                  height={section.height}
-                  visible={visible && expanded}
-                />
-              ) : (
-                <button type="button" onClick={onCustomize}>
-                  Choose an app
-                </button>
-              )
-            }
-          </SidebarSection>
-        );
-      case "workflows":
-        return (
-          <SidebarSection
-            title={section.title ?? "Workflows"}
-            defaultOpen={defaultOpen}
-            action={
-              !memberShell ? (
-                <ShortcutHint label="Create workflow">
-                  <button
-                    type="button"
-                    aria-label="Create workflow"
-                    onClick={onNewWorkflow}
-                    className="grid size-6 cursor-pointer place-items-center rounded text-fg-faint hover:bg-bg-overlay hover:text-fg"
-                  >
-                    <Plus className="size-3.5" />
-                  </button>
-                </ShortcutHint>
-              ) : undefined
-            }
-          >
-            <WorkflowsNav
-              projectId={projectId}
-              active={
-                activeTab?.kind === "workflow" ? activeTab.name : undefined
-              }
-              onEmptyChange={setEmpty}
-              onSelect={(workflow, mode) =>
-                onOpenTab(
-                  {
-                    kind: "workflow",
-                    name: workflow.name,
-                    label: workflow.displayName ?? workflow.name,
-                  },
-                  mode,
-                )
-              }
-            />
-          </SidebarSection>
-        );
-      case "apps":
-        return (
-          <SidebarSection
-            title={section.title ?? "Apps"}
-            defaultOpen={defaultOpen}
-          >
-            <AppsNav
-              projectId={projectId}
-              active={activeTab?.kind === "app" ? activeTab.name : undefined}
-              onEmptyChange={setEmpty}
-              onSelect={(appName, mode) =>
-                onOpenTab({ kind: "app", name: appName }, mode)
-              }
-            />
-          </SidebarSection>
-        );
-      case "files":
-        return (
-          <SidebarSection
-            title={section.title ?? "Files"}
-            defaultOpen={defaultOpen}
-          >
-            <FilesNav
-              projectId={projectId}
-              contentOnly={memberShell}
-              activePath={activeFilePath}
-              onEmptyChange={setEmpty}
-              onOpen={onOpenFile}
-            />
-          </SidebarSection>
-        );
-      case "chats":
-        return (
-          <SidebarSection
-            title={section.title ?? "Chats"}
-            defaultOpen={defaultOpen}
-            action={
-              <ShortcutHint label="New chat" shortcut={keybindingLabel}>
-                <button
-                  type="button"
-                  onClick={onNewChat}
-                  className="grid size-6 cursor-pointer place-items-center rounded text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-                  aria-label="New chat"
-                >
-                  <Plus className="size-3.5" />
-                </button>
-              </ShortcutHint>
-            }
-          >
-            <SessionsNav
-              projectId={projectId}
-              activeSessionId={activeChatSessionId}
-              agentsData={agentsData}
-              defaultAgentId={defaultAgentId}
-              projectAgentNames={projectAgentNames}
-              unreadSessionIds={unreadSessionIds}
-              onEmptyChange={setEmpty}
-              onCommand={onSessionCommand}
-              onSelect={onOpenSession}
-              onSessionAction={onSessionAction}
-            />
-          </SidebarSection>
-        );
-      case "tabs":
-        return tabs ? (
-          <SidebarSection
-            title={section.title ?? "Tabs"}
-            defaultOpen={defaultOpen}
-          >
-            {tabs}
-          </SidebarSection>
-        ) : null;
-      case "bookmarks":
-        if (!profileId) return null;
-        return (
-          <SidebarSection
-            title={section.title ?? "Bookmarks"}
-            defaultOpen={defaultOpen}
-          >
-            <BookmarksNav
-              projectId={projectId}
-              profileId={profileId}
-              pinnedStyle={pinnedStyle}
-              defaultOpenMode={section.open}
-              menuOverride={section.menu}
-              onEmptyChange={setEmpty}
-              onOpen={(url, mode) =>
-                onOpenUrl(url, mode ?? section.open ?? "replace")
-              }
-            />
-          </SidebarSection>
-        );
-      case "git":
-        return (
-          <SidebarSection
-            title={section.title ?? "Changes"}
-            defaultOpen={defaultOpen}
-          >
-            {(expanded) => (
-              <GitNav
-                key={projectId}
-                visible={visible && expanded}
-                activeSessionId={activeChatSessionId}
-                projectId={projectId}
-                onOpenDiff={onOpenTab}
-                onEmptyChange={setEmpty}
-              />
-            )}
-          </SidebarSection>
-        );
-      case "prs":
-        return (
-          <SidebarSection
-            title={section.title ?? "Pull Requests"}
-            defaultOpen={defaultOpen}
-          >
-            <PrsNav
-              projectId={projectId}
-              onOpenDiff={onOpenTab}
-              onOpenUrl={onOpenUrl}
-              onEmptyChange={setEmpty}
-            />
-          </SidebarSection>
-        );
-      case "remote":
-        return (
-          <SidebarSection
-            title={section.title ?? "Server"}
-            defaultOpen={defaultOpen}
-          >
-            <RemoteNav
-              projectId={projectId}
-              onEmptyChange={setEmpty}
-              onOpenFile={onOpenFile}
-              onOpenHistory={onOpenHistory}
-              onPublish={onPublish}
-              onPropose={onPropose}
-            />
-          </SidebarSection>
-        );
-      case "custom":
-        return (
-          <SidebarSection
-            title={section.title ?? "Links"}
-            defaultOpen={defaultOpen}
-          >
-            <CustomItems
-              section={section}
-              experienceContext={experienceContext}
-              onOpenUrl={onOpenUrl}
-              onEmptyChange={setEmpty}
-            />
-          </SidebarSection>
-        );
-      default:
-        return null;
-    }
-  })();
-  if (!body) return null;
-  if (!hideEmpty) return body;
-  return <div className={empty ? "hidden" : undefined}>{body}</div>;
-}
-
-/**
- * A user-defined section's items. Same row component as bookmarks, so a
- * config-authored item gets the identical ⋯ menu behavior; only the
- * bookmark-specific actions (pin/rename/remove) are inert here.
- */
-function CustomItems({
-  section,
-  experienceContext,
-  onOpenUrl,
-  onEmptyChange,
-}: {
-  section: SidebarSectionConfig;
-  experienceContext: ProjectExperienceContext;
-  onOpenUrl: (url: string, mode: CommitMode) => void;
-  onEmptyChange?: (empty: boolean) => void;
-}) {
-  const items = (section.items ?? []).filter((item) =>
-    sidebarItemVisible(item, experienceContext),
-  );
-  const isEmpty = items.length === 0;
-  useEffect(() => {
-    onEmptyChange?.(isEmpty);
-  }, [isEmpty, onEmptyChange]);
-  if (items.length === 0) {
-    return <p className="sidebar-empty-state">No items yet.</p>;
-  }
-  return (
-    <ul className="flex flex-col gap-0.5">
-      {items.map((item) => (
-        <CustomItem
-          key={JSON.stringify(item)}
-          item={item}
-          section={section}
-          experienceContext={experienceContext}
-          onOpenUrl={onOpenUrl}
-        />
-      ))}
-    </ul>
-  );
-}
-
-function CustomItem({
-  item,
-  section,
-  experienceContext,
-  onOpenUrl,
-}: {
-  item: SidebarItem;
-  section: SidebarSectionConfig;
-  experienceContext: ProjectExperienceContext;
-  onOpenUrl: (url: string, mode: CommitMode) => void;
-}) {
-  const [open, setOpen] = useState(item.collapsed !== true);
-  const children = (item.items ?? []).filter((child) =>
-    sidebarItemVisible(child, experienceContext),
-  );
-  const mode = item.open ?? section.open ?? "replace";
-  const openItem = (intent: CommitMode = mode) => {
-    if (item.url) onOpenUrl(item.url, intent);
-    else if (children.length > 0) setOpen((value) => !value);
-  };
-  return (
-    <li>
-      <SidebarItemRow
-        label={item.label}
-        title={item.url}
-        icon={
-          item.icon ??
-          (item.url ? (
-            <SiteFavicon url={item.url} />
-          ) : (
-            <Folder className="size-3.5 shrink-0 text-fg-faint" />
-          ))
-        }
-        menu={
-          item.url
-            ? (item.menu ?? section.menu ?? DEFAULT_CUSTOM_MENU)
-            : (item.menu ?? [])
-        }
-        preview={item.preview}
-        disclosure={
-          children.length > 0
-            ? { open, onToggle: () => setOpen((value) => !value) }
-            : undefined
-        }
-        resource={Boolean(item.url)}
-        defaultOpenMode={mode}
-        onOpen={openItem}
-        onAction={(entry) => {
-          if (!item.url) return;
-          switch (entry.action) {
-            case "open":
-              onOpenUrl(item.url, mode);
-              break;
-            case "open-tab":
-              onOpenUrl(item.url, "tab");
-              break;
-            case "open-here":
-              onOpenUrl(item.url, "replace");
-              break;
-            case "copy-url":
-              void navigator.clipboard.writeText(item.url);
-              break;
-            default:
-              break;
-          }
-        }}
-      />
-      {children.length > 0 && (
-        <Collapsible open={open}>
-          <ul className="ml-5 flex flex-col gap-0.5">
-            {children.map((child) => (
-              <CustomItem
-                key={JSON.stringify(child)}
-                item={child}
-                section={section}
-                experienceContext={experienceContext}
-                onOpenUrl={onOpenUrl}
-              />
-            ))}
-          </ul>
-        </Collapsible>
-      )}
-    </li>
-  );
-}
-
-function sidebarItemVisible(
-  item: SidebarItem,
-  context: ProjectExperienceContext,
-): boolean {
-  if (!matchesProjectExperience(item.when, context)) return false;
-  if (item.url) return true;
-  return (item.items ?? []).some((child) => sidebarItemVisible(child, context));
-}
-
-function SidebarSection({
-  title,
-  defaultOpen = false,
-  action,
-  children,
-}: {
-  title: string;
-  defaultOpen?: boolean;
-  action?: ReactNode;
-  children: ReactNode | ((expanded: boolean) => ReactNode);
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  const [visited, setVisited] = useState(defaultOpen);
-  useEffect(() => {
-    setOpen(defaultOpen);
-    if (defaultOpen) setVisited(true);
-  }, [defaultOpen]);
-  return (
-    <section className="sidebar-section pb-2">
-      <div className="flex items-center">
-        <button
-          type="button"
-          onClick={() => {
-            setVisited(true);
-            setOpen((value) => !value);
-          }}
-          className="flex h-7 min-w-0 flex-1 cursor-pointer items-center justify-between gap-2 rounded-md px-2 text-xs font-medium text-fg-muted hover:text-fg"
-          aria-expanded={open}
-        >
-          <span className="truncate">{title}</span>
-          <ChevronRight
-            className={`size-3 shrink-0 transition-transform duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
-              open ? "rotate-90" : ""
-            }`}
-          />
-        </button>
-        {action}
-      </div>
-      <Collapsible open={open}>
-        {typeof children === "function"
-          ? (visited || open) && children(open)
-          : children}
-      </Collapsible>
-    </section>
-  );
-}
-
-function WorkflowsNav({
-  projectId,
-  active,
-  onEmptyChange,
-  onSelect,
-}: {
-  projectId: string;
-  active?: string;
-  /** Reports emptiness up so hide-when-empty sections can drop entirely. */
-  onEmptyChange?: (empty: boolean) => void;
-  onSelect: (
-    workflow: { name: string; displayName?: string },
-    mode?: CommitMode,
-  ) => void;
-}) {
-  const workflowsQuery = useWorkflows(projectId);
-  const workflows = workflowsQuery.data ?? [];
-  const isEmpty = workflows.length === 0;
-  useEffect(() => {
-    onEmptyChange?.(isEmpty);
-  }, [isEmpty, onEmptyChange]);
-  if (workflows.length === 0) {
-    return <p className="sidebar-empty-state">Ask the agent to create one.</p>;
-  }
-  return (
-    <ul className="flex flex-col gap-0.5">
-      {workflows.map((workflow) => (
-        <li key={workflow.name}>
-          <OpenResourceButton
-            type="button"
-            onOpen={(mode) =>
-              onSelect(
-                {
-                  name: workflow.name,
-                  displayName: workflow.displayName ?? undefined,
-                },
-                mode,
-              )
-            }
-            className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${
-              workflow.name === active
-                ? "bg-bg-overlay text-fg"
-                : "text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
-            }`}
-          >
-            <WorkflowIcon className="size-3.5 shrink-0" />
-            <span className="truncate">
-              {workflow.displayName ?? workflow.name}
-            </span>
-          </OpenResourceButton>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function AppsNav({
-  projectId,
-  active,
-  onEmptyChange,
-  onSelect,
-}: {
-  projectId: string;
-  active?: string;
-  onEmptyChange?: (empty: boolean) => void;
-  onSelect: (appName: string, mode?: CommitMode) => void;
-}) {
-  const appsQuery = useApps(projectId);
-  const apps = appsQuery.data ?? [];
-  const isEmpty = apps.length === 0;
-  useEffect(() => {
-    onEmptyChange?.(isEmpty);
-  }, [isEmpty, onEmptyChange]);
-  if (apps.length === 0) {
-    return <p className="sidebar-empty-state">Ask the agent to build one.</p>;
-  }
-  return (
-    <ul className="flex flex-col gap-0.5">
-      {apps.map((app) => (
-        <li key={app.name} data-point-key={`app:${app.name}`}>
-          <OpenResourceButton
-            type="button"
-            onOpen={(mode) => onSelect(app.name, mode)}
-            className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${
-              app.name === active
-                ? "bg-bg-overlay text-fg"
-                : "text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
-            }`}
-          >
-            <LayoutGrid className="size-3.5 shrink-0" />
-            <span className="truncate">{app.name}</span>
-          </OpenResourceButton>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function SessionsNav({
-  projectId,
-  activeSessionId,
-  agentsData,
-  defaultAgentId,
-  projectAgentNames,
-  unreadSessionIds,
-  onEmptyChange,
-  onCommand,
-  onSelect,
-  onSessionAction,
-}: {
-  projectId: string;
-  activeSessionId?: string;
-  agentsData: AgentsData | null;
-  defaultAgentId: string | null;
-  projectAgentNames: Record<string, string>;
-  unreadSessionIds: ReadonlySet<string>;
-  onEmptyChange?: (empty: boolean) => void;
-  onCommand: (session: AgentSession, command: SessionCommand) => void;
-  onSelect: (session: AgentSession, mode?: CommitMode) => void;
-  onSessionAction: (sessionId: string, action: ChatSessionAction) => void;
-}) {
-  const sessionsQuery = useAgentSessions(projectId, { limit: 100 });
-  const sessions = useMemo(
-    () =>
-      (sessionsQuery.data?.items ?? []).filter(
-        (session) => session.visibility === "promoted",
-      ),
-    [sessionsQuery.data?.items],
-  );
-  const [renderedSessions, setRenderedSessions] = useState<
-    Array<{ session: AgentSession; exiting: boolean }>
-  >([]);
-  useEffect(() => {
-    const currentById = new Map(
-      sessions.map((session) => [session.id, session]),
-    );
-    setRenderedSessions((current) => {
-      const currentIds = new Set(current.map((entry) => entry.session.id));
-      return [
-        ...current.map((entry) => ({
-          session: currentById.get(entry.session.id) ?? entry.session,
-          exiting: !currentById.has(entry.session.id),
-        })),
-        ...sessions
-          .filter((session) => !currentIds.has(session.id))
-          .map((session) => ({ session, exiting: false })),
-      ];
-    });
-    const timer = window.setTimeout(() => {
-      setRenderedSessions((current) =>
-        current.filter((entry) => currentById.has(entry.session.id)),
-      );
-    }, 180);
-    return () => window.clearTimeout(timer);
-  }, [sessions]);
-  const [collapsedParents, setCollapsedParents] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const [checkouts, setCheckouts] = useState<SessionCheckoutInfo[]>([]);
-  useEffect(() => {
-    const load = () => {
-      void desktopApi.sessionCheckouts(projectId).then(setCheckouts);
-    };
-    load();
-    return desktopApi.onGitChanged((event) => {
-      if (event.projectId === projectId) load();
-    });
-  }, [projectId]);
-  const checkoutBySession = new Map(
-    checkouts.map((checkout) => [checkout.sessionId, checkout]),
-  );
-  const isEmpty = sessions.length === 0;
-  useEffect(() => {
-    onEmptyChange?.(isEmpty);
-  }, [isEmpty, onEmptyChange]);
-  if (sessions.length === 0 && renderedSessions.length === 0) {
-    return <p className="sidebar-empty-state">No chats yet.</p>;
-  }
-  const renderedByParent = new Map<string | null, typeof renderedSessions>();
-  const renderedIds = new Set(
-    renderedSessions.map((entry) => entry.session.id),
-  );
-  for (const entry of renderedSessions) {
-    const parentId =
-      entry.session.parentSessionId &&
-      renderedIds.has(entry.session.parentSessionId)
-        ? entry.session.parentSessionId
-        : null;
-    const siblings = renderedByParent.get(parentId) ?? [];
-    siblings.push(entry);
-    renderedByParent.set(parentId, siblings);
-  }
-  const renderBranch = (parentId: string | null, depth: number): ReactNode =>
-    (renderedByParent.get(parentId) ?? []).map(({ session, exiting }) => {
-      const checkout = checkoutBySession.get(session.id);
-      const children = renderedByParent.get(session.id) ?? [];
-      const collapsed = collapsedParents.has(session.id);
-      const agentId = session.agentId ?? defaultAgentId;
-      const agentName =
-        agentsData?.agents.find((agent) => agent.id === agentId)?.name ??
-        (agentId ? projectAgentNames[agentId] : undefined) ??
-        "Default";
-      const checkoutLabel = checkout
-        ? checkout.kind === "external"
-          ? "External"
-          : (checkout.branch ?? "Worktree")
-        : undefined;
-      return (
-        <li
-          key={session.id}
-          data-session-id={session.id}
-          draggable
-          onDragStart={(event) => {
-            const url = chatBookmarkUrl({ projectId, sessionId: session.id });
-            event.dataTransfer.setData(
-              TAB_DRAG_TYPE,
-              JSON.stringify({
-                key: `session:${session.id}`,
-                kind: "chat",
-                title: sessionLabel(session),
-                bookmarkUrl: url,
-              } satisfies TabDragPayload),
-            );
-            event.dataTransfer.setData("text/uri-list", url);
-            event.dataTransfer.effectAllowed = "copy";
-          }}
-          className={
-            exiting ? "animate-session-row-out" : "animate-session-row-in"
-          }
-        >
-          <SidebarItemRow
-            style={{ marginLeft: depth * 14 }}
-            label={sessionLabel(session)}
-            disclosure={
-              children.length > 0
-                ? {
-                    open: !collapsed,
-                    onToggle: () =>
-                      setCollapsedParents((current) => {
-                        const next = new Set(current);
-                        if (next.has(session.id)) next.delete(session.id);
-                        else next.add(session.id);
-                        return next;
-                      }),
-                  }
-                : undefined
-            }
-            icon={
-              <ChatGlyph
-                icon={session.icon}
-                fork={Boolean(session.parentSessionId)}
-                className="size-3.5 shrink-0"
-              />
-            }
-            active={session.id === activeSessionId}
-            labelContent={
-              <>
-                <AnimatedTitle text={sessionLabel(session)} />
-                {session.attentionRequired ? (
-                  <span className="sr-only">Ready for you</span>
-                ) : unreadSessionIds.has(session.id) ? (
-                  <span className="sr-only">Unread</span>
-                ) : null}
-              </>
-            }
-            menu={chatSessionMenu({
-              unread: unreadSessionIds.has(session.id),
-              archived: false,
-            })}
-            preview={{
-              title: sessionLabel(session),
-              description: session.activity ?? undefined,
-              metadata: [
-                { label: "Agent", value: agentName },
-                {
-                  label: "Environment",
-                  value: session.environment ?? "Default",
-                },
-                {
-                  label: "Status",
-                  value: session.running
-                    ? "Working"
-                    : session.status === "closed"
-                      ? "Closed"
-                      : "Ready",
-                },
-                ...(checkoutLabel
-                  ? [{ label: "Checkout", value: checkoutLabel }]
-                  : []),
-              ],
-            }}
-            previewContent={
-              <SidebarSessionInspector
-                projectId={projectId}
-                session={session}
-                agent={agentsData?.agents.find((agent) => agent.id === agentId)}
-                agentName={agentName}
-                checkout={checkout ?? null}
-                onCommand={(command) => onCommand(session, command)}
-                onArchive={() => onSessionAction(session.id, "archive")}
-              />
-            }
-            end={
-              <>
-                {(session.attentionRequired ||
-                  unreadSessionIds.has(session.id)) && (
-                  <span
-                    data-testid={
-                      session.attentionRequired
-                        ? "session-attention"
-                        : "session-unread"
-                    }
-                    className="grid size-3 shrink-0 place-items-center"
-                    aria-hidden="true"
-                  >
-                    <SignalBadge
-                      signals={{
-                        attention: session.attentionRequired,
-                        unread: unreadSessionIds.has(session.id),
-                      }}
-                      size="sm"
-                    />
-                  </span>
-                )}
-                {checkoutLabel ? (
-                  <span className="ml-auto flex max-w-28 shrink-0 items-center gap-1 truncate rounded bg-bg-inset px-1.5 py-0.5 text-[10px] text-fg-faint">
-                    <GitBranch className="size-2.5 shrink-0" />
-                    <span className="truncate">{checkoutLabel}</span>
-                  </span>
-                ) : null}
-              </>
-            }
-            resource
-            onOpen={(mode) => onSelect(session, mode)}
-            onAction={(entry) => onSessionAction(session.id, entry.action)}
-          />
-          {children.length > 0 && (
-            <Collapsible open={!collapsed}>
-              <ul>{renderBranch(session.id, depth + 1)}</ul>
-            </Collapsible>
-          )}
-        </li>
-      );
-    });
-  return <ul className="flex flex-col gap-0.5">{renderBranch(null, 0)}</ul>;
-}
-
-function sessionLabel(session: AgentSession): string {
-  if (session.title) return session.title;
-  const created = new Date(session.createdAt);
-  return `Chat ${created.toLocaleDateString()} ${created.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
 }
 
 function EmptyState({

@@ -135,24 +135,24 @@ export class DeploymentRuntimeService {
               ).providerId;
             const projectDirectory = `${this.deps.provider.workspaceRoot}/deployments/${args.artifact.id}/project`;
 
-            if (!existing) {
-              await this.deps.artifacts.markStatus({
-                artifactId: args.artifact.id,
-                status: "building",
-              });
-              await this.materialize({
-                sandboxId,
-                projectDirectory,
-                files: args.files,
-                originalFiles: args.originalFiles,
-                cloneSource: args.cloneSource,
-                plugins: args.plugins,
-              });
-            } else {
-              await this.deps.provider.startSandbox(sandboxId);
-            }
-
             try {
+              if (!existing) {
+                await this.deps.artifacts.markStatus({
+                  artifactId: args.artifact.id,
+                  status: "building",
+                });
+                await this.materialize({
+                  sandboxId,
+                  projectDirectory,
+                  files: args.files,
+                  originalFiles: args.originalFiles,
+                  cloneSource: args.cloneSource,
+                  plugins: args.plugins,
+                });
+              } else {
+                await this.deps.provider.startSandbox(sandboxId);
+              }
+
               const runtime = await runtimeProvider.ensureRuntime({
                 sandboxId,
                 deploymentArtifactId: args.artifact.id,
@@ -599,7 +599,7 @@ export class DeploymentRuntimeService {
       args.sandboxId,
       workflowFallback
         ? "bun install --no-save"
-        : "if [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile; else bun install --no-save; fi",
+        : "if [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile --production --filter '!./apps/*'; else bun install --no-save; fi",
       {
         cwd: args.projectDirectory,
         timeout: 300,

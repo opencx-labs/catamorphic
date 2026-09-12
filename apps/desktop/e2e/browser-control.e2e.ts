@@ -62,7 +62,7 @@ beforeAll(async () => {
   await app.eval(
     `window.catamorphicDesktop.createProject({name:'Browser testing',rootPath:${JSON.stringify(path.join(app.userDataDir, "browser-project"))}})`,
   );
-  await app.eval("location.reload()");
+  await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Browser testing')`);
   await app.eval(`window.catamorphicDesktop.devWindow('setSize',1200,850)`);
   await app.eval(
@@ -238,7 +238,7 @@ it("captures model images and points inside a page, follows scrolling and clears
     uid: await uid("Destination"),
     note: "Edit destination",
   });
-  await tool("clear_pointers", {});
+  await tool("point_at", { target: null });
   expect(
     await guest.eval(`!!document.querySelector('[data-catamorphic-pointer]')`),
   ).toBe(false);

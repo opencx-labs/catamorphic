@@ -1,5 +1,5 @@
 import { useCatamorphic } from "@catamorphic/react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 /**
  * A skill as the palette and composer see it: the tiers merged by core
@@ -24,30 +24,68 @@ export interface SkillInfo {
 export function useProjectSkills(
   projectId: string | undefined,
   active: boolean,
-  /** Bump to refetch while `active` stays true (e.g. per palette open). */
   refresh = 0,
 ): SkillInfo[] {
+  return useProjectSkillCatalog(projectId, active, refresh).skills;
+}
+
+export function useProjectSkillCatalog(
+  projectId: string | undefined,
+  active: boolean,
+  refresh = 0,
+) {
   const { apiClient } = useCatamorphic();
-  const [skills, setSkills] = useState<SkillInfo[]>([]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `refresh` is a deliberate retrigger — bumping it refetches with nothing else changed
+  // A reopening is a new request even for the same project. Scope the result
+  // during render so old rows cannot flash before the refresh effect runs.
+  const request = useMemo(
+    () => ({ projectId, active, refresh, apiClient }),
+    [projectId, active, refresh, apiClient],
+  );
+  const [catalog, setCatalog] = useState<{
+    request?: typeof request;
+    skills: SkillInfo[];
+    loading: boolean;
+    error?: string;
+  }>({ skills: [], loading: true });
   useEffect(() => {
-    if (!active || !projectId) return;
+    if (!request.active || !request.projectId) return;
     let cancelled = false;
-    void apiClient
+    setCatalog({ request, skills: [], loading: true });
+    void request.apiClient
       .GET("/api/projects/{projectId}/skills", {
-        params: { path: { projectId } },
+        params: { path: { projectId: request.projectId } },
       })
       .then((result) => {
-        if (!cancelled && result.data) setSkills(result.data);
+        if (!result.data) throw new Error("Could not load skills.");
+        if (!cancelled)
+          setCatalog({ request, skills: result.data, loading: false });
       })
       .catch(() => {
-        if (!cancelled) setSkills([]);
+        if (!cancelled)
+          setCatalog({
+            request,
+            skills: [],
+            loading: false,
+            error: "Could not load skills. Retry to refresh the list.",
+          });
       });
     return () => {
       cancelled = true;
     };
-  }, [active, projectId, apiClient, refresh]);
-  return skills;
+  }, [request]);
+  return catalog.request === request
+    ? catalog
+    : { skills: [], loading: active };
+}
+
+/** Shared by both skill launchers; an empty picked set really offers no skills. */
+export function skillsForAgent(
+  skills: SkillInfo[],
+  setting?: { mode: "all" } | { mode: "picked"; names: string[] },
+): SkillInfo[] {
+  return setting?.mode === "picked"
+    ? skills.filter((skill) => setting.names.includes(skill.name))
+    : skills;
 }
 
 /**

@@ -120,9 +120,28 @@ export class AppStorageService {
     return this.db
       .selectFrom("apps")
       .innerJoin("projects", "projects.id", "apps.project_id")
+      .leftJoin(
+        "session_artifacts",
+        "session_artifacts.id",
+        "apps.session_artifact_id",
+      )
       .where("projects.tenant_id", "=", identity.tenantId)
       .where("apps.project_id", "=", projectId)
       .where("apps.name", "=", appName)
+      .where(({ or, and, eb }) =>
+        or([
+          eb("apps.session_artifact_id", "is", null),
+          and([
+            eb(
+              "session_artifacts.owner_external_user_id",
+              "=",
+              identity.externalUserId,
+            ),
+            eb("session_artifacts.status", "=", "active"),
+            eb("session_artifacts.session_id", "is not", null),
+          ]),
+        ]),
+      )
       .select(["apps.id"])
       .executeTakeFirst();
   }

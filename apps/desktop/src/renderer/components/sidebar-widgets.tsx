@@ -1,12 +1,7 @@
-import {
-  useAgentSession,
-  useAgentSessions,
-  useRuns,
-  useWorkflows,
-} from "@catamorphic/react";
+import { useAgentSessions, useRuns, useWorkflows } from "@catamorphic/react";
 import type { AgentSession } from "@catamorphic/react/types";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { desktopApi } from "../lib/desktop-api.js";
@@ -15,6 +10,12 @@ import {
   useLocalProjectFiles,
 } from "../lib/local-project-files.js";
 import { OpenResourceButton } from "./open-resource-button.js";
+import {
+  useSidebarContent,
+  useSidebarRefresh,
+} from "./sidebar-contribution.js";
+import { SidebarItemRow } from "./sidebar-item-row.js";
+import { SidebarTree } from "./sidebar-tree.js";
 import type { WorkspaceTab } from "./workspace-tabs.js";
 
 export function SidebarActivity({
@@ -33,41 +34,73 @@ export function SidebarActivity({
     refetchInterval: visible ? 2000 : false,
   });
   const workflows = useWorkflows(projectId);
+  useSidebarRefresh(sessions.refetch);
+  useSidebarRefresh(workflows.refetch);
   const active = (sessions.data?.items ?? []).filter(
     (session) => session.running || session.attentionRequired,
+  );
+  const [workflowStates, setWorkflowStates] = useState<
+    ReadonlyMap<string, { count: number; loading: boolean; error: boolean }>
+  >(new Map());
+  const reportWorkflow = useCallback(
+    (
+      name: string,
+      state: { count: number; loading: boolean; error: boolean },
+    ) => {
+      setWorkflowStates((current) => {
+        const before = current.get(name);
+        return before?.count === state.count &&
+          before.loading === state.loading &&
+          before.error === state.error
+          ? current
+          : new Map(current).set(name, state);
+      });
+    },
+    [],
+  );
+  const states = (workflows.data ?? []).map((workflow) =>
+    workflowStates.get(workflow.name),
+  );
+  useSidebarContent(
+    sessions.isError ||
+      workflows.isError ||
+      states.some((state) => state?.error)
+      ? "error"
+      : sessions.isLoading ||
+          workflows.isLoading ||
+          states.some((state) => !state || state.loading)
+        ? "loading"
+        : active.length || states.some((state) => state?.count)
+          ? "ready"
+          : "empty",
   );
   return (
     <div className="text-xs">
       {sessions.isError && (
-        <p className="px-2 py-1 text-warning">Could not load activity.</p>
+        <p role="alert" className="sidebar-empty-state">
+          Could not load activity.{" "}
+          <button type="button" onClick={() => void sessions.refetch()}>
+            Retry
+          </button>
+        </p>
       )}
-      {active.map((session) => (
-        <OpenResourceButton
-          key={session.id}
-          type="button"
-          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-bg-overlay"
-          onOpen={(mode) => onOpenSession(session, mode)}
-        >
-          <span
-            className={`size-1.5 shrink-0 rounded-full ${session.attentionRequired ? "bg-accent" : "bg-success"}`}
+      <SidebarTree
+        items={active}
+        label="Agent activity"
+        renderItem={(session) => (
+          <SidebarItemRow
+            itemId={session.id}
+            label={session.title ?? "Untitled chat"}
+            icon="MessageSquare"
+            resource
+            description={session.activity ?? undefined}
+            badges={[session.attentionRequired ? "Needs you" : "Working"]}
+            onOpen={(mode) => onOpenSession(session, mode)}
+            onAction={() => {}}
           />
-          <span className="min-w-0 flex-1 truncate">
-            {session.title ?? "Untitled chat"}
-          </span>
-          <span className="shrink-0 text-fg-faint">
-            {session.attentionRequired ? (
-              "Needs you"
-            ) : (
-              <SessionActivity
-                projectId={projectId}
-                sessionId={session.id}
-                visible={visible}
-              />
-            )}
-          </span>
-        </OpenResourceButton>
-      ))}
-      {!sessions.isLoading && !sessions.isError && active.length === 0 && (
+        )}
+      />
+      {!sessions.isLoading && !sessions.isError && !active.length && (
         <p className="sidebar-empty-state">No agents need attention.</p>
       )}
       {(workflows.data ?? []).map((workflow) => (
@@ -77,58 +110,27 @@ export function SidebarActivity({
           name={workflow.name}
           visible={visible}
           onOpenTab={onOpenTab}
+          report={reportWorkflow}
         />
       ))}
     </div>
   );
 }
-function SessionActivity({
-  projectId,
-  sessionId,
-  visible,
-}: {
-  projectId: string;
-  sessionId: string;
-  visible: boolean;
-}) {
-  const detail = useAgentSession(
-    visible ? projectId : undefined,
-    visible ? sessionId : undefined,
-    { refetchInterval: visible ? 2000 : false },
-  );
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    if (!visible) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [visible]);
-  const execution = detail.data?.execution;
-  const started = execution?.activityAt ?? execution?.startedAt;
-  const seconds = started
-    ? Math.max(0, Math.floor((now - Date.parse(started)) / 1000))
-    : null;
-  const activity = execution?.activity ?? "Preparing";
-  return (
-    <span
-      title={activity}
-      className="inline-block max-w-44 truncate align-bottom"
-    >
-      {activity}
-      {seconds !== null && Number.isFinite(seconds) ? ` · ${seconds}s` : ""}
-    </span>
-  );
-}
-
 function WorkflowActivity({
   projectId,
   name,
   visible,
   onOpenTab,
+  report,
 }: {
   projectId: string;
   name: string;
   visible: boolean;
   onOpenTab: (tab: WorkspaceTab, mode?: OpenMode) => void;
+  report: (
+    name: string,
+    state: { count: number; loading: boolean; error: boolean },
+  ) => void;
 }) {
   const runs = useRuns({
     projectId,
@@ -136,36 +138,44 @@ function WorkflowActivity({
     limit: 10,
     pollInterval: visible ? 2000 : false,
   });
-  const refetch = runs.refetch;
-  useEffect(() => {
-    if (!visible) return;
-    const timer = window.setInterval(() => {
-      if (!document.hidden) void refetch();
-    }, 10000);
-    return () => window.clearInterval(timer);
-  }, [visible, refetch]);
+  useSidebarRefresh(runs.refetch);
   const active = (runs.data?.items ?? []).filter((run) =>
     ["pending", "running", "waiting", "paused", "failed"].includes(run.status),
   );
+  useEffect(
+    () =>
+      report(name, {
+        count: active.length,
+        loading: runs.isLoading,
+        error: runs.isError,
+      }),
+    [name, active.length, runs.isLoading, runs.isError, report],
+  );
   return (
     <>
-      {active.map((run) => (
-        <OpenResourceButton
-          key={run.id}
-          type="button"
-          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-bg-overlay"
-          onOpen={(mode) => onOpenTab({ kind: "workflow", name }, mode)}
-        >
-          <span className="min-w-0 flex-1 truncate">{name}</span>
-          <span
-            className={
-              run.status === "failed" ? "text-warning" : "text-fg-faint"
-            }
-          >
-            {run.status}
-          </span>
-        </OpenResourceButton>
-      ))}
+      {runs.isError && (
+        <p role="alert" className="sidebar-empty-state">
+          Could not load {name} activity.{" "}
+          <button type="button" onClick={() => void runs.refetch()}>
+            Retry
+          </button>
+        </p>
+      )}
+      <SidebarTree
+        items={active}
+        label={`${name} activity`}
+        renderItem={(run) => (
+          <SidebarItemRow
+            itemId={run.id}
+            label={name}
+            icon="Workflow"
+            resource
+            badges={[run.status]}
+            onOpen={(mode) => onOpenTab({ kind: "workflow", name }, mode)}
+            onAction={() => {}}
+          />
+        )}
+      />
     </>
   );
 }
@@ -196,6 +206,16 @@ export function SidebarNote({
       }),
     enabled: Boolean(file) && visible,
   });
+  useSidebarContent(
+    note.isError || files.isError
+      ? "error"
+      : file && note.isPending
+        ? "loading"
+        : file
+          ? "ready"
+          : "empty",
+  );
+  useSidebarRefresh(note.refetch);
   const refetch = note.refetch;
   const refetchFiles = files.refetch;
   useEffect(() => {

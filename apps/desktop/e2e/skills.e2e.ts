@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, describe, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 /**
@@ -184,6 +184,10 @@ describe("skills as commands", () => {
        row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
        return true;`,
     );
+    expect(await run(`return composer().textContent;`)).toBe("/team");
+    await run(
+      `$('[data-testid="slash-menu"] [data-skill-name="team-notes"]').click(); return true;`,
+    );
     await runWait(
       `return !!byText('section[aria-label] *', 'skill loaded: team-notes') &&
               !!byText('section[aria-label] *', 'source:project');`,
@@ -191,11 +195,286 @@ describe("skills as commands", () => {
     );
   });
 
+  it("uses live input when Enter arrives before the menu rerenders", async () => {
+    await run(`setReactValue(composer(), '/team'); return true;`);
+    await runWait(
+      `return !!$('[data-testid="slash-menu"] [data-skill-name="team-notes"]');`,
+    );
+    await run(
+      `setReactValue(composer(), 'Keep this freshly typed message'); composerKey('Enter'); return true;`,
+    );
+    await runWait(
+      `return !!byText('[role="log"] *', 'You said: Keep this freshly typed message');`,
+    );
+
+    await run(`setReactValue(composer(), '/team'); return true;`);
+    await runWait(
+      `return !!$('[data-testid="slash-menu"] [data-skill-name="team-notes"]');`,
+    );
+    await run(
+      `setReactValue(composer(), '/team-notes keep the freshly typed arguments'); composerKey('Tab'); composer().closest('form').requestSubmit(); return true;`,
+    );
+    await runWait(
+      `return !!byText('[role="log"] *', 'Use the "team-notes" skill: keep the freshly typed arguments');`,
+    );
+  });
+
+  it("completes a command with Tab, leaves space for arguments, and keeps IME and Escape safe", async () => {
+    await run(`setReactValue(composer(), '/team'); return true;`);
+    await runWait(
+      `return !!$('[data-testid="slash-menu"] [data-skill-name="team-notes"]') && !$('[aria-label="Commands"][aria-busy="true"]');`,
+    );
+    await run(`composerKey('Enter', { isComposing: true }); return true;`);
+    expect(await run(`return composer().textContent;`)).toBe("/team");
+    await run(`composerKey('Escape'); return true;`);
+    await runWait(`return !$('[data-testid="slash-menu"]');`);
+    expect(await run(`return !!composer();`)).toBe(true);
+    await run(`setReactValue(composer(), '/team-'); return true;`);
+    await runWait(`return !!$('[data-testid="slash-menu"]');`);
+    await run(`composerKey('Tab'); return true;`);
+    await runWait(`return !$('[data-testid="slash-menu"]');`);
+    expect(
+      await run(`return composer().textContent.replaceAll('\u00a0', ' ');`),
+    ).toBe("/team-notes ");
+    await run(
+      `setReactValue(composer(), '/team-notes include the decisions'); return true;`,
+    );
+    await run(`composer().closest('form').requestSubmit(); return true;`);
+    await runWait(
+      `return !!byText('[role="log"] *', 'Use the "team-notes" skill: include the decisions');`,
+    );
+  });
+
+  it("shows an empty state and links keyboard navigation to the active option", async () => {
+    await run(`setReactValue(composer(), '/zzzznonexistent'); return true;`);
+    await runWait(
+      `return !!byText('[data-testid="slash-menu"]', 'No matching commands');`,
+    );
+    await run(`setReactValue(composer(), '/'); return true;`);
+    await runWait(
+      `return $('[data-testid="slash-menu"] [role="option"]') && !$('[aria-label="Commands"][aria-busy="true"]');`,
+    );
+    await run(`composerKey('ArrowDown'); return true;`);
+    await runWait(
+      `const active = document.getElementById(composer().getAttribute('aria-activedescendant')); return active && active.getAnimations().length === 0;`,
+    );
+    await app.screenshot("/tmp/catamorphic-slash-menu.png");
+    expect(
+      await run(
+        `const active = document.getElementById(composer().getAttribute('aria-activedescendant')); return active?.getAttribute('aria-selected');`,
+      ),
+    ).toBe("true");
+    expect(
+      await run(
+        `return !!document.getElementById(composer().getAttribute('aria-controls'));`,
+      ),
+    ).toBe(true);
+    await run(
+      `composerKey('Escape'); setReactValue(composer(), ''); return true;`,
+    );
+  });
+
+  it("keeps the selected row visible in the compact light composer", async () => {
+    await app.eval(
+      `window.catamorphicDesktop.setTheme({selection:'light',overrides:{}})`,
+    );
+    await app.waitFor(`document.documentElement.dataset.theme === 'light'`);
+    await app.eval(`window.catamorphicDesktop.devWindow('setSize',840,650)`);
+    await run(`setReactValue(composer(), '/'); return true;`);
+    await runWait(
+      `return $('[data-testid="slash-menu"] [role="option"]') && !$('[aria-label="Commands"][aria-busy="true"]');`,
+    );
+    for (let index = 0; index < 20; index++)
+      await run(`composerKey('ArrowDown'); return true;`);
+    await runWait(
+      `const list = document.getElementById(composer().getAttribute('aria-controls')); const active = document.getElementById(composer().getAttribute('aria-activedescendant')); if (!list || !active) return false; const a = active.getBoundingClientRect(), b = list.getBoundingClientRect(); return a.top >= b.top - 1 && a.bottom <= b.bottom + 1 && active.getAnimations().length === 0;`,
+    );
+    await app.screenshot("/tmp/catamorphic-slash-menu-light.png");
+    expect(app.getRendererErrors()).toEqual([]);
+    await run(
+      `composerKey('Escape'); setReactValue(composer(), ''); return true;`,
+    );
+    await app.eval(
+      `window.catamorphicDesktop.setTheme({selection:'dark',overrides:{}})`,
+    );
+    await app.eval(`window.catamorphicDesktop.devWindow('setSize',1200,800)`);
+  });
+
+  it("surfaces discovery errors, preserves the draft, and recovers with Retry", async () => {
+    await app.blockRequests(["*/api/projects/*/skills"]);
+    try {
+      await run(`setReactValue(composer(), '/team'); return true;`);
+      await runWait(
+        `return !!byText('[data-testid="slash-menu"]', 'Could not load skills');`,
+      );
+      await run(`composer().closest('form').requestSubmit(); return true;`);
+      expect(await run(`return composer().textContent;`)).toBe("/team");
+    } finally {
+      await app.blockRequests([]);
+    }
+    await run(
+      `byText('[data-testid="slash-menu"] button', 'Retry').click(); return true;`,
+    );
+    await runWait(
+      `return !!$('[data-testid="slash-menu"] [data-skill-name="team-notes"]');`,
+    );
+    await run(`setReactValue(composer(), ''); return true;`);
+  });
+
+  it("returns only the selected harness's native commands through the real desktop bridge", async () => {
+    const result = await app.eval<{
+      builtin: string[];
+      claude: string[];
+      codex: string[];
+    }>(`(async () => {
+      const api = window.catamorphicDesktop;
+      const state = await api.getServerState();
+      const projects = await (await fetch(state.url + '/api/projects')).json();
+      const projectId = projects.items.find(p => p.name === 'e2e-skills').id;
+      const result = {};
+      for (const [key, harness] of [['builtin', 'ai-sdk'], ['claude', 'claude-code'], ['codex', 'codex']]) {
+        const agent = await api.agentsCreate({ name: 'Catalog ' + key, harness, auth: 'local' });
+        const catalog = await api.agentCommands({ projectId, agentId: agent.id });
+        if (catalog.error) throw new Error(catalog.error);
+        result[key] = catalog.commands.map(command => command.name);
+      }
+      return result;
+    })()`);
+    expect(result.builtin).toEqual([]);
+    expect(result.claude).toContain("compact");
+    expect(result.codex).toEqual(["native-notes"]);
+  });
+
+  it("requires project-agent consent and refreshes a changed definition before discovery", async () => {
+    const dir = path.join(projectRoot, "agents");
+    fs.mkdirSync(dir, { recursive: true });
+    const definition = {
+      version: 1,
+      name: "Release Claude",
+      kind: "claude-code",
+      credentials: { source: "profile" },
+    };
+    const file = path.join(dir, "release-claude.json");
+    fs.writeFileSync(file, JSON.stringify(definition));
+    const invoke = `(async () => {
+      const api = window.catamorphicDesktop;
+      const state = await api.getServerState();
+      const projects = await (await fetch(state.url + '/api/projects')).json();
+      const projectId = projects.items.find(p => p.name === 'e2e-skills').id;
+      return { api, projectId };
+    })()`;
+    const before = await app.eval<{ error?: string; commands: unknown[] }>(
+      `${invoke}.then(({api,projectId}) => api.agentCommands({projectId,agentId:'project:'+projectId+':release-claude'}))`,
+    );
+    expect(before.error).toBeTruthy();
+    expect(before.commands).toEqual([]);
+    await app.eval(
+      `${invoke}.then(({api,projectId}) => api.projectAgentApprove(projectId, 'release-claude'))`,
+    );
+    const approved = await app.eval<{
+      error?: string;
+      commands: { name: string }[];
+    }>(
+      `${invoke}.then(({api,projectId}) => api.agentCommands({projectId,agentId:'project:'+projectId+':release-claude'}))`,
+    );
+    expect(approved.error).toBeUndefined();
+    expect(
+      approved.commands.some((command) => command.name === "compact"),
+    ).toBe(true);
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ ...definition, model: "changed-model" }),
+    );
+    const stale = await app.eval<{ error?: string; commands: unknown[] }>(
+      `${invoke}.then(({api,projectId}) => api.agentCommands({projectId,agentId:'project:'+projectId+':release-claude'}))`,
+    );
+    expect(stale.error).toBeTruthy();
+    expect(stale.commands).toEqual([]);
+  });
+
+  it("clears stale native rows when switching harnesses in the same chat", async () => {
+    const nativeDir = path.join(projectRoot, ".codex/skills/native-notes");
+    fs.mkdirSync(nativeDir, { recursive: true });
+    fs.writeFileSync(path.join(nativeDir, "SKILL.md"), "Native notes fixture.");
+    for (const [name, command, absent] of [
+      ["Catalog claude", "compact", "native-notes"],
+      ["Catalog codex", "native-notes", "compact"],
+      ["Fake Agent", "team-notes", "native-notes"],
+    ]) {
+      await ensurePalette();
+      await paletteType(">switch agent");
+      await runWait(
+        `const row = paletteRows().find(el => el.textContent.includes('Switch agent for this chat')); if (!row) return false; row.dispatchEvent(new MouseEvent('mousedown', {bubbles:true,cancelable:true})); return true;`,
+      );
+      await runWait(
+        `const row = paletteRows().find(el => el.textContent.includes(${JSON.stringify(name)})); if (!row) return false; row.dispatchEvent(new MouseEvent('mousedown', {bubbles:true,cancelable:true})); return true;`,
+      );
+      await runWait(
+        `return !!byText('[role="log"] div', ${JSON.stringify(`Switched to ${name}`)});`,
+      );
+      await run(`setReactValue(composer(), '/'); return true;`);
+      await runWait(
+        `return !!$('[data-testid="slash-menu"] [data-skill-name="${command}"]') && !$('[aria-label="Commands"][aria-busy="true"]');`,
+      );
+      await runWait(
+        `return !$('[data-testid="slash-menu"] [data-skill-name="${absent}"]');`,
+        { label: `remove ${absent} after switching to ${name}` },
+      );
+      // Use Chromium's editing/keyboard path for each harness, including
+      // Tab completion, trailing whitespace, arguments, and dispatch.
+      await run(
+        `setReactValue(composer(), ''); composer().focus(); return true;`,
+      );
+      await app.insertText(`/${command}`);
+      await runWait(
+        `return !!$('[data-testid="slash-menu"] [data-skill-name="${command}"]');`,
+      );
+      await app.press("Tab");
+      expect(await run(`return composer().textContent;`)).toBe(`/${command} `);
+      await app.insertText("release 42");
+      await app.press("Enter");
+      const reply =
+        name === "Catalog claude"
+          ? "You said: /compact release 42"
+          : name === "Catalog codex"
+            ? "native skill loaded: Native notes fixture. | release 42"
+            : "skill loaded: team-notes";
+      await runWait(
+        `return visibleDock().querySelector('[role="log"]').textContent.includes(${JSON.stringify(reply)});`,
+        { label: `${name} command reply`, timeoutMs: 30_000 },
+      );
+      expect(await run(`return composer().textContent;`)).toBe("");
+    }
+  });
+
+  it("opens local status without sending or discarding attached context", async () => {
+    await run(
+      `const data = new DataTransfer(); data.setData('text/plain', 'Meeting context. '.repeat(100)); composer().dispatchEvent(new ClipboardEvent('paste', {bubbles:true,cancelable:true,clipboardData:data})); return true;`,
+    );
+    await runWait(
+      `return composer().querySelectorAll('[data-pill-id]').length > 0;`,
+    );
+    const count = await run<number>(
+      `return composer().querySelectorAll('[data-pill-id]').length;`,
+    );
+    await run(`setReactValue(composer(), '/status'); return true;`);
+    await run(`composer().closest('form').requestSubmit(); return true;`);
+    expect(
+      await run(`return composer().querySelectorAll('[data-pill-id]').length;`),
+    ).toBe(count);
+    expect(
+      await run(`return composer().textContent.includes('/status');`),
+    ).toBe(false);
+    await run(
+      `pressKey('Escape'); composer().replaceChildren(); composer().dispatchEvent(new InputEvent('input', {bubbles:true})); return true;`,
+    );
+  });
+
   it("targets the focused chat from the palette, highlighting it", async () => {
     // The floating chat from the previous tests is focused; a skill row
     // must point at it (border accent) and send into it, not a new chat.
-    const before = await run<number>(
-      `return $$('section[aria-label]').length;`,
+    const before = await run<string[]>(
+      `return $$('[data-chat-local-id]').map(el => el.dataset.chatLocalId).sort();`,
     );
     await ensurePalette();
     await paletteType(">checklist");
@@ -213,12 +492,10 @@ describe("skills as commands", () => {
       `return !!byText('section[aria-label] *', 'skill loaded: checklist');`,
       { timeoutMs: 30_000, label: "checklist reply in the focused chat" },
     );
-    const after = await run<number>(`return $$('section[aria-label]').length;`);
-    if (after !== before) {
-      throw new Error(
-        `expected no new chat: ${String(before)} docks -> ${String(after)}`,
-      );
-    }
+    const after = await run<string[]>(
+      `return $$('[data-chat-local-id]').map(el => el.dataset.chatLocalId).sort();`,
+    );
+    expect(after).toEqual(before);
   });
 
   it("request_connection opens the connectors modal seeded with the agent's query", async () => {

@@ -64,6 +64,13 @@ export class McpAppsService {
     return map;
   }
 
+  /** Reuse the authenticated host client without eagerly mounting its tool schemas. */
+  async tools(profileId: string, serverKey: string) {
+    const connection = this.keyed(profileId).get(serverKey);
+    if (!connection) throw new Error(`No connection for ${serverKey}`);
+    return (await this.connect(profileId, connection)).tools;
+  }
+
   /** Fetch the `ui://` template behind a tool key. */
   async view(profileId: string, toolKey: string): Promise<McpAppView> {
     const { connection, toolName } = this.resolve(profileId, toolKey);

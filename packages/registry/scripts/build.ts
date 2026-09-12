@@ -26,6 +26,8 @@ interface RegistryItem {
   name: string;
   type: string;
   description?: string;
+  title?: string;
+  docs?: string;
   dependencies?: string[];
   devDependencies?: string[];
   registryDependencies?: string[];
@@ -81,11 +83,13 @@ async function build(): Promise<void> {
   }
 
   const index: { name: string; type: string; description?: string }[] = [];
+  const catalog: RegistryItem[] = [];
 
   for (const name of itemDirs) {
     const itemDir = path.join(SRC, name);
     const item = await readRegistryItem(itemDir);
     const inlined = await inlineFiles(itemDir, item);
+    catalog.push(inlined);
     const outPath = path.join(DIST, `${name}.json`);
     await fs.writeFile(outPath, `${JSON.stringify(inlined, null, 2)}\n`);
     index.push({
@@ -99,6 +103,10 @@ async function build(): Promise<void> {
   const indexPath = path.join(DIST, "index.json");
   await fs.writeFile(indexPath, `${JSON.stringify(index, null, 2)}\n`);
   console.log(`registry: built index (${index.length} items)`);
+  await fs.writeFile(
+    path.join(ROOT, "dist", "catalog.json"),
+    `${JSON.stringify(catalog, null, 2)}\n`,
+  );
 }
 
 await build();

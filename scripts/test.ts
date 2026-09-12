@@ -49,6 +49,8 @@ function errorCode(error: unknown): string | undefined {
 }
 
 function processGroupTarget(processGroupId: number): number {
+  if (!Number.isSafeInteger(processGroupId) || processGroupId <= 0)
+    throw new Error("Process group ID must be a positive integer");
   return process.platform === "win32" ? processGroupId : -processGroupId;
 }
 
@@ -90,9 +92,17 @@ async function settleProcessGroup(input: {
   }
   if (!processGroupIsLive(input.processGroupId)) return;
   signalProcessGroup(input.processGroupId, "SIGKILL");
-  while (processGroupIsLive(input.processGroupId)) {
+  const killDeadline = Date.now() + PROCESS_GROUP_GRACE_MS;
+  while (
+    processGroupIsLive(input.processGroupId) &&
+    Date.now() < killDeadline
+  ) {
     await delay(20);
   }
+  if (processGroupIsLive(input.processGroupId))
+    throw new Error(
+      `Test process group ${input.processGroupId} did not exit after SIGKILL`,
+    );
 }
 
 export class TestSignalController {
@@ -113,6 +123,7 @@ export class TestSignalController {
   }
 
   activate(processGroupId: number): void {
+    processGroupTarget(processGroupId);
     this.activeProcessGroupId = processGroupId;
     if (this.forwardedSignal) {
       signalProcessGroup(processGroupId, this.forwardedSignal);
@@ -170,7 +181,12 @@ export function testRunEnvironment(input: {
     TMP: input.resources.tempPath,
     TEMP: input.resources.tempPath,
     BUN_INSTALL_CACHE_DIR: input.resources.bunCachePath,
-    TURBO_CACHE_DIR: input.resources.turboCachePath,
+    // Hosted CI owns its checkout and can reuse successful tasks. Each
+    // invocation still owns its temporary files and disposable database.
+    TURBO_CACHE_DIR:
+      input.source.GITHUB_ACTIONS === "true"
+        ? (input.source.TURBO_CACHE_DIR ?? input.resources.turboCachePath)
+        : input.resources.turboCachePath,
     XDG_CACHE_HOME: input.resources.xdgCachePath,
     TURBO_TELEMETRY_DISABLED: "1",
   };
@@ -258,7 +274,20 @@ export async function runLoggedProcess(input: {
         input.signals.clear(processGroupId);
       }
     }
-    await closeCompletion;
+    const closed = await new Promise<boolean>((resolve) => {
+      const timeout = setTimeout(() => resolve(false), PROCESS_GROUP_GRACE_MS);
+      void closeCompletion.then(() => {
+        clearTimeout(timeout);
+        resolve(true);
+      });
+    });
+    if (!closed) {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      cleanupError ??= new Error(
+        `Test subprocess ${processGroupId} left output pipes open after cleanup`,
+      );
+    }
     try {
       await closeLog(log);
     } catch (error) {
@@ -289,8 +318,8 @@ export function turboTestArguments(input: {
     "run",
     "test",
     "--no-daemon",
+    "--force",
     `--concurrency=${TURBO_CONCURRENCY}`,
-    ...input.cliArguments,
   ];
 }
 

@@ -1,17 +1,6 @@
 /* biome-ignore-all lint/a11y/noRedundantRoles: list-style resets need explicit list semantics */
-import {
-  ChevronRight,
-  Folder,
-  FolderPlus,
-  MessageSquare,
-  Plus,
-} from "lucide-react";
-import {
-  type DragEvent as ReactDragEvent,
-  type ReactNode,
-  useEffect,
-  useState,
-} from "react";
+import { FolderPlus, MessageSquare, Plus } from "lucide-react";
+import { type DragEvent as ReactDragEvent, useEffect, useState } from "react";
 import { parseChatBookmarkUrl } from "../../shared/bookmark-target.js";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { readBookmarkDrop } from "../lib/bookmark-drag.js";
@@ -23,11 +12,18 @@ import {
   type SidebarMenuEntry,
 } from "../lib/desktop-api.js";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag.js";
-import { Collapsible } from "./collapsible.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
 import { ShortcutHint } from "./shortcut-hint.js";
+import {
+  projectSidebarItems,
+  useSidebarContent,
+  useSidebarContribution,
+  useSidebarItemCount,
+  useSidebarRefresh,
+} from "./sidebar-contribution.js";
 import { SidebarItemRow } from "./sidebar-item-row.js";
+import { SidebarTree } from "./sidebar-tree.js";
 import { SiteFavicon } from "./site-favicon.js";
 
 const PROJECT_MENU: SidebarMenuEntry[] = [
@@ -79,7 +75,6 @@ export function BookmarksNav({
   pinnedStyle = "tiles",
   defaultOpenMode = "replace",
   menuOverride,
-  onEmptyChange,
   onOpen,
 }: {
   projectId: string;
@@ -87,12 +82,11 @@ export function BookmarksNav({
   pinnedStyle?: "tiles" | "list";
   defaultOpenMode?: OpenMode;
   menuOverride?: SidebarMenuEntry[];
-  onEmptyChange?: (empty: boolean) => void;
   onOpen: (url: string, mode?: OpenMode) => void | Promise<void>;
 }) {
+  const contribution = useSidebarContribution();
   const [data, setData] = useState<BookmarksData | null>(null);
   const [edit, setEdit] = useState<BookmarkEdit | null>(null);
-  const [expanded, setExpanded] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [status, setStatus] = useState("");
@@ -115,13 +109,22 @@ export function BookmarksNav({
       data.project.folders.length === 0 &&
       !data.library?.bookmarks.length &&
       !data.library?.folders.length);
-  useEffect(() => {
-    onEmptyChange?.(isEmpty);
-  }, [isEmpty, onEmptyChange]);
+  useSidebarItemCount(
+    pinnedStyle === "tiles"
+      ? projectSidebarItems(
+          data?.pinned.bookmarks ?? [],
+          contribution?.section,
+        ).filter(
+          (item) => !contribution?.section.itemOverrides?.[item.id]?.hide,
+        ).length
+      : 0,
+  );
+  useSidebarContent(
+    error ? "error" : data === null ? "loading" : isEmpty ? "empty" : "ready",
+  );
   useEffect(() => {
     let cancelled = false;
     setEdit(null);
-    setExpanded([]);
     setData(null);
     void desktopApi.bookmarksGet({ projectId, profileId }).then((loaded) => {
       if (!cancelled) setData(loaded);
@@ -148,6 +151,14 @@ export function BookmarksNav({
     };
   }, [projectId, profileId]);
 
+  useSidebarRefresh(async () => {
+    try {
+      setData(await desktopApi.bookmarksGet({ projectId, profileId }));
+      setError(null);
+    } catch (cause) {
+      setError(String(cause));
+    }
+  });
   const perform = (operation: Promise<unknown>) => {
     setError(null);
     void operation.catch((cause: unknown) =>
@@ -198,10 +209,6 @@ export function BookmarksNav({
             pinned,
           })
           .then(() => {
-            if (folderId)
-              setExpanded((current) =>
-                current.includes(folderId) ? current : [...current, folderId],
-              );
             const location = folderId
               ? (pinned ? data?.pinned : data?.project)?.folders.find(
                   (folder) => folder.id === folderId,
@@ -277,6 +284,7 @@ export function BookmarksNav({
       }}
     >
       <SidebarItemRow
+        itemId={bookmark.id}
         presentation={pinned && pinnedStyle === "tiles" ? "tile" : "row"}
         label={bookmark.label}
         title={`${bookmark.label} · ${bookmark.url}`}
@@ -287,9 +295,9 @@ export function BookmarksNav({
             tile={pinned && pinnedStyle === "tiles"}
           />
         }
-        menu={
-          menuOverride ??
-          (pinned
+        menu={menuOverride}
+        defaultMenu={
+          pinned
             ? PINNED_MENU
             : library
               ? PROJECT_MENU.map((entry) =>
@@ -297,7 +305,7 @@ export function BookmarksNav({
                     ? { label: "Rename…", action: "rename" }
                     : entry,
                 )
-              : PROJECT_MENU)
+              : PROJECT_MENU
         }
         resource
         defaultOpenMode={defaultOpenMode}
@@ -317,90 +325,98 @@ export function BookmarksNav({
     </li>
   );
 
-  const renderFolders = (
+  const renderTree = (
     scope: ProjectBookmarks,
     pinned: boolean,
-    parentId?: string,
     library = false,
-  ): ReactNode =>
-    scope.folders
-      .filter((folder) => folder.parentId === parentId)
-      .map((folder) => {
-        const open = expanded.includes(folder.id);
-        const children = scope.bookmarks.filter(
-          (bookmark) => bookmark.folderId === folder.id,
-        );
-        const nested = scope.folders.some(
-          (child) => child.parentId === folder.id,
-        );
-        return (
-          <li
-            key={folder.id}
-            data-bookmark-drop={`${pinned ? "pinned-folder" : "folder"}:${folder.id}`}
-            {...(library
-              ? {}
-              : dropHandlers(
-                  `${pinned ? "pinned-folder" : "folder"}:${folder.id}`,
-                ))}
-            className={
-              dropTarget ===
-              `${pinned ? "pinned-folder" : "folder"}:${folder.id}`
-                ? "rounded-md bg-accent/10 ring-1 ring-accent"
-                : undefined
-            }
-          >
-            <SidebarItemRow
-              label={folder.label}
-              icon={<Folder className="size-4 shrink-0" />}
-              end={
-                <ChevronRight
-                  className={`size-3 shrink-0 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
-                />
-              }
-              menu={FOLDER_MENU}
-              expanded={open}
-              onOpen={() =>
-                setExpanded((current) =>
-                  open
-                    ? current.filter((id) => id !== folder.id)
-                    : [...current, folder.id],
-                )
-              }
-              onAction={(entry) => {
-                if (entry.action === "rename")
-                  setEdit({
-                    kind: "rename",
-                    id: folder.id,
-                    label: folder.label,
-                  });
-                if (entry.action === "remove")
-                  perform(
-                    (library
-                      ? desktopApi.bookmarksRemoveLibrary
-                      : pinned
-                        ? desktopApi.bookmarksRemovePinned
-                        : desktopApi.bookmarksRemove)({
-                      projectId,
-                      profileId,
-                      id: folder.id,
-                    }),
-                  );
-              }}
-            />
-            <Collapsible open={open}>
-              <ul role="list" className="ml-4 flex flex-col gap-0.5">
-                {children.map((bookmark) => row(bookmark, pinned, library))}
-                {renderFolders(scope, pinned, folder.id, library)}
-              </ul>
-              {children.length === 0 && !nested && (
-                <p className="px-4 py-2 text-xs text-fg-muted">
-                  {library ? "Empty folder" : "Drop a tab or chat here."}
-                </p>
-              )}
-            </Collapsible>
-          </li>
-        );
-      });
+    foldersOnly = false,
+  ) => {
+    type Entry = {
+      id: string;
+      parentId: string | null;
+      label: string;
+      hasChildren: boolean;
+      bookmark?: Bookmark;
+    };
+    const folderIds = new Set(scope.folders.map((folder) => folder.id));
+    const items: Entry[] = [
+      ...scope.folders.map((folder) => ({
+        id: folder.id,
+        parentId: folder.parentId ?? null,
+        label: folder.label,
+        hasChildren: true,
+      })),
+      ...scope.bookmarks
+        .filter(
+          (bookmark) =>
+            !foldersOnly ||
+            Boolean(bookmark.folderId && folderIds.has(bookmark.folderId)),
+        )
+        .map((bookmark) => ({
+          id: bookmark.id,
+          parentId: bookmark.folderId ?? null,
+          label: bookmark.label,
+          hasChildren: false,
+          bookmark,
+        })),
+    ];
+    return (
+      <SidebarTree
+        items={items}
+        label={
+          library
+            ? "Saved bookmarks"
+            : pinned
+              ? "Pinned folders"
+              : "Project bookmarks"
+        }
+        defaultExpanded={false}
+        renderItem={(item, tree) =>
+          item.bookmark ? (
+            <div style={{ marginLeft: tree.depth * 14 }}>
+              {row(item.bookmark, pinned, library)}
+            </div>
+          ) : (
+            <div
+              style={{ marginLeft: tree.depth * 14 }}
+              data-bookmark-drop={`${pinned ? "pinned-folder" : "folder"}:${item.id}`}
+              {...(library
+                ? {}
+                : dropHandlers(
+                    `${pinned ? "pinned-folder" : "folder"}:${item.id}`,
+                  ))}
+            >
+              <SidebarItemRow
+                itemId={item.id}
+                label={item.label}
+                icon="Folder"
+                menu={FOLDER_MENU}
+                disclosure={{ open: tree.expanded, onToggle: tree.toggle }}
+                expanded={tree.expanded}
+                onOpen={tree.toggle}
+                onAction={(entry) => {
+                  if (entry.action === "rename")
+                    setEdit({ kind: "rename", id: item.id, label: item.label });
+                  else if (entry.action === "remove")
+                    perform(
+                      (library
+                        ? desktopApi.bookmarksRemoveLibrary
+                        : pinned
+                          ? desktopApi.bookmarksRemovePinned
+                          : desktopApi.bookmarksRemove)({
+                        projectId,
+                        profileId,
+                        id: item.id,
+                      }),
+                    );
+                }}
+              />
+            </div>
+          )
+        }
+      />
+    );
+  };
 
   return (
     <div
@@ -431,14 +447,18 @@ export function BookmarksNav({
                 Drop a tab here to pin across projects
               </li>
             )}
-            {data.pinned.bookmarks
+            {projectSidebarItems(data.pinned.bookmarks, contribution?.section)
+              .filter(
+                (bookmark) =>
+                  !contribution?.section.itemOverrides?.[bookmark.id]?.hide,
+              )
               .filter((bookmark) => !bookmark.folderId)
               .map((bookmark) => row(bookmark, true))}
           </ul>
         )}
         {data && (
           <ul role="list" className="flex flex-col gap-0.5">
-            {renderFolders(data.pinned, true)}
+            {renderTree(data.pinned, true, false, true)}
           </ul>
         )}
       </section>
@@ -461,10 +481,7 @@ export function BookmarksNav({
               Saved bookmarks
             </h3>
             <ul role="list" className="flex flex-col gap-0.5">
-              {data.library.bookmarks
-                .filter((bookmark) => !bookmark.folderId)
-                .map((bookmark) => row(bookmark, false, true))}
-              {renderFolders(data.library, false, undefined, true)}
+              {renderTree(data.library, false, true)}
             </ul>
           </section>
         )}
@@ -475,10 +492,7 @@ export function BookmarksNav({
         role="list"
         className="max-h-64 overflow-y-auto flex flex-col gap-0.5"
       >
-        {data?.project.bookmarks
-          .filter((bookmark) => !bookmark.folderId)
-          .map((bookmark) => row(bookmark, false))}
-        {data && renderFolders(data.project, false)}
+        {data && renderTree(data.project, false)}
       </ul>
       <div className="flex items-center gap-1 px-1">
         <button

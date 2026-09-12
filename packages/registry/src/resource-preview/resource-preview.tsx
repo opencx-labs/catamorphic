@@ -2,6 +2,16 @@
 
 import type { ResourcePreview } from "@catamorphic/react";
 import { useState } from "react";
+import Markdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
+
+// A glance never navigates the host or fetches embedded remote resources.
+const PREVIEW_COMPONENTS: Components = {
+  a: ({ children }) => (
+    <span className="text-accent underline underline-offset-2">{children}</span>
+  ),
+  img: ({ alt }) => <span className="text-fg-muted">{alt || "Image"}</span>,
+};
 
 export function formatPreviewBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -77,18 +87,41 @@ export function ResourcePreviewContent({
         </video>
       ) : content.kind === "text" ? (
         <>
-          <pre
-            data-testid="pill-preview-text"
-            className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-bg-inset p-2 font-mono text-[11px] leading-4 text-fg-muted"
-          >
-            {content.text || "Empty file"}
-          </pre>
+          {content.format === "markdown" ? (
+            <div
+              data-testid="preview-markdown"
+              className="cat-markdown mt-2 max-h-56 overflow-auto break-words text-xs leading-relaxed text-fg"
+            >
+              {content.text ? (
+                <Markdown
+                  remarkPlugins={[remarkGfm]}
+                  skipHtml
+                  components={PREVIEW_COMPONENTS}
+                >
+                  {content.text}
+                </Markdown>
+              ) : (
+                <p className="text-fg-muted">Empty file</p>
+              )}
+            </div>
+          ) : (
+            <pre
+              data-testid="pill-preview-text"
+              className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-bg-inset p-2 font-mono text-[11px] leading-4 text-fg-muted"
+            >
+              {content.text || "Empty file"}
+            </pre>
+          )}
           {content.truncated && (
             <p className="mt-1 text-[11px] text-fg-muted">
               Showing the beginning of this file.
             </p>
           )}
         </>
+      ) : content.kind === "summary" ? (
+        <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-relaxed text-fg-muted">
+          {content.text}
+        </p>
       ) : (
         <p role="status" className="mt-2 text-xs text-fg-muted">
           {content.message}

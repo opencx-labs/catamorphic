@@ -22,7 +22,7 @@ export class ProjectRootsStore {
 
   constructor(private readonly pglite: PGlite) {}
 
-  async init(): Promise<void> {
+  async init(relocation?: { from: string; to: string }): Promise<void> {
     await this.pglite.exec(`
       CREATE SCHEMA IF NOT EXISTS desktop;
       CREATE TABLE IF NOT EXISTS desktop.project_roots (
@@ -33,6 +33,12 @@ export class ProjectRootsStore {
     await this.pglite.exec(
       `ALTER TABLE desktop.project_roots ADD COLUMN IF NOT EXISTS automatic_checkpoints boolean NOT NULL DEFAULT false`,
     );
+    if (relocation) {
+      await this.pglite.query(
+        "UPDATE desktop.project_roots SET root_path = $1 || substring(root_path FROM length($2) + 1) WHERE starts_with(root_path, $2 || '/')",
+        [relocation.to, relocation.from],
+      );
+    }
     const rows = await this.pglite.query<{
       project_id: string;
       root_path: string;

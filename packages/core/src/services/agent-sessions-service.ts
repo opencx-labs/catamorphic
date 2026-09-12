@@ -17,6 +17,7 @@ import {
   type AgentQuestionRequest,
   type AgentRuntimeRequestResponse,
   type AttachedPluginForAgent,
+  capabilityEventPresenter,
   type McpToolPolicyLayers,
   messageWithAttachmentNames,
   narrowingLayer,
@@ -91,6 +92,11 @@ import {
   type SessionMailboxItem,
 } from "./session-mailboxes-service.js";
 import {
+  SessionMirrorDivergedError,
+  type SessionMirrorInput,
+  writeSessionMirror,
+} from "./session-mirror.js";
+import {
   documentsClientFor,
   shipRemoteProject,
   syncRemoteProject,
@@ -126,6 +132,8 @@ interface PreparedSessionCreate {
 }
 
 export interface AgentSession {
+  /** Authorized immediate children, populated by paged navigation queries. */
+  childCount?: number;
   id: string;
   projectId: string;
   externalUserId: string;
@@ -333,20 +341,6 @@ export class AgentTurnInProgressError extends Error {
   constructor(readonly sessionId: string) {
     super(`Agent session '${sessionId}' has a turn in progress`);
     this.name = "AgentTurnInProgressError";
-  }
-}
-
-/**
- * A mirror push found messages here the mirroring side doesn't know —
- * the session was continued on THIS backend, so the mirror source must
- * stop pushing (the conversation forked; this side owns it now).
- */
-export class SessionMirrorDivergedError extends Error {
-  constructor(readonly sessionId: string) {
-    super(
-      `Agent session '${sessionId}' was continued on this server; the mirror source must stop pushing`,
-    );
-    this.name = "SessionMirrorDivergedError";
   }
 }
 
@@ -820,7 +814,13 @@ export class AgentSessionsService {
   async list(
     identity: Identity,
     projectId: string,
-    input: { limit?: number; offset?: number } = {},
+    input: {
+      limit?: number;
+      offset?: number;
+      parentSessionId?: string;
+      rootsOnly?: boolean;
+      visibility?: SessionVisibility;
+    } = {},
   ): Promise<{ items: AgentSession[]; total: number }> {
     await this.requireProject(identity, projectId);
     const limit = input.limit ?? 50;
@@ -837,6 +837,84 @@ export class AgentSessionsService {
       query = query
         .where("external_user_id", "=", identity.externalUserId)
         .where("agent_id", "in", agentIds);
+    }
+
+    if (input.visibility) {
+      const visibility = input.visibility;
+      query = query.where((eb) =>
+        eb(
+          eb.fn.coalesce(
+            eb
+              .selectFrom("agent_session_views")
+              .select("visibility")
+              .whereRef("session_id", "=", "agent_sessions.id")
+              .where("tenant_id", "=", identity.tenantId)
+              .where("external_user_id", "=", identity.externalUserId),
+            eb.val("promoted"),
+          ),
+          "=",
+          visibility,
+        ),
+      );
+    }
+
+    if (input.parentSessionId) {
+      await this.requireSession(identity, projectId, input.parentSessionId);
+      query = query.where("parent_session_id", "=", input.parentSessionId);
+    } else if (input.rootsOnly) {
+      const visibility = input.visibility;
+      query = visibility
+        ? query.where((eb) =>
+            eb.or([
+              eb("parent_session_id", "is", null),
+              eb.not(
+                eb.exists(
+                  eb
+                    .selectFrom("agent_sessions as ancestor")
+                    .select("ancestor.id")
+                    .whereRef(
+                      "ancestor.id",
+                      "=",
+                      "agent_sessions.parent_session_id",
+                    )
+                    .where("ancestor.project_id", "=", projectId)
+                    .$if(!isBuilder(identity, projectId), (parent) =>
+                      parent
+                        .where(
+                          "ancestor.external_user_id",
+                          "=",
+                          identity.externalUserId,
+                        )
+                        .where(
+                          "ancestor.agent_id",
+                          "in",
+                          this.coveredAgentIds(identity, projectId),
+                        ),
+                    )
+                    .where((parent) =>
+                      parent(
+                        parent.fn.coalesce(
+                          parent
+                            .selectFrom("agent_session_views")
+                            .select("visibility")
+                            .whereRef("session_id", "=", "ancestor.id")
+                            .where("tenant_id", "=", identity.tenantId)
+                            .where(
+                              "external_user_id",
+                              "=",
+                              identity.externalUserId,
+                            ),
+                          parent.val("promoted"),
+                        ),
+                        "=",
+                        visibility,
+                      ),
+                    ),
+                ),
+              ),
+            ]),
+          )
+        : query.where("parent_session_id", "is", null);
     }
 
     const rows = await query
@@ -857,16 +935,44 @@ export class AgentSessionsService {
     );
     const running = await this.runningSessionIds(rows.map((row) => row.id));
 
+    const children = rows.length
+      ? await query
+          .clearWhere()
+          .where("project_id", "=", projectId)
+          .where(
+            "parent_session_id",
+            "in",
+            rows.map((row) => row.id),
+          )
+          .$if(!isBuilder(identity, projectId), (builder) =>
+            builder
+              .where("external_user_id", "=", identity.externalUserId)
+              .where(
+                "agent_id",
+                "in",
+                this.coveredAgentIds(identity, projectId),
+              ),
+          )
+          .select(["parent_session_id"])
+          .select((eb) => eb.fn.countAll<number>().as("count"))
+          .groupBy("parent_session_id")
+          .execute()
+      : [];
+    const counts = new Map(
+      children.map((row) => [row.parent_session_id, Number(row.count)]),
+    );
+
     return {
-      items: rows.map((row) =>
-        mapSession(
+      items: rows.map((row) => ({
+        ...mapSession(
           row,
           running.has(row.id),
           this.hostId,
           this.authorityLeaseMs,
           presentations.get(row.id),
         ),
-      ),
+        childCount: counts.get(row.id) ?? 0,
+      })),
       total,
     };
   }
@@ -1393,6 +1499,7 @@ export class AgentSessionsService {
     input: {
       systemPrompt?: string;
       agentId?: string;
+      model?: string;
       effort?: AgentEffort;
       environment?: string;
       source?: AgentSessionSource;
@@ -1421,6 +1528,7 @@ export class AgentSessionsService {
     input: {
       systemPrompt?: string;
       agentId?: string;
+      model?: string;
       effort?: AgentEffort;
       environment?: string;
       title?: string;
@@ -1453,6 +1561,7 @@ export class AgentSessionsService {
     input: {
       systemPrompt?: string;
       agentId?: string;
+      model?: string;
       effort?: AgentEffort;
       environment?: string;
       title?: string;
@@ -1576,7 +1685,7 @@ export class AgentSessionsService {
             source: input.source ?? "api",
             provider_session_id: null,
             agent_id: selectedAgentId ?? null,
-            model: null,
+            model: input.model || null,
             model_effort: input.effort ?? null,
             system_prompt: systemPrompt || null,
             sandbox_id: null,
@@ -1734,31 +1843,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     sessionId: string,
-    input: {
-      title?: string | null;
-      icon?: string | null;
-      provider?: string;
-      source?: AgentSessionSource;
-      /**
-       * The source session's PROJECT-agent slug, when it ran one: project
-       * agent definitions are committed files that sync between backends,
-       * so when this side has the same slug (and the caller's scope covers
-       * it), the fork continues on the SAME agent instead of the default.
-       */
-      agentSlug?: string;
-      todos: AgentTodo[];
-      authority: { hostId: string; revision: number };
-      messages: Array<{
-        id: string;
-        role: "user" | "assistant" | "system";
-        content: string;
-        metadata: Record<string, unknown> | null;
-        author: SessionMessageAuthor;
-        deliveryMode: SessionDeliveryMode;
-        idempotencyKey: string | null;
-        createdAt: string;
-      }>;
-    },
+    input: SessionMirrorInput,
   ): Promise<AgentSession> {
     return withSpan(
       {
@@ -1835,130 +1920,16 @@ export class AgentSessionsService {
             : []
           : undefined;
 
-        // One transaction: the divergence check, the session upsert, and
-        // the appends must not interleave with a turn starting here (the
-        // append order IS the transcript order, via `seq`).
-        const row = await this.db.transaction().execute(async (trx) => {
-          const current = await trx
-            .selectFrom("agent_sessions")
-            .selectAll()
-            .where("id", "=", sessionId)
-            .forUpdate()
-            .executeTakeFirst();
-          if (
-            current &&
-            (current.project_id !== projectId ||
-              current.external_user_id !== identity.externalUserId)
-          ) {
-            throw new AccessDeniedError();
-          }
-          if (
-            current &&
-            current.authority_host_id !== "unassigned" &&
-            (current.authority_host_id !== input.authority.hostId ||
-              Number(current.authority_revision) > input.authority.revision)
-          ) {
-            throw new SessionMirrorDivergedError(sessionId);
-          }
-          if (current && !current.allocation_id) {
-            throw new Error("Agent session has no Environment Allocation");
-          }
-          const held = await trx
-            .selectFrom("agent_messages")
-            .select(["id"])
-            .where("session_id", "=", sessionId)
-            .forUpdate()
-            .execute();
-          const incomingIds = new Set(input.messages.map((m) => m.id));
-          if (held.some((entry) => !incomingIds.has(entry.id))) {
-            throw new SessionMirrorDivergedError(sessionId);
-          }
-
-          const allocation =
-            !current && mirrorAdmission
-              ? await this.executionAllocations.create({
-                  identity,
-                  projectId,
-                  environmentName: mirrorAdmission.environmentName,
-                  workloadKind: "agent",
-                  rootWorkloadId: sessionId,
-                  workerNodeId: mirrorAdmission.runtime.workerNodeId,
-                  policy: {
-                    binding: mirrorAdmission.binding,
-                    requirements: mirrorAdmission.effectiveRequirements,
-                    connections: mirrorConnections,
-                  },
-                  transaction: trx,
-                })
-              : undefined;
-          const session = current
-            ? await trx
-                .updateTable("agent_sessions")
-                .set({
-                  title: input.title ?? current.title,
-                  icon: input.icon ?? current.icon,
-                  todos: agentTodosJson(input.todos),
-                  updated_at: new Date(),
-                  authority_host_id: input.authority.hostId,
-                  authority_revision: input.authority.revision,
-                  authority_seen_at: new Date(),
-                  mirror_message_count: input.messages.length,
-                })
-                .where("id", "=", sessionId)
-                .returningAll()
-                .executeTakeFirstOrThrow()
-            : await trx
-                .insertInto("agent_sessions")
-                .values({
-                  id: sessionId,
-                  project_id: projectId,
-                  external_user_id: identity.externalUserId,
-                  provider: input.provider ?? "mirror",
-                  source: input.source ?? "api",
-                  provider_session_id: null,
-                  agent_id: agentId,
-                  model: null,
-                  model_effort: null,
-                  system_prompt: null,
-                  sandbox_id: null,
-                  allocation_id: allocation!.id,
-                  environment_name: mirrorAdmission!.environmentName,
-                  status: "active",
-                  base_commit_sha: null,
-                  title: input.title ?? null,
-                  icon: input.icon ?? null,
-                  todos: agentTodosJson(input.todos),
-                  authority_host_id: input.authority.hostId,
-                  authority_revision: input.authority.revision,
-                  authority_seen_at: new Date(),
-                  mirror_message_count: input.messages.length,
-                })
-                .returningAll()
-                .executeTakeFirstOrThrow();
-
-          // `seq` is an identity column: transcript order IS insertion
-          // order, so append the unseen messages in payload order, in one
-          // statement (a mirror can carry hundreds of messages).
-          const heldIds = new Set(held.map((entry) => entry.id));
-          const fresh = input.messages
-            .filter((message) => !heldIds.has(message.id))
-            .map((message) => ({
-              id: message.id,
-              session_id: sessionId,
-              role: message.role,
-              content: message.content,
-              metadata: message.metadata as JsonObject | null,
-              author_kind: message.author.kind,
-              author_payload: JSON.parse(JSON.stringify(message.author)),
-              delivery_mode: message.deliveryMode,
-              idempotency_key: message.idempotencyKey,
-              commit_sha: null,
-              created_at: new Date(message.createdAt),
-            }));
-          if (fresh.length > 0) {
-            await trx.insertInto("agent_messages").values(fresh).execute();
-          }
-          return session;
+        const row = await writeSessionMirror({
+          db: this.db,
+          executionAllocations: this.executionAllocations,
+          identity,
+          projectId,
+          sessionId,
+          input,
+          agentId,
+          mirrorAdmission,
+          mirrorConnections,
         });
         return mapSession(row, false, this.hostId, this.authorityLeaseMs);
       },
@@ -3807,6 +3778,7 @@ export class AgentSessionsService {
             ...(attachments ? { attachments } : {}),
             toolPolicies: callerLayers ?? {},
           };
+          const blockingQuestions = new Set<string>();
           turnOptions.askQuestion = async (input) => {
             const requestId = `${assistantMessageId}:${input.requestId}`;
             const requests = new AgentRuntimeRequestsService(this.db);
@@ -3820,6 +3792,7 @@ export class AgentSessionsService {
                   kind: "question",
                   status: "pending",
                   sessionId,
+                  turnId: extras.turnId,
                   createdAt: new Date().toISOString(),
                   blocking: input.blocking,
                   origin: {
@@ -3837,49 +3810,84 @@ export class AgentSessionsService {
             );
             if (!input.blocking)
               return `Question request ${requestId} is open. Continue independent work. The user's answer will arrive as a message when submitted.`;
-            while (true) {
-              input.signal?.throwIfAborted();
-              const row = await this.db
-                .selectFrom("agent_runtime_requests")
-                .select(["status", "response"])
-                .where("session_id", "=", sessionId)
-                .where("request_id", "=", requestId)
-                .executeTakeFirstOrThrow();
-              if (row.status === "resolved") {
-                const response: { answers: string[] } = JSON.parse(
-                  JSON.stringify(row.response),
-                );
-                // Every answer enters the durable inbox, even when another
-                // server receives it. The waiting tool consumes its own answer;
-                // only non-blocking answers are eligible for native steering.
-                await writeOwned((trx) =>
-                  trx
-                    .updateTable("agent_turns")
-                    .set({
-                      status: "completed",
-                      result_message_id: assistantMessageId,
-                      completed_at: new Date(),
-                    })
-                    .where("session_id", "=", sessionId)
-                    .where("status", "=", "queued")
-                    .where("message_id", "in", (eb) =>
-                      eb
-                        .selectFrom("agent_messages")
-                        .select("id")
-                        .where("session_id", "=", sessionId)
-                        .where(
-                          "idempotency_key",
-                          "=",
-                          `question-answer:${requestId}`,
-                        ),
-                    )
-                    .execute(),
-                );
-                return response.answers.join("\n");
+            blockingQuestions.add(requestId);
+            try {
+              await this.turns.progress({
+                turnId: extras.turnId,
+                leaseToken: extras.leaseToken,
+                phase: "waiting",
+                activity: "Waiting for your answer",
+              });
+              while (true) {
+                input.signal?.throwIfAborted();
+                const row = await this.db
+                  .selectFrom("agent_runtime_requests")
+                  .select(["status", "response"])
+                  .where("session_id", "=", sessionId)
+                  .where("request_id", "=", requestId)
+                  .executeTakeFirstOrThrow();
+                if (row.status === "resolved") {
+                  const response: { answers: string[] } = JSON.parse(
+                    JSON.stringify(row.response),
+                  );
+                  // Every answer enters the durable inbox, even when another
+                  // server receives it. The waiting tool consumes its own answer;
+                  // only non-blocking answers are eligible for native steering.
+                  await writeOwned((trx) =>
+                    trx
+                      .updateTable("agent_turns")
+                      .set({
+                        status: "completed",
+                        result_message_id: assistantMessageId,
+                        completed_at: new Date(),
+                      })
+                      .where("session_id", "=", sessionId)
+                      .where("status", "=", "queued")
+                      .where("message_id", "in", (eb) =>
+                        eb
+                          .selectFrom("agent_messages")
+                          .select("id")
+                          .where("session_id", "=", sessionId)
+                          .where(
+                            "idempotency_key",
+                            "=",
+                            `question-answer:${requestId}`,
+                          ),
+                      )
+                      .execute(),
+                  );
+                  return response.answers.join("\n");
+                }
+                if (row.status !== "pending")
+                  throw new Error("Question is no longer pending");
+                await delay(200, undefined, { signal: input.signal });
               }
-              if (row.status !== "pending")
-                throw new Error("Question is no longer pending");
-              await delay(200, undefined, { signal: input.signal });
+            } finally {
+              blockingQuestions.delete(requestId);
+              // A waiting request cannot survive the native call that owned it.
+              // Answered requests are untouched; interruption withdraws pending UI.
+              await writeOwned((trx) =>
+                trx
+                  .updateTable("agent_runtime_requests")
+                  .set({
+                    status: "cancelled",
+                    resolved_at: new Date(),
+                    updated_at: new Date(),
+                    revision: sql<number>`revision + 1`,
+                  })
+                  .where("session_id", "=", sessionId)
+                  .where("request_id", "=", requestId)
+                  .where("status", "=", "pending")
+                  .execute(),
+              );
+              await this.turns.progress({
+                turnId: extras.turnId,
+                leaseToken: extras.leaseToken,
+                phase: blockingQuestions.size ? "waiting" : "working",
+                activity: blockingQuestions.size
+                  ? "Waiting for your answer"
+                  : "Continuing",
+              });
             }
           };
           turnOptions.readPendingMessages = async () => {
@@ -4029,7 +4037,9 @@ export class AgentSessionsService {
                   message,
                   turnOptions,
                 );
-          for await (const event of stream) {
+          const presentCapability = capabilityEventPresenter();
+          for await (const rawEvent of stream) {
+            const event = presentCapability(rawEvent);
             if (extras.leaseLost())
               throw new Error(
                 "Execution ownership was lost. Check the last actions before retrying.",
@@ -4062,8 +4072,14 @@ export class AgentSessionsService {
               const owned = await this.turns.progress({
                 turnId: extras.turnId,
                 leaseToken: extras.leaseToken,
-                phase: event.type === "question" ? "waiting" : "working",
-                activity: activityLabel(event),
+                phase:
+                  blockingQuestions.size > 0 || event.type === "question"
+                    ? "waiting"
+                    : "working",
+                activity:
+                  blockingQuestions.size > 0
+                    ? "Waiting for your answer"
+                    : activityLabel(event),
               });
               if (!owned)
                 throw new Error(
@@ -5851,6 +5867,31 @@ export class AgentSessionsService {
       }
     }
     return layers;
+  }
+
+  /** The same live caller ceiling used by harness and deferred host tools. */
+  async toolContextForSession(args: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+  }): Promise<{
+    agentId: string | null;
+    toolPolicies?: Record<string, McpToolPolicyLayers>;
+  }> {
+    // Tool discovery needs the assignment and caller ceiling, never the transcript.
+    const session = await this.requireSession(
+      args.identity,
+      args.projectId,
+      args.sessionId,
+    );
+    return {
+      agentId: session.agent_id,
+      toolPolicies: await this.callerToolPolicies(
+        args.identity,
+        args.projectId,
+        session.agent_id,
+      ),
+    };
   }
 
   /** `caller` + `toolPolicies` for {@link StartSessionOpts}. */

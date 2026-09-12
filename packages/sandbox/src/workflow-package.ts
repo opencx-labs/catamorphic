@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import type { PluginPayload } from "./plugin-upload.js";
@@ -12,7 +12,10 @@ export interface WorkflowPackagePayload extends PluginPayload {
 
 export async function resolveWorkflowPackageFallback(args: {
   packageJson?: string;
+  /** A committed lockfile is authoritative; never replace its resolved package. */
+  hasLockfile?: boolean;
 }): Promise<WorkflowPackagePayload | undefined> {
+  if (args.hasLockfile) return undefined;
   const declaredVersion = readDeclaredVersion(args.packageJson);
   if (!declaredVersion) return undefined;
 
@@ -70,24 +73,23 @@ export async function loadAppPackagePayload(): Promise<PluginPayload> {
   const require = createRequire(import.meta.url);
   const packageJsonPath = require.resolve(`${APP_PACKAGE_NAME}/package.json`);
   const packageRoot = path.dirname(packageJsonPath);
-  const [packageJson, javascript, javascriptMap, types, typesMap] =
-    await Promise.all([
-      readFile(packageJsonPath, "utf8"),
-      readFile(path.join(packageRoot, "dist/index.js"), "utf8"),
-      readFile(path.join(packageRoot, "dist/index.js.map"), "utf8"),
-      readFile(path.join(packageRoot, "dist/index.d.ts"), "utf8"),
-      readFile(path.join(packageRoot, "dist/index.d.ts.map"), "utf8"),
-    ]);
-  return {
-    packageName: APP_PACKAGE_NAME,
-    files: {
-      "package.json": packageJson,
-      "dist/index.js": javascript,
-      "dist/index.js.map": javascriptMap,
-      "dist/index.d.ts": types,
-      "dist/index.d.ts.map": typesMap,
-    },
+  const files: Record<string, string> = {
+    "package.json": await readFile(packageJsonPath, "utf8"),
   };
+  // The runtime and UI entries are self-contained. Project-installed component
+  // packs are ordinary source and dependencies, not part of this payload.
+  for (const entry of await readdir(path.join(packageRoot, "dist"), {
+    recursive: true,
+    withFileTypes: true,
+  })) {
+    if (!entry.isFile() || !/\.(js|ts)$/.test(entry.name)) continue;
+    const absolute = path.join(entry.parentPath, entry.name);
+    files[path.relative(packageRoot, absolute)] = await readFile(
+      absolute,
+      "utf8",
+    );
+  }
+  return { packageName: APP_PACKAGE_NAME, files };
 }
 
 export async function loadWorkflowPackagePayload(): Promise<WorkflowPackagePayload> {

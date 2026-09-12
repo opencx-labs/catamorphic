@@ -21,6 +21,8 @@ export type {
 export const BROWSER_IMPORTERS: BrowserImporter[] = [
   chromiumImporter({
     id: "chrome",
+    keychainService: "Chrome Safe Storage",
+    keychainAccount: "Chrome",
     label: "Google Chrome",
     darwinDir: "Library/Application Support/Google/Chrome",
     linuxDir: ".config/google-chrome",
@@ -28,6 +30,8 @@ export const BROWSER_IMPORTERS: BrowserImporter[] = [
   }),
   chromiumImporter({
     id: "edge",
+    keychainService: "Microsoft Edge Safe Storage",
+    keychainAccount: "Microsoft Edge",
     label: "Microsoft Edge",
     darwinDir: "Library/Application Support/Microsoft Edge",
     linuxDir: ".config/microsoft-edge",
@@ -35,6 +39,8 @@ export const BROWSER_IMPORTERS: BrowserImporter[] = [
   }),
   chromiumImporter({
     id: "brave",
+    keychainService: "Brave Safe Storage",
+    keychainAccount: "Brave",
     label: "Brave",
     darwinDir: "Library/Application Support/BraveSoftware/Brave-Browser",
     linuxDir: ".config/BraveSoftware/Brave-Browser",
@@ -42,6 +48,8 @@ export const BROWSER_IMPORTERS: BrowserImporter[] = [
   }),
   chromiumImporter({
     id: "arc",
+    keychainService: "Arc Safe Storage",
+    keychainAccount: "Arc",
     label: "Arc",
     darwinDir: "Library/Application Support/Arc/User Data",
   }),
@@ -52,10 +60,21 @@ export const BROWSER_IMPORTERS: BrowserImporter[] = [
   }),
   chromiumImporter({
     id: "chromium",
+    keychainService: "Chromium Safe Storage",
+    keychainAccount: "Chromium",
     label: "Chromium",
     darwinDir: "Library/Application Support/Chromium",
     linuxDir: ".config/chromium",
     win32Dir: "AppData/Local/Chromium/User Data",
+  }),
+  chromiumImporter({
+    id: "opera",
+    label: "Opera",
+    darwinDir: "Library/Application Support/com.operasoftware.Opera",
+    linuxDir: ".config/opera",
+    win32Dir: "AppData/Roaming/Opera Software/Opera Stable",
+    keychainService: "Opera Safe Storage",
+    keychainAccount: "Opera",
   }),
   firefoxImporter(),
 ];

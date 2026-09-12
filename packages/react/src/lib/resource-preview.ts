@@ -8,6 +8,7 @@ export interface ResourcePreview {
     | { kind: "image"; src: string }
     | { kind: "audio"; src: string; mediaType: string }
     | { kind: "video"; src: string; mediaType: string }
-    | { kind: "text"; text: string; truncated?: boolean }
+    | { kind: "text"; text: string; format?: "markdown"; truncated?: boolean }
+    | { kind: "summary"; text: string }
     | { kind: "unavailable"; message: string };
 }

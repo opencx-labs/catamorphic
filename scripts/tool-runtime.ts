@@ -39,6 +39,23 @@ export function toolRuntime(input: {
   };
 }
 
+/** Keep shard flags on Vitest, so changing a shard never rebuilds dependencies. */
+export function vitestShardArguments(shard: string | undefined): string[] {
+  if (!shard) return [];
+  const [index, total] = shard.split("/").map(Number);
+  if (
+    !/^[1-9]\d*\/[1-9]\d*$/.test(shard) ||
+    !index ||
+    !total ||
+    !Number.isSafeInteger(index) ||
+    !Number.isSafeInteger(total) ||
+    index > total
+  ) {
+    throw new Error("CATAMORPHIC_TEST_SHARD must be index/total");
+  }
+  return [`--shard=${shard}`, "--passWithNoTests"];
+}
+
 if (import.meta.main) {
   const rootPath = path.resolve(import.meta.dirname, "..");
   const runtime = toolRuntime({ rootPath, env: process.env });
@@ -76,7 +93,13 @@ if (import.meta.main) {
   );
   const result = spawnSync(
     runtime.nodePath,
-    [entryPoint, ...(tool === "vitest" ? ["run"] : []), ...toolArguments],
+    [
+      entryPoint,
+      ...(tool === "vitest"
+        ? ["run", ...vitestShardArguments(process.env.CATAMORPHIC_TEST_SHARD)]
+        : []),
+      ...toolArguments,
+    ],
     {
       cwd: workingDirectory,
       env: runtime.env,

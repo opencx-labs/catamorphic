@@ -1,6 +1,7 @@
 import { APP_THEME_COLOR_TOKENS } from "@catamorphic/app";
 import { PARSER_PACKAGE_VERSION } from "@catamorphic/parser";
 import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
+import { SESSION_ARTIFACTS_SKILL } from "./session-artifacts-skill.js";
 import { WORKFLOW_LIFECYCLE_SKILL } from "./workflow-lifecycle-skill.js";
 
 const SHARED_TSCONFIG = `{
@@ -850,6 +851,31 @@ description: The mechanics of building frontend apps that call this project's wo
 
 # Building Apps
 
+Reuse project-owned components and follow the project's app design guidance first.
+When the user, project or host points to a component registry, fetch the appropriate
+item and read its source, declared dependencies and usage notes. Discover the components.read capability through discover_capabilities when
+available, then invoke it to list or fetch the host's shipped items. Install source into the project,
+then adapt it; do not treat registry components as a hidden runtime dependency.
+Preserve existing customizations. Temporary apps keep installed pack files in their
+explicit artifact snapshot instead of changing the project. For code reviews,
+consult session-artifacts and fetch the code-review pack unless suitable components
+are already installed. More packs follow the same install-and-adapt process.
+
+Choose a canonical icon at creation, or discover set_app_presentation to change its
+type: review, dashboard, report, tracker, form, or calculator. All code reviews
+use review. When no type clearly fits, use default (the ordinary grid icon).
+The same tool accepts title. Use a short, descriptive title for the app's
+purpose or subject, matching the user's language. Keep it stable as you iterate;
+avoid generic labels such as Session app or unnecessary status/version suffixes.
+There is no required title template. Neither title nor icon changes rebuild or
+publish the app. Do not invent custom glyphs or colors for common app types.
+
+Generated interactive results, including code reviews, use ordinary apps.
+For a temporary or session-owned result, load the session-artifacts skill and
+discover session_artifact when the host provides capability discovery (or use the direct MCP tool). It supplies the same scaffold,
+retains source with the session and builds immediately without publication.
+The project-file steps below apply when the result belongs in the project.
+
 A project is a bun workspace with three kinds of member:
 
 - \`contracts/\` — **types only, never runtime code.** The one package both
@@ -862,6 +888,31 @@ A project is a bun workspace with three kinds of member:
 **Apps never import from \`workflows/\`.** The boundary is structural —
 \`contracts/\` has no JavaScript to bundle — but respect it in your head
 too: anything an app imports ships to every viewer's browser.
+
+## Collections and compact host widgets
+
+For hierarchies and large lists, import \`createCollection\` from
+\`@catamorphic/app\` and \`CollectionTree\`, \`CollectionItemView\`,
+\`useCollection\`, and \`useCollectionItem\` from \`@catamorphic/app/ui\`.
+Sources load paged roots and lazy children with stable IDs, cursors and an
+AbortSignal. Publish item patches for label/status changes and invalidate only
+changed branches. Use per-item subscriptions instead of one timer per row.
+Acquire a collection while it is needed and release it on cleanup; shared
+collections refcount upstream listeners. Tree row height is explicit and only
+the visible window is mounted. Keep large inspectors outside row geometry.
+The same ItemAction can appear in inline actions, overflow, or right-click menus;
+these placements are independent and an empty menu explicitly disables it.
+
+When a host grants collection capabilities, \`createHostCollection({source})\`
+uses the same store and tree. Execute only advertised actions via
+\`runCollectionAction({source,itemId,action})\`; never reach into the host DOM,
+IPC, or credentials. Read \`subscribeDisplay\` for current surface and visibility,
+and call \`reportContentState\` with loading, ready, empty or error so the host
+can decide whether the widget is useful. Keep the collection acquired for cheap
+availability discovery if the widget should reappear after becoming empty;
+pass \`active: false\` to a second tree subscriber to avoid duplicate ownership.
+Host-specific source names, grants and placement belong in the host's settings
+skill. Read that skill and the installed package declarations before authoring.
 
 ## The contract is the whole data path
 
@@ -1583,6 +1634,7 @@ documents — grep is faster and never lies.
 `;
 
 export const HOST_SKILLS: Record<string, string> = {
+  "session-artifacts/SKILL.md": SESSION_ARTIFACTS_SKILL,
   "workflow-lifecycle/SKILL.md": WORKFLOW_LIFECYCLE_SKILL,
   "searching-documents/SKILL.md": SEARCHING_DOCUMENTS_SKILL,
   "publishing-to-github/SKILL.md": `---

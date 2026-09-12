@@ -213,6 +213,8 @@ export interface AppRef {
    * nothing rather than something wider.
    */
   channel?: "published" | "dev";
+  /** An authorized retained build of a session app. */
+  versionId?: string;
 }
 
 export interface WorkflowRef {

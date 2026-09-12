@@ -1,6 +1,6 @@
-import { Globe } from "lucide-react";
 import { useEffect, useState } from "react";
 import { desktopApi } from "../lib/desktop-api";
+import { ResourcePreviewContent } from "./catamorphic/resource-preview";
 /** Link previews reuse local metadata; hovering never visits a website. */
 export function WebPreview({ url }: { url: string }) {
   const hostname = URL.canParse(url) ? new URL(url).hostname : "Link";
@@ -24,14 +24,13 @@ export function WebPreview({ url }: { url: string }) {
     };
   }, [url]);
   return (
-    <div className="text-xs">
-      <div className="flex items-center gap-2 font-medium">
-        <Globe className="size-4 shrink-0" />
-        {(title?.url === url ? title.title : "") || hostname}
-      </div>
-      <p className="mt-2 select-text break-all font-mono text-[11px] text-fg-muted">
-        {url}
-      </p>
-    </div>
+    <ResourcePreviewContent
+      preview={{
+        name: (title?.url === url ? title.title : "") || hostname,
+        typeLabel: "Page",
+        location: url,
+        content: { kind: "summary", text: hostname },
+      }}
+    />
   );
 }

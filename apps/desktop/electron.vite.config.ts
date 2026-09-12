@@ -29,22 +29,31 @@ export default defineConfig({
   renderer: {
     plugins: [react(), tailwindcss()],
     resolve: {
-      alias: {
-        "@": path.resolve(import.meta.dirname, "src/renderer"),
+      alias: [
+        {
+          find: "@",
+          replacement: path.resolve(import.meta.dirname, "src/renderer"),
+        },
         // @tiptap/extension-drag-handle statically imports its collaboration
         // support, which would pull the whole yjs graph into the renderer
         // bundle for a feature we don't use. The stub satisfies the imports;
         // every stubbed call is guarded (see the stub's header) — re-verify
         // if tiptap is upgraded past the pinned 3.30.1.
-        "@tiptap/y-tiptap": path.resolve(
-          import.meta.dirname,
-          "src/renderer/lib/tiptap-collab-stub.ts",
-        ),
-        "@tiptap/extension-collaboration": path.resolve(
-          import.meta.dirname,
-          "src/renderer/lib/tiptap-collab-stub.ts",
-        ),
-      },
+        {
+          find: "@tiptap/y-tiptap",
+          replacement: path.resolve(
+            import.meta.dirname,
+            "src/renderer/lib/tiptap-collab-stub.ts",
+          ),
+        },
+        {
+          find: "@tiptap/extension-collaboration",
+          replacement: path.resolve(
+            import.meta.dirname,
+            "src/renderer/lib/tiptap-collab-stub.ts",
+          ),
+        },
+      ],
     },
     // Workspace packages resolve from their dist/ builds. Left to vite's
     // dependency optimizer they get PREBUNDLED AND CACHED — a running dev

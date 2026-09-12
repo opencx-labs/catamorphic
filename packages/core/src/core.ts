@@ -92,6 +92,7 @@ import { RunsService } from "./services/runs-service.js";
 import { RuntimeEventsService } from "./services/runtime-events-service.js";
 import { SchedulesService } from "./services/schedules-service.js";
 import { SecretsService } from "./services/secrets-service.js";
+import { SessionArtifactsService } from "./services/session-artifacts-service.js";
 import type { SessionMailboxesService } from "./services/session-mailboxes-service.js";
 import { SessionSyncService } from "./services/session-sync-service.js";
 import { SkillsService } from "./services/skills-service.js";
@@ -366,6 +367,7 @@ export class CatamorphicCore {
   readonly agentRuntimeRequests: AgentRuntimeRequestsService;
   readonly toolPermissions?: ToolPermissionChannel;
   readonly apps?: AppsService;
+  readonly sessionArtifacts: SessionArtifactsService;
   readonly appPolicies: AppPoliciesService;
   readonly github?: GithubService;
   readonly remoteSync: RemoteSyncService;
@@ -417,6 +419,11 @@ export class CatamorphicCore {
       : undefined;
 
     this.appPolicies = new AppPoliciesService(this.db);
+    this.sessionArtifacts = new SessionArtifactsService(
+      this.db,
+      this.projectManager,
+      config.appBundleStore,
+    );
     this.apps =
       this.sandboxProvider && this.devSandboxes && config.appBundleStore
         ? new AppsService(this.db, {
@@ -426,6 +433,7 @@ export class CatamorphicCore {
             bundleStore: config.appBundleStore,
             policies: this.appPolicies,
             maxBundleBytes: config.maxAppBundleBytes,
+            artifacts: this.sessionArtifacts,
           })
         : undefined;
 
@@ -917,6 +925,7 @@ export class CatamorphicCore {
       this.sessionMailboxes = this.agentSessions.mailboxes;
       this.sessionSync = new SessionSyncService(this.db);
       this.watchers = new WatchersService(this.db, {
+        artifacts: this.sessionArtifacts,
         projectManager: this.projectManager,
         runs: this.runs,
         triggers: this.triggers,

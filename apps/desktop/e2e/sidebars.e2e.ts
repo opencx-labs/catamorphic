@@ -8,10 +8,12 @@ let configFile: string;
 let projectId: string;
 beforeAll(async () => {
   app = await launchApp();
-  await app.waitFor(`!!document.querySelector('[data-sidebar="right"]')`);
+  await app.waitFor(
+    `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]')`,
+  );
   expect(
     await app.eval(
-      `document.querySelector('[data-sidebar="right"]').getAttribute('aria-hidden')`,
+      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]').getAttribute('aria-hidden')`,
     ),
   ).toBe("true");
   configFile = await app.eval<string>(
@@ -21,10 +23,8 @@ beforeAll(async () => {
     `window.catamorphicDesktop.createProject({name:'Sidebar studio',rootPath:${JSON.stringify(`${app.userDataDir}/sidebar-studio`)}})`,
   );
   projectId = project.id;
-  await app.eval("location.reload()");
-  await app.waitFor(
-    `document.body?.innerText.includes('Sidebar studio') && !!document.querySelector('[aria-label="Pin a project note"]')`,
-  );
+  await app.reload();
+  await app.waitFor(`document.body?.innerText.includes('Sidebar studio')`);
 });
 afterAll(async () => {
   await app?.stop();
@@ -34,16 +34,16 @@ const writeConfig = (config: unknown) =>
 
 const toggleRight = () =>
   app.eval(
-    `document.querySelector('[aria-label="Collapse right sidebar"], [aria-label="Expand right sidebar"]').click()`,
+    `document.querySelector('[data-workspace-visible="true"] [aria-label="Collapse right sidebar"], [data-workspace-visible="true"] [aria-label="Expand right sidebar"]').click()`,
   );
 const waitRight = (open: boolean) =>
   app.waitFor(
-    `document.querySelector('[data-sidebar="right"]')?.getAttribute('aria-hidden') === '${!open}'`,
+    `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]')?.getAttribute('aria-hidden') === '${!open}'`,
   );
 const reload = async () => {
-  await app.eval("window.__sidebarReload = true; location.reload()");
+  await app.reload();
   await app.waitFor(
-    `!window.__sidebarReload && !!document.querySelector('[data-sidebar="right"]')`,
+    `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]')`,
   );
 };
 
@@ -51,7 +51,7 @@ describe("tabbed sidebars", () => {
   it("hides the default left tab strip and keeps the footer below customized tabs", async () => {
     expect(
       await app.eval(
-        `!!document.querySelector('[data-sidebar="left"] [role="tablist"]')`,
+        `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar="left"] [role="tablist"]')`,
       ),
     ).toBe(false);
     const config = structuredClone(DEFAULT_SIDEBAR_CONFIG);
@@ -63,22 +63,22 @@ describe("tabbed sidebars", () => {
     });
     writeConfig(config);
     await app.waitFor(
-      `!!document.querySelector('[data-sidebar="left"] [role="tab"][aria-label="Extra"]')`,
+      `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar="left"] [role="tab"][aria-label="Extra"]')`,
     );
     expect(
       await app.eval(`(() => {
-      const side = document.querySelector('[data-sidebar="left"]');
+      const side = document.querySelector('[data-workspace-visible="true"] [data-sidebar="left"]');
       const tabs = side.querySelector('[role="tablist"]').getBoundingClientRect();
       const bounds = side.getBoundingClientRect();
       return Math.abs((tabs.left + tabs.right) / 2 - (bounds.left + bounds.right) / 2);
     })()`),
     ).toBeLessThan(2);
     await app.eval(
-      `document.querySelector('[data-sidebar="left"] [aria-label="Extra"]').click()`,
+      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="left"] [aria-label="Extra"]').click()`,
     );
     expect(
       await app.eval(`(() => {
-      const side = document.querySelector('[data-sidebar="left"]');
+      const side = document.querySelector('[data-workspace-visible="true"] [data-sidebar="left"]');
       const profile = side.querySelector('[aria-label^="Switch profile:"]');
       const customize = side.querySelector('[aria-label="Customize sidebar"]');
       const settings = [...side.querySelectorAll('button')].find(b => b.getAttribute('aria-label') === 'Settings');
@@ -87,12 +87,12 @@ describe("tabbed sidebars", () => {
     ).toBe(true);
     expect(
       await app.eval(
-        `!!document.querySelector('[data-sidebar="right"] [aria-label="Customize sidebar"]')`,
+        `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [aria-label="Customize sidebar"]')`,
       ),
     ).toBe(false);
     writeConfig(DEFAULT_SIDEBAR_CONFIG);
     await app.waitFor(
-      `!document.querySelector('[data-sidebar="left"] [role="tablist"]')`,
+      `!document.querySelector('[data-workspace-visible="true"] [data-sidebar="left"] [role="tablist"]')`,
     );
   });
 
@@ -101,23 +101,23 @@ describe("tabbed sidebars", () => {
     config.right.reverse();
     writeConfig(config);
     await app.waitFor(
-      `document.querySelector('[data-sidebar="right"] [role="tab"]')?.getAttribute('aria-label') === 'Pull requests'`,
+      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"]')?.getAttribute('aria-label') === 'Pull requests'`,
     );
     expect(
       await app.eval(
-        `document.querySelector('[data-sidebar="right"] [role="tab"][aria-selected="true"]')?.getAttribute('aria-label')`,
+        `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"][aria-selected="true"]')?.getAttribute('aria-label')`,
       ),
-    ).toBe("Activity and notes");
+    ).toBe("Activity");
     writeConfig(DEFAULT_SIDEBAR_CONFIG);
     await app.waitFor(
-      `document.querySelector('[data-sidebar="right"] [role="tab"]')?.getAttribute('aria-label') === 'Activity and notes'`,
+      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"]')?.getAttribute('aria-label') === 'Activity'`,
     );
   });
 
   it("uses bare accent icons and keyboard navigation with persistent panels", async () => {
     expect(
       await app.eval(`(() => {
-      const tab = document.querySelector('[data-sidebar="right"] [role="tab"][aria-selected="true"]');
+      const tab = document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"][aria-selected="true"]');
       return { text:tab.textContent, color:getComputedStyle(tab).color, accent:getComputedStyle(document.documentElement).getPropertyValue('--color-accent').trim(), border:getComputedStyle(tab).borderTopWidth, background:getComputedStyle(tab).backgroundColor };
     })()`),
     ).toMatchObject({
@@ -126,27 +126,27 @@ describe("tabbed sidebars", () => {
       background: "rgba(0, 0, 0, 0)",
     });
     await app.eval(`(() => {
-      window.__sidebarNote = document.querySelector('[aria-label="Pin a project note"]');
-      const tab = document.querySelector('[data-sidebar="right"] [role="tab"]');
+      window.__sidebarSection = document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [data-sidebar-widget="activity"] .sidebar-section');
+      const tab = document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"]');
       tab.focus(); tab.dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowRight',bubbles:true,cancelable:true}));
     })()`);
     await app.waitFor(
-      `document.querySelector('[data-sidebar="right"] [role="tab"][aria-selected="true"]')?.getAttribute('aria-label') === 'Pull requests'`,
+      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"][aria-selected="true"]')?.getAttribute('aria-label') === 'Pull requests'`,
     );
     await app.eval(
       `document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'Home',bubbles:true,cancelable:true}))`,
     );
     await app.waitFor(
-      `document.querySelector('[data-sidebar="right"] [role="tab"][aria-selected="true"]')?.getAttribute('aria-label') === 'Activity and notes'`,
+      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"][aria-selected="true"]')?.getAttribute('aria-label') === 'Activity'`,
     );
     expect(
       await app.eval(
-        `window.__sidebarNote === document.querySelector('[aria-label="Pin a project note"]')`,
+        `!!window.__sidebarSection && window.__sidebarSection === document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [data-sidebar-widget="activity"] .sidebar-section')`,
       ),
     ).toBe(true);
     expect(
       await app.eval(
-        `getComputedStyle(document.querySelector('[data-sidebar="right"] .sidebar-tab-panel')).transitionDuration`,
+        `getComputedStyle(document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] .sidebar-tab-panel')).transitionDuration`,
       ),
     ).toContain("0.2s");
   });
@@ -162,17 +162,17 @@ describe("tabbed sidebars", () => {
     );
     expect(
       await app.eval(
-        `document.querySelector('[data-sidebar="right"] [role="tab"][aria-selected="true"]')?.getAttribute('aria-label')`,
+        `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"][aria-selected="true"]')?.getAttribute('aria-label')`,
       ),
     ).toBe("Work companion");
     expect(
       await app.eval(
-        `window.__sidebarNote === document.querySelector('[aria-label="Pin a project note"]')`,
+        `!!window.__sidebarSection && window.__sidebarSection === document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [data-sidebar-widget="activity"] .sidebar-section')`,
       ),
     ).toBe(true);
     fs.writeFileSync(configFile, "module.exports = {");
     await app.waitFor(
-      `document.querySelector('[data-sidebar="right"] [role="alert"]')?.textContent.includes('could not reload')`,
+      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="alert"]')?.textContent.includes('could not reload')`,
     );
     expect(
       await app.eval(
@@ -181,28 +181,28 @@ describe("tabbed sidebars", () => {
     ).toBe(true);
     writeConfig(config);
     await app.waitFor(
-      `!document.querySelector('[data-sidebar="right"] [role="alert"]')`,
+      `!document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="alert"]')`,
     );
   });
 
   it("persists widths and tab selection, and collapses each side independently", async () => {
     await app.eval(`(() => {
-      document.querySelector('[data-sidebar="right"] [role="tab"][aria-label="Pull requests"]').click();
+      document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"][aria-label="Pull requests"]').click();
       const handle = document.querySelector('[aria-label="Resize right sidebar"]');
       handle.dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowLeft',bubbles:true,cancelable:true}));
       document.querySelector('[aria-label="Collapse sidebar"]').click();
     })()`);
     await app.waitFor(
-      `document.querySelector('[data-sidebar="left"]').getAttribute('aria-hidden') === 'true'`,
+      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="left"]').getAttribute('aria-hidden') === 'true'`,
     );
     expect(
       await app.eval(
-        `document.querySelector('[data-sidebar="right"]').getAttribute('aria-hidden')`,
+        `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]').getAttribute('aria-hidden')`,
       ),
     ).toBe("false");
-    await app.eval("location.reload()");
+    await app.reload();
     await app.waitFor(
-      `document.querySelector('[data-sidebar="right"] [role="tab"][aria-selected="true"]')?.getAttribute('aria-label') === 'Pull requests'`,
+      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"][aria-selected="true"]')?.getAttribute('aria-label') === 'Pull requests'`,
     );
     expect(
       await app.eval(
@@ -211,7 +211,7 @@ describe("tabbed sidebars", () => {
     ).toBe("340");
     expect(
       await app.eval(
-        `document.querySelector('[data-sidebar="left"]').getAttribute('aria-hidden')`,
+        `document.querySelector('[data-workspace-visible="true"] [data-sidebar="left"]').getAttribute('aria-hidden')`,
       ),
     ).toBe("true");
     await app.eval(
@@ -234,7 +234,7 @@ describe("tabbed sidebars", () => {
     );
     await reload();
     await app.waitFor(
-      `!!document.querySelector('[data-sidebar="right"] [role="tab"]')`,
+      `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"]')`,
     );
     await waitRight(false);
     await toggleRight();
@@ -250,12 +250,17 @@ describe("tabbed sidebars", () => {
       `${root}/.catamorphic/sidebar.js`,
       `module.exports = ${JSON.stringify({ ...DEFAULT_SIDEBAR_CONFIG, right: [] })};\n`,
     );
+    // Navigate the live workspace before checking persisted sidebar state.
+    // lastProjectId is only a fallback; changing it does not switch this window.
     await app.eval(
-      `window.catamorphicDesktop.setPrefs({lastProjectId:${JSON.stringify(project.id)}})`,
+      `window.catamorphicDesktop.workspaceNavigate(${JSON.stringify(project.id)})`,
+    );
+    await app.waitFor(
+      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]')?.textContent.includes('Customize sidebar')`,
     );
     await reload();
     await app.waitFor(
-      `document.querySelector('[data-sidebar="right"]')?.textContent.includes('Customize sidebar')`,
+      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]')?.textContent.includes('Customize sidebar')`,
     );
     await waitRight(false);
     expect(
@@ -264,11 +269,14 @@ describe("tabbed sidebars", () => {
       ),
     ).toBe(true);
     await app.eval(
-      `window.catamorphicDesktop.setPrefs({lastProjectId:${JSON.stringify(projectId)}})`,
+      `window.catamorphicDesktop.workspaceNavigate(${JSON.stringify(projectId)})`,
+    );
+    await app.waitFor(
+      `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"]')`,
     );
     await reload();
     await app.waitFor(
-      `!!document.querySelector('[data-sidebar="right"] [role="tab"]')`,
+      `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"]')`,
     );
     await waitRight(true);
   });
@@ -276,7 +284,7 @@ describe("tabbed sidebars", () => {
   it("centers Customize sidebar in an empty right sidebar and opens customization", async () => {
     writeConfig({ ...DEFAULT_SIDEBAR_CONFIG, right: [] });
     await app.waitFor(
-      `document.querySelector('[data-sidebar="right"]')?.textContent.includes('Customize sidebar')`,
+      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]')?.textContent.includes('Customize sidebar')`,
     );
     await waitRight(false);
     await toggleRight();
@@ -285,17 +293,17 @@ describe("tabbed sidebars", () => {
     // populated-sidebar preference is open.
     await reload();
     await app.waitFor(
-      `document.querySelector('[data-sidebar="right"]')?.textContent.includes('Customize sidebar')`,
+      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]')?.textContent.includes('Customize sidebar')`,
     );
     await waitRight(false);
     await toggleRight();
     await waitRight(true);
     await app.waitFor(
-      `document.querySelector('[data-sidebar="right"]').getAnimations().every(a => a.playState !== 'running')`,
+      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]').getAnimations().every(a => a.playState !== 'running')`,
     );
     expect(
       await app.eval(`(() => {
-      const side = document.querySelector('[data-sidebar="right"]');
+      const side = document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]');
       const button = [...side.querySelectorAll('button')].find(b => b.textContent.includes('Customize sidebar'));
       const bounds = side.getBoundingClientRect();
       const rect = button.getBoundingClientRect();
@@ -303,7 +311,7 @@ describe("tabbed sidebars", () => {
     })()`),
     ).toBeLessThan(2);
     await app.eval(
-      `[...document.querySelectorAll('[data-sidebar="right"] button')].find(b => b.textContent.trim() === 'Customize sidebar').click()`,
+      `[...document.querySelectorAll('[data-workspace-visible="true"] [data-sidebar="right"] button')].find(b => b.textContent.trim() === 'Customize sidebar').click()`,
     );
     await app.waitFor(
       `document.body.innerText.includes('The live sidebar configuration file on this machine is')`,
@@ -311,7 +319,7 @@ describe("tabbed sidebars", () => {
     expect(await app.eval("document.body.innerText")).toContain(configFile);
     writeConfig(DEFAULT_SIDEBAR_CONFIG);
     await app.waitFor(
-      `!!document.querySelector('[data-sidebar="right"] [role="tab"]')`,
+      `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"]')`,
     );
     await waitRight(true);
     await app.waitFor(
@@ -346,7 +354,7 @@ describe("tabbed sidebars", () => {
       `!!document.querySelector('[aria-label="Switch profile: Default Profile"]')`,
     );
     await app.waitFor(
-      `!!document.querySelector('[data-sidebar="right"] [role="tab"]')`,
+      `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"]')`,
     );
     await waitRight(true);
     expect(app.getRendererErrors()).toEqual([]);

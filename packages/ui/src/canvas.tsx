@@ -18,15 +18,25 @@ import {
   type NodeTypes,
   type OnNodesChange,
   ReactFlow,
+  useNodesInitialized,
+  useReactFlow,
+  useStore,
 } from "@xyflow/react";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import { useCallback, useEffect, useMemo } from "react";
+import {
+  type RefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { nodeTypes as builtInNodeTypes } from "./nodes/index.js";
 import { useGraphTransition } from "./use-graph-transition.js";
 
 const FIT_VIEW_OPTIONS: FitViewOptions = {
   padding: 0.08,
-  minZoom: 0.5,
+  minZoom: 0.1,
   maxZoom: 1,
 };
 
@@ -97,6 +107,8 @@ export function WorkflowCanvas({
 }: {
   nodeRenderers?: Partial<NodeTypes>;
 } = {}) {
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const [viewportReady, setViewportReady] = useState(false);
   const [nodes, setNodes] = useAtom(reactFlowNodesAtom);
   const edges = useAtomValue(reactFlowEdgesAtom);
   const graph = useAtomValue(graphAtom);
@@ -165,8 +177,10 @@ export function WorkflowCanvas({
 
   return (
     <div
+      ref={canvasRef}
       className="catamorphic-workflow-canvas"
       data-graph-transitioning={animated.transitioning}
+      data-viewport-ready={viewportReady}
       style={{ position: "absolute", inset: 0 }}
     >
       <ReactFlow
@@ -179,8 +193,6 @@ export function WorkflowCanvas({
         translateExtent={translateExtent}
         minZoom={0.1}
         maxZoom={2}
-        fitView
-        fitViewOptions={FIT_VIEW_OPTIONS}
         nodesDraggable={false}
         nodesConnectable={false}
         nodesFocusable={true}
@@ -193,6 +205,7 @@ export function WorkflowCanvas({
         zoomActivationKeyCode={null}
         proOptions={{ hideAttribution: true }}
       >
+        <InitialVisibleFit canvasRef={canvasRef} onReady={setViewportReady} />
         <Background />
         <Controls />
         {panelVisibility.minimap && (
@@ -207,4 +220,54 @@ export function WorkflowCanvas({
       </ReactFlow>
     </div>
   );
+}
+
+/** Hidden, retained tabs have no viewport yet. Fit once after their first
+ * visible measurement, then preserve the user's viewport through later edits. */
+function InitialVisibleFit({
+  canvasRef,
+  onReady,
+}: {
+  canvasRef: RefObject<HTMLDivElement | null>;
+  onReady(ready: boolean): void;
+}) {
+  const initialized = useNodesInitialized();
+  const { fitView } = useReactFlow();
+  const viewportWidth = useStore((state) => state.width);
+  const viewportHeight = useStore((state) => state.height);
+  const fitted = useRef(false);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !initialized || fitted.current) return;
+    let frame = 0;
+    let disposed = false;
+    const scheduleFit = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const bounds = canvas.getBoundingClientRect();
+        if (
+          disposed ||
+          fitted.current ||
+          bounds.width === 0 ||
+          bounds.height === 0 ||
+          Math.abs(viewportWidth - bounds.width) > 1 ||
+          Math.abs(viewportHeight - bounds.height) > 1
+        )
+          return;
+        // React Flow queues this fit for its next node update. Mark the request
+        // now: a resize can clean up this effect before the promise resolves.
+        fitted.current = true;
+        void fitView(FIT_VIEW_OPTIONS).then(() => onReady(true));
+      });
+    };
+    const observer = new ResizeObserver(scheduleFit);
+    observer.observe(canvas);
+    scheduleFit();
+    return () => {
+      disposed = true;
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [canvasRef, initialized, fitView, viewportWidth, viewportHeight, onReady]);
+  return null;
 }

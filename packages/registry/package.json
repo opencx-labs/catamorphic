@@ -11,7 +11,10 @@
     "@catamorphic/react": "workspace:*",
     "@catamorphic/ui": "workspace:*",
     "lucide-react": "^1.24.0",
-    "use-stick-to-bottom": "^1.1.6"
+    "use-stick-to-bottom": "^1.1.6",
+    "@pierre/diffs": "^1.4.1",
+    "shiki": "^4.4.3",
+    "@shikijs/langs": "^4.4.3"
   },
   "peerDependencies": {
     "@tanstack/react-query": "^5",
@@ -29,5 +32,13 @@
     "react-dom": "^19.2.7",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1"
+  },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    "./package.json": "./package.json",
+    "./catalog.json": "./dist/catalog.json",
+    "./r/*": "./dist/r/*"
   }
 }

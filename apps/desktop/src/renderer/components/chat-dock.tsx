@@ -11,46 +11,37 @@ import {
 import { AgentEnvironmentControl } from "@catamorphic/ui";
 import { useQuery } from "@tanstack/react-query";
 import {
-  AppWindow,
   ArrowUp,
   Bot,
-  ChevronUp,
   Columns2,
-  FileCode,
   Ghost,
-  GitBranch,
-  GitFork,
   Globe,
-  LayoutGrid,
-  LoaderCircle,
   Maximize2,
   Minus,
   Paperclip,
   PictureInPicture2,
   Radio,
-  SquareTerminal,
   X,
 } from "lucide-react";
 import {
   type ClipboardEvent,
   type FormEvent,
   type KeyboardEvent,
-  type ReactNode,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+import type { AgentCommandsResult } from "../../shared/agent-commands.js";
 import type {
   ChatDockProps,
   ChatSurface,
   McpAppRef,
 } from "../../shared/chat.js";
-import type { OpenMode } from "../../shared/open-mode.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
-import { commandScore } from "../lib/command-score";
 import {
   type AgentInfo,
   desktopApi,
@@ -61,12 +52,13 @@ import {
   readEditorSelection,
   selectionFromClipboard,
 } from "../lib/editor-selection";
-import { useListMotion } from "../lib/list-motion";
+import { skillsForAgent, useProjectSkillCatalog } from "../lib/skills";
 import {
-  type SkillInfo,
-  skillInvocation,
-  useProjectSkills,
-} from "../lib/skills";
+  matchSlashEntries,
+  resolveSlashMessage,
+  type SlashEntry,
+  slashEntries,
+} from "../lib/slash-commands";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { classifyPastedText, selectionName, textPill } from "../lib/text-pills";
 import type { ChatMode } from "../lib/workspace-types.js";
@@ -81,8 +73,10 @@ import {
 } from "./catamorphic/chat-timeline";
 import { TodoProgress } from "./catamorphic/todo-progress.js";
 import { ChatGlyph } from "./chat-icon";
+import { SurfacesRail } from "./chat-surface-rail.js";
 import { FilePreviewProjectContext } from "./file-preview";
 import { renderResponseLink } from "./response-link";
+import { SlashMenu } from "./slash-menu";
 
 export type {
   ChatDockEntry,
@@ -100,10 +94,7 @@ import {
 import { ContextMeter, latestReportedModel } from "./context-meter.js";
 import { EnvironmentConnections } from "./environment-connections.js";
 import { Modal } from "./modal.js";
-import {
-  OpenResourceButton,
-  ResourceLinkBoundary,
-} from "./open-resource-button.js";
+import { ResourceLinkBoundary } from "./open-resource-button.js";
 import { PendingButton } from "./pending-button.js";
 import {
   ProjectAuthorityProvider,
@@ -113,34 +104,6 @@ import { RemoteMessageConnectionGuard } from "./remote-message-connection-guard.
 import { SessionInspector } from "./session-inspector.js";
 import { ShortcutHint } from "./shortcut-hint";
 
-/** Chips group per kind once a chat collects this many surfaces. */
-const SURFACE_GROUP_THRESHOLD = 3;
-
-const SURFACE_GROUP_LABELS = {
-  browser: "pages",
-  terminal: "terminals",
-  editor: "files",
-  chat: "forks",
-  subagent: "subagents",
-  watcher: "watchers",
-  app: "apps",
-  workflow: "workflows",
-  mcpapp: "app views",
-} as const;
-
-const SURFACE_ICONS = {
-  browser: Globe,
-  terminal: SquareTerminal,
-  editor: FileCode,
-  chat: GitFork,
-  subagent: Bot,
-  watcher: Radio,
-  app: LayoutGrid,
-  workflow: GitBranch,
-  mcpapp: AppWindow,
-} as const;
-
-/** Stable, complementary empty-state and composer copy for each chat. */
 const EMPTY_CHAT_PROMPTS = [
   { empty: "Ready when you are.", composer: "Give me the first move…" },
   { empty: "Where are we headed?", composer: "Name the destination…" },
@@ -178,19 +141,6 @@ const MAX_TOTAL_MEDIA_BYTES = 48 * 1024 * 1024;
 
 /** Server-side attachment cap, mirrored so the composer can refuse early. */
 const MAX_ATTACHMENTS = 32;
-
-/** A "/" menu row: a project/host skill, or the harness's own command. */
-type SlashEntry = {
-  name: string;
-  description: string;
-} & (
-  | { kind: "skill"; skill: SkillInfo }
-  | { kind: "status" }
-  | {
-      kind: "command";
-      command: { name: string; description: string; argumentHint: string };
-    }
-);
 
 /** A workspace tab dropped on the chat becomes a tab pill. */
 function tabPillFromDrag(
@@ -484,628 +434,6 @@ const emptyChatPromptFor = (localId: string) => {
 };
 
 /**
- * One surface chip: open on click, tile right on ⌘-click or the button.
- * Chips carrying `info` (subagents, watchers) open their detail popover
- * instead — they have no workspace tab behind them.
- */
-/**
- * An anchored popover that enters with pop-in and leaves with pop-out:
- * stays mounted through the exit and unmounts on animationend. `open`
- * drives the direction. The panel owns the exit snapshot — children
- * freeze at the last open render, so callers pass live content (null
- * while closed is fine) and never hand-roll snapshot refs.
- */
-function PopPanel({
-  open,
-  className,
-  testId,
-  children,
-}: {
-  open: boolean;
-  className: string;
-  testId?: string;
-  children: ReactNode;
-}) {
-  const [mounted, setMounted] = useState(open);
-  const frozenRef = useRef<ReactNode>(children);
-  if (open) frozenRef.current = children;
-  useEffect(() => {
-    if (open) setMounted(true);
-  }, [open]);
-  if (!mounted) return null;
-  return (
-    <div
-      data-testid={testId}
-      onAnimationEnd={(event) => {
-        if (event.animationName === "pop-out" && !open) setMounted(false);
-      }}
-      className={`${className} ${open ? "animate-pop-in" : "animate-pop-out"}`}
-    >
-      {open ? children : frozenRef.current}
-    </div>
-  );
-}
-
-/**
- * The composer's "/" menu: project + host skills and the harness's own
- * slash commands in one list. Pops in/out with the panel vocabulary;
- * rows FLIP/fade as the filter narrows (the palette's list motion).
- * Content snapshots through the exit so the panel never blanks mid-pop.
- */
-function SlashMenu({
-  open,
-  matches,
-  selected,
-  onHover,
-  onCommit,
-}: {
-  open: boolean;
-  matches: SlashEntry[];
-  selected: number;
-  onHover: (index: number) => void;
-  onCommit: (entry: SlashEntry) => void;
-}) {
-  const sizerRef = useRef<HTMLDivElement>(null);
-  const { reset } = useListMotion(
-    sizerRef,
-    matches.map((entry) => entry.name).join("\u0000"),
-    { keepTransitions: "background-color, color" },
-  );
-  useEffect(() => {
-    if (!open) reset();
-  }, [open, reset]);
-  // PopPanel freezes the last open render through the exit, so an
-  // emptied match list closes with the previous rows still visible.
-  return (
-    <PopPanel
-      open={open && matches.length > 0}
-      className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-full overflow-y-auto rounded-lg border border-border bg-bg-raised p-1.5 shadow-2xl"
-      testId="slash-menu"
-    >
-      <div ref={sizerRef} role="listbox" aria-label="Commands">
-        {matches.map((entry, index) => (
-          <div
-            key={entry.name}
-            data-item-id={entry.name}
-            role="option"
-            tabIndex={-1}
-            aria-selected={index === selected}
-            data-skill-name={entry.name}
-            onMouseDown={(event) => {
-              event.preventDefault();
-              onCommit(entry);
-            }}
-            onMouseEnter={() => onHover(index)}
-            className={`flex cursor-pointer items-baseline gap-2 rounded-md px-2 py-1.5 text-sm ${
-              index === selected ? "bg-bg-overlay text-fg" : "text-fg-muted"
-            }`}
-          >
-            <span className="shrink-0 font-medium">
-              {entry.kind === "skill" ? entry.skill.title : `/${entry.name}`}
-            </span>
-            {entry.kind === "skill" ? (
-              <span className="shrink-0 font-mono text-[11px] text-fg-faint">
-                /{entry.name}
-              </span>
-            ) : entry.kind === "command" ? (
-              entry.command.argumentHint && (
-                <span className="shrink-0 font-mono text-[11px] text-fg-faint">
-                  {entry.command.argumentHint}
-                </span>
-              )
-            ) : null}
-            {entry.description && (
-              <span className="min-w-0 truncate text-xs text-fg-faint">
-                {entry.description}
-              </span>
-            )}
-            {entry.kind === "skill" && entry.skill.source === "host" && (
-              <span className="ml-auto shrink-0 rounded border border-border px-1 text-[10px] text-fg-faint">
-                App
-              </span>
-            )}
-            {entry.kind === "command" && (
-              <span className="ml-auto shrink-0 rounded border border-border px-1 text-[10px] text-fg-faint">
-                Claude Code
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
-    </PopPanel>
-  );
-}
-
-function SurfaceChip({
-  surface,
-  onOpenSurface,
-  onRemoveSurface,
-  onOpenMcpApp,
-  onToggleInfo,
-}: {
-  surface: ChatSurface;
-  onOpenSurface: (key: string, mode: OpenMode | "split") => void;
-  onRemoveSurface?: (key: string) => void;
-  onOpenMcpApp?: (view: McpAppRef, mode: OpenMode | "split") => void;
-  onToggleInfo: (key: string) => void;
-}) {
-  const Icon = SURFACE_ICONS[surface.kind];
-  return (
-    <span
-      className="group/chip relative flex shrink-0 items-center overflow-hidden rounded-md border border-border bg-bg-inset text-[11px] text-fg-muted"
-      data-testid="surface-chip"
-      data-kind={surface.kind}
-      data-active={surface.active || undefined}
-      data-attention={surface.attention || undefined}
-      // Chips are point_at-addressable ("chip:<surface key>") — the
-      // agent can glow one on its own chat.
-      data-point-key={`chip:${surface.key}`}
-    >
-      <OpenResourceButton
-        isResource={!surface.info}
-        type="button"
-        onOpen={(mode) =>
-          surface.mcpApp
-            ? onOpenMcpApp?.(surface.mcpApp, mode)
-            : surface.info
-              ? onToggleInfo(surface.key)
-              : onOpenSurface(surface.key, mode)
-        }
-        className="flex min-w-0 cursor-pointer items-center gap-1.5 py-1 pl-2 pr-2 transition-colors duration-100 hover:text-fg"
-      >
-        <span className="relative grid size-3 shrink-0 place-items-center">
-          {surface.kind === "browser" && surface.faviconUrl ? (
-            <img
-              src={surface.faviconUrl}
-              alt=""
-              className={`col-start-1 row-start-1 size-3 rounded-[2px] transition-opacity duration-200 ${
-                surface.active ? "opacity-0" : "opacity-100"
-              }`}
-            />
-          ) : (
-            <Icon
-              className={`col-start-1 row-start-1 size-3 transition-opacity duration-200 ${
-                surface.active ? "opacity-0" : "opacity-100"
-              }`}
-            />
-          )}
-          <LoaderCircle
-            className={`col-start-1 row-start-1 size-3 text-accent transition-opacity duration-200 ${
-              surface.active ? "animate-spin opacity-100" : "opacity-0"
-            }`}
-          />
-          {/* Background-opened surface waiting for the user: the unread
-              dot (accent fill) with the waiting-state pulse, cleared by
-              opening the chip. */}
-          {surface.attention && (
-            <span className="absolute -right-0.5 -top-0.5 size-1.5 animate-pulse rounded-full bg-accent" />
-          )}
-        </span>
-        <span className="max-w-36 truncate">{surface.label}</span>
-      </OpenResourceButton>
-      {/* The split affordance only exists under the pointer: an overlay
-          on the chip's right end that fades over the label's tail (its
-          left edge is a gradient into the chip background) instead of
-          permanently reserving width on every chip. */}
-      {!surface.info && (
-        <span className="pointer-events-none absolute inset-y-0 right-0 flex items-center bg-gradient-to-l from-bg-inset from-70% to-transparent pl-3 pr-0.5 opacity-0 transition-opacity duration-100 group-hover/chip:pointer-events-auto group-hover/chip:opacity-100">
-          <ShortcutHint label="Open to the right" shortcut="⌘⇧-click">
-            <button
-              type="button"
-              onClick={() => onOpenSurface(surface.key, "split")}
-              className="grid size-6 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-100 hover:text-fg"
-              aria-label={`Open ${surface.label} to the right`}
-            >
-              <Columns2 className="size-3" />
-            </button>
-          </ShortcutHint>
-          {surface.removable && onRemoveSurface && (
-            <ShortcutHint label="Remove from this chat">
-              <button
-                type="button"
-                onClick={() => onRemoveSurface(surface.key)}
-                className="grid size-6 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-100 hover:text-fg"
-                aria-label={`Remove ${surface.label}`}
-              >
-                <X className="size-3" />
-              </button>
-            </ShortcutHint>
-          )}
-        </span>
-      )}
-    </span>
-  );
-}
-
-/** The collapsed "4 terminals" chip a crowded kind folds into. */
-function GroupChip({
-  kind,
-  group,
-  open,
-  onToggle,
-}: {
-  kind: ChatSurface["kind"];
-  group: ChatSurface[];
-  open: boolean;
-  onToggle: () => void;
-}) {
-  const Icon = SURFACE_ICONS[kind];
-  const anyActive = group.some((surface) => surface.active);
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      className={`flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border py-1 pl-2 pr-1.5 text-[11px] transition-colors duration-100 ${
-        open
-          ? "border-border-strong bg-bg-overlay text-fg"
-          : "border-border bg-bg-inset text-fg-muted hover:text-fg"
-      }`}
-      aria-expanded={open}
-      aria-label={`${group.length} ${SURFACE_GROUP_LABELS[kind]}`}
-      data-attention={group.some((surface) => surface.attention) || undefined}
-    >
-      <span className="relative grid size-3 shrink-0 place-items-center">
-        <Icon
-          className={`col-start-1 row-start-1 size-3 transition-opacity duration-200 ${anyActive ? "opacity-0" : "opacity-100"}`}
-        />
-        <LoaderCircle
-          className={`col-start-1 row-start-1 size-3 text-accent transition-opacity duration-200 ${anyActive ? "animate-spin opacity-100" : "opacity-0"}`}
-        />
-        {/* Attention aggregates onto the group chip, like the spinner. */}
-        {group.some((surface) => surface.attention) && (
-          <span className="absolute -right-0.5 -top-0.5 size-1.5 animate-pulse rounded-full bg-accent" />
-        )}
-      </span>
-      {group.length} {SURFACE_GROUP_LABELS[kind]}
-      <ChevronUp
-        className={`size-3 text-fg-faint transition-transform duration-150 ${
-          open ? "rotate-180" : ""
-        }`}
-      />
-    </button>
-  );
-}
-
-/** What one kind renders on the rail: chips, or the collapsed group. */
-type RailItem =
-  | { id: string; type: "chip"; surface: ChatSurface }
-  | { id: string; type: "group"; group: ChatSurface[] };
-
-/**
- * One kind's strip on the rail, with motion: chips (or the group chip
- * they fold into past the threshold) enter with pill-in and leave with
- * pill-out — the collapse reads as chips folding into the group, not a
- * teleport. Removed items linger until their exit animation lands.
- */
-function KindStrip({
-  kind,
-  group,
-  animateEnter,
-  openGroup,
-  onToggleGroup,
-  onOpenSurface,
-  onRemoveSurface,
-  onOpenMcpApp,
-  onToggleInfo,
-}: {
-  kind: ChatSurface["kind"];
-  group: ChatSurface[];
-  /** False on the rail's first paint — pre-existing chips don't animate. */
-  animateEnter: boolean;
-  openGroup: ChatSurface["kind"] | null;
-  onToggleGroup: (kind: ChatSurface["kind"]) => void;
-  onOpenSurface: (key: string, mode: OpenMode | "split") => void;
-  onRemoveSurface?: (key: string) => void;
-  onOpenMcpApp?: (view: McpAppRef, mode: OpenMode | "split") => void;
-  onToggleInfo: (key: string) => void;
-}) {
-  const collapsed = group.length > SURFACE_GROUP_THRESHOLD;
-  const live: RailItem[] = collapsed
-    ? [{ id: `group:${kind}`, type: "group", group }]
-    : group.map((surface) => ({
-        id: `chip:${surface.key}`,
-        type: "chip",
-        surface,
-      }));
-  const liveIdsKey = live.map((item) => item.id).join("\u0000");
-  const [exiting, setExiting] = useState<RailItem[]>([]);
-  const prevIdsRef = useRef<Set<string> | null>(null);
-  const prevItemsRef = useRef<RailItem[]>([]);
-  // Entered ids keep their pill-in class for the element's lifetime —
-  // the animation runs once on insertion, and a mid-flight re-render
-  // must not strip the class and snap the tween.
-  const enteredRef = useRef(new Set<string>());
-  for (const item of live) {
-    const prev = prevIdsRef.current;
-    if (prev === null) {
-      if (animateEnter) enteredRef.current.add(item.id);
-    } else if (!prev.has(item.id)) {
-      enteredRef.current.add(item.id);
-    }
-  }
-  // biome-ignore lint/correctness/useExhaustiveDependencies: diffing is keyed on the id list; item objects are re-derived each render
-  useEffect(() => {
-    const previous = prevItemsRef.current;
-    const liveIds = new Set(live.map((item) => item.id));
-    prevIdsRef.current = liveIds;
-    prevItemsRef.current = live;
-    for (const id of enteredRef.current) {
-      if (!liveIds.has(id)) enteredRef.current.delete(id);
-    }
-    const removed = previous.filter((item) => !liveIds.has(item.id));
-    setExiting((current) => {
-      const kept = current.filter(
-        (item) =>
-          !liveIds.has(item.id) && !removed.some((gone) => gone.id === item.id),
-      );
-      const next = [...kept, ...removed];
-      return next.length === current.length &&
-        next.every((item, index) => item === current[index])
-        ? current
-        : next;
-    });
-  }, [liveIdsKey]);
-
-  const renderItem = (item: RailItem, exitingItem: boolean) => (
-    <span
-      key={item.id}
-      className={`flex shrink-0 items-center overflow-hidden ${
-        exitingItem
-          ? "animate-pill-out"
-          : enteredRef.current.has(item.id)
-            ? "animate-pill-in"
-            : ""
-      }`}
-      onAnimationEnd={
-        exitingItem
-          ? (event) => {
-              if (event.animationName === "pill-out") {
-                setExiting((current) =>
-                  current.filter((gone) => gone.id !== item.id),
-                );
-              }
-            }
-          : undefined
-      }
-    >
-      {item.type === "group" ? (
-        <GroupChip
-          kind={kind}
-          group={item.group}
-          open={openGroup === kind}
-          onToggle={() => onToggleGroup(kind)}
-        />
-      ) : (
-        <SurfaceChip
-          surface={item.surface}
-          onOpenSurface={onOpenSurface}
-          onRemoveSurface={onRemoveSurface}
-          onOpenMcpApp={onOpenMcpApp}
-          onToggleInfo={onToggleInfo}
-        />
-      )}
-    </span>
-  );
-
-  return (
-    <span className="flex shrink-0 items-center gap-1.5">
-      {exiting.map((item) => renderItem(item, true))}
-      {live.map((item) => renderItem(item, false))}
-    </span>
-  );
-}
-
-/**
- * The surfaces rail. Kinds with many surfaces collapse into one group
- * chip ("4 pages") whose popover expands upward; kinds with few show
- * individual chips. Active surfaces (agent working, command running)
- * carry a spinner that aggregates onto their group chip. Collapse and
- * expansion animate through KindStrip; the popovers pop in and out.
- */
-function SurfacesRail({
-  surfaces,
-  onOpenSurface,
-  onRemoveSurface,
-  onOpenMcpApp,
-}: {
-  surfaces: ChatSurface[];
-  onOpenSurface: (key: string, mode: OpenMode | "split") => void;
-  onRemoveSurface?: (key: string) => void;
-  onOpenMcpApp?: (view: McpAppRef, mode: OpenMode | "split") => void;
-}) {
-  const [openGroup, setOpenGroup] = useState<ChatSurface["kind"] | null>(null);
-  const [openInfoKey, setOpenInfoKey] = useState<string | null>(null);
-  const railRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!openGroup && !openInfoKey) return;
-    const onDocMouseDown = (event: MouseEvent) => {
-      if (!railRef.current?.contains(event.target as Node)) {
-        setOpenGroup(null);
-        setOpenInfoKey(null);
-      }
-    };
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setOpenGroup(null);
-        setOpenInfoKey(null);
-      }
-    };
-    document.addEventListener("mousedown", onDocMouseDown);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onDocMouseDown);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [openGroup, openInfoKey]);
-
-  const byKind = new Map<ChatSurface["kind"], ChatSurface[]>();
-  for (const surface of surfaces) {
-    byKind.set(surface.kind, [...(byKind.get(surface.kind) ?? []), surface]);
-  }
-
-  const toggleInfo = (key: string) => {
-    setOpenGroup(null);
-    setOpenInfoKey((current) => (current === key ? null : key));
-  };
-  const openInfoSurface = openInfoKey
-    ? surfaces.find((surface) => surface.key === openInfoKey)
-    : undefined;
-  // PopPanel freezes the last open render through the exit animation,
-  // so live (possibly null) content is passed straight in.
-  const infoSurface = openInfoSurface?.info ? openInfoSurface : null;
-  const groupSurfaces = openGroup ? byKind.get(openGroup) : undefined;
-  const firstPaintRef = useRef(true);
-  useEffect(() => {
-    firstPaintRef.current = false;
-  }, []);
-
-  return (
-    <div ref={railRef} className="relative mx-3">
-      {/* Detail popover for chips that ARE their surface (subagents,
-          watchers): the chip's activity feed, expanded upward. */}
-      <PopPanel
-        open={Boolean(infoSurface)}
-        className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-80 overflow-y-auto rounded-lg border border-border bg-bg-raised p-2 shadow-2xl"
-        testId="surface-info-popover"
-      >
-        {infoSurface && (
-          <>
-            <div className="flex items-center gap-1.5 px-1 pb-1.5 text-[11px] font-semibold text-fg">
-              {(() => {
-                const Icon = SURFACE_ICONS[infoSurface.kind];
-                return infoSurface.active ? (
-                  <LoaderCircle className="size-3 animate-spin text-accent" />
-                ) : (
-                  <Icon className="size-3" />
-                );
-              })()}
-              <span className="truncate">{infoSurface.label}</span>
-            </div>
-            <div className="flex flex-col gap-0.5">
-              {infoSurface.info?.map((line, index) => (
-                <div
-                  // biome-ignore lint/suspicious/noArrayIndexKey: static activity lines
-                  key={index}
-                  className="truncate px-1 font-mono text-[11px] text-fg-muted"
-                >
-                  {line}
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-      </PopPanel>
-      <PopPanel
-        open={Boolean(groupSurfaces)}
-        className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-72 overflow-y-auto rounded-lg border border-border bg-bg-raised p-1 shadow-2xl"
-      >
-        {groupSurfaces?.map((surface) => (
-          <div
-            key={surface.key}
-            className="group/chip flex items-center rounded-md text-[12px] text-fg-muted transition-colors duration-100 hover:bg-bg-overlay"
-          >
-            <OpenResourceButton
-              isResource={!surface.info}
-              type="button"
-              onOpen={(mode) => {
-                if (surface.mcpApp) {
-                  onOpenMcpApp?.(surface.mcpApp, mode);
-                  setOpenGroup(null);
-                  return;
-                }
-                if (surface.info) {
-                  toggleInfo(surface.key);
-                  return;
-                }
-                onOpenSurface(surface.key, mode);
-                setOpenGroup(null);
-              }}
-              className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 py-1.5 text-left hover:text-fg"
-            >
-              <span className="relative grid size-3.5 shrink-0 place-items-center">
-                {surface.kind === "browser" && surface.faviconUrl ? (
-                  <img
-                    src={surface.faviconUrl}
-                    alt=""
-                    className={`col-start-1 row-start-1 size-3.5 rounded-[2px] ${surface.active ? "opacity-0" : ""}`}
-                  />
-                ) : (
-                  (() => {
-                    const Icon = SURFACE_ICONS[surface.kind];
-                    return (
-                      <Icon
-                        className={`col-start-1 row-start-1 size-3.5 ${surface.active ? "opacity-0" : ""}`}
-                      />
-                    );
-                  })()
-                )}
-                {surface.active && (
-                  <LoaderCircle className="col-start-1 row-start-1 size-3.5 animate-spin text-accent" />
-                )}
-                {surface.attention && (
-                  <span className="absolute -right-0.5 -top-0.5 size-1.5 animate-pulse rounded-full bg-accent" />
-                )}
-              </span>
-              <span className="truncate">{surface.label}</span>
-            </OpenResourceButton>
-            {!surface.info && (
-              <span className="mr-1 flex shrink-0 items-center opacity-0 transition-opacity duration-100 group-hover/chip:opacity-100">
-                <ShortcutHint label="Open to the right" shortcut="⌘⇧-click">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onOpenSurface(surface.key, "split");
-                      setOpenGroup(null);
-                    }}
-                    className="grid size-6 cursor-pointer place-items-center rounded text-fg-faint hover:text-fg"
-                    aria-label={`Open ${surface.label} to the right`}
-                  >
-                    <Columns2 className="size-3" />
-                  </button>
-                </ShortcutHint>
-                {surface.removable && onRemoveSurface && (
-                  <ShortcutHint label="Remove from this chat">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onRemoveSurface(surface.key);
-                        setOpenGroup(null);
-                      }}
-                      className="grid size-6 cursor-pointer place-items-center rounded text-fg-faint hover:text-fg"
-                      aria-label={`Remove ${surface.label}`}
-                    >
-                      <X className="size-3" />
-                    </button>
-                  </ShortcutHint>
-                )}
-              </span>
-            )}
-          </div>
-        ))}
-      </PopPanel>
-      <div className="flex items-center gap-1.5 overflow-x-auto pt-1">
-        {[...byKind.entries()].map(([kind, group]) => (
-          <KindStrip
-            key={kind}
-            kind={kind}
-            group={group}
-            animateEnter={!firstPaintRef.current}
-            openGroup={openGroup}
-            onToggleGroup={(toggled) =>
-              setOpenGroup((current) => (current === toggled ? null : toggled))
-            }
-            onOpenSurface={onOpenSurface}
-            onRemoveSurface={onRemoveSurface}
-            onOpenMcpApp={onOpenMcpApp}
-            onToggleInfo={toggleInfo}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/**
  * One chat surface tied to one bottom bubble. Stays mounted while minimized
  * so queued sends and drafts survive; the panel morphs between a floating
  * partial dock and a full workspace tab (the bubble hides while tabbed).
@@ -1207,6 +535,8 @@ function ChatDockContent({
   const chat = useAgentChat(projectId, {
     sessionId: entry.sessionId,
     agentId: selectedAgentId,
+    model: entry.model,
+    effort: entry.effort,
     environment: selectedEnvironment,
     source: "desktop",
     idleRefetchIntervalMs: refreshWhileIdle ? 3_000 : false,
@@ -1375,94 +705,21 @@ function ChatDockContent({
     }
   };
 
-  // Slash commands (ADR 0052): "/" at the start of the composer lists the
-  // project's skills (both tiers, fetched fresh while relevant); a
-  // committed command sends the skill's invocation message. The menu shows
-  // only while the command token is being typed — a space (arguments)
-  // closes it, and submit still resolves `/name args` to the invocation.
+  const isTab = entry.mode === "tab";
+  const frontSurface = entry.mode === "partial" || (isTab && tabActive);
   const slashing = draft.startsWith("/");
-  const skills = useProjectSkills(projectId, slashing);
-  // The harness's OWN slash commands (Claude Code: built-ins,
-  // .claude/commands, plugin commands) merge in under the skills — the
-  // menu shows what the agent would actually accept, not just skills.
-  // Fetched (cached in main) when "/" starts; the effect lives below the
-  // roster, which knows the active agent.
-  const [harnessCommands, setHarnessCommands] = useState<
-    Array<{ name: string; description: string; argumentHint: string }>
-  >([]);
-  const slashToken = /^\/([^\s/]*)$/.exec(draft)?.[1];
+  const catalogActive = slashing && frontSurface;
+  const [commandsRefresh, setCommandsRefresh] = useState(0);
+  const skillCatalog = useProjectSkillCatalog(
+    projectId,
+    catalogActive,
+    commandsRefresh,
+  );
+  const slashListId = useId();
+  const composerFormRef = useRef<HTMLFormElement>(null);
+  const slashToken = /^\/(\S*)$/.exec(draft)?.[1];
   const [slashDismissed, setSlashDismissed] = useState(false);
-  const [slashIndex, setSlashIndex] = useState(0);
-  const slashMatches = useMemo<SlashEntry[]>(() => {
-    if (slashToken === undefined) return [];
-    const skillNames = new Set(skills.map((skill) => skill.name));
-    const statusEntry: SlashEntry = {
-      kind: "status",
-      name: "status",
-      description: "Show this session's status and actions",
-    };
-    const all: SlashEntry[] = [
-      statusEntry,
-      ...skills.map((skill) => ({
-        kind: "skill" as const,
-        name: skill.name,
-        description: skill.description,
-        skill,
-      })),
-      // A skill can also surface as a CLI command (the host-skills
-      // plugin); the skill row wins the name.
-      ...harnessCommands
-        .filter((command) => !skillNames.has(command.name))
-        .map((command) => ({
-          kind: "command" as const,
-          name: command.name,
-          description: command.description,
-          command,
-        })),
-    ];
-    if (!slashToken) return all;
-    return all
-      .map((entry) => ({
-        entry,
-        score: commandScore(entry.name, slashToken, [entry.description]),
-      }))
-      .filter((scored) => scored.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .map((scored) => scored.entry);
-  }, [slashToken, skills, harnessCommands]);
-  const slashMenuOpen =
-    slashToken !== undefined && !slashDismissed && slashMatches.length > 0;
-  const slashSelected = Math.min(slashIndex, slashMatches.length - 1);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the token is the trigger — each command keystroke resets the selection
-  useEffect(() => {
-    setSlashIndex(0);
-  }, [slashToken]);
-
-  /** Commit a slash-menu row: send the invocation (attachments ride along). */
-  const runSlash = (entry: SlashEntry) => {
-    if (pendingTransfersRef.current > 0) return;
-    const files = composerRef.current?.read().attachments ?? [];
-    composerRef.current?.clear();
-    setRecall(null);
-    // Skills send their harness-neutral invocation; harness commands go
-    // as the literal "/name" — the CLI executes those natively.
-    if (entry.kind === "status") {
-      setLocalInspectorNonce((value) => value + 1);
-      return;
-    }
-    void chat.send(
-      entry.kind === "skill" ? skillInvocation(entry.name) : `/${entry.name}`,
-      files,
-    );
-  };
-
-  /** `/name args` sent as text still resolves to the skill invocation. */
-  const resolveSlashMessage = (message: string): string => {
-    const match = /^\/(\S+)(?:\s+([\s\S]+))?$/.exec(message);
-    if (!match?.[1]) return message;
-    const skill = skills.find((entry) => entry.name === match[1]);
-    return skill ? skillInvocation(skill.name, match[2]) : message;
-  };
+  const [slashSelection, setSlashSelection] = useState<string>();
   const answerQuestion = useAnswerAgentQuestion(projectId, chat.sessionId);
   const pendingQuestion =
     chat.session?.questions?.find((entry) => entry.blocking !== false) ??
@@ -1683,7 +940,8 @@ function ChatDockContent({
     enabled: inspected && !!activeAgent,
     staleTime: 600_000,
   });
-  const selectedModel = chat.session?.model || activeAgent?.model;
+  const selectedModel =
+    (chat.session ? chat.session.model : entry.model) || activeAgent?.model;
   const reportedModel = latestReportedModel(chat.messages);
   const effortModel = modelCatalog.data?.models.find(
     (model) =>
@@ -1707,8 +965,6 @@ function ChatDockContent({
       }),
     [],
   );
-  const isTab = entry.mode === "tab";
-  const frontSurface = entry.mode === "partial" || (isTab && tabActive);
 
   // Lurk mode: while the agent works and a tab is visible behind the
   // floating dock, the dock shrinks VERTICALLY to a strip — header, the
@@ -1734,13 +990,17 @@ function ChatDockContent({
       if (internalAutofocusDepthRef.current === 0) {
         userInteractionRef.current += 1;
       }
-      setDockEngaged(inDock(event.target));
+      const inside = inDock(event.target);
+      setDockEngaged(inside);
+      if (!inside) setSlashDismissed(true);
     };
     // Clicks on unfocusable chrome (a webview, blank pane space) never
     // fire focusin — the pointer decides too.
     const onPointerDown = (event: PointerEvent) => {
       userInteractionRef.current += 1;
-      setDockEngaged(inDock(event.target));
+      const inside = inDock(event.target);
+      setDockEngaged(inside);
+      if (!inside) setSlashDismissed(true);
     };
     const onKeyDown = () => {
       userInteractionRef.current += 1;
@@ -1821,25 +1081,113 @@ function ChatDockContent({
     };
   }, [frontSurface, sessionAuthAgent, activeAgent]);
 
-  // Harness command fetch: when "/" starts, ask main for the CLI's own
-  // command list. Main owns the gating (Claude Code agents only — others
-  // answer empty) and the cache; the id in the deps clears a stale list
-  // on agent switch.
+  // Fresh native commands belong to the selected agent and session checkout.
+  // A late response from an earlier agent never reaches the active composer.
   const commandsAgentId = activeAgent?.id ?? null;
+  const commandsKey = JSON.stringify([
+    projectId,
+    activeAgent,
+    chat.sessionId,
+    checkout?.path,
+  ]);
+  const commandsRequest = useMemo(
+    () => ({
+      key: commandsKey,
+      active: catalogActive,
+      refresh: commandsRefresh,
+    }),
+    [commandsKey, catalogActive, commandsRefresh],
+  );
+  const [nativeCatalog, setNativeCatalog] = useState<
+    AgentCommandsResult & {
+      request?: typeof commandsRequest;
+      loading: boolean;
+    }
+  >({ commands: [], loading: true });
   useEffect(() => {
-    setHarnessCommands([]);
-    if (!slashing || commandsAgentId === null) return;
+    if (!commandsRequest.active || commandsAgentId === null) return;
     let cancelled = false;
-    desktopApi
-      .agentCommands(projectId, commandsAgentId)
-      .then((commands) => {
-        if (!cancelled) setHarnessCommands(commands);
+    setNativeCatalog({ request: commandsRequest, commands: [], loading: true });
+    void desktopApi
+      .agentCommands({
+        projectId,
+        agentId: commandsAgentId,
+        ...(chat.sessionId ? { sessionId: chat.sessionId } : {}),
       })
-      .catch(() => {});
+      .then((result) => {
+        if (!cancelled)
+          setNativeCatalog({
+            ...result,
+            request: commandsRequest,
+            loading: false,
+          });
+      })
+      .catch(() => {
+        if (!cancelled)
+          setNativeCatalog({
+            request: commandsRequest,
+            commands: [],
+            loading: false,
+            error: "Could not load agent commands. Retry to refresh the list.",
+          });
+      });
     return () => {
       cancelled = true;
     };
-  }, [slashing, commandsAgentId, projectId]);
+  }, [commandsRequest, commandsAgentId, projectId, chat.sessionId]);
+  const nativeCurrent = nativeCatalog.request === commandsRequest;
+  const commandsLoading =
+    catalogActive &&
+    (skillCatalog.loading ||
+      (commandsAgentId !== null && (!nativeCurrent || nativeCatalog.loading)));
+  const commandsError =
+    skillCatalog.error ?? (nativeCurrent ? nativeCatalog.error : undefined);
+  const entries = useMemo(
+    () =>
+      slashEntries({
+        skills: skillsForAgent(skillCatalog.skills, activeAgent?.skills),
+        commands: nativeCurrent ? nativeCatalog.commands : [],
+        harnessLabel:
+          activeAgent?.harness === "codex" ? "Codex skill" : "Claude Code",
+      }),
+    [
+      skillCatalog.skills,
+      activeAgent?.skills,
+      activeAgent?.harness,
+      nativeCurrent,
+      nativeCatalog.commands,
+    ],
+  );
+  const slashMatches = useMemo(
+    () =>
+      slashToken === undefined ? [] : matchSlashEntries(entries, slashToken),
+    [entries, slashToken],
+  );
+  const slashMenuOpen =
+    frontSurface && slashToken !== undefined && !slashDismissed;
+  // Known entries remain usable while the other catalog is still loading.
+  // Only unresolved slash text waits, so a failed probe never sends it by accident.
+  const resolutionBlocked = (text: string, command?: SlashEntry) =>
+    text.startsWith("/") &&
+    !command &&
+    !entries.some(
+      (entry) => entry.name === /^\/([^\s\uFFFC]+)/.exec(text)?.[1],
+    ) &&
+    (!catalogActive || commandsLoading || !!commandsError);
+  const slashSelected = Math.max(
+    0,
+    slashMatches.findIndex((entry) => entry.name === slashSelection),
+  );
+  const commandResolutionBlocked = resolutionBlocked(
+    draft,
+    slashMenuOpen ? slashMatches[slashSelected] : undefined,
+  );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: typing or changing agents resets navigation
+  useEffect(() => {
+    setSlashSelection(undefined);
+  }, [slashToken, commandsKey]);
+
+  const runSlash = (entry: SlashEntry) => sendDraft(false, entry);
 
   // Whether a one-click re-login exists is main's verdict (the auth-health
   // probe reports it); the dock only supplies the label and the launcher.
@@ -2026,27 +1374,37 @@ function ChatDockContent({
     return { message, files };
   };
 
+  const sendDraft = (now: boolean, selected?: SlashEntry) => {
+    if (pendingTransfersRef.current > 0) return;
+    const current = composerRef.current?.read({ trim: false });
+    if (!current) return;
+    // Input and submit can arrive before React paints the new draft. Never
+    // apply a highlighted row from an earlier token to the user's live text.
+    const menuCurrent = slashMenuOpen && current.text === draft;
+    if (selected && !menuCurrent) return;
+    const command = menuCurrent
+      ? (selected ?? slashMatches[slashSelected])
+      : undefined;
+    if (command?.kind === "status" || current.text.trim() === "/status") {
+      rewriteText("");
+      setRecall(null);
+      setLocalInspectorNonce((value) => value + 1);
+      return;
+    }
+    if (resolutionBlocked(current.text, command)) return;
+    if (command) rewriteText(`/${command.name}`);
+    const composed = takeComposer();
+    if (!composed) return;
+    const message = resolveSlashMessage(composed.message, entries);
+    if (now) void chat.sendNow(message, composed.files);
+    else void chat.send(message, composed.files);
+  };
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
-    const composed = takeComposer();
-    if (!composed) return;
-    if (composed.message.trim() === "/status" && composed.files.length === 0) {
-      setLocalInspectorNonce((value) => value + 1);
-      return;
-    }
-    void chat.send(resolveSlashMessage(composed.message), composed.files);
+    sendDraft(false);
   };
-
-  /** ⌘↵: jump the queue — interrupt the running turn and send this now. */
-  const submitNow = () => {
-    const composed = takeComposer();
-    if (!composed) return;
-    if (composed.message.trim() === "/status" && composed.files.length === 0) {
-      setLocalInspectorNonce((value) => value + 1);
-      return;
-    }
-    void chat.sendNow(resolveSlashMessage(composed.message), composed.files);
-  };
+  /** ⌘↵ interrupts the running turn and sends through the same resolver. */
+  const submitNow = () => sendDraft(true);
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.nativeEvent.isComposing) return;
@@ -2057,19 +1415,33 @@ function ChatDockContent({
     // ArrowUp/Down claim below). Escape closes it and stays in the
     // composer — preventDefault keeps the window listener from stepping
     // the whole chat down.
-    if (slashMenuOpen) {
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    if (
+      slashMenuOpen &&
+      composerRef.current?.read({ trim: false }).text === draft
+    ) {
+      if (
+        !event.altKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.shiftKey &&
+        slashMatches.length > 0 &&
+        (event.key === "ArrowDown" || event.key === "ArrowUp")
+      ) {
         event.preventDefault();
-        setSlashIndex((current) => {
-          const last = slashMatches.length - 1;
-          const at = Math.min(current, last);
-          return event.key === "ArrowDown"
-            ? Math.min(at + 1, last)
-            : Math.max(at - 1, 0);
+        setSlashSelection((current) => {
+          const at = Math.max(
+            0,
+            slashMatches.findIndex((entry) => entry.name === current),
+          );
+          const next =
+            event.key === "ArrowDown"
+              ? Math.min(at + 1, slashMatches.length - 1)
+              : Math.max(at - 1, 0);
+          return slashMatches[next]?.name;
         });
         return;
       }
-      if (event.key === "Tab") {
+      if (event.key === "Tab" && !event.shiftKey && slashMatches.length > 0) {
         // Complete the name, keep typing arguments.
         event.preventDefault();
         const entry = slashMatches[slashSelected];
@@ -2088,6 +1460,7 @@ function ChatDockContent({
         event.preventDefault();
         const entry = slashMatches[slashSelected];
         if (entry) runSlash(entry);
+        else if (!commandsLoading) submit();
         return;
       }
     }
@@ -2122,7 +1495,7 @@ function ChatDockContent({
     // still under the caret, and that break must win over the pill.
     if (
       event.key === "Backspace" &&
-      draft.length === 0 &&
+      draft.trim().length === 0 &&
       composerRef.current?.emptyButPills() &&
       !event.metaKey &&
       !event.altKey
@@ -2684,6 +2057,9 @@ function ChatDockContent({
             <TodoProgress todos={chat.session?.todos ?? []} />
             <span className="flex items-center gap-0.5 rounded-lg border border-border bg-bg-raised p-0.5">
               <SessionInspector
+                projectId={projectId}
+                onOpenArtifact={(target) => onLinkClick?.(target, "tab")}
+                awaitingInput={awaitingInput}
                 session={chat.session}
                 fallbackTitle={title}
                 harness={activeAgent?.harness ?? chat.session?.provider}
@@ -2740,7 +2116,7 @@ function ChatDockContent({
                       )?.name ?? "Project agent")
                     : (activeAgent?.name ?? "Default agent")
                 }
-                model={chat.session?.model || activeAgent?.model || "Automatic"}
+                model={selectedModel || "Automatic"}
                 reportedModel={reportedModel}
                 onInspect={() => {
                   setInspected(true);
@@ -2749,21 +2125,37 @@ function ChatDockContent({
                 effort={
                   effectiveEffort(
                     activeAgent,
-                    chat.session?.modelEffort ?? activeAgent?.effort,
+                    chat.session?.modelEffort ??
+                      entry.effort ??
+                      activeAgent?.effort,
                     effortModel,
                   ) ?? "Unavailable"
                 }
                 onEditModel={
-                  !chat.session || chat.session.running || !activeAgent
+                  chat.isSending || chat.session?.running || !activeAgent
                     ? undefined
                     : onEditModel
                 }
                 onEditEffort={
-                  !chat.session ||
-                  chat.session.running ||
+                  chat.isSending ||
+                  chat.session?.running ||
                   supportedEfforts(activeAgent, effortModel).length === 0
                     ? undefined
                     : onEditEffort
+                }
+                modelDisabledReason={
+                  chat.isSending || chat.session?.running
+                    ? "Model can be changed after the current turn finishes."
+                    : !activeAgent
+                      ? "Choose an agent to select a model."
+                      : undefined
+                }
+                effortDisabledReason={
+                  chat.isSending || chat.session?.running
+                    ? "Reasoning can be changed after the current turn finishes."
+                    : supportedEfforts(activeAgent, effortModel).length === 0
+                      ? "This model does not offer a reasoning setting."
+                      : undefined
                 }
                 checkout={checkout}
                 incognito={isIncognito}
@@ -2934,7 +2326,9 @@ function ChatDockContent({
               className="min-h-0 flex-1"
               contentClassName={isTab ? "mx-auto w-full max-w-4xl pt-12" : ""}
               messages={messages}
-              activity={chat.connectionLost ? undefined : activity}
+              activity={
+                chat.connectionLost || awaitingInput ? undefined : activity
+              }
               queue={chat.queue}
               onUpdateQueued={chat.updateQueued}
               onRemoveQueued={chat.removeQueued}
@@ -2953,7 +2347,7 @@ function ChatDockContent({
               }
               emptyState={emptyPrompt.empty}
               onLinkClick={onLinkClick}
-              renderLink={renderResponseLink}
+              renderLink={(props) => renderResponseLink({ ...props, surfaces })}
               onFileClick={onFileClick}
               resolveToolIcon={resolveToolIcon}
               onFork={entry.sessionId ? onFork : undefined}
@@ -2996,8 +2390,10 @@ function ChatDockContent({
               (not unmounted) so chip motion state survives the lurk. */}
             {railSurfaces.length > 0 && onOpenSurface && (
               <div
-                className={`shrink-0 overflow-hidden transition-[max-height,opacity] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
-                  lurking ? "max-h-0 opacity-0" : "max-h-12 opacity-100"
+                className={`shrink-0 transition-[max-height,opacity] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+                  lurking
+                    ? "max-h-0 overflow-hidden opacity-0"
+                    : "max-h-12 overflow-visible opacity-100"
                 }`}
                 inert={lurking ? true : undefined}
               >
@@ -3223,6 +2619,7 @@ function ChatDockContent({
               />
             )}
             <form
+              ref={composerFormRef}
               className="field relative m-3 mt-1 flex shrink-0 flex-col rounded-xl bg-bg-raised p-1.5"
               onSubmit={submit}
             >
@@ -3230,12 +2627,47 @@ function ChatDockContent({
                 harness's own commands. Rows commit on mousedown like
                 the palette, so the composer never loses focus; the
                 panel pops in/out and rows glide as the filter types. */}
+              {!slashMenuOpen &&
+                slashing &&
+                (commandsLoading || commandsError) && (
+                  <div
+                    role="status"
+                    className="mb-2 flex items-center gap-2 px-3 text-xs text-fg-muted"
+                  >
+                    <span>
+                      {commandsLoading ? "Loading commands…" : commandsError}
+                    </span>
+                    {commandsError && (
+                      <button
+                        type="button"
+                        className="rounded px-2 py-1 text-fg hover:bg-bg-overlay"
+                        onClick={() => setCommandsRefresh((value) => value + 1)}
+                      >
+                        Retry
+                      </button>
+                    )}
+                  </div>
+                )}
               <SlashMenu
                 open={slashMenuOpen}
+                id={slashListId}
+                anchorRef={composerFormRef}
+                loading={commandsLoading}
+                error={commandsError}
+                onRetry={() => {
+                  setCommandsRefresh((value) => value + 1);
+                  composerRef.current?.focus();
+                }}
                 matches={slashMatches}
                 selected={slashSelected}
-                onHover={setSlashIndex}
+                onHover={(index) =>
+                  setSlashSelection(slashMatches[index]?.name)
+                }
                 onCommit={runSlash}
+                onDismiss={() => {
+                  setSlashDismissed(true);
+                  composerRef.current?.focus();
+                }}
               />
               <div className="flex items-center gap-2">
                 {/* Any file attaches — as media when the agent takes it,
@@ -3266,6 +2698,16 @@ function ChatDockContent({
                   dropped, enter with pill-in and leave with pill-out. */}
                 <ComposerInput
                   ref={composerRef}
+                  suggestions={
+                    slashMenuOpen
+                      ? {
+                          listId: slashListId,
+                          activeId: slashMatches.length
+                            ? `${slashListId}-${slashSelected}`
+                            : undefined,
+                        }
+                      : undefined
+                  }
                   onAnimationEnd={(event) => {
                     if (event.animationName.startsWith("input-recall-")) {
                       setRecallMotion((current) =>
@@ -3328,7 +2770,9 @@ function ChatDockContent({
                     type="submit"
                     className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-fg transition-opacity duration-150 disabled:opacity-35"
                     disabled={
-                      pendingTransfers > 0 || (!draft.trim() && pillCount === 0)
+                      pendingTransfers > 0 ||
+                      commandResolutionBlocked ||
+                      (!draft.trim() && pillCount === 0)
                     }
                     data-disabled-reason="Write a message or attach a file first"
                     aria-label="Send message"

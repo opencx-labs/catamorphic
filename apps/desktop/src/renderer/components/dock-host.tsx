@@ -1,6 +1,7 @@
 import { GripVertical } from "lucide-react";
 import {
   type CSSProperties,
+  type PointerEvent,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -32,6 +33,7 @@ const EMPTY: DockSnapshot = {
   detached: false,
   multiProject: false,
   side: "right",
+  alignment: "edge",
 };
 
 /** One presentation vocabulary, mounted in a workspace or in the native dock. */
@@ -61,8 +63,17 @@ export function DockHost({
     [remoteSnapshot.activeChatId],
   );
   const [signals, setSignals] = useState<Record<string, ChatSignals>>({});
-  const dragStart = useRef<{ x: number; middle: number } | null>(null);
-  const [dragOffset, setDragOffset] = useState(0);
+  const dragStart = useRef<{
+    x: number;
+    left: number;
+    middle: number;
+    max: number;
+    moved: boolean;
+  } | null>(null);
+  const suppressClick = useRef(false);
+  const [dragLeft, setDragLeft] = useState<number | null>(null);
+  const positionRevision = useRef(0);
+  const [positionError, setPositionError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [region, setRegion] = useState<CSSProperties>({ inset: 0 });
@@ -159,8 +170,9 @@ export function DockHost({
       void desktopApi.dockResize({
         width: expanded || dialogOpen ? 780 : railWidth,
         height: expanded || dialogOpen ? 560 : 76,
+        expanded: !collapsed,
       });
-  }, [detachedWindow, expanded, dialogOpen, railWidth]);
+  }, [detachedWindow, expanded, dialogOpen, railWidth, collapsed]);
 
   const invoke = (chat: DockData, event: ChatEvent) => {
     if (chat.local) {
@@ -263,12 +275,113 @@ export function DockHost({
       actions.current.get(active.entry.localId)?.close?.();
   };
   useEffect(() => desktopApi.onCloseSurface(() => closeFromMenu.current()), []);
+  const saveSide = (side: "left" | "right") => {
+    const revision = ++positionRevision.current;
+    const previous = snapshot.side;
+    setSnapshot((state) => ({ ...state, side }));
+    setPositionError(null);
+    void desktopApi.setPrefs({ dockSide: side }).catch(() => {
+      if (positionRevision.current !== revision) return;
+      setSnapshot((state) => ({ ...state, side: previous }));
+      setPositionError(
+        "Could not save the dock position. Try dragging it again.",
+      );
+    });
+  };
+  const nativeDrag = (
+    phase: "start" | "move" | "end" | "cancel",
+    screenX: number,
+  ) => {
+    void desktopApi
+      .dockDrag({
+        phase,
+        screenX,
+        reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)")
+          .matches,
+      })
+      .catch(() =>
+        setPositionError("Could not move the dock. Try dragging it again."),
+      );
+  };
+  const cancelDrag = () => {
+    if (detachedWindow && dragStart.current)
+      nativeDrag("cancel", dragStart.current.x);
+    suppressClick.current = dragStart.current?.moved ?? false;
+    dragStart.current = null;
+    setDragLeft(null);
+  };
+  const dragHandlers = {
+    onPointerDown: (event: PointerEvent<HTMLButtonElement>) => {
+      if (event.button !== 0) return;
+      const host = event.currentTarget
+        .closest("[data-dock-host]")
+        ?.getBoundingClientRect();
+      const rail = event.currentTarget
+        .closest("[data-dock-host]")
+        ?.querySelector("[data-dock-rail]")
+        ?.getBoundingClientRect();
+      if (!host || !rail) return;
+      suppressClick.current = false;
+      dragStart.current = {
+        x: detachedWindow ? event.screenX : event.clientX,
+        left: rail.left - host.left,
+        middle: host.left + host.width / 2,
+        max: Math.max(32, host.width - rail.width - 32),
+        moved: false,
+      };
+      if (detachedWindow) nativeDrag("start", event.screenX);
+      event.currentTarget.setPointerCapture(event.pointerId);
+    },
+    onPointerMove: (event: PointerEvent<HTMLButtonElement>) => {
+      const start = dragStart.current;
+      if (!start || !event.currentTarget.hasPointerCapture(event.pointerId))
+        return;
+      const delta = (detachedWindow ? event.screenX : event.clientX) - start.x;
+      if (!start.moved && Math.abs(delta) < 5) return;
+      start.moved = true;
+      event.preventDefault();
+      if (detachedWindow) nativeDrag("move", event.screenX);
+      else setDragLeft(Math.max(32, Math.min(start.max, start.left + delta)));
+    },
+    onPointerUp: (event: PointerEvent<HTMLButtonElement>) => {
+      const start = dragStart.current;
+      if (!start) return;
+      dragStart.current = null;
+      suppressClick.current = start.moved;
+      if (detachedWindow)
+        nativeDrag(start.moved ? "end" : "cancel", event.screenX);
+      else if (start.moved)
+        saveSide(event.clientX < start.middle ? "left" : "right");
+      setDragLeft(null);
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    },
+    onPointerCancel: cancelDrag,
+    onLostPointerCapture: () => {
+      if (dragStart.current) cancelDrag();
+    },
+    onClickCapture: (event: React.MouseEvent<HTMLButtonElement>) => {
+      if (!suppressClick.current) return;
+      suppressClick.current = false;
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => {
+      if (event.key === "Escape" && dragStart.current) {
+        event.preventDefault();
+        cancelDrag();
+      }
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      saveSide(event.key === "ArrowLeft" ? "left" : "right");
+    },
+  };
   showing.current = new Set();
   return (
     <div
       data-dock-host
       data-dock-native={detachedWindow || undefined}
       data-dock-side={snapshot.side}
+      data-dock-alignment={snapshot.alignment}
       className={`pointer-events-none absolute ${detachedWindow ? "inset-0" : ""}`}
       style={{ ...themeStyle(currentTheme), ...(detachedWindow ? {} : region) }}
     >
@@ -312,7 +425,6 @@ export function DockHost({
               data-theme={chat.theme?.appearance}
               style={{
                 ...themeStyle(chat.theme),
-                transform: isTab ? undefined : `translateX(${dragOffset}px)`,
               }}
             >
               <ChatDock
@@ -403,7 +515,9 @@ export function DockHost({
               const chat = scoped.find((chat) => chat.entry.localId === id);
               if (chat) invoke(chat, { kind: "menu", entry });
             }}
-            dragOffset={dragOffset}
+            dragLeft={dragLeft}
+            alignment={snapshot.alignment}
+            dragHandlers={dragHandlers}
             newChatProjectName={
               snapshot.chats.find((chat) => chat.projectId === currentProjectId)
                 ?.projectName
@@ -445,65 +559,26 @@ export function DockHost({
                 actions.current.get(active.entry.localId)?.minimize?.();
             }}
           />
-          <ShortcutHint label="Drag dock to either edge">
-            <button
-              type="button"
-              aria-label="Move chat dock"
-              className={`pointer-events-auto absolute bottom-5 z-50 grid size-6 cursor-grab place-items-center rounded text-fg-faint hover:text-fg ${snapshot.side === "left" ? "left-0" : "right-0"}`}
-              data-native-drag={detachedWindow || undefined}
-              style={{ transform: `translateX(${dragOffset}px)` }}
-              onPointerDown={(event) => {
-                if (detachedWindow) return;
-                const bounds = event.currentTarget
-                  .closest("[data-dock-host]")
-                  ?.getBoundingClientRect();
-                dragStart.current = {
-                  x: event.clientX,
-                  middle: bounds
-                    ? bounds.left + bounds.width / 2
-                    : innerWidth / 2,
-                };
-                event.currentTarget.setPointerCapture(event.pointerId);
-              }}
-              onPointerMove={(event) => {
-                if (
-                  dragStart.current &&
-                  event.currentTarget.hasPointerCapture(event.pointerId)
-                )
-                  setDragOffset(event.clientX - dragStart.current.x);
-              }}
-              onPointerCancel={() => {
-                dragStart.current = null;
-                setDragOffset(0);
-              }}
-              onPointerUp={(event) => {
-                const start = dragStart.current;
-                if (
-                  detachedWindow ||
-                  !start ||
-                  !event.currentTarget.hasPointerCapture(event.pointerId)
-                )
-                  return;
-                event.currentTarget.releasePointerCapture(event.pointerId);
-                dragStart.current = null;
-                const side = event.clientX < start.middle ? "left" : "right";
-                void desktopApi.setPrefs({ dockSide: side }).then(() => {
-                  setSnapshot((snapshot) => ({ ...snapshot, side }));
-                  setDragOffset(0);
-                });
-              }}
-              onKeyDown={(event) => {
-                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight")
-                  return;
-                event.preventDefault();
-                void desktopApi.setPrefs({
-                  dockSide: event.key === "ArrowLeft" ? "left" : "right",
-                });
-              }}
+          {!collapsed && (
+            <ShortcutHint label="Drag dock to either edge">
+              <button
+                type="button"
+                aria-label="Move chat dock"
+                className={`pointer-events-auto absolute bottom-5 z-50 grid size-6 cursor-grab place-items-center rounded text-fg-faint hover:text-fg ${snapshot.side === "left" ? "left-0" : "right-0"}`}
+                {...dragHandlers}
+              >
+                <GripVertical className="size-3.5" />
+              </button>
+            </ShortcutHint>
+          )}
+          {positionError && (
+            <p
+              role="alert"
+              className="pointer-events-auto absolute bottom-16 right-3 rounded-md border border-danger/30 bg-bg-raised px-3 py-2 text-xs text-danger"
             >
-              <GripVertical className="size-3.5" />
-            </button>
-          </ShortcutHint>
+              {positionError}
+            </p>
+          )}
         </>
       )}
     </div>

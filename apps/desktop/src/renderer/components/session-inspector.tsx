@@ -3,6 +3,7 @@ import {
   Archive,
   ChevronDown,
   CircleDot,
+  CircleHelp,
   Ghost,
   GitBranch,
   GitFork,
@@ -15,6 +16,7 @@ import type { SessionCheckoutInfo } from "../lib/desktop-api.js";
 import { ChatGlyph } from "./chat-icon.js";
 import { HarnessIcon } from "./harness-icon.js";
 import { ResourceInspector } from "./resource-inspector.js";
+import { SessionArtifacts } from "./session-artifacts.js";
 
 const SOURCE_LABELS: Record<AgentSession["source"], string> = {
   desktop: "Desktop",
@@ -26,6 +28,9 @@ const SOURCE_LABELS: Record<AgentSession["source"], string> = {
 };
 
 export function SessionInspector({
+  projectId,
+  onOpenArtifact,
+  awaitingInput = false,
   session,
   fallbackTitle,
   agentName,
@@ -43,6 +48,8 @@ export function SessionInspector({
   effort = "Default",
   onEditModel,
   onEditEffort,
+  modelDisabledReason,
+  effortDisabledReason,
   moveDisabledReason,
   moveError,
   onMove,
@@ -51,6 +58,9 @@ export function SessionInspector({
   archived = false,
   onOpenParent,
 }: {
+  projectId?: string;
+  onOpenArtifact?: (target: string) => void;
+  awaitingInput?: boolean;
   session: AgentSession | null | undefined;
   fallbackTitle: string;
   agentName: string;
@@ -68,6 +78,8 @@ export function SessionInspector({
   effort?: string;
   onEditModel?: () => void;
   onEditEffort?: () => void;
+  modelDisabledReason?: string;
+  effortDisabledReason?: string;
   moveDisabledReason?: string | null;
   moveError?: string | null;
   onMove?: () => void;
@@ -76,19 +88,22 @@ export function SessionInspector({
   archived?: boolean;
   onOpenParent?: () => void;
 }) {
+  const busy = session?.running && !awaitingInput;
   const state = archived
     ? "Archived"
     : !session
       ? "New"
-      : session.running
-        ? "Working"
-        : session.attentionRequired
-          ? "Needs attention"
-          : session.status === "closed"
-            ? "Archived"
-            : session.resumable
-              ? "Paused"
-              : "Ready";
+      : awaitingInput
+        ? "Waiting for your answer"
+        : session.running
+          ? "Working"
+          : session.attentionRequired
+            ? "Needs attention"
+            : session.status === "closed"
+              ? "Archived"
+              : session.resumable
+                ? "Paused"
+                : "Ready";
   const source = incognito
     ? "This device"
     : session
@@ -101,35 +116,63 @@ export function SessionInspector({
       openRequest={openRequest}
       onOpen={onInspect}
       content={(dismiss) => (
-        <SessionInspectorContent
-          session={session}
-          fallbackTitle={fallbackTitle}
-          agentName={agentName}
-          environmentControl={environmentControl}
-          onManageConnections={
-            onManageConnections
-              ? () => {
-                  dismiss();
-                  onManageConnections();
-                }
-              : undefined
-          }
-          checkout={checkout}
-          incognito={incognito}
-          moving={moving}
-          model={model}
-          reportedModel={reportedModel}
-          effort={effort}
-          onEditModel={onEditModel}
-          onEditEffort={onEditEffort}
-          moveDisabledReason={moveDisabledReason}
-          moveError={moveError}
-          onMove={onMove}
-          onFork={onFork}
-          onArchive={onArchive}
-          archived={archived}
-          onOpenParent={onOpenParent}
-        />
+        <>
+          <SessionInspectorContent
+            session={session}
+            fallbackTitle={fallbackTitle}
+            agentName={agentName}
+            environmentControl={environmentControl}
+            onManageConnections={
+              onManageConnections
+                ? () => {
+                    dismiss();
+                    onManageConnections();
+                  }
+                : undefined
+            }
+            checkout={checkout}
+            incognito={incognito}
+            moving={moving}
+            model={model}
+            reportedModel={reportedModel}
+            effort={effort}
+            onEditModel={
+              onEditModel
+                ? () => {
+                    dismiss();
+                    onEditModel();
+                  }
+                : undefined
+            }
+            onEditEffort={
+              onEditEffort
+                ? () => {
+                    dismiss();
+                    onEditEffort();
+                  }
+                : undefined
+            }
+            modelDisabledReason={modelDisabledReason}
+            effortDisabledReason={effortDisabledReason}
+            moveDisabledReason={moveDisabledReason}
+            moveError={moveError}
+            onMove={onMove}
+            onFork={onFork}
+            onArchive={onArchive}
+            archived={archived}
+            onOpenParent={onOpenParent}
+          />
+          {projectId && session && onOpenArtifact && (
+            <SessionArtifacts
+              projectId={projectId}
+              sessionId={session.id}
+              onOpen={(target) => {
+                dismiss();
+                onOpenArtifact(target);
+              }}
+            />
+          )}
+        </>
       )}
     >
       {(triggerProps) => (
@@ -145,12 +188,14 @@ export function SessionInspector({
             aria-hidden="true"
           >
             <LoaderCircle
-              className={`col-start-1 row-start-1 size-3 text-accent transition-opacity duration-200 ${session?.running ? "animate-spin opacity-100" : "opacity-0"}`}
+              className={`col-start-1 row-start-1 size-3 text-accent transition-opacity duration-200 ${busy ? "animate-spin opacity-100" : "opacity-0"}`}
             />
             <span
-              className={`col-start-1 row-start-1 transition-[opacity,transform] duration-200 ${session?.running ? "scale-75 opacity-0" : "scale-100 opacity-100"}`}
+              className={`col-start-1 row-start-1 transition-[opacity,transform] duration-200 ${busy ? "scale-75 opacity-0" : "scale-100 opacity-100"}`}
             >
-              {incognito ? (
+              {awaitingInput ? (
+                <CircleHelp className="size-3 text-accent" />
+              ) : incognito ? (
                 <Ghost className="size-3" />
               ) : (
                 <CircleDot className="size-3 text-accent" />
@@ -186,6 +231,8 @@ export function SessionInspectorContent({
   effort = "Default",
   onEditModel,
   onEditEffort,
+  modelDisabledReason,
+  effortDisabledReason,
   moveDisabledReason,
   moveError,
   onMove,
@@ -207,6 +254,8 @@ export function SessionInspectorContent({
   effort?: string;
   onEditModel?: () => void;
   onEditEffort?: () => void;
+  modelDisabledReason?: string;
+  effortDisabledReason?: string;
   moveDisabledReason?: string | null;
   moveError?: string | null;
   onMove?: () => void;
@@ -261,7 +310,12 @@ export function SessionInspectorContent({
 
       <dl className="grid grid-cols-[5.5rem_1fr] gap-x-3 gap-y-2 py-3 text-[11px]">
         <InspectorRow label="Agent" value={agentName} />
-        <InspectorRow label="Model" value={model} onEdit={onEditModel} />
+        <InspectorRow
+          label="Model"
+          value={model}
+          onEdit={onEditModel}
+          disabledReason={modelDisabledReason}
+        />
         {reportedModel && reportedModel !== model ? (
           <InspectorRow label="Last reply" value={reportedModel} />
         ) : null}
@@ -273,6 +327,7 @@ export function SessionInspectorContent({
               : effort.charAt(0).toUpperCase() + effort.slice(1)
           }
           onEdit={onEditEffort}
+          disabledReason={effortDisabledReason}
         />
         <InspectorRow label="Source" value={source} />
         <InspectorRow label="Status" value={state} />
@@ -368,20 +423,23 @@ function InspectorRow({
   label,
   value,
   onEdit,
+  disabledReason,
 }: {
   label: string;
   value: string;
   onEdit?: () => void;
+  disabledReason?: string;
 }) {
   return (
     <>
       <dt className="text-fg-faint">{label}</dt>
-      <dd className="min-w-0 text-fg" title={value}>
-        {onEdit ? (
+      <dd className="min-w-0 text-fg" data-disabled-reason={disabledReason}>
+        {onEdit || disabledReason ? (
           <button
             type="button"
             aria-label={`Change ${label.toLowerCase()}`}
             onClick={onEdit}
+            disabled={Boolean(disabledReason)}
             className="group -mx-1.5 flex w-[calc(100%+0.75rem)] min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-0.5 text-left transition-colors duration-150 ease-[cubic-bezier(0.2,0,0,1)] hover:bg-bg-raised focus-visible:outline-2 focus-visible:outline-accent"
           >
             <span className="min-w-0 flex-1 truncate">{value}</span>

@@ -1,27 +1,74 @@
-import { FileText } from "lucide-react";
+import { AppWindow, FileText, Workflow } from "lucide-react";
 import type { ReactNode } from "react";
+import type { ChatSurface } from "../../shared/chat";
 import type { OpenModifiers } from "../../shared/open-mode";
-import { parseSurfaceLink } from "../lib/surface-link";
+import { parseSurfaceLink } from "../../shared/surface-link";
 import { PILL_SURFACE } from "./context-pill";
 import { FilePreview } from "./file-preview";
 import { ResourceInspector } from "./resource-inspector";
+import { SurfacePreview } from "./surface-preview";
 import { WebPreview } from "./web-preview";
 
 export function ResponseLink({
   href,
   children,
   onOpen,
+  surfaces,
 }: {
+  surfaces?: ChatSurface[];
   href: string;
   children: ReactNode;
   onOpen: (href: string, modifiers: OpenModifiers) => void;
 }) {
   const target = parseSurfaceLink(href);
+  if (target?.kind === "workflow" || target?.kind === "app") {
+    const Icon = target.kind === "workflow" ? Workflow : AppWindow;
+    return (
+      <ResourceInspector<HTMLAnchorElement>
+        label={`${target.kind === "workflow" ? "Workflow" : "App"} preview`}
+        content={
+          <SurfacePreview
+            surface={{
+              key: `${target.kind}:${target.name}`,
+              kind: target.kind,
+              label: typeof children === "string" ? children : target.name,
+            }}
+          />
+        }
+      >
+        {(props) => (
+          <a
+            {...props}
+            href={href}
+            data-response-link={target.kind}
+            className={`inline-flex max-w-full items-baseline gap-1 px-1.5 align-baseline no-underline ${PILL_SURFACE}`}
+            onClick={(event) => {
+              event.preventDefault();
+              props.onClick();
+              onOpen(href, event);
+            }}
+          >
+            <Icon className="size-3 shrink-0 self-center" />
+            {children}
+            <span className="text-[10px] text-fg-muted">
+              {target.kind === "workflow" ? "Workflow" : "App"}
+            </span>
+          </a>
+        )}
+      </ResourceInspector>
+    );
+  }
+  const linkedSurface =
+    target?.kind === "tab"
+      ? surfaces?.find((surface) => surface.key === target.key)
+      : undefined;
   const file = target?.kind === "file";
   const content = file ? (
     <FilePreview filePath={target.path} />
   ) : target?.kind === "browser" ? (
     <WebPreview url={target.url} />
+  ) : linkedSurface ? (
+    <SurfacePreview surface={linkedSurface} />
   ) : undefined;
   if (!content)
     return (
@@ -37,14 +84,20 @@ export function ResponseLink({
     );
   return (
     <ResourceInspector<HTMLAnchorElement>
-      label={file ? "File preview" : "Link preview"}
+      label={
+        linkedSurface
+          ? `Preview ${linkedSurface.label}`
+          : file
+            ? "File preview"
+            : "Link preview"
+      }
       content={content}
     >
       {(props) => (
         <a
           {...props}
           href={href}
-          data-response-link={file ? "file" : "web"}
+          data-response-link={linkedSurface?.kind ?? (file ? "file" : "web")}
           className={
             file
               ? `inline-flex max-w-full items-baseline gap-1 px-1.5 align-baseline no-underline ${PILL_SURFACE}`

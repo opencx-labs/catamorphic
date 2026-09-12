@@ -16,24 +16,14 @@ import {
 } from "@catamorphic/core";
 import type {
   AgentMcpServerConfig,
-  AgentPluginConfig,
   CodingAgentProvider,
   ExtraTool,
-  ExtraToolContext,
-  McpToolPolicyLayers,
   SandboxProvider,
-  ToolPermissionDecision,
-  ToolPermissionHandler,
-  ToolPolicyAnnotations,
 } from "@catamorphic/sandbox";
-import { narrowingLayer, PROJECT_TOOLS_SERVER_KEY } from "@catamorphic/sandbox";
+import { PROJECT_TOOLS_SERVER_KEY } from "@catamorphic/sandbox";
+import type { AgentCommandsResult } from "../../shared/agent-commands.js";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { AgentConfig } from "../agents-store.js";
-import {
-  connectionServerKeys,
-  toAgentMcpServer,
-} from "../connections-store.js";
-import { connectorHarnessPath } from "../connector-harness.js";
 import type { ConnectorsService } from "../connectors.js";
 import {
   type DownloadableHarness,
@@ -47,6 +37,7 @@ import type { ProfilesStore } from "../profiles.js";
 import { projectDefaultAgentSlug } from "../project-manifest.js";
 import { shellBinShimDir } from "../shell-integration.js";
 import { FriendlyAgentErrors } from "./agent-errors.js";
+import { DesktopAgentMcp, type ResolvedMcp } from "./agent-mcp-policy.js";
 import { createCodexElicitation } from "./codex-elicitation.js";
 import { desktopSettingsContext } from "./desktop-settings-context.js";
 import { E2eFakeCodingAgent } from "./e2e-fakes.js";
@@ -62,6 +53,7 @@ import type { ProjectSessionContext } from "./workspace-context-agent.js";
 import { WorkspaceContextAgent } from "./workspace-context-agent.js";
 import {
   buildWorkspaceToolkit,
+  type WorkspaceTool,
   type WorkspaceToolkit,
 } from "./workspace-tools.js";
 
@@ -83,12 +75,6 @@ export interface DesktopAgentRegistryDeps {
   toolPermissions?: ToolPermissionBroker;
   /** Installed connector plugins (Claude Code loads them natively). */
   connectors?: ConnectorsService;
-  /**
-   * The project's workflow-tools MCP endpoint (`/api/projects/:id/mcp`),
-   * mounted per chat session so agents can call the project's ai.tool-call
-   * workflows. Undefined while the embedded server is still booting.
-   */
-  projectMcpUrl?: (projectId: string, sessionId: string) => string | undefined;
   /** Codex's authenticated loopback access to filtered workspace tools. */
   workspaceMcpServer?: (
     projectId: string,
@@ -180,46 +166,8 @@ const CODEX_SANDBOX_MODES = {
  * is observation (overview, read_tab, read_terminal, snapshots) and
  * pointing — a read-only agent can still show, watch, and explain.
  */
-const MUTATING_WORKSPACE_TOOLS = new Set([
-  "run_terminal",
-  "write_terminal",
-  "browser_act",
-  "build_app",
-  "sync_project",
-  "create_pull_request",
-  "set_session_activity",
-  "create_worktree",
-  "use_worktree",
-  "use_project_checkout",
-]);
-
-const HOST_CHECKOUT_TOOLS = new Set([
-  "create_worktree",
-  "use_worktree",
-  "use_project_checkout",
-]);
-
 /** Server key of the per-project workflow-tools MCP server (session-scoped). */
 export const WORKFLOWS_SERVER_KEY = PROJECT_TOOLS_SERVER_KEY;
-
-/** An agent's resolved MCP surface: servers for every harness, plugin
- * directories for the harness that can load them natively. */
-interface ResolvedMcp {
-  servers: Record<string, AgentMcpServerConfig>;
-  plugins: AgentPluginConfig[];
-  /**
-   * Tool policy layers per server key: the connection's own (the
-   * profile's ceiling) then the agent's narrowing, when it has one. Every
-   * assigned connection gets an entry — the harness gates the ones it
-   * finds here and pre-approves the rest (session-scoped surfaces).
-   */
-  policies: Record<string, McpToolPolicyLayers>;
-  /** Cached tool annotations per server key (for `auto` off the hot path). */
-  annotations: Record<string, Record<string, ToolPolicyAnnotations>>;
-  /** Server key → connection id, so "Always allow" can land on the right
-   * connection's policy. */
-  connectionIds: Record<string, string>;
-}
 
 /**
  * The desktop's dynamic {@link CodingAgentRegistry}: agents come from the
@@ -234,6 +182,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     {
       key: string;
       profileId: string;
+      config: AgentConfig;
       provider: RegisteredCodingAgent["provider"];
       topology: RegisteredCodingAgent["topology"];
       privilege: RegisteredCodingAgent["privilege"];
@@ -252,8 +201,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   /** Workspace tools shared by every harness that can mount them. */
   readonly workspaceToolkit: WorkspaceToolkit | undefined;
   private readonly harnessComponents: HarnessComponentStore;
+  private readonly mcp: DesktopAgentMcp;
 
   constructor(private readonly deps: DesktopAgentRegistryDeps) {
+    this.mcp = new DesktopAgentMcp(deps);
     this.harnessComponents = new HarnessComponentStore({
       rootDir: deps.harnessComponentsDir,
     });
@@ -318,6 +269,122 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     };
   }
 
+  /** Resolve the same configuration and consent as execution, without starting a session. */
+  async listCommands({
+    projectId,
+    agentId,
+    workingDirectory,
+  }: {
+    projectId: string;
+    agentId: string;
+    workingDirectory: string;
+  }): Promise<AgentCommandsResult> {
+    const ref = parseProjectAgentId(agentId);
+    if (ref && ref.projectId !== projectId)
+      return { commands: [], error: "This agent belongs to another project." };
+    const resolved = ref
+      ? this.resolveProjectConfig(agentId, ref.projectId, ref.slug)
+      : this.findConfig(agentId);
+    if (!resolved)
+      return {
+        commands: [],
+        error: "Select an available agent to load commands.",
+      };
+    if ("error" in resolved) return { commands: [], error: resolved.error };
+    const { config, profileId } = resolved;
+    if (profileId !== this.deps.profiles.profileForProject(projectId).id)
+      return { commands: [], error: "This agent belongs to another profile." };
+    if (config.harness === "ai-sdk") return { commands: [] };
+    if (this.deps.e2eFake) {
+      return {
+        commands:
+          config.harness === "claude-code"
+            ? [
+                {
+                  name: "compact",
+                  description: "Summarize conversation history",
+                  argumentHint: "[instructions]",
+                },
+                {
+                  name: "review",
+                  description: "Review a pull request",
+                  argumentHint: "<pr-number>",
+                },
+              ]
+            : [
+                {
+                  name: "native-notes",
+                  description: "Write notes with Codex",
+                  argumentHint: "[instructions]",
+                  skillPath: path.join(
+                    workingDirectory,
+                    ".codex/skills/native-notes/SKILL.md",
+                  ),
+                },
+              ],
+      };
+    }
+    const { component, environment } = await this.ensureNativeComponents(
+      config.harness,
+    );
+    if (config.harness === "codex") {
+      const { listCodexSkills } = await import("@catamorphic/codex");
+      const skills = await listCodexSkills({
+        executable: component.executablePath,
+        workingDirectory,
+        env: {
+          ...environment,
+          ...(config.auth === "account"
+            ? { CODEX_HOME: this.agentHome(agentId) }
+            : {}),
+        },
+      });
+      return {
+        commands: skills
+          .filter(
+            (skill) =>
+              config.skills?.mode !== "picked" ||
+              config.skills.names.includes(skill.name),
+          )
+          .map((skill) => ({
+            name: skill.name,
+            description: skill.description,
+            argumentHint: "[instructions]",
+            skillPath: skill.path,
+          })),
+      };
+    }
+    const { listClaudeSlashCommands } = await import(
+      "@catamorphic/claude-code"
+    );
+    const hostSkills = this.deps.hostSkills?.();
+    const generatedAliases = new Set(
+      hostSkills?.skills.map(
+        (skill) => `${hostSkills.plugin.name}:${skill.name}`,
+      ),
+    );
+    return {
+      commands: (
+        await listClaudeSlashCommands({
+          workingDirectory,
+          pathToClaudeCodeExecutable: component.executablePath,
+          env: {
+            ...environment,
+            ...(config.auth === "account"
+              ? { CLAUDE_CONFIG_DIR: this.agentHome(agentId) }
+              : {}),
+          },
+          plugins: this.mcp
+            .resolve({ config, profileId })
+            .plugins.map((plugin) => ({
+              type: "local",
+              path: plugin.path,
+            })),
+        })
+      ).filter((command) => !generatedAliases.has(command.name)),
+    };
+  }
+
   async refreshOpenRouterDefault(): Promise<void> {
     try {
       this.openrouterDefault = bestFreeModelId(await fetchOpenRouterModels());
@@ -358,14 +425,14 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       return undefined;
     }
     const { config, profileId } = found;
-    const mcp = this.resolveMcp(config, profileId);
+    const mcp = this.mcp.resolve({ config, profileId });
     // Providers are cached by credential identity plus their MCP surface:
     // model and effort travel per turn (TurnOptions via fresh defaults
     // below), so switching them must NOT rebuild the provider — a rebuild
     // would drop the built-in agent's in-memory sessions mid-conversation.
     // Connection/connector edits DO rebuild, so the next turn runs with
     // the new server set — but header VALUES are not part of the key:
-    // harnesses read servers live (see liveServers), so a rotated OAuth
+    // the capability connection pool reads live credentials, so a rotated OAuth
     // token or renewed header reaches the next call in place, never
     // rebuilding the provider under a conversation.
     // Policies are deliberately NOT part of the key either: harnesses
@@ -407,6 +474,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     this.cache.set(id, {
       key,
       profileId,
+      config,
       provider,
       topology: built.topology,
       privilege: config.mode ?? "edit",
@@ -444,230 +512,6 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         .finally(() => this.closing.delete(closing));
       this.closing.add(closing);
     }
-  }
-
-  /**
-   * The agent's effective MCP surface: the profile's enabled connections
-   * narrowed by the agent's assignment ("all" = every current and future
-   * connection), plus the connector plugins whose connections made the
-   * cut (a plugin with no connections follows the "all" assignment only).
-   */
-  private resolveMcp(config: AgentConfig, profileId: string): ResolvedMcp {
-    const stores = this.deps.profileConfig.forProfile(profileId);
-    const assignment = config.connections ?? { mode: "all" };
-    const picked =
-      assignment.mode === "picked" ? new Set(assignment.connectionIds) : null;
-
-    // Keys are computed over the FULL enabled set, then narrowed — so the
-    // same key names the same connection for every agent and for the
-    // MCP-apps view resolver, whatever this agent's assignment is.
-    const servers: Record<string, AgentMcpServerConfig> = {};
-    const policies: ResolvedMcp["policies"] = {};
-    const annotations: ResolvedMcp["annotations"] = {};
-    const connectionIds: Record<string, string> = {};
-    for (const [key, connection] of connectionServerKeys(
-      stores.connections.list(),
-    )) {
-      if (picked && !picked.has(connection.id)) continue;
-      const mapped = toAgentMcpServer(connection);
-      if (!mapped) continue;
-      servers[key] = mapped;
-      connectionIds[key] = connection.id;
-      // Layers: the connection's policy (absent = auto), then the agent's
-      // (profile agents key by connection id; committed/remote definitions
-      // by connector name or server key).
-      const agentPolicy =
-        config.toolPolicies?.[connection.id] ??
-        config.toolPolicies?.[connection.name] ??
-        config.toolPolicies?.[key];
-      policies[key] = [
-        // Layer zero when present: the provisioner's ceiling (an org's
-        // shared credential). Then the user's own, then the agent's.
-        ...(connection.ceiling ? [connection.ceiling.policy] : []),
-        connection.toolPolicy ?? {},
-        ...(agentPolicy ? [narrowingLayer(agentPolicy)] : []),
-      ];
-      // The FULL cached roster (empty hints when a tool has none): Codex
-      // derives its allow/deny lists from what's known here, and a tool
-      // that exists but wasn't listed would otherwise escape the policy.
-      annotations[key] = Object.fromEntries(
-        (connection.tools ?? []).map((tool) => [
-          tool.name,
-          tool.annotations ?? {},
-        ]),
-      );
-    }
-
-    const plugins: AgentPluginConfig[] = [];
-    for (const connector of this.deps.connectors?.listInstalled(profileId) ??
-      []) {
-      const included =
-        !picked ||
-        connector.connectionIds.some((connectionId) =>
-          picked.has(connectionId),
-        );
-      if (included && !connector.external) {
-        plugins.push({
-          name: connector.name,
-          path: connectorHarnessPath(connector.path),
-        });
-      }
-    }
-    // Host-tier skills ride as a plugin regardless of connection
-    // assignment — they are app doctrine, not a connector. A picked-skills
-    // agent (ADR 0056) is the exception: the plugin would hand Claude Code
-    // the whole app tier natively, so it is withheld and the picked set is
-    // offered through the prompt's skills section + read_skill instead.
-    const hostSkillsPlugin = this.deps.hostSkills?.()?.plugin;
-    if (hostSkillsPlugin && config.skills?.mode !== "picked") {
-      plugins.push(hostSkillsPlugin);
-    }
-    // The project's own workflow-tools server (session-scoped, key
-    // "catamorphic") is unrestricted unless the agent says otherwise —
-    // an agent's `toolPolicies.catamorphic` is how a host narrows which
-    // workflows an agent may run (or must ask before running).
-    const workflowPolicy = config.toolPolicies?.[WORKFLOWS_SERVER_KEY];
-    if (workflowPolicy) {
-      policies[WORKFLOWS_SERVER_KEY] = [narrowingLayer(workflowPolicy)];
-    }
-    for (const [serverKey, policy] of Object.entries(
-      config.toolPolicies ?? {},
-    )) {
-      if (serverKey.startsWith("connection_")) {
-        policies[serverKey] = [narrowingLayer(policy)];
-      }
-    }
-    return { servers, plugins, policies, annotations, connectionIds };
-  }
-
-  /**
-   * The `ask` prompt for an agent's MCP tools: the front window's consent
-   * modal, labeled with the agent. "Always allow" is persisted on the
-   * connection's policy (the profile ceiling) so the next provider build
-   * and every other agent see it; the asking harness remembers it too.
-   */
-  private toolPermissionHandler(
-    config: AgentConfig,
-    profileId: string,
-  ): ToolPermissionHandler | undefined {
-    const bridge = this.deps.workspaceBridge;
-    const broker = this.deps.toolPermissions;
-    if (!bridge && !broker) return undefined;
-    return async (request, signal) => {
-      if (signal?.aborted) return { decision: "deny" };
-      // Race the desktop consent modal against the HTTP broker (remote
-      // companion clients): the first REAL answer wins, and the loser is
-      // withdrawn — the modal via abort, the broker entry via answer().
-      const decision = await new Promise<ToolPermissionDecision>((resolve) => {
-        let settled = false;
-        const abortModal = new AbortController();
-        const ask = broker?.open(request, config.name);
-        const settle = (
-          value: ToolPermissionDecision,
-          source: "bridge" | "broker",
-        ) => {
-          if (settled) return;
-          settled = true;
-          signal?.removeEventListener("abort", cancel);
-          if (source === "bridge" && ask) broker?.answer(ask.id, value);
-          if (source === "broker") abortModal.abort();
-          resolve(value);
-        };
-        const cancel = () => {
-          abortModal.abort();
-          settle({ decision: "deny" }, "bridge");
-        };
-        signal?.addEventListener("abort", cancel, { once: true });
-        if (signal?.aborted) {
-          cancel();
-          return;
-        }
-        void ask?.promise.then((value) => settle(value, "broker"));
-        if (bridge) {
-          void bridge
-            .toolPermission(config.name, request, abortModal.signal)
-            .then((value) => {
-              // Null = no window, cancelled, or timed out. With a broker
-              // present its own timeout produces the deny (and a paired
-              // phone may still answer); without one, deny here, because
-              // a tool call must never hang on a missing UI.
-              if (value) settle(value, "bridge");
-              else if (!ask) settle({ decision: "deny" }, "bridge");
-            })
-            .catch((cause) => {
-              // A throwing bridge must not leave the race unsettled (and
-              // must not surface as an unhandled rejection in main).
-              console.warn("[desktop] tool-permission prompt failed:", cause);
-              settle({ decision: "deny" }, "bridge");
-            });
-        }
-      });
-      if (signal?.aborted) return { decision: "deny" };
-      if (decision.decision === "allow" && decision.remember === "always") {
-        const connectionId = this.livePolicies(config, profileId).connectionIds[
-          request.server
-        ];
-        if (connectionId) {
-          this.deps.profileConfig
-            .forProfile(profileId)
-            .connections.setToolPermission(connectionId, request.tool, "allow");
-        }
-      }
-      return decision;
-    };
-  }
-
-  /**
-   * The current policy layers/annotations for an agent, re-resolved from
-   * the stores on every read — what the harness getters call, so edits in
-   * the connectors modal apply to the next tool call, not the next
-   * provider build. Cheap: a pass over the profile's connections.
-   */
-  private livePolicies(
-    config: AgentConfig,
-    profileId: string,
-  ): Pick<ResolvedMcp, "policies" | "annotations" | "connectionIds"> {
-    return this.liveMcp(config, profileId);
-  }
-
-  /**
-   * The current server configs for an agent, re-resolved on every read —
-   * headers included, so the bearer a token refresh just wrote reaches
-   * the harness's next connect/spawn/query. The server SET is still part
-   * of the cache key (an added or removed connection rebuilds); only the
-   * values move underneath.
-   */
-  private liveServers(
-    config: AgentConfig,
-    profileId: string,
-  ): Record<string, AgentMcpServerConfig> {
-    return this.liveMcp(config, profileId).servers;
-  }
-
-  private liveMcp(config: AgentConfig, profileId: string): ResolvedMcp {
-    // The profile store's copy is the live one for profile agents (a
-    // cleared policy is a real edit — no fallback to the build-time copy);
-    // project agents are not in that store and carry their definition's
-    // policies, which are part of their cache key so an edit rebuilds.
-    const latest =
-      this.deps.profileConfig.forProfile(profileId).agents.get(config.id) ??
-      config;
-    return this.resolveMcp(latest, profileId);
-  }
-
-  /**
-   * Session-scoped MCP servers: the session's project decides the server
-   * set, so this resolves per session start/turn — one "catamorphic"
-   * entry pointing at the project's workflow-tools endpoint.
-   */
-  private sessionMcpServers(
-    context: ExtraToolContext,
-  ): Record<string, AgentMcpServerConfig> {
-    const url = this.deps.projectMcpUrl?.(
-      context.projectId,
-      context.sessionId ?? "",
-    );
-    return url ? { [WORKFLOWS_SERVER_KEY]: { transport: "http", url } } : {};
   }
 
   private freshDefaults(config: AgentConfig) {
@@ -722,15 +566,27 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
    * actionable error — a turn on it errors clearly instead of hanging or
    * disappearing into AgentNotConfiguredError.
    */
-  private getProjectAgent(
+  private resolveProjectConfig(
     id: string,
     projectId: string,
     slug: string,
-  ): RegisteredCodingAgent | undefined {
+  ):
+    | {
+        config: AgentConfig;
+        profileId: string;
+        def: AgentDefinition;
+        persona: string | undefined;
+        source: string;
+        hash: string;
+        rootPath: string;
+      }
+    | { error: string; missing?: boolean } {
     const rootPath = this.deps.projectRootPath?.(projectId);
     if (!rootPath) {
-      this.evict(id);
-      return undefined;
+      return {
+        error: "The project agent is no longer available.",
+        missing: true,
+      };
     }
     const agentsDir = path.join(rootPath, "agents");
     let rawText: string;
@@ -738,8 +594,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       rawText = fs.readFileSync(path.join(agentsDir, `${slug}.json`), "utf-8");
     } catch {
       // No definition file → the agent does not exist.
-      this.evict(id);
-      return undefined;
+      return {
+        error: "The project agent is no longer available.",
+        missing: true,
+      };
     }
     let persona: string | undefined;
     try {
@@ -752,27 +610,24 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     try {
       raw = JSON.parse(rawText);
     } catch {
-      return this.failFast(
-        id,
-        `The project agent file agents/${slug}.json is not valid JSON — fix the file and try again.`,
-      );
+      return {
+        error: `The project agent file agents/${slug}.json is not valid JSON. Fix the file and try again.`,
+      };
     }
     const validated = validateAgentDefinition(raw, {
       allowE2eFake: this.deps.e2eFake,
     });
     if ("error" in validated) {
-      return this.failFast(
-        id,
-        `The project agent definition agents/${slug}.json is invalid (${validated.error}) — fix the file and try again.`,
-      );
+      return {
+        error: `The project agent definition agents/${slug}.json is invalid (${validated.error}). Fix the file and try again.`,
+      };
     }
     const def = validated.definition;
 
     if (def.kind === "acp") {
-      return this.failFast(
-        id,
-        `"${def.name}" is an ACP agent — ACP harness support isn't built yet. Pick another agent for now.`,
-      );
+      return {
+        error: `"${def.name}" is an ACP agent. ACP harness support isn't built yet. Pick another agent for now.`,
+      };
     }
 
     // The security core: a committed definition is collaborator-authored
@@ -792,16 +647,14 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     if (def.kind !== "e2e-fake" && source !== "secret") {
       const binding = stores.agentBindings.get(projectId, slug);
       if (!binding) {
-        return this.failFast(
-          id,
-          `The project agent "${def.name}" needs your approval before it can use your credentials — open the agent picker to review and approve it.`,
-        );
+        return {
+          error: `The project agent "${def.name}" needs your approval before it can use your credentials. Open the agent picker to review and approve it.`,
+        };
       }
       if (binding.consentHash !== hash) {
-        return this.failFast(
-          id,
-          `The definition of the project agent "${def.name}" changed since you approved it — open the agent picker to review and re-approve it.`,
-        );
+        return {
+          error: `The definition of the project agent "${def.name}" changed since you approved it. Open the agent picker to review and re-approve it.`,
+        };
       }
       bindingAuth = binding.auth ?? { mode: "local" };
     }
@@ -851,7 +704,25 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         : {}),
       ...(def.delegation ? { delegation: def.delegation } : {}),
     };
-    const mcp = this.resolveMcp(config, profileId);
+    return { config, profileId, def, persona, source, hash, rootPath };
+  }
+
+  private getProjectAgent(
+    id: string,
+    projectId: string,
+    slug: string,
+  ): RegisteredCodingAgent | undefined {
+    const resolved = this.resolveProjectConfig(id, projectId, slug);
+    if ("error" in resolved) {
+      if (resolved.missing) {
+        this.evict(id);
+        return undefined;
+      }
+      return this.failFast(id, resolved.error);
+    }
+    const { config, profileId, def, persona, source, hash, rootPath } =
+      resolved;
+    const mcp = this.mcp.resolve({ config, profileId });
 
     const defaults = {
       effort: def.effort ?? ("medium" as const),
@@ -912,6 +783,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     this.cache.set(id, {
       key,
       profileId,
+      config,
       provider,
       topology: registered.topology,
       privilege: def.mode ?? "edit",
@@ -1012,10 +884,12 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       const topology = "native";
       const fake = new E2eFakeCodingAgent(
         this.deps.sandboxProvider,
-        this.workspaceTools(config, topology),
-        this.toolPermissionHandler(config, profileId),
+        this.workspaceTools(config, topology, true),
+        this.mcp.permissionHandler({ config, profileId }),
         (projectId) => this.settingsContext(projectId, config),
         this.deps.workspaceBridge?.elicit.bind(this.deps.workspaceBridge),
+        (sessionId, options) =>
+          this.mcp.bindSessionQuestions({ sessionId, options }),
       );
       return {
         id: config.id,
@@ -1059,16 +933,17 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
               ),
               modelId,
               extraTools: this.workspaceTools(config, "native"),
-              mcpServers: () => this.liveServers(config, profileId),
+              mcpServers: {},
               // Elicitation from this agent's connectors → the front window,
               // labeled with the agent so the user knows who's asking.
               onElicit: bridge
                 ? (request) => bridge.elicit(config.name, request)
                 : undefined,
-              mcpServersForSession: (context) =>
-                this.sessionMcpServers(context),
-              mcpPolicies: () => this.livePolicies(config, profileId).policies,
-              onToolPermission: this.toolPermissionHandler(config, profileId),
+              mcpPolicies: () => this.mcp.live({ config, profileId }).policies,
+              onToolPermission: this.mcp.permissionHandler({
+                config,
+                profileId,
+              }),
             });
             if (!loaded) {
               return new FailFastCodingAgent(
@@ -1127,18 +1002,18 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                   pathToClaudeCodeExecutable: component.executablePath,
                   extraTools: this.workspaceTools(config, "native"),
                   disableNativeMonitors: true,
-                  mcpServers: () => this.liveServers(config, profileId),
-                  mcpServersForSession: (context) =>
-                    this.sessionMcpServers(context),
+                  hostOwnsTodos: true,
+                  hostOwnsSubagents: true,
+                  mcpServers: {},
                   plugins: mcp.plugins,
                   mcpPolicies: () =>
-                    this.livePolicies(config, profileId).policies,
+                    this.mcp.live({ config, profileId }).policies,
                   mcpToolAnnotations: () =>
-                    this.livePolicies(config, profileId).annotations,
-                  onToolPermission: this.toolPermissionHandler(
+                    this.mcp.live({ config, profileId }).annotations,
+                  onToolPermission: this.mcp.permissionHandler({
                     config,
                     profileId,
-                  ),
+                  }),
                 }),
                 { hasTools: true, config, profileId },
               ),
@@ -1167,12 +1042,14 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             return this.wrapErrors(
               this.withWorkspace(
                 new CodexAgent({
-                  onToolPermission: this.toolPermissionHandler(
+                  onToolPermission: this.mcp.permissionHandler({
                     config,
                     profileId,
-                  ),
-                  mcpElicitationForSession: () =>
+                  }),
+                  mcpElicitationForSession: ({ sessionId }) =>
                     createCodexElicitation({
+                      askQuestion: () =>
+                        this.mcp.questionForSession({ sessionId }),
                       elicit: this.deps.workspaceBridge?.elicit.bind(
                         this.deps.workspaceBridge,
                       ),
@@ -1196,7 +1073,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                       ? { env: componentEnv }
                       : {}),
                   codexPathOverride: component.executablePath,
-                  mcpServers: () => this.liveServers(config, profileId),
+                  mcpServers: {},
                   mcpServersForSession: (context) => {
                     const workspaceServer = context.sessionId
                       ? this.deps.workspaceMcpServer?.(
@@ -1206,16 +1083,15 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                         )
                       : undefined;
                     return {
-                      ...this.sessionMcpServers(context),
                       ...(workspaceServer
                         ? { workspace: workspaceServer }
                         : {}),
                     };
                   },
                   mcpPolicies: () =>
-                    this.livePolicies(config, profileId).policies,
+                    this.mcp.live({ config, profileId }).policies,
                   mcpToolAnnotations: () =>
-                    this.livePolicies(config, profileId).annotations,
+                    this.mcp.live({ config, profileId }).annotations,
                 }),
                 { hasTools: true, config, profileId },
               ),
@@ -1282,6 +1158,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           Promise.resolve(null),
       },
       (projectId) => this.settingsContext(projectId, opts.config),
+      (sessionId, options) =>
+        this.mcp.bindSessionQuestions({ sessionId, options }),
     );
   }
 
@@ -1324,19 +1202,34 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
    */
   private workspaceTools(
     config: Pick<AgentConfig, "mode">,
-    topology: "native" | "controller",
-  ): ExtraTool[] | undefined {
+    topology: RegisteredCodingAgent["topology"],
+    all = false,
+  ): WorkspaceTool[] | undefined {
     const tools = this.workspaceToolkit?.tools;
     if (!tools) return undefined;
-    return tools.filter((tool) => {
-      if (topology === "controller" && HOST_CHECKOUT_TOOLS.has(tool.name)) {
-        return false;
-      }
-      return !(
-        (config.mode ?? "edit") === "read-only" &&
-        MUTATING_WORKSPACE_TOOLS.has(tool.name)
-      );
-    });
+    return tools.filter(
+      (tool) =>
+        (all || tool.eager) &&
+        (topology === "native" || !tool.nativeOnly) &&
+        ((config.mode ?? "edit") !== "read-only" || tool.readOnly),
+    );
+  }
+
+  /** Live policy/configuration, shared by direct and discovered projections. */
+  capabilitySurface(id: string) {
+    const registered = this.get(id);
+    const found = this.findConfig(id) ?? this.cache.get(id);
+    if (!found || !registered) return undefined;
+    const { config, profileId } = found;
+    const topology = registered.topology;
+    return {
+      revision: JSON.stringify([id, config.mode, profileId, topology]),
+      tools: this.workspaceTools(config, topology, true) ?? [],
+      readOnly: config.mode === "read-only",
+      profileId,
+      mcp: this.mcp.live({ config, profileId }),
+      ask: this.mcp.permissionHandler({ config, profileId }),
+    };
   }
 
   /** Filtered host workspace tools for a loopback, session-scoped harness. */

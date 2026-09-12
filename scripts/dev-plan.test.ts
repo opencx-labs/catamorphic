@@ -20,13 +20,13 @@ describe("createDevPlan", () => {
   it("distinguishes worktrees with identical basenames", () => {
     const first = createDevPlan({
       rootPath: "/workspace/team-one/catamorphic",
-      tempPath: "/tmp",
+      dataPath: "/home/test/.catamorphic/dev",
       target: "all",
       ports,
     });
     const second = createDevPlan({
       rootPath: "/workspace/team-two/catamorphic",
-      tempPath: "/tmp",
+      dataPath: "/home/test/.catamorphic/dev",
       target: "all",
       ports,
     });
@@ -38,7 +38,7 @@ describe("createDevPlan", () => {
   it("uses the sanitized explicit instance override", () => {
     const plan = createDevPlan({
       rootPath: "/workspace/team-one/catamorphic",
-      tempPath: "/private/tmp",
+      dataPath: "/home/test/.catamorphic/dev",
       instanceOverride: " Feature /// QA...Run ",
       target: "all",
       ports,
@@ -46,13 +46,13 @@ describe("createDevPlan", () => {
 
     expect(plan.instance).toBe("feature-qa-run");
     expect(plan.desktopDataDir).toBe(
-      "/private/tmp/catamorphic-dev/feature-qa-run/desktop",
+      "/home/test/.catamorphic/dev/feature-qa-run/desktop",
     );
     expect(plan.serverDataDir).toBe(
-      "/private/tmp/catamorphic-dev/feature-qa-run/server",
+      "/home/test/.catamorphic/dev/feature-qa-run/server",
     );
     expect(plan.lockPath).toBe(
-      "/private/tmp/catamorphic-dev/feature-qa-run/dev.lock",
+      "/home/test/.catamorphic/dev/feature-qa-run/dev.lock",
     );
   });
 
@@ -60,7 +60,7 @@ describe("createDevPlan", () => {
     expect(() =>
       createDevPlan({
         rootPath: "/workspace/team-one/catamorphic",
-        tempPath: "/private/tmp",
+        dataPath: "/home/test/.catamorphic/dev",
         instanceOverride: "",
         target: "all",
         ports,
@@ -71,7 +71,7 @@ describe("createDevPlan", () => {
   it("builds one combined Turbo argument list for all apps", () => {
     const plan = createDevPlan({
       rootPath: "/workspace/team-one/catamorphic",
-      tempPath: "/tmp",
+      dataPath: "/home/test/.catamorphic/dev",
       target: "all",
       ports,
     });
@@ -92,7 +92,7 @@ describe("createDevPlan", () => {
   ] as const)("builds an app-specific Turbo list for %s", (target, filter) => {
     const plan = createDevPlan({
       rootPath: "/workspace/team-one/catamorphic",
-      tempPath: "/tmp",
+      dataPath: "/home/test/.catamorphic/dev",
       target,
       ports,
     });
@@ -109,17 +109,17 @@ describe("createDevPlan", () => {
   it("sets literal worktree paths and reserved ports in the app environment", () => {
     const plan = createDevPlan({
       rootPath: "/workspace/team-one/catamorphic",
-      tempPath: "/private/tmp",
+      dataPath: "/home/test/.catamorphic/dev",
       instanceOverride: "qa",
       target: "all",
       ports,
     });
 
     expect(plan.env).toEqual({
-      CATAMORPHIC_DESKTOP_DATA_DIR: "/private/tmp/catamorphic-dev/qa/desktop",
+      CATAMORPHIC_DESKTOP_DATA_DIR: "/home/test/.catamorphic/dev/qa/desktop",
       CATAMORPHIC_DESKTOP_CDP_PORT: "9311",
       CATAMORPHIC_DESKTOP_VITE_PORT: "5178",
-      CATAMORPHIC_DATA_DIR: "/private/tmp/catamorphic-dev/qa/server",
+      CATAMORPHIC_DATA_DIR: "/home/test/.catamorphic/dev/qa/server",
       PORT: "4705",
       CATAMORPHIC_OPERATOR_PORT: "4706",
       CATAMORPHIC_PUBLIC_URL: "http://127.0.0.1:4705",

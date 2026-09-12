@@ -192,10 +192,12 @@ class BunInvocationWorker implements RuntimeInvocationWorker {
   private async terminateChild(): Promise<void> {
     if (this.terminated) return;
     this.terminated = true;
-    if (this.abortPending) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 25));
-    }
     const child = this.child;
+    // Give cooperative cancellation a bounded exit window. A fixed 25 ms sleep
+    // could kill a busy child before it even received the abort message.
+    if (this.abortPending && child) {
+      await waitForExit({ child, timeoutMs: 1_000 });
+    }
     if (!child || child.exitCode !== null || child.signalCode !== null) return;
     child.kill("SIGTERM");
     await waitForExit({ child, timeoutMs: 1_000 });

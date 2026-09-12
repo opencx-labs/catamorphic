@@ -5,6 +5,7 @@ import {
 import { normalizePrefs } from "../../shared/app-prefs.js";
 import { SETTING_KEYS, SETTINGS } from "../../shared/settings.js";
 import { THEME_TOKENS } from "../../shared/theme-tokens.js";
+import { SIDEBAR_AUTHORING_GUIDE } from "../sidebar-authoring.js";
 import { THEME_PRESETS } from "../theme.js";
 
 /** Delivered through the host skill tier, including existing user projects. */
@@ -102,16 +103,7 @@ An empty string disables an action; delete its key to restore the default. Keep
 bindings unique. Defaults and supported action ids:
 ${KEYBINDING_ACTIONS.map((action) => `- ${action}: ${JSON.stringify(DEFAULT_KEYBINDINGS[action])}`).join("\n")}
 
-## Sidebar: JavaScript, whole-document replacement
-
-Use the supplied sidebar paths. Precedence is built-in, profile, shared project,
-personal project. Each file replaces the entire document. Read the resolved highest
-existing layer before copying it to a higher layer, then edit only the intended
-sections. Preserve unrelated content. The profile file is the live, commented
-schema/example; read it before editing. Export with module.exports = {left: [...],
-right: [...]}. Delete an override file to inherit the lower layer again.
-One left sidebar tab hides its tab strip; an empty right sidebar starts closed.
-Sidebar content and the top/sidebar placement of open workspace tabs are separate.
+${SIDEBAR_AUTHORING_GUIDE}
 
 ## Validation and boundaries
 

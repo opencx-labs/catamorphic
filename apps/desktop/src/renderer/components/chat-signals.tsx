@@ -15,7 +15,7 @@ import type { ReactNode } from "react";
  *                  editor tabs with unsaved changes)
  *
  * One badge shows at a time, most-urgent first: awaitingInput > attention >
- * unread > draft; all badges yield to the spinner. `SignalGlyph` renders the
+ * unread > draft; a blocking question takes precedence over the spinner. `SignalGlyph` renders the
  * icon/spinner stack; `SignalBadge` renders the badge cluster — hosts
  * position it (bubbles pin it to the button corner, tabs to the icon).
  */
@@ -38,27 +38,30 @@ export const combineSignals = (list: ChatSignals[]): ChatSignals => ({
 /** Base icon that cross-fades to a spinner while the agent works. */
 export function SignalGlyph({
   working = false,
+  awaitingInput = false,
   className = "size-4",
   children,
 }: {
   working?: boolean;
+  awaitingInput?: boolean;
   /** Size of the icon box (the icon and spinner share it). */
   className?: string;
   /** The base icon (lucide icon, favicon img, …), sized to fill the box. */
   children: ReactNode;
 }) {
+  const busy = working && !awaitingInput;
   return (
     <span className={`relative grid shrink-0 place-items-center ${className}`}>
       <span
         className={`col-start-1 row-start-1 grid size-full place-items-center transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-          working ? "scale-50 opacity-0" : "scale-100 opacity-100"
+          busy ? "scale-50 opacity-0" : "scale-100 opacity-100"
         }`}
       >
         {children}
       </span>
       <LoaderCircle
         className={`col-start-1 row-start-1 size-full text-accent transition-[opacity] duration-200 ${
-          working ? "animate-spin opacity-100" : "opacity-0"
+          busy ? "animate-spin opacity-100" : "opacity-0"
         }`}
       />
     </span>
@@ -85,10 +88,10 @@ export function SignalBadge({
   size?: keyof typeof BADGE_SIZES;
 }) {
   const spec = BADGE_SIZES[size];
-  const active = signals.working
-    ? null
-    : signals.awaitingInput
-      ? "question"
+  const active = signals.awaitingInput
+    ? "question"
+    : signals.working
+      ? null
       : signals.attention
         ? "attention"
         : signals.unread

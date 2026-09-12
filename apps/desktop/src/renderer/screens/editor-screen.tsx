@@ -1,18 +1,14 @@
 import Editor, { type OnMount } from "@monaco-editor/react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ExternalLink, FileCode, FileText, Search } from "lucide-react";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { ShortcutHint } from "../components/shortcut-hint.js";
-import { commandScore } from "../lib/command-score.js";
+import { ExternalLink, FileText } from "lucide-react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { desktopApi } from "../lib/desktop-api.js";
 import {
+  notifyEditorSelectionChange,
   registerSelectionReader,
   stampSelectionOnClipboard,
 } from "../lib/editor-selection.js";
-import {
-  localEditorPath,
-  useLocalProjectFiles,
-} from "../lib/local-project-files.js";
+import { localEditorPath } from "../lib/local-project-files.js";
 import { useMonacoTheme } from "../lib/monaco-setup.js";
 import { useTheme } from "../lib/theme.js";
 
@@ -31,7 +27,7 @@ const isOfficePath = (path: string) => /\.(docx?|pptx?|xlsx?)$/i.test(path);
 const isPdfPath = (path: string) => /\.pdf$/i.test(path);
 
 /**
- * A code editor tab: quick-open over the project's files, Monaco on the
+ * A code editor tab: palette navigation over project files, Monaco on the
  * picked file (language inferred from the extension), Cmd+S / Save writes
  * through the embedded server's file API. One tab edits one file at a
  * time, but unsaved drafts survive switching files within the tab.
@@ -42,9 +38,9 @@ export interface EditorScreenProps {
   line?: number;
   column?: number;
   navigation?: string;
-  /** Path of the open file (project-relative), or null → the picker. */
+  /** Path of the open file (project-relative), or null for a palette entry point. */
   filePath: string | null;
-  onFileChange: (filePath: string | null) => void;
+  onFindFile: () => void;
   /** Any unsaved draft in this tab — surfaces as a dot on the tab icon. */
   onDirtyChange: (dirty: boolean) => void;
   /** Register the surface-level Share action in the window's top bar. */
@@ -58,7 +54,7 @@ export function EditorScreen({
   column,
   navigation,
   filePath,
-  onFileChange,
+  onFindFile,
   onDirtyChange,
   registerShare,
   onShare,
@@ -227,6 +223,7 @@ export function EditorScreen({
             : selection.endLineNumber,
       };
     };
+    editor.onDidChangeCursorSelection(notifyEditorSelectionChange);
     editor.onDidFocusEditorText(() => publishReader(readMonacoSelection));
     publishReader(readMonacoSelection);
     editor.focus();
@@ -234,7 +231,11 @@ export function EditorScreen({
 
   if (!filePath) {
     return (
-      <FilePicker projectId={projectId} onPick={(path) => onFileChange(path)} />
+      <div className="grid flex-1 place-items-center text-sm text-fg-muted">
+        <button type="button" onClick={onFindFile} className="text-accent">
+          Find a file in the palette
+        </button>
+      </div>
     );
   }
 
@@ -250,16 +251,9 @@ export function EditorScreen({
         data-editor-toolbar
         className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-bg-inset px-3"
       >
-        <ShortcutHint label="Open another file">
-          <button
-            type="button"
-            onClick={() => onFileChange(null)}
-            className="flex min-w-0 cursor-pointer items-center gap-1.5 rounded px-1.5 py-0.5 font-mono text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-          >
-            <Search className="size-3 shrink-0" />
-            <span className="truncate">{filePath}</span>
-          </button>
-        </ShortcutHint>
+        <span className="min-w-0 truncate font-mono text-xs text-fg-muted">
+          {filePath}
+        </span>
         <span
           className="ml-auto text-xs text-fg-faint"
           title="Saving updates this file on your device. Uploading and recording a Git commit are separate actions."
@@ -378,133 +372,6 @@ export function EditorScreen({
             )}
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-
-/** Palette-style quick-open over the project's file list. */
-function FilePicker({
-  projectId,
-  onPick,
-}: {
-  projectId: string;
-  onPick: (path: string) => void;
-}) {
-  const filesQuery = useLocalProjectFiles(projectId);
-  const refetchFiles = filesQuery.refetch;
-  useEffect(
-    () =>
-      desktopApi.onGitChanged((event) => {
-        if (event.projectId === projectId) void refetchFiles();
-      }),
-    [projectId, refetchFiles],
-  );
-  const [query, setQuery] = useState("");
-  const [highlighted, setHighlighted] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
-
-  const files = filesQuery.data ?? [];
-  const matches = useMemo(() => {
-    const trimmed = query.trim();
-    if (!trimmed) return files.slice(0, 100);
-    return files
-      .map((file) => ({
-        file,
-        score: commandScore(file.path, trimmed, []),
-      }))
-      .filter((entry) => entry.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 100)
-      .map((entry) => entry.file);
-  }, [files, query]);
-
-  const clampedHighlight = Math.min(highlighted, matches.length - 1);
-
-  return (
-    <div
-      data-testid="editor-file-picker"
-      data-project-id={projectId}
-      data-query-status={filesQuery.status}
-      data-fetch-status={filesQuery.fetchStatus}
-      data-file-count={files.length}
-      data-match-count={matches.length}
-      className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-6 pt-[18vh]"
-    >
-      <div className="w-full max-w-xl">
-        <div className="flex items-center gap-2 rounded-lg border border-border bg-bg-inset px-3">
-          <Search className="size-4 shrink-0 text-fg-faint" />
-          <input
-            ref={inputRef}
-            value={query}
-            onChange={(event) => {
-              setQuery(event.target.value);
-              setHighlighted(0);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "ArrowDown") {
-                event.preventDefault();
-                setHighlighted((value) =>
-                  Math.min(value + 1, matches.length - 1),
-                );
-              } else if (event.key === "ArrowUp") {
-                event.preventDefault();
-                setHighlighted((value) => Math.max(value - 1, 0));
-              } else if (event.key === "Enter") {
-                const picked = matches[clampedHighlight];
-                if (picked) onPick(picked.path);
-              }
-            }}
-            placeholder="Open a file…"
-            className="h-10 w-full bg-transparent text-sm text-fg outline-none placeholder:text-fg-faint"
-          />
-        </div>
-        {filesQuery.error && (
-          <div role="alert" className="mt-3 text-xs text-danger">
-            {filesQuery.error.message}
-            <button
-              type="button"
-              onClick={() => void filesQuery.refetch()}
-              className="ml-2 text-accent"
-            >
-              Retry loading files
-            </button>
-          </div>
-        )}
-        {filesQuery.isLoading && (
-          <p role="status" className="mt-3 text-xs text-fg-muted">
-            Loading files…
-          </p>
-        )}
-        <ul className="mt-2 pb-8">
-          {matches.map((file, index) => (
-            <li key={file.path}>
-              <button
-                type="button"
-                onClick={() => onPick(file.path)}
-                onMouseEnter={() => setHighlighted(index)}
-                className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left font-mono text-xs transition-colors duration-150 ${
-                  index === clampedHighlight
-                    ? "bg-bg-overlay text-fg"
-                    : "text-fg-muted"
-                }`}
-              >
-                <FileCode className="size-3.5 shrink-0 text-fg-faint" />
-                <span className="truncate">{file.path}</span>
-              </button>
-            </li>
-          ))}
-          {!filesQuery.isLoading &&
-            !filesQuery.error &&
-            matches.length === 0 && (
-              <li className="px-2 py-6 text-center text-sm text-fg-muted">
-                No files match “{query}”.
-              </li>
-            )}
-        </ul>
       </div>
     </div>
   );

@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { toolRuntime } from "./tool-runtime.js";
+import { toolRuntime, vitestShardArguments } from "./tool-runtime.js";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const temporaryDirectories: string[] = [];
@@ -156,7 +156,7 @@ describe("toolRuntime", () => {
 
   it("routes explicit external tests through pinned Turbo", () => {
     expect(packageScripts("package.json")["test:external"]).toBe(
-      "CATAMORPHIC_EXTERNAL_INTEGRATIONS=1 bun scripts/tool-runtime.ts turbo run test --no-daemon --concurrency=2 --filter=@catamorphic/daytona --filter=@catamorphic/s3 --filter=@catamorphic/cloudflare --filter=@catamorphic/codex",
+      "CATAMORPHIC_EXTERNAL_INTEGRATIONS=1 bun scripts/tool-runtime.ts turbo run test --no-daemon --force --concurrency=2 --filter=@catamorphic/daytona --filter=@catamorphic/s3 --filter=@catamorphic/cloudflare --filter=@catamorphic/codex",
     );
   });
 
@@ -186,13 +186,11 @@ describe("toolRuntime", () => {
     const pwaScripts = packageScripts("apps/pwa/package.json");
 
     expect(desktopScripts["test:e2e"]).toBe(
-      "bun --bun electron-vite build && CATAMORPHIC_E2E_WINDOW_MODE=hidden bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ./vitest.e2e.config.ts",
+      "bun ../../scripts/desktop-test.ts",
     );
-    expect(desktopScripts["test:e2e:visible"]).toBe(
-      "bun --bun electron-vite build && CATAMORPHIC_E2E_WINDOW_MODE=visible bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ./vitest.e2e.config.ts",
-    );
+    expect(desktopScripts["test:e2e:visible"]).toBeUndefined();
     expect(desktopScripts["test:eval"]).toBe(
-      "bun --bun electron-vite build && CATAMORPHIC_E2E_WINDOW_MODE=hidden bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ./vitest.eval.config.ts",
+      "bun --bun electron-vite build && bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/desktop --config ./vitest.eval.config.ts",
     );
     expect(pwaScripts["test:e2e"]).toBe(
       "bun --bun vite build && bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/pwa --config ./vitest.e2e.config.ts",
@@ -219,4 +217,14 @@ describe("toolRuntime", () => {
       );
     }
   });
+});
+
+it("applies valid shard flags at the Vitest boundary", () => {
+  expect(vitestShardArguments(undefined)).toEqual([]);
+  expect(vitestShardArguments("2/4")).toEqual([
+    "--shard=2/4",
+    "--passWithNoTests",
+  ]);
+  for (const shard of ["2/1", "0/2", "wat", "1/0", "1/999999999999999999"])
+    expect(() => vitestShardArguments(shard)).toThrow();
 });

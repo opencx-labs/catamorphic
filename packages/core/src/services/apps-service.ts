@@ -1,3 +1,8 @@
+import {
+  APP_ICON_NAMES,
+  type AppIconName,
+  resolveAppIcon,
+} from "@catamorphic/app";
 import type { DB } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import { getTracer, markSpanError, withSpan } from "@catamorphic/otel";
@@ -14,7 +19,7 @@ import {
   uploadPluginPayloads,
 } from "@catamorphic/sandbox";
 import type { Kysely, Selectable } from "kysely";
-import { type Identity, identityCovers } from "../identity.js";
+import { type Identity, identityCovers, narrowIdentity } from "../identity.js";
 import {
   type AppBundleStore,
   appBundleKey,
@@ -28,6 +33,7 @@ import {
 import { assertBuilder } from "./artifact-scope.js";
 import type { DevSandboxService } from "./dev-sandbox-service.js";
 import { requireTenantProject } from "./projects-service.js";
+import type { SessionArtifactsService } from "./session-artifacts-service.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -54,6 +60,14 @@ export interface AppSummary {
   id: string | null;
   activeVersionId: string | null;
   publishedAt: string | null;
+  icon: AppIconName;
+  title: string;
+}
+
+export interface AppPresentation {
+  name: string;
+  title: string;
+  icon: AppIconName;
 }
 
 export interface AppVersion {
@@ -159,6 +173,7 @@ export class AppsService {
       bundleStore: AppBundleStore;
       policies: AppPoliciesService;
       maxBundleBytes?: number;
+      artifacts?: SessionArtifactsService;
     },
   ) {}
 
@@ -177,6 +192,42 @@ export class AppsService {
   }
 
   /** Apps present in the repo, merged with build/publish state. */
+  async identityForApp(args: {
+    identity: Identity;
+    projectId: string;
+    appName: string;
+    channel?: "published" | "dev";
+    versionId?: string;
+  }): Promise<Identity> {
+    const row = await this.db
+      .selectFrom("apps")
+      .innerJoin("projects", "projects.id", "apps.project_id")
+      .where("apps.project_id", "=", args.projectId)
+      .where("apps.name", "=", args.appName)
+      .where("projects.tenant_id", "=", args.identity.tenantId)
+      .select("apps.session_artifact_id")
+      .executeTakeFirst();
+    const ref = {
+      kind: "app",
+      projectId: args.projectId,
+      name: args.appName,
+      channel: args.channel,
+      versionId: args.versionId,
+    } satisfies import("../identity.js").AppRef;
+    if (row?.session_artifact_id && this.deps.artifacts) {
+      try {
+        await this.deps.artifacts.get({
+          ...args,
+          artifactId: row.session_artifact_id,
+        });
+        return { ...args.identity, scope: [{ ...ref, channel: "dev" }] };
+      } catch {
+        return { ...args.identity, scope: [] };
+      }
+    }
+    return narrowIdentity(args.identity, ref);
+  }
+
   async list(args: {
     identity: Identity;
     projectId: string;
@@ -193,9 +244,12 @@ export class AppsService {
           .on("app_versions.is_active", "=", true),
       )
       .where("apps.project_id", "=", args.projectId)
+      .where("apps.session_artifact_id", "is", null)
       .select([
         "apps.id",
         "apps.name",
+        "apps.icon",
+        "apps.title",
         "app_versions.id as active_version_id",
         "app_versions.published_at",
       ])
@@ -209,8 +263,128 @@ export class AppsService {
         id: row?.id ?? null,
         activeVersionId: row?.active_version_id ?? null,
         publishedAt: row?.published_at?.toISOString() ?? null,
+        icon: resolveAppIcon(row?.icon),
+        title: row?.title ?? name,
       };
     });
+  }
+
+  /** Host presentation, including the title of a retained session app. */
+  async presentation(args: {
+    identity: Identity;
+    projectId: string;
+    appName: string;
+  }): Promise<AppPresentation> {
+    await requireTenantProject(this.db, args.identity.tenantId, args.projectId);
+    const row = await this.db
+      .selectFrom("apps")
+      .selectAll()
+      .where("project_id", "=", args.projectId)
+      .where("name", "=", args.appName)
+      .executeTakeFirst();
+    if (row?.session_artifact_id) {
+      if (!this.deps.artifacts) throw new AppNotFoundError(args.appName);
+      const artifact = await this.deps.artifacts.get({
+        ...args,
+        artifactId: row.session_artifact_id,
+      });
+      return {
+        name: args.appName,
+        title: artifact.title,
+        icon: resolveAppIcon(row.icon),
+      };
+    }
+    if (
+      !identityCovers(args.identity, {
+        kind: "app",
+        projectId: args.projectId,
+        name: args.appName,
+      })
+    )
+      throw new AppNotFoundError(args.appName);
+    if (!row) {
+      await this.requireProject(args.identity, args.projectId);
+      if (!(await this.appNamesFromRepo(args)).includes(args.appName))
+        throw new AppNotFoundError(args.appName);
+    }
+    return {
+      name: args.appName,
+      title: row?.title ?? args.appName,
+      icon: resolveAppIcon(row?.icon),
+    };
+  }
+
+  /** Titles and icons require no source mutation or build. */
+  async updatePresentation(args: {
+    identity: Identity;
+    projectId: string;
+    appName: string;
+    icon?: AppIconName;
+    title?: string;
+  }): Promise<AppPresentation> {
+    return withSpan(
+      {
+        tracer,
+        name: "app.update_presentation",
+        attributes: {
+          "catamorphic.project.id": args.projectId,
+          "catamorphic.app.name": args.appName,
+        },
+      },
+      async () => {
+        if (args.icon !== undefined && !APP_ICON_NAMES.includes(args.icon))
+          throw new Error("Unknown app icon");
+        const title = args.title?.trim();
+        if (args.title !== undefined && (!title || title.length > 200))
+          throw new Error("App title must contain 1 to 200 characters");
+        if (args.icon === undefined && title === undefined)
+          throw new Error("Supply a title or icon");
+        const presentation = await this.presentation(args);
+        const row = await this.db
+          .selectFrom("apps")
+          .selectAll()
+          .where("project_id", "=", args.projectId)
+          .where("name", "=", args.appName)
+          .executeTakeFirst();
+        if (row?.session_artifact_id) {
+          if (!this.deps.artifacts) throw new AppNotFoundError(args.appName);
+          await this.deps.artifacts.assertActive({
+            ...args,
+            artifactId: row.session_artifact_id,
+          });
+        } else {
+          await this.requireProject(args.identity, args.projectId);
+        }
+        const appId = row?.id ?? (await this.ensureAppRow(args));
+        await this.db.transaction().execute(async (trx) => {
+          await trx
+            .updateTable("apps")
+            .set({
+              ...(args.icon !== undefined
+                ? { icon: args.icon === "default" ? null : args.icon }
+                : {}),
+              ...(!row?.session_artifact_id && title !== undefined
+                ? { title }
+                : {}),
+              updated_at: new Date(),
+            })
+            .where("id", "=", appId)
+            .execute();
+          if (row?.session_artifact_id && title !== undefined) {
+            await trx
+              .updateTable("session_artifacts")
+              .set({ title, updated_at: new Date() })
+              .where("id", "=", row.session_artifact_id)
+              .execute();
+          }
+        });
+        return {
+          ...presentation,
+          icon: args.icon ?? presentation.icon,
+          title: title ?? presentation.title,
+        };
+      },
+    );
   }
 
   /**
@@ -225,6 +399,7 @@ export class AppsService {
     kind: AppVersionKind;
     /** Required for published builds; ignored for previews. */
     commitSha?: string;
+    artifactId?: string;
   }): Promise<AppVersion> {
     return withSpan(
       {
@@ -239,13 +414,34 @@ export class AppsService {
         },
       },
       async (span) => {
-        await this.requireProject(args.identity, args.projectId);
+        const artifact = args.artifactId
+          ? await this.deps.artifacts?.get({
+              ...args,
+              artifactId: args.artifactId,
+            })
+          : undefined;
+        if (
+          args.artifactId &&
+          (!artifact || artifact.appName !== args.appName)
+        ) {
+          throw new AppNotFoundError(args.appName);
+        }
+        if (artifact)
+          await this.deps.artifacts?.assertActive({
+            ...args,
+            artifactId: artifact.id,
+          });
+        if (artifact && args.kind !== "preview")
+          throw new AppPublishStateError(
+            "Save session source to the project before publishing",
+          );
+        if (!artifact) await this.requireProject(args.identity, args.projectId);
         assertAppName(args.appName);
         const policy = await this.deps.policies.get(args.identity.tenantId);
         if (!policy.appsEnabled) {
           throw new AppsDisabledError(args.identity.tenantId);
         }
-        if (policy.maxAppsPerProject) {
+        if (policy.maxAppsPerProject && !artifact) {
           const names = await this.appNamesFromRepo(args);
           if (names.length > policy.maxAppsPerProject) {
             throw new AppLimitExceededError(
@@ -266,25 +462,42 @@ export class AppsService {
           }
         }
 
-        const appId = await this.ensureAppRow(args);
-        const version = await this.db
-          .insertInto("app_versions")
-          .values({
-            app_id: appId,
-            kind: args.kind,
-            status: "building",
-            commit_sha: args.kind === "published" ? args.commitSha : null,
-            built_by_external_user_id: args.identity.externalUserId,
-          })
-          .returningAll()
-          .executeTakeFirstOrThrow();
+        const { appId, version } = await this.db
+          .transaction()
+          .execute(async (trx) => {
+            if (artifact) {
+              const retained = await trx
+                .selectFrom("session_artifacts")
+                .select(["status", "session_id"])
+                .where("id", "=", artifact.id)
+                .forUpdate()
+                .executeTakeFirst();
+              if (retained?.status !== "active" || !retained.session_id)
+                throw new AppNotFoundError(args.appName);
+            }
+            const appId = await this.ensureAppRow(args, trx);
+            const version = await trx
+              .insertInto("app_versions")
+              .values({
+                app_id: appId,
+                kind: args.kind,
+                status: "building",
+                commit_sha:
+                  artifact?.commitSha ??
+                  (args.kind === "published" ? args.commitSha : null),
+                built_by_external_user_id: args.identity.externalUserId,
+              })
+              .returningAll()
+              .executeTakeFirstOrThrow();
+            return { appId, version };
+          });
         span.setAttribute("catamorphic.app.version_id", version.id);
 
         try {
           // Preview builds compile what the caller has right now — including
           // an agent's in-flight sandbox work that hasn't hit the end-of-turn
           // sync yet — so pull sandbox changes into the dev tree first.
-          if (args.kind === "preview") {
+          if (args.kind === "preview" && !artifact) {
             await this.deps.devSandboxes.syncBack({
               identity: args.identity,
               projectId: args.projectId,
@@ -293,15 +506,35 @@ export class AppsService {
           // One snapshot feeds both the authorization parse and the compile
           // upload, so the frozen set and the bundle come from the same tree
           // — for previews too, where the dev repo can move mid-build.
-          const files = await this.projectSnapshot(args);
+          const files =
+            artifact && this.deps.artifacts
+              ? await this.deps.artifacts.files({
+                  ...args,
+                  artifactId: artifact.id,
+                  commitSha: artifact.commitSha,
+                })
+              : await this.projectSnapshot(args);
           const { allowedWorkflows, workflowShapes } =
             this.resolveAppContract(files);
           const bundle = await (args.kind === "preview"
             ? this.withBuildLock(
                 `${args.projectId}:${args.identity.externalUserId}`,
-                () => this.compile({ ...args, versionId: version.id, files }),
+                () =>
+                  this.compile({
+                    ...args,
+                    appName: artifact?.name ?? args.appName,
+                    isolated: Boolean(artifact),
+                    versionId: version.id,
+                    files,
+                  }),
               )
-            : this.compile({ ...args, versionId: version.id, files }));
+            : this.compile({
+                ...args,
+                appName: artifact?.name ?? args.appName,
+                isolated: Boolean(artifact),
+                versionId: version.id,
+                files,
+              }));
           const installLimit =
             this.deps.maxBundleBytes ?? DEFAULT_MAX_BUNDLE_BYTES;
           const limit = policy.maxBundleBytes
@@ -343,7 +576,7 @@ export class AppsService {
             .returningAll()
             .executeTakeFirstOrThrow();
 
-          await this.pruneOldPreviews({ ...keyArgs });
+          if (!artifact) await this.pruneOldPreviews({ ...keyArgs });
           return mapVersion(ready, args.appName);
         } catch (error) {
           markSpanError({
@@ -445,6 +678,7 @@ export class AppsService {
             .innerJoin("apps", "apps.id", "app_versions.app_id")
             .where("app_versions.id", "=", args.versionId)
             .where("apps.project_id", "=", args.projectId)
+            .where("apps.session_artifact_id", "is", null)
             .selectAll("app_versions")
             .select("apps.name as app_name")
             .executeTakeFirst();
@@ -483,6 +717,7 @@ export class AppsService {
       .innerJoin("apps", "apps.id", "app_versions.app_id")
       .where("apps.project_id", "=", args.projectId)
       .where("apps.name", "=", args.appName)
+      .where("apps.session_artifact_id", "is", null)
       .selectAll("app_versions")
       .select("apps.name as app_name")
       .orderBy("app_versions.created_at", "desc")
@@ -508,9 +743,17 @@ export class AppsService {
       .innerJoin("apps", "apps.id", "app_versions.app_id")
       .where("app_versions.id", "=", args.versionId)
       .where("apps.project_id", "=", args.projectId)
-      .select("app_versions.id")
+      .select(["app_versions.id", "apps.session_artifact_id"])
       .executeTakeFirst();
     if (!version) throw new AppVersionNotFoundError(args.versionId);
+    if (version.session_artifact_id) {
+      if (!this.deps.artifacts)
+        throw new AppVersionNotFoundError(args.versionId);
+      await this.deps.artifacts.get({
+        ...args,
+        artifactId: version.session_artifact_id,
+      });
+    }
   }
 
   /** Loads the stored bundle for one version. */
@@ -530,7 +773,7 @@ export class AppsService {
         },
       },
       async () => {
-        await this.requireProject(args.identity, args.projectId);
+        await this.assertBundleReadable(args);
         const version = await this.db
           .selectFrom("app_versions")
           .innerJoin("apps", "apps.id", "app_versions.app_id")
@@ -575,6 +818,8 @@ export class AppsService {
      * now (mirrors the `dev` app ref in `resolveScope`).
      */
     channel?: "published" | "dev";
+    versionId?: string;
+    metadataOnly?: boolean;
   }): Promise<
     | { state: "not_found" }
     | { state: "not_published" }
@@ -609,9 +854,20 @@ export class AppsService {
       .where("apps.project_id", "=", args.projectId)
       .where("apps.name", "=", args.appName)
       .where("projects.tenant_id", "=", args.identity.tenantId)
-      .select("apps.id")
+      .select(["apps.id", "apps.session_artifact_id"])
       .executeTakeFirst();
     if (!app) return { state: "not_found" };
+    if (app.session_artifact_id) {
+      if (!this.deps.artifacts) return { state: "not_found" };
+      try {
+        await this.deps.artifacts.get({
+          ...args,
+          artifactId: app.session_artifact_id,
+        });
+      } catch {
+        return { state: "not_found" };
+      }
+    }
 
     let versionQuery = this.db
       .selectFrom("app_versions")
@@ -625,7 +881,7 @@ export class AppsService {
         "workflow_shapes",
       ]);
     versionQuery =
-      args.channel === "dev"
+      args.channel === "dev" || app.session_artifact_id
         ? versionQuery
             .where(
               "built_by_external_user_id",
@@ -635,15 +891,19 @@ export class AppsService {
             .orderBy("created_at", "desc")
             .limit(1)
         : versionQuery.where("is_active", "=", true);
+    if (args.versionId)
+      versionQuery = versionQuery.where("id", "=", args.versionId);
     const version = await versionQuery.executeTakeFirst();
     if (!version?.bundle_key || !version.css_key) {
       return { state: "not_published" };
     }
 
-    const [code, css] = await Promise.all([
-      this.deps.bundleStore.get(version.bundle_key),
-      this.deps.bundleStore.get(version.css_key),
-    ]);
+    const [code, css] = args.metadataOnly
+      ? [{ data: new Uint8Array() }, { data: new Uint8Array() }]
+      : await Promise.all([
+          this.deps.bundleStore.get(version.bundle_key),
+          this.deps.bundleStore.get(version.css_key),
+        ]);
     if (!code || !css) return { state: "not_published" };
     const policy = await this.deps.policies.get(args.identity.tenantId);
     const decoder = new TextDecoder();
@@ -665,6 +925,7 @@ export class AppsService {
     appName: string;
     kind: AppVersionKind;
     versionId: string;
+    isolated?: boolean;
     /** The snapshot to build — the same file set the frozen set was parsed from. */
     files: Record<string, string>;
   }): Promise<Pick<AppBundle, "code" | "css">> {
@@ -675,7 +936,7 @@ export class AppsService {
     });
 
     let buildRoot = sandbox.projectDirectory;
-    if (args.kind === "published") {
+    if (args.kind === "published" || args.isolated) {
       // Published artifacts must be reproducible from git alone, so they build
       // from a pristine checkout rather than the user's mutable dev tree.
       // Keyed by version id: two apps published from the same commit build
@@ -749,7 +1010,7 @@ export class AppsService {
       }
       const build = await this.deps.provider.executeCommand(
         sandbox.providerId,
-        "bun run build",
+        "NODE_ENV=production bun run build",
         { cwd: appDir, timeout: BUILD_TIMEOUT_SECONDS },
       );
       if (build.exitCode !== 0) {
@@ -829,9 +1090,9 @@ export class AppsService {
       );
     }
     if (!surface) {
-      throw new AppContractError(
-        "workflows/src/app-api.ts is missing. Export the contract object listing the workflows apps may call.",
-      );
+      // Static generated UI needs no backend contract. An absent contract
+      // freezes an empty callable set; it never means unrestricted access.
+      return { allowedWorkflows: [], workflowShapes: {} };
     }
     const workflowShapes: Record<
       string,
@@ -904,17 +1165,30 @@ export class AppsService {
     }
   }
 
-  private async ensureAppRow(args: {
-    projectId: string;
-    appName: string;
-  }): Promise<string> {
-    const row = await this.db
+  private async ensureAppRow(
+    args: {
+      projectId: string;
+      appName: string;
+      artifactId?: string;
+    },
+    db = this.db,
+  ): Promise<string> {
+    const row = await db
       .insertInto("apps")
-      .values({ project_id: args.projectId, name: args.appName })
+      .values({
+        project_id: args.projectId,
+        name: args.appName,
+        session_artifact_id: args.artifactId ?? null,
+      })
       .onConflict((conflict) =>
         conflict
           .columns(["project_id", "name"])
-          .doUpdateSet({ updated_at: new Date() }),
+          .doUpdateSet({ updated_at: new Date() })
+          .where(
+            "apps.session_artifact_id",
+            args.artifactId ? "=" : "is",
+            args.artifactId ?? null,
+          ),
       )
       .returning("id")
       .executeTakeFirstOrThrow();

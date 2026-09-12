@@ -3,11 +3,7 @@ import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 let app: AppHandle;
 beforeAll(async () => {
-  app = await launchApp({
-    env: process.env.CATAMORPHIC_INSPECTOR_SCREENSHOT
-      ? { CATAMORPHIC_E2E_WINDOW_MODE: "visible" }
-      : {},
-  });
+  app = await launchApp();
 });
 afterAll(async () => {
   await app?.stop();
@@ -27,8 +23,37 @@ const run = (body: string) =>
 const wait = (body: string) =>
   app.waitFor(`(async () => { ${helpers} ${body} })()`);
 const inspector = async () => {
-  await wait(`return !$('[data-testid="resource-inspector"]');`);
-  await run(`dock().querySelector('[aria-label^="Session status:"]').click();`);
+  await wait(
+    `return !document.getAnimations().some(animation => animation.playState === "running" && animation.effect?.getTiming().iterations !== Infinity);`,
+  );
+  if (
+    await run(
+      `return !!$('[data-resource-inspector][data-open="true"] [data-testid="session-inspector-content"]');`,
+    )
+  )
+    return;
+  // Navigate like a user: pointerdown on status dismisses any other hover
+  // card. Waiting for every unrelated card to disappear can hang while the
+  // pointer remains over a sidebar/project trigger after onboarding.
+  const point = await app.waitFor<{ x: number; y: number }>(`(() => { ${helpers}
+    const button = dock()?.querySelector('[aria-label^="Session status:"]');
+    if (!button || button.closest('[inert]')) return false;
+    const rect = button.getBoundingClientRect();
+    return {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2};
+  })()`);
+  await app.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+  await app.cdp("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    ...point,
+    button: "left",
+    clickCount: 1,
+  });
+  await app.cdp("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    ...point,
+    button: "left",
+    clickCount: 1,
+  });
   await wait(`return !!$('[data-testid="session-inspector-content"]');`);
 };
 const pick = async (name: string) => {
@@ -58,6 +83,20 @@ describe("session runtime controls", () => {
     );
     await wait(`return !!dock()?.querySelector('[data-composer-input]');`);
     await run(
+      `window.__draftAgentDefaults = await window.catamorphicDesktop.agentsList();`,
+    );
+    await inspector();
+    await run(`$('[aria-label="Change model"]').click();`);
+    await pick("Fake Model B");
+    await inspector();
+    await run(`$('[aria-label="Change reasoning"]').click();`);
+    await pick("High effort");
+    expect(
+      await run(
+        `return JSON.stringify(await window.catamorphicDesktop.agentsList()) === JSON.stringify(window.__draftAgentDefaults);`,
+      ),
+    ).toBe(true);
+    await run(
       `const input = dock().querySelector('[data-composer-input]'); setReactValue(input, 'hello agent'); input.closest('form').requestSubmit();`,
     );
     await wait(`return dock()?.textContent.includes('You said: hello agent');`);
@@ -67,6 +106,9 @@ describe("session runtime controls", () => {
       const base = url + '/api/projects/' + project.id + '/agent/sessions';
       const sessions = await fetch(base).then(r => r.json());
       window.__runtimeTest = { base, id: sessions.items[0].id, agents: await window.catamorphicDesktop.agentsList() };`);
+    await wait(
+      `const {base,id} = window.__runtimeTest; const session = await fetch(base + '/' + id).then(r => r.json()); return session.model === 'fake-model-b' && session.modelEffort === 'high';`,
+    );
     await inspector();
     await run(`$('[aria-label="Change model"]').click();`);
     await pick("Fake Model B");
@@ -87,7 +129,7 @@ describe("session runtime controls", () => {
         `return JSON.stringify(await window.catamorphicDesktop.agentsList()) === JSON.stringify(window.__runtimeTest.agents);`,
       ),
     ).toBe(true);
-    await run(`window.location.reload();`);
+    await app.reload();
     await wait(
       `const chat = $$('button').find(el => el.textContent.trim() === 'Quick chat'); if (!chat) return false; chat.dispatchEvent(new MouseEvent('click', {bubbles:true,cancelable:true,altKey:true})); return true;`,
     );
@@ -108,7 +150,7 @@ describe("session runtime controls", () => {
     await pick("Agent default");
     await inspector();
     await wait(
-      `const content = $('[data-testid="session-inspector-content"]'); return !!content && !content.textContent.includes('fake-model-b');`,
+      `const model = $('[aria-label="Change model"]'); return !!model && !model.textContent.includes('fake-model-b');`,
     );
   });
 });
@@ -233,4 +275,119 @@ it("uses themed harness marks in new-chat status", async () => {
     await run(`dock().querySelector('[aria-label="Close chat"]').click();`);
     await wait(`return !$('section[data-floating-chat="true"]');`);
   }
+});
+
+it("centers expanded chats on request and drags the collapsed bubble between bottom corners", async () => {
+  await run(`const { agents } = await window.catamorphicDesktop.agentsList();
+    await window.catamorphicDesktop.agentsSetDefault(agents.find(agent => agent.name === 'Fake Agent').id);
+    await window.catamorphicDesktop.setPrefs({dockSide:'right',dockAlignment:'center'});
+    window.dispatchEvent(new KeyboardEvent('keydown', {key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}));`);
+  await wait(`return !!dock();`);
+  await wait(
+    `const button=$('[aria-label="Expand chat bubbles"]'); if(button && !button.inert) button.click(); return $('[data-dock-rail]')?.dataset.dockCollapsed === 'false';`,
+  );
+  await wait(`const host=$('[data-dock-host]').getBoundingClientRect(), rail=$('[data-dock-rail]').getBoundingClientRect(), chat=dock().getBoundingClientRect();
+    return Math.abs((rail.left+rail.right-host.left-host.right)/2)<2 && Math.abs((chat.left+chat.right-host.left-host.right)/2)<2;`);
+  if (process.env.CATAMORPHIC_INSPECTOR_SCREENSHOT)
+    await app.screenshot(
+      `${process.env.CATAMORPHIC_INSPECTOR_SCREENSHOT}-dock-center.png`,
+    );
+  await run(
+    `await window.catamorphicDesktop.setPrefs({dockAlignment:'edge'});`,
+  );
+  await wait(
+    `const host=$('[data-dock-host]').getBoundingClientRect(), chat=dock().getBoundingClientRect(); return host.right-chat.right < 40;`,
+  );
+  if (process.env.CATAMORPHIC_INSPECTOR_SCREENSHOT)
+    await app.screenshot(
+      `${process.env.CATAMORPHIC_INSPECTOR_SCREENSHOT}-dock-edge.png`,
+    );
+  await run(`$('[aria-label="Collapse chat bubbles"]').click();`);
+  await wait(
+    `return $('[data-dock-rail]')?.dataset.dockCollapsed === 'true' && !document.getAnimations().some(a=>a.playState==='running' && a.effect?.getTiming().iterations!==Infinity);`,
+  );
+  for (const side of ["left", "right"]) {
+    const point = await app.eval<{
+      x: number;
+      y: number;
+      target: number;
+    }>(`(() => {
+      const box=document.querySelector('[aria-label="Expand chat bubbles"]').getBoundingClientRect();
+      const host=document.querySelector('[data-dock-host]').getBoundingClientRect();
+      return {x:box.left+box.width/2,y:box.top+box.height/2,target:${JSON.stringify(side)}==='left'?host.left+80:host.right-80};})()`);
+    await app.cdp("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: point.x,
+      y: point.y,
+      button: "left",
+      clickCount: 1,
+    });
+    await app.cdp("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: point.target,
+      y: point.y,
+      button: "left",
+      buttons: 1,
+    });
+    await wait(
+      `return $('[data-dock-rail]')?.dataset.dockDragging === 'true';`,
+    );
+    await app.cdp("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: point.target,
+      y: point.y,
+      button: "left",
+      clickCount: 1,
+    });
+    await wait(`const rail=$('[data-dock-rail]'), host=$('[data-dock-host]'); const box=rail.getBoundingClientRect(), bounds=host.getBoundingClientRect();
+      return rail.dataset.dockCollapsed==='true' && host.dataset.dockSide===${JSON.stringify(side)} && Math.abs((${JSON.stringify(side)}==='left'?box.left-bounds.left:bounds.right-box.right)-32)<2;`);
+  }
+  // Escape cancels a drag, and neither dragging nor canceling expands the dock.
+  const point = await app.eval<{ x: number; y: number }>(
+    `(() => {const b=document.querySelector('[aria-label="Expand chat bubbles"]').getBoundingClientRect();return {x:b.left+b.width/2,y:b.top+b.height/2};})()`,
+  );
+  await app.cdp("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    ...point,
+    button: "left",
+    clickCount: 1,
+  });
+  await app.cdp("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: point.x - 100,
+    y: point.y,
+    button: "left",
+    buttons: 1,
+  });
+  await app.press("Escape");
+  await app.cdp("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: point.x - 100,
+    y: point.y,
+    button: "left",
+    clickCount: 1,
+  });
+  await wait(
+    `return $('[data-dock-rail]')?.dataset.dockCollapsed==='true' && !$('[data-dock-dragging]') && $('[data-dock-host]').dataset.dockSide==='right';`,
+  );
+  await app.cdp("Emulation.setEmulatedMedia", {
+    features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+  });
+  expect(
+    await run(
+      `return getComputedStyle($('[data-dock-rail]')).transitionDuration;`,
+    ),
+  ).toBe("0s");
+  await app.cdp("Emulation.setEmulatedMedia", { features: [] });
+  await run(`$('[aria-label="Expand chat bubbles"]').click();`);
+  await wait(`return $('[data-dock-rail]')?.dataset.dockCollapsed==='false';`);
+  await run(`$('[aria-label="Collapse chat bubbles"]').click();`);
+  await wait(`return $('[data-dock-rail]')?.dataset.dockCollapsed==='true';`);
+  await run(`$('[aria-label="Expand chat bubbles"]').focus();`);
+  await app.press("ArrowLeft");
+  await wait(`return $('[data-dock-host]')?.dataset.dockSide==='left';`);
+  await app.reload();
+  await wait(
+    `return $('[data-dock-host]')?.dataset.dockSide==='left' && $('[data-dock-host]')?.dataset.dockAlignment==='edge';`,
+  );
 });

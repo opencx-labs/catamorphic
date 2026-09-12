@@ -1,11 +1,29 @@
 import {
   AccessDeniedError,
+  type AppRef,
   AppVersionNotFoundError,
+  type Identity,
+  narrowIdentity,
   RunNotFoundError,
 } from "@catamorphic/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../app.js";
 import { createTestApp } from "./test-app.js";
+
+const identityForApp = async (args: {
+  identity: Identity;
+  projectId: string;
+  appName: string;
+  channel?: AppRef["channel"];
+  versionId?: string;
+}) =>
+  narrowIdentity(args.identity, {
+    kind: "app",
+    projectId: args.projectId,
+    name: args.appName,
+    channel: args.channel,
+    versionId: args.versionId,
+  });
 
 const PROJECT_ID = "a1b2c3d4-e5f6-4890-abcd-ef1234567890";
 const VERSION_ID = "b2c3d4e5-f6a7-4890-bcde-a12345678901";
@@ -17,6 +35,21 @@ afterEach(async () => {
 });
 
 describe("app route contracts", () => {
+  it.each([
+    {},
+    { icon: "random-icon" },
+    { title: "   " },
+    { title: "x".repeat(201) },
+  ])("rejects invalid presentation edits %j", async (payload) => {
+    const app = createTestApp();
+    apps.push(app);
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${PROJECT_ID}/apps/ops-dashboard/presentation`,
+      payload,
+    });
+    expect(response.statusCode).toBe(400);
+  });
   it.each([
     { method: "GET", url: `/api/projects/${PROJECT_ID}/apps` },
     {
@@ -108,7 +141,7 @@ describe("guest document serving", () => {
   }) {
     const app = createTestApp({
       core: {
-        apps: { viewState: async () => readyState },
+        apps: { identityForApp, viewState: async () => readyState },
         appStorage: {
           get: storage?.get ?? (async () => ({ data: {}, revision: "0" })),
           put: storage?.put ?? (async () => {}),
@@ -139,7 +172,7 @@ describe("guest document serving", () => {
       appId: APP_ID,
       versionId: VERSION_ID,
       guestUrl: expect.stringMatching(
-        /^http:\/\/.+\/api\/projects\/.+\/apps\/ops-dashboard\/guest\?channel=dev$/,
+        /^http:\/\/.+\/api\/projects\/.+\/apps\/ops-dashboard\/guest\?channel=dev&versionId=[^&]+$/,
       ),
     });
   });
@@ -263,7 +296,10 @@ describe("guest document serving", () => {
   it("answers 404 for a non-ready app", async () => {
     const app = createTestApp({
       core: {
-        apps: { viewState: async () => ({ state: "not_published" }) },
+        apps: {
+          identityForApp,
+          viewState: async () => ({ state: "not_published" }),
+        },
       } as never,
     });
     apps.push(app);
@@ -280,6 +316,7 @@ describe("bundle route caching", () => {
   function appWithBundleCore(calls: string[]) {
     const core = {
       apps: {
+        identityForApp,
         assertBundleReadable: async () => {
           calls.push("assertBundleReadable");
         },
@@ -341,6 +378,7 @@ describe("bundle route caching", () => {
     const app = createTestApp({
       core: {
         apps: {
+          identityForApp,
           assertBundleReadable: async () => {
             throw new AppVersionNotFoundError(VERSION_ID);
           },
@@ -379,7 +417,7 @@ describe("app storage", () => {
     const puts: unknown[] = [];
     const app = createTestApp({
       core: {
-        apps: { viewState: async () => readyState },
+        apps: { identityForApp, viewState: async () => readyState },
         appStorage: {
           get: async () => ({ data: {}, revision: "0" }),
           put: async (...args: unknown[]) => {
@@ -403,7 +441,7 @@ describe("app storage", () => {
   it("guest document bakes the caller's seed in, HTML-inert", async () => {
     const app = createTestApp({
       core: {
-        apps: { viewState: async () => readyState },
+        apps: { identityForApp, viewState: async () => readyState },
         appStorage: {
           get: async () => ({
             // A hostile value must never reach the HTML tokenizer intact.
@@ -432,7 +470,7 @@ describe("app-originated execution (structural narrowing)", () => {
   function coreCapturingIdentity() {
     const seen: unknown[] = [];
     const core = {
-      apps: {},
+      apps: { identityForApp },
       runs: {
         call: async (args: { identity: unknown; workflowName: string }) => {
           seen.push(args.identity);
@@ -553,6 +591,7 @@ describe("app-originated execution (structural narrowing)", () => {
     const app = createApp({
       core: {
         apps: {
+          identityForApp,
           list: async ({ identity }: { identity: { scope?: unknown[] } }) => {
             if (identity.scope) throw new AccessDeniedError();
             return [];

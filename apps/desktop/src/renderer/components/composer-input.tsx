@@ -65,7 +65,7 @@ export interface ComposerInputHandle {
   /** Swap the prose, keep the pills (history recall). Caret lands at end. */
   replaceText(text: string): void;
   /** The wire shape: prose with markers + attachments in marker order. */
-  read(): SerializedComposer<AgentChatAttachment>;
+  read(options?: { trim?: boolean }): SerializedComposer<AgentChatAttachment>;
   snapshot(): ChatDraft;
   restore(draft: ChatDraft): void;
   /** Drop everything (after send). */
@@ -86,6 +86,7 @@ export interface ComposerInputHandle {
 export interface ComposerInputProps {
   placeholder: string;
   ariaLabel: string;
+  suggestions?: { listId: string; activeId?: string };
   /** Layout classes for the height-animated frame around the editable. */
   wrapperClassName?: string;
   className?: string;
@@ -189,6 +190,7 @@ export const ComposerInput = forwardRef<
   {
     placeholder,
     ariaLabel,
+    suggestions,
     wrapperClassName = "",
     className = "",
     onChange,
@@ -214,15 +216,18 @@ export const ComposerInput = forwardRef<
     return attachmentsRef.current.get(id) ?? null;
   }, []);
 
-  const read = useCallback((): SerializedComposer<AgentChatAttachment> => {
-    const root = rootRef.current;
-    if (!root) return { message: "", attachments: [], text: "" };
-    const raw = serializeComposer(root, resolve);
-    return {
-      ...raw,
-      attachments: raw.attachments.map(({ id: _id, ...rest }) => rest),
-    };
-  }, [resolve]);
+  const read = useCallback(
+    (options?: { trim?: boolean }): SerializedComposer<AgentChatAttachment> => {
+      const root = rootRef.current;
+      if (!root) return { message: "", attachments: [], text: "" };
+      const raw = serializeComposer(root, resolve, options);
+      return {
+        ...raw,
+        attachments: raw.attachments.map(({ id: _id, ...rest }) => rest),
+      };
+    },
+    [resolve],
+  );
 
   /** Re-derive pill state from the DOM and tell the parent what changed. */
   const sync = useCallback(() => {
@@ -256,8 +261,8 @@ export const ComposerInput = forwardRef<
         );
       return same ? previous : next;
     });
-    const state = serializeComposer(root, resolve);
-    const empty = state.message === "" && state.attachments.length === 0;
+    const state = serializeComposer(root, resolve, { trim: false });
+    const empty = state.message.trim() === "" && state.attachments.length === 0;
     root.toggleAttribute("data-empty", empty);
     onChangeRef.current({
       text: state.text,
@@ -544,6 +549,9 @@ export const ComposerInput = forwardRef<
         tabIndex={0}
         aria-multiline="true"
         aria-label={ariaLabel}
+        aria-autocomplete={suggestions ? "list" : undefined}
+        aria-controls={suggestions?.listId}
+        aria-activedescendant={suggestions?.activeId}
         contentEditable
         suppressContentEditableWarning
         spellCheck

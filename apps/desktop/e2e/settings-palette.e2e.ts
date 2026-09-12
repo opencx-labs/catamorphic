@@ -44,7 +44,7 @@ beforeAll(async () => {
     `window.catamorphicDesktop.profilesList().then(data => data.profiles.find(profile => profile.projectIds.includes(${JSON.stringify(projectId)}))?.id ?? data.defaultProfileId)`,
   );
   personalFile = `${app.userDataDir}/profiles/${profileId}/settings-projects/${projectId}.json`;
-  await app.eval("location.reload()");
+  await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Settings palette')`);
   // Close the startup New Tab so all following searches use the overlay.
   await app.eval(
@@ -146,7 +146,7 @@ it("offers the actual desktop host skill and lets a project agent edit its scope
   await wait(`return input().placeholder==='Message the agent…'`);
   await type("E2E enable personal tab frame");
   await wait(
-    `return rows()[0]?.textContent.includes('E2E enable personal tab frame')`,
+    `return rows()[0]?.textContent.includes('Ask agent') && !rows()[0]?.textContent.includes('E2E enable personal tab frame')`,
   );
   await run(`key('Enter')`);
   await app.waitFor(
