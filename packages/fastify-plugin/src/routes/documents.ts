@@ -406,10 +406,14 @@ export function registerDocumentRoutes(
         return reply
           .status(403)
           .send({ error: "Proposals are turned off on this server" });
-      return core().proposals.list({
-        identity: resolveIdentity(request),
-        projectId: request.params.projectId,
-      });
+      try {
+        return await core().proposals.list({
+          identity: resolveIdentity(request),
+          projectId: request.params.projectId,
+        });
+      } catch (error) {
+        return handleErrors(error, reply);
+      }
     },
   });
   typed.route({
@@ -450,6 +454,7 @@ export function registerDocumentRoutes(
       }),
       response: {
         200: z.array(ProposalFileSchema),
+        400: ErrorSchema,
         403: ErrorSchema,
         404: ErrorSchema,
       },
@@ -459,11 +464,15 @@ export function registerDocumentRoutes(
         return reply
           .status(403)
           .send({ error: "Proposals are turned off on this server" });
-      return core().proposals.files({
-        identity: resolveIdentity(request),
-        projectId: request.params.projectId,
-        number: request.params.number,
-      });
+      try {
+        return await core().proposals.files({
+          identity: resolveIdentity(request),
+          projectId: request.params.projectId,
+          number: request.params.number,
+        });
+      } catch (error) {
+        return handleErrors(error, reply);
+      }
     },
   });
   typed.route({
@@ -475,6 +484,7 @@ export function registerDocumentRoutes(
       }),
       response: {
         200: ProposalDiscussionSchema,
+        400: ErrorSchema,
         403: ErrorSchema,
         404: ErrorSchema,
       },

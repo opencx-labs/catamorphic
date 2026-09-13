@@ -2,6 +2,7 @@ import {
   DocumentConflictError,
   DocumentNotFoundError,
   DocumentPathError,
+  ProjectNotFoundError,
 } from "@catamorphic/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTestApp } from "./test-app.js";
@@ -23,7 +24,10 @@ const entry = {
   writtenAt: "2026-08-18T00:00:00.000Z",
 };
 
-function appWithDocuments(overrides: Record<string, unknown> = {}) {
+function appWithDocuments(
+  overrides: Record<string, unknown> = {},
+  proposals: Record<string, unknown> = {},
+) {
   const calls: Array<{ op: string; args: unknown }> = [];
   const record =
     (op: string, result: unknown) =>
@@ -34,6 +38,7 @@ function appWithDocuments(overrides: Record<string, unknown> = {}) {
     };
   const app = createTestApp({
     core: {
+      proposals,
       documents: {
         list: record("list", [entry]),
         read: record("read", { ...entry, text: "# Acme\nhello" }),
@@ -69,6 +74,49 @@ function appWithDocuments(overrides: Record<string, unknown> = {}) {
 }
 
 describe("document routes (ADR 0055)", () => {
+  it.each(["", "/1", "/1/files", "/1/discussion"])(
+    "returns 404 for a missing proposal project at %s",
+    async (suffix) => {
+      const missing = async () => {
+        throw new ProjectNotFoundError(PROJECT_ID);
+      };
+      const { app } = appWithDocuments(
+        {},
+        {
+          list: missing,
+          read: missing,
+          files: missing,
+          discussion: missing,
+        },
+      );
+      const result = await app.inject({
+        method: "GET",
+        url: `/api/projects/${PROJECT_ID}/proposals${suffix}`,
+      });
+      expect(result.statusCode).toBe(404);
+      expect(result.json()).toEqual({ error: "Project not found" });
+    },
+  );
+
+  it.each(["/1", "/1/files", "/1/discussion"])(
+    "returns an actionable stale proposal error at %s",
+    async (suffix) => {
+      const changed = async () => {
+        throw new DocumentPathError("Refresh this proposal");
+      };
+      const { app } = appWithDocuments(
+        {},
+        { read: changed, files: changed, discussion: changed },
+      );
+      const result = await app.inject({
+        method: "GET",
+        url: `/api/projects/${PROJECT_ID}/proposals${suffix}`,
+      });
+      expect(result.statusCode).toBe(400);
+      expect(result.json()).toEqual({ error: "Refresh this proposal" });
+    },
+  );
+
   it("lists, reads (json + raw), writes, deletes, histories, searches", async () => {
     const { app, calls } = appWithDocuments();
     const base = `/api/projects/${PROJECT_ID}/documents`;

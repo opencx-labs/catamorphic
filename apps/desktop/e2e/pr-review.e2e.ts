@@ -125,10 +125,10 @@ beforeAll(async () => {
   await wait("return !$('[data-testid=project-submit]').disabled;");
   await run("$('[data-testid=project-submit]').click();");
   await wait(
-    "return !!$('[data-sidebar=right] [role=tab][aria-label=\"Pull requests\"]');",
+    "return !!$('[data-sidebar=right] [role=tab][aria-label=\"Proposals\"]');",
   );
   await run(
-    "$('[data-sidebar=right] [role=tab][aria-label=\"Pull requests\"]').click();",
+    "$('[data-sidebar=right] [role=tab][aria-label=\"Proposals\"]').click();",
   );
   await wait(
     "return [...document.querySelectorAll('[data-sidebar=right] button')].some(b=>b.textContent.includes('Validate input before processing'));",

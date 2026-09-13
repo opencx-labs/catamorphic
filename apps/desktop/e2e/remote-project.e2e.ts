@@ -7,8 +7,8 @@ import { type AppHandle, launchApp } from "./harness.js";
 /**
  * Remote projects end to end (ADR 0055): a member pastes a connect link,
  * and the app materializes what the server lets them see. The member shell
- * syncs local work without exposing repository controls, and Share publishes
- * from the universal surface bar. The "server"
+ * syncs local work without exposing repository controls, and publishing lives
+ * in the file status popover in the universal surface bar. The "server"
  * is a tiny in-test HTTP server speaking the plugin's documents routes and
  * the same OAuth discovery, PKCE, and bearer-token contract as the stock host.
  */
@@ -135,6 +135,7 @@ function startFakeServer(): Promise<void> {
         "/api/projects/remote-1/apps",
         "/api/projects/remote-1/skills",
         "/api/projects/remote-1/workflow-enablements",
+        "/api/projects/remote-1/proposals",
       ].includes(url.pathname)
     )
       return send(200, []);
@@ -465,8 +466,8 @@ describe("remote projects (ADR 0055)", () => {
       },
     );
     await runWait(
-      `return !!$('.cat-mdedit .ProseMirror') && !!$('[data-testid="surface-share"]');`,
-      { timeoutMs: 60_000, label: "brief editor and top-bar Share" },
+      `return !!$('.cat-mdedit .ProseMirror') && !!$('[data-testid="file-inspector-trigger"]');`,
+      { timeoutMs: 60_000, label: "brief editor and file status" },
     );
     await run(
       `const editor = window.__catMarkdownEditor.editor;
@@ -475,10 +476,17 @@ describe("remote projects (ADR 0055)", () => {
        return true;`,
     );
     await runWait(
-      `return $$('button').some((button) => button.textContent === 'Save');`,
+      `return $('[data-testid="file-inspector-trigger"]')?.getAttribute('aria-label') === 'File status: Unsaved changes';`,
       { label: "brief marked dirty" },
     );
-    await run(`$('[data-testid="surface-share"]').click(); return true;`);
+    await run(
+      `$('[data-testid="file-inspector-trigger"]').click(); return true;`,
+    );
+    await runWait(
+      `const publish = byText('[role="dialog"][aria-label="File status and actions"] button', 'Publish…');
+       if (!publish || publish.disabled) return false; publish.click(); return true;`,
+      { label: "publish from file status" },
+    );
     await runWait(`return !!$('[data-testid="publish-submit"]');`, {
       label: "publish modal",
     });

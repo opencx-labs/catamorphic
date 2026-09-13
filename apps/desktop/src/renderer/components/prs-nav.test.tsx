@@ -16,6 +16,7 @@ vi.mock("../lib/desktop-api.js", () => ({
     }),
     prList: vi.fn(),
     prFiles: vi.fn(),
+    remoteStatus: vi.fn().mockResolvedValue(null),
     onGitChanged: vi.fn(() => () => {}),
   },
 }));
