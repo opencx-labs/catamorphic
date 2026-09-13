@@ -101,7 +101,7 @@ describe("tabbed sidebars", () => {
     config.right.reverse();
     writeConfig(config);
     await app.waitFor(
-      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"]')?.getAttribute('aria-label') === 'Pull requests'`,
+      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"]')?.getAttribute('aria-label') === 'Proposals'`,
     );
     expect(
       await app.eval(
@@ -131,7 +131,7 @@ describe("tabbed sidebars", () => {
       tab.focus(); tab.dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowRight',bubbles:true,cancelable:true}));
     })()`);
     await app.waitFor(
-      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"][aria-selected="true"]')?.getAttribute('aria-label') === 'Pull requests'`,
+      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"][aria-selected="true"]')?.getAttribute('aria-label') === 'Proposals'`,
     );
     await app.eval(
       `document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key:'Home',bubbles:true,cancelable:true}))`,
@@ -187,7 +187,7 @@ describe("tabbed sidebars", () => {
 
   it("persists widths and tab selection, and collapses each side independently", async () => {
     await app.eval(`(() => {
-      document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"][aria-label="Pull requests"]').click();
+      document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"][aria-label="Proposals"]').click();
       const handle = document.querySelector('[aria-label="Resize right sidebar"]');
       handle.dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowLeft',bubbles:true,cancelable:true}));
       document.querySelector('[aria-label="Collapse sidebar"]').click();
@@ -202,7 +202,7 @@ describe("tabbed sidebars", () => {
     ).toBe("false");
     await app.reload();
     await app.waitFor(
-      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"][aria-selected="true"]')?.getAttribute('aria-label') === 'Pull requests'`,
+      `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"][aria-selected="true"]')?.getAttribute('aria-label') === 'Proposals'`,
     );
     expect(
       await app.eval(
