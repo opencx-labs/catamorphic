@@ -336,19 +336,19 @@ it("virtualizes a large file tree and keeps the current file visible", async () 
 });
 
 it("keeps review context reachable and avoids horizontal overflow in a narrow window", async () => {
-  await run(
-    "[...document.querySelectorAll('summary')].find(e=>e.textContent.trim()==='Review details').click();",
-  );
-  expect(
-    await run(
-      "return $('[aria-label=\"Review status and people\"]').getBoundingClientRect().height > 0;",
-    ),
-  ).toBe(true);
-  await run(
-    "[...document.querySelectorAll('summary')].find(e=>e.textContent.trim()==='Review details').click();",
-  );
   await app.eval("window.catamorphicDesktop.devWindow('setSize', 1000, 700)");
   await wait("return window.innerWidth <= 1000;");
+  await run("$('[data-testid=\"proposal-inspector-trigger\"]').click();");
+  await wait("return !!$('[aria-label=\"Review status and people\"]');");
+  expect(
+    await run(
+      "const panel=$('[role=dialog][aria-label=\"Proposal status and actions\"]');const bounds=panel.getBoundingClientRect();return bounds.height > 0 && bounds.left >= 0 && bounds.right <= window.innerWidth;",
+    ),
+  ).toBe(true);
+  await app.press("Escape");
+  await wait(
+    "return !$('[role=dialog][aria-label=\"Proposal status and actions\"]');",
+  );
   await app.screenshot("/tmp/catamorphic-review-narrow-e2e.png");
   expect(
     await run(
