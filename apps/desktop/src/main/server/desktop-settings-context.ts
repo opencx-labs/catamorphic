@@ -30,6 +30,10 @@ export function desktopSettingsContext({
     access,
     projectId: project.id,
     profileId,
+    personalFilesDirectory:
+      access === "native" && project.rootPath
+        ? path.join(project.rootPath, ".catamorphic", "personal", profileId)
+        : undefined,
     files: {
       preferences,
       theme: {

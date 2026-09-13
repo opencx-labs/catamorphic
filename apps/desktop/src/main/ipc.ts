@@ -7,9 +7,10 @@ import { promisify } from "node:util";
 import {
   definitionHash,
   formatProjectAgentId,
+  normalizeDocumentPath,
   type ProjectAgentEntry,
 } from "@catamorphic/core";
-import { discoverCheckout, nativeGit } from "@catamorphic/git";
+import { discoverCheckout, isPersonalFile, nativeGit } from "@catamorphic/git";
 import {
   buildInstallationUrl,
   GithubApi,
@@ -33,7 +34,10 @@ import type { AgentCommandsResult } from "../shared/agent-commands.js";
 import type { FilePreviewInput } from "../shared/file-preview.js";
 import type { FileSearchInput } from "../shared/file-search.js";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
-import { prCommentInputSchema } from "../shared/pr-details.js";
+import {
+  prCommentInputSchema,
+  prDecisionInputSchema,
+} from "../shared/pr-details.js";
 import type { SettingsPatch, SettingsScope } from "../shared/settings.js";
 import type { UsageSummary, UsageWindowDays } from "../shared/usage.js";
 import type { BindingAuth } from "./agent-bindings-store.js";
@@ -48,6 +52,12 @@ import {
   type AgentAuthHealthReport,
   claudeOauthHealth,
 } from "./auth-health.js";
+import {
+  authorizationStatus,
+  cancelAuthorization,
+  continueAuthorizationInBrowser,
+  trackAuthorization,
+} from "./authorization-recovery.js";
 import { saveComposerFile } from "./composer-files.js";
 import { parseConnectLink } from "./connect-link.js";
 import {
@@ -86,6 +96,7 @@ import {
   fetchOpenRouterModels,
   openRouterPkceLogin,
 } from "./openrouter.js";
+import { listPersonalFiles } from "./personal-files.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
 import {
@@ -242,6 +253,36 @@ async function openRemoteAuthorization(
   }
 }
 
+async function authorizeWorkspaceRemote(
+  sender: WebContents,
+  serverUrl: string,
+) {
+  const controller = new AbortController();
+  let dispose: (() => void) | undefined;
+  let initialUrl: string | undefined;
+  try {
+    return await authorizeRemoteServer({
+      serverUrl,
+      signal: controller.signal,
+      openUrl: async (url) => {
+        initialUrl = url;
+        dispose = trackAuthorization({
+          sender,
+          url,
+          label: "Sign in to your company",
+          expiresAt: Date.now() + 300_000,
+          cancel: () => controller.abort(),
+        });
+        await openRemoteAuthorization(sender, url);
+      },
+      onCallbackServed: (origin) => closeWorkspaceCallback(sender, origin),
+    });
+  } finally {
+    dispose?.();
+    if (initialUrl) closeWorkspaceCallback(sender, initialUrl);
+  }
+}
+
 export function registerIpcHandlers(
   profileConfig: ProfileConfigManager,
   state: ServerState,
@@ -255,6 +296,16 @@ export function registerIpcHandlers(
 ): void {
   const storesFor = (event: Electron.IpcMainInvokeEvent) =>
     profileConfig.forProfile(windows.profileFor(event.sender));
+
+  ipcMain.handle("catamorphic:authorization-status", (event) =>
+    authorizationStatus(event.sender),
+  );
+  ipcMain.handle("catamorphic:authorization-cancel", (event) =>
+    cancelAuthorization(event.sender),
+  );
+  ipcMain.handle("catamorphic:authorization-continue-browser", (event) =>
+    continueAuthorizationInBrowser(event.sender),
+  );
 
   // --- continue on mobile (QR pairing) ---
 
@@ -354,6 +405,7 @@ export function registerIpcHandlers(
   ipcMain.handle(
     "catamorphic:window-set-profile",
     (event, profileId: string) => {
+      cancelAuthorization(event.sender);
       windows.assign(event.sender, profileId);
       return windows.profileFor(event.sender);
     },
@@ -1853,11 +1905,8 @@ export function registerIpcHandlers(
       }
       const serverUrl = input.serverUrl.replace(/\/+$/, "");
       const sender = event.sender;
-      let credentials = await authorizeRemoteServer({
-        serverUrl,
-        openUrl: (url) => openRemoteAuthorization(sender, url),
-        onCallbackServed: (origin) => closeWorkspaceCallback(sender, origin),
-      });
+      const joiningProfileId = windows.profileFor(sender);
+      let credentials = await authorizeWorkspaceRemote(sender, serverUrl);
       const client = remoteClient({
         serverUrl,
         remoteProjectId: input.remoteProjectId,
@@ -1880,7 +1929,13 @@ export function registerIpcHandlers(
         rootPath: input.rootPath,
         existing: false,
         automaticCheckpoints: !builderCheckout,
-        reopen: (id) => server.catamorphic.core.projects.get(identity, id),
+        reopen: (id) => {
+          if (!profiles.get(joiningProfileId)?.projectIds.includes(id))
+            throw new Error(
+              "This folder belongs to another profile. Choose a separate location for your copy.",
+            );
+          return server.catamorphic.core.projects.get(identity, id);
+        },
         create: async (id, rootPath) => {
           if (builderCheckout && githubFullName) {
             await ensureGithubRepositoryAccess(
@@ -1905,6 +1960,7 @@ export function registerIpcHandlers(
         },
       });
       // The store is never program: keep it out of the local git history.
+      profiles.claimProject(joiningProfileId, project.id);
       await appendLocalGitExcludes(input.rootPath, [
         "store/",
         ".catamorphic/remote-sync.json",
@@ -2126,18 +2182,55 @@ export function registerIpcHandlers(
     "catamorphic:remote-propose",
     async (
       event,
-      input: { projectId: string; title: string; body?: string },
+      input: {
+        projectId: string;
+        title: string;
+        body?: string;
+        paths: string[];
+      },
     ) => {
       const link = requireLink(event, input.projectId);
       const rootPath = await requireRoot(input.projectId);
-      const status = localStatus(rootPath);
-      if (status.programEdits.length === 0) {
-        throw new Error("No edits outside store/ to propose");
+      if (
+        !Array.isArray(input.paths) ||
+        input.paths.length === 0 ||
+        input.paths.length > 200
+      ) {
+        throw new Error("Choose the files to include in your proposal");
       }
-      const changes = status.programEdits.map((relative) => ({
-        path: relative,
-        content: fs.readFileSync(path.join(rootPath, relative), "utf8"),
-      }));
+      const selected = [...new Set(input.paths.map(normalizeDocumentPath))];
+      const root = fs.realpathSync(rootPath);
+      const changes = selected.map((relative) => {
+        if (isPersonalFile(relative) || relative.startsWith("store/"))
+          throw new Error(
+            "Choose project files for this proposal. Personal files must be prepared for sharing first.",
+          );
+        const absolute = fs.realpathSync(path.join(root, relative));
+        const contained = path.relative(root, absolute);
+        const canonical = contained.split(path.sep).join("/");
+        if (
+          isPersonalFile(canonical) ||
+          canonical === ".git" ||
+          canonical.startsWith(".git/") ||
+          canonical.startsWith("store/")
+        )
+          throw new Error(
+            "A proposal cannot include a link to personal files, the store, or repository internals",
+          );
+        if (contained.startsWith("..") || path.isAbsolute(contained))
+          throw new Error("Proposal files must be inside the project folder");
+        if (
+          !fs.statSync(absolute).isFile() ||
+          fs.statSync(absolute).size > 1024 * 1024
+        )
+          throw new Error("Proposals support text files up to 1 MB each");
+        return {
+          path: relative,
+          content: new TextDecoder("utf-8", { fatal: true }).decode(
+            fs.readFileSync(absolute),
+          ),
+        };
+      });
       return storedRemoteClient(event, input.projectId, link).propose({
         title: input.title,
         ...(input.body ? { body: input.body } : {}),
@@ -2173,11 +2266,10 @@ export function registerIpcHandlers(
         throw new Error("This project is not connected to a remote server");
       }
       const sender = event.sender;
-      const credentials = await authorizeRemoteServer({
-        serverUrl: inspected.link.serverUrl,
-        openUrl: (url) => openRemoteAuthorization(sender, url),
-        onCallbackServed: (origin) => closeWorkspaceCallback(sender, origin),
-      });
+      const credentials = await authorizeWorkspaceRemote(
+        sender,
+        inspected.link.serverUrl,
+      );
       storesFor(event).remoteProjects.updateCredentials(projectId, credentials);
       const client = storedRemoteClient(event, projectId, {
         ...inspected.link,
@@ -2306,9 +2398,17 @@ export function registerIpcHandlers(
     },
   );
 
-  ipcMain.handle("catamorphic:reveal-folder", (_event, folderPath: string) => {
-    if (path.isAbsolute(folderPath)) shell.openPath(folderPath);
-  });
+  ipcMain.handle(
+    "catamorphic:reveal-folder",
+    async (_event, folderPath: string) => {
+      if (!path.isAbsolute(folderPath))
+        throw new Error("Choose an absolute file or folder path");
+      if (fs.statSync(folderPath).isDirectory()) {
+        const error = await shell.openPath(folderPath);
+        if (error) throw new Error(error);
+      } else shell.showItemInFolder(folderPath);
+    },
+  );
 
   ipcMain.handle(
     "catamorphic:composer-file-save",
@@ -2448,7 +2548,7 @@ export function registerIpcHandlers(
   );
   ipcMain.handle(
     "catamorphic:project-local-files",
-    async (_event, projectId: string) => {
+    async (event, projectId: string) => {
       if (!state.current) throw new Error("The local server is starting");
       // The desktop owns this synced working copy. Remote program access
       // and execution still go through the member's remote authority.
@@ -2456,7 +2556,11 @@ export function registerIpcHandlers(
         { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
         projectId,
       );
-      return files.map((file) => ({ path: file.path }));
+      const personal = await listPersonalFiles({
+        root: await requireRoot(projectId),
+        profileId: windows.profileFor(event.sender),
+      });
+      return [...files.map((file) => ({ path: file.path })), ...personal];
     },
   );
   ipcMain.handle(
@@ -2578,6 +2682,29 @@ export function registerIpcHandlers(
   );
 
   ipcMain.handle(
+    "catamorphic:session-use-project-folder",
+    async (event, input: { projectId: string; sessionId: string }) => {
+      const server = state.current;
+      if (!server) throw new Error("Server is not running");
+      if (
+        profiles.profileForProject(input.projectId).id !==
+        windows.profileFor(event.sender)
+      )
+        throw new Error("Project belongs to another profile");
+      const session = await server.catamorphic.core.agentSessions?.get(
+        identity,
+        input.projectId,
+        input.sessionId,
+      );
+      if (!session) throw new Error("Chat is unavailable");
+      if (session.running)
+        throw new Error("Stop the current turn before changing its folder");
+      await server.returnSessionToProjectFolder(input);
+      notifyGitChanged(input.projectId);
+    },
+  );
+
+  ipcMain.handle(
     "catamorphic:git-untracked-directory",
     async (
       _event,
@@ -2634,6 +2761,11 @@ export function registerIpcHandlers(
     const input = prCommentInputSchema.parse(raw);
     const fixture = e2eReviewFixture();
     if (fixture) return fixture.postComment(input);
+    const link = storesFor(event).remoteProjects.get(input.projectId);
+    if (link)
+      return storedRemoteClient(event, input.projectId, link).proposalComment(
+        input,
+      );
     requireGithubCli(event);
     return githubCliPrComment({
       rootPath: await requireRoot(input.projectId),
@@ -2641,11 +2773,70 @@ export function registerIpcHandlers(
     });
   });
 
+  ipcMain.handle("catamorphic:pr-decision", async (event, raw: unknown) => {
+    const input = prDecisionInputSchema.parse(raw);
+    const link = storesFor(event).remoteProjects.get(input.projectId);
+    const remoteMe = link
+      ? await storedRemoteClient(event, input.projectId, link).me()
+      : null;
+    const remoteProject = remoteMe?.projects.find(
+      (project) => project.projectId === link?.remoteProjectId,
+    );
+    if (link) {
+      if (!remoteProject?.builder)
+        throw new Error("Only project builders can approve or apply proposals");
+      // Apply the same proposal visibility check used by the review surface.
+      await storedRemoteClient(event, input.projectId, link).proposalFiles(
+        input.number,
+      );
+    }
+    requireGithubCli(event);
+    const repository = await githubCliRepository(
+      await requireRoot(input.projectId),
+    );
+    if (!repository)
+      throw new Error(
+        "Connect the reviewer's GitHub account in Settings > Connections",
+      );
+    if (
+      link &&
+      (!remoteProject?.source ||
+        repoFullNameFromUrl(remoteProject.source.remoteUrl)?.toLowerCase() !==
+          repository.fullName.toLowerCase())
+    ) {
+      throw new Error(
+        "This folder's repository does not match the company project. Reconnect the project before reviewing.",
+      );
+    }
+    if (input.decision === "apply") {
+      await repository.api.mergePullRequest({
+        fullName: repository.fullName,
+        number: input.number,
+        headSha: input.headSha,
+      });
+    } else {
+      await repository.api.reviewPullRequest({
+        fullName: repository.fullName,
+        number: input.number,
+        headSha: input.headSha,
+        decision: input.decision === "approve" ? "APPROVE" : "REQUEST_CHANGES",
+        body: input.body,
+      });
+    }
+    notifyGitChanged(input.projectId);
+    return { decision: input.decision };
+  });
+
   ipcMain.handle(
     "catamorphic:pr-details",
     async (event, projectId: string, number: number) => {
       const fixture = e2eReviewFixture();
       if (fixture) return fixture.details;
+      const link = storesFor(event).remoteProjects.get(projectId);
+      if (link)
+        return storedRemoteClient(event, projectId, link).proposalDiscussion(
+          number,
+        );
       requireGithubCli(event);
       return githubCliPrDetails({
         rootPath: await requireRoot(projectId),
@@ -2654,9 +2845,46 @@ export function registerIpcHandlers(
     },
   );
 
+  ipcMain.handle(
+    "catamorphic:pr-review",
+    async (event, projectId: string, number: number) => {
+      const fixture = e2eReviewFixture();
+      if (fixture)
+        return {
+          proposal: fixture.prs.find((item) => item.number === number),
+          files: fixture.files,
+        };
+      const link = storesFor(event).remoteProjects.get(projectId);
+      if (link)
+        return storedRemoteClient(event, projectId, link).proposalReview(
+          number,
+        );
+      requireGithubCli(event);
+      const cli = await githubCliRepository(await requireRoot(projectId));
+      if (!cli)
+        throw new Error("Sign into GitHub in Settings to read this proposal.");
+      const before = await cli.api.pullRequest({
+        fullName: cli.fullName,
+        number,
+      });
+      const files = await cli.api.pullRequestFiles(cli.fullName, number);
+      const proposal = await cli.api.pullRequest({
+        fullName: cli.fullName,
+        number,
+      });
+      if (before.headSha !== proposal.headSha)
+        throw new Error(
+          "This proposal changed while loading. Refresh to review the latest version.",
+        );
+      return { proposal, files };
+    },
+  );
+
   ipcMain.handle("catamorphic:pr-list", async (event, projectId: string) => {
     const fixture = e2eReviewFixture();
     if (fixture) return fixture.prs;
+    const link = storesFor(event).remoteProjects.get(projectId);
+    if (link) return storedRemoteClient(event, projectId, link).listProposals();
     requireGithubCli(event);
     const server = state.current;
     if (!server) return [];
@@ -2679,6 +2907,9 @@ export function registerIpcHandlers(
     async (event, projectId: string, number: number) => {
       const fixture = e2eReviewFixture();
       if (fixture) return fixture.files;
+      const link = storesFor(event).remoteProjects.get(projectId);
+      if (link)
+        return storedRemoteClient(event, projectId, link).proposalFiles(number);
       requireGithubCli(event);
       const server = state.current;
       if (!server) throw new Error("Server not running");
@@ -2700,7 +2931,23 @@ export function registerIpcHandlers(
 
   ipcMain.handle("catamorphic:github-connect-start", async (event) => {
     const grant = await requestDeviceCode(GITHUB_APP);
+    cancelAuthorization(event.sender);
     const generation = ++deviceFlowGeneration;
+    const dispose = trackAuthorization({
+      sender: event.sender,
+      url: grant.verificationUri,
+      label: "Connect GitHub",
+      expiresAt: Date.now() + grant.expiresIn * 1000,
+      cancel: () => {
+        if (generation !== deviceFlowGeneration) return;
+        deviceFlowGeneration += 1;
+        if (!event.sender.isDestroyed())
+          event.sender.send("catamorphic:github-connected", {
+            error: "GitHub sign-in ended. Connect again when ready.",
+          });
+        closeWorkspaceCallback(event.sender, grant.verificationUri);
+      },
+    });
     openWorkspaceUrl(event.sender, grant.verificationUri);
 
     const poll = async (): Promise<void> => {
@@ -2710,10 +2957,12 @@ export function registerIpcHandlers(
         // A newer connect attempt or an app shutdown obsoletes this loop.
         if (generation !== deviceFlowGeneration) return;
         await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        if (generation !== deviceFlowGeneration) return;
         const server = state.current;
         if (!server) return;
         try {
           const result = await pollDeviceToken(GITHUB_APP, grant.deviceCode);
+          if (generation !== deviceFlowGeneration) return;
           if (result.tokens) {
             const status = await server.catamorphic.core.github?.connect(
               identity,
@@ -2737,7 +2986,7 @@ export function registerIpcHandlers(
         error: "The GitHub device code expired. Try connecting again",
       });
     };
-    void poll();
+    void poll().finally(dispose);
 
     return {
       userCode: grant.userCode,
@@ -2745,7 +2994,8 @@ export function registerIpcHandlers(
     };
   });
 
-  ipcMain.handle("catamorphic:github-connect-cancel", () => {
+  ipcMain.handle("catamorphic:github-connect-cancel", (event) => {
+    cancelAuthorization(event.sender);
     deviceFlowGeneration += 1;
   });
 
@@ -2753,7 +3003,15 @@ export function registerIpcHandlers(
   // authorization itself — send users to the installation page where GitHub
   // shows the repository picker.
   ipcMain.handle("catamorphic:github-manage-repos", (event) => {
-    openWorkspaceUrl(event.sender, buildInstallationUrl(GITHUB_APP));
+    const url = buildInstallationUrl(GITHUB_APP);
+    trackAuthorization({
+      sender: event.sender,
+      url,
+      label: "Grant GitHub repository access",
+      expiresAt: Date.now() + 600_000,
+      cancel: () => closeWorkspaceCallback(event.sender, url),
+    });
+    openWorkspaceUrl(event.sender, url);
   });
 
   ipcMain.handle("catamorphic:github-disconnect", async () => {

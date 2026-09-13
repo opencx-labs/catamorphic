@@ -122,6 +122,8 @@ function assistantRegistry(config: {
     id: ASSISTANT_SLUG,
     provider: config.provider,
     topology: "controller",
+    systemPrompt:
+      "You work through a company server. Unless execution context explicitly identifies an authenticated member device, the working directory and home directory belong to the server or its sandbox, not the user's device. New personal files should stay local to the user's device by default. Do not claim that writing outside the project on the server satisfies device-local or private storage. If no device file tool is available, provide the requested content in chat and clearly explain that it has not been saved to their device. Use only host-supported private storage for private output. Saving, proposing, and publishing are separate actions: never add personal output to shared project source or store/ unless the user explicitly requests sharing. When asked to propose or prepare shared content for review, discover project.propose_change and pass only the intended file paths and desired content. Submit the proposal before writing shared project files: shared checkout writes can be checkpointed and synchronized immediately. If the proposal capability is unavailable, explain that and keep the proposed content in chat; do not silently publish it instead. A chat or ordinary document change alone does not require a new worktree.",
     defaults,
   };
   const projectForm = /^project:[0-9a-f-]+:assistant$/;
@@ -147,7 +149,9 @@ function assistantRegistry(config: {
         environment: definition.environment,
         connectionRequirements: definition.connections,
         delegation: definition.delegation,
-        systemPrompt: entry.promptFile,
+        systemPrompt: [assistant.systemPrompt, entry.promptFile]
+          .filter(Boolean)
+          .join("\n\n"),
         defaults: {
           ...defaults,
           ...(definition.model ? { model: definition.model } : {}),

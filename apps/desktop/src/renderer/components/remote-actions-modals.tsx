@@ -177,25 +177,27 @@ export function RemoteProposeModal({
   projectId,
   open,
   files,
-  features,
   onClose,
+  onOpenProposal,
 }: {
   projectId: string;
   open: boolean;
-  /** The program files with local edits that will be proposed. */
+  /** The project files available to include in this proposal. */
   files: string[];
-  features: RemoteFeatures | undefined;
   onClose: () => void;
+  onOpenProposal: (proposal: { number: number; title: string }) => void;
 }) {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
+  const [selected, setSelected] = useState<string[]>(
+    files.length === 1 ? files : [],
+  );
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<{
     branch: string;
     pullRequest?: { url: string; number: number };
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const opensPullRequest = features ? features.proposalsOpenPullRequests : null;
 
   useEffect(() => {
     if (!open) return;
@@ -204,11 +206,12 @@ export function RemoteProposeModal({
     setPending(false);
     setResult(null);
     setError(null);
-  }, [open]);
+    setSelected(files.length === 1 ? files : []);
+  }, [open, files]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!title.trim()) return;
+    if (!title.trim() || selected.length === 0) return;
     setPending(true);
     setError(null);
     try {
@@ -216,6 +219,7 @@ export function RemoteProposeModal({
         await desktopApi.remotePropose({
           projectId,
           title: title.trim(),
+          paths: selected,
           ...(body.trim() ? { body: body.trim() } : {}),
         }),
       );
@@ -235,21 +239,30 @@ export function RemoteProposeModal({
               Propose these changes
             </h2>
             <p className="mt-1 text-xs text-fg-muted">
-              Edits outside store/ go to the people who maintain this project
-              for review, under your name
-              {opensPullRequest === true
-                ? ", as a pull request."
-                : opensPullRequest === false
-                  ? ", as a branch they can review."
-                  : "."}
+              {result
+                ? "Your proposal is ready for the project reviewers."
+                : "Choose the files to send for review. The shared project changes only after approval."}
             </p>
           </div>
           {!result ? (
             <>
               <ul className="max-h-32 overflow-y-auto rounded-md bg-bg-inset px-2.5 py-1.5 font-mono text-[11px] text-fg-muted">
                 {files.map((file) => (
-                  <li key={file} className="truncate">
-                    {file}
+                  <li key={file}>
+                    <label className="flex cursor-pointer items-center gap-2 py-1">
+                      <input
+                        type="checkbox"
+                        checked={selected.includes(file)}
+                        onChange={(event) =>
+                          setSelected((current) =>
+                            event.target.checked
+                              ? [...current, file]
+                              : current.filter((path) => path !== file),
+                          )
+                        }
+                      />
+                      <span className="truncate">{file}</span>
+                    </label>
                   </li>
                 ))}
               </ul>
@@ -258,7 +271,7 @@ export function RemoteProposeModal({
                 <input
                   value={title}
                   onChange={(event) => setTitle(event.target.value)}
-                  placeholder="Refunds now take 3 days"
+                  placeholder="Describe what changed"
                   // biome-ignore lint/a11y/noAutofocus: modal's primary field
                   autoFocus
                   data-testid="propose-title"
@@ -279,20 +292,10 @@ export function RemoteProposeModal({
             <p className="text-[13px] text-fg" data-testid="propose-result">
               {result.pullRequest ? (
                 <>
-                  Pull request #{result.pullRequest.number} opened on your
-                  behalf:{" "}
-                  <span className="font-mono text-[12px] text-fg-muted">
-                    {result.pullRequest.url}
-                  </span>
+                  Proposal #{result.pullRequest.number}: {title}
                 </>
               ) : (
-                <>
-                  Proposed on branch{" "}
-                  <span className="font-mono text-[12px] text-fg-muted">
-                    {result.branch}
-                  </span>
-                  . The maintainers will see it.
-                </>
+                <>Changes sent to the project reviewers.</>
               )}
             </p>
           )}
@@ -306,13 +309,26 @@ export function RemoteProposeModal({
           >
             {result ? "Done" : "Cancel"}
           </button>
+          {result?.pullRequest && (
+            <button
+              type="button"
+              onClick={() => {
+                if (!result.pullRequest) return;
+                onOpenProposal({ number: result.pullRequest.number, title });
+                onClose();
+              }}
+              className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg hover:opacity-90"
+            >
+              View proposal
+            </button>
+          )}
           {!result && (
             <PendingButton
               type="submit"
               pending={pending}
               pendingLabel="Proposing…"
-              disabled={!title.trim() || files.length === 0}
-              data-disabled-reason="Enter a title and make a file change first"
+              disabled={!title.trim() || selected.length === 0}
+              data-disabled-reason="Enter a title and select at least one file"
               data-testid="propose-submit"
               className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             >

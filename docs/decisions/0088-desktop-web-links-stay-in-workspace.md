@@ -1,6 +1,6 @@
 # ADR 0088: Desktop web links stay in the workspace
 
-- **Status:** Accepted
+- **Status:** Accepted; sign-in recovery exception defined by [0137](0137-sign-in-recovery.md)
 - **Date:** 2026-09-04
 - **Refines:** 0043, 0055, 0072, and 0079
 

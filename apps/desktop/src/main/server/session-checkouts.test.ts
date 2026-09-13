@@ -395,14 +395,17 @@ describe("SessionCheckouts", () => {
     );
   });
 
-  it("falls back to primary when a bound worktree disappears", async () => {
+  it("requires explicit recovery when a bound worktree disappears", async () => {
     const created = await checkouts.createManaged({ projectId, sessionId });
     await fs.rm(created.path, { recursive: true, force: true });
-    expect(await checkouts.resolve({ projectId, sessionId })).toBe(rootPath);
-    expect(checkouts.takeRecoveryWarning(sessionId)).toContain(
-      "returned to the primary project checkout",
+    await expect(checkouts.resolve({ projectId, sessionId })).rejects.toThrow(
+      "The assigned worktree",
     );
-    expect(checkouts.takeRecoveryWarning(sessionId)).toBeNull();
+    await expect(checkouts.resolve({ projectId, sessionId })).rejects.toThrow(
+      "The assigned worktree",
+    );
+    await checkouts.returnPrimary({ projectId, sessionId });
+    expect(await checkouts.resolve({ projectId, sessionId })).toBe(rootPath);
     expect(await checkouts.describe({ projectId, sessionId })).toMatchObject({
       kind: "primary",
     });

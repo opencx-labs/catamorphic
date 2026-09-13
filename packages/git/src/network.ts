@@ -168,20 +168,35 @@ export async function fetchFromRemote(opts: {
   credentials?: GitCredentials;
   branch: string;
 }): Promise<{ sha: string | null }> {
+  // Disposable origin snapshots have no network remote/refspec. Keep this
+  // tracking namespace separate from the host's internal origin.
+  const remote = "catamorphic-network";
+  await git.addRemote({
+    fs: nodeFs,
+    dir: opts.repoPath,
+    remote,
+    url: opts.url,
+    force: true,
+  });
   try {
     const result = await git.fetch({
       fs: nodeFs,
       http,
       dir: opts.repoPath,
       url: opts.url,
+      remote,
       ref: opts.branch,
+      remoteRef: opts.branch,
       singleBranch: true,
       tags: false,
       onAuth: onAuthFor(opts.credentials),
     });
     return { sha: result.fetchHead };
   } catch (err) {
-    if (err instanceof Error && /could not find/i.test(err.message)) {
+    if (
+      err instanceof git.Errors.NotFoundError &&
+      err.data.what === opts.branch
+    ) {
       return { sha: null };
     }
     throw err;

@@ -1,9 +1,11 @@
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CODE_THEMES } from "../../shared/app-prefs.js";
 import type { PrDetails } from "../../shared/pr-details.js";
 import { ActionSearchInput } from "../components/action-search-input.js";
 import { ReviewNavigation } from "../components/catamorphic/code-review.js";
 import { CodeDiff } from "../components/code-diff.js";
+import { ProposalInspector } from "../components/proposal-inspector.js";
 import { ReviewFileTree } from "../components/review-file-tree.js";
 import { ReviewGuideDocument } from "../components/review-guide-document.js";
 import { ReviewMarkdown } from "../components/review-markdown.js";
@@ -34,6 +36,14 @@ export function ReviewScreen({
   number: number;
   onOpenArtifact?: (target: string, title: string) => void;
 }) {
+  const access = useQuery({
+    queryKey: ["proposal-review-access", projectId],
+    queryFn: () => desktopApi.remoteStatus(projectId),
+  });
+  const companyProject = Boolean(access.data);
+  const allowExternalLinks =
+    access.isSuccess &&
+    (!companyProject || access.data?.capabilities?.builder === true);
   const reviewRef = useRef<HTMLElement>(null);
   const [details, setDetails] = useState<PrDetails | null>(null);
   const [detailsError, setDetailsError] = useState<string | null>(null);
@@ -57,6 +67,8 @@ export function ReviewScreen({
   const [discussionPath, setDiscussionPath] = useState<string>();
   const bindings = useKeybindings();
   const storageKey = `review:${projectId}:${number}`;
+  const loadedReviewKey = useRef<string | undefined>(undefined);
+  const loadedDetailsKey = useRef<string | undefined>(undefined);
   const [viewed, setViewed] = useState<Record<string, string>>({});
   useEffect(() => {
     try {
@@ -80,19 +92,15 @@ export function ReviewScreen({
   useEffect(() => {
     let cancelled = false;
     setError(null);
-    setPr(null);
-    setFiles([]);
-    void Promise.all([
-      desktopApi.prList(projectId),
-      desktopApi.prFiles(projectId, number),
-    ])
-      .then(async ([prs, changes]) => {
+    if (loadedReviewKey.current !== storageKey) {
+      setPr(null);
+      setFiles([]);
+      loadedReviewKey.current = storageKey;
+    }
+    void desktopApi
+      .prReview(projectId, number)
+      .then(async ({ proposal: found, files: changes }) => {
         if (cancelled) return;
-        const found = prs.find((item) => item.number === number);
-        if (!found)
-          throw new Error(
-            "This pull request is no longer in the open list. Open it on GitHub for its current state.",
-          );
         const stamps = await Promise.all(
           changes.map(async (file) => {
             const value = `${file.status}:${file.previousPath ?? ""}:${file.patch ?? `${found.headSha ?? found.updatedAt}:${file.additions}:${file.deletions}`}`;
@@ -127,11 +135,14 @@ export function ReviewScreen({
     return () => {
       cancelled = true;
     };
-  }, [projectId, number, revision]);
+  }, [projectId, number, revision, storageKey]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: Refresh reloads review metadata.
   useEffect(() => {
     let cancelled = false;
-    setDetails(null);
+    if (loadedDetailsKey.current !== storageKey) {
+      setDetails(null);
+      loadedDetailsKey.current = storageKey;
+    }
     setDetailsError(null);
     void desktopApi
       .prDetails(projectId, number)
@@ -147,7 +158,7 @@ export function ReviewScreen({
     return () => {
       cancelled = true;
     };
-  }, [projectId, number, revision]);
+  }, [projectId, number, revision, storageKey]);
   const filtered = useMemo(
     () =>
       files.filter(
@@ -198,7 +209,7 @@ export function ReviewScreen({
   return (
     <section
       ref={reviewRef}
-      aria-label="Pull request review"
+      aria-label={companyProject ? "Proposal review" : "Pull request review"}
       tabIndex={-1}
       className="@container/review flex h-full min-h-0 flex-1 flex-col"
       data-testid="review-screen"
@@ -222,31 +233,21 @@ export function ReviewScreen({
       <header className="flex min-h-12 shrink-0 items-center gap-3 px-4 py-2">
         <p className="shrink-0 text-xs tabular-nums text-fg-muted">#{number}</p>
         <h1 className="min-w-0 flex-1 truncate text-sm font-semibold">
-          {pr?.title ?? "Loading review…"}
+          {pr?.title ?? (error ? "Could not load proposal" : "Loading review…")}
         </h1>
         <p className="shrink-0 text-xs tabular-nums text-fg-muted @max-[640px]/review:hidden">
           {done}/{files.length} reviewed
         </p>
-        {details && (
-          <details
-            className="relative shrink-0 text-xs"
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                event.currentTarget.open = false;
-                event.currentTarget.querySelector("summary")?.focus();
-              }
-            }}
-          >
-            <summary className="cursor-pointer list-none rounded-md px-2 py-1 text-fg-muted hover:bg-bg-overlay">
-              Review details
-            </summary>
-            <div className="absolute right-0 top-8 z-40 max-h-[70vh] w-72 overflow-auto rounded-lg border border-border bg-bg-overlay p-4 shadow-lg">
-              <ReviewMetadata
-                details={details}
-                label="Review status and people"
-              />
-            </div>
-          </details>
+        {pr && (
+          <span className="flex items-center rounded-lg border border-border bg-bg-raised p-0.5">
+            <ProposalInspector
+              key={`${projectId}:${number}`}
+              projectId={projectId}
+              proposal={pr}
+              details={details}
+              onChanged={() => setRevision((value) => value + 1)}
+            />
+          </span>
         )}
         <button
           type="button"
@@ -405,6 +406,7 @@ export function ReviewScreen({
           {details ? (
             <ReviewDiscussion
               details={details}
+              allowExternalLinks={allowExternalLinks}
               submitShortcut={{
                 binding: bindings["submit-pr-comment"],
                 label: formatBinding(bindings["submit-pr-comment"]),
@@ -456,15 +458,22 @@ export function ReviewScreen({
             <div className="flex min-w-0 flex-col gap-4">
               <div className="flex flex-wrap items-center gap-3 text-xs text-fg-muted">
                 <p>{pr?.author}</p>
-                <p className="font-mono">
-                  {pr?.head} → {pr?.base}
-                </p>
+                {!companyProject && access.isSuccess && (
+                  <p className="font-mono">
+                    {pr?.head} → {pr?.base}
+                  </p>
+                )}
                 <p>
                   {pr?.draft
                     ? "Draft"
-                    : (details?.state.toLowerCase() ?? "Open")}
+                    : companyProject &&
+                        details?.state.toUpperCase() === "MERGED"
+                      ? "Applied"
+                      : (details?.state.toLowerCase() ?? "Open")}
                 </p>
-                <p>{files.length} files</p>
+                <p>
+                  {files.length} {files.length === 1 ? "file" : "files"}
+                </p>
               </div>
               <details
                 open
@@ -481,7 +490,13 @@ export function ReviewScreen({
               </details>
             </div>
             {details ? (
-              <ReviewMetadata details={details} />
+              <ReviewMetadata
+                details={details}
+                company={companyProject}
+                label={
+                  companyProject ? "Proposal details" : "Pull request details"
+                }
+              />
             ) : (
               <p className="text-xs text-fg-muted">
                 {detailsError ?? "Loading checks and reviewers…"}

@@ -515,7 +515,7 @@ export function buildWorkspaceToolkit(
     {
       name: "create_worktree",
       description:
-        "Create and assign a Catamorphic-managed Git worktree for this session. Use it only when isolation is safer than sharing the primary project folder.",
+        "Create or reuse this session's managed Git worktree when independent repository state is needed. Ordinary document edits, private files, and proposals stay in the project folder unless the user or coordination policy requires isolation.",
       parameters: {},
       execute: async (_input, ctx) => {
         if (!ctx.sessionId) throw new Error("This turn has no chat session.");

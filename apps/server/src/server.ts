@@ -57,6 +57,7 @@ import {
 import { loadStockConnectionProviders } from "./connection-config.js";
 import { EncryptedFileCredentialVault } from "./credential-vault.js";
 import { stockExecution } from "./execution-config.js";
+import { stockGithub } from "./github-config.js";
 import { registerMachineSetup } from "./setup/machines.js";
 import {
   loadStockOperatorSecret,
@@ -249,8 +250,10 @@ async function buildStockServerInner(
   const environmentProvider = machine.environmentProvider;
   const toolPermissions = new DurableToolPermissionBroker(ownDb);
   const agents = buildAgentRegistry({ sandboxProvider, toolPermissions, env });
+  const github = stockGithub({ env, tenantId: SERVER_TENANT_ID });
 
   const catamorphic = createCatamorphic({
+    ...(github ? { github: github.config, proposalBot: github.identity } : {}),
     hostId,
     agentCapabilities: stockAgentCapabilities({
       core: () => catamorphic.core,
@@ -345,7 +348,65 @@ async function buildStockServerInner(
   });
   disposers.push(() => worker.stop());
   const core = catamorphic.core;
-  catamorphic.startAgentWorker();
+  if (github && core.github) {
+    await core.github.connect(github.identity, {
+      accessToken: github.accessToken,
+      expiresAt: null,
+      refreshToken: null,
+      refreshTokenExpiresAt: null,
+    });
+  }
+  if (github) {
+    let stopped = false;
+    let activeSync: Promise<void> | undefined;
+    const syncProjects = async () => {
+      for (let offset = 0; !stopped; offset += 50) {
+        const page = await core.projects.list(github.identity, {
+          limit: 50,
+          offset,
+        });
+        for (const project of page.items) {
+          if (stopped) return;
+          if (!project.remoteUrl) continue;
+          try {
+            const result = await core.remoteSync.syncPublished({
+              identity: github.identity,
+              projectId: project.id,
+            });
+            if (result.status === "pulled" || result.status === "merged") {
+              core.roles.invalidate(project.id);
+              console.info(
+                `Company project ${project.id} received published updates`,
+              );
+            }
+          } catch (error) {
+            console.warn(
+              `Company project sync failed for ${project.id}:`,
+              error,
+            );
+          }
+        }
+        if (offset + page.items.length >= page.total) return;
+      }
+    };
+    const tick = () => {
+      if (activeSync || stopped) return;
+      activeSync = syncProjects()
+        .catch((error) => console.warn("Company project sync failed:", error))
+        .finally(() => {
+          activeSync = undefined;
+        });
+    };
+    const timer = setInterval(tick, 60_000);
+    timer.unref();
+    disposers.push(async () => {
+      stopped = true;
+      clearInterval(timer);
+      await activeSync;
+    });
+    tick();
+  }
+  if (core.agentSessions) catamorphic.startAgentWorker();
   const rootIdentity: Identity = {
     tenantId: SERVER_TENANT_ID,
     externalUserId: SETUP_AGENT_USER,
@@ -540,12 +601,14 @@ async function buildStockServerInner(
       try {
         const result = await provisionStockProject({
           services: {
+            ...(core.github ? { github: core.github } : {}),
             projects: core.projects,
             deployment: core.deployment,
             roles: core.roles,
             admission,
           },
           operatorIdentity: rootIdentity,
+          githubIdentity: github?.identity,
           input: parsed.data,
         });
         return reply.status(201).send(result);

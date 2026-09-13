@@ -21,6 +21,7 @@ import type { OpenMode } from "../../shared/open-mode.js";
 import type {
   PrComment,
   PrCommentInput,
+  PrDecisionInput,
   PrDetails,
 } from "../../shared/pr-details.js";
 import type {
@@ -741,6 +742,13 @@ export interface CatamorphicDesktopApi {
     name: string;
     bytes: Uint8Array;
   }) => Promise<{ path: string; name: string }>;
+  authorizationStatus: () => Promise<{
+    label: string;
+    expiresAt: number;
+  } | null>;
+  authorizationCancel: () => Promise<void>;
+  onAuthorizationChanged: (listener: () => void) => () => void;
+  authorizationContinueBrowser: () => Promise<void>;
   githubConnectStart: () => Promise<{
     userCode: string;
     verificationUri: string;
@@ -871,6 +879,7 @@ export interface CatamorphicDesktopApi {
     projectId: string;
     title: string;
     body?: string;
+    paths: string[];
   }) => Promise<{
     branch: string;
     pullRequest?: { url: string; number: number };
@@ -1332,6 +1341,10 @@ export interface CatamorphicDesktopApi {
     sessionId?: string,
   ) => Promise<GitOverview>;
   sessionCheckouts: (projectId: string) => Promise<SessionCheckoutInfo[]>;
+  sessionUseProjectFolder: (input: {
+    projectId: string;
+    sessionId: string;
+  }) => Promise<void>;
   gitUntrackedDirectory: (input: {
     projectId: string;
     worktreePath: string;
@@ -1341,7 +1354,14 @@ export interface CatamorphicDesktopApi {
   cancelFileSearch: () => Promise<void>;
   fileSearch: (input: FileSearchInput) => Promise<FileSearchResult>;
   prComment: (input: PrCommentInput) => Promise<PrComment>;
+  prDecision: (
+    input: PrDecisionInput,
+  ) => Promise<{ decision: PrDecisionInput["decision"] }>;
   prDetails: (projectId: string, number: number) => Promise<PrDetails>;
+  prReview: (
+    projectId: string,
+    number: number,
+  ) => Promise<{ proposal: PullRequestSummary; files: PullRequestFile[] }>;
   prList: (projectId: string) => Promise<PullRequestSummary[]>;
   prFiles: (projectId: string, number: number) => Promise<PullRequestFile[]>;
 

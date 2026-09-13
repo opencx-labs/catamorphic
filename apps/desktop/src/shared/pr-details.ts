@@ -69,6 +69,19 @@ export const prCommentInputSchema = z.object({
   replyTo: z.number().int().positive().optional(),
 });
 export type PrCommentInput = z.infer<typeof prCommentInputSchema>;
+export const prDecisionInputSchema = z
+  .object({
+    projectId: z.string().min(1),
+    number: z.number().int().positive(),
+    headSha: z.string().regex(/^[a-f0-9]{40,64}$/),
+    decision: z.enum(["approve", "request-changes", "apply"]),
+    body: z.string().trim().max(65536).default(""),
+  })
+  .refine(
+    (input) => input.decision !== "request-changes" || input.body.length > 0,
+    { message: "Explain the changes you are requesting" },
+  );
+export type PrDecisionInput = z.infer<typeof prDecisionInputSchema>;
 export type PrComment = PrDetails["comments"][number];
 export const postedCommentSchema = z.object({
   id: z.number(),

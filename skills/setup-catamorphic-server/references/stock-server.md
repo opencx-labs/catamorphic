@@ -66,6 +66,27 @@ construct Better Auth rows.
 Before provisioning, verify that the installed server exposes both its
 machine-local operator operations and its intended human sign-in routes.
 
+For a GitHub-backed brain, configure the host's `CATAMORPHIC_GITHUB_CLIENT_ID`
+and `CATAMORPHIC_GITHUB_TOKEN`, using a service account distinct from human
+reviewers. Pass `githubRepository: "owner/repository"` to project provisioning
+with the requested roles and admission policy. This imports source and pushes
+the role configuration. Never give this credential to invited members. Their
+normal company sign-in authorizes proposal submission and scoped proposal reads;
+builders review and apply PRs using their own repository credentials.
+
+Grant each role the intended execution environments as well as its agents.
+Builder status alone does not grant execution. For the default stock-server
+environment, include `environments: ["local"]` in the role definition. Here
+`local` means the server's machine. A member-device target requires a declared
+environment with `binding: "this-machine"`, a role grant for that environment,
+and a connected desktop runner. Never describe server-side output as a file
+saved on the member's device.
+
+The stock host checks the linked repository every minute and brings published
+changes into its shared origin. An accepted PR reaches members through their
+normal project download. If sync fails, preserve both histories and resolve
+the error rather than force-pushing one over the other.
+
 ## Boundaries
 
 - The operational credential proves machine access. It is not a Catamorphic

@@ -237,7 +237,7 @@ export function visibleSidebarConfig({
             (section) =>
               matchesProjectExperience(section.when, context) &&
               (context.builder ||
-                !["git", "prs"].includes(section.source?.type ?? section.type)),
+                !["git"].includes(section.source?.type ?? section.type)),
           )
           .map((section) => ({ ...section, items: items(section.items) })),
       }))

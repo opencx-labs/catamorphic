@@ -79,7 +79,7 @@ export function useSidebarAppCollections({
     const admitted = new Map<string, Map<string, AppCollectionItem>>();
     const loadedParents = new Map<string, Set<string | null>>();
     const requireSource = (source: string) => {
-      if (!allowed.has(source) || (!builder && ["git", "prs"].includes(source)))
+      if (!allowed.has(source) || (!builder && ["git"].includes(source)))
         throw new Error(`Source ${source} is not granted to this widget`);
     };
     const result: AppCollections = {

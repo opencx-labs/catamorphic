@@ -1,5 +1,19 @@
 # Catamorphic stock server
 
+For GitHub-backed company proposals, configure `CATAMORPHIC_GITHUB_CLIENT_ID`
+and `CATAMORPHIC_GITHUB_TOKEN` on the server. Use a service account with access
+only to the company repositories, separate from the builders who review its
+PRs. Members never receive this token. The stock host validates the account at
+boot and supplies the existing `GithubService` and proposal bot identity.
+Tokens that need rotation are replaced in the deployment environment.
+
+The machine-local project setup operation accepts `githubRepository` as
+`owner/repository` alongside the explicit roles and admission policy. It imports
+that repository and publishes the requested role definitions. Ongoing source
+changes use ordinary proposals and repository review. Members can list and read
+proposals through their company sign-in only when their document scope permits
+every changed path, including the old path of renamed files.
+
 ## Machines and execution Environments
 
 The accepted managed deployment model uses multiple Catamorphic server instances

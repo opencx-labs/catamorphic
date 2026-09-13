@@ -31,6 +31,14 @@ shared surface is a process bug, not a win. See the [historical log](DESIGN-HIST
 
 ## Principles
 
+File and proposal lifecycle (ADR 0136): new personal files stay on this device
+by default, including inside company projects. A file's top controls use the
+same status inspector as chat: actual location, Save, Publish, and Propose.
+The Proposals sidebar reuses PR review. Members submit selected files through
+the company host; builders approve or apply the reviewed revision with their
+own repository identity. Worktrees serve independent repository work, not
+ordinary documents, privacy, or the existence of a proposal.
+
 1. **System-first.** New profiles follow the operating system, resolving to
    Catamorphic Light or Catamorphic Dark. An explicit theme selection stays
    fixed until the user changes it.

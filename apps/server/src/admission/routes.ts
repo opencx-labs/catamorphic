@@ -121,7 +121,12 @@ export function registerStockAdmissionRoutes(
             : {}),
         });
         const links = options.publicBases.map((base) =>
-          invitationLinks(base, projectId, invitation.id),
+          invitationLinks(
+            base,
+            projectId,
+            invitation.id,
+            invitation.projectName,
+          ),
         );
         reply.status(201);
         return {
@@ -237,12 +242,14 @@ function invitationLinks(
   publicBase: string,
   projectId: string,
   invitationId: string,
+  projectName: string,
 ): { connect: string; web: string } {
   const base = publicBase.replace(/\/+$/, "");
   const params = new URLSearchParams({
     server: `${base}/api`,
     project: projectId,
     invitation: invitationId,
+    name: projectName,
   });
   return {
     connect: `catamorphic://connect?${params.toString()}`,

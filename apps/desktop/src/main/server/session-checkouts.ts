@@ -116,7 +116,6 @@ export function parseWorktreePorcelain(output: string): RepositoryWorktree[] {
 export class SessionCheckouts {
   private readonly pglite: PGlite;
   private readonly projectRoot: SessionCheckoutsOptions["projectRoot"];
-  private readonly recoveryWarnings = new Map<string, string>();
 
   constructor(options: SessionCheckoutsOptions) {
     this.pglite = options.pglite;
@@ -151,19 +150,10 @@ export class SessionCheckouts {
       await this.assertSameRepository(root, binding.path);
       return await canonicalPath(binding.path);
     } catch {
-      await this.deleteBinding(input.sessionId);
-      this.recoveryWarnings.set(
-        input.sessionId,
-        `The assigned checkout at ${binding.path} is no longer usable. This session has returned to the primary project checkout. Re-check concurrent work before editing.`,
+      throw new Error(
+        `The assigned worktree at ${binding.path} is unavailable. Restore that folder or explicitly choose the project folder before continuing. Your changes have not been moved.`,
       );
-      return root;
     }
-  }
-
-  takeRecoveryWarning(sessionId: string): string | null {
-    const warning = this.recoveryWarnings.get(sessionId) ?? null;
-    this.recoveryWarnings.delete(sessionId);
-    return warning;
   }
 
   async describe(input: {
@@ -205,6 +195,7 @@ export class SessionCheckouts {
     });
   }
 
+  /** List retained assignments even when a folder is temporarily unavailable. */
   async assigned(projectId: string): Promise<
     Array<{
       sessionId: string;
@@ -215,35 +206,22 @@ export class SessionCheckouts {
   > {
     const result = await this.pglite.query<{
       session_id: string;
+      path: string;
       kind: "managed" | "external";
       branch: string | null;
     }>(
-      `SELECT session_id, kind, branch
+      `SELECT session_id, path, kind, branch
        FROM desktop.session_checkouts
        WHERE project_id = $1
        ORDER BY created_at`,
       [projectId],
     );
-    const assigned: Array<{
-      sessionId: string;
-      path: string;
-      kind: "managed" | "external";
-      branch: string | null;
-    }> = [];
-    for (const row of result.rows) {
-      const description = await this.describe({
-        projectId,
-        sessionId: row.session_id,
-      });
-      if (description.kind === "primary") continue;
-      assigned.push({
-        sessionId: row.session_id,
-        path: description.path,
-        kind: description.kind,
-        branch: description.branch,
-      });
-    }
-    return assigned;
+    return result.rows.map((row) => ({
+      sessionId: row.session_id,
+      path: row.path,
+      kind: row.kind,
+      branch: row.branch,
+    }));
   }
 
   async isOccupied(input: {
@@ -292,9 +270,25 @@ export class SessionCheckouts {
         () => false,
       );
       if (pathExists) {
-        throw new Error(
-          `Managed worktree path already exists: ${worktreePath}`,
+        const registered = (await this.list(input.projectId)).find(
+          (candidate) =>
+            path.resolve(candidate.path) === path.resolve(worktreePath),
         );
+        if (registered?.kind !== "managed")
+          throw new Error(
+            `The previous worktree folder at ${worktreePath} is no longer registered. Restore it before continuing.`,
+          );
+        await this.assertSameRepository(root, worktreePath);
+        await input.ensureAvailable?.(worktreePath);
+        const binding: SessionCheckoutBinding = {
+          sessionId: input.sessionId,
+          projectId: input.projectId,
+          path: await canonicalPath(worktreePath),
+          kind: "managed",
+          branch: registered.branch,
+        };
+        await this.save(binding);
+        return binding;
       }
 
       const prefix = input.sessionId.replace(/[^A-Za-z0-9]/g, "").slice(0, 8);
@@ -345,7 +339,7 @@ export class SessionCheckouts {
       "-z",
       "--untracked-files=all",
     ]);
-    if (status) {
+    if (status && worktree.kind !== "managed") {
       throw new Error(
         "The external worktree has uncommitted changes. Commit or clean them before assigning it to an agent session.",
       );
@@ -354,7 +348,7 @@ export class SessionCheckouts {
       sessionId: input.sessionId,
       projectId: input.projectId,
       path: adoptedPath,
-      kind: "external",
+      kind: worktree.kind === "managed" ? "managed" : "external",
       branch: worktree.branch,
     };
     await this.save(binding);

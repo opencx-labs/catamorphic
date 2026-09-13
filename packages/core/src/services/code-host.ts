@@ -36,6 +36,24 @@ export interface CodeHost {
     identity: Identity,
     input: { remoteUrl: string },
   ): Promise<PullRequestSummary[]>;
+  /** Optional capability: read one pull request regardless of its lifecycle state. */
+  pullRequest?(
+    identity: Identity,
+    input: { remoteUrl: string; number: number },
+  ): Promise<PullRequestSummary>;
+  pullRequestDiscussion?(
+    identity: Identity,
+    input: { remoteUrl: string; number: number },
+  ): Promise<PullRequestDiscussion>;
+  commentOnPullRequest?(
+    identity: Identity,
+    input: {
+      remoteUrl: string;
+      number: number;
+      body: string;
+      replyTo?: number;
+    },
+  ): Promise<PullRequestComment>;
   /** Optional capability: a pull request's changed files with patches. */
   pullRequestFiles?(
     identity: Identity,
@@ -71,4 +89,35 @@ export interface PullRequestFile {
   /** Unified-diff hunk text; null for binary or oversized files. */
   patch: string | null;
   previousPath?: string;
+}
+
+export interface PullRequestComment {
+  id: number;
+  body: string;
+  author: { login: string } | null;
+  createdAt: string;
+  url: string;
+  state?: string;
+  path?: string;
+  line?: number | null;
+  replyToId?: number;
+  diffHunk?: string;
+  side?: "LEFT" | "RIGHT";
+}
+
+export interface PullRequestDiscussion {
+  state: string;
+  reviewDecision: string | null;
+  assignees: Array<{ login: string }>;
+  reviewRequests: Array<{ login: string }>;
+  reviews: PullRequestComment[];
+  comments: PullRequestComment[];
+  inlineComments: PullRequestComment[];
+  inlineCommentsUnavailable: boolean;
+  statusCheckRollup: Array<{
+    name: string;
+    status: string;
+    conclusion: string | null;
+    detailsUrl: string;
+  }>;
 }

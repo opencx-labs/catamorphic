@@ -130,9 +130,20 @@ export class StockAdmissionService {
     roles?: readonly string[];
     grants?: Readonly<Record<string, readonly string[]>>;
     expiresAt?: Date;
-  }): Promise<{ id: string; projectId: string; expiresAt: string }> {
+  }): Promise<{
+    id: string;
+    projectId: string;
+    projectName: string;
+    expiresAt: string;
+  }> {
     assertPermission(input.identity, input.projectId, "memberships:manage");
     const policy = await this.requirePolicy(input.projectId);
+    const project = await this.services.db
+      .selectFrom("projects")
+      .select("name")
+      .where("id", "=", input.projectId)
+      .where("tenant_id", "=", input.identity.tenantId)
+      .executeTakeFirstOrThrow();
     const roles = [...new Set(input.roles ?? [policy.default_role])];
     await this.validateRoles({
       identity: input.identity,
@@ -155,6 +166,7 @@ export class StockAdmissionService {
     return {
       id: row.id,
       projectId: row.project_id,
+      projectName: project.name,
       expiresAt: row.expires_at.toISOString(),
     };
   }

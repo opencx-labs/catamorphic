@@ -46,9 +46,11 @@ export function orderedChecks(details: PrDetails) {
 export function ReviewMetadata({
   details,
   label = "Pull request details",
+  company = false,
 }: {
   details: PrDetails;
   label?: string;
+  company?: boolean;
 }) {
   const checks = orderedChecks(details);
   const reviewers = latestReviews(details.reviews);
@@ -60,96 +62,113 @@ export function ReviewMetadata({
       <section>
         <h2 className="mb-2 font-medium text-fg-muted">Review status</h2>
         <p>
-          {details.reviewDecision?.replaceAll("_", " ").toLowerCase() ||
-            "Awaiting review"}
+          {details.state === "MERGED"
+            ? "Applied to project"
+            : details.state === "CLOSED"
+              ? "Closed"
+              : details.reviewDecision?.replaceAll("_", " ").toLowerCase() ||
+                (reviewers.length ? "Reviews received" : "Awaiting review")}
         </p>
       </section>
-      <section>
-        <h2 className="mb-2 font-medium text-fg-muted">Requested reviewers</h2>
-        {details.reviewRequests.length ? (
-          details.reviewRequests.map((person, index) => (
-            <p key={person.login ?? person.name ?? index} className="py-1">
-              {person.login ?? person.name ?? "Team reviewer"}
-            </p>
-          ))
-        ) : (
-          <p className="text-fg-faint">No reviewers requested</p>
-        )}
-      </section>
-      <section>
-        <h2 className="mb-2 font-medium text-fg-muted">Assignees</h2>
-        {details.assignees.length ? (
-          details.assignees.map((person, index) => (
-            <p key={person.login ?? index}>{person.login ?? person.name}</p>
-          ))
-        ) : (
-          <p className="text-fg-faint">Unassigned</p>
-        )}
-      </section>
-      <section>
-        <h2 className="mb-2 font-medium text-fg-muted">
-          Latest reviews · {reviewers.length}
-        </h2>
-        <div className="max-h-48 overflow-auto">
-          {reviewers.map((review, index) => (
-            <div
-              key={String(review.id ?? index)}
-              className="flex justify-between gap-2 py-1"
-            >
-              <p>{review.author?.login ?? "Reviewer"}</p>
-              <p className="text-fg-muted">
-                {review.state?.replaceAll("_", " ").toLowerCase()}
+      {(!company || details.reviewRequests.length > 0) && (
+        <section>
+          <h2 className="mb-2 font-medium text-fg-muted">
+            Requested reviewers
+          </h2>
+          {details.reviewRequests.length ? (
+            details.reviewRequests.map((person, index) => (
+              <p key={person.login ?? person.name ?? index} className="py-1">
+                {person.login ?? person.name ?? "Team reviewer"}
               </p>
-            </div>
-          ))}
-        </div>
-      </section>
-      <section>
-        <h2 className="mb-2 font-medium text-fg-muted">
-          CI checks ·{" "}
-          {checks.filter((c) => (c.conclusion ?? c.state) === "SUCCESS").length}
-          /{checks.length} passed
-        </h2>
-        {checks.length ? (
-          <div className="max-h-80 overflow-auto">
-            {checks.map((check) => {
-              const status =
-                check.conclusion || check.state || check.status || "Pending";
-              return (
-                <a
-                  key={
-                    check.detailsUrl ??
-                    check.targetUrl ??
-                    check.name ??
-                    check.context
-                  }
-                  href={check.detailsUrl || check.targetUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex min-w-0 items-start justify-between gap-3 rounded py-1.5 hover:bg-bg-overlay"
-                >
-                  <p className="min-w-0 flex-1 break-words">
-                    {check.name ?? check.context ?? "Check"}
-                  </p>
-                  <p
-                    className={
-                      status === "SUCCESS"
-                        ? "text-success"
-                        : ["FAILURE", "ERROR", "TIMED_OUT"].includes(status)
-                          ? "text-danger"
-                          : "text-fg-muted"
-                    }
-                  >
-                    {status.toLowerCase().replaceAll("_", " ")}
-                  </p>
-                </a>
-              );
-            })}
+            ))
+          ) : (
+            <p className="text-fg-faint">No reviewers requested</p>
+          )}
+        </section>
+      )}
+      {(!company || details.assignees.length > 0) && (
+        <section>
+          <h2 className="mb-2 font-medium text-fg-muted">Assignees</h2>
+          {details.assignees.length ? (
+            details.assignees.map((person, index) => (
+              <p key={person.login ?? index}>{person.login ?? person.name}</p>
+            ))
+          ) : (
+            <p className="text-fg-faint">Unassigned</p>
+          )}
+        </section>
+      )}
+      {(!company || reviewers.length > 0) && (
+        <section>
+          <h2 className="mb-2 font-medium text-fg-muted">
+            Latest reviews · {reviewers.length}
+          </h2>
+          <div className="max-h-48 overflow-auto">
+            {reviewers.map((review, index) => (
+              <div
+                key={String(review.id ?? index)}
+                className="flex justify-between gap-2 py-1"
+              >
+                <p>{review.author?.login ?? "Reviewer"}</p>
+                <p className="text-fg-muted">
+                  {review.state?.replaceAll("_", " ").toLowerCase()}
+                </p>
+              </div>
+            ))}
           </div>
-        ) : (
-          <p className="text-fg-faint">No checks reported</p>
-        )}
-      </section>
+        </section>
+      )}
+      {(!company || checks.length > 0) && (
+        <section>
+          <h2 className="mb-2 font-medium text-fg-muted">
+            {company ? "Project checks" : "CI checks"} ·{" "}
+            {
+              checks.filter((c) => (c.conclusion ?? c.state) === "SUCCESS")
+                .length
+            }
+            /{checks.length} passed
+          </h2>
+          {checks.length ? (
+            <div className="max-h-80 overflow-auto">
+              {checks.map((check) => {
+                const status =
+                  check.conclusion || check.state || check.status || "Pending";
+                return (
+                  <a
+                    key={
+                      check.detailsUrl ??
+                      check.targetUrl ??
+                      check.name ??
+                      check.context
+                    }
+                    href={check.detailsUrl || check.targetUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex min-w-0 items-start justify-between gap-3 rounded py-1.5 hover:bg-bg-overlay"
+                  >
+                    <p className="min-w-0 flex-1 break-words">
+                      {check.name ?? check.context ?? "Check"}
+                    </p>
+                    <p
+                      className={
+                        status === "SUCCESS"
+                          ? "text-success"
+                          : ["FAILURE", "ERROR", "TIMED_OUT"].includes(status)
+                            ? "text-danger"
+                            : "text-fg-muted"
+                      }
+                    >
+                      {status.toLowerCase().replaceAll("_", " ")}
+                    </p>
+                  </a>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-fg-faint">No checks reported</p>
+          )}
+        </section>
+      )}
     </aside>
   );
 }
@@ -209,9 +228,11 @@ export function discussionThreads(details: PrDetails) {
 function CommentIdentity({
   comment,
   reply = false,
+  allowExternalLinks = true,
 }: {
   comment: PrDetails["comments"][number];
   reply?: boolean;
+  allowExternalLinks?: boolean;
 }) {
   const timestamp = comment.createdAt ?? comment.submittedAt;
   return (
@@ -238,7 +259,7 @@ function CommentIdentity({
           })}
         </time>
       )}
-      {comment.url && (
+      {allowExternalLinks && comment.url && (
         <a
           href={comment.url}
           target="_blank"
@@ -259,6 +280,7 @@ export function ReviewDiscussion({
   focusedPath,
   onClearPath,
   onPostComment,
+  allowExternalLinks = true,
   draftKey = "review-comment",
   submitShortcut,
 }: {
@@ -271,6 +293,7 @@ export function ReviewDiscussion({
     body: string;
     replyTo?: number;
   }) => Promise<PrDetails["comments"][number]>;
+  allowExternalLinks?: boolean;
   draftKey?: string;
   submitShortcut?: { binding: string; label: string };
 }) {
@@ -301,7 +324,7 @@ export function ReviewDiscussion({
     <div className="mx-auto flex h-full min-h-0 w-full max-w-4xl flex-col">
       <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-6 py-4">
         <h2 className="text-sm font-medium">Discussion · {threads.length}</h2>
-        {url && (
+        {allowExternalLinks && url && (
           <a
             className="text-xs text-fg-muted hover:text-fg"
             href={`${url}#issuecomment-new`}
@@ -391,7 +414,10 @@ export function ReviewDiscussion({
                 </div>
               )}
               <div className="p-4">
-                <CommentIdentity comment={comment} />
+                <CommentIdentity
+                  comment={comment}
+                  allowExternalLinks={allowExternalLinks}
+                />
                 <div className="pl-8">
                   <CommentBody body={comment.body} />
                 </div>
@@ -402,7 +428,11 @@ export function ReviewDiscussion({
                   data-comment-id={reply.id}
                   className="min-w-0 border-t border-border px-4 py-3"
                 >
-                  <CommentIdentity comment={reply} reply />
+                  <CommentIdentity
+                    comment={reply}
+                    reply
+                    allowExternalLinks={allowExternalLinks}
+                  />
                   <div className="pl-8">
                     <CommentBody body={reply.body} />
                   </div>

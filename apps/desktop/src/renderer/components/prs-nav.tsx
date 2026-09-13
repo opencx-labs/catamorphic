@@ -36,6 +36,19 @@ export function PrsNav({
   const [prs, setPrs] = useState<PullRequestSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const [company, setCompany] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void desktopApi
+      .remoteStatus(projectId)
+      .then((status) => {
+        if (!cancelled) setCompany(Boolean(status));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
   useSidebarRefresh(() => setRefresh((value) => value + 1));
   const isEmpty = !error && prs !== null && prs.length === 0;
   useSidebarContent(
@@ -90,6 +103,7 @@ export function PrsNav({
   const inScope = (items: PullRequestSummary[]) =>
     items.filter(
       (pr) =>
+        company ||
         filter === "all" ||
         (filter === "created"
           ? pr.author === pr.viewerLogin
@@ -175,7 +189,11 @@ export function PrsNav({
     );
   if (!prs) return null;
   if (prs.length === 0) {
-    return <p className="sidebar-empty-state">No open pull requests.</p>;
+    return (
+      <p className="sidebar-empty-state">
+        {company ? "No proposals awaiting review." : "No open pull requests."}
+      </p>
+    );
   }
   return (
     <div className="flex flex-col gap-2">
@@ -184,23 +202,25 @@ export function PrsNav({
           {preferencesError}
         </p>
       )}
-      <fieldset className="flex gap-1 px-2" aria-label="Pull request scope">
-        {(["for-you", "created", "all"] as const).map((value) => (
-          <button
-            type="button"
-            key={value}
-            aria-pressed={filter === value}
-            onClick={() => setFilter(value)}
-            className={`rounded-md px-2 py-1 text-xs ${filter === value ? "bg-bg-overlay text-fg" : "text-fg-muted"}`}
-          >
-            {value === "for-you"
-              ? "For you"
-              : value === "created"
-                ? "Created"
-                : "All"}
-          </button>
-        ))}
-      </fieldset>
+      {!company && (
+        <fieldset className="flex gap-1 px-2" aria-label="Pull request scope">
+          {(["for-you", "created", "all"] as const).map((value) => (
+            <button
+              type="button"
+              key={value}
+              aria-pressed={filter === value}
+              onClick={() => setFilter(value)}
+              className={`rounded-md px-2 py-1 text-xs ${filter === value ? "bg-bg-overlay text-fg" : "text-fg-muted"}`}
+            >
+              {value === "for-you"
+                ? "For you"
+                : value === "created"
+                  ? "Created"
+                  : "All"}
+            </button>
+          ))}
+        </fieldset>
+      )}
       {filter === "for-you" &&
         prs.some((pr) => pr.reviewRequestsUnavailable) && (
           <p role="status" className="px-2 text-xs text-warning">

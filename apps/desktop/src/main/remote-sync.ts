@@ -1,4 +1,9 @@
+import { createApiClient } from "@catamorphic/api-client";
 import type {
+  PullRequestComment,
+  PullRequestDiscussion,
+  PullRequestFile,
+  PullRequestSummary,
   RemoteDocumentEntry,
   RemoteDocumentsClient,
   RemoteDocumentVersion,
@@ -94,6 +99,17 @@ export class RemoteAuthError extends Error {
 
 /** The documents client plus the two members' verbs beside it. */
 export interface RemoteProjectClient extends RemoteDocumentsClient {
+  proposalReview(
+    number: number,
+  ): Promise<{ proposal: PullRequestSummary; files: PullRequestFile[] }>;
+  listProposals(): Promise<PullRequestSummary[]>;
+  proposalFiles(number: number): Promise<PullRequestFile[]>;
+  proposalDiscussion(number: number): Promise<PullRequestDiscussion>;
+  proposalComment(input: {
+    number: number;
+    body: string;
+    replyTo?: number;
+  }): Promise<PullRequestComment>;
   me(): Promise<RemoteMe>;
   admit(input: { invitationId?: string }): Promise<void>;
   listRoles(): Promise<RemoteRole[]>;
@@ -177,6 +193,20 @@ export function httpDocumentsClient(args: {
     const response = await request(false);
     return response.status === 401 ? request(true) : response;
   };
+  const proposalClient = createApiClient({
+    baseUrl: args.serverUrl.replace(/\/api\/?$/, ""),
+    fetch: async (input, init) => {
+      const request = new Request(input, init);
+      return authorizedFetch(request.url, {
+        method: request.method,
+        headers: request.headers,
+        signal: request.signal,
+        ...(request.method === "GET" || request.method === "HEAD"
+          ? {}
+          : { body: await request.text() }),
+      });
+    },
+  });
   const q = (params: Record<string, string | number | undefined>) =>
     Object.entries(params)
       .filter(([, v]) => v !== undefined)
@@ -376,6 +406,49 @@ export function httpDocumentsClient(args: {
       );
       if (!response.ok) return fail(response, "Proposing changes");
       return (await response.json()) as RemoteProposalResult;
+    },
+    async proposalReview(number) {
+      const { data, response } = await proposalClient.GET(
+        "/api/projects/{projectId}/proposals/{number}",
+        { params: { path: { projectId: args.projectId, number } } },
+      );
+      if (!data) return fail(response, "Reading proposal");
+      return data;
+    },
+    async listProposals() {
+      const { data, response } = await proposalClient.GET(
+        "/api/projects/{projectId}/proposals",
+        { params: { path: { projectId: args.projectId } } },
+      );
+      if (!data) return fail(response, "Reading proposals");
+      return data;
+    },
+    async proposalDiscussion(number) {
+      const { data, response } = await proposalClient.GET(
+        "/api/projects/{projectId}/proposals/{number}/discussion",
+        { params: { path: { projectId: args.projectId, number } } },
+      );
+      if (!data) return fail(response, "Reading proposal discussion");
+      return data;
+    },
+    async proposalComment(input) {
+      const { data, response } = await proposalClient.POST(
+        "/api/projects/{projectId}/proposals/{number}/comments",
+        {
+          params: { path: { projectId: args.projectId, number: input.number } },
+          body: { body: input.body, replyTo: input.replyTo },
+        },
+      );
+      if (!data) return fail(response, "Posting proposal comment");
+      return data;
+    },
+    async proposalFiles(number) {
+      const { data, response } = await proposalClient.GET(
+        "/api/projects/{projectId}/proposals/{number}/files",
+        { params: { path: { projectId: args.projectId, number } } },
+      );
+      if (!data) return fail(response, "Reading proposal files");
+      return data;
     },
     async history(relative) {
       const response = await authorizedFetch(

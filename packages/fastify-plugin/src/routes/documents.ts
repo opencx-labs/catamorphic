@@ -18,7 +18,13 @@ import {
   DocumentVersionSchema,
   ErrorSchema,
   ProjectIdParamsSchema,
+  ProposalCommentInputSchema,
+  ProposalCommentSchema,
+  ProposalDiscussionSchema,
+  ProposalFileSchema,
   ProposalResultSchema,
+  ProposalReviewSchema,
+  ProposalSummarySchema,
   ProposeChangeSchema,
   WriteDocumentSchema,
 } from "../schemas.js";
@@ -381,6 +387,141 @@ export function registerDocumentRoutes(
         return reply.status(201).send(result);
       } catch (err) {
         return handleErrors(err, reply);
+      }
+    },
+  });
+  typed.route({
+    method: "GET",
+    url: "/projects/:projectId/proposals",
+    schema: {
+      params: ProjectIdParamsSchema,
+      response: {
+        200: z.array(ProposalSummarySchema),
+        403: ErrorSchema,
+        404: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      if (!ctx.features.proposals)
+        return reply
+          .status(403)
+          .send({ error: "Proposals are turned off on this server" });
+      return core().proposals.list({
+        identity: resolveIdentity(request),
+        projectId: request.params.projectId,
+      });
+    },
+  });
+  typed.route({
+    method: "GET",
+    url: "/projects/:projectId/proposals/:number",
+    schema: {
+      params: ProjectIdParamsSchema.extend({
+        number: z.coerce.number().int().positive(),
+      }),
+      response: {
+        200: ProposalReviewSchema,
+        400: ErrorSchema,
+        403: ErrorSchema,
+        404: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      if (!ctx.features.proposals)
+        return reply
+          .status(403)
+          .send({ error: "Proposals are turned off on this server" });
+      try {
+        return await core().proposals.read({
+          identity: resolveIdentity(request),
+          ...request.params,
+        });
+      } catch (error) {
+        return handleErrors(error, reply);
+      }
+    },
+  });
+  typed.route({
+    method: "GET",
+    url: "/projects/:projectId/proposals/:number/files",
+    schema: {
+      params: ProjectIdParamsSchema.extend({
+        number: z.coerce.number().int().positive(),
+      }),
+      response: {
+        200: z.array(ProposalFileSchema),
+        403: ErrorSchema,
+        404: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      if (!ctx.features.proposals)
+        return reply
+          .status(403)
+          .send({ error: "Proposals are turned off on this server" });
+      return core().proposals.files({
+        identity: resolveIdentity(request),
+        projectId: request.params.projectId,
+        number: request.params.number,
+      });
+    },
+  });
+  typed.route({
+    method: "GET",
+    url: "/projects/:projectId/proposals/:number/discussion",
+    schema: {
+      params: ProjectIdParamsSchema.extend({
+        number: z.coerce.number().int().positive(),
+      }),
+      response: {
+        200: ProposalDiscussionSchema,
+        403: ErrorSchema,
+        404: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      if (!ctx.features.proposals)
+        return reply
+          .status(403)
+          .send({ error: "Proposals are turned off on this server" });
+      try {
+        return await core().proposals.discussion({
+          identity: resolveIdentity(request),
+          ...request.params,
+        });
+      } catch (error) {
+        return handleErrors(error, reply);
+      }
+    },
+  });
+  typed.route({
+    method: "POST",
+    url: "/projects/:projectId/proposals/:number/comments",
+    schema: {
+      params: ProjectIdParamsSchema.extend({
+        number: z.coerce.number().int().positive(),
+      }),
+      body: ProposalCommentInputSchema,
+      response: {
+        200: ProposalCommentSchema,
+        400: ErrorSchema,
+        403: ErrorSchema,
+        404: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      if (!ctx.features.proposals)
+        return reply
+          .status(403)
+          .send({ error: "Proposals are turned off on this server" });
+      try {
+        return await core().proposals.comment({
+          identity: resolveIdentity(request),
+          ...request.params,
+          ...request.body,
+        });
+      } catch (error) {
+        return handleErrors(error, reply);
       }
     },
   });

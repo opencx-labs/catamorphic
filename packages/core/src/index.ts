@@ -191,6 +191,8 @@ export {
 } from "./services/client-runners-service.js";
 export type {
   CodeHost,
+  PullRequestComment,
+  PullRequestDiscussion,
   PullRequestFile,
   PullRequestSummary,
 } from "./services/code-host.js";

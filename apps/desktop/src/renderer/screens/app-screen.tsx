@@ -31,6 +31,8 @@ export function useApps(projectId: string | undefined) {
       const result = await apiClient.GET("/api/projects/{projectId}/apps", {
         params: { path: { projectId: projectId ?? "" } },
       });
+      // Source listing is builder-only; scoped members open granted app surfaces.
+      if (result.response.status === 403) return [];
       if (!result.data) throw new Error("Failed to list apps");
       return result.data;
     },

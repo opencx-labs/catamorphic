@@ -521,6 +521,10 @@ export class CodexAppServer {
       push({ type: "thread.started", thread_id: threadId });
       const started = await this.request("turn/start", {
         threadId,
+        // Resuming an already loaded thread keeps its previous configuration.
+        // Apply the host's live checkout assignment to every turn, including
+        // switches between the project folder and a managed worktree.
+        cwd: options.workingDirectory,
         effort: options.modelReasoningEffort,
         input:
           typeof input === "string"

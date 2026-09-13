@@ -1,13 +1,17 @@
 import type { DB } from "@catamorphic/db";
 import {
+  fetchFromRemote,
   type NetworkSyncResult,
   type ProjectManager,
+  PushNotFastForwardError,
+  push,
   pushToRemote,
   syncWithNetworkRemote,
 } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely } from "kysely";
-import type { Identity } from "../identity.js";
+import { type Identity, isBuilder } from "../identity.js";
+import { AccessDeniedError } from "./artifact-scope.js";
 import type {
   CodeHost,
   PullRequestFile,
@@ -49,6 +53,71 @@ export class RemoteSyncService {
     private readonly projectManager: ProjectManager,
     private readonly hosts: CodeHost[],
   ) {}
+
+  /** Download accepted code-host changes without publishing a member's work. */
+  async syncPublished(input: {
+    identity: Identity;
+    projectId: string;
+  }): Promise<RemoteSyncOutcome> {
+    const { identity, projectId } = input;
+    if (!isBuilder(identity, projectId)) throw new AccessDeniedError();
+    const key = `published:${projectId}`;
+    const existing = this.inflight.get(key);
+    if (existing) return existing;
+    const run = withSpan(
+      {
+        tracer,
+        name: "project.remote.sync_published",
+        attributes: {
+          "catamorphic.project.id": projectId,
+          "catamorphic.tenant.id": identity.tenantId,
+        },
+      },
+      async (): Promise<RemoteSyncOutcome> => {
+        const remote = this.projectManager.remoteBackend;
+        const row = await this.projectRow(identity, projectId);
+        if (!remote || !row?.remote_url) return { status: "no-remote" };
+        const dev = await this.projectManager.openEphemeral({
+          tenantId: identity.tenantId,
+          projectId,
+        });
+        try {
+          const localSha = await dev.resolveRef();
+          const fetched = await fetchFromRemote({
+            repoPath: dev.repoPath,
+            url: row.remote_url,
+            credentials: await this.credentialsFor(identity, row.remote_url),
+            branch: row.remote_branch ?? "main",
+          });
+          const remoteSha = fetched.sha;
+          if (!remoteSha) return { status: "no-op", localSha, remoteSha };
+          if (remoteSha === localSha)
+            return { status: "up-to-date", localSha, remoteSha };
+          try {
+            await push({
+              dev,
+              remote,
+              tenantId: identity.tenantId,
+              projectId,
+              remoteBranch: "main",
+              localSha: remoteSha,
+            });
+          } catch (error) {
+            if (error instanceof PushNotFastForwardError) {
+              // Never resolve divergence by pushing unreviewed server work to GitHub.
+              return { status: "diverged", localSha, remoteSha };
+            }
+            throw error;
+          }
+          return { status: "pulled", localSha: remoteSha, remoteSha };
+        } finally {
+          await dev.dispose();
+        }
+      },
+    ).finally(() => this.inflight.delete(key));
+    this.inflight.set(key, run);
+    return run;
+  }
 
   /**
    * Run the sync policy now. Never throws for the routine outcomes —

@@ -11,7 +11,7 @@ import {
   LoaderCircle,
   Server,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import type { SessionCheckoutInfo } from "../lib/desktop-api.js";
 import { ChatGlyph } from "./chat-icon.js";
 import { HarnessIcon } from "./harness-icon.js";
@@ -39,6 +39,7 @@ export function SessionInspector({
   environmentControl,
   onManageConnections,
   checkout,
+  onUseProjectFolder,
   incognito,
   openRequest,
   onInspect,
@@ -69,6 +70,7 @@ export function SessionInspector({
   environmentControl?: ReactNode;
   onManageConnections?: () => void;
   checkout: SessionCheckoutInfo | null;
+  onUseProjectFolder?: () => Promise<void>;
   incognito: boolean;
   openRequest?: number;
   onInspect?: () => void;
@@ -131,6 +133,7 @@ export function SessionInspector({
                 : undefined
             }
             checkout={checkout}
+            onUseProjectFolder={onUseProjectFolder}
             incognito={incognito}
             moving={moving}
             model={model}
@@ -224,6 +227,7 @@ export function SessionInspectorContent({
   environmentControl,
   onManageConnections,
   checkout,
+  onUseProjectFolder,
   incognito,
   moving = false,
   model = "Automatic",
@@ -247,6 +251,7 @@ export function SessionInspectorContent({
   environmentControl?: ReactNode;
   onManageConnections?: () => void;
   checkout: SessionCheckoutInfo | null;
+  onUseProjectFolder?: () => Promise<void>;
   incognito: boolean;
   moving?: boolean;
   model?: string;
@@ -264,6 +269,8 @@ export function SessionInspectorContent({
   archived?: boolean;
   onOpenParent?: () => void;
 }) {
+  const [changingFolder, setChangingFolder] = useState(false);
+  const [folderError, setFolderError] = useState<string | null>(null);
   const state = archived
     ? "Archived"
     : !session
@@ -351,8 +358,45 @@ export function SessionInspectorContent({
             </dd>
           </>
         )}
-        {checkoutLabel ? (
-          <InspectorRow label="Checkout" value={checkoutLabel} />
+        {checkoutLabel && checkout ? (
+          <>
+            <InspectorRow label="Checkout" value={checkoutLabel} />
+            <dt className="text-fg-faint">Folder</dt>
+            <dd className="min-w-0 break-all text-fg-muted">
+              {checkout.path}
+              {onUseProjectFolder && (
+                <div className="mt-2 space-y-1">
+                  <button
+                    type="button"
+                    disabled={changingFolder || session?.running}
+                    className="cursor-pointer text-accent hover:underline disabled:cursor-default disabled:opacity-50"
+                    onClick={async () => {
+                      setChangingFolder(true);
+                      setFolderError(null);
+                      try {
+                        await onUseProjectFolder();
+                      } catch (error) {
+                        setFolderError(
+                          error instanceof Error
+                            ? error.message
+                            : "Could not change the working folder",
+                        );
+                      } finally {
+                        setChangingFolder(false);
+                      }
+                    }}
+                  >
+                    {changingFolder ? "Changing folder…" : "Use project folder"}
+                  </button>
+                  <p className="break-normal text-fg-faint">
+                    Future work uses the project folder. Existing files stay
+                    here.
+                  </p>
+                  {folderError && <p role="alert">{folderError}</p>}
+                </div>
+              )}
+            </dd>
+          </>
         ) : null}
         {incognito ? <InspectorRow label="Privacy" value="Incognito" /> : null}
         {session?.handoffStatus === "pending" ? (

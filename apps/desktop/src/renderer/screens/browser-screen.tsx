@@ -12,6 +12,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { OpenMode } from "../../shared/open-mode.js";
+import { AuthorizationInspector } from "../components/authorization-inspector.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
 import {
   type Bookmark,
@@ -981,6 +982,8 @@ export function BrowserScreen({
           </div>
         )}
       </div>
+
+      <AuthorizationInspector />
 
       {/* Bookmark star, Chrome-style: filled means saved, click toggles. */}
       {firstUrl && (

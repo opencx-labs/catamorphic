@@ -93,9 +93,8 @@ export const DEFAULT_SIDEBAR_CONFIG: SidebarConfig = {
     },
     {
       id: "reviews",
-      title: "Pull requests",
+      title: "Proposals",
       icon: "GitPullRequest",
-      when: { builder: true },
       sections: [{ id: "prs", type: "prs" }],
     },
   ],

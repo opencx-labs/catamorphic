@@ -15,6 +15,10 @@ const RoleSlugSchema = z
 export const ProvisionStockProjectInputSchema = z
   .strictObject({
     name: z.string().trim().min(1).max(200),
+    githubRepository: z
+      .string()
+      .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)
+      .optional(),
     roles: z
       .array(
         z.strictObject({
@@ -55,6 +59,13 @@ export type ProvisionStockProjectInput = z.infer<
 >;
 
 interface StockProjectProvisioningServices {
+  github?: {
+    importRepo(
+      identity: Identity,
+      input: { name: string; fullName: string },
+    ): Promise<Project>;
+    pushProject(identity: Identity, projectId: string): Promise<void>;
+  };
   projects: {
     create(identity: Identity, input: { name: string }): Promise<Project>;
   };
@@ -83,12 +94,27 @@ interface StockProjectProvisioningServices {
 export async function provisionStockProject(args: {
   services: StockProjectProvisioningServices;
   operatorIdentity: Identity;
+  githubIdentity?: Identity;
   input: ProvisionStockProjectInput;
 }): Promise<{ project: Project }> {
   const parsed = ProvisionStockProjectInputSchema.parse(args.input);
-  const project = await args.services.projects.create(args.operatorIdentity, {
-    name: parsed.name,
-  });
+  if (
+    parsed.githubRepository &&
+    (!args.services.github || !args.githubIdentity)
+  ) {
+    throw new Error(
+      "Configure the server's GitHub connection before importing a company repository",
+    );
+  }
+  const project =
+    parsed.githubRepository && args.services.github && args.githubIdentity
+      ? await args.services.github.importRepo(args.githubIdentity, {
+          name: parsed.name,
+          fullName: parsed.githubRepository,
+        })
+      : await args.services.projects.create(args.operatorIdentity, {
+          name: parsed.name,
+        });
   const files = Object.fromEntries(
     [...parsed.roles]
       .sort((left, right) => left.slug.localeCompare(right.slug))
@@ -104,6 +130,9 @@ export async function provisionStockProject(args: {
     { message: "Configure project roles", files },
   );
   args.services.roles.invalidate(project.id);
+  if (parsed.githubRepository && args.services.github && args.githubIdentity) {
+    await args.services.github.pushProject(args.githubIdentity, project.id);
+  }
   await args.services.admission.setPolicy({
     identity: args.operatorIdentity,
     projectId: project.id,

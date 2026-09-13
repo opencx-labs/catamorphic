@@ -28,6 +28,19 @@ interface RawRepo {
   pushed_at: string | null;
 }
 
+interface RawPullRequest {
+  number: number;
+  title: string;
+  html_url: string;
+  user: { login: string } | null;
+  head: { ref: string; sha?: string };
+  body?: string | null;
+  requested_reviewers?: Array<{ login: string }>;
+  base: { ref: string };
+  draft: boolean;
+  updated_at: string;
+}
+
 interface RawWatchPull {
   id: number;
   number: number;
@@ -71,6 +84,52 @@ interface RawCheckSuite {
   updated_at: string;
   app: { slug: string } | null;
   [key: string]: unknown;
+}
+
+interface RawDiscussionComment {
+  id: number;
+  body: string;
+  user: { login: string } | null;
+  created_at?: string;
+  submitted_at?: string;
+  html_url: string;
+  state?: string;
+  path?: string;
+  line?: number | null;
+  in_reply_to_id?: number;
+  diff_hunk?: string;
+  side?: "LEFT" | "RIGHT";
+}
+
+function pullRequestSummary(pr: RawPullRequest): GithubPullRequest {
+  return {
+    number: pr.number,
+    body: pr.body ?? "",
+    headSha: pr.head.sha,
+    requestedReviewers: pr.requested_reviewers?.map((user) => user.login) ?? [],
+    title: pr.title,
+    url: pr.html_url,
+    author: pr.user?.login ?? "unknown",
+    head: pr.head.ref,
+    base: pr.base.ref,
+    draft: pr.draft,
+    updatedAt: pr.updated_at,
+  };
+}
+
+function discussionComment(raw: RawDiscussionComment) {
+  return {
+    id: raw.id,
+    body: raw.body ?? "",
+    author: raw.user,
+    createdAt: raw.created_at ?? raw.submitted_at ?? "",
+    url: raw.html_url,
+    ...(raw.state ? { state: raw.state } : {}),
+    ...(raw.path ? { path: raw.path, line: raw.line } : {}),
+    ...(raw.in_reply_to_id ? { replyToId: raw.in_reply_to_id } : {}),
+    ...(raw.diff_hunk ? { diffHunk: raw.diff_hunk } : {}),
+    ...(raw.side ? { side: raw.side } : {}),
+  };
 }
 
 /** Minimal REST client bound to one user access token. */
@@ -176,6 +235,116 @@ export class GithubApi {
     return { url: raw.html_url, number: raw.number };
   }
 
+  async pullRequestDiscussion(input: { fullName: string; number: number }) {
+    const base = `/repos/${input.fullName}`;
+    const pull = await this.request<{
+      state: string;
+      merged: boolean;
+      head: { sha: string };
+      assignees: Array<{ login: string }>;
+      requested_reviewers: Array<{ login: string }>;
+    }>(`${base}/pulls/${input.number}`);
+    const [reviews, comments, inlineComments, checks] = await Promise.all([
+      this.requestPages<RawDiscussionComment>(
+        `${base}/pulls/${input.number}/reviews`,
+      ),
+      this.requestPages<RawDiscussionComment>(
+        `${base}/issues/${input.number}/comments`,
+      ),
+      this.requestPages<RawDiscussionComment>(
+        `${base}/pulls/${input.number}/comments`,
+      ),
+      this.request<{
+        check_runs: Array<{
+          name: string;
+          status: string;
+          conclusion: string | null;
+          html_url: string;
+        }>;
+      }>(`${base}/commits/${pull.head.sha}/check-runs?per_page=100`),
+    ]);
+    return {
+      state: pull.merged ? "MERGED" : pull.state.toUpperCase(),
+      reviewDecision: null,
+      assignees: pull.assignees.map(({ login }) => ({ login })),
+      reviewRequests: pull.requested_reviewers.map(({ login }) => ({ login })),
+      reviews: reviews.map(discussionComment),
+      comments: comments.map(discussionComment),
+      inlineComments: inlineComments.map(discussionComment),
+      inlineCommentsUnavailable: false,
+      statusCheckRollup: checks.check_runs.map((check) => ({
+        name: check.name,
+        status: check.status.toUpperCase(),
+        conclusion: check.conclusion?.toUpperCase() ?? null,
+        detailsUrl: check.html_url,
+      })),
+    };
+  }
+
+  async commentOnPullRequest(input: {
+    fullName: string;
+    number: number;
+    body: string;
+    replyTo?: number;
+  }) {
+    const endpoint = input.replyTo
+      ? `/repos/${input.fullName}/pulls/${input.number}/comments/${input.replyTo}/replies`
+      : `/repos/${input.fullName}/issues/${input.number}/comments`;
+    return discussionComment(
+      await this.request<RawDiscussionComment>(endpoint, {
+        method: "POST",
+        body: { body: input.body },
+      }),
+    );
+  }
+
+  /** Tie each review to the exact revision the reviewer inspected. */
+  async reviewPullRequest(input: {
+    fullName: string;
+    number: number;
+    headSha: string;
+    decision: "APPROVE" | "REQUEST_CHANGES";
+    body: string;
+  }): Promise<void> {
+    const current = await this.request<{
+      state: string;
+      head: { sha: string };
+    }>(`/repos/${input.fullName}/pulls/${input.number}`);
+    if (current.state !== "open" || current.head.sha !== input.headSha)
+      throw new Error(
+        "This proposal changed since you opened it. Refresh and review the latest changes.",
+      );
+    await this.request(
+      `/repos/${input.fullName}/pulls/${input.number}/reviews`,
+      {
+        method: "POST",
+        body: {
+          commit_id: input.headSha,
+          event: input.decision,
+          body: input.body,
+        },
+      },
+    );
+  }
+
+  async mergePullRequest(input: {
+    fullName: string;
+    number: number;
+    headSha: string;
+  }): Promise<{ sha: string }> {
+    const result = await this.request<{
+      merged: boolean;
+      sha: string;
+      message: string;
+    }>(`/repos/${input.fullName}/pulls/${input.number}/merge`, {
+      method: "PUT",
+      body: { sha: input.headSha, merge_method: "squash" },
+    });
+    if (!result.merged)
+      throw new Error(result.message || "The proposal could not be applied");
+    return { sha: result.sha };
+  }
+
   /** GitHub includes direct and team requests in review-requested:@me. */
   private async requestedReviewNumbers(fullName: string): Promise<Set<number>> {
     const numbers = new Set<number>();
@@ -202,18 +371,9 @@ export class GithubApi {
     if (!/^[\w.-]+\/[\w.-]+$/.test(fullName)) {
       throw new GithubApiError(400, `Invalid repository name: ${fullName}`);
     }
-    const raw = await this.requestPages<{
-      number: number;
-      title: string;
-      html_url: string;
-      user: { login: string } | null;
-      head: { ref: string; sha?: string };
-      body?: string | null;
-      requested_reviewers?: Array<{ login: string }>;
-      base: { ref: string };
-      draft: boolean;
-      updated_at: string;
-    }>(`/repos/${fullName}/pulls?state=open&sort=updated&direction=desc`);
+    const raw = await this.requestPages<RawPullRequest>(
+      `/repos/${fullName}/pulls?state=open&sort=updated&direction=desc`,
+    );
     const requested = raw.length
       ? await this.requestedReviewNumbers(fullName).catch(() => undefined)
       : new Set<number>();
@@ -221,19 +381,26 @@ export class GithubApi {
       ...(requested
         ? { reviewRequestedForViewer: requested.has(pr.number) }
         : { reviewRequestsUnavailable: true }),
-      number: pr.number,
-      body: pr.body ?? "",
-      headSha: pr.head.sha,
-      requestedReviewers:
-        pr.requested_reviewers?.map((user) => user.login) ?? [],
-      title: pr.title,
-      url: pr.html_url,
-      author: pr.user?.login ?? "unknown",
-      head: pr.head.ref,
-      base: pr.base.ref,
-      draft: pr.draft,
-      updatedAt: pr.updated_at,
+      ...pullRequestSummary(pr),
     }));
+  }
+
+  /** Read an individual pull request, including completed proposals. */
+  async pullRequest(input: {
+    fullName: string;
+    number: number;
+  }): Promise<GithubPullRequest> {
+    if (
+      !/^[\w.-]+\/[\w.-]+$/.test(input.fullName) ||
+      !Number.isSafeInteger(input.number) ||
+      input.number <= 0
+    )
+      throw new GithubApiError(400, "Invalid pull request");
+    return pullRequestSummary(
+      await this.request<RawPullRequest>(
+        `/repos/${input.fullName}/pulls/${input.number}`,
+      ),
+    );
   }
 
   /** Changed files of a pull request, with unified-diff patches. */

@@ -557,11 +557,13 @@ function ChatDockContent({
   );
   const visibleWatchers = watcherQuery.data?.items ?? [];
   const activeEnvironment = chat.session?.environment ?? selectedEnvironment;
+  const activeEnvironmentItem = environmentQuery.data?.items.find(
+    (item) => item.name === activeEnvironment,
+  );
   const activeEnvironmentLabel =
-    environmentQuery.data?.items.find((item) => item.name === activeEnvironment)
-      ?.label ??
-    activeEnvironment ??
-    "Default";
+    authority && !activeEnvironmentItem?.clientRequired
+      ? `Company server (${activeEnvironmentItem?.label ?? activeEnvironment ?? "default"})`
+      : (activeEnvironmentItem?.label ?? activeEnvironment ?? "This device");
   const isIncognito = Boolean(entry.incognito);
   const [remoteCheckNonce, setRemoteCheckNonce] = useState(0);
   const wasSendingRef = useRef(chat.isSending);
@@ -2065,7 +2067,20 @@ function ChatDockContent({
                 harness={activeAgent?.harness ?? chat.session?.provider}
                 provider={activeAgent?.provider}
                 environmentControl={
-                  chat.session?.environment ? (
+                  authority &&
+                  chat.sessionId &&
+                  compatibleEnvironments.length > 1 ? (
+                    <AgentEnvironmentControl
+                      projectId={projectId}
+                      sessionId={chat.sessionId}
+                      agentId={chat.session?.agentId ?? undefined}
+                      currentEnvironment={
+                        chat.session?.environment ?? undefined
+                      }
+                      currentEnvironmentLabel={activeEnvironmentLabel}
+                      busy={chat.isWorking}
+                    />
+                  ) : chat.session?.environment ? (
                     <span
                       className="flex min-w-0 items-center gap-1.5 text-fg"
                       data-testid="chat-environment-badge"
@@ -2158,6 +2173,17 @@ function ChatDockContent({
                       : undefined
                 }
                 checkout={checkout}
+                onUseProjectFolder={
+                  checkout && activeSessionId && !authority
+                    ? async () => {
+                        await desktopApi.sessionUseProjectFolder({
+                          projectId,
+                          sessionId: activeSessionId,
+                        });
+                        setCheckout(null);
+                      }
+                    : undefined
+                }
                 incognito={isIncognito}
                 openRequest={(inspectRequestNonce ?? 0) + localInspectorNonce}
                 moving={moveState.moving}
@@ -2405,17 +2431,6 @@ function ChatDockContent({
                 />
               </div>
             )}
-            {authority && chat.sessionId && (
-              <div className="mx-3 mb-2">
-                <AgentEnvironmentControl
-                  projectId={projectId}
-                  sessionId={chat.sessionId}
-                  agentId={chat.session?.agentId ?? undefined}
-                  currentEnvironment={chat.session?.environment ?? undefined}
-                  busy={chat.isWorking}
-                />
-              </div>
-            )}
             {authority &&
               !chat.sessionId &&
               catalog.data?.startingActions.map((action) => (
@@ -2459,6 +2474,51 @@ function ChatDockContent({
                 </select>
               </label>
             )}
+            {authority && !chat.sessionId && catalog.isError && (
+              <div role="alert" className="mx-3 mb-2 text-xs text-danger">
+                <p>Could not load this project's assistants.</p>
+                <button
+                  type="button"
+                  className="mt-1 underline"
+                  onClick={() => void catalog.refetch()}
+                >
+                  Try again
+                </button>
+              </div>
+            )}
+            {authority &&
+              !chat.sessionId &&
+              catalog.data &&
+              !catalog.isError &&
+              !catalog.data.items.some((agent) => agent.available) && (
+                <div role="status" className="mx-3 mb-2 text-xs text-fg-muted">
+                  <p>No assistant is ready for this project.</p>
+                  {catalog.data.items.map((agent) => (
+                    <p key={agent.id} className="mt-1">
+                      {agent.reason ??
+                        (agent.environments.items.some((item) => item.allowed)
+                          ? "An allowed place to run is unavailable. Connect this device below if offered, or ask the project builder to check execution settings."
+                          : "Ask the project builder to give your role access to a place to run the assistant.")}
+                    </p>
+                  ))}
+                  {catalog.data.items.length === 0 && (
+                    <p className="mt-1">
+                      Ask the project builder to enable an assistant for your
+                      role.
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    className="mt-1 underline"
+                    onClick={() => {
+                      void catalog.refetch();
+                      void environmentQuery.refetch();
+                    }}
+                  >
+                    Check again
+                  </button>
+                </div>
+              )}
             {authority &&
               environmentQuery.data?.items
                 .filter(
@@ -2499,11 +2559,11 @@ function ChatDockContent({
                       }}
                       className="rounded border border-border px-2 py-1"
                     >
-                      Connect This machine
+                      Connect this device
                     </PendingButton>
                     <p className="mt-1">
-                      Use this desktop's sandbox. Project permissions and
-                      conversation history stay on the server.
+                      Let the assistant work on this device. Project permissions
+                      and conversation history stay on the company server.
                     </p>
                   </div>
                 ))}

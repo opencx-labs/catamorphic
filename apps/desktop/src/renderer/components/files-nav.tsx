@@ -127,7 +127,9 @@ export function isVisibleProjectFile(
     !path.startsWith(".git/") &&
     !path.startsWith("node_modules/") &&
     path !== ".catamorphic/remote.json" &&
-    (!contentOnly || path.startsWith("store/"))
+    (!contentOnly ||
+      !path.startsWith(".") ||
+      path.startsWith(".catamorphic/personal/"))
   );
 }
 

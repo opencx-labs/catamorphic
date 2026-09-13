@@ -20,7 +20,6 @@ import {
   PanelLeft,
   PanelRight,
   Settings as SettingsIcon,
-  Share2,
   Sparkles,
   Wand2,
 } from "lucide-react";
@@ -644,13 +643,6 @@ export function App({
   // Profiles whose auto-opened setup tab the user closed this session —
   // closing it skips setup (the modal still gates chat attempts).
   const setupDismissedRef = useRef(new Set<string>());
-  const hasAgents = (agentsData?.agents.length ?? 0) > 0;
-  /** True = chat may start; false = the wizard modal took over. */
-  const requireAgents = (): boolean => {
-    if (agentsData === null || hasAgents) return true;
-    setWizardModalOpen(true);
-    return false;
-  };
 
   // In-place profile switch: a full-window veil fades up, the workspace
   // swaps beneath it, and the veil fades away (see switchProfile).
@@ -703,6 +695,20 @@ export function App({
   const remoteSurfaceStatus = remoteSurfaceResolved
     ? (remoteSurfaceState?.status ?? null)
     : null;
+  const hasAgents =
+    Boolean(remoteSurfaceStatus) || (agentsData?.agents.length ?? 0) > 0;
+  /** True = chat may start; false = the wizard modal took over. */
+  const requireAgents = (): boolean => {
+    if (
+      (projectId && !remoteSurfaceResolved) ||
+      agentsData === null ||
+      hasAgents
+    )
+      return true;
+    setWizardModalOpen(true);
+    return false;
+  };
+
   const memberShell = !remoteSurfaceResolved
     ? true
     : remoteSurfaceStatus !== null &&
@@ -1842,7 +1848,6 @@ export function App({
   // (skill palette rows, post-auth continuations) speaks into an already
   // open chat. Sends queue behind an in-flight turn like composer sends.
   const chatSendersRef = useRef(new Map<string, (message: string) => void>());
-  const editorShareHandlersRef = useRef(new Map<string, () => Promise<void>>());
 
   // Webview guest WebContents ids per browser tab — the agent bridge
   // drives pages from the main process by guest id.
@@ -2125,7 +2130,13 @@ export function App({
   // Agent-less profiles greet the user with the setup wizard as a real,
   // closable tab: close it to skip; it returns as a modal on chat attempts.
   useEffect(() => {
-    if (!projectId || !workspaceReady || agentsData === null || hasAgents)
+    if (
+      !projectId ||
+      !remoteSurfaceResolved ||
+      !workspaceReady ||
+      agentsData === null ||
+      hasAgents
+    )
       return;
     if (!activeProfileId || setupDismissedRef.current.has(activeProfileId)) {
       return;
@@ -2143,6 +2154,7 @@ export function App({
   }, [
     projectId,
     workspaceReady,
+    remoteSurfaceResolved,
     agentsData,
     hasAgents,
     activeProfileId,
@@ -2424,7 +2436,10 @@ export function App({
         for (const browser of ws.browsers) {
           // The callback path specifically: with a fixed port (Slack's
           // 3118) a bare origin match could close a dev-server tab.
-          if (browser.url.startsWith(`${prefix}/callback`)) {
+          if (
+            browser.initialUrl === prefix ||
+            browser.url.startsWith(`${prefix}/callback`)
+          ) {
             closeTabRef.current(browserTabKey(browser.localId), {
               force: true,
             });
@@ -5226,42 +5241,6 @@ export function App({
               !tabsInSidebar &&
               workspaceTabBar}
             {projectId && tabsInSidebar && !headerInSidebar && workspaceTitle}
-            {(() => {
-              const editorId = workspace.activeTabKey?.startsWith("editor:")
-                ? workspace.activeTabKey.slice("editor:".length)
-                : undefined;
-              const editor = editorId
-                ? workspace.editors.find(
-                    (candidate) => candidate.localId === editorId,
-                  )
-                : undefined;
-              if (
-                !editor?.filePath?.startsWith("store/") ||
-                !remoteSurfaceStatus ||
-                remoteSurfaceStatus.capabilities?.features.publications ===
-                  false
-              ) {
-                return null;
-              }
-              return (
-                <ShortcutHint label="Share this file">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const share = editorShareHandlersRef.current.get(
-                        editor.localId,
-                      );
-                      if (share) void share().catch(() => undefined);
-                    }}
-                    className="app-no-drag grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors hover:bg-bg-overlay hover:text-fg"
-                    aria-label="Share this file"
-                    data-testid="surface-share"
-                  >
-                    <Share2 className="size-3.5" />
-                  </button>
-                </ShortcutHint>
-              );
-            })()}
             {!rightSidebarOpen && (
               <ShortcutHint
                 label="Expand right sidebar"
@@ -5672,20 +5651,44 @@ export function App({
                       projectId={projectId}
                       filePath={editor.filePath}
                       onFindFile={() => focusSearch("search-files", "files")}
+                      onSharePersonal={
+                        remoteSurfaceStatus
+                          ? (path, intent) => {
+                              sendToAgent(
+                                `${intent === "propose" ? "Prepare and submit a proposal to add" : "Prepare to publish"} my local file ${JSON.stringify(path)} to this company project. Read this file, choose a suitable shared location using the project conventions, and include only this file and any dependencies it needs. Keep my local original until sharing succeeds. ${intent === "publish" ? "Show me the audience before creating the publication." : "Submit through the company proposal service and show me the review link."}`,
+                                "float",
+                              );
+                            }
+                          : undefined
+                      }
                       onDirtyChange={(dirty) =>
                         onEditorState(editor.localId, { dirty })
                       }
-                      registerShare={(share) => {
-                        editorShareHandlersRef.current.set(
-                          editor.localId,
-                          share,
-                        );
-                      }}
-                      onShare={(path) =>
-                        setRemotePublish({
-                          path,
-                          features: remoteSurfaceStatus?.capabilities?.features,
-                        })
+                      onShare={
+                        editor.filePath?.startsWith("store/") &&
+                        remoteSurfaceStatus &&
+                        remoteSurfaceStatus.capabilities?.features
+                          .publications !== false
+                          ? (path) =>
+                              setRemotePublish({
+                                path,
+                                features:
+                                  remoteSurfaceStatus.capabilities?.features,
+                              })
+                          : undefined
+                      }
+                      onPropose={
+                        remoteSurfaceStatus &&
+                        remoteSurfaceStatus.capabilities?.features.proposals !==
+                          false &&
+                        !editor.filePath?.startsWith("store/")
+                          ? (path) =>
+                              setRemotePropose({
+                                files: [path],
+                                features:
+                                  remoteSurfaceStatus.capabilities?.features,
+                              })
+                          : undefined
                       }
                     />
                   </Suspense>
@@ -6166,11 +6169,11 @@ export function App({
         open={remoteConnect.open}
         link={remoteConnect.link}
         onClose={() => setRemoteConnect({ open: false, link: null })}
-        onConnected={(project) => {
-          setRemoteConnect({ open: false, link: null });
+        onConnected={async (project) => {
           if (activeProfile) {
-            void desktopApi.profilesClaimProject(activeProfile.id, project.id);
+            await desktopApi.profilesClaimProject(activeProfile.id, project.id);
           }
+          setRemoteConnect({ open: false, link: null });
           selectProject(project.id);
         }}
       />
@@ -6191,8 +6194,16 @@ export function App({
             projectId={projectId}
             open={remotePropose !== null}
             files={remotePropose?.files ?? []}
-            features={remotePropose?.features}
             onClose={() => setRemotePropose(null)}
+            onOpenProposal={({ number, title }) =>
+              openTab({
+                kind: "diff",
+                name: `review:${number}`,
+                label: `#${number} ${title}`,
+                projectId,
+                source: { type: "review", prNumber: number },
+              })
+            }
           />
         </>
       )}

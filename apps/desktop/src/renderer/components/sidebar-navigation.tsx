@@ -486,8 +486,8 @@ export function ConfiguredSection({
       case "prs":
         return (
           <SidebarSection
-            title={section.title ?? "Pull Requests"}
-            action={searchAction("Pull requests")}
+            title={section.title ?? "Proposals"}
+            action={searchAction("Proposals")}
             defaultOpen={defaultOpen}
           >
             <PrsNav

@@ -172,11 +172,19 @@ export class ProfilesStore {
 
   claimProject(profileId: string, projectId: string): void {
     const profile = this.get(profileId) ?? this.defaultProfile();
+    // Explicit ownership supersedes lazy adoption by the default profile.
+    // A project must never belong to two profiles with different credentials.
+    for (const other of this.data.profiles) {
+      if (other.id === profile.id) continue;
+      other.projectIds = other.projectIds.filter((id) => id !== projectId);
+      if (other.defaultProjectId === projectId)
+        other.defaultProjectId = other.projectIds[0];
+    }
     if (!profile.projectIds.includes(projectId)) {
       profile.projectIds.push(projectId);
       profile.defaultProjectId ??= projectId;
-      this.save();
     }
+    this.save();
   }
 
   releaseProject(projectId: string): void {

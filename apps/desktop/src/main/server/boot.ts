@@ -88,6 +88,10 @@ export interface EmbeddedServer {
   projectRoots: ProjectRootsStore;
   /** Desktop-local checkout assignment and Git worktree lifecycle. */
   sessionCheckouts: SessionCheckouts;
+  returnSessionToProjectFolder: (input: {
+    projectId: string;
+    sessionId: string;
+  }) => ReturnType<SessionCheckouts["returnPrimary"]>;
   /** Per-project open-workspace snapshots (tabs, chats, ordering). */
   workspaceStates: WorkspaceStateStore;
   /** Dynamic roster of configured agents (per-profile agents.json files). */
@@ -362,8 +366,6 @@ export async function startEmbeddedServer(
       userSkillInfos(profileConfig.userSkillsDir(profileId)),
     sessionPeers: (projectId, sessionId) =>
       sessionPeersResolver?.(projectId, sessionId) ?? Promise.resolve([]),
-    checkoutNotice: (_projectId, sessionId) =>
-      Promise.resolve(sessionCheckouts.takeRecoveryWarning(sessionId)),
   });
   if (e2eFakeAgent) {
     const agents = profileConfig.forDefaultProfile().agents;
@@ -760,6 +762,26 @@ export async function startEmbeddedServer(
       return service.replaceTodos(desktopIdentity, projectId, sessionId, items);
     },
   });
+  const returnSessionToProjectFolder = ({
+    projectId,
+    sessionId,
+  }: {
+    projectId: string;
+    sessionId: string;
+  }) =>
+    sessionCheckouts.withAssignmentLock({
+      projectId,
+      operation: async () => {
+        const root = projectRoots.getSync(projectId);
+        if (!root) throw new Error(`Project '${projectId}' has no folder`);
+        if (await requiresIsolatedCheckout(projectId, sessionId, root)) {
+          throw new Error(
+            "Isolation policy prevents using the project folder while another protected session is running there.",
+          );
+        }
+        return sessionCheckouts.returnPrimary({ projectId, sessionId });
+      },
+    });
   agentRegistry.workspaceToolkit?.setCheckoutBridge({
     current: (projectId, sessionId) =>
       sessionCheckouts.describe({ projectId, sessionId }),
@@ -798,19 +820,7 @@ export async function startEmbeddedServer(
         },
       }),
     returnToPrimary: (projectId, sessionId) =>
-      sessionCheckouts.withAssignmentLock({
-        projectId,
-        operation: async () => {
-          const root = projectRoots.getSync(projectId);
-          if (!root) throw new Error(`Project '${projectId}' has no folder`);
-          if (await requiresIsolatedCheckout(projectId, sessionId, root)) {
-            throw new Error(
-              "Isolation policy prevents using the primary checkout while another protected session is running there.",
-            );
-          }
-          return sessionCheckouts.returnPrimary({ projectId, sessionId });
-        },
-      }),
+      returnSessionToProjectFolder({ projectId, sessionId }),
   });
   agentRegistry.workspaceToolkit?.setSessionVisibility(
     async (_projectId, sessionId) =>
@@ -1288,6 +1298,7 @@ export async function startEmbeddedServer(
     catamorphic,
     projectRoots,
     sessionCheckouts,
+    returnSessionToProjectFolder,
     workspaceStates,
     agentRegistry,
     triggers,

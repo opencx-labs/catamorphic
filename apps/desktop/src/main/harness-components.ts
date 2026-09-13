@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
-import { createRequire } from "node:module";
+import { findPackageJSON } from "node:module";
 import path from "node:path";
 
 export type DownloadableHarness = "claude-code" | "codex";
@@ -304,18 +304,40 @@ function platformArtifacts(): Partial<
 }
 
 function resolveInstalled(artifact: HarnessArtifact): HarnessExecutable | null {
-  try {
-    const require = createRequire(import.meta.url);
-    const packageJson = require.resolve(
-      `${artifact.installedPackageName}/package.json`,
-    );
-    const root = path.dirname(packageJson);
-    const executable = path.join(root, artifact.executableRelativePath);
-    if (!fs.statSync(executable).isFile()) return null;
-    return executableAt(root, artifact, "installed");
-  } catch {
-    return null;
+  // Package managers keep the platform alias beside the Codex CLI, nested
+  // beneath the SDK. It is not necessarily visible from the desktop package.
+  const dependencyPaths = [
+    [artifact.installedPackageName],
+    ...(artifact.packageName === "@openai/codex"
+      ? [
+          [
+            "@catamorphic/codex",
+            "@openai/codex-sdk",
+            "@openai/codex",
+            artifact.installedPackageName,
+          ],
+        ]
+      : []),
+  ];
+  for (const dependencies of dependencyPaths) {
+    try {
+      let containingModule = import.meta.url;
+      for (const dependency of dependencies) {
+        const packageJson = findPackageJSON(dependency, containingModule);
+        if (!packageJson)
+          throw new Error("Optional component is not installed");
+        containingModule = fs.realpathSync(packageJson);
+      }
+      const root = path.dirname(containingModule);
+      const executable = path.join(root, artifact.executableRelativePath);
+      if (!fs.statSync(executable).isFile()) continue;
+      return executableAt(root, artifact, "installed");
+    } catch {
+      // An optional dependency may be absent in a packaged desktop. The
+      // integrity-pinned download remains the fallback in that case.
+    }
   }
+  return null;
 }
 
 function executableAt(

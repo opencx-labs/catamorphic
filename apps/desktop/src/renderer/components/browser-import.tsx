@@ -142,7 +142,8 @@ export function BrowserImport() {
             <Download className="size-4 text-fg-muted" /> Import browser data
           </h2>
           <p className="mt-1 text-xs leading-5 text-fg-muted">
-            Bring bookmarks and saved logins into this profile.
+            Bring bookmarks and passwords into this profile. Passkeys are not
+            imported.
           </p>
         </div>
         <ShortcutHint label="Scan again">

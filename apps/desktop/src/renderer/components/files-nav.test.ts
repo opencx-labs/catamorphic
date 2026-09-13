@@ -50,12 +50,16 @@ describe("buildTree", () => {
 });
 
 describe("isVisibleProjectFile", () => {
-  it("narrows a member shell to work products", () => {
+  it("shows downloaded work without internal setup files", () => {
     expect(isVisibleProjectFile("store/customers/acme/qbr.md", true)).toBe(
       true,
     );
-    expect(isVisibleProjectFile("apps/demo/index.tsx", true)).toBe(false);
-    expect(isVisibleProjectFile("workflows/follow-up.ts", true)).toBe(false);
+    expect(isVisibleProjectFile("playbooks/customer-checkin.md", true)).toBe(
+      true,
+    );
+    expect(isVisibleProjectFile(".agents/skills/setup/SKILL.md", true)).toBe(
+      false,
+    );
     expect(isVisibleProjectFile("apps/demo/index.tsx", false)).toBe(true);
   });
 });

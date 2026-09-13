@@ -4,6 +4,7 @@ import {
   defineAgentCapability,
   hasProjectPermission,
 } from "@catamorphic/core";
+import { projectToolCapabilities } from "@catamorphic/fastify-plugin";
 import { z } from "zod";
 import type { StockAuth } from "./auth/stock-auth.js";
 
@@ -69,6 +70,18 @@ export function stockAgentCapabilities(args: {
           .findUserById({ userId: identity.externalUserId });
         return user ? { displayName: user.name } : {};
       }),
+    sources: [
+      async (context, selection) => {
+        if (selection.name && selection.name !== "project.propose_change")
+          return [];
+        return projectToolCapabilities({
+          core: args.core(),
+          context,
+          allow: ({ name }) => name === "propose_change",
+        });
+      },
+      ...(args.custom?.sources ?? []),
+    ],
     capabilities: [
       ...(args.custom?.capabilities?.some(
         (item) => item.name === directory.name,

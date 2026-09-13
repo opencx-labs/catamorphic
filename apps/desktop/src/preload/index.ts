@@ -15,7 +15,7 @@ import type { FilePreviewInput } from "../shared/file-preview.js";
 import type { FileSearchInput } from "../shared/file-search.js";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
 import type { OpenMode } from "../shared/open-mode.js";
-import type { PrCommentInput } from "../shared/pr-details.js";
+import type { PrCommentInput, PrDecisionInput } from "../shared/pr-details.js";
 import type { SettingsScope } from "../shared/settings.js";
 import type { DesktopUpdateState } from "../shared/update.js";
 
@@ -368,6 +368,20 @@ const api = {
     ipcRenderer.invoke("catamorphic:editor-file-write", input),
   projectOpenFile: (projectId: string, filePath: string): Promise<void> =>
     ipcRenderer.invoke("catamorphic:project-open-file", projectId, filePath),
+  authorizationStatus: (): Promise<{
+    label: string;
+    expiresAt: number;
+  } | null> => ipcRenderer.invoke("catamorphic:authorization-status"),
+  onAuthorizationChanged: (listener: () => void): (() => void) => {
+    const handler = () => listener();
+    ipcRenderer.on("catamorphic:authorization-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:authorization-changed", handler);
+  },
+  authorizationCancel: (): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:authorization-cancel"),
+  authorizationContinueBrowser: (): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:authorization-continue-browser"),
   githubConnectStart: (): Promise<{
     userCode: string;
     verificationUri: string;
@@ -919,6 +933,8 @@ const api = {
     ipcRenderer.invoke("catamorphic:git-overview", projectId, paths, sessionId),
   sessionCheckouts: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:session-checkouts", projectId),
+  sessionUseProjectFolder: (input: { projectId: string; sessionId: string }) =>
+    ipcRenderer.invoke("catamorphic:session-use-project-folder", input),
   gitUntrackedDirectory: (input: {
     projectId: string;
     worktreePath: string;
@@ -931,8 +947,12 @@ const api = {
     ipcRenderer.invoke("catamorphic:file-search", input),
   prComment: (input: PrCommentInput): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:pr-comment", input),
+  prDecision: (input: PrDecisionInput): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:pr-decision", input),
   prDetails: (projectId: string, number: number): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:pr-details", projectId, number),
+  prReview: (projectId: string, number: number): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:pr-review", projectId, number),
   prList: (projectId: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:pr-list", projectId),
   prFiles: (projectId: string, number: number): Promise<unknown> =>

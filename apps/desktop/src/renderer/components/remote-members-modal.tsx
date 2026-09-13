@@ -38,9 +38,10 @@ export function RemoteMembersModal({
         data.members.map((member) => [member.externalUserId, member.roles]),
       ),
     );
-    setInviteRole(
-      (current) =>
-        current || data.roles.find((role) => role.definition)?.slug || "",
+    setInviteRole((current) =>
+      data.roles.some((role) => role.slug === current && role.definition)
+        ? current
+        : "",
     );
   }, [projectId]);
 
@@ -48,6 +49,7 @@ export function RemoteMembersModal({
     if (!open) return;
     setError(null);
     setInviteLink(null);
+    setInviteRole("");
     void load().catch((cause: unknown) =>
       setError(cause instanceof Error ? cause.message : String(cause)),
     );
@@ -87,6 +89,19 @@ export function RemoteMembersModal({
     }
   };
 
+  const [inviteCopied, setInviteCopied] = useState(false);
+  const copyInvite = async (link: string) => {
+    setInviteCopied(false);
+    try {
+      await navigator.clipboard.writeText(link);
+      setInviteCopied(true);
+    } catch {
+      setError(
+        "The invitation is ready, but could not be copied. Try Copy invite link again.",
+      );
+    }
+  };
+
   const invite = async () => {
     if (!inviteRole) return;
     setBusy("invite");
@@ -99,7 +114,7 @@ export function RemoteMembersModal({
       });
       const link = created.connectLinks[0] ?? created.webLinks[0] ?? null;
       setInviteLink(link);
-      if (link) await navigator.clipboard.writeText(link).catch(() => {});
+      if (link) await copyInvite(link);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -138,8 +153,7 @@ export function RemoteMembersModal({
             </h2>
           </div>
           <p className="mt-1 text-xs leading-5 text-fg-muted">
-            Roles come from this project's committed role files. Managers can
-            assign them without any server-owner account.
+            Choose what teammates can access in this project.
           </p>
         </header>
 
@@ -157,10 +171,14 @@ export function RemoteMembersModal({
                 className="field h-9 min-w-0 px-2.5 text-[13px]"
               />
               <select
+                aria-label="Invitation role"
                 value={inviteRole}
                 onChange={(event) => setInviteRole(event.target.value)}
                 className="field h-9 min-w-0 px-2 text-[13px]"
               >
+                <option value="" disabled>
+                  Choose a role
+                </option>
                 {roles.map((role) => (
                   <option key={role.slug} value={role.slug}>
                     {role.definition?.name ?? role.slug}
@@ -182,12 +200,14 @@ export function RemoteMembersModal({
             {inviteLink && (
               <button
                 type="button"
-                onClick={() => void navigator.clipboard.writeText(inviteLink)}
+                onClick={() => void copyInvite(inviteLink)}
                 className="flex items-center gap-2 rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-left text-xs text-success"
               >
                 <Copy className="size-3.5 shrink-0" />
                 <span className="min-w-0 flex-1 truncate">
-                  Invite link copied. Click to copy again.
+                  {inviteCopied
+                    ? "Invite link copied. Click to copy again."
+                    : "Copy invite link"}
                 </span>
               </button>
             )}

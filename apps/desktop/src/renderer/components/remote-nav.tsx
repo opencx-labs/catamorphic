@@ -169,8 +169,10 @@ export function RemoteNav({
             data-testid="remote-sync"
             className="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-border text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <Download className="size-3.5" />
-            Download updates
+            <span className="inline-flex items-center gap-1.5">
+              <Download className="size-3.5" />
+              Download updates
+            </span>
           </PendingButton>
           <PendingButton
             type="button"
@@ -181,8 +183,10 @@ export function RemoteNav({
             data-testid="remote-ship"
             className="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md bg-accent text-xs font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <Upload className="size-3.5" />
-            Upload{selected.length > 0 ? ` ${selected.length}` : ""}
+            <span className="inline-flex items-center gap-1.5">
+              <Upload className="size-3.5" />
+              Upload{selected.length > 0 ? ` ${selected.length}` : ""}
+            </span>
           </PendingButton>
         </div>
         {canManageMembers && (

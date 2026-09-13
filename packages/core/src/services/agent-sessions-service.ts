@@ -4868,6 +4868,23 @@ export class AgentSessionsService {
         },
       ]),
     );
+    // A host may expose its built-in assistant under a project-qualified id
+    // without a committed definition. Scoped members cannot use the bare id.
+    const defaultId = this.codingAgents.defaultAgentId(args.projectId);
+    const qualifiedDefault = defaultId ? parseProjectAgentId(defaultId) : null;
+    if (
+      defaultId &&
+      qualifiedDefault?.projectId === args.projectId &&
+      this.codingAgents.get(defaultId)
+    ) {
+      const unqualified = candidates.get(qualifiedDefault.slug);
+      candidates.delete(qualifiedDefault.slug);
+      candidates.set(defaultId, {
+        id: defaultId,
+        name: unqualified?.name ?? qualifiedDefault.slug,
+        description: unqualified?.description,
+      });
+    }
     for (const entry of entries)
       candidates.set(formatProjectAgentId(args.projectId, entry.slug), {
         id: formatProjectAgentId(args.projectId, entry.slug),
@@ -5049,6 +5066,12 @@ export class AgentSessionsService {
           projectId: projectAgent.projectId,
         })
       ).find((entry) => entry.slug === projectAgent.slug);
+      // Hosts may provide a built-in, project-qualified assistant without a
+      // source definition. A present but invalid definition must still fail.
+      if (!entry) {
+        const builtin = this.codingAgents.get(id);
+        if (builtin) return builtin;
+      }
       if (!entry?.definition) throw new AgentNotConfiguredError(id);
       const resolved = await this.codingAgents.projectAgent({ id, entry });
       if (!resolved) throw new AgentNotConfiguredError(id);

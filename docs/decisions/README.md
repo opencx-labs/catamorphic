@@ -148,3 +148,5 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0133](0133-lean-agent-tool-surface.md) | Lean agent tool surface | Accepted |
 | [0134](0134-consent-and-collection-lifecycle.md) | Consent binding and collection lifecycle | Accepted |
 | [0135](0135-artifact-publication-before-admission.md) | Publish artifact candidates before admitting revisions | Accepted |
+| [0136](0136-local-work-and-project-proposals.md) | Local work and project proposals | Accepted |
+| [0137](0137-sign-in-recovery.md) | Sign-in recovery stays with the active attempt | Accepted |

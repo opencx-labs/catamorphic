@@ -8,12 +8,14 @@ export function AgentEnvironmentControl({
   sessionId,
   agentId,
   currentEnvironment,
+  currentEnvironmentLabel,
   busy,
 }: {
   projectId: string;
   sessionId: string;
   agentId?: string;
   currentEnvironment?: string;
+  currentEnvironmentLabel?: string;
   busy: boolean;
 }) {
   const environments = useEnvironments(projectId, {
@@ -32,9 +34,10 @@ export function AgentEnvironmentControl({
       <div className="flex flex-wrap items-center gap-2">
         <span>
           Running on{" "}
-          {environments.data?.items.find(
-            (item) => item.name === currentEnvironment,
-          )?.label ??
+          {currentEnvironmentLabel ??
+            environments.data?.items.find(
+              (item) => item.name === currentEnvironment,
+            )?.label ??
             currentEnvironment ??
             "assigned environment"}
         </span>
@@ -64,7 +67,12 @@ export function AgentEnvironmentControl({
         <PendingButton
           type="button"
           pending={update.isPending}
-          disabled={busy || !target?.available || !target.compatible}
+          disabled={
+            busy ||
+            environment === currentEnvironment ||
+            !target?.available ||
+            !target.compatible
+          }
           className="rounded border border-border px-2 py-1 disabled:opacity-50"
           onClick={() => {
             if (environment)

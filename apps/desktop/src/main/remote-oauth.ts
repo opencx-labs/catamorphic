@@ -68,8 +68,16 @@ export async function authorizeRemoteServer(options: {
   openUrl(url: string): Promise<void>;
   onCallbackServed?(origin: string): void;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<RemoteOAuthCredentials> {
-  const fetchImpl = options.fetch ?? fetch;
+  const fetchImpl: typeof fetch = (input, init) =>
+    (options.fetch ?? fetch)(input, {
+      ...init,
+      signal: AbortSignal.any([
+        AbortSignal.timeout(30_000),
+        ...(options.signal ? [options.signal] : []),
+      ]),
+    });
   assertSecureRemoteUrl(options.serverUrl);
   const server = new URL(options.serverUrl);
   const protectedResource = await fetchJson<ProtectedResourceMetadata>(
@@ -112,7 +120,12 @@ export async function authorizeRemoteServer(options: {
     }
   }
 
-  const callback = await openLoopbackCallback(options.timeoutMs ?? 120_000);
+  const state = randomBytes(32).toString("base64url");
+  const callback = await openLoopbackCallback({
+    timeoutMs: options.timeoutMs ?? 300_000,
+    state,
+    signal: options.signal,
+  });
   try {
     const registration = await fetchImpl(metadata.registration_endpoint, {
       method: "POST",
@@ -137,7 +150,6 @@ export async function authorizeRemoteServer(options: {
 
     const verifier = randomBytes(48).toString("base64url");
     const challenge = createHash("sha256").update(verifier).digest("base64url");
-    const state = randomBytes(32).toString("base64url");
     const authorize = new URL(metadata.authorization_endpoint);
     authorize.searchParams.set("client_id", registered.client_id);
     authorize.searchParams.set("redirect_uri", callback.url);
@@ -212,7 +224,15 @@ async function fetchJson<T>(fetchImpl: typeof fetch, url: URL): Promise<T> {
   return (await response.json()) as T;
 }
 
-async function openLoopbackCallback(timeoutMs: number): Promise<{
+async function openLoopbackCallback({
+  timeoutMs,
+  state,
+  signal,
+}: {
+  timeoutMs: number;
+  state: string;
+  signal?: AbortSignal;
+}): Promise<{
   url: string;
   result: Promise<{ code?: string; state: string; error?: string }>;
   close(): Promise<void>;
@@ -227,11 +247,26 @@ async function openLoopbackCallback(timeoutMs: number): Promise<{
       rejectResult = reject;
     },
   );
+  // Discovery/registration may fail before the caller awaits this promise.
+  void result.catch(() => {});
+  signal?.throwIfAborted();
   const server = http.createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    if (
+      request.method !== "GET" ||
+      url.pathname !== "/callback" ||
+      !constantTimeTextEqual(url.searchParams.get("state") ?? "", state)
+    ) {
+      response.writeHead(400);
+      response.end("This callback does not match the active sign-in.");
+      return;
+    }
+    response.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+    });
     response.end(
-      "<!doctype html><meta charset=utf-8><title>Connected</title><p>Connected. You can return to Catamorphic.</p>",
+      "<!doctype html><meta charset=utf-8><title>Return to Catamorphic</title><p>Return to Catamorphic to finish connecting.</p>",
     );
     resolveResult?.({
       ...(url.searchParams.get("code")
@@ -253,14 +288,24 @@ async function openLoopbackCallback(timeoutMs: number): Promise<{
     throw new Error("Could not open the local authorization callback");
   }
   const timer = setTimeout(() => {
-    rejectResult?.(new Error("Remote authorization timed out"));
+    rejectResult?.(
+      new Error("Sign-in timed out. Connect again to start a new attempt."),
+    );
   }, timeoutMs);
   timer.unref();
+  const abort = () =>
+    rejectResult?.(
+      new Error("Sign-in cancelled. You can try again when ready."),
+    );
+  signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) abort();
   return {
     url: `http://127.0.0.1:${address.port}/callback`,
-    result: result.finally(() => clearTimeout(timer)),
+    result,
     close: () =>
       new Promise<void>((resolve, reject) => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
         server.close((error) => (error ? reject(error) : resolve()));
       }),
   };

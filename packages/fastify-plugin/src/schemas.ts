@@ -1629,6 +1629,68 @@ export const ProposalResultSchema = z.object({
   pullRequest: z.object({ url: z.string(), number: z.number() }).optional(),
 });
 
+export const ProposalSummarySchema = z.object({
+  number: z.number().int().positive(),
+  title: z.string(),
+  url: z.string(),
+  author: z.string(),
+  head: z.string(),
+  base: z.string(),
+  draft: z.boolean(),
+  updatedAt: z.string(),
+  body: z.string().optional(),
+  headSha: z.string().optional(),
+});
+export const ProposalFileSchema = z.object({
+  path: z.string(),
+  status: z.string(),
+  additions: z.number(),
+  deletions: z.number(),
+  patch: z.string().nullable(),
+  previousPath: z.string().optional(),
+});
+
+export const ProposalReviewSchema = z.object({
+  proposal: ProposalSummarySchema,
+  files: z.array(ProposalFileSchema),
+});
+
+export const ProposalCommentSchema = z.object({
+  id: z.number(),
+  body: z.string(),
+  author: z.object({ login: z.string() }).nullable(),
+  createdAt: z.string(),
+  url: z.string(),
+  state: z.string().optional(),
+  path: z.string().optional(),
+  line: z.number().nullable().optional(),
+  replyToId: z.number().optional(),
+  diffHunk: z.string().optional(),
+  side: z.enum(["LEFT", "RIGHT"]).optional(),
+});
+export const ProposalDiscussionSchema = z.object({
+  state: z.string(),
+  reviewDecision: z.string().nullable(),
+  assignees: z.array(z.object({ login: z.string() })),
+  reviewRequests: z.array(z.object({ login: z.string() })),
+  reviews: z.array(ProposalCommentSchema),
+  comments: z.array(ProposalCommentSchema),
+  inlineComments: z.array(ProposalCommentSchema),
+  inlineCommentsUnavailable: z.boolean(),
+  statusCheckRollup: z.array(
+    z.object({
+      name: z.string(),
+      status: z.string(),
+      conclusion: z.string().nullable(),
+      detailsUrl: z.string(),
+    }),
+  ),
+});
+export const ProposalCommentInputSchema = z.object({
+  body: z.string().trim().min(1).max(60000),
+  replyTo: z.number().int().positive().optional(),
+});
+
 // --- Publications (ADR 0055) ---
 export const PublicationSchema = z.object({
   slug: z.string(),

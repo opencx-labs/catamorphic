@@ -2,6 +2,7 @@ import Editor, { type OnMount } from "@monaco-editor/react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ExternalLink, FileText } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { FileInspector } from "../components/file-inspector.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import {
   notifyEditorSelectionChange,
@@ -43,9 +44,9 @@ export interface EditorScreenProps {
   onFindFile: () => void;
   /** Any unsaved draft in this tab — surfaces as a dot on the tab icon. */
   onDirtyChange: (dirty: boolean) => void;
-  /** Register the surface-level Share action in the window's top bar. */
-  registerShare?: (share: () => Promise<void>) => void;
   onShare?: (filePath: string) => void;
+  onPropose?: (filePath: string) => void;
+  onSharePersonal?: (filePath: string, intent: "publish" | "propose") => void;
 }
 
 export function EditorScreen({
@@ -56,8 +57,9 @@ export function EditorScreen({
   filePath,
   onFindFile,
   onDirtyChange,
-  registerShare,
   onShare,
+  onPropose,
+  onSharePersonal,
 }: EditorScreenProps) {
   const theme = useTheme();
   const editorTheme = useMonacoTheme();
@@ -159,9 +161,10 @@ export function EditorScreen({
     );
   };
 
-  const shareRef = useRef(async () => {});
-  shareRef.current = async () => {
-    if (!filePath || writeFile.isPending) return;
+  const saveBeforeAction = async (action: (filePath: string) => void) => {
+    if (!filePath) return;
+    if (writeFile.isPending)
+      throw new Error("Wait for this file to finish saving");
     const content = draftsRef.current[filePath];
     if (content !== undefined) {
       await writeFile.mutateAsync({ path: filePath, content });
@@ -171,11 +174,8 @@ export function EditorScreen({
         return rest;
       });
     }
-    onShare?.(filePath);
+    action(filePath);
   };
-  useEffect(() => {
-    registerShare?.(() => shareRef.current());
-  }, [registerShare]);
 
   // Selection channel: while this pane's editor has focus, chats can pull
   // "what's selected" to build a selection pill (see lib/editor-selection).
@@ -249,29 +249,42 @@ export function EditorScreen({
     >
       <div
         data-editor-toolbar
-        className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-bg-inset px-3"
+        className="flex h-12 shrink-0 items-center gap-2 px-3"
       >
         <span className="min-w-0 truncate font-mono text-xs text-fg-muted">
-          {filePath}
+          {filePath.replace(/^(?:.*\/)?\.catamorphic\/personal\/[^/]+\//, "")}
         </span>
-        <span
-          className="ml-auto text-xs text-fg-faint"
-          title="Saving updates this file on your device. Uploading and recording a Git commit are separate actions."
-        >
-          On this device
+        <span className="ml-auto flex shrink-0 items-center gap-0.5 rounded-lg border border-border bg-bg-raised p-0.5">
+          <FileInspector
+            projectId={projectId}
+            filePath={filePath}
+            dirty={draft !== undefined}
+            saving={writeFile.isPending}
+            onSave={() => saveRef.current()}
+            onPublish={onShare ? () => saveBeforeAction(onShare) : undefined}
+            onPropose={
+              onPropose ? () => saveBeforeAction(onPropose) : undefined
+            }
+            onSharePersonal={
+              onSharePersonal
+                ? (intent) =>
+                    saveBeforeAction((path) => onSharePersonal(path, intent))
+                : undefined
+            }
+          />
+          {draft !== undefined && (
+            <button
+              type="button"
+              data-testid="editor-save"
+              onClick={() => saveRef.current()}
+              disabled={writeFile.isPending}
+              data-disabled-reason="Saving this file"
+              className="ml-auto h-6 shrink-0 cursor-pointer rounded border border-border-strong bg-bg-overlay px-2 text-xs text-fg transition-colors duration-150 hover:border-accent disabled:opacity-50"
+            >
+              {writeFile.isPending ? "Saving…" : "Save"}
+            </button>
+          )}
         </span>
-        {draft !== undefined && (
-          <button
-            type="button"
-            data-testid="editor-save"
-            onClick={() => saveRef.current()}
-            disabled={writeFile.isPending}
-            data-disabled-reason="Saving this file"
-            className="ml-auto h-6 shrink-0 cursor-pointer rounded border border-border-strong bg-bg-overlay px-2 text-xs text-fg transition-colors duration-150 hover:border-accent disabled:opacity-50"
-          >
-            {writeFile.isPending ? "Saving…" : "Save"}
-          </button>
-        )}
       </div>
       {(fileQuery.error || writeFile.error) && (
         <p role="alert" className="p-3 text-xs text-danger">

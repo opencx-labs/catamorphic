@@ -11406,7 +11406,61 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            number: number;
+                            title: string;
+                            url: string;
+                            author: string;
+                            head: string;
+                            base: string;
+                            draft: boolean;
+                            updatedAt: string;
+                            body?: string;
+                            headSha?: string;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
         put?: never;
         post: {
             parameters: {
@@ -11443,6 +11497,382 @@ export interface paths {
                                 url: string;
                                 number: number;
                             };
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/proposals/{number}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    number: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            proposal: {
+                                number: number;
+                                title: string;
+                                url: string;
+                                author: string;
+                                head: string;
+                                base: string;
+                                draft: boolean;
+                                updatedAt: string;
+                                body?: string;
+                                headSha?: string;
+                            };
+                            files: {
+                                path: string;
+                                status: string;
+                                additions: number;
+                                deletions: number;
+                                patch: string | null;
+                                previousPath?: string;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/proposals/{number}/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    number: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            path: string;
+                            status: string;
+                            additions: number;
+                            deletions: number;
+                            patch: string | null;
+                            previousPath?: string;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/proposals/{number}/discussion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    number: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            state: string;
+                            reviewDecision: string | null;
+                            assignees: {
+                                login: string;
+                            }[];
+                            reviewRequests: {
+                                login: string;
+                            }[];
+                            reviews: {
+                                id: number;
+                                body: string;
+                                author: {
+                                    login: string;
+                                } | null;
+                                createdAt: string;
+                                url: string;
+                                state?: string;
+                                path?: string;
+                                line?: number | null;
+                                replyToId?: number;
+                                diffHunk?: string;
+                                /** @enum {string} */
+                                side?: "LEFT" | "RIGHT";
+                            }[];
+                            comments: {
+                                id: number;
+                                body: string;
+                                author: {
+                                    login: string;
+                                } | null;
+                                createdAt: string;
+                                url: string;
+                                state?: string;
+                                path?: string;
+                                line?: number | null;
+                                replyToId?: number;
+                                diffHunk?: string;
+                                /** @enum {string} */
+                                side?: "LEFT" | "RIGHT";
+                            }[];
+                            inlineComments: {
+                                id: number;
+                                body: string;
+                                author: {
+                                    login: string;
+                                } | null;
+                                createdAt: string;
+                                url: string;
+                                state?: string;
+                                path?: string;
+                                line?: number | null;
+                                replyToId?: number;
+                                diffHunk?: string;
+                                /** @enum {string} */
+                                side?: "LEFT" | "RIGHT";
+                            }[];
+                            inlineCommentsUnavailable: boolean;
+                            statusCheckRollup: {
+                                name: string;
+                                status: string;
+                                conclusion: string | null;
+                                detailsUrl: string;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/proposals/{number}/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    number: number;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        body: string;
+                        replyTo?: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: number;
+                            body: string;
+                            author: {
+                                login: string;
+                            } | null;
+                            createdAt: string;
+                            url: string;
+                            state?: string;
+                            path?: string;
+                            line?: number | null;
+                            replyToId?: number;
+                            diffHunk?: string;
+                            /** @enum {string} */
+                            side?: "LEFT" | "RIGHT";
                         };
                     };
                 };

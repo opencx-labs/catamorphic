@@ -148,6 +148,35 @@ export class GithubService {
           viewerLogin: viewer.connected ? viewer.login : undefined,
         }));
       },
+      pullRequest: async (identity, input) => {
+        const fullName = repoFullNameFromUrl(input.remoteUrl);
+        if (!fullName)
+          throw new Error(`Not a GitHub remote: ${input.remoteUrl}`);
+        return new GithubApi(await this.freshToken(identity), {
+          fetch: this.fetch,
+        }).pullRequest({ fullName, number: input.number });
+      },
+      pullRequestDiscussion: async (identity, input) => {
+        const fullName = repoFullNameFromUrl(input.remoteUrl);
+        if (!fullName)
+          throw new Error(`Not a GitHub remote: ${input.remoteUrl}`);
+        return new GithubApi(await this.freshToken(identity), {
+          fetch: this.fetch,
+        }).pullRequestDiscussion({ fullName, number: input.number });
+      },
+      commentOnPullRequest: async (identity, input) => {
+        const fullName = repoFullNameFromUrl(input.remoteUrl);
+        if (!fullName)
+          throw new Error(`Not a GitHub remote: ${input.remoteUrl}`);
+        return new GithubApi(await this.freshToken(identity), {
+          fetch: this.fetch,
+        }).commentOnPullRequest({
+          fullName,
+          number: input.number,
+          body: input.body,
+          replyTo: input.replyTo,
+        });
+      },
       pullRequestFiles: async (identity, input) => {
         const fullName = repoFullNameFromUrl(input.remoteUrl);
         if (!fullName) {
