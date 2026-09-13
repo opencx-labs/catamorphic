@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmod,
@@ -9,6 +10,7 @@ import {
   unlink,
 } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 
 export interface DevInstanceLock {
   bindProcessGroup(processGroupId: number): Promise<void>;
@@ -413,6 +415,47 @@ function signalProcessGroup(
   }
 }
 
+async function devProcessGroups(processGroupId: number): Promise<number[]> {
+  if (process.platform === "win32") return [processGroupId];
+  // Turbo starts each package task in another process group. Snapshot those
+  // descendants BEFORE signaling Turbo: after it exits they are reparented,
+  // so checking only Turbo's group would declare success and leak Electron.
+  const { stdout } = await promisify(execFile)(
+    "ps",
+    ["-A", "-o", "pid=,ppid=,pgid="],
+    { timeout: 5_000, maxBuffer: 4 * 1024 * 1024 },
+  );
+  const processes = stdout
+    .trim()
+    .split("\n")
+    .flatMap((line) => {
+      const [pid, parentPid, groupId] = line.trim().split(/\s+/).map(Number);
+      return pid && parentPid !== undefined && groupId
+        ? [{ pid, parentPid, groupId }]
+        : [];
+    });
+  const owned = new Set(
+    processes
+      .filter((item) => item.groupId === processGroupId)
+      .map((item) => item.pid),
+  );
+  let previousSize = -1;
+  while (previousSize !== owned.size) {
+    previousSize = owned.size;
+    for (const item of processes) {
+      if (owned.has(item.parentPid)) owned.add(item.pid);
+    }
+  }
+  return [
+    ...new Set([
+      processGroupId,
+      ...processes
+        .filter((item) => owned.has(item.pid))
+        .map((item) => item.groupId),
+    ]),
+  ];
+}
+
 export async function stopDevProcessGroup(input: {
   processGroupId: number;
   signal: NodeJS.Signals;
@@ -430,25 +473,31 @@ export async function terminateDevProcessGroup(input: {
   killWaitMs?: number;
 }): Promise<void> {
   if (!processGroupIsLive(input.processGroupId)) return;
-  signalProcessGroup(input.processGroupId, input.signal ?? "SIGTERM");
+  const groups = new Set(await devProcessGroups(input.processGroupId));
+  const stillRunning = (): boolean => {
+    for (const group of groups) {
+      if (!processGroupIsLive(group)) groups.delete(group);
+    }
+    return groups.size > 0;
+  };
+  for (const group of groups) {
+    signalProcessGroup(group, input.signal ?? "SIGTERM");
+  }
   const deadline = Date.now() + (input.gracePeriodMs ?? 5_000);
-  while (processGroupIsLive(input.processGroupId) && Date.now() < deadline) {
+  while (stillRunning() && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  if (processGroupIsLive(input.processGroupId)) {
-    signalProcessGroup(input.processGroupId, "SIGKILL");
+  for (const group of groups) {
+    signalProcessGroup(group, "SIGKILL");
   }
   const killWaitMs = input.killWaitMs ?? 1_000;
   const killDeadline = Date.now() + killWaitMs;
-  while (
-    processGroupIsLive(input.processGroupId) &&
-    Date.now() < killDeadline
-  ) {
+  while (stillRunning() && Date.now() < killDeadline) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  if (processGroupIsLive(input.processGroupId)) {
+  if (stillRunning()) {
     throw new Error(
-      `Development process group ${input.processGroupId} remained observable after SIGKILL for ${killWaitMs}ms. Stop it manually before retrying development; its instance lock was retained.`,
+      `Development process groups ${[...groups].join(", ")} remained observable after SIGKILL for ${killWaitMs}ms. Stop them manually before retrying development; the instance lock was retained.`,
     );
   }
 }

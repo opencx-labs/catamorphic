@@ -22,8 +22,12 @@ import {
 
 const temporaryDirectories: string[] = [];
 const childProcesses: ChildProcess[] = [];
+const detachedDescendants: number[] = [];
 
 afterEach(() => {
+  for (const group of detachedDescendants.splice(0)) {
+    if (processGroupIsLive(group)) process.kill(-group, "SIGKILL");
+  }
   for (const child of childProcesses.splice(0)) {
     if (child.pid && child.exitCode === null) {
       try {
@@ -433,6 +437,57 @@ describe("acquireDevPortAllocatorLock", () => {
 });
 
 describe("stopDevProcessGroup", () => {
+  it.each([false, true])(
+    "reaps a separate descendant group (paused: %s) without stopping an unrelated group",
+    async (paused) => {
+      const lockPath = temporaryLockPath();
+      const readyPath = path.join(path.dirname(lockPath), "detached-ready");
+      const lock = await acquireDevInstanceLock({ lockPath, pid: process.pid });
+      const descendantSource = [
+        "const fs = require('node:fs');",
+        "process.on('SIGTERM', () => {});",
+        `fs.writeFileSync(${JSON.stringify(readyPath)}, String(process.pid));`,
+        "setInterval(() => {}, 1000);",
+      ].join("");
+      const leaderSource = [
+        "const { spawn } = require('node:child_process');",
+        `spawn(process.execPath, ['-e', ${JSON.stringify(descendantSource)}], { detached: true, stdio: 'ignore' });`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("");
+      const leader = spawn(process.execPath, ["-e", leaderSource], {
+        detached: true,
+        stdio: "ignore",
+      });
+      const unrelated = spawn(
+        process.execPath,
+        ["-e", "setInterval(() => {}, 1000)"],
+        {
+          detached: true,
+          stdio: "ignore",
+        },
+      );
+      childProcesses.push(leader, unrelated);
+      await waitForFile(readyPath);
+      const descendant = Number(readFileSync(readyPath, "utf8"));
+      detachedDescendants.push(descendant);
+      if (!leader.pid || !unrelated.pid) throw new Error("Missing child PID");
+      if (paused) process.kill(descendant, "SIGSTOP");
+
+      await stopDevProcessGroup({
+        processGroupId: leader.pid,
+        signal: "SIGTERM",
+        gracePeriodMs: 50,
+        lock,
+      });
+
+      expect(processGroupIsLive(descendant)).toBe(false);
+      expect(processGroupIsLive(leader.pid)).toBe(false);
+      expect(processGroupIsLive(unrelated.pid)).toBe(true);
+      expect(existsSync(lockPath)).toBe(false);
+    },
+  );
+
   it("waits for descendants to exit before releasing the instance lock", async () => {
     const lockPath = temporaryLockPath();
     const readyPath = path.join(path.dirname(lockPath), "ready");
@@ -626,7 +681,7 @@ describe("stopDevProcessGroup", () => {
 
     try {
       expect(outcome).toBe(
-        `Development process group ${processGroupId} remained observable after SIGKILL for 25ms. Stop it manually before retrying development; its instance lock was retained.`,
+        `Development process groups ${processGroupId} remained observable after SIGKILL for 25ms. Stop them manually before retrying development; the instance lock was retained.`,
       );
       expect(signals).toContain("SIGTERM");
       expect(signals).toContain("SIGKILL");

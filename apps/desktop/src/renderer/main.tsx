@@ -13,6 +13,7 @@ import { TerminalAppearanceProvider } from "./lib/terminal-appearance.js";
 import { ThemeProvider } from "./lib/theme.js";
 import { WorkspaceRoot } from "./workspace-root.js";
 import "./styles.css";
+import "./lib/dev-performance.js";
 
 const detachedWindow =
   new URLSearchParams(location.search).get("surface") === "dock";
