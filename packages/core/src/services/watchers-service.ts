@@ -173,38 +173,7 @@ export class WatchersService {
     cursorSequence: number;
     requiredTriggerPrefix?: string;
   }): Promise<Watcher> {
-    const session = await this.db
-      .selectFrom("agent_sessions")
-      .select(["status", "environment_name", "authority_host_id"])
-      .where("id", "=", input.sessionId)
-      .where("project_id", "=", input.projectId)
-      .executeTakeFirstOrThrow();
-    if (session.status !== "active")
-      throw new Error("Cannot create a watcher for a closed session");
-    const presentation = await this.db
-      .selectFrom("agent_session_views")
-      .select("visibility")
-      .where("session_id", "=", input.sessionId)
-      .where("tenant_id", "=", input.identity.tenantId)
-      .where("external_user_id", "=", input.identity.externalUserId)
-      .executeTakeFirst();
-    if (presentation?.visibility === "archived")
-      throw new Error(
-        "Restore the session before creating a reminder or monitor",
-      );
-    if (
-      session.authority_host_id !== "unassigned" &&
-      session.authority_host_id !== this.deps.sessions.hostId
-    )
-      throw new Error(
-        "Create this session's reminders on its authoritative host",
-      );
-    if (
-      session.environment_name &&
-      input.environment &&
-      session.environment_name !== input.environment
-    )
-      throw new Error("Session reminders must use the session's Environment");
+    const session = await this.assertWatcherSession(input, this.db);
     input = {
       ...input,
       environment: session.environment_name ?? input.environment,
@@ -221,7 +190,6 @@ export class WatchersService {
     const sourcePath = source.sourcePath;
     const remoteBranch = source.remoteBranch;
     const commitSha = source.commitSha;
-    let enablementId: string | undefined;
     try {
       const bindings = await this.deps.triggers.listAtCommit({
         identity: input.identity,
@@ -293,7 +261,8 @@ export class WatchersService {
         remoteBranch,
         environment: input.environment,
       });
-      const enablement = await this.deps.workflowEnablements.create({
+      let row: WatcherRow | undefined;
+      await this.deps.workflowEnablements.create({
         identity: input.identity,
         projectId: input.projectId,
         workflowName: input.workflowName,
@@ -303,36 +272,35 @@ export class WatchersService {
         consentDigest: preview.consentDigest,
         temporary: true,
         ...(expiresAt ? { expiresAt } : {}),
+
+        onCreate: async ({ transaction, enablement }) => {
+          await this.assertWatcherSession(input, transaction);
+          row = await transaction
+            .insertInto("watchers")
+            .values({
+              id: watcherId,
+              project_id: input.projectId,
+              session_id: input.sessionId,
+              monitor_id: input.monitorId,
+              owner_external_user_id: input.identity.externalUserId,
+              owner_identity: JSON.parse(JSON.stringify(input.identity)),
+              workflow_name: input.workflowName,
+              source_path: sourcePath,
+              remote_branch: remoteBranch,
+              commit_sha: commitSha,
+              deployment_artifact_id: artifact.id,
+              workflow_enablement_id: enablement.id,
+              environment_name: enablement.environment_name,
+              cursor_sequence: String(input.cursorSequence),
+              expires_at: expiresAt,
+            })
+            .returningAll()
+            .executeTakeFirstOrThrow();
+        },
       });
-      enablementId = enablement.id;
-      const row = await this.db
-        .insertInto("watchers")
-        .values({
-          id: watcherId,
-          project_id: input.projectId,
-          session_id: input.sessionId,
-          monitor_id: input.monitorId,
-          owner_external_user_id: input.identity.externalUserId,
-          owner_identity: JSON.parse(JSON.stringify(input.identity)),
-          workflow_name: input.workflowName,
-          source_path: sourcePath,
-          remote_branch: remoteBranch,
-          commit_sha: commitSha,
-          deployment_artifact_id: artifact.id,
-          workflow_enablement_id: enablement.id,
-          environment_name: enablement.environment,
-          cursor_sequence: String(input.cursorSequence),
-          expires_at: expiresAt,
-        })
-        .returningAll()
-        .executeTakeFirstOrThrow();
+      if (!row) throw new Error("Watcher ownership was not recorded");
       return mapWatcher(row, triggerKinds);
     } catch (error) {
-      if (enablementId)
-        await this.deps.workflowEnablements.disable({
-          identity: input.identity,
-          enablementId,
-        });
       await this.artifacts.discard({
         identity: input.identity,
         projectId: input.projectId,
@@ -340,6 +308,51 @@ export class WatchersService {
       });
       throw error;
     }
+  }
+
+  private async assertWatcherSession(
+    input: {
+      identity: Identity;
+      projectId: string;
+      sessionId: string;
+      environment?: string;
+    },
+    database: Kysely<DB>,
+  ) {
+    const session = await database
+      .selectFrom("agent_sessions")
+      .forUpdate()
+      .select(["status", "environment_name", "authority_host_id"])
+      .where("id", "=", input.sessionId)
+      .where("project_id", "=", input.projectId)
+      .executeTakeFirstOrThrow();
+    if (session.status !== "active")
+      throw new Error("Cannot create a watcher for a closed session");
+    const presentation = await database
+      .selectFrom("agent_session_views")
+      .select("visibility")
+      .where("session_id", "=", input.sessionId)
+      .where("tenant_id", "=", input.identity.tenantId)
+      .where("external_user_id", "=", input.identity.externalUserId)
+      .executeTakeFirst();
+    if (presentation?.visibility === "archived")
+      throw new Error(
+        "Restore the session before creating a reminder or monitor",
+      );
+    if (
+      session.authority_host_id !== "unassigned" &&
+      session.authority_host_id !== this.deps.sessions.hostId
+    )
+      throw new Error(
+        "Create this session's reminders on its authoritative host",
+      );
+    if (
+      session.environment_name &&
+      input.environment &&
+      session.environment_name !== input.environment
+    )
+      throw new Error("Session reminders must use the session's Environment");
+    return session;
   }
 
   async list(input: {

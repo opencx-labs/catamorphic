@@ -1297,6 +1297,34 @@ describe("agent session coordination", () => {
     }
   });
 
+  it("sweeps resources again after closing a session to fence late watcher admission", async () => {
+    const project = await projects.create(identity, {
+      name: "Close admission",
+    });
+    const session = await sessions.create(identity, project.id);
+    const cleanupStatus: string[] = [];
+    sessions.setArchiveResourcesHandler({
+      impact: async () => ({ activeProcessCount: 0 }),
+      stop: async () => {
+        const row = await db
+          .selectFrom("agent_sessions")
+          .select("status")
+          .where("id", "=", session.id)
+          .executeTakeFirstOrThrow();
+        cleanupStatus.push(row.status);
+      },
+    });
+    try {
+      await sessions.close(identity, project.id, session.id);
+      expect(cleanupStatus).toEqual(["active", "closed"]);
+    } finally {
+      sessions.setArchiveResourcesHandler({
+        impact: async () => ({ activeProcessCount: 0 }),
+        stop: async () => {},
+      });
+    }
+  });
+
   it("archives a whole session tree and confirms only when live resources stop", async () => {
     const project = await projects.create(identity, { name: "Archive tree" });
     const parent = await sessions.create(identity, project.id);
@@ -1310,7 +1338,12 @@ describe("agent session coordination", () => {
       { task: "Prepare the Globex renewal deck before archiving" },
     );
     await provider.slowStarted;
-    const stop = vi.fn(async () => {});
+    const cleanupVisibility: string[] = [];
+    const stop = vi.fn(async () => {
+      cleanupVisibility.push(
+        (await sessions.get(identity, project.id, parent.id)).visibility,
+      );
+    });
     sessions.setArchiveResourcesHandler({
       impact: async () => ({ activeProcessCount: 1 }),
       stop,
@@ -1334,7 +1367,7 @@ describe("agent session coordination", () => {
     const archived = await sessions.archive(identity, project.id, parent.id, {
       confirmStop: true,
     });
-    expect(stop).toHaveBeenCalledOnce();
+    expect(cleanupVisibility).toEqual(["promoted", "archived"]);
     expect(archived.sessions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

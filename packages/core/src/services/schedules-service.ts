@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { DB, Json } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { Cron } from "croner";
-import type { Kysely } from "kysely";
+import { type Kysely, sql } from "kysely";
 import type { Identity } from "../identity.js";
 import type {
   StoredTriggerActivation,
@@ -117,12 +117,20 @@ export class SchedulesService {
           next_fire_at: nextFireAt,
         })
         .onConflict((conflict) =>
-          conflict.column("activation_id").doUpdateSet({
+          conflict.column("activation_id").doUpdateSet(({ ref }) => ({
             cron_expression: cron,
             timezone,
             fire_at: at,
+            // Only a configuration change resets the clock. An unchanged
+            // concurrent tick must preserve another worker's advanced cursor.
+            next_fire_at: sql`case when
+              ${ref("schedule_bindings.cron_expression")} is distinct from ${cron}
+              or ${ref("schedule_bindings.timezone")} is distinct from ${timezone}
+              or ${ref("schedule_bindings.fire_at")} is distinct from ${at}
+              then ${nextFireAt}
+              else ${ref("schedule_bindings.next_fire_at")} end`,
             updated_at: now,
-          }),
+          })),
         )
         .execute();
     }

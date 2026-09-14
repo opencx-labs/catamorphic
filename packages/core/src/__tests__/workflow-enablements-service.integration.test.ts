@@ -119,6 +119,33 @@ describe("WorkflowEnablementsService", () => {
       }),
     ).rejects.toBeInstanceOf(WorkflowEnablementConsentRequiredError);
 
+    await expect(
+      service.create({
+        identity: memberA,
+        projectId,
+        workflowName: "watchInbox",
+        remoteBranch: "release",
+        consentDigest: preview.consentDigest,
+        onCreate: async ({ transaction, enablement }) => {
+          expect(
+            await transaction
+              .selectFrom("workflow_enablement_events")
+              .select("event_type")
+              .where("enablement_id", "=", enablement.id)
+              .execute(),
+          ).toEqual([{ event_type: "created" }]);
+          throw new Error("Owner was archived during preparation");
+        },
+      }),
+    ).rejects.toThrow("Owner was archived during preparation");
+    expect(await service.list({ identity: memberA, projectId })).toEqual([]);
+    expect(
+      await db
+        .selectFrom("workflow_enablement_events")
+        .select("enablement_id")
+        .execute(),
+    ).toEqual([]);
+
     const created = await service.create({
       identity: memberA,
       projectId,

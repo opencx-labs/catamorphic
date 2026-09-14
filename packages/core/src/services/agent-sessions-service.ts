@@ -4849,6 +4849,14 @@ export class AgentSessionsService {
           return closed;
         });
 
+        // Admission rechecks status under this session's row lock. Sweep any
+        // watcher that committed before closure, after further admission is barred.
+        await this.archiveResources?.stop({
+          identity,
+          projectId,
+          sessionIds: [sessionId],
+        });
+
         await this.connectionGrants?.revokeAllocation({
           allocationId,
         });
@@ -5034,6 +5042,15 @@ export class AgentSessionsService {
         }
         return { archivedRows: archived, resourceRows: resources };
       });
+
+    // A watcher may finish admission while the first cleanup is stopping work.
+    // Admission locks the session row and rechecks visibility, so after this
+    // commit it either already exists and is stopped here, or cannot be created.
+    await this.archiveResources?.stop({
+      identity,
+      projectId,
+      sessionIds: impact.sessionIds,
+    });
 
     for (const row of resourceRows) {
       if (row.provider_session_id) {
