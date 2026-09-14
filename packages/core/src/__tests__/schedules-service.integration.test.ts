@@ -37,8 +37,8 @@ const binding: StoredTriggerActivation = {
 };
 const fired: Json[] = [];
 const dispatcher = {
-  storedProductionActivations: vi.fn(async () => [binding]),
-  fire: vi.fn(async (args: { payload: Json }) => {
+  storedActiveActivations: vi.fn(async () => [binding]),
+  fireAtCommit: vi.fn(async (args: { payload: Json }) => {
     fired.push(args.payload);
     return {
       kind: "schedule",
@@ -161,7 +161,9 @@ describe("schedule trigger dispatcher", () => {
         .executeTakeFirstOrThrow(),
     ).toEqual({ next_fire_at: new Date("2026-08-29T10:06:00.000Z") });
 
-    dispatcher.fire.mockRejectedValueOnce(new Error("temporary outage"));
+    dispatcher.fireAtCommit.mockRejectedValueOnce(
+      new Error("temporary outage"),
+    );
     expect(
       await schedules.tick({
         identity,
@@ -203,5 +205,93 @@ describe("schedule trigger dispatcher", () => {
       1,
     );
     expect(fired).toHaveLength(firedBeforeConcurrentTick + 1);
+  });
+  it("fires a one-shot once after restart, including a missed deadline", async () => {
+    await db.deleteFrom("schedule_bindings").execute();
+    binding.config = { at: "2026-09-14T12:00:00Z" };
+    const before = fired.length;
+    const first = new SchedulesService(db, dispatcher);
+    expect(
+      await first.tick({
+        identity,
+        projectId,
+        now: new Date("2026-09-07T12:00:00Z"),
+      }),
+    ).toEqual({ enrolled: 0 });
+    const restarted = new SchedulesService(db, dispatcher);
+    expect(
+      await restarted.tick({
+        identity,
+        projectId,
+        now: new Date("2027-01-14T13:00:00Z"),
+      }),
+    ).toEqual({ enrolled: 1 });
+    expect(fired.at(-1)).toMatchObject({
+      activationId,
+      scheduledFor: "2026-09-14T12:00:00.000Z",
+    });
+    expect(
+      await new SchedulesService(db, dispatcher).tick({
+        identity,
+        projectId,
+        now: new Date("2027-02-14T13:00:00Z"),
+      }),
+    ).toEqual({ enrolled: 0 });
+    expect(fired).toHaveLength(before + 1);
+    expect(
+      await db
+        .selectFrom("schedule_bindings")
+        .select("next_fire_at")
+        .where("activation_id", "=", activationId)
+        .executeTakeFirstOrThrow(),
+    ).toEqual({ next_fire_at: null });
+  });
+  it("reschedules a completed one-shot and replaces a future deadline without firing the old time", async () => {
+    const schedules = new SchedulesService(db, dispatcher);
+    const before = fired.length;
+    binding.config = { at: "2027-03-15T12:00:00Z" };
+    await schedules.tick({
+      identity,
+      projectId,
+      now: new Date("2027-03-01T12:00:00Z"),
+    });
+    expect(
+      await db
+        .selectFrom("schedule_bindings")
+        .select("next_fire_at")
+        .where("activation_id", "=", activationId)
+        .executeTakeFirstOrThrow(),
+    ).toEqual({ next_fire_at: new Date("2027-03-15T12:00:00Z") });
+    binding.config = { at: "2027-03-22T12:00:00Z" };
+    await schedules.tick({
+      identity,
+      projectId,
+      now: new Date("2027-03-10T12:00:00Z"),
+    });
+    expect(
+      await schedules.tick({
+        identity,
+        projectId,
+        now: new Date("2027-03-15T12:00:00Z"),
+      }),
+    ).toEqual({ enrolled: 0 });
+    expect(
+      await schedules.tick({
+        identity,
+        projectId,
+        now: new Date("2027-03-22T12:00:00Z"),
+      }),
+    ).toEqual({ enrolled: 1 });
+    expect(fired.at(-1)).toMatchObject({
+      scheduledFor: "2027-03-22T12:00:00.000Z",
+    });
+    expect(
+      await schedules.tick({
+        identity,
+        projectId,
+        now: new Date("2027-03-23T12:00:00Z"),
+      }),
+    ).toEqual({ enrolled: 0 });
+    expect(fired).toHaveLength(before + 1);
   });
 });

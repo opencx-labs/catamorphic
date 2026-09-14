@@ -16,15 +16,24 @@ import type { AgentSession } from "../types.js";
 /** Mark a server-requested session notification seen by opening the chat. */
 export function useAcknowledgeAgentSessionAttention(
   projectId: string | undefined,
-): UseMutationResult<AgentSession, CatamorphicError, string> {
+): UseMutationResult<
+  AgentSession,
+  CatamorphicError,
+  { sessionId: string; observedRevision: number }
+> {
   const { apiClient } = useCatamorphic();
   const queryClient = useQueryClient();
-  return useMutation<AgentSession, CatamorphicError, string>({
-    mutationFn: (sessionId) =>
+  return useMutation<
+    AgentSession,
+    CatamorphicError,
+    { sessionId: string; observedRevision: number }
+  >({
+    mutationFn: ({ sessionId, observedRevision }) =>
       runWithCatamorphicError(async () => {
         const result = await apiClient.POST(
           "/api/projects/{projectId}/agent/sessions/{sessionId}/attention/acknowledge",
           {
+            body: { observedRevision },
             params: {
               path: { projectId: projectId as string, sessionId },
             },
@@ -33,6 +42,9 @@ export function useAcknowledgeAgentSessionAttention(
         return assertApiOk(result, "Acknowledge session attention failed");
       }),
     onSuccess: (session) => {
+      void queryClient.invalidateQueries({
+        queryKey: ["cat", "agent", "attention"],
+      });
       void queryClient.invalidateQueries({
         queryKey: ["cat", "project", projectId, "agent", "session", session.id],
       });

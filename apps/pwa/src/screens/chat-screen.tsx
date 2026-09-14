@@ -26,6 +26,7 @@ import { ToolPermissionCard } from "../components/catamorphic/tool-permission-ca
 import { ChatGlyph } from "../components/chat-glyph.js";
 import { ConnectionTrouble } from "../components/connection-trouble.js";
 import { Screen } from "../components/screen.js";
+import { SessionMonitors } from "../components/session-monitors.js";
 import { clientFor } from "../lib/api.js";
 import { mirrorForkNotice } from "../lib/fork.js";
 import { navigate } from "../lib/nav.js";
@@ -35,12 +36,14 @@ export function ChatScreen({
   connection,
   projectId,
   sessionId,
+  messageId,
   queryClient,
   animation,
 }: {
   connection: PwaConnection;
   projectId: string;
   sessionId: string | null;
+  messageId?: string;
   queryClient: QueryClient;
   animation?: string;
 }) {
@@ -55,6 +58,7 @@ export function ChatScreen({
         connection={connection}
         projectId={projectId}
         sessionId={sessionId}
+        messageId={messageId}
         animation={animation}
       />
     </CatamorphicProvider>
@@ -65,11 +69,13 @@ function Chat({
   connection,
   projectId,
   sessionId,
+  messageId,
   animation,
 }: {
   connection: PwaConnection;
   projectId: string;
   sessionId: string | null;
+  messageId?: string;
   animation?: string;
 }) {
   const catalog = useAgentCatalog(projectId);
@@ -135,15 +141,21 @@ function Chat({
   useEffect(() => {
     const session = chat.session;
     if (
+      document.visibilityState !== "visible" ||
       !session?.attentionRequired ||
       session.attentionRevision <= acknowledgedRevisionRef.current
     ) {
       return;
     }
     acknowledgedRevisionRef.current = session.attentionRevision;
-    void acknowledgeAttention.mutateAsync(session.id).catch(() => {
-      acknowledgedRevisionRef.current = session.attentionSeenRevision;
-    });
+    void acknowledgeAttention
+      .mutateAsync({
+        sessionId: session.id,
+        observedRevision: session.attentionRevision,
+      })
+      .catch(() => {
+        acknowledgedRevisionRef.current = session.attentionSeenRevision;
+      });
   }, [chat.session, acknowledgeAttention]);
   const permissions = useToolPermissions(
     projectId,
@@ -215,6 +227,19 @@ function Chat({
       }
     >
       <div className="flex h-full min-h-0 flex-col">
+        <SessionMonitors
+          projectId={projectId}
+          sessionId={chat.sessionId ?? undefined}
+          onOpen={(resourceType, resourceId) =>
+            navigate({
+              kind: "resource",
+              connectionId: connection.id,
+              projectId,
+              resourceType,
+              resourceId,
+            })
+          }
+        />
         {chat.session?.parentSessionId ? (
           <button
             type="button"
@@ -261,6 +286,31 @@ function Chat({
           </nav>
         ) : null}
         <ChatTimeline
+          focusMessageId={messageId}
+          onLinkClick={(href) => {
+            const match = /^(session|run|artifact|workflow):(.+)$/.exec(href);
+            if (match) {
+              try {
+                const id = decodeURIComponent(match[2] ?? "");
+                if (match[1] === "session") openRelated(id);
+                else if (
+                  match[1] === "run" ||
+                  match[1] === "artifact" ||
+                  match[1] === "workflow"
+                )
+                  navigate({
+                    kind: "resource",
+                    connectionId: connection.id,
+                    projectId,
+                    resourceType: match[1],
+                    resourceId: id,
+                  });
+              } catch {
+                /* Malformed resource links are inert. */
+              }
+            } else if (/^https?:\/\//i.test(href))
+              window.open(href, "_blank", "noopener,noreferrer");
+          }}
           className="min-h-0 flex-1"
           messages={messages.filter(
             (message) => message.content !== QUESTIONS_DISMISSED_MESSAGE,

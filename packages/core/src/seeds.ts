@@ -2,6 +2,7 @@ import { APP_THEME_COLOR_TOKENS } from "@catamorphic/app";
 import { PARSER_PACKAGE_VERSION } from "@catamorphic/parser";
 import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
 import { SESSION_ARTIFACTS_SKILL } from "./session-artifacts-skill.js";
+import { SESSION_WORKFLOWS_SKILL } from "./session-workflows-skill.js";
 import { WORKFLOW_LIFECYCLE_SKILL } from "./workflow-lifecycle-skill.js";
 
 const SHARED_TSCONFIG = `{
@@ -764,7 +765,7 @@ return context.host["catamorphic.sessions"].deliver({
 \`message_only\` records context without starting a turn. \`next_turn\` wakes
 an idle session or queues behind its active turn. Use \`interrupt\` only when
 letting the current turn finish would make the result wrong. Watcher source is
-pinned on an isolated git ref and expires automatically; it is never merged
+pinned on an isolated git ref with optional explicit expiry; it is never merged
 into the project's main branch.
 
 \`\`\`typescript
@@ -1636,6 +1637,7 @@ documents — grep is faster and never lies.
 export const HOST_SKILLS: Record<string, string> = {
   "session-artifacts/SKILL.md": SESSION_ARTIFACTS_SKILL,
   "workflow-lifecycle/SKILL.md": WORKFLOW_LIFECYCLE_SKILL,
+  "session-workflows/SKILL.md": SESSION_WORKFLOWS_SKILL,
   "searching-documents/SKILL.md": SEARCHING_DOCUMENTS_SKILL,
   "publishing-to-github/SKILL.md": `---
 name: publishing-to-github

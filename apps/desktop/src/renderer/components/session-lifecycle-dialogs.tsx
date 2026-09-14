@@ -110,6 +110,7 @@ export function ArchiveSessionDialog({
   sessionCount,
   runningCount,
   watcherCount,
+  watchers,
   processCount,
   pending,
   error,
@@ -120,6 +121,12 @@ export function ArchiveSessionDialog({
   sessionCount: number;
   runningCount: number;
   watcherCount: number;
+  watchers: Array<{
+    id: string;
+    name: string;
+    environment: string | null;
+    nextRunAt: string | null;
+  }>;
   processCount: number;
   pending: boolean;
   error: string | null;
@@ -127,10 +134,18 @@ export function ArchiveSessionDialog({
   onConfirm: () => void;
 }) {
   return (
-    <Modal open={session !== null} onClose={onClose} width={440}>
+    <Modal
+      open={session !== null}
+      onClose={onClose}
+      width={440}
+      labelledBy="archive-session-title"
+    >
       <div className="px-5 pt-5">
-        <h2 className="text-sm font-semibold text-fg">
-          Stop and archive {session?.title ?? "this chat"}?
+        <h2
+          id="archive-session-title"
+          className="text-sm font-semibold text-fg"
+        >
+          Archive {session?.title ?? "this chat"}?
         </h2>
         <p className="mt-2 text-[13px] leading-relaxed text-fg-muted">
           Archiving hides this session and its subsessions. Agents can still
@@ -139,10 +154,33 @@ export function ArchiveSessionDialog({
         <div className="mt-4 rounded-lg border border-border bg-bg-inset px-3 py-2.5 text-xs text-fg-muted">
           {sessionCount} {sessionCount === 1 ? "session" : "sessions"}
           {runningCount > 0 ? `, ${runningCount} active` : ""}
-          {watcherCount > 0 ? `, ${watcherCount} watchers` : ""}
+          {watcherCount > 0
+            ? `, ${watcherCount} ${watcherCount === 1 ? "reminder or monitor" : "reminders and monitors"}`
+            : ""}
           {processCount > 0 ? `, ${processCount} running processes` : ""}
           {" will be stopped."}
         </div>
+        {watchers.length > 0 && (
+          <div className="mt-3 text-xs text-fg-muted">
+            <p>
+              These reminders and monitors will be cancelled. Restoring the chat
+              will not restart them.
+            </p>
+            <ul className="mt-2 max-h-48 space-y-2 overflow-y-auto rounded-lg border border-border p-3">
+              {watchers.map((watcher) => (
+                <li key={watcher.id}>
+                  <div className="font-medium text-fg">{watcher.name}</div>
+                  <div>
+                    {watcher.nextRunAt
+                      ? `Next: ${new Date(watcher.nextRunAt).toLocaleString()}`
+                      : "Event monitor or paused schedule"}
+                  </div>
+                  <div>{watcher.environment}</div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         {error ? <p className="mt-3 text-xs text-danger">{error}</p> : null}
       </div>
       <footer className="mt-4 flex justify-end gap-2 border-t border-border px-5 py-3.5">
@@ -154,13 +192,16 @@ export function ArchiveSessionDialog({
           Cancel
         </button>
         <PendingButton
+          data-testid="archive-session-confirm"
           type="button"
           onClick={onConfirm}
           pending={pending}
           pendingLabel="Archiving…"
           className="h-8 rounded-md border border-danger/40 bg-danger/10 px-3 text-[13px] font-medium text-danger hover:bg-danger/20 disabled:opacity-50"
         >
-          Stop and archive
+          {watcherCount > 0
+            ? "Archive and cancel reminders"
+            : "Stop and archive"}
         </PendingButton>
       </footer>
     </Modal>

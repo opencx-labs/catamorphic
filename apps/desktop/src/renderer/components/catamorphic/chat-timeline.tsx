@@ -32,6 +32,7 @@ import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 import { splitAttachmentMarkers } from "../../lib/composer-serialize";
 import { ContextPill } from "../context-pill";
 import { ShortcutHint } from "../shortcut-hint";
+import { SessionAttribution } from "./session-attribution.js";
 
 const REMARK_PLUGINS = [remarkGfm];
 
@@ -129,6 +130,7 @@ export interface AgentQuestion {
 }
 
 export interface ChatTimelineProps {
+  focusMessageId?: string;
   /** Persisted + optimistic messages, in order. */
   messages: ChatTimelineMessage[];
   /** Live activity line ("Thinking...", tool progress) shown under messages. */
@@ -224,6 +226,7 @@ export interface ChatTimelineProps {
  * `useAgentChat` (see `AgentChat`) or any other source.
  */
 export function ChatTimeline({
+  focusMessageId,
   messages,
   activity,
   queuedCount = 0,
@@ -276,22 +279,32 @@ export function ChatTimeline({
         {(() => {
           const keys = timelineKeys(messages);
           return messages.map((message, index) => (
-            <Message
+            <div
               key={keys[index]}
-              message={message}
-              isLast={message.id === lastConversationId}
-              resolveAgentName={resolveAgentName}
-              onLinkClick={onLinkClick}
-              renderLink={renderLink}
-              onFileClick={onFileClick}
-              resolveToolIcon={resolveToolIcon}
-              // Retry re-runs the last user turn; without one there is
-              // nothing to re-run — hide the button, never show a dead one.
-              onRetry={hasRetryableTurn ? onRetry : undefined}
-              onReauth={onReauth}
-              reauthLabel={reauthLabel}
-              onFork={onFork}
-            />
+              data-message-id={message.id}
+              tabIndex={-1}
+              className={
+                message.id === focusMessageId
+                  ? "rounded-md outline outline-1 outline-accent/50"
+                  : "contents"
+              }
+            >
+              <Message
+                message={message}
+                isLast={message.id === lastConversationId}
+                resolveAgentName={resolveAgentName}
+                onLinkClick={onLinkClick}
+                renderLink={renderLink}
+                onFileClick={onFileClick}
+                resolveToolIcon={resolveToolIcon}
+                // Retry re-runs the last user turn; without one there is
+                // nothing to re-run — hide the button, never show a dead one.
+                onRetry={hasRetryableTurn ? onRetry : undefined}
+                onReauth={onReauth}
+                reauthLabel={reauthLabel}
+                onFork={onFork}
+              />
+            </div>
           ));
         })()}
         {activity && (
@@ -339,6 +352,10 @@ export function ChatTimeline({
           register={registerJumpToPreviousUserMessage}
         />
       )}
+      <FocusMessage
+        messageId={focusMessageId}
+        ready={messages.some((message) => message.id === focusMessageId)}
+      />
       <ScrollToLatest />
     </StickToBottom>
   );
@@ -441,22 +458,6 @@ function contentHash(message: ChatTimelineMessage): string {
   const result = `${text.length.toString(36)}:${(hash >>> 0).toString(36)}`;
   contentHashCache.set(message, result);
   return result;
-}
-
-function deliveryAuthorLabel(message: ChatTimelineMessage): string | null {
-  if (message.role !== "user") return null;
-  switch (message.author?.kind) {
-    case "agent":
-      return "Agent message";
-    case "workflow":
-      return `Workflow · ${message.author.workflowName}`;
-    case "watcher":
-      return "Watcher";
-    case "system":
-      return "System";
-    default:
-      return null;
-  }
 }
 
 /** One pass over the list; duplicate contents get occurrence suffixes. */
@@ -582,7 +583,7 @@ function MessageImpl({
   const humanUserMessage =
     message.role === "user" &&
     (!message.author || message.author.kind === "user");
-  const deliveryAuthor = deliveryAuthorLabel(message);
+
   const enterClasses = `motion-safe:transition-[opacity,translate] motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${entered ? "motion-safe:translate-y-0 motion-safe:opacity-100" : "motion-safe:translate-y-1 motion-safe:opacity-0"}`;
 
   // Failed turns render as an error card with recovery actions (the
@@ -641,11 +642,11 @@ function MessageImpl({
       data-user-message={humanUserMessage || undefined}
       className={`group/msg relative max-w-[85%] text-sm ${enterClasses} ${humanUserMessage ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2" : message.role === "user" ? "mr-auto rounded-xl rounded-bl-sm border border-border bg-bg-raised px-3 py-2" : "mr-auto"}`}
     >
-      {deliveryAuthor && (
-        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-fg-faint">
-          {deliveryAuthor}
-        </div>
-      )}
+      <SessionAttribution
+        author={message.role === "assistant" ? undefined : message.author}
+        metadata={message.metadata}
+        onOpen={onLinkClick}
+      />
       {stripAttachments.length > 0 && (
         <AttachmentStrip attachments={stripAttachments} />
       )}
@@ -1564,4 +1565,37 @@ function ScrollToLatest() {
       <ArrowDown className="size-4" />
     </button>
   );
+}
+
+/** Stop following new output when opening a notification's exact message. */
+function FocusMessage({
+  messageId,
+  ready,
+}: {
+  messageId?: string;
+  ready: boolean;
+}) {
+  const { contentRef, scrollRef, stopScroll } = useStickToBottomContext();
+  useEffect(() => {
+    if (!messageId || !ready) return;
+    const frame = requestAnimationFrame(() => {
+      const target = contentRef.current?.querySelector<HTMLElement>(
+        `[data-message-id="${CSS.escape(messageId)}"]`,
+      );
+      const scroller = scrollRef.current;
+      if (!target || !scroller) return;
+      stopScroll();
+      scroller.scrollTo({
+        top:
+          scroller.scrollTop +
+          target.getBoundingClientRect().top -
+          scroller.getBoundingClientRect().top -
+          12,
+        behavior: "instant",
+      });
+      target.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [messageId, ready, contentRef, scrollRef, stopScroll]);
+  return null;
 }

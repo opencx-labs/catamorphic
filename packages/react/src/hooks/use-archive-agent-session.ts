@@ -21,6 +21,13 @@ export type ArchiveAgentSessionResult = {
   impact: {
     sessionIds: string[];
     runningSessionIds: string[];
+    watchers: Array<{
+      id: string;
+      sessionId: string;
+      name: string;
+      environment: string | null;
+      nextRunAt: string | null;
+    }>;
     activeWatcherCount: number;
     activeProcessCount: number;
     requiresConfirmation: boolean;
@@ -51,6 +58,9 @@ export function useArchiveAgentSession(
         return assertApiOk(result, "Archive agent session failed");
       }),
     onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["cat", "agent", "attention"],
+      });
       void queryClient.invalidateQueries({
         queryKey: ["cat", "project", projectId, "agent", "sessions"],
       });

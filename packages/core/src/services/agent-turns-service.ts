@@ -3,6 +3,8 @@ import type { DB, JsonObject } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { type Kysely, sql, type Transaction } from "kysely";
 
+import { UserNotificationsService } from "./user-notifications-service.js";
+
 export type SessionDeliveryMode = "message_only" | "next_turn" | "interrupt";
 
 export type SessionMessageAuthor =
@@ -215,6 +217,7 @@ export class AgentTurnsService {
     content: string;
     author: SessionMessageAuthor;
     mode: SessionDeliveryMode;
+    attention?: "required" | "none";
     idempotencyKey?: string;
     metadata?: JsonObject;
     transaction?: Transaction<DB>;
@@ -238,6 +241,7 @@ export class AgentTurnsService {
     content: string;
     author: SessionMessageAuthor;
     mode: SessionDeliveryMode;
+    attention?: "required" | "none";
     idempotencyKey?: string;
     metadata?: JsonObject;
     transaction?: Transaction<DB>;
@@ -281,7 +285,9 @@ export class AgentTurnsService {
           author_payload: jsonAuthor(input.author),
           delivery_mode: input.mode,
           idempotency_key: input.idempotencyKey ?? null,
-          metadata: input.metadata ?? null,
+          metadata: input.attention
+            ? { ...input.metadata, attention: input.attention }
+            : (input.metadata ?? null),
         })
         .onConflict((conflict) =>
           conflict
@@ -318,6 +324,65 @@ export class AgentTurnsService {
           mode: parseDeliveryMode(existing.delivery_mode),
           created: false,
         };
+      }
+
+      if ((input.attention ?? input.metadata?.attention) === "required") {
+        // The attention revision emits a state event too. Preserve the same
+        // actor and causal chain as the message so monitors cannot echo it.
+        await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...input.author, causation: input.metadata?.causation ?? [] })}, true)`.execute(
+          trx,
+        );
+        const session = await trx
+          .selectFrom("agent_sessions")
+          .innerJoin("projects", "projects.id", "agent_sessions.project_id")
+          .select([
+            "agent_sessions.project_id",
+            "agent_sessions.external_user_id",
+            "projects.tenant_id",
+          ])
+          .where("agent_sessions.id", "=", input.sessionId)
+          .executeTakeFirstOrThrow();
+        await trx
+          .updateTable("agent_sessions")
+          .set(({ ref }) => ({
+            attention_revision: sql`${ref("attention_revision")} + 1`,
+            updated_at: new Date(),
+          }))
+          .where("id", "=", input.sessionId)
+          .execute();
+        await trx
+          .insertInto("agent_session_views")
+          .values({
+            session_id: input.sessionId,
+            tenant_id: session.tenant_id,
+            external_user_id: session.external_user_id,
+            visibility: "promoted",
+            previous_visibility: "promoted",
+          })
+          .onConflict((conflict) =>
+            conflict
+              .columns(["session_id", "tenant_id", "external_user_id"])
+              .doUpdateSet(({ ref }) => ({
+                visibility: sql`CASE WHEN ${ref("agent_session_views.visibility")} = 'archived' THEN 'archived' ELSE 'promoted' END`,
+                previous_visibility: "promoted",
+                updated_at: new Date(),
+              })),
+          )
+          .execute();
+        await new UserNotificationsService(this.db).publish({
+          identity: {
+            tenantId: session.tenant_id,
+            externalUserId: session.external_user_id,
+          },
+          projectId: session.project_id,
+          sessionId: input.sessionId,
+          kind: "session_attention",
+          title: "A message needs your attention",
+          body: input.content,
+          route: `/?project=${encodeURIComponent(session.project_id)}&session=${encodeURIComponent(input.sessionId)}&message=${encodeURIComponent(inserted.id)}`,
+          collapseKey: `message:${inserted.id}`,
+          transaction: trx,
+        });
       }
 
       if (input.mode === "message_only") {

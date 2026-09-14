@@ -54,6 +54,11 @@ export function defineTriggerKind<
    * authoring time through the generated trigger types.
    */
   output?: z.ZodType;
+  /** Pure routing filter. Complex business conditions belong in workflow code. */
+  matches?: (input: {
+    config: z.output<ConfigSchema>;
+    payload: z.output<PayloadSchema>;
+  }) => boolean;
   /** Derives an enrollment correlation key from a validated payload. */
   correlationKey?: (payload: z.output<PayloadSchema>) => string | undefined;
 }): TriggerKindDefinition<z.output<PayloadSchema>, z.output<ConfigSchema>> {
@@ -70,6 +75,17 @@ export function defineTriggerKind<
     ...(args.output ? { outputJsonSchema: toJsonSchema(args.output) } : {}),
     validatePayload: (value) => validate(args.payload, value),
     validateConfig: (value) => validate(configSchema, value),
+    matches: args.matches
+      ? ({ config, payload }) =>
+          args.matches?.({
+            config: z
+              .custom<z.output<ConfigSchema>>(
+                (value) => configSchema.safeParse(value).success,
+              )
+              .parse(config),
+            payload: args.payload.parse(payload),
+          }) ?? true
+      : undefined,
     correlationKey: args.correlationKey
       ? (payload) => args.correlationKey?.(payload as z.output<PayloadSchema>)
       : undefined,

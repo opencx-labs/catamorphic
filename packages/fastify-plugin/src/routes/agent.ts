@@ -29,6 +29,7 @@ import {
   AgentCatalogSchema,
   AgentQuestionParamsSchema,
   AgentSessionArchiveConfirmationSchema,
+  AgentSessionArchiveImpactSchema,
   AgentSessionArchiveResultSchema,
   AgentSessionDetailSchema,
   AgentSessionIdParamsSchema,
@@ -534,6 +535,9 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
     url: "/projects/:projectId/agent/sessions/:sessionId/attention/acknowledge",
     schema: {
       params: AgentSessionIdParamsSchema,
+      body: z
+        .object({ observedRevision: z.number().int().nonnegative().optional() })
+        .nullish(),
       response: {
         200: AgentSessionSchema,
         404: ErrorSchema,
@@ -552,6 +556,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
             identity,
             request.params.projectId,
             request.params.sessionId,
+            request.body ?? {},
           ),
         );
       } catch (err) {
@@ -1264,6 +1269,41 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
       }
     },
   });
+
+  typed.get(
+    "/projects/:projectId/agent/sessions/:sessionId/archive-impact",
+    {
+      schema: {
+        params: AgentSessionIdParamsSchema,
+        response: {
+          200: AgentSessionArchiveImpactSchema,
+          404: ErrorSchema,
+          503: ErrorSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const sessions = ctx.core?.agentSessions;
+      if (!sessions)
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      try {
+        return reply.send(
+          await sessions.archiveImpact(
+            resolveIdentity(request),
+            request.params.projectId,
+            request.params.sessionId,
+          ),
+        );
+      } catch (error) {
+        if (
+          error instanceof ProjectNotFoundError ||
+          error instanceof AgentSessionNotFoundError
+        )
+          return reply.status(404).send({ error: "Session not found" });
+        throw error;
+      }
+    },
+  );
 
   typed.route({
     method: "POST",

@@ -47,6 +47,10 @@ export class RemoteSessionMirror {
         projectId: string,
         sessionId: string,
       ) => Promise<AgentSessionDetail>;
+      sessionEvents?: (
+        projectId: string,
+        sessionId: string,
+      ) => Promise<unknown[]>;
       listSessions?: (projectId: string) => Promise<AgentSession[]>;
       beginHandoff?: (
         projectId: string,
@@ -436,6 +440,12 @@ export class RemoteSessionMirror {
             provider: detail.provider,
             source: detail.source,
             todos: detail.todos,
+            workStatus: detail.workStatus,
+            stateRevision: detail.stateRevision,
+            events: await this.deps.sessionEvents?.(
+              link.localProjectId,
+              sessionId,
+            ),
             ...(projectAgent ? { agentSlug: projectAgent.slug } : {}),
             messages: detail.messages.map((message) => ({
               id: message.id,

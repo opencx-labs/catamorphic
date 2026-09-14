@@ -1,7 +1,7 @@
 import type { DB, Json } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { WorkflowGraph } from "@catamorphic/parser";
-import type { Kysely, Selectable } from "kysely";
+import type { Kysely, Selectable, Transaction } from "kysely";
 import type { Identity } from "../identity.js";
 import { hasControlPlanePermission } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
@@ -228,6 +228,11 @@ export class WorkflowEnablementsService {
       consentDigest: string;
       temporary?: boolean;
       expiresAt?: Date;
+      /** Attach ownership in the same transaction before triggers become visible. */
+      onCreate?: (input: {
+        transaction: Transaction<DB>;
+        enablement: Selectable<DB["workflow_enablements"]>;
+      }) => Promise<void>;
     },
   ): Promise<WorkflowEnablement> {
     return withSpan(
@@ -320,6 +325,7 @@ export class WorkflowEnablementsService {
               "created",
               null,
             );
+            await input.onCreate?.({ transaction: trx, enablement: row });
             return row;
           });
         } catch (error) {

@@ -127,7 +127,8 @@ async function joinableProjects(options: {
   accessToken: string;
   fetch: typeof fetch;
 }): Promise<Array<{ id: string; name: string }>> {
-  const response = await options.fetch(
+  const fetchImpl = options.fetch;
+  const response = await fetchImpl(
     `${options.serverUrl.replace(/\/+$/, "")}/admission/projects`,
     { headers: { authorization: `Bearer ${options.accessToken}` } },
   );
@@ -154,7 +155,8 @@ async function accessibleProjects(options: {
   accessToken: string;
   fetch: typeof fetch;
 }): Promise<Array<{ id: string; name?: string }>> {
-  const response = await options.fetch(
+  const fetchImpl = options.fetch;
+  const response = await fetchImpl(
     `${options.serverUrl.replace(/\/+$/, "")}/me`,
     { headers: { authorization: `Bearer ${options.accessToken}` } },
   );
@@ -176,7 +178,7 @@ async function accessibleProjects(options: {
   if (ids.length === 0) return [];
 
   const names = new Map<string, string>();
-  const list = await options.fetch(
+  const list = await fetchImpl(
     `${options.serverUrl.replace(/\/+$/, "")}/projects`,
     { headers: { authorization: `Bearer ${options.accessToken}` } },
   );

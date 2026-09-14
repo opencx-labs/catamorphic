@@ -13,7 +13,7 @@ for existing projects; do not overwrite customized project skills to refresh it.
 The default standing prompt and every harness must preserve the same distinctions:
 
 - Session checks pass TypeScript source directly to `create_watcher` or
-  `create_github_watcher`. The host writes `workflows/src/watchers/<id>.ts` on
+  `create_github_watcher`. The host writes `workflows/src/artifacts/<id>.ts` on
   an isolated expiring ref. Imports resolve against the committed origin,
   not the current session's uncommitted helpers. Never write the temporary
   source into an automatically checkpointed project folder first.
@@ -207,3 +207,18 @@ session id is already available.
 - Steps must have `"use step"` directive
 - All function parameters must be destructured objects
 - Use JSDoc for all UI-facing metadata
+
+## Session triggers and actions
+
+Read the shipped [session-workflows guide](../../../packages/core/src/session-workflows-skill.ts)
+when authoring timers, monitors, or session actions. Use the same primitives for
+session-owned and durable enablements. A schedule has either an absolute `at`
+or a `cron` with `timezone`; it never needs another timer service. Session events
+carry event-time snapshots. Read current state through a returned host transition
+before acting on information that can become stale. Explicit work completion is
+separate from a settled turn. Preserve actor and causal provenance through local
+and remote delivery, and use stable idempotency keys for every mutation.
+
+Exercise the quiet, actionable, failure, restart, and stop paths. Check that source
+and exact runs remain accessible from chat. Never claim that writing or deploying
+source enabled an automation, or that a queued remote message has already run.

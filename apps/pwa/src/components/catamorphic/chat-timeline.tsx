@@ -21,6 +21,7 @@ import {
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
+import { SessionAttribution } from "./session-attribution.js";
 
 const REMARK_PLUGINS = [remarkGfm];
 
@@ -75,6 +76,7 @@ export interface AgentQuestion {
 }
 
 export interface ChatTimelineProps {
+  focusMessageId?: string;
   /** Persisted + optimistic messages, in order. */
   messages: ChatTimelineMessage[];
   /** Live activity line ("Thinking...", tool progress) shown under messages. */
@@ -137,6 +139,7 @@ export interface ChatTimelineProps {
  * by both the docked chat and full-surface chat hosts.
  */
 export function ChatTimeline({
+  focusMessageId,
   messages,
   activity,
   queuedCount = 0,
@@ -165,14 +168,24 @@ export function ChatTimeline({
           </div>
         )}
         {messages.map((message, index) => (
-          <Message
+          <div
             key={timelineKey(message, index, messages)}
-            message={message}
-            onLinkClick={onLinkClick}
-            renderLink={renderLink}
-            onFileClick={onFileClick}
-            resolveToolIcon={resolveToolIcon}
-          />
+            data-message-id={message.id}
+            tabIndex={-1}
+            className={
+              message.id === focusMessageId
+                ? "rounded-md outline outline-1 outline-accent/50"
+                : "contents"
+            }
+          >
+            <Message
+              message={message}
+              onLinkClick={onLinkClick}
+              renderLink={renderLink}
+              onFileClick={onFileClick}
+              resolveToolIcon={resolveToolIcon}
+            />
+          </div>
         ))}
         {activity && (
           <div className="flex items-center gap-2 text-xs text-fg-muted">
@@ -191,6 +204,10 @@ export function ChatTimeline({
           </div>
         )}
       </StickToBottom.Content>
+      <FocusMessage
+        messageId={focusMessageId}
+        ready={messages.some((message) => message.id === focusMessageId)}
+      />
       <ScrollToLatest />
     </StickToBottom>
   );
@@ -278,9 +295,21 @@ function Message({
       // entrance would snap while only opacity faded.
       className={`max-w-[85%] text-sm motion-safe:transition-[opacity,translate] motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${entered ? "motion-safe:translate-y-0 motion-safe:opacity-100" : "motion-safe:translate-y-1 motion-safe:opacity-0"} ${humanUserMessage ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2" : message.role === "user" ? "mr-auto rounded-xl rounded-bl-sm border border-border bg-bg-raised px-3 py-2" : "mr-auto"}`}
     >
-      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-fg-faint">
-        {deliveryAuthorLabel(message)}
-      </div>
+      {message.author && message.author.kind !== "user" ? (
+        <SessionAttribution
+          author={message.author}
+          metadata={message.metadata}
+          onOpen={onLinkClick}
+        />
+      ) : (
+        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-fg-faint">
+          {message.role === "assistant"
+            ? "Agent"
+            : message.role === "system"
+              ? "System"
+              : "You"}
+        </div>
+      )}
       {message.role === "assistant" && (
         <TurnSteps
           steps={turnSteps(message)}
@@ -711,23 +740,6 @@ function changedFiles(message: ChatTimelineMessage): string[] {
   });
 }
 
-function deliveryAuthorLabel(message: ChatTimelineMessage): string {
-  if (message.role === "assistant") return "Agent";
-  if (message.role === "system") return "System";
-  switch (message.author?.kind) {
-    case "agent":
-      return "Agent message";
-    case "workflow":
-      return `Workflow · ${message.author.workflowName}`;
-    case "watcher":
-      return "Watcher";
-    case "system":
-      return "System";
-    default:
-      return "You";
-  }
-}
-
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null
     ? (value as Record<string, unknown>)
@@ -747,4 +759,37 @@ function ScrollToLatest() {
       <ArrowDown className="size-4" />
     </button>
   );
+}
+
+/** Stop following new output when opening a notification's exact message. */
+function FocusMessage({
+  messageId,
+  ready,
+}: {
+  messageId?: string;
+  ready: boolean;
+}) {
+  const { contentRef, scrollRef, stopScroll } = useStickToBottomContext();
+  useEffect(() => {
+    if (!messageId || !ready) return;
+    const frame = requestAnimationFrame(() => {
+      const target = contentRef.current?.querySelector<HTMLElement>(
+        `[data-message-id="${CSS.escape(messageId)}"]`,
+      );
+      const scroller = scrollRef.current;
+      if (!target || !scroller) return;
+      stopScroll();
+      scroller.scrollTo({
+        top:
+          scroller.scrollTop +
+          target.getBoundingClientRect().top -
+          scroller.getBoundingClientRect().top -
+          12,
+        behavior: "instant",
+      });
+      target.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [messageId, ready, contentRef, scrollRef, stopScroll]);
+  return null;
 }

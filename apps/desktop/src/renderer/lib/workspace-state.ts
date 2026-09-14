@@ -179,7 +179,9 @@ export const editorTabKey = (localId: string) => `editor:${localId}`;
 export const serializeWorkspace = (ws: Workspace): Workspace => {
   const chats = ws.chats
     .filter((chat) => chat.sessionId)
-    .map(({ pendingMessage: _pending, ...chat }) => chat);
+    .map(
+      ({ pendingMessage: _pending, focusMessageId: _focus, ...chat }) => chat,
+    );
   const chatIds = new Set(chats.map((chat) => chat.localId));
   const chatRef = (id: string | undefined) =>
     id && chatIds.has(id) ? { chatLocalId: id } : {};

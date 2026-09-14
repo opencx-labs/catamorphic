@@ -29,6 +29,14 @@ timelines, sessions, editors, runs) must be ported back to the installable
 packages/registry so embedders get it too. A desktop-only improvement to a
 shared surface is a process bug, not a win. See the [historical log](DESIGN-HISTORY.md) for its rationale.
 
+## Session reminders
+
+Session reminders persist until delivered or cancelled, with no default expiry
+(ADR 0139). Local reminders run when this desktop is available. Archiving lists
+and cancels the session tree's reminders and monitors; closing a chat leaves them
+enabled. Attention belongs to an attributed message, and notification clicks open
+that message. Late delivery shows the original scheduled time.
+
 ## Principles
 
 File and proposal lifecycle (ADR 0136): new personal files stay on this device
@@ -437,3 +445,12 @@ Signed macOS builds verify the browser-import helper's Developer ID identity,
 matching app team, universal architectures, and safe version protocol. The manual
 import smoke uses a disposable Chrome profile and a known test login; macOS
 keeps control of the authentication and Keychain authorization prompts.
+
+
+### 2026-09-14: Session workflow actions
+
+Session monitors and timed wakeups use ordinary workflow enablements, with retained
+source and run history. Chat displays compact attributed action entries. Agent,
+workflow, run, originating chat, and child links use the workspace's resource
+opening behavior. Turn completion and explicit work completion stay distinct.
+Local and remote sessions share the same trigger and action contracts (ADR 0138).

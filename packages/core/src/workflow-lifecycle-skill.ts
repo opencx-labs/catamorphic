@@ -51,7 +51,7 @@ cron job, native harness monitor, or indefinitely running shell loop.
   modules already present in the committed origin. Relative imports resolve
   from workflows/src/artifacts/, not from the user's current directory.
 - Use registered trigger kinds and their actual config/payload types. For a
-  schedule, the payload has bindingId, scheduledFor, and firedAt. For an event
+  schedule, the payload has activationId, scheduledFor, and firedAt. For an event
   watcher it is the normalized Project Event envelope. Do not copy a fictional
   event kind from an example into a real request.
 - Set a bounded expiry appropriate to the request and an allowed Environment.
@@ -63,9 +63,9 @@ cron job, native harness monitor, or indefinitely running shell loop.
 - A boundary may return context.host["catamorphic.sessions"].deliver(...).
   message_only appends without a model turn; next_turn wakes or queues a turn;
   interrupt is for genuinely urgent work. A terminal result does not itself
-  stop a watcher. Have the owning agent call stop_watcher after the condition
-  is satisfied; when it must react, deliver with next_turn and identify the
-  watcher by its name. Expiry is the fallback, not the normal completion plan.
+  stop a watcher. Return context.host["catamorphic.sessions"].stop({ idempotencyKey: "stop" })
+  from a later boundary when the condition is satisfied. An owning agent can also
+  call stop_watcher. Expiry is the fallback, not the normal completion plan.
 - Keep the returned watcher id. Confirm its status, Environment, expiry, and
   notification behavior. Reuse or stop an existing equivalent watcher rather
   than creating duplicates. Stop, expiry, and session close/archive disable

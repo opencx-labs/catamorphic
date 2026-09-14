@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionInspectorContent } from "./session-inspector.js";
 
 const session: AgentSession = {
+  workStatus: "open",
+  stateRevision: 0,
   id: "00000000-0000-4000-8000-000000000001",
   projectId: "00000000-0000-4000-8000-000000000002",
   externalUserId: "member-1",

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { DB, Json } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { Cron } from "croner";
-import type { Kysely } from "kysely";
+import { type Kysely, sql } from "kysely";
 import type { Identity } from "../identity.js";
 import type {
   StoredTriggerActivation,
@@ -11,18 +11,17 @@ import type {
 
 const tracer = getTracer("@catamorphic/core");
 
-interface ScheduleConfig {
-  cron: string;
-  timezone: string;
-}
+type ScheduleConfig = { at: string } | { cron: string; timezone: string };
 
 interface ScheduleTriggerDispatcher {
-  storedProductionActivations(args: {
+  storedActiveActivations(args: {
     identity: Identity;
     projectId: string;
     kind: string;
   }): Promise<StoredTriggerActivation[]>;
-  fire(args: {
+  fireAtCommit(args: {
+    commitSha: string;
+    remoteBranch: string;
     identity: Identity;
     projectId: string;
     kind: string;
@@ -43,6 +42,8 @@ interface ClaimedOccurrence {
   workflowName: string;
   environment: string;
   attemptCount: number;
+  commitSha: string;
+  remoteBranch: string;
 }
 
 /** Materializes and dispatches the built-in `schedule` trigger kind. */
@@ -85,7 +86,7 @@ export class SchedulesService {
     projectId: string,
     now: Date,
   ): Promise<void> {
-    const bindings = await this.triggers.storedProductionActivations({
+    const bindings = await this.triggers.storedActiveActivations({
       identity,
       projectId,
       kind: "schedule",
@@ -97,26 +98,39 @@ export class SchedulesService {
         .selectAll()
         .where("activation_id", "=", binding.activationId)
         .executeTakeFirst();
+      const cron = "cron" in config ? config.cron : null;
+      const timezone = "timezone" in config ? config.timezone : null;
+      const at = "at" in config ? new Date(config.at) : null;
       const changed =
         !existing ||
-        existing.cron_expression !== config.cron ||
-        existing.timezone !== config.timezone;
+        existing.cron_expression !== cron ||
+        existing.timezone !== timezone ||
+        existing.fire_at?.getTime() !== at?.getTime();
       const nextFireAt = changed ? nextRun(config, now) : existing.next_fire_at;
       await this.db
         .insertInto("schedule_bindings")
         .values({
           activation_id: binding.activationId,
-          cron_expression: config.cron,
-          timezone: config.timezone,
+          cron_expression: cron,
+          timezone,
+          fire_at: at,
           next_fire_at: nextFireAt,
         })
         .onConflict((conflict) =>
-          conflict.column("activation_id").doUpdateSet({
-            cron_expression: config.cron,
-            timezone: config.timezone,
-            next_fire_at: nextFireAt,
+          conflict.column("activation_id").doUpdateSet(({ ref }) => ({
+            cron_expression: cron,
+            timezone,
+            fire_at: at,
+            // Only a configuration change resets the clock. An unchanged
+            // concurrent tick must preserve another worker's advanced cursor.
+            next_fire_at: sql`case when
+              ${ref("schedule_bindings.cron_expression")} is distinct from ${cron}
+              or ${ref("schedule_bindings.timezone")} is distinct from ${timezone}
+              or ${ref("schedule_bindings.fire_at")} is distinct from ${at}
+              then ${nextFireAt}
+              else ${ref("schedule_bindings.next_fire_at")} end`,
             updated_at: now,
-          }),
+          })),
         )
         .execute();
     }
@@ -162,6 +176,7 @@ export class SchedulesService {
         .execute();
       for (const row of due) {
         const scheduledFor = row.next_fire_at;
+        if (!scheduledFor) continue;
         await transaction
           .insertInto("schedule_occurrences")
           .values({
@@ -171,10 +186,12 @@ export class SchedulesService {
           })
           .onConflict((conflict) => conflict.doNothing())
           .execute();
-        const config = {
-          cron: row.cron_expression,
-          timezone: row.timezone,
-        };
+        const config: ScheduleConfig = row.fire_at
+          ? { at: row.fire_at.toISOString() }
+          : {
+              cron: row.cron_expression ?? "",
+              timezone: row.timezone ?? "UTC",
+            };
         await transaction
           .updateTable("schedule_bindings")
           .set({
@@ -182,7 +199,7 @@ export class SchedulesService {
             // Coalesce missed clock ticks into this one durable occurrence.
             // The next due time is computed from the worker's current clock,
             // not by replaying every interval spent offline.
-            next_fire_at: nextRun(config, now),
+            next_fire_at: "at" in config ? null : nextRun(config, now),
             updated_at: now,
           })
           .where("activation_id", "=", row.activation_id)
@@ -217,7 +234,9 @@ export class SchedulesService {
           enrolled += 1;
           continue;
         }
-        const result = await this.triggers.fire({
+        const result = await this.triggers.fireAtCommit({
+          commitSha: occurrence.commitSha,
+          remoteBranch: occurrence.remoteBranch,
           identity,
           projectId,
           kind: "schedule",
@@ -292,6 +311,8 @@ export class SchedulesService {
           "activation.enablement_id",
           "definition.workflow_name",
           "enablement.environment_name",
+          "enablement.commit_sha",
+          "enablement.remote_branch",
         ])
         .where("enablement.project_id", "=", projectId)
         .where((expression) =>
@@ -327,6 +348,8 @@ export class SchedulesService {
           .execute();
       }
       return rows.map((row) => ({
+        commitSha: row.commit_sha,
+        remoteBranch: row.remote_branch,
         activationId: row.activation_id,
         enablementId: row.enablement_id,
         scheduledFor: row.scheduled_for,
@@ -366,6 +389,14 @@ export class SchedulesService {
 
 function parseConfig(value: Json): ScheduleConfig {
   if (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    typeof value.at === "string" &&
+    Number.isFinite(Date.parse(value.at))
+  )
+    return { at: value.at };
+  if (
     typeof value === "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -378,10 +409,65 @@ function parseConfig(value: Json): ScheduleConfig {
 }
 
 function nextRun(config: ScheduleConfig, after: Date): Date {
+  if ("at" in config) return new Date(config.at);
   const next = new Cron(config.cron, {
     timezone: config.timezone,
     paused: true,
   }).nextRun(after);
   if (!next) throw new Error("Schedule has no next occurrence");
   return next;
+}
+
+/** Next intended occurrence, even before the scheduler's first enrollment tick. */
+export async function nextScheduledTime(input: {
+  db: Kysely<DB>;
+  enablementId: string | null;
+}): Promise<string | null> {
+  if (!input.enablementId) return null;
+  const schedules = await input.db
+    .selectFrom("workflow_enablement_triggers as activation")
+    .innerJoin(
+      "trigger_definitions as definition",
+      "definition.id",
+      "activation.trigger_definition_id",
+    )
+    .leftJoin(
+      "schedule_bindings as schedule",
+      "schedule.activation_id",
+      "activation.id",
+    )
+    .select([
+      "schedule.activation_id",
+      "schedule.next_fire_at",
+      "definition.config",
+      "activation.config_overlay",
+    ])
+    .where("activation.enablement_id", "=", input.enablementId)
+    .where("definition.trigger_kind", "=", "schedule")
+    .execute();
+  const dates = schedules
+    .flatMap((schedule) => {
+      if (schedule.activation_id)
+        return schedule.next_fire_at
+          ? [schedule.next_fire_at.toISOString()]
+          : [];
+      const base = schedule.config;
+      const overlay = schedule.config_overlay;
+      const config =
+        base &&
+        typeof base === "object" &&
+        !Array.isArray(base) &&
+        overlay &&
+        typeof overlay === "object" &&
+        !Array.isArray(overlay)
+          ? { ...base, ...overlay }
+          : base;
+      try {
+        return [nextRun(parseConfig(config), new Date()).toISOString()];
+      } catch {
+        return [];
+      }
+    })
+    .sort();
+  return dates[0] ?? null;
 }

@@ -56,6 +56,7 @@ describe("temporary watchers", () => {
   const triggered: Array<Record<string, unknown>> = [];
   const attemptedEventIds: string[] = [];
   let failingEventId: string | null = null;
+  let beforeEnablementCreate: (() => Promise<void>) | undefined;
   const bindingKinds = new Map([
     ["watchIssue", "issue.changed"],
     ["watchRegression", "regression.changed"],
@@ -167,6 +168,7 @@ describe("temporary watchers", () => {
             external_user_id: identity.externalUserId,
             workflow_enablement_id: String(input.enablementId),
             provenance: {},
+            correlation_key: String(input.correlationKey),
           })
           .execute();
         return { id };
@@ -187,6 +189,7 @@ describe("temporary watchers", () => {
       runs,
     });
     const sessions = {
+      hostId: "local-host",
       assertSession: vi.fn(async () => undefined),
     } as unknown as AgentSessionsService;
     const monitors = {} as ProjectEventMonitorsService;
@@ -199,54 +202,73 @@ describe("temporary watchers", () => {
       sessions,
       workflowEnablements: {
         preview: vi.fn(async () => ({ consentDigest: "d".repeat(64) })),
-        create: vi.fn(async (input: Record<string, unknown>) => {
-          const id = crypto.randomUUID();
-          const artifact = await db
-            .selectFrom("deployment_artifacts")
-            .selectAll()
-            .where("project_id", "=", projectId)
-            .where("commit_sha", "=", String(input.commitSha))
-            .executeTakeFirstOrThrow();
-          await db
-            .insertInto("workflow_enablements")
-            .values({
-              id,
-              tenant_id: tenantId,
-              project_id: projectId,
-              workflow_name: String(input.workflowName),
-              deployment_artifact_id: artifact.id,
-              commit_sha: String(input.commitSha),
-              remote_branch: String(input.remoteBranch),
-              environment_name: String(input.environment ?? "local"),
-              owner_kind: "member",
-              owner_external_user_id: identity.externalUserId,
-              owner_identity: {
-                tenantId: identity.tenantId,
-                externalUserId: identity.externalUserId,
-              },
-              capabilities: [],
-              consent_digest: "d".repeat(64),
-              temporary: true,
-              created_by_external_user_id: identity.externalUserId,
-            })
-            .execute();
-          await db
-            .insertInto("workflow_enablement_triggers")
-            .columns(["enablement_id", "trigger_definition_id"])
-            .expression((eb) =>
-              eb
-                .selectFrom("trigger_definitions")
-                .select([
-                  eb.val(id).as("enablement_id"),
-                  "id as trigger_definition_id",
-                ])
+        create: vi.fn(
+          async (
+            input: Parameters<WorkflowEnablementsService["create"]>[0],
+          ) => {
+            await beforeEnablementCreate?.();
+            return db.transaction().execute(async (transaction) => {
+              const id = crypto.randomUUID();
+              const artifact = await transaction
+                .selectFrom("deployment_artifacts")
+                .selectAll()
                 .where("project_id", "=", projectId)
                 .where("commit_sha", "=", String(input.commitSha))
-                .where("workflow_name", "=", String(input.workflowName)),
-            )
-            .execute();
-          return { id, environment: String(input.environment ?? "local") };
-        }),
+                .executeTakeFirstOrThrow();
+              const enablement = await transaction
+                .insertInto("workflow_enablements")
+                .values({
+                  id,
+                  tenant_id: tenantId,
+                  project_id: projectId,
+                  workflow_name: String(input.workflowName),
+                  deployment_artifact_id: artifact.id,
+                  commit_sha: String(input.commitSha),
+                  remote_branch: String(input.remoteBranch),
+                  environment_name: String(input.environment ?? "local"),
+                  owner_kind: "member",
+                  owner_external_user_id: identity.externalUserId,
+                  owner_identity: JSON.parse(JSON.stringify(input.identity)),
+                  capabilities: [],
+                  consent_digest: "d".repeat(64),
+                  temporary: true,
+                  expires_at:
+                    input.expiresAt instanceof Date ? input.expiresAt : null,
+                  created_by_external_user_id: identity.externalUserId,
+                })
+                .returningAll()
+                .executeTakeFirstOrThrow();
+              await transaction
+                .insertInto("workflow_enablement_triggers")
+                .columns(["enablement_id", "trigger_definition_id"])
+                .expression((eb) =>
+                  eb
+                    .selectFrom("trigger_definitions")
+                    .select([
+                      eb.val(id).as("enablement_id"),
+                      "id as trigger_definition_id",
+                    ])
+                    .where("project_id", "=", projectId)
+                    .where("commit_sha", "=", String(input.commitSha))
+                    .where("workflow_name", "=", String(input.workflowName)),
+                )
+                .execute();
+              await input.onCreate?.({ transaction, enablement });
+              return { id, environment: String(input.environment ?? "local") };
+            });
+          },
+        ),
+        revalidate: vi.fn(
+          async ({ enablementId }: { enablementId: string }) => {
+            const row = await db
+              .selectFrom("workflow_enablements")
+              .selectAll()
+              .where("id", "=", enablementId)
+              .executeTakeFirstOrThrow();
+            if (row.status !== "active") throw new Error("Enablement disabled");
+            return { ownerIdentity: row.owner_identity };
+          },
+        ),
         disable: disableEnablement,
       } as unknown as WorkflowEnablementsService,
     });
@@ -421,12 +443,75 @@ describe("temporary watchers", () => {
     expect(triggered).toEqual([
       expect.objectContaining({
         enablementId: expect.stringMatching(/^[0-9a-f-]{36}$/),
-        correlationKey: `watcher:${watcher.id}:event:${appended.event.id}`,
+        correlationKey: expect.stringMatching(
+          new RegExp(`^event:[0-9a-f-]{36}:${appended.event.id}$`),
+        ),
         input: appended.event,
         workflowName: "watchIssue",
         environment: "edge",
       }),
     ]);
+  });
+
+  it("suppresses causal cycles and recovers a receipt after its run has already completed", async () => {
+    const watcher = (
+      await watchers.list({ identity, projectId, sessionId })
+    ).find((item) => item.workflowName === "watchIssue");
+    if (!watcher) throw new Error("Fixture watcher missing");
+    const enablement = await db
+      .selectFrom("watchers")
+      .select("workflow_enablement_id")
+      .where("id", "=", watcher.id)
+      .executeTakeFirstOrThrow();
+    const cycle = await events.append({
+      projectId,
+      source: "test",
+      kind: "issue.changed",
+      externalId: "cycle",
+      occurredAt: new Date().toISOString(),
+      payload: { causation: [enablement.workflow_enablement_id] },
+    });
+    expect(await watchers.dispatchPending()).toBe(0);
+    expect(
+      await db
+        .selectFrom("project_event_deliveries")
+        .select(["status", "error"])
+        .where("event_id", "=", cycle.event.id)
+        .executeTakeFirst(),
+    ).toMatchObject({ status: "completed", error: "Causal cycle suppressed" });
+    const event = await events.append({
+      projectId,
+      source: "test",
+      kind: "issue.changed",
+      externalId: "crash-after-run",
+      occurredAt: new Date().toISOString(),
+      payload: {},
+    });
+    expect(await watchers.dispatchPending()).toBe(1);
+    const admissions = triggered.length;
+    await db
+      .updateTable("workflow_runs")
+      .set({ status: "completed", completed_at: new Date() })
+      .where("correlation_key", "like", `%:${event.event.id}`)
+      .execute();
+    await db
+      .updateTable("project_event_deliveries")
+      .set({
+        status: "leased",
+        lease_owner: "dead-worker",
+        lease_expires_at: new Date(0),
+      })
+      .where("event_id", "=", event.event.id)
+      .execute();
+    await watchers.dispatchPending();
+    expect(triggered).toHaveLength(admissions);
+    expect(
+      await db
+        .selectFrom("project_event_deliveries")
+        .select("status")
+        .where("event_id", "=", event.event.id)
+        .executeTakeFirst(),
+    ).toEqual({ status: "completed" });
   });
 
   it("rejects a workflow without an ordinary inline trigger binding", async () => {
@@ -494,6 +579,11 @@ describe("temporary watchers", () => {
     ).toBe(first.event.sequence);
 
     failingEventId = null;
+    await db
+      .updateTable("project_event_deliveries")
+      .set({ next_attempt_at: new Date(0) })
+      .where("event_id", "=", second.event.id)
+      .execute();
     expect(await watchers.dispatchPending()).toBe(1);
     expect(attemptedEventIds.slice(-3)).toEqual([
       first.event.id,
@@ -508,7 +598,7 @@ describe("temporary watchers", () => {
       scope: [{ kind: "agent", projectId, name: "reviewer" }],
       executionScope: [{ projectId, name: "local" }],
     };
-    const watcher = await watchers.create({
+    await watchers.create({
       identity: scopedIdentity,
       projectId,
       sessionId,
@@ -537,14 +627,12 @@ describe("temporary watchers", () => {
 
     expect(await watchers.dispatchPending()).toBe(1);
     expect(
-      triggered.find(
-        (entry) =>
-          entry.correlationKey ===
-          `watcher:${watcher.id}:event:${appended.event.id}`,
+      triggered.find((entry) =>
+        String(entry.correlationKey).endsWith(`:${appended.event.id}`),
       )?.identity,
     ).toEqual(scopedIdentity);
   });
-  it("does no workflow lookup while idle and advances past unrelated events", async () => {
+  it("does no workflow lookup while idle or for unrelated events", async () => {
     await watchers.dispatchPending();
     const lookup = vi.spyOn(triggers, "listAtCommit");
     await watchers.dispatchPending();
@@ -558,7 +646,7 @@ describe("temporary watchers", () => {
       payload: {},
     });
     expect(await watchers.dispatchPending()).toBe(0);
-    expect(lookup).toHaveBeenCalled();
+    expect(lookup).not.toHaveBeenCalled();
     lookup.mockClear();
     expect(await watchers.dispatchPending()).toBe(0);
     expect(lookup).not.toHaveBeenCalled();
@@ -693,4 +781,185 @@ describe("temporary watchers", () => {
       ).toBeGreaterThan(0);
     },
   );
+  it.each([
+    {
+      archived: true,
+      host: "local-host",
+      environment: "local",
+      error: "Restore the session",
+    },
+    {
+      archived: false,
+      host: "remote-host",
+      environment: "local",
+      error: "authoritative host",
+    },
+    {
+      archived: false,
+      host: "local-host",
+      environment: "remote",
+      error: "session's Environment",
+    },
+  ])(
+    "rejects invalid reminder ownership before creating artifacts: $error",
+    async ({ archived, host, environment, error }) => {
+      const targetId = crypto.randomUUID();
+      await db
+        .insertInto("agent_sessions")
+        .values({
+          id: targetId,
+          project_id: projectId,
+          external_user_id: identity.externalUserId,
+          provider: "test",
+          authority_host_id: host,
+          environment_name: "local",
+        })
+        .execute();
+      if (archived)
+        await db
+          .insertInto("agent_session_views")
+          .values({
+            session_id: targetId,
+            tenant_id: tenantId,
+            external_user_id: identity.externalUserId,
+            visibility: "archived",
+            archived_at: new Date(),
+          })
+          .execute();
+      await expect(
+        watchers.create({
+          identity,
+          projectId,
+          sessionId: targetId,
+          workflowName: "invalidReminder",
+          source: "export const invalidReminder = true;",
+          environment,
+        }),
+      ).rejects.toThrow(error);
+      expect(
+        await db
+          .selectFrom("session_artifacts")
+          .select("id")
+          .where("session_id", "=", targetId)
+          .execute(),
+      ).toEqual([]);
+    },
+  );
+
+  it.each(["archived", "closed"])(
+    "rolls back activation when a session is %s during watcher preparation",
+    async (lifecycle) => {
+      const targetId = crypto.randomUUID();
+      await db
+        .insertInto("agent_sessions")
+        .values({
+          id: targetId,
+          project_id: projectId,
+          external_user_id: identity.externalUserId,
+          provider: "test",
+        })
+        .execute();
+      beforeEnablementCreate = async () => {
+        if (lifecycle === "closed") {
+          await db
+            .updateTable("agent_sessions")
+            .set({ status: "closed" })
+            .where("id", "=", targetId)
+            .execute();
+          return;
+        }
+        await db
+          .insertInto("agent_session_views")
+          .values({
+            session_id: targetId,
+            tenant_id: tenantId,
+            external_user_id: identity.externalUserId,
+            visibility: "archived",
+            archived_at: new Date(),
+          })
+          .execute();
+      };
+      try {
+        await expect(
+          watchers.create({
+            identity,
+            projectId,
+            sessionId: targetId,
+            workflowName: `archiveRace${lifecycle}`,
+            source: `import { defineWorkflow, trigger } from "@catamorphic/workflow";
+        export const archiveRace${lifecycle} = defineWorkflow(({ defineBoundary }) => ({
+          triggers: [trigger("schedule", { at: "2020-01-01T00:00:00Z" })],
+          steps: [defineBoundary({ run: async ({ input }) => input })],
+        }));`,
+          }),
+        ).rejects.toThrow(
+          lifecycle === "closed" ? "closed session" : "Restore the session",
+        );
+      } finally {
+        beforeEnablementCreate = undefined;
+      }
+      expect(
+        await db
+          .selectFrom("workflow_enablements")
+          .select("id")
+          .where("workflow_name", "=", `archiveRace${lifecycle}`)
+          .execute(),
+      ).toEqual([]);
+      expect(
+        await watchers.list({ identity, projectId, sessionId: targetId }),
+      ).toEqual([]);
+    },
+  );
+
+  it("keeps a seven-day reminder enabled across months offline without an implicit expiry", async () => {
+    const at = new Date(Date.now() + 7 * 86_400_000).toISOString();
+    const reminder = await watchers.create({
+      identity,
+      projectId,
+      sessionId,
+      workflowName: "longReminder",
+      source: `import { defineWorkflow, trigger } from "@catamorphic/workflow";
+      export const longReminder = defineWorkflow(({ defineBoundary }) => ({
+        triggers: [trigger("schedule", { at: ${JSON.stringify(at)} })],
+        steps: [defineBoundary({ run: async ({ input }) => input })],
+      }));`,
+    });
+    expect(reminder.expiresAt).toBeNull();
+    expect(
+      (
+        await db
+          .selectFrom("workflow_enablements")
+          .select("expires_at")
+          .where("workflow_name", "=", "longReminder")
+          .executeTakeFirstOrThrow()
+      ).expires_at,
+    ).toBeNull();
+    const before = triggered.filter(
+      (run) => run.workflowName === "longReminder",
+    ).length;
+    const late = new Date(Date.now() + 100 * 86_400_000);
+    await new SchedulesService(db, triggers).tick({
+      identity,
+      projectId,
+      now: late,
+    });
+    await new SchedulesService(db, triggers).tick({
+      identity,
+      projectId,
+      now: late,
+    });
+    const runs = triggered.filter((run) => run.workflowName === "longReminder");
+    expect(runs).toHaveLength(before + 1);
+    expect(runs.at(-1)?.input).toMatchObject({ scheduledFor: at });
+    await watchers.stopForSessions({
+      identity,
+      projectId,
+      sessionIds: [sessionId],
+    });
+    expect(
+      (await watchers.list({ identity, projectId, sessionId })).find(
+        (item) => item.id === reminder.id,
+      )?.status,
+    ).toBe("stopped");
+  });
 });

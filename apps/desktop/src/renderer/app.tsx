@@ -1,8 +1,8 @@
 import {
-  useAcknowledgeAgentSessionAttention,
   useAgentSessions,
   useAppPresentations,
   useArchiveAgentSession,
+  useCatamorphic,
   useCreateAgentSession,
   useForkAgentSession,
   useProjects,
@@ -183,6 +183,7 @@ import {
 } from "./screens/browser-screen.js";
 import { McpAppScreen } from "./screens/mcp-app-screen.js";
 import { ProfileSettingsScreen } from "./screens/profile-settings-screen.js";
+import { RunScreen } from "./screens/run-screen.js";
 import { SettingsScreen } from "./screens/settings-screen.js";
 
 // Heavy workspace surfaces stay out of the startup parse path. They remain
@@ -957,11 +958,13 @@ export function App({
   }, [profileVeil]);
 
   // Shared with SessionsNav via the query cache; titles feed tab labels.
+  const { apiClient } = useCatamorphic();
   const sessionsQuery = useAgentSessions(projectId, { limit: 100 });
-  const acknowledgeSessionAttention =
-    useAcknowledgeAgentSessionAttention(projectId);
+  const projectAttention = runtime.attention;
   const sessionsById = new Map(
-    (sessionsQuery.data?.items ?? []).map((session) => [session.id, session]),
+    [...(sessionsQuery.data?.items ?? []), ...(projectAttention ?? [])].map(
+      (session) => [session.id, session],
+    ),
   );
   const archiveSession = useArchiveAgentSession(projectId);
   const unarchiveSession = useUnarchiveAgentSession(projectId);
@@ -977,6 +980,12 @@ export function App({
     processCount: number;
     runningCount: number;
     watcherCount: number;
+    watchers: Array<{
+      id: string;
+      name: string;
+      environment: string | null;
+      nextRunAt: string | null;
+    }>;
   } | null>(null);
   const [archiveError, setArchiveError] = useState<string | null>(null);
 
@@ -1081,20 +1090,36 @@ export function App({
   const beginArchive = async (session: AgentSession) => {
     const sessionIds = descendantIds(session.id);
     const terminalSessionIds = terminalSessionsFor(sessionIds);
-    if (terminalSessionIds.length > 0) {
-      setArchiveError(null);
-      setArchiveRequest({
-        session,
-        sessionIds,
-        terminalSessionIds,
-        processCount: terminalSessionIds.length,
-        runningCount: sessionIds.filter((id) => sessionsById.get(id)?.running)
-          .length,
-        watcherCount: 0,
-      });
-      return;
-    }
     try {
+      const preview = await apiClient.GET(
+        "/api/projects/{projectId}/agent/sessions/{sessionId}/archive-impact",
+        {
+          params: {
+            path: { projectId: projectId ?? "", sessionId: session.id },
+          },
+        },
+      );
+      if (preview.error || !preview.data)
+        throw new Error(
+          preview.error?.error ?? "Could not check archive impact",
+        );
+      const impact = preview.data;
+      if (terminalSessionIds.length > 0 || impact.requiresConfirmation) {
+        setArchiveError(null);
+        setArchiveRequest({
+          session,
+          sessionIds: impact.sessionIds,
+          terminalSessionIds,
+          processCount: Math.max(
+            terminalSessionIds.length,
+            impact.activeProcessCount,
+          ),
+          runningCount: impact.runningSessionIds.length,
+          watcherCount: impact.activeWatcherCount,
+          watchers: impact.watchers,
+        });
+        return;
+      }
       const result = await archiveSession.mutateAsync({
         sessionId: session.id,
       });
@@ -1106,6 +1131,12 @@ export function App({
               impact?: {
                 sessionIds?: string[];
                 runningSessionIds?: string[];
+                watchers?: Array<{
+                  id: string;
+                  name: string;
+                  environment: string | null;
+                  nextRunAt: string | null;
+                }>;
                 activeWatcherCount?: number;
                 activeProcessCount?: number;
               };
@@ -1120,6 +1151,7 @@ export function App({
           processCount: details.impact.activeProcessCount ?? 0,
           runningCount: details.impact.runningSessionIds?.length ?? 0,
           watcherCount: details.impact.activeWatcherCount ?? 0,
+          watchers: details.impact.watchers ?? [],
         });
         return;
       }
@@ -1302,7 +1334,7 @@ export function App({
   const surfacedAttentionRef = useRef(new Map<string, number>());
   useEffect(() => {
     if (!projectId || !workspaceReady) return;
-    const attentionSessions = (sessionsQuery.data?.items ?? []).filter(
+    const attentionSessions = (projectAttention ?? []).filter(
       (session) => session.attentionRequired,
     );
     if (attentionSessions.length === 0) return;
@@ -1326,7 +1358,7 @@ export function App({
         ? { ...ws, chats: [...ws.chats, ...additions] }
         : ws;
     });
-  }, [projectId, sessionsQuery.data, updateWorkspace, workspaceReady]);
+  }, [projectId, projectAttention, updateWorkspace, workspaceReady]);
 
   const openTab = (tab: WorkspaceTab, mode?: CommitMode) => {
     // Settings navigation must reveal its control, including keyboard commits
@@ -1583,6 +1615,16 @@ export function App({
   ): Promise<string> => {
     const intent =
       opts.mode ?? (opts.side ? "side" : opts.newTab ? "tab" : "replace");
+    if (value.startsWith("session:") && projectIdRef.current) {
+      await openUrl(
+        chatBookmarkUrl({
+          projectId: projectIdRef.current,
+          sessionId: decodeURIComponent(value.slice(8)),
+        }),
+        intent === "replace" ? "tab" : intent,
+      );
+      return value;
+    }
     const target = parseSurfaceLink(value);
     if (!target)
       throw new Error("This link is not a supported workspace target");
@@ -1647,7 +1689,8 @@ export function App({
           ? target.key
           : target.kind === "workflow" ||
               target.kind === "app" ||
-              target.kind === "artifact"
+              target.kind === "artifact" ||
+              target.kind === "run"
             ? `${target.kind}:${target.name}`
             : browserTabKey(localId);
     if (
@@ -1710,7 +1753,8 @@ export function App({
             }
           : target.kind === "workflow" ||
               target.kind === "app" ||
-              target.kind === "artifact"
+              target.kind === "artifact" ||
+              target.kind === "run"
             ? {
                 tabs: ws.tabs.some((tab) => tabKey(tab) === key)
                   ? ws.tabs
@@ -1721,12 +1765,14 @@ export function App({
                         name: target.name,
                         label:
                           opts.label ??
-                          (target.kind === "artifact"
-                            ? "Session artifact"
-                            : target.kind === "app" &&
-                                target.name.startsWith("session-")
-                              ? "Session app"
-                              : undefined),
+                          (target.kind === "run"
+                            ? "Workflow run"
+                            : target.kind === "artifact"
+                              ? "Session artifact"
+                              : target.kind === "app" &&
+                                  target.name.startsWith("session-")
+                                ? "Session app"
+                                : undefined),
                         chatLocalId: opts.chatLocalId,
                       },
                     ],
@@ -2293,22 +2339,76 @@ export function App({
         playChime(kind);
       }
       if (current?.desktopNotifications ?? true) {
-        const notification = notifyDesktop(
+        notifyDesktop(
           title,
           kind === "question"
             ? "The agent has a question for you."
             : "The agent finished working.",
-        );
-        if (notification) {
-          notification.onclick = () => {
+          () => {
             void desktopApi.windowFocus();
             revealChatRef.current(localId);
-          };
-        }
+          },
+        );
       }
     },
     [],
   );
+
+  const notifiedMessagesRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (!projectId || !workspaceReady) return;
+    for (const session of projectAttention ?? []) {
+      const message = session.attentionMessage;
+      if (
+        !session.attentionRequired ||
+        !message ||
+        notifiedMessagesRef.current.has(message.id)
+      )
+        continue;
+      notifiedMessagesRef.current.add(message.id);
+      const chat = workspaceRef.current.chats.find(
+        (candidate) => candidate.sessionId === session.id,
+      );
+      if (
+        (prefsRef.current?.notificationSounds ?? true) &&
+        !(
+          visibleRef.current &&
+          document.hasFocus() &&
+          chat &&
+          chatVisible(workspaceRef.current, chat)
+        )
+      )
+        playChime("question");
+      if (prefsRef.current?.desktopNotifications ?? true) {
+        notifyDesktop(
+          session.title ?? "A message needs your attention",
+          message.content,
+          () => {
+            void desktopApi.windowFocus();
+            void desktopApi.workspaceNavigate(projectId);
+            const existing = workspaceRef.current.chats.find(
+              (candidate) => candidate.sessionId === session.id,
+            );
+            const entry = existing ?? {
+              ...newChatEntry("min"),
+              sessionId: session.id,
+            };
+            updateWorkspace((ws) => ({
+              ...ws,
+              chats: existing
+                ? ws.chats.map((candidate) =>
+                    candidate.localId === entry.localId
+                      ? { ...candidate, focusMessageId: message.id }
+                      : candidate,
+                  )
+                : [...ws.chats, { ...entry, focusMessageId: message.id }],
+            }));
+            revealChatRef.current(entry.localId);
+          },
+        );
+      }
+    }
+  }, [projectId, workspaceReady, projectAttention, updateWorkspace]);
 
   const onSignalsChange = useCallback(
     (localId: string, next: ChatLiveSignals) => {
@@ -2366,28 +2466,6 @@ export function App({
     visibleSessionIdsRef.current = visibleIds;
     setSessionListPreference("unreadSessionIds", newlyVisible, false);
   }, [workspace, runtime.visible, setSessionListPreference]);
-
-  const acknowledgingAttentionRef = useRef(new Set<string>());
-  useEffect(() => {
-    for (const chat of workspace.chats.filter(
-      (candidate) => runtime.visible && chatVisible(workspace, candidate),
-    )) {
-      const sessionId = chat.sessionId;
-      if (
-        !sessionId ||
-        !sessionsById.get(sessionId)?.attentionRequired ||
-        acknowledgingAttentionRef.current.has(sessionId)
-      ) {
-        continue;
-      }
-      acknowledgingAttentionRef.current.add(sessionId);
-      acknowledgeSessionAttention.mutate(sessionId, {
-        onSettled: () => {
-          acknowledgingAttentionRef.current.delete(sessionId);
-        },
-      });
-    }
-  }, [workspace, runtime.visible, sessionsById, acknowledgeSessionAttention]);
 
   // Cmd+W (via the app menu) closes the most specific surface in focus:
   // the floating chat if one is open, else the active workspace tab.
@@ -5075,6 +5153,7 @@ export function App({
         sessionCount={archiveRequest?.sessionIds.length ?? 0}
         runningCount={archiveRequest?.runningCount ?? 0}
         watcherCount={archiveRequest?.watcherCount ?? 0}
+        watchers={archiveRequest?.watchers ?? []}
         processCount={archiveRequest?.processCount ?? 0}
         pending={archiveSession.isPending}
         error={archiveError}
@@ -5359,6 +5438,8 @@ export function App({
                           }
                         />
                       </Suspense>
+                    ) : tab.kind === "run" ? (
+                      <RunScreen projectId={projectId} runId={tab.name} />
                     ) : tab.kind === "artifact" ? (
                       <ArtifactScreen
                         projectId={projectId}

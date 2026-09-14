@@ -2,6 +2,7 @@ import {
   type AgentChatAttachment,
   type AgentChatTextAttachment,
   messageWithAttachmentNames,
+  useAcknowledgeAgentSessionAttention,
   useAgentCatalog,
   useAgentChat,
   useAnswerAgentQuestion,
@@ -550,6 +551,33 @@ function ChatDockContent({
       onSessionCreated(entry.localId, sessionId);
     },
   });
+  const acknowledgeAttention = useAcknowledgeAgentSessionAttention(projectId);
+  const acknowledgingAttention = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const acknowledge = () => {
+      const session = chat.session;
+      if (
+        !refreshWhileIdle ||
+        !document.hasFocus() ||
+        !session?.attentionRequired
+      )
+        return;
+      const key = `${session.id}:${session.attentionRevision}`;
+      if (acknowledgingAttention.current === key) return;
+      acknowledgingAttention.current = key;
+      acknowledgeAttention.mutate(
+        { sessionId: session.id, observedRevision: session.attentionRevision },
+        {
+          onError: () => {
+            acknowledgingAttention.current = undefined;
+          },
+        },
+      );
+    };
+    acknowledge();
+    window.addEventListener("focus", acknowledge);
+    return () => window.removeEventListener("focus", acknowledge);
+  }, [refreshWhileIdle, chat.session, acknowledgeAttention]);
   const watcherQuery = useWatchers(
     projectId,
     chat.sessionId ?? entry.sessionId ?? undefined,
@@ -2302,9 +2330,15 @@ function ChatDockContent({
                         : "text-fg-faint"
                     }`}
                   />
-                  <span className="max-w-48 truncate">
+                  <button
+                    type="button"
+                    className="max-w-48 truncate rounded hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                    onClick={() =>
+                      onLinkClick?.(`artifact:${watcher.id}`, "tab")
+                    }
+                  >
                     {watcher.workflowName}
-                  </span>
+                  </button>
                   <span
                     className="text-fg-faint"
                     title={
@@ -2315,6 +2349,22 @@ function ChatDockContent({
                   >
                     {watcher.status}
                   </span>
+                  {watcher.nextRunAt && (
+                    <span>
+                      Next: {new Date(watcher.nextRunAt).toLocaleString()}
+                    </span>
+                  )}
+                  {watcher.lastRun && (
+                    <button
+                      type="button"
+                      className={`rounded hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${watcher.lastRun.status === "failed" ? "text-danger" : "text-fg-muted"}`}
+                      onClick={() =>
+                        onLinkClick?.(`run:${watcher.lastRun?.id}`, "tab")
+                      }
+                    >
+                      Last run: {watcher.lastRun.status}
+                    </button>
+                  )}
                   {watcher.lastError && (
                     <span
                       className="max-w-64 truncate text-danger"
@@ -2349,6 +2399,7 @@ function ChatDockContent({
             onOpen={(url, mode) => onLinkClick?.(url, mode)}
           >
             <ChatTimeline
+              focusMessageId={entry.focusMessageId}
               className="min-h-0 flex-1"
               contentClassName={isTab ? "mx-auto w-full max-w-4xl pt-12" : ""}
               messages={messages}

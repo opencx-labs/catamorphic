@@ -7,6 +7,13 @@ import { useSyncExternalStore } from "react";
  * push/fade screen transition.
  */
 export type Route =
+  | {
+      kind: "resource";
+      connectionId: string;
+      projectId: string;
+      resourceType: "run" | "artifact" | "workflow";
+      resourceId: string;
+    }
   | { kind: "projects" }
   | { kind: "connect" }
   | { kind: "profiles" }
@@ -17,10 +24,13 @@ export type Route =
       projectId: string;
       /** null = a fresh chat, created lazily on first send. */
       sessionId: string | null;
+      messageId?: string;
     };
 
 export function routeDepth(route: Route): number {
   switch (route.kind) {
+    case "resource":
+      return 3;
     case "projects":
       return 0;
     case "connect":
@@ -35,6 +45,8 @@ export function routeDepth(route: Route): number {
 
 export function formatHash(route: Route): string {
   switch (route.kind) {
+    case "resource":
+      return `#/c/${route.connectionId}/p/${route.projectId}/r/${route.resourceType}/${encodeURIComponent(route.resourceId)}`;
     case "projects":
       return "#/projects";
     case "connect":
@@ -44,7 +56,7 @@ export function formatHash(route: Route): string {
     case "sessions":
       return `#/c/${route.connectionId}/p/${route.projectId}`;
     case "chat":
-      return `#/c/${route.connectionId}/p/${route.projectId}/s/${route.sessionId ?? "new"}`;
+      return `#/c/${route.connectionId}/p/${route.projectId}/s/${route.sessionId ?? "new"}${route.messageId ? `/m/${encodeURIComponent(route.messageId)}` : ""}`;
   }
 }
 
@@ -59,11 +71,30 @@ export function parseHash(hash: string): Route {
     typeof parts[3] === "string"
   ) {
     const base = { connectionId: parts[1], projectId: parts[3] };
+    if (
+      parts[4] === "r" &&
+      (parts[5] === "run" ||
+        parts[5] === "artifact" ||
+        parts[5] === "workflow") &&
+      parts[6]
+    ) {
+      try {
+        return {
+          kind: "resource",
+          ...base,
+          resourceType: parts[5],
+          resourceId: decodeURIComponent(parts[6]),
+        };
+      } catch {
+        return { kind: "sessions", ...base };
+      }
+    }
     if (parts[4] === "s" && typeof parts[5] === "string") {
       return {
         kind: "chat",
         ...base,
         sessionId: parts[5] === "new" ? null : parts[5],
+        ...(parts[6] === "m" && parts[7] ? { messageId: parts[7] } : {}),
       };
     }
     return { kind: "sessions", ...base };

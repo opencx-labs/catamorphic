@@ -92,6 +92,10 @@ import { RunsService } from "./services/runs-service.js";
 import { RuntimeEventsService } from "./services/runtime-events-service.js";
 import { SchedulesService } from "./services/schedules-service.js";
 import { SecretsService } from "./services/secrets-service.js";
+import {
+  SESSION_ACTION_SCHEMAS,
+  SessionActionsService,
+} from "./services/session-actions-service.js";
 import { SessionArtifactsService } from "./services/session-artifacts-service.js";
 import type { SessionMailboxesService } from "./services/session-mailboxes-service.js";
 import { SessionSyncService } from "./services/session-sync-service.js";
@@ -361,6 +365,7 @@ export class CatamorphicCore {
   /** Durable transcript replication outbox, drained by the embedding host. */
   readonly sessionSync?: SessionSyncService;
   readonly watchers?: WatchersService;
+  readonly sessionActions?: SessionActionsService;
   /** Durable normalized provider events, independently replayable by cursor. */
   readonly agentRuntimeEvents: AgentRuntimeEventsService;
   /** Durable approval, question, and elicitation requests. */
@@ -442,6 +447,50 @@ export class CatamorphicCore {
       description:
         "Deliver to an existing agent session or wake a stable member session",
       calls: {
+        ...Object.fromEntries(
+          Object.keys(SESSION_ACTION_SCHEMAS).map((operation) => [
+            operation,
+            async (
+              context: import("./services/capability-providers.js").HostCallContext,
+              args: unknown,
+            ) => {
+              if (!this.sessionActions)
+                throw new Error("Coding agents are not configured");
+              if (!(operation in SESSION_ACTION_SCHEMAS))
+                throw new Error("Unknown session action");
+              const origin = await this.workflowSessionOrigin(context);
+              return this.sessionActions.execute({
+                identity: context.caller,
+                projectId: context.projectId,
+                operation: operation as keyof typeof SESSION_ACTION_SCHEMAS,
+                args,
+                ...origin,
+              });
+            },
+          ]),
+        ),
+        stop: async (context, args) => {
+          const origin = await this.workflowSessionOrigin(context);
+          if (
+            !origin.provenance.sessionId ||
+            !origin.provenance.watcherId ||
+            !this.sessionActions
+          )
+            throw new Error(
+              "Only a temporary workflow can stop its own activation",
+            );
+          return this.sessionActions.execute({
+            identity: context.caller,
+            projectId: context.projectId,
+            operation: "stopWatcher",
+            ...origin,
+            args: {
+              ...(args && typeof args === "object" ? args : {}),
+              sessionId: origin.provenance.sessionId,
+              watcherId: origin.provenance.watcherId,
+            },
+          });
+        },
         wake: async (context, args) => {
           if (!this.agentSessions) {
             throw new Error("Coding agents are not configured");
@@ -477,6 +526,7 @@ export class CatamorphicCore {
           return this.agentSessions.wake(context.caller, context.projectId, {
             ...input,
             wakeKey: JSON.stringify([context.workflowName, input.key]),
+            origin: await this.workflowSessionOrigin(context),
             environment: enabledEnvironment ?? input.environment,
             workflowName: context.workflowName,
             runId: context.runId,
@@ -487,39 +537,20 @@ export class CatamorphicCore {
             throw new Error("Coding agents are not configured");
           }
           const input = sessionDeliveryArgs(args);
-          const watcher = await this.db
-            .selectFrom("watcher_runs")
-            .select("watcher_id")
-            .where("run_id", "=", context.runId)
-            .executeTakeFirst();
-          const run = watcher
-            ? null
-            : await this.db
-                .selectFrom("workflow_runs")
-                .select("correlation_key")
-                .where("id", "=", context.runId)
-                .executeTakeFirst();
-          const watcherId =
-            watcher?.watcher_id ??
-            run?.correlation_key?.match(/^watcher:([0-9a-f-]{36}):event:/)?.[1];
+          const origin = await this.workflowSessionOrigin(context);
           return this.agentSessions.deliver(
             context.caller,
             context.projectId,
             input.sessionId,
             {
               content: input.content,
-              author: watcherId
-                ? {
-                    kind: "watcher",
-                    watcherId,
-                    runId: context.runId,
-                  }
-                : {
-                    kind: "workflow",
-                    runId: context.runId,
-                    workflowName: context.workflowName,
-                  },
+              author: origin.author,
+              metadata: {
+                provenance: origin.provenance,
+                causation: origin.causation,
+              },
               mode: input.mode,
+              attention: input.attention,
               idempotencyKey: input.idempotencyKey,
             },
           );
@@ -935,12 +966,88 @@ export class CatamorphicCore {
         sessions: this.agentSessions,
         github: this.github,
       });
+      this.sessionActions = new SessionActionsService(
+        this.db,
+        this.agentSessions,
+        () => this.watchers,
+      );
+      this.agentSessions.setSessionActionHandler(async (input) => {
+        const action = SESSION_ACTION_SCHEMAS[input.operation];
+        if (!action || !this.sessionActions)
+          throw new Error("Unknown session action");
+        return this.sessionActions.execute(input);
+      });
       this.agentSessions.setArchiveResourcesHandler({
         impact: async () => ({ activeProcessCount: 0 }),
         stop: (input) =>
           this.watchers?.stopForSessions(input) ?? Promise.resolve(),
       });
     }
+  }
+  private async workflowSessionOrigin(
+    context: import("./services/capability-providers.js").HostCallContext,
+  ) {
+    const run = await this.db
+      .selectFrom("workflow_runs")
+      .select(["workflow_enablement_id", "input"])
+      .where("id", "=", context.runId)
+      .where("project_id", "=", context.projectId)
+      .executeTakeFirstOrThrow();
+    const watcher = run.workflow_enablement_id
+      ? await this.db
+          .selectFrom("watchers")
+          .select(["id", "session_id"])
+          .where("workflow_enablement_id", "=", run.workflow_enablement_id)
+          .executeTakeFirst()
+      : undefined;
+    const event =
+      run.input && typeof run.input === "object" && !Array.isArray(run.input)
+        ? run.input.payload
+        : null;
+    const previous =
+      event &&
+      typeof event === "object" &&
+      !Array.isArray(event) &&
+      Array.isArray(event.causation)
+        ? event.causation.filter((id): id is string => typeof id === "string")
+        : [];
+    const causation = [
+      ...previous,
+      ...(run.workflow_enablement_id ? [run.workflow_enablement_id] : []),
+    ];
+    const author: import("./services/agent-turns-service.js").SessionMessageAuthor =
+      {
+        kind: "workflow",
+        runId: context.runId,
+        workflowName: context.workflowName,
+      };
+    return {
+      author,
+      causation,
+      provenance: {
+        projectId: context.projectId,
+        hostId: this.agentSessions?.hostId ?? "",
+        runId: context.runId,
+        workflowName: context.workflowName,
+        scheduledFor:
+          run.input &&
+          typeof run.input === "object" &&
+          !Array.isArray(run.input) &&
+          typeof run.input.scheduledFor === "string"
+            ? run.input.scheduledFor
+            : null,
+        firedAt:
+          run.input &&
+          typeof run.input === "object" &&
+          !Array.isArray(run.input) &&
+          typeof run.input.firedAt === "string"
+            ? run.input.firedAt
+            : null,
+        enablementId: run.workflow_enablement_id,
+        watcherId: watcher?.id ?? null,
+        sessionId: watcher?.session_id ?? null,
+      },
+    };
   }
 }
 
@@ -961,6 +1068,7 @@ function sessionDeliveryArgs(value: unknown): {
   sessionId: string;
   content: string;
   mode: "message_only" | "next_turn" | "interrupt";
+  attention?: "required" | "none";
   idempotencyKey?: string;
 } {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -986,7 +1094,14 @@ function sessionDeliveryArgs(value: unknown): {
   ) {
     throw new Error("idempotencyKey must be a string");
   }
+  if (
+    input.attention !== undefined &&
+    input.attention !== "none" &&
+    input.attention !== "required"
+  )
+    throw new Error("attention must be none or required");
   return {
+    attention: input.attention,
     sessionId: input.sessionId,
     content: input.content,
     mode: input.mode,

@@ -81,7 +81,12 @@ function SessionsList({
   const openOrResume = async (session: (typeof items)[number]) => {
     if (!session.resumable) {
       if (session.attentionRequired) {
-        void acknowledgeAttention.mutateAsync(session.id).catch(() => {});
+        void acknowledgeAttention
+          .mutateAsync({
+            sessionId: session.id,
+            observedRevision: session.attentionRevision,
+          })
+          .catch(() => {});
       }
       openChat(session.id);
       return;
@@ -109,7 +114,12 @@ function SessionsList({
       }
       await sessions.refetch();
       if (session.attentionRequired) {
-        await acknowledgeAttention.mutateAsync(session.id).catch(() => {});
+        await acknowledgeAttention
+          .mutateAsync({
+            sessionId: session.id,
+            observedRevision: session.attentionRevision,
+          })
+          .catch(() => {});
       }
       openChat(session.id);
     } catch (error) {

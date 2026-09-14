@@ -6,6 +6,7 @@ import {
   type ConnectionProvider,
   DurableToolPermissionBroker,
   type Identity,
+  startWatcherDispatcher,
 } from "@catamorphic/core";
 import {
   createDatabase,
@@ -29,6 +30,7 @@ import {
   ObjectRemoteBackend,
   PostgresObjectStore,
   ProjectManager,
+  SESSION_TRIGGER_KINDS,
   schedule,
 } from "@catamorphic/server-sdk";
 import { createPushTransport } from "@catamorphic/server-sdk/web-push";
@@ -305,7 +307,7 @@ async function buildStockServerInner(
     documentBlobStore:
       objectStore ?? new FsBundleStore(path.join(data, "document-blobs")),
     toolPermissions,
-    triggerKinds: [schedule],
+    triggerKinds: [schedule, ...SESSION_TRIGGER_KINDS],
     projectSeeds: (defaults) => ({
       ...defaults,
       "agents/assistant.json": JSON.stringify({
@@ -348,6 +350,12 @@ async function buildStockServerInner(
   });
   disposers.push(() => worker.stop());
   const core = catamorphic.core;
+  const watcherWorker = core.watchers
+    ? startWatcherDispatcher({ watchers: core.watchers })
+    : undefined;
+  disposers.push(async () => {
+    await watcherWorker?.stop();
+  });
   if (github && core.github) {
     await core.github.connect(github.identity, {
       accessToken: github.accessToken,

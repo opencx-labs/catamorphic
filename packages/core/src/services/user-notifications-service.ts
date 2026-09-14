@@ -103,8 +103,9 @@ export class UserNotificationsService {
     collapseKey: string;
     projectId?: string;
     sessionId?: string;
+    transaction?: Kysely<DB>;
   }): Promise<void> {
-    await this.db.transaction().execute(async (transaction) => {
+    const publish = async (transaction: Kysely<DB>) => {
       const subscriptions = await transaction
         .selectFrom("push_subscriptions")
         .select("id")
@@ -112,7 +113,6 @@ export class UserNotificationsService {
         .where("external_user_id", "=", args.identity.externalUserId)
         .where("retired_at", "is", null)
         .execute();
-      if (subscriptions.length === 0) return;
       const inserted = await transaction
         .insertInto("user_notification_events")
         .values({
@@ -142,6 +142,7 @@ export class UserNotificationsService {
           .where("external_user_id", "=", args.identity.externalUserId)
           .where("collapse_key", "=", args.collapseKey)
           .executeTakeFirstOrThrow());
+      if (subscriptions.length === 0) return;
       await transaction
         .insertInto("notification_deliveries")
         .values(
@@ -152,7 +153,9 @@ export class UserNotificationsService {
         )
         .onConflict((conflict) => conflict.doNothing())
         .execute();
-    });
+    };
+    if (args.transaction) await publish(args.transaction);
+    else await this.db.transaction().execute(publish);
   }
 
   /** Recover missed failure alerts from durable turn results, without duplicates. */

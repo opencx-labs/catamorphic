@@ -74,6 +74,8 @@ export interface McpAppRef {
 }
 
 export interface ChatDockEntry {
+  /** Transient target opened by a message notification. */
+  focusMessageId?: string;
   localId: string;
   sessionId?: string;
   mode: ChatMode;

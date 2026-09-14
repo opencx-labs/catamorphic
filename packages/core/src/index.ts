@@ -481,6 +481,11 @@ export {
   type SecretStatus,
   SecretsService,
 } from "./services/secrets-service.js";
+export {
+  SESSION_ACTION_SCHEMAS,
+  type SessionActionOperation,
+  SessionActionsService,
+} from "./services/session-actions-service.js";
 export type {
   SessionArtifact,
   SessionArtifactAddress,

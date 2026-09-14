@@ -110,9 +110,10 @@ describe("SessionsScreen", () => {
       }),
     );
     expect(mocks.refetch).toHaveBeenCalled();
-    expect(mocks.acknowledge).toHaveBeenCalledWith(
-      "11111111-1111-4111-8111-111111111111",
-    );
+    expect(mocks.acknowledge).toHaveBeenCalledWith({
+      sessionId: "11111111-1111-4111-8111-111111111111",
+      observedRevision: 1,
+    });
     expect(mocks.navigate).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "chat",
