@@ -29,6 +29,14 @@ export class SessionMirrorDivergedError extends Error {
 }
 
 export type SessionMirrorInput = {
+  workStatus?: "open" | "completed";
+  stateRevision?: number;
+  events?: Array<{
+    id: string;
+    kind: string;
+    occurredAt: string;
+    payload: JsonObject;
+  }>;
   title?: string | null;
   icon?: string | null;
   provider?: string;
@@ -80,6 +88,9 @@ export async function writeSessionMirror({
   // the appends must not interleave with a turn starting here (the
   // append order IS the transcript order, via `seq`).
   return db.transaction().execute(async (trx) => {
+    await sql`select set_config('catamorphic.suppress_session_events', 'true', true)`.execute(
+      trx,
+    );
     const current = await trx
       .selectFrom("agent_sessions")
       .selectAll()
@@ -138,6 +149,8 @@ export async function writeSessionMirror({
           .set({
             title: input.title ?? current.title,
             icon: input.icon ?? current.icon,
+            work_status: input.workStatus,
+            state_revision: input.stateRevision,
             todos: sql<Json>`${JSON.stringify(input.todos)}::jsonb`,
             updated_at: new Date(),
             authority_host_id: input.authority.hostId,
@@ -168,6 +181,8 @@ export async function writeSessionMirror({
             base_commit_sha: null,
             title: input.title ?? null,
             icon: input.icon ?? null,
+            work_status: input.workStatus,
+            state_revision: input.stateRevision,
             todos: sql<Json>`${JSON.stringify(input.todos)}::jsonb`,
             authority_host_id: input.authority.hostId,
             authority_revision: input.authority.revision,
@@ -201,6 +216,38 @@ export async function writeSessionMirror({
       }));
     if (fresh.length > 0) {
       await trx.insertInto("agent_messages").values(fresh).execute();
+    }
+    for (const event of input.events ?? []) {
+      if (
+        event.payload.sessionId !== sessionId ||
+        !event.kind.startsWith("session.")
+      )
+        throw new AccessDeniedError();
+      const snapshot = event.payload.session;
+      await trx
+        .insertInto("project_events")
+        .values({
+          id: event.id,
+          project_id: projectId,
+          source: "session",
+          kind: event.kind,
+          external_id: `${input.authority.hostId}:${event.id}`,
+          occurred_at: new Date(event.occurredAt),
+          payload: {
+            ...event.payload,
+            sessionId,
+            externalUserId: identity.externalUserId,
+            agentId: session.agent_id,
+            session:
+              snapshot &&
+              typeof snapshot === "object" &&
+              !Array.isArray(snapshot)
+                ? { ...snapshot, id: sessionId }
+                : {},
+          },
+        })
+        .onConflict((conflict) => conflict.doNothing())
+        .execute();
     }
     return session;
   });

@@ -113,6 +113,7 @@ function TabHoverCard({
 
 const TAB_ICONS = {
   workflow: WorkflowIcon,
+  run: WorkflowIcon,
   app: LayoutGrid,
   artifact: AppWindow,
   chat: MessageSquare,

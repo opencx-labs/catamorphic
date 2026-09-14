@@ -311,7 +311,17 @@ describe("AppMount", () => {
     const replies: unknown[] = [];
     vi.spyOn(frame.contentWindow, "postMessage").mockImplementation(
       (data: unknown) => {
-        replies.push(data);
+        // The host also publishes asynchronous display/context updates.
+        // Only this invocation's result belongs to the polling assertion.
+        if (
+          data &&
+          typeof data === "object" &&
+          "kind" in data &&
+          data.kind === "result" &&
+          "callId" in data &&
+          data.callId === "c1"
+        )
+          replies.push(data);
       },
     );
 

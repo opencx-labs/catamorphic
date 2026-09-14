@@ -1,10 +1,14 @@
 import { useCatamorphic } from "@catamorphic/react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import {
+  ProjectAuthorityProvider,
+  useRemoteAuthority,
+} from "../components/project-authority-provider.js";
 import { AppScreen } from "./app-screen.js";
 
 /** Source and execution use the same retained identity as a generated app. */
-export function ArtifactScreen({
+function ArtifactDetails({
   projectId,
   artifactId,
   onAskAgent,
@@ -234,5 +238,46 @@ export function ArtifactScreen({
         </div>
       )}
     </section>
+  );
+}
+
+/** Retained artifacts stay on their execution host; try local before the linked server. */
+export function ArtifactScreen(props: {
+  projectId: string;
+  artifactId: string;
+  onAskAgent: (message: string) => void;
+}) {
+  const { apiClient } = useCatamorphic();
+  const local = useQuery({
+    queryKey: ["cat", props.projectId, "artifact", props.artifactId],
+    queryFn: async () => {
+      const result = await apiClient.GET(
+        "/api/projects/{projectId}/session-artifacts/{artifactId}",
+        { params: { path: props } },
+      );
+      if (!result.data)
+        throw new Error("This artifact is unavailable or was discarded.");
+      return result.data;
+    },
+  });
+  if (local.error)
+    return (
+      <ProjectAuthorityProvider projectId={props.projectId}>
+        <RemoteArtifact {...props} />
+      </ProjectAuthorityProvider>
+    );
+  return <ArtifactDetails {...props} />;
+}
+function RemoteArtifact(props: {
+  projectId: string;
+  artifactId: string;
+  onAskAgent: (message: string) => void;
+}) {
+  const remote = useRemoteAuthority();
+  return (
+    <ArtifactDetails
+      {...props}
+      projectId={remote?.remoteProjectId ?? props.projectId}
+    />
   );
 }

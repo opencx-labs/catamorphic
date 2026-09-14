@@ -48,6 +48,8 @@ export interface TriggerKindRuntime {
   outputJsonSchema?: Json;
   validatePayload(value: Json): TriggerValidationResult;
   validateConfig(value: Json): TriggerValidationResult;
+  /** Pure selector over validated binding config and event payload. */
+  matches?(input: { config: Json; payload: Json }): boolean;
   /** Derives an enrollment correlation key from the payload (ADR 0027). */
   correlationKey?(payload: Json): string | undefined;
 }

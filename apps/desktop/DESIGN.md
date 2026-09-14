@@ -437,3 +437,12 @@ Signed macOS builds verify the browser-import helper's Developer ID identity,
 matching app team, universal architectures, and safe version protocol. The manual
 import smoke uses a disposable Chrome profile and a known test login; macOS
 keeps control of the authentication and Keychain authorization prompts.
+
+
+### 2026-09-14: Session workflow actions
+
+Session monitors and timed wakeups use ordinary workflow enablements, with retained
+source and run history. Chat displays compact attributed action entries. Agent,
+workflow, run, originating chat, and child links use the workspace's resource
+opening behavior. Turn completion and explicit work completion stay distinct.
+Local and remote sessions share the same trigger and action contracts (ADR 0138).

@@ -24,6 +24,7 @@ import {
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
+import { SessionAttribution } from "./session-attribution.js";
 
 const REMARK_PLUGINS = [remarkGfm];
 
@@ -62,6 +63,7 @@ export interface ChatTimelineMessage {
   role: "user" | "assistant" | "system";
   content: string;
   metadata?: unknown;
+  author?: AgentMessage["author"];
 }
 
 export interface AgentQuestionOption {
@@ -357,11 +359,13 @@ function Message({
       // translate-y-* sets the individual `translate` property, which a
       // `transform` transition does not cover — the slide half of the
       // entrance would snap while only opacity faded.
-      className={`max-w-[85%] text-sm motion-safe:transition-[opacity,translate] motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${entered ? "motion-safe:translate-y-0 motion-safe:opacity-100" : "motion-safe:translate-y-1 motion-safe:opacity-0"} ${message.role === "user" ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2" : "mr-auto"}`}
+      className={`max-w-[85%] text-sm motion-safe:transition-[opacity,translate] motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${entered ? "motion-safe:translate-y-0 motion-safe:opacity-100" : "motion-safe:translate-y-1 motion-safe:opacity-0"} ${message.role === "user" && (!message.author || message.author.kind === "user") ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2" : "mr-auto"}`}
     >
-      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-fg-faint">
-        {message.role === "user" ? "You" : "Agent"}
-      </div>
+      <SessionAttribution
+        author={message.role === "assistant" ? undefined : message.author}
+        metadata={message.metadata}
+        onOpen={onLinkClick}
+      />
       {message.role === "assistant" && (
         <TurnSteps
           steps={turnSteps(message)}

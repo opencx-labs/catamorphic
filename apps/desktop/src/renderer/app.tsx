@@ -183,6 +183,7 @@ import {
 } from "./screens/browser-screen.js";
 import { McpAppScreen } from "./screens/mcp-app-screen.js";
 import { ProfileSettingsScreen } from "./screens/profile-settings-screen.js";
+import { RunScreen } from "./screens/run-screen.js";
 import { SettingsScreen } from "./screens/settings-screen.js";
 
 // Heavy workspace surfaces stay out of the startup parse path. They remain
@@ -1583,6 +1584,16 @@ export function App({
   ): Promise<string> => {
     const intent =
       opts.mode ?? (opts.side ? "side" : opts.newTab ? "tab" : "replace");
+    if (value.startsWith("session:") && projectIdRef.current) {
+      await openUrl(
+        chatBookmarkUrl({
+          projectId: projectIdRef.current,
+          sessionId: decodeURIComponent(value.slice(8)),
+        }),
+        intent === "replace" ? "tab" : intent,
+      );
+      return value;
+    }
     const target = parseSurfaceLink(value);
     if (!target)
       throw new Error("This link is not a supported workspace target");
@@ -1647,7 +1658,8 @@ export function App({
           ? target.key
           : target.kind === "workflow" ||
               target.kind === "app" ||
-              target.kind === "artifact"
+              target.kind === "artifact" ||
+              target.kind === "run"
             ? `${target.kind}:${target.name}`
             : browserTabKey(localId);
     if (
@@ -1710,7 +1722,8 @@ export function App({
             }
           : target.kind === "workflow" ||
               target.kind === "app" ||
-              target.kind === "artifact"
+              target.kind === "artifact" ||
+              target.kind === "run"
             ? {
                 tabs: ws.tabs.some((tab) => tabKey(tab) === key)
                   ? ws.tabs
@@ -1721,12 +1734,14 @@ export function App({
                         name: target.name,
                         label:
                           opts.label ??
-                          (target.kind === "artifact"
-                            ? "Session artifact"
-                            : target.kind === "app" &&
-                                target.name.startsWith("session-")
-                              ? "Session app"
-                              : undefined),
+                          (target.kind === "run"
+                            ? "Workflow run"
+                            : target.kind === "artifact"
+                              ? "Session artifact"
+                              : target.kind === "app" &&
+                                  target.name.startsWith("session-")
+                                ? "Session app"
+                                : undefined),
                         chatLocalId: opts.chatLocalId,
                       },
                     ],
@@ -5359,6 +5374,8 @@ export function App({
                           }
                         />
                       </Suspense>
+                    ) : tab.kind === "run" ? (
+                      <RunScreen projectId={projectId} runId={tab.name} />
                     ) : tab.kind === "artifact" ? (
                       <ArtifactScreen
                         projectId={projectId}

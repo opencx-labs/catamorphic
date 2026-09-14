@@ -8,36 +8,13 @@ import {
   GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
   hole,
   mcpToolKind,
+  SESSION_TRIGGER_KINDS,
   schedule,
 } from "@catamorphic/server-sdk";
 import { z } from "zod";
 import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./boot.js";
 
-/**
- * The desktop app's custom trigger kinds — the embedder side of the trigger
- * contract. A project workflow subscribes with e.g.
- * `triggers: [trigger("chat.turn-completed", { statuses: ["completed"] })]`,
- * and the desktop fires the kind when the real event happens.
- */
-export const chatTurnCompleted = defineTriggerKind({
-  name: "chat.turn-completed",
-  description:
-    "A coding-agent chat turn in this project settled (completed, failed, or awaiting input)",
-  display: { label: "Chat Turn", icon: "messages-square", color: "#7c3aed" },
-  payload: z.object({
-    sessionId: z.string(),
-    messageId: z.string(),
-    status: z.enum(["completed", "failed", "awaiting_input"]),
-    changedFiles: z.array(z.string()),
-  }),
-  config: z.object({
-    /** Settled statuses the workflow wants. Omitted = completed only. */
-    statuses: z
-      .array(z.enum(["completed", "failed", "awaiting_input"]))
-      .optional(),
-  }),
-});
-
+/** Session events are published durably by core; these sources are desktop-owned. */
 export const terminalIdle = defineTriggerKind({
   name: "terminal.idle",
   description:
@@ -73,7 +50,7 @@ export const aiToolCall = defineTriggerKind({
 });
 
 export const DESKTOP_TRIGGER_KINDS = [
-  chatTurnCompleted,
+  ...SESSION_TRIGGER_KINDS,
   terminalIdle,
   aiToolCall,
   schedule,
@@ -103,9 +80,6 @@ export class DesktopTriggers {
   }
 
   onAgentTurnSettled(event: AgentTurnSettledEvent, refreshTypes = true): void {
-    void this.fireChatTurn(event).catch((error) => {
-      warn("chat.turn-completed", error);
-    });
     // The turn may have created or edited workflows; keep the generated
     // trigger types in the project fresh for the next turn. No-op when
     // nothing drifted.
@@ -143,33 +117,6 @@ export class DesktopTriggers {
             .catch((error) => warn(`sync-types ${project.name}`, error)),
         ),
     );
-  }
-
-  private async fireChatTurn(event: AgentTurnSettledEvent): Promise<void> {
-    const bindings = await this.scoped.triggers.list({
-      projectId: event.projectId,
-      kind: chatTurnCompleted,
-    });
-    // Config-driven targeting: each workflow declares which settled
-    // statuses it wants; omitted means completed turns only.
-    const targets = bindings
-      .filter((binding) =>
-        (binding.config.statuses ?? ["completed"]).includes(event.status),
-      )
-      .map((binding) => binding.workflowName);
-    if (targets.length === 0) return;
-    await this.scoped.triggers.fire({
-      projectId: event.projectId,
-      kind: chatTurnCompleted,
-      payload: {
-        sessionId: event.sessionId,
-        messageId: event.messageId,
-        status: event.status,
-        changedFiles: event.changedFiles,
-      },
-      mode: "async",
-      workflows: targets,
-    });
   }
 }
 

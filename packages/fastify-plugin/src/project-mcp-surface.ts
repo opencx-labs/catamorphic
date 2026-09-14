@@ -5,7 +5,10 @@ import {
   mayUseProject,
   projectAgentId,
   resolveScope,
+  SESSION_ACTION_SCHEMAS,
+  type SessionActionOperation,
 } from "@catamorphic/core";
+import { z } from "zod";
 import { appPresentationTool } from "./app-presentation-tools.js";
 import { toolError, toolValue } from "./mcp-shared.js";
 import { sessionArtifactTool } from "./session-artifact-tools.js";
@@ -605,6 +608,46 @@ export function surfaceTools(
         });
       }),
     });
+
+    if (core.sessionActions) {
+      const actions = core.sessionActions;
+      for (const operation of Object.keys(
+        SESSION_ACTION_SCHEMAS,
+      ) as SessionActionOperation[]) {
+        tools.push({
+          definition: {
+            name: `session_${operation}`,
+            description: `Session ${operation}. Uses the same authorized operation as workflows. Mutations require a stable idempotencyKey; retries return the existing result. Load the session-workflows skill for examples.`,
+            inputSchema: z.toJSONSchema(SESSION_ACTION_SCHEMAS[operation]),
+          },
+          call: guarded(async (args) => {
+            const source = currentSessionId
+              ? await sessions.get(identity, projectId, currentSessionId)
+              : undefined;
+            return actions.execute({
+              identity,
+              projectId,
+              operation,
+              args,
+              author: source
+                ? {
+                    kind: "agent",
+                    sessionId: source.id,
+                    agentId: source.agentId,
+                  }
+                : { kind: "user", externalUserId: identity.externalUserId },
+              causation: source
+                ? await sessions.causalContext({
+                    identity,
+                    projectId,
+                    sessionId: source.id,
+                  })
+                : [],
+            });
+          }),
+        });
+      }
+    }
 
     if (core.watchers) {
       const watchers = core.watchers;

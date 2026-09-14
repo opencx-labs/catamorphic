@@ -208,4 +208,5 @@ export type {
   WorkflowsResource,
 } from "./scoped-client.js";
 export { ScopedClient, TenantScopedClient } from "./scoped-client.js";
+export { SESSION_TRIGGER_KINDS } from "./session-trigger-kinds.js";
 export { defineStaticEnvironments } from "./static-environments.js";

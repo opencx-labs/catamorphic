@@ -111,6 +111,12 @@ interface AgentExecutionRuntime {
 
 type SessionRow = Selectable<DB["agent_sessions"]>;
 type MessageRow = Selectable<DB["agent_messages"]>;
+export interface SessionOperationOrigin {
+  author: SessionMessageAuthor;
+  causation?: string[];
+  provenance?: JsonObject;
+}
+
 type SessionVisibility = "latent" | "promoted" | "archived";
 
 export type AgentSessionSource =
@@ -162,6 +168,9 @@ export interface AgentSession {
   archivedAt: string | null;
   /** Short agent-published description used to coordinate project peers. */
   activity: string | null;
+  /** Explicit work completion, independent of individual turn status. */
+  workStatus: "open" | "completed";
+  stateRevision: number;
   /** Current agent-owned progress list for this conversation. */
   todos: AgentTodo[];
   /** Host currently responsible for executing this session's turns. */
@@ -394,7 +403,7 @@ function checkpointMessage(userMessage: string): string {
  * replace it (or drop it) with `CatamorphicCoreConfig.standingAgentPrompt`
  * (ADR 0049).
  */
-const WORKFLOW_AUTHORING_SYSTEM_PROMPT = `A Catamorphic project is a folder that can hold any kind of work — documents, notes, data, code, automations (workflows), and apps, in any mix. Read what is actually in the project before assuming what it is about; many projects contain no workflows at all. The rules below apply only when you create or edit workflows: Every workflow is an exported defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps })) value; runs execute ordered boundary and batch scopes against an immutable deployment, with continuation state persisted in Postgres. There is no "use workflow" directive — IO and business operations live in "use step" functions called from boundary run bodies. Cancellation is a host-issued terminal control declared with controls: { cancel: true }, never a BoundaryContext transition. A workflow may subscribe to host-defined trigger kinds with triggers: [trigger("kind", config)] — the kind name must be a string literal, the config a constant expression, both typed by the generated workflows/src/catamorphic-triggers.d.ts; the fired payload becomes the first step's input. Declare provider-neutral connections at workflow definition level; roles separately grant workflow, agent, Environment, and connection aliases, and each member explicitly enables unattended execution. Use context.host["catamorphic.sessions"].wake with a stable key and project-agent slug when a member-owned workflow should run an agent and surface its reusable session in desktop and PWA; service-owned enablements cannot create personal notifications. Only exported defineBatchStep calls inside defineBatch.process are physically coalesced. For authoring primitives, use the project's established SaaS wrapper when present; otherwise use @catamorphic/workflow. Never create local copies. Before authoring, load the host workflow-lifecycle skill when offered and choose session lifetime, source visibility, and execution Environment separately. Temporary checks use the available create_watcher/create_github_watcher tool with source passed directly, never files added to the shared working tree. Reusable project definitions belong under workflows/src/. Member-owned enablement does not make source private; use only a host-supported private artifact capability for private saved workflows. Project files may be checkpointed and automatically synced; neither an uncommitted file nor an unpushed branch is a privacy boundary. Saving, sharing, deploying, and enabling are separate outcomes; report only those confirmed by the host. Consult .agents/skills/writing-workflows/SKILL.md, .agents/skills/durable-workflows/SKILL.md, and .agents/skills/batch-workflows/SKILL.md, when present, before creating or restructuring workflows.`;
+const WORKFLOW_AUTHORING_SYSTEM_PROMPT = `A Catamorphic project is a folder that can hold any kind of work — documents, notes, data, code, automations (workflows), and apps, in any mix. Read what is actually in the project before assuming what it is about; many projects contain no workflows at all. The rules below apply only when you create or edit workflows: Every workflow is an exported defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps })) value; runs execute ordered boundary and batch scopes against an immutable deployment, with continuation state persisted in Postgres. There is no "use workflow" directive — IO and business operations live in "use step" functions called from boundary run bodies. Cancellation is a host-issued terminal control declared with controls: { cancel: true }, never a BoundaryContext transition. A workflow may subscribe to host-defined trigger kinds with triggers: [trigger("kind", config)] — the kind name must be a string literal, the config a constant expression, both typed by the generated workflows/src/catamorphic-triggers.d.ts; the fired payload becomes the first step's input. Declare provider-neutral connections at workflow definition level; roles separately grant workflow, agent, Environment, and connection aliases, and each member explicitly enables unattended execution. Use context.host["catamorphic.sessions"].wake with a stable key and project-agent slug when a member-owned workflow should run an agent and surface its reusable session in desktop and PWA; service-owned enablements cannot create personal notifications. Only exported defineBatchStep calls inside defineBatch.process are physically coalesced. For authoring primitives, use the project's established SaaS wrapper when present; otherwise use @catamorphic/workflow. Never create local copies. For session monitors, wakeups, and session actions, load the host session-workflows skill. Before authoring, load the host workflow-lifecycle skill when offered and choose session lifetime, source visibility, and execution Environment separately. Temporary checks use the available create_watcher/create_github_watcher tool with source passed directly, never files added to the shared working tree. Reusable project definitions belong under workflows/src/. Member-owned enablement does not make source private; use only a host-supported private artifact capability for private saved workflows. Project files may be checkpointed and automatically synced; neither an uncommitted file nor an unpushed branch is a privacy boundary. Saving, sharing, deploying, and enabling are separate outcomes; report only those confirmed by the host. Consult .agents/skills/writing-workflows/SKILL.md, .agents/skills/durable-workflows/SKILL.md, and .agents/skills/batch-workflows/SKILL.md, when present, before creating or restructuring workflows.`;
 
 export function buildAgentSystemPrompt({
   systemPrompt,
@@ -809,6 +818,17 @@ export class AgentSessionsService {
   /** Late-bound because WatchersService itself depends on this service. */
   setArchiveResourcesHandler(handler: ArchiveSessionResourcesHandler): void {
     this.archiveResources = handler;
+  }
+
+  private sessionActionHandler?: (
+    input: Parameters<
+      import("./session-actions-service.js").SessionActionsService["execute"]
+    >[0],
+  ) => Promise<import("@catamorphic/db").Json>;
+  setSessionActionHandler(
+    handler: NonNullable<AgentSessionsService["sessionActionHandler"]>,
+  ): void {
+    this.sessionActionHandler = handler;
   }
 
   async list(
@@ -1497,6 +1517,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     input: {
+      sourceActionId?: string;
       systemPrompt?: string;
       agentId?: string;
       model?: string;
@@ -1526,6 +1547,8 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     input: {
+      sourceActionId?: string;
+      origin?: SessionOperationOrigin;
       systemPrompt?: string;
       agentId?: string;
       model?: string;
@@ -1542,12 +1565,28 @@ export class AgentSessionsService {
       prepared?: PreparedSessionCreate;
     },
   ): Promise<AgentSession> {
+    if (input.sourceActionId && !input.transaction) {
+      const existing = await this.db
+        .selectFrom("agent_sessions")
+        .select("id")
+        .where("project_id", "=", projectId)
+        .where("source_action_id", "=", input.sourceActionId)
+        .executeTakeFirst();
+      if (existing) return this.get(identity, projectId, existing.id);
+    }
     const prepared =
       input.prepared ??
       (await this.prepareSessionCreate(identity, projectId, input));
+    const insert = async (transaction: Transaction<DB>) => {
+      if (input.origin)
+        await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
+          transaction,
+        );
+      return prepared.insert(transaction);
+    };
     const row = input.transaction
-      ? await prepared.insert(input.transaction)
-      : await this.db.transaction().execute(prepared.insert);
+      ? await insert(input.transaction)
+      : await this.db.transaction().execute(insert);
 
     return mapSession(row, false, this.hostId, this.authorityLeaseMs, {
       visibility: prepared.visibility,
@@ -1559,6 +1598,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     input: {
+      sourceActionId?: string;
       systemPrompt?: string;
       agentId?: string;
       model?: string;
@@ -1679,6 +1719,7 @@ export class AgentSessionsService {
           .insertInto("agent_sessions")
           .values({
             id: sessionId,
+            source_action_id: input.sourceActionId ?? null,
             project_id: projectId,
             external_user_id: identity.externalUserId,
             provider: agent.provider.name,
@@ -1726,6 +1767,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     input: {
+      origin?: SessionOperationOrigin;
       wakeKey: string;
       content: string;
       workflowName: string;
@@ -1760,6 +1802,7 @@ export class AgentSessionsService {
           ...(input.environment ? { environment: input.environment } : {}),
           ...(input.title ? { title: input.title } : {}),
           wakeKey: input.wakeKey,
+          origin: input.origin,
         });
         row = await this.db
           .selectFrom("agent_sessions")
@@ -1791,6 +1834,8 @@ export class AgentSessionsService {
       mode: input.mode ?? "next_turn",
       idempotencyKey: `workflow-wake:${input.runId}:${input.wakeKey}`,
       metadata: {
+        causation: input.origin?.causation ?? [],
+        provenance: input.origin?.provenance ?? {},
         workflowNotification: {
           ...(input.notification?.title
             ? { title: input.notification.title }
@@ -2227,7 +2272,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     sessionId: string,
-    input: { messageId?: string } = {},
+    input: { messageId?: string; sourceActionId?: string } = {},
   ): Promise<AgentSession> {
     return withSpan(
       {
@@ -2246,6 +2291,15 @@ export class AgentSessionsService {
           projectId,
           sessionId,
         );
+        if (input.sourceActionId) {
+          const existing = await this.db
+            .selectFrom("agent_sessions")
+            .select("id")
+            .where("project_id", "=", projectId)
+            .where("source_action_id", "=", input.sourceActionId)
+            .executeTakeFirst();
+          if (existing) return this.get(identity, projectId, existing.id);
+        }
         const messages = await this.db
           .selectFrom("agent_messages")
           .where("session_id", "=", sessionId)
@@ -2301,6 +2355,7 @@ export class AgentSessionsService {
               icon: session.icon,
               parent_session_id: sessionId,
               forked_from_session_id: sessionId,
+              source_action_id: input.sourceActionId ?? null,
               title: forkTitle,
               authority_host_id: this.hostId,
               authority_revision: 1,
@@ -2317,6 +2372,9 @@ export class AgentSessionsService {
               previous_visibility: "promoted",
             })
             .execute();
+          await sql`select set_config('catamorphic.suppress_session_events', 'true', true)`.execute(
+            trx,
+          );
           for (const message of copied) {
             await trx
               .insertInto("agent_messages")
@@ -2333,6 +2391,9 @@ export class AgentSessionsService {
               })
               .execute();
           }
+          await sql`select set_config('catamorphic.suppress_session_events', 'false', true)`.execute(
+            trx,
+          );
           // The divider that tells both the user and the agent where this
           // conversation came from.
           await trx
@@ -2364,6 +2425,8 @@ export class AgentSessionsService {
     projectId: string,
     sourceSessionId: string,
     input: {
+      sourceActionId?: string;
+      origin?: SessionOperationOrigin;
       routeId?: string;
       agentId?: string;
       task: string;
@@ -2378,6 +2441,20 @@ export class AgentSessionsService {
     );
     if (source.status !== "active") {
       throw new AgentSessionClosedError(sourceSessionId);
+    }
+    if (input.sourceActionId) {
+      const existing = await this.db
+        .selectFrom("agent_sessions")
+        .select("id")
+        .where("project_id", "=", projectId)
+        .where("source_action_id", "=", input.sourceActionId)
+        .executeTakeFirst();
+      if (existing) {
+        const child = (
+          await this.listSubsessions(identity, projectId, sourceSessionId)
+        ).find((item) => item.session.id === existing.id);
+        if (child) return child;
+      }
     }
     const sourceAgentId =
       source.agent_id ?? this.codingAgents.defaultAgentId(projectId);
@@ -2422,6 +2499,7 @@ export class AgentSessionsService {
     if (!task) throw new Error("A subsession task is required");
     const contextMode = input.contextMode ?? "fresh";
     const childInput = {
+      sourceActionId: input.sourceActionId,
       agentId: targetAgentId,
       parentSessionId: sourceSessionId,
       visibility: "latent" as const,
@@ -2435,7 +2513,22 @@ export class AgentSessionsService {
       projectId,
       childInput,
     );
+    const origin = input.origin ?? {
+      author: {
+        kind: "agent" as const,
+        sessionId: sourceSessionId,
+        agentId: sourceAgentId ?? null,
+      },
+      causation: await this.causalContext({
+        identity,
+        projectId,
+        sessionId: sourceSessionId,
+      }),
+    };
     const created = await this.db.transaction().execute(async (transaction) => {
+      await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...origin.author, causation: origin.causation ?? [] })}, true)`.execute(
+        transaction,
+      );
       const lockedSource = await transaction
         .selectFrom("agent_sessions")
         .select(["id", "status"])
@@ -2481,6 +2574,9 @@ export class AgentSessionsService {
           .where(sql`coalesce(metadata ->> 'status', '')`, "!=", "in_progress")
           .orderBy("seq", "asc")
           .execute();
+        await sql`select set_config('catamorphic.suppress_session_events', 'true', true)`.execute(
+          transaction,
+        );
         for (const message of history) {
           await transaction
             .insertInto("agent_messages")
@@ -2499,6 +2595,9 @@ export class AgentSessionsService {
         }
       }
 
+      await sql`select set_config('catamorphic.suppress_session_events', 'false', true)`.execute(
+        transaction,
+      );
       const delegation = await transaction
         .insertInto("agent_delegations")
         .values({
@@ -2516,10 +2615,10 @@ export class AgentSessionsService {
       const receipt = await this.turns.deliver({
         sessionId: child.id,
         content: task,
-        author: {
-          kind: "agent",
-          sessionId: sourceSessionId,
-          agentId: sourceAgentId ?? null,
+        author: origin.author,
+        metadata: {
+          causation: origin.causation ?? [],
+          provenance: origin.provenance ?? {},
         },
         mode: "next_turn",
         idempotencyKey: `delegation:${delegation.id}:task`,
@@ -2829,6 +2928,51 @@ export class AgentSessionsService {
     );
   }
 
+  async exportEvents(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+  }): Promise<NonNullable<SessionMirrorInput["events"]>> {
+    await this.requireSession(input.identity, input.projectId, input.sessionId);
+    const rows = await this.db
+      .selectFrom("project_events")
+      .select(["id", "kind", "occurred_at", "payload"])
+      .where("project_id", "=", input.projectId)
+      .where("source", "=", "session")
+      .where(sql`payload->>'sessionId'`, "=", input.sessionId)
+      .orderBy("sequence")
+      .execute();
+    return rows.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      occurredAt: row.occurred_at.toISOString(),
+      payload: row.payload as JsonObject,
+    }));
+  }
+
+  async causalContext(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+  }): Promise<string[]> {
+    await this.requireSession(input.identity, input.projectId, input.sessionId);
+    const message = await this.db
+      .selectFrom("agent_turns as turn")
+      .innerJoin("agent_messages as message", "message.id", "turn.message_id")
+      .select("message.metadata")
+      .where("turn.session_id", "=", input.sessionId)
+      .where("turn.status", "=", "running")
+      .executeTakeFirst();
+    const metadata = message?.metadata;
+    const chain =
+      metadata && typeof metadata === "object" && !Array.isArray(metadata)
+        ? metadata.causation
+        : undefined;
+    return Array.isArray(chain)
+      ? chain.filter((id): id is string => typeof id === "string")
+      : [];
+  }
+
   /** Deliver an attributed inbox message and optionally schedule an agent turn. */
   async deliver(
     identity: Identity,
@@ -2842,6 +2986,19 @@ export class AgentSessionsService {
       metadata?: JsonObject;
     },
   ): Promise<SessionDeliveryReceipt> {
+    if (input.author.kind === "agent" && !input.metadata?.causation) {
+      input = {
+        ...input,
+        metadata: {
+          ...input.metadata,
+          causation: await this.causalContext({
+            identity,
+            projectId,
+            sessionId: input.author.sessionId,
+          }),
+        },
+      };
+    }
     const session = await this.requireSession(identity, projectId, sessionId);
     if (session.status !== "active") {
       throw new AgentSessionClosedError(sessionId);
@@ -2895,6 +3052,45 @@ export class AgentSessionsService {
       item.destinationHostId !== this.hostId
     ) {
       throw new SessionMirrorDivergedError(item.sessionId);
+    }
+    const action = item.metadata?.sessionAction;
+    if (
+      action &&
+      typeof action === "object" &&
+      !Array.isArray(action) &&
+      typeof action.operation === "string" &&
+      this.sessionActionHandler
+    ) {
+      const { SESSION_ACTION_SCHEMAS } = await import(
+        "./session-actions-service.js"
+      );
+      const operation = action.operation;
+      if (!(operation in SESSION_ACTION_SCHEMAS))
+        throw new Error("Unknown session action");
+      await this.sessionActionHandler({
+        identity,
+        projectId,
+        author: item.author,
+        operation: operation as keyof typeof SESSION_ACTION_SCHEMAS,
+        args: action.args,
+        provenance:
+          action.provenance &&
+          typeof action.provenance === "object" &&
+          !Array.isArray(action.provenance)
+            ? action.provenance
+            : {},
+        causation: Array.isArray(action.causation)
+          ? action.causation.filter(
+              (id): id is string => typeof id === "string",
+            )
+          : [],
+      });
+      return {
+        messageId: item.messageId,
+        mode: "message_only",
+        turnId: null,
+        created: true,
+      };
     }
     const activeTurn = (
       await this.turns.listPending({ sessionId: item.sessionId })
@@ -4601,7 +4797,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     sessionId: string,
-    input: { confirmStop?: boolean } = {},
+    input: { confirmStop?: boolean; origin?: SessionOperationOrigin } = {},
   ): Promise<{ impact: AgentSessionArchiveImpact; sessions: AgentSession[] }> {
     const impact = await this.archiveImpact(identity, projectId, sessionId);
     if (impact.requiresConfirmation && !input.confirmStop) {
@@ -4644,6 +4840,10 @@ export class AgentSessionsService {
     const { archivedRows, resourceRows } = await this.db
       .transaction()
       .execute(async (transaction) => {
+        if (input.origin)
+          await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
+            transaction,
+          );
         await transaction
           .updateTable("agent_delegations")
           .set({ status: "archived", completed_at: new Date() })
@@ -4769,6 +4969,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     sessionId: string,
+    input: { origin?: SessionOperationOrigin } = {},
   ): Promise<AgentSession[]> {
     await this.requireSession(identity, projectId, sessionId);
     const sessionIds = await this.descendantSessionIds(projectId, sessionId);
@@ -4789,17 +4990,23 @@ export class AgentSessionsService {
         environment: row.environment_name ?? undefined,
       });
     }
-    await this.db
-      .updateTable("agent_session_views")
-      .set(({ ref }) => ({
-        visibility: ref("previous_visibility"),
-        archived_at: null,
-        updated_at: new Date(),
-      }))
-      .where("tenant_id", "=", identity.tenantId)
-      .where("external_user_id", "=", identity.externalUserId)
-      .where("session_id", "in", sessionIds)
-      .execute();
+    await this.db.transaction().execute(async (transaction) => {
+      if (input.origin)
+        await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
+          transaction,
+        );
+      await transaction
+        .updateTable("agent_session_views")
+        .set(({ ref }) => ({
+          visibility: ref("previous_visibility"),
+          archived_at: null,
+          updated_at: new Date(),
+        }))
+        .where("tenant_id", "=", identity.tenantId)
+        .where("external_user_id", "=", identity.externalUserId)
+        .where("session_id", "in", sessionIds)
+        .execute();
+    });
     const rows = await this.db
       .selectFrom("agent_sessions")
       .selectAll()
@@ -6472,6 +6679,8 @@ function mapSession(
     visibility: presentation?.visibility ?? "promoted",
     archivedAt: presentation?.archivedAt?.toISOString() ?? null,
     activity: row.activity,
+    workStatus: row.work_status === "completed" ? "completed" : "open",
+    stateRevision: Number(row.state_revision),
     todos: agentTodos(row.todos),
     authorityHostId: row.authority_host_id,
     authorityRevision: Number(row.authority_revision),

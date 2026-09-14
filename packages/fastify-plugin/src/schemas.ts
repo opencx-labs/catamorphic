@@ -1004,6 +1004,8 @@ export const AgentSessionsQuerySchema = PaginationQuerySchema.extend({
 });
 
 export const AgentSessionSchema = z.object({
+  workStatus: z.enum(["open", "completed"]),
+  stateRevision: z.number().int().nonnegative(),
   childCount: z.number().int().nonnegative().optional(),
   id: z.string().uuid(),
   projectId: z.string().uuid(),
@@ -1172,6 +1174,26 @@ export const SessionMessageAuthorSchema = z.discriminatedUnion("kind", [
 
 /** A transcript pushed from another backend (ADR 0061). */
 export const MirrorAgentSessionSchema = z.object({
+  workStatus: z.enum(["open", "completed"]).optional(),
+  stateRevision: z.number().int().nonnegative().optional(),
+  events: z
+    .array(
+      z.object({
+        id: z.string().uuid(),
+        kind: z.enum([
+          "session.created",
+          "session.message-received",
+          "session.message-sent",
+          "session.turn-changed",
+          "session.state-changed",
+          "session.work-changed",
+          "session.authority-changed",
+        ]),
+        occurredAt: z.string().datetime(),
+        payload: z.record(z.string(), JsonValueSchema),
+      }),
+    )
+    .optional(),
   authority: z.object({
     hostId: z.string().min(1).max(255),
     revision: z.number().int().positive(),
@@ -1283,6 +1305,13 @@ export const AcknowledgeSessionMailboxSchema = z.object({
 });
 
 export const WatcherSchema = z.object({
+  lastRun: z
+    .object({
+      id: z.string().uuid(),
+      status: z.string(),
+      error: z.string().nullable(),
+    })
+    .nullable(),
   id: z.string().uuid(),
   projectId: z.string().uuid(),
   sessionId: z.string().uuid(),

@@ -23,6 +23,7 @@ import { ExecutionAllocationsService } from "../services/execution-allocations-s
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
+import { SessionActionsService } from "../services/session-actions-service.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 class DeferredProvider implements CodingAgentProvider {
@@ -1533,6 +1534,544 @@ describe("agent session coordination", () => {
         attentionSeenRevision: 1,
         attentionRequired: true,
       });
+    });
+  });
+  it("publishes durable lifecycle events atomically and distinguishes work from turns", async () => {
+    const project = await projects.create(identity, {
+      name: "Lifecycle events",
+    });
+    const session = await sessions.create(identity, project.id);
+    const before = await sessions.exportEvents({
+      identity,
+      projectId: project.id,
+      sessionId: session.id,
+    });
+    expect(before.map((event) => event.kind)).toEqual(["session.created"]);
+    await expect(
+      db.transaction().execute(async (trx) => {
+        await trx
+          .updateTable("agent_sessions")
+          .set({ work_status: "completed" })
+          .where("id", "=", session.id)
+          .execute();
+        throw new Error("rollback");
+      }),
+    ).rejects.toThrow("rollback");
+    expect(
+      await sessions.exportEvents({
+        identity,
+        projectId: project.id,
+        sessionId: session.id,
+      }),
+    ).toEqual(before);
+    const author = {
+      kind: "workflow" as const,
+      workflowName: "review",
+      runId: crypto.randomUUID(),
+    };
+    const delivery = {
+      content: "A durable observation",
+      mode: "message_only" as const,
+      author,
+      idempotencyKey: "event-once",
+      metadata: { causation: ["activation-1"] },
+    };
+    await sessions.deliver(identity, project.id, session.id, delivery);
+    await sessions.deliver(identity, project.id, session.id, delivery);
+    const events = await sessions.exportEvents({
+      identity,
+      projectId: project.id,
+      sessionId: session.id,
+    });
+    expect(
+      events.filter((event) => event.kind === "session.message-received"),
+    ).toHaveLength(1);
+    expect(events.at(-1)?.payload).toMatchObject({
+      actor: author,
+      causation: ["activation-1"],
+      session: { workStatus: "open" },
+    });
+    await sessions.sendMessage(
+      identity,
+      project.id,
+      session.id,
+      "Finish this turn",
+    );
+    const settled = await sessions.exportEvents({
+      identity,
+      projectId: project.id,
+      sessionId: session.id,
+    });
+    expect(
+      settled.some(
+        (event) =>
+          event.kind === "session.turn-changed" &&
+          JSON.stringify(event.payload).includes('"completed"'),
+      ),
+    ).toBe(true);
+    expect(
+      settled.filter((event) => event.kind === "session.message-sent"),
+    ).toHaveLength(1);
+    expect(settled.some((event) => event.kind === "session.work-changed")).toBe(
+      false,
+    );
+  });
+
+  it("records attributed actions once, fences stale state, and retains archive history", async () => {
+    const project = await projects.create(identity, {
+      name: "Session actions",
+    });
+    const session = await sessions.create(identity, project.id);
+    await db
+      .insertInto("push_subscriptions")
+      .values({
+        tenant_id: identity.tenantId,
+        external_user_id: identity.externalUserId,
+        endpoint_hash: "session-action-test",
+        endpoint: "https://push.invalid/qa",
+        p256dh: "test",
+        auth_secret: "test",
+      })
+      .execute();
+    const actions = new SessionActionsService(db, sessions, () => undefined);
+    const author = {
+      kind: "workflow" as const,
+      runId: crypto.randomUUID(),
+      workflowName: "finishReview",
+    };
+    const base = {
+      identity,
+      projectId: project.id,
+      author,
+      causation: ["activation-review"],
+    };
+    const notify = {
+      ...base,
+      operation: "notify" as const,
+      args: {
+        sessionId: session.id,
+        content: "Review ready",
+        idempotencyKey: "notify",
+      },
+    };
+    const result = await actions.execute(notify);
+    expect(
+      await new SessionActionsService(db, sessions, () => undefined).execute(
+        notify,
+      ),
+    ).toEqual(result);
+    const notifications = await db
+      .selectFrom("user_notification_events")
+      .select("id")
+      .where("session_id", "=", session.id)
+      .execute();
+    expect(notifications).toHaveLength(1);
+    expect(
+      await db
+        .selectFrom("notification_deliveries")
+        .select("event_id")
+        .where("event_id", "=", notifications[0]!.id)
+        .execute(),
+    ).toHaveLength(1);
+    expect(
+      (await sessions.get(identity, project.id, session.id)).attentionRevision,
+    ).toBe(1);
+    await expect(
+      actions.execute({
+        ...notify,
+        args: { ...notify.args, content: "Different work" },
+      }),
+    ).rejects.toThrow("another action");
+    await expect(
+      actions.execute({
+        ...base,
+        operation: "complete",
+        args: {
+          sessionId: session.id,
+          content: "Done",
+          idempotencyKey: "stale",
+          expectedStateRevision: 0,
+        },
+      }),
+    ).rejects.toThrow("Session state changed");
+    await actions.execute({
+      ...base,
+      operation: "complete",
+      args: {
+        sessionId: session.id,
+        content: "Work finished",
+        idempotencyKey: "complete",
+      },
+    });
+    const completeEvent = (
+      await sessions.exportEvents({
+        identity,
+        projectId: project.id,
+        sessionId: session.id,
+      })
+    ).find((event) => event.kind === "session.work-changed");
+    expect(completeEvent?.payload).toMatchObject({
+      actor: { kind: "workflow", runId: author.runId },
+      causation: ["activation-review"],
+      session: { workStatus: "completed" },
+    });
+    await actions.execute({
+      ...base,
+      operation: "archive",
+      args: { sessionId: session.id, idempotencyKey: "archive" },
+    });
+    const detail = await sessions.get(identity, project.id, session.id);
+    expect(detail.visibility).toBe("archived");
+    expect(
+      detail.messages.filter((message) => message.metadata?.sessionAction),
+    ).toHaveLength(3);
+    await actions.execute({
+      ...base,
+      operation: "unarchive",
+      args: { sessionId: session.id, idempotencyKey: "unarchive" },
+    });
+    expect(
+      (await sessions.get(identity, project.id, session.id)).visibility,
+    ).toBe("promoted");
+    const visibilityEvents = (
+      await sessions.exportEvents({
+        identity,
+        projectId: project.id,
+        sessionId: session.id,
+      })
+    ).filter(
+      (event) =>
+        event.kind === "session.state-changed" &&
+        JSON.stringify(event.payload).includes('"visibility"'),
+    );
+    expect(visibilityEvents).toHaveLength(2);
+    for (const event of visibilityEvents)
+      expect(event.payload).toMatchObject({
+        actor: { kind: "workflow", runId: author.runId },
+        causation: base.causation,
+      });
+  });
+
+  it.each([false, true])(
+    "fences a replaced action executor's late result (failure: %s)",
+    async (lateFailure) => {
+      const project = await projects.create(identity, {
+        name: "Action lease recovery",
+      });
+      const session = await sessions.create(identity, project.id);
+      const actions = new SessionActionsService(db, sessions, () => undefined);
+      const started = deferred<void>();
+      const release = deferred<void>();
+      const original = sessions.archive.bind(sessions);
+      const archive = vi
+        .spyOn(sessions, "archive")
+        .mockImplementationOnce(async (...args) => {
+          started.resolve();
+          await release.promise;
+          if (lateFailure) throw new Error("Late executor failure");
+          return original(...args);
+        });
+      const input: Parameters<SessionActionsService["execute"]>[0] = {
+        identity,
+        projectId: project.id,
+        operation: "archive",
+        args: { sessionId: session.id, idempotencyKey: "archive-once" },
+        author: {
+          kind: "workflow",
+          workflowName: "cleanup",
+          runId: crypto.randomUUID(),
+        },
+      };
+      const stale = actions.execute(input).then(
+        () => "unexpected success",
+        (error: unknown) => String(error),
+      );
+      try {
+        await started.promise;
+        await db
+          .updateTable("session_actions")
+          .set({ lease_expires_at: new Date(0) })
+          .where("session_id", "=", session.id)
+          .execute();
+        await actions.execute(input);
+        release.resolve();
+        expect(await stale).toContain(
+          lateFailure ? "Late executor failure" : "lease was replaced",
+        );
+        expect(
+          await db
+            .selectFrom("session_actions")
+            .select(["status", "error", "lease_owner"])
+            .where("session_id", "=", session.id)
+            .executeTakeFirstOrThrow(),
+        ).toEqual({ status: "completed", error: null, lease_owner: null });
+        const detail = await sessions.get(identity, project.id, session.id);
+        expect(
+          detail.messages.filter(
+            (message) => message.content === "Archived this session",
+          ),
+        ).toHaveLength(1);
+        expect(
+          detail.messages.some((message) =>
+            message.content.includes("failed:"),
+          ),
+        ).toBe(false);
+      } finally {
+        release.resolve();
+        await stale;
+        archive.mockRestore();
+      }
+    },
+  );
+
+  it("routes actions to the authoritative host and imports them once", async () => {
+    const project = await projects.create(identity, {
+      name: "Remote session actions",
+    });
+    const session = await sessions.create(identity, project.id);
+    const actions = new SessionActionsService(db, sessions, () => undefined);
+    const author = {
+      kind: "workflow" as const,
+      runId: crypto.randomUUID(),
+      workflowName: "remoteReview",
+    };
+    await db
+      .updateTable("agent_sessions")
+      .set({ authority_host_id: "remote-host" })
+      .where("id", "=", session.id)
+      .execute();
+    await actions.execute({
+      identity,
+      projectId: project.id,
+      author,
+      operation: "notify",
+      args: {
+        sessionId: session.id,
+        content: "Remote result",
+        idempotencyKey: "remote-notify",
+      },
+    });
+    expect(
+      (await sessions.get(identity, project.id, session.id)).attentionRevision,
+    ).toBe(0);
+    const items = await sessions.mailboxes.list(identity, project.id, {
+      destinationHostId: "remote-host",
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.metadata?.sessionAction).toMatchObject({
+      operation: "notify",
+    });
+    await db
+      .updateTable("agent_sessions")
+      .set({ authority_host_id: sessions.hostId })
+      .where("id", "=", session.id)
+      .execute();
+    const item = { ...items[0]!, destinationHostId: sessions.hostId };
+    sessions.setSessionActionHandler((input) => actions.execute(input));
+    await sessions.importMailbox(identity, project.id, item);
+    await sessions.importMailbox(identity, project.id, item);
+    expect(
+      (await sessions.get(identity, project.id, session.id)).attentionRevision,
+    ).toBe(1);
+    expect(
+      (await sessions.get(identity, project.id, session.id)).messages.filter(
+        (message) => message.content === "Remote result",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("retains failure attribution and a retry never interrupts a later turn", async () => {
+    const project = await projects.create(identity, {
+      name: "Action recovery",
+    });
+    const session = await sessions.create(identity, project.id);
+    const actions = new SessionActionsService(db, sessions, () => undefined);
+    const base = {
+      identity,
+      projectId: project.id,
+      author: {
+        kind: "workflow" as const,
+        runId: crypto.randomUUID(),
+        workflowName: "recover",
+      },
+    };
+    const input = {
+      ...base,
+      operation: "interrupt" as const,
+      args: { sessionId: session.id, idempotencyKey: "interrupt" },
+    };
+    await actions.execute(input);
+    // Simulate a crash after the effect but before completion was persisted.
+    await db
+      .updateTable("session_actions")
+      .set({ status: "running", lease_expires_at: new Date(0) })
+      .where("session_id", "=", session.id)
+      .execute();
+    await sessions.enqueueMessage(
+      identity,
+      project.id,
+      session.id,
+      "Prepare the Globex renewal deck",
+    );
+    await provider.slowStarted;
+    try {
+      await actions.execute(input);
+      expect(
+        (await sessions.get(identity, project.id, session.id)).execution
+          ?.cancellationRequested,
+      ).toBe(false);
+      await expect(
+        actions.execute({
+          ...base,
+          operation: "archive",
+          args: { sessionId: session.id, idempotencyKey: "unsafe-archive" },
+        }),
+      ).rejects.toThrow();
+      const detail = await sessions.get(identity, project.id, session.id);
+      expect(
+        detail.messages.some(
+          (message) =>
+            message.author.kind === "workflow" &&
+            JSON.stringify(message.metadata?.sessionAction).includes(
+              '"failed"',
+            ),
+        ),
+      ).toBe(true);
+      expect(detail.visibility).toBe("promoted");
+    } finally {
+      provider.release();
+    }
+  });
+
+  it("mirrors work state and original event identities without emitting duplicate lifecycle events", async () => {
+    const project = await projects.create(identity, {
+      name: "Mirrored domain events",
+    });
+    const sessionId = crypto.randomUUID();
+    const event = {
+      id: crypto.randomUUID(),
+      kind: "session.work-changed",
+      occurredAt: new Date().toISOString(),
+      payload: {
+        sessionId,
+        externalUserId: "source-user",
+        agentId: null,
+        session: { id: sessionId, workStatus: "completed", stateRevision: 7 },
+        actor: { kind: "workflow", workflowName: "review" },
+        causation: ["upstream"],
+      },
+    };
+    const input = {
+      authority: { hostId: "desktop-origin", revision: 1 },
+      todos: [],
+      messages: [],
+      workStatus: "completed" as const,
+      stateRevision: 7,
+      events: [event],
+    };
+    const first = await sessions.mirror(identity, project.id, sessionId, input);
+    expect(first).toMatchObject({ workStatus: "completed", stateRevision: 7 });
+    await sessions.mirror(identity, project.id, sessionId, input);
+    const events = await sessions.exportEvents({
+      identity,
+      projectId: project.id,
+      sessionId,
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      id: event.id,
+      payload: {
+        externalUserId: identity.externalUserId,
+        causation: ["upstream"],
+      },
+    });
+    await expect(
+      sessions.mirror(identity, project.id, sessionId, {
+        ...input,
+        events: [
+          {
+            ...event,
+            id: crypto.randomUUID(),
+            payload: { ...event.payload, sessionId: crypto.randomUUID() },
+          },
+        ],
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("forks settled history without publishing it as newly received messages", async () => {
+    const project = await projects.create(identity, {
+      name: "Fork event history",
+    });
+    const parent = await sessions.create(identity, project.id);
+    await sessions.deliver(identity, project.id, parent.id, {
+      content: "Historical message",
+      author: { kind: "user", externalUserId: identity.externalUserId },
+      mode: "message_only",
+      idempotencyKey: "history",
+    });
+    const child = await sessions.fork(identity, project.id, parent.id);
+    const events = await sessions.exportEvents({
+      identity,
+      projectId: project.id,
+      sessionId: child.id,
+    });
+    expect(
+      events.some((event) =>
+        JSON.stringify(event.payload).includes("Historical message"),
+      ),
+    ).toBe(false);
+    expect(
+      (await sessions.get(identity, project.id, child.id)).messages.some(
+        (message) => message.content === "Historical message",
+      ),
+    ).toBe(true);
+  });
+
+  it("retries workflow child creation without duplicating a delegated session", async () => {
+    const project = await projects.create(identity, {
+      name: "Workflow delegation",
+    });
+    const session = await sessions.create(identity, project.id, {
+      agentId: "orchestrator",
+    });
+    const actions = new SessionActionsService(db, sessions, () => undefined);
+    const input = {
+      identity,
+      projectId: project.id,
+      author: {
+        kind: "workflow" as const,
+        runId: crypto.randomUUID(),
+        workflowName: "delegate",
+      },
+      causation: ["delegate-activation"],
+      operation: "spawn" as const,
+      args: {
+        sessionId: session.id,
+        task: "Inspect the result",
+        routeId: "small-only",
+        idempotencyKey: "child",
+      },
+    };
+    const first = await actions.execute(input);
+    expect(await actions.execute(input)).toEqual(first);
+    expect(
+      await sessions.listSubsessions(identity, project.id, session.id),
+    ).toHaveLength(1);
+    const child = (
+      await sessions.listSubsessions(identity, project.id, session.id)
+    )[0];
+    if (!child) throw new Error("Expected delegated child");
+    const events = await sessions.exportEvents({
+      identity,
+      projectId: project.id,
+      sessionId: child.session.id,
+    });
+    expect(
+      events.find((event) => event.kind === "session.created")?.payload,
+    ).toMatchObject({
+      actor: { kind: "workflow", runId: input.author.runId },
+      causation: input.causation,
     });
   });
 });

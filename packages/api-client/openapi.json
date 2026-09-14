@@ -13245,6 +13245,15 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "workStatus": {
+                      "type": "string",
+                      "enum": ["open", "completed"]
+                    },
+                    "stateRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
                     "childCount": {
                       "type": "integer",
                       "minimum": 0,
@@ -13450,6 +13459,8 @@
                     }
                   },
                   "required": [
+                    "workStatus",
+                    "stateRevision",
                     "id",
                     "projectId",
                     "externalUserId",
@@ -13764,6 +13775,15 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "workStatus": {
+                            "type": "string",
+                            "enum": ["open", "completed"]
+                          },
+                          "stateRevision": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
                           "childCount": {
                             "type": "integer",
                             "minimum": 0,
@@ -13978,6 +13998,8 @@
                           }
                         },
                         "required": [
+                          "workStatus",
+                          "stateRevision",
                           "id",
                           "projectId",
                           "externalUserId",
@@ -14057,6 +14079,52 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "workStatus": {
+                    "type": "string",
+                    "enum": ["open", "completed"]
+                  },
+                  "stateRevision": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "session.created",
+                            "session.message-received",
+                            "session.message-sent",
+                            "session.turn-changed",
+                            "session.state-changed",
+                            "session.work-changed",
+                            "session.authority-changed"
+                          ]
+                        },
+                        "occurredAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                        },
+                        "payload": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "$ref": "#/components/schemas/JsonValueInput"
+                          }
+                        }
+                      },
+                      "required": ["id", "kind", "occurredAt", "payload"]
+                    }
+                  },
                   "authority": {
                     "type": "object",
                     "properties": {
@@ -14305,6 +14373,15 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "workStatus": {
+                      "type": "string",
+                      "enum": ["open", "completed"]
+                    },
+                    "stateRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
                     "childCount": {
                       "type": "integer",
                       "minimum": 0,
@@ -14510,6 +14587,8 @@
                     }
                   },
                   "required": [
+                    "workStatus",
+                    "stateRevision",
                     "id",
                     "projectId",
                     "externalUserId",
@@ -14800,6 +14879,15 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "workStatus": {
+                      "type": "string",
+                      "enum": ["open", "completed"]
+                    },
+                    "stateRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
                     "childCount": {
                       "type": "integer",
                       "minimum": 0,
@@ -15005,6 +15093,8 @@
                     }
                   },
                   "required": [
+                    "workStatus",
+                    "stateRevision",
                     "id",
                     "projectId",
                     "externalUserId",
@@ -15163,6 +15253,15 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "workStatus": {
+                      "type": "string",
+                      "enum": ["open", "completed"]
+                    },
+                    "stateRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
                     "childCount": {
                       "type": "integer",
                       "minimum": 0,
@@ -15368,6 +15467,8 @@
                     }
                   },
                   "required": [
+                    "workStatus",
+                    "stateRevision",
                     "id",
                     "projectId",
                     "externalUserId",
@@ -15628,6 +15729,15 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "workStatus": {
+                      "type": "string",
+                      "enum": ["open", "completed"]
+                    },
+                    "stateRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
                     "childCount": {
                       "type": "integer",
                       "minimum": 0,
@@ -16154,6 +16264,8 @@
                     }
                   },
                   "required": [
+                    "workStatus",
+                    "stateRevision",
                     "id",
                     "projectId",
                     "externalUserId",
@@ -16266,6 +16378,15 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "workStatus": {
+                      "type": "string",
+                      "enum": ["open", "completed"]
+                    },
+                    "stateRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
                     "childCount": {
                       "type": "integer",
                       "minimum": 0,
@@ -16471,6 +16592,8 @@
                     }
                   },
                   "required": [
+                    "workStatus",
+                    "stateRevision",
                     "id",
                     "projectId",
                     "externalUserId",
@@ -16582,6 +16705,15 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "workStatus": {
+                      "type": "string",
+                      "enum": ["open", "completed"]
+                    },
+                    "stateRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
                     "childCount": {
                       "type": "integer",
                       "minimum": 0,
@@ -16787,6 +16919,8 @@
                     }
                   },
                   "required": [
+                    "workStatus",
+                    "stateRevision",
                     "id",
                     "projectId",
                     "externalUserId",
@@ -17113,6 +17247,15 @@
                     "session": {
                       "type": "object",
                       "properties": {
+                        "workStatus": {
+                          "type": "string",
+                          "enum": ["open", "completed"]
+                        },
+                        "stateRevision": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
                         "childCount": {
                           "type": "integer",
                           "minimum": 0,
@@ -17323,6 +17466,8 @@
                         }
                       },
                       "required": [
+                        "workStatus",
+                        "stateRevision",
                         "id",
                         "projectId",
                         "externalUserId",
@@ -17528,6 +17673,15 @@
                       "session": {
                         "type": "object",
                         "properties": {
+                          "workStatus": {
+                            "type": "string",
+                            "enum": ["open", "completed"]
+                          },
+                          "stateRevision": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
                           "childCount": {
                             "type": "integer",
                             "minimum": 0,
@@ -17742,6 +17896,8 @@
                           }
                         },
                         "required": [
+                          "workStatus",
+                          "stateRevision",
                           "id",
                           "projectId",
                           "externalUserId",
@@ -17925,6 +18081,15 @@
                       "session": {
                         "type": "object",
                         "properties": {
+                          "workStatus": {
+                            "type": "string",
+                            "enum": ["open", "completed"]
+                          },
+                          "stateRevision": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
                           "childCount": {
                             "type": "integer",
                             "minimum": 0,
@@ -18139,6 +18304,8 @@
                           }
                         },
                         "required": [
+                          "workStatus",
+                          "stateRevision",
                           "id",
                           "projectId",
                           "externalUserId",
@@ -18370,6 +18537,15 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "workStatus": {
+                      "type": "string",
+                      "enum": ["open", "completed"]
+                    },
+                    "stateRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
                     "childCount": {
                       "type": "integer",
                       "minimum": 0,
@@ -18575,6 +18751,8 @@
                     }
                   },
                   "required": [
+                    "workStatus",
+                    "stateRevision",
                     "id",
                     "projectId",
                     "externalUserId",
@@ -19499,6 +19677,15 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "workStatus": {
+                      "type": "string",
+                      "enum": ["open", "completed"]
+                    },
+                    "stateRevision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
                     "childCount": {
                       "type": "integer",
                       "minimum": 0,
@@ -19704,6 +19891,8 @@
                     }
                   },
                   "required": [
+                    "workStatus",
+                    "stateRevision",
                     "id",
                     "projectId",
                     "externalUserId",
@@ -20300,6 +20489,15 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "workStatus": {
+                            "type": "string",
+                            "enum": ["open", "completed"]
+                          },
+                          "stateRevision": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
                           "childCount": {
                             "type": "integer",
                             "minimum": 0,
@@ -20514,6 +20712,8 @@
                           }
                         },
                         "required": [
+                          "workStatus",
+                          "stateRevision",
                           "id",
                           "projectId",
                           "externalUserId",
@@ -20695,6 +20895,15 @@
                   "items": {
                     "type": "object",
                     "properties": {
+                      "workStatus": {
+                        "type": "string",
+                        "enum": ["open", "completed"]
+                      },
+                      "stateRevision": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
                       "childCount": {
                         "type": "integer",
                         "minimum": 0,
@@ -20900,6 +21109,8 @@
                       }
                     },
                     "required": [
+                      "workStatus",
+                      "stateRevision",
                       "id",
                       "projectId",
                       "externalUserId",
@@ -22901,6 +23112,26 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "lastRun": {
+                            "nullable": true,
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "status": {
+                                "type": "string"
+                              },
+                              "error": {
+                                "nullable": true,
+                                "type": "string"
+                              }
+                            },
+                            "required": ["id", "status", "error"],
+                            "additionalProperties": false
+                          },
                           "id": {
                             "type": "string",
                             "format": "uuid",
@@ -22977,6 +23208,7 @@
                           }
                         },
                         "required": [
+                          "lastRun",
                           "id",
                           "projectId",
                           "sessionId",

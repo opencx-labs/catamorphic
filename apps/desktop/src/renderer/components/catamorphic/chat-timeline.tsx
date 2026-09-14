@@ -32,6 +32,7 @@ import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 import { splitAttachmentMarkers } from "../../lib/composer-serialize";
 import { ContextPill } from "../context-pill";
 import { ShortcutHint } from "../shortcut-hint";
+import { SessionAttribution } from "./session-attribution.js";
 
 const REMARK_PLUGINS = [remarkGfm];
 
@@ -443,22 +444,6 @@ function contentHash(message: ChatTimelineMessage): string {
   return result;
 }
 
-function deliveryAuthorLabel(message: ChatTimelineMessage): string | null {
-  if (message.role !== "user") return null;
-  switch (message.author?.kind) {
-    case "agent":
-      return "Agent message";
-    case "workflow":
-      return `Workflow · ${message.author.workflowName}`;
-    case "watcher":
-      return "Watcher";
-    case "system":
-      return "System";
-    default:
-      return null;
-  }
-}
-
 /** One pass over the list; duplicate contents get occurrence suffixes. */
 function timelineKeys(messages: ChatTimelineMessage[]): string[] {
   const seen = new Map<string, number>();
@@ -582,7 +567,7 @@ function MessageImpl({
   const humanUserMessage =
     message.role === "user" &&
     (!message.author || message.author.kind === "user");
-  const deliveryAuthor = deliveryAuthorLabel(message);
+
   const enterClasses = `motion-safe:transition-[opacity,translate] motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${entered ? "motion-safe:translate-y-0 motion-safe:opacity-100" : "motion-safe:translate-y-1 motion-safe:opacity-0"}`;
 
   // Failed turns render as an error card with recovery actions (the
@@ -641,11 +626,11 @@ function MessageImpl({
       data-user-message={humanUserMessage || undefined}
       className={`group/msg relative max-w-[85%] text-sm ${enterClasses} ${humanUserMessage ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2" : message.role === "user" ? "mr-auto rounded-xl rounded-bl-sm border border-border bg-bg-raised px-3 py-2" : "mr-auto"}`}
     >
-      {deliveryAuthor && (
-        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-fg-faint">
-          {deliveryAuthor}
-        </div>
-      )}
+      <SessionAttribution
+        author={message.role === "assistant" ? undefined : message.author}
+        metadata={message.metadata}
+        onOpen={onLinkClick}
+      />
       {stripAttachments.length > 0 && (
         <AttachmentStrip attachments={stripAttachments} />
       )}

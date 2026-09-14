@@ -91,7 +91,12 @@ async function prepare(
 
 describe("completeRemoteConnection", () => {
   it("connects every existing membership after signing in at the server host", async () => {
-    const fetchImpl = fetchForCallback({ admitted: true });
+    const respond = fetchForCallback({ admitted: true });
+    const fetchImpl: typeof fetch = function (this: unknown, ...args) {
+      // Native Window.fetch rejects a foreign receiver, unlike arrow mocks.
+      expect(this).toBeUndefined();
+      return respond(...args);
+    };
     const started = await beginServerAuthorization({
       serverUrl: "https://brain.acme.dev/api",
       redirectUri: "https://brain.acme.dev/oauth/callback",

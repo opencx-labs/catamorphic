@@ -483,11 +483,24 @@ describe("skills as commands", () => {
        return !!row && !!$('[data-palette-target]');`,
       { timeoutMs: 15_000, label: "skill row highlights the focused chat" },
     );
-    await run(
-      `paletteInput().dispatchEvent(new KeyboardEvent('keydown',
-         { key: 'Enter', bubbles: true, cancelable: true }));
-       return true;`,
+    // Other skills can match "checklist" in their body. Select the intended
+    // result explicitly; this scenario verifies its target, not search ranking.
+    const point = await run<{ x: number; y: number }>(
+      `const rect = paletteRows().find((el) => el.textContent.includes('Checklist')).getBoundingClientRect();
+       return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };`,
     );
+    await app.cdp("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      ...point,
+      button: "left",
+      clickCount: 1,
+    });
+    await app.cdp("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      ...point,
+      button: "left",
+      clickCount: 1,
+    });
     await runWait(
       `return !!byText('section[aria-label] *', 'skill loaded: checklist');`,
       { timeoutMs: 30_000, label: "checklist reply in the focused chat" },

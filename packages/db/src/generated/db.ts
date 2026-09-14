@@ -130,12 +130,15 @@ export interface AgentSessions {
   provider_session_id: string | null;
   sandbox_id: string | null;
   source: Generated<string>;
+  source_action_id: string | null;
+  state_revision: Generated<Int8>;
   status: Generated<string>;
   system_prompt: string | null;
   title: string | null;
   todos: Generated<Json>;
   updated_at: Generated<Timestamp>;
   wake_key: string | null;
+  work_status: Generated<string>;
 }
 
 export interface AgentSessionViews {
@@ -563,6 +566,18 @@ export interface NotificationDeliveries {
   updated_at: Generated<Timestamp>;
 }
 
+export interface ProjectEventDeliveries {
+  activation_id: string;
+  attempt_count: Generated<number>;
+  error: string | null;
+  event_id: string;
+  lease_expires_at: Timestamp | null;
+  lease_owner: string | null;
+  next_attempt_at: Generated<Timestamp>;
+  run_ids: Generated<Json>;
+  status: Generated<string>;
+}
+
 export interface ProjectEventMonitors {
   config: Generated<Json>;
   created_at: Generated<Timestamp>;
@@ -678,10 +693,11 @@ export interface RateReservationBuckets {
 export interface ScheduleBindings {
   activation_id: string;
   created_at: Generated<Timestamp>;
-  cron_expression: string;
+  cron_expression: string | null;
+  fire_at: Timestamp | null;
   last_scheduled_for: Timestamp | null;
-  next_fire_at: Timestamp;
-  timezone: string;
+  next_fire_at: Timestamp | null;
+  timezone: string | null;
   updated_at: Generated<Timestamp>;
 }
 
@@ -697,6 +713,24 @@ export interface ScheduleOccurrences {
   run_ids: Generated<Json>;
   scheduled_for: Timestamp;
   status: Generated<string>;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface SessionActions {
+  actor: Json;
+  created_at: Generated<Timestamp>;
+  error: string | null;
+  id: Generated<string>;
+  idempotency_key: string;
+  input: Json;
+  lease_expires_at: Timestamp | null;
+  lease_owner: string | null;
+  operation: string;
+  project_id: string;
+  result: Json | null;
+  session_id: string;
+  status: Generated<string>;
+  target_turn_id: string | null;
   updated_at: Generated<Timestamp>;
 }
 
@@ -1142,6 +1176,7 @@ export interface DB {
   member_connection_attachments: MemberConnectionAttachments;
   memberships: Memberships;
   notification_deliveries: NotificationDeliveries;
+  project_event_deliveries: ProjectEventDeliveries;
   project_event_monitors: ProjectEventMonitors;
   project_events: ProjectEvents;
   project_plugins: ProjectPlugins;
@@ -1153,6 +1188,7 @@ export interface DB {
   rate_reservation_buckets: RateReservationBuckets;
   schedule_bindings: ScheduleBindings;
   schedule_occurrences: ScheduleOccurrences;
+  session_actions: SessionActions;
   session_artifact_revisions: SessionArtifactRevisions;
   session_artifacts: SessionArtifacts;
   session_mailbox_items: SessionMailboxItems;

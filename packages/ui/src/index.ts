@@ -20,7 +20,7 @@ export {
   friendlyType,
 } from "./display-utils.js";
 export type { RunsPanelProps } from "./runs-panel.js";
-export { RunsPanel } from "./runs-panel.js";
+export { RunDetail, RunsPanel } from "./runs-panel.js";
 export { Toolbar } from "./toolbar.js";
 export type { WorkflowEditorProps } from "./workflow-editor.js";
 export { WorkflowEditor, WorkflowEditorChrome } from "./workflow-editor.js";

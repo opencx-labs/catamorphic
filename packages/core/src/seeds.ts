@@ -2,6 +2,7 @@ import { APP_THEME_COLOR_TOKENS } from "@catamorphic/app";
 import { PARSER_PACKAGE_VERSION } from "@catamorphic/parser";
 import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
 import { SESSION_ARTIFACTS_SKILL } from "./session-artifacts-skill.js";
+import { SESSION_WORKFLOWS_SKILL } from "./session-workflows-skill.js";
 import { WORKFLOW_LIFECYCLE_SKILL } from "./workflow-lifecycle-skill.js";
 
 const SHARED_TSCONFIG = `{
@@ -1636,6 +1637,7 @@ documents — grep is faster and never lies.
 export const HOST_SKILLS: Record<string, string> = {
   "session-artifacts/SKILL.md": SESSION_ARTIFACTS_SKILL,
   "workflow-lifecycle/SKILL.md": WORKFLOW_LIFECYCLE_SKILL,
+  "session-workflows/SKILL.md": SESSION_WORKFLOWS_SKILL,
   "searching-documents/SKILL.md": SEARCHING_DOCUMENTS_SKILL,
   "publishing-to-github/SKILL.md": `---
 name: publishing-to-github

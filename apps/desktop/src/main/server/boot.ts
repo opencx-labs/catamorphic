@@ -246,6 +246,15 @@ export async function startEmbeddedServer(
     // Desktop-local privacy flag (ADR 0062): never crosses core.
     isIncognito: (sessionId) => incognitoSessions?.has(sessionId) ?? false,
     markIncognito: (sessionId) => incognitoSessions?.set(sessionId, true),
+    sessionEvents: (projectId, sessionId) =>
+      catamorphic.core.agentSessions?.exportEvents({
+        identity: {
+          tenantId: DESKTOP_TENANT_ID,
+          externalUserId: DESKTOP_USER_ID,
+        },
+        projectId,
+        sessionId,
+      }) ?? Promise.resolve([]),
     sessionDetail: (projectId, sessionId) =>
       catamorphic.core.agentSessions
         ? catamorphic.core.agentSessions.get(
@@ -1222,12 +1231,9 @@ export async function startEmbeddedServer(
     });
     for (const project of items) {
       if (shutdownDone) return;
-      const remoteProjects = profileConfig.forProfile(
-        profiles.profileForProject(project.id).id,
-      ).remoteProjects;
-      // A linked project's canonical hosting server owns its schedules.
-      // This desktop does not shadow-run them or become an implicit fallback.
-      if (remoteProjects.get(project.id)) continue;
+      // Enablements are host-owned durable state. Synced workflow source alone
+      // does not activate a schedule; locally created temporary workflows must
+      // still run when their project is linked to a remote.
       await catamorphic.core.schedules.tick({
         identity,
         projectId: project.id,

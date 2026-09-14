@@ -350,8 +350,8 @@ export class TriggersService {
     }));
   }
 
-  /** Active runtime instances of production trigger definitions. */
-  async storedProductionActivations(args: {
+  /** Active runtime instances of pinned trigger definitions, including temporary source. */
+  async storedActiveActivations(args: {
     identity: Identity;
     projectId: string;
     kind: string;
@@ -555,6 +555,14 @@ export class TriggersService {
           const wanted = new Set(args.workflows);
           targets = targets.filter(({ binding }) =>
             wanted.has(binding.workflowName),
+          );
+        }
+        if (kind.matches) {
+          targets = targets.filter(({ binding }) =>
+            kind.matches?.({
+              config: binding.config as Json,
+              payload: args.payload,
+            }),
           );
         }
         span.setAttribute("catamorphic.trigger.target_count", targets.length);

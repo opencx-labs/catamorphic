@@ -1,11 +1,11 @@
 import type { DB, Json } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
-
-import { type Kysely, type Selectable, sql } from "kysely";
+import type { Kysely, Selectable } from "kysely";
 import type { Identity } from "../identity.js";
 import type { AgentSessionsService } from "./agent-sessions-service.js";
 import type { GithubService } from "./github-service.js";
+import { ProjectEventDispatcher } from "./project-event-dispatcher.js";
 import type { ProjectEventMonitorsService } from "./project-event-monitors-service.js";
 import type { ProjectEventsService } from "./project-events-service.js";
 import type { RunsService } from "./runs-service.js";
@@ -31,6 +31,7 @@ export interface Watcher {
   status: "active" | "paused" | "stopped" | "expired";
   expiresAt: string | null;
   lastError: string | null;
+  lastRun: { id: string; status: string; error: string | null } | null;
   createdAt: string;
 }
 
@@ -314,9 +315,21 @@ export class WatchersService {
           .where("commit_sha", "=", row.commit_sha)
           .where("workflow_name", "=", row.workflow_name)
           .execute();
-        return mapWatcher(row, [
-          ...new Set(bindings.map((binding) => binding.trigger_kind)),
-        ]);
+        const lastRun = row.workflow_enablement_id
+          ? await this.db
+              .selectFrom("workflow_runs")
+              .select(["id", "status", "error"])
+              .where("workflow_enablement_id", "=", row.workflow_enablement_id)
+              .orderBy("created_at", "desc")
+              .limit(1)
+              .executeTakeFirst()
+          : undefined;
+        return {
+          ...mapWatcher(row, [
+            ...new Set(bindings.map((binding) => binding.trigger_kind)),
+          ]),
+          lastRun: lastRun ?? null,
+        };
       }),
     );
   }
@@ -433,24 +446,11 @@ export class WatchersService {
       .selectAll("watchers")
       .select("projects.tenant_id")
       .where("watchers.status", "in", ["active", "paused"])
-      .where(({ or, and, eb, exists, selectFrom }) =>
-        or([
-          eb("watchers.expires_at", "<=", new Date()),
-          and([
-            eb("watchers.status", "=", "active"),
-            exists(
-              selectFrom("project_events as event")
-                .select("event.id")
-                .whereRef("event.project_id", "=", "watchers.project_id")
-                .whereRef("event.sequence", ">", "watchers.cursor_sequence"),
-            ),
-          ]),
-        ]),
-      )
+      .where("watchers.expires_at", "<=", new Date())
       .orderBy("watchers.updated_at")
       .limit(input.limit ?? 50)
       .execute();
-    let dispatched = 0;
+
     for (const row of rows) {
       try {
         const identity = persistedIdentity(
@@ -470,73 +470,6 @@ export class WatchersService {
             .set({ status: "expired", updated_at: new Date() })
             .where("id", "=", row.id)
             .execute();
-          continue;
-        }
-        const bindings = await this.deps.triggers.listAtCommit({
-          identity,
-          projectId: row.project_id,
-          workflowName: row.workflow_name,
-          commitSha: row.commit_sha,
-          remoteBranch: row.remote_branch,
-        });
-        const kinds = [...new Set(bindings.map((binding) => binding.kind))];
-        const events = await this.deps.events.list({
-          projectId: row.project_id,
-          afterSequence: Number(row.cursor_sequence),
-          limit: 100,
-        });
-        for (const event of events) {
-          try {
-            // Advance past irrelevant events too, so idle watchers never rescan
-            // the same history and cannot starve later watchers in the page.
-            if (!kinds.includes(event.kind)) {
-              await this.advance(row.id, event.sequence, null);
-              continue;
-            }
-            const result = await this.deps.triggers.fireAtCommit({
-              identity,
-              projectId: row.project_id,
-              commitSha: row.commit_sha,
-              remoteBranch: row.remote_branch,
-              environment: row.environment_name ?? undefined,
-              kind: event.kind,
-              payload: JSON.parse(JSON.stringify(event)),
-              workflows: [row.workflow_name],
-              enablementIds: row.workflow_enablement_id
-                ? [row.workflow_enablement_id]
-                : [],
-              mode: "async",
-              correlationKey: `watcher:${row.id}:event:${event.id}`,
-              onConflict: "ignore",
-            });
-            if (result.runs.length > 1) {
-              throw new Error(
-                "A Watcher event matched more than one workflow run",
-              );
-            }
-            const run = result.runs[0];
-            if (run) {
-              await this.db
-                .insertInto("watcher_runs")
-                .values({
-                  watcher_id: row.id,
-                  event_id: event.id,
-                  run_id: run.runId,
-                })
-                .onConflict((conflict) =>
-                  conflict.columns(["watcher_id", "event_id"]).doNothing(),
-                )
-                .execute();
-            }
-            await this.advance(row.id, event.sequence, null);
-            dispatched += result.runs.length;
-          } catch (error) {
-            await this.recordFailure(
-              row.id,
-              error instanceof Error ? error.message : String(error),
-            );
-            break;
-          }
         }
       } catch (error) {
         await this.recordFailure(
@@ -545,7 +478,11 @@ export class WatchersService {
         );
       }
     }
-    return dispatched;
+    return new ProjectEventDispatcher(
+      this.db,
+      this.deps.triggers,
+      this.deps.workflowEnablements,
+    ).dispatch(input);
   }
 
   private async latestProjectSequence(projectId: string): Promise<number> {
@@ -556,22 +493,6 @@ export class WatchersService {
       .orderBy("sequence", "desc")
       .executeTakeFirst();
     return Number(row?.sequence ?? 0);
-  }
-
-  private async advance(
-    watcherId: string,
-    sequence: number,
-    error: string | null,
-  ): Promise<void> {
-    await this.db
-      .updateTable("watchers")
-      .set(({ ref }) => ({
-        cursor_sequence: sql`greatest(${ref("cursor_sequence")}, ${String(sequence)})`,
-        last_error: error,
-        updated_at: new Date(),
-      }))
-      .where("id", "=", watcherId)
-      .execute();
   }
 
   private async recordFailure(watcherId: string, error: string): Promise<void> {
@@ -638,6 +559,7 @@ function mapWatcher(row: WatcherRow, triggerKinds: string[]): Watcher {
     status: watcherStatus(row.status),
     expiresAt: row.expires_at?.toISOString() ?? null,
     lastError: row.last_error,
+    lastRun: null,
     createdAt: row.created_at.toISOString(),
   };
 }

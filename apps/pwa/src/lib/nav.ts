@@ -7,6 +7,13 @@ import { useSyncExternalStore } from "react";
  * push/fade screen transition.
  */
 export type Route =
+  | {
+      kind: "resource";
+      connectionId: string;
+      projectId: string;
+      resourceType: "run" | "artifact" | "workflow";
+      resourceId: string;
+    }
   | { kind: "projects" }
   | { kind: "connect" }
   | { kind: "profiles" }
@@ -21,6 +28,8 @@ export type Route =
 
 export function routeDepth(route: Route): number {
   switch (route.kind) {
+    case "resource":
+      return 3;
     case "projects":
       return 0;
     case "connect":
@@ -35,6 +44,8 @@ export function routeDepth(route: Route): number {
 
 export function formatHash(route: Route): string {
   switch (route.kind) {
+    case "resource":
+      return `#/c/${route.connectionId}/p/${route.projectId}/r/${route.resourceType}/${encodeURIComponent(route.resourceId)}`;
     case "projects":
       return "#/projects";
     case "connect":
@@ -59,6 +70,24 @@ export function parseHash(hash: string): Route {
     typeof parts[3] === "string"
   ) {
     const base = { connectionId: parts[1], projectId: parts[3] };
+    if (
+      parts[4] === "r" &&
+      (parts[5] === "run" ||
+        parts[5] === "artifact" ||
+        parts[5] === "workflow") &&
+      parts[6]
+    ) {
+      try {
+        return {
+          kind: "resource",
+          ...base,
+          resourceType: parts[5],
+          resourceId: decodeURIComponent(parts[6]),
+        };
+      } catch {
+        return { kind: "sessions", ...base };
+      }
+    }
     if (parts[4] === "s" && typeof parts[5] === "string") {
       return {
         kind: "chat",

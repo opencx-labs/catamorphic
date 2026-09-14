@@ -10,6 +10,7 @@ import type {
   JsonValue,
   WorkflowTypeError,
 } from "./json.js";
+import type { SessionHostOperations } from "./session-operations.js";
 
 export interface RetryBackoff {
   initial: string;
@@ -289,7 +290,9 @@ export interface BoundaryContext<Input> {
   /** Who triggered the run; absent when the host started it as itself. */
   readonly caller?: WorkflowCaller;
   /** Host-executed capability calls, caller-bound (ADR 0055). */
-  readonly host: HostNamespace;
+  readonly host: HostNamespace & {
+    readonly "catamorphic.sessions": SessionHostOperations;
+  };
   /** The documents surface, caller-bound (ADR 0055). */
   readonly documents: DocumentsCalls;
   /** Brokered external-system calls. Credential material stays host-side. */

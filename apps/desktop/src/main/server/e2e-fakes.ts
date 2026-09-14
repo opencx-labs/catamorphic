@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,7 +20,10 @@ import type {
   ToolPermissionHandler,
   TurnOptions,
 } from "@catamorphic/sandbox";
-import { inlineAttachmentReferences } from "@catamorphic/sandbox";
+import {
+  inlineAttachmentReferences,
+  StdioDeploymentRuntimeProvider,
+} from "@catamorphic/sandbox";
 import { z } from "zod";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import { createCodexElicitation } from "./codex-elicitation.js";
@@ -36,6 +39,32 @@ const execFileAsync = promisify(execFile);
  */
 export class E2eLocalSandboxProvider implements SandboxProvider {
   readonly workspaceRoot: string;
+  readonly deploymentRuntime = new StdioDeploymentRuntimeProvider({
+    uploadFiles: (sandboxId, files, basePath) =>
+      this.uploadFiles(sandboxId, files, basePath),
+    mkdirp: async (_sandboxId, directory) => {
+      fs.mkdirSync(directory, { recursive: true });
+    },
+    openSupervisor: async ({ runtimeDirectory, env }) => {
+      const child = spawn("bun", ["run", "entry.mjs"], {
+        cwd: runtimeDirectory,
+        env: { PATH: process.env.PATH, ...env },
+        stdio: ["pipe", "pipe", "inherit"],
+      });
+      return {
+        stdout: child.stdout,
+        write: (data: string) =>
+          new Promise<void>((resolve, reject) =>
+            child.stdin.write(data, (error) =>
+              error ? reject(error) : resolve(),
+            ),
+          ),
+        kill: async () => {
+          child.kill("SIGTERM");
+        },
+      };
+    },
+  });
   private readonly roots = new Map<string, string>();
   private counter = 0;
 
@@ -55,8 +84,12 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
   }
 
   async startSandbox(_sandboxId: string): Promise<void> {}
-  async stopSandbox(_sandboxId: string): Promise<void> {}
-  async destroySandbox(_sandboxId: string): Promise<void> {}
+  async stopSandbox(sandboxId: string): Promise<void> {
+    await this.deploymentRuntime.releaseSandbox({ sandboxId });
+  }
+  async destroySandbox(sandboxId: string): Promise<void> {
+    await this.deploymentRuntime.releaseSandbox({ sandboxId });
+  }
 
   async getSandboxStatus(_sandboxId: string): Promise<SandboxStatus> {
     return "started";
@@ -399,6 +432,63 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
               ? ` ${attachment.source.filePath}:${attachment.source.startLine ?? "?"}-${attachment.source.endLine ?? "?"}`
               : ""
           }] ${attachment.text}`,
+        };
+      }
+      yield { type: "done" };
+      return;
+    }
+
+    if (prompt.startsWith("session workflow ")) {
+      const gateway = opts?.capabilities;
+      if (!gateway) throw new Error("Capability gateway unavailable");
+      const sessionId = state.toolContext.sessionId;
+      if (!sessionId) throw new Error("Session context unavailable");
+      const scenario = prompt.slice("session workflow ".length).trim();
+      const invoke = async (name: string, input: Record<string, unknown>) => {
+        const discovered = await gateway.discover({ query: name });
+        if (!discovered.items.some((item) => item.name === name))
+          throw new Error(`Capability unavailable: ${name}`);
+        return gateway.invoke({ name, input, requestId: crypto.randomUUID() });
+      };
+      if (
+        scenario === "complete" ||
+        scenario === "reopen" ||
+        scenario === "notify" ||
+        scenario === "spawn"
+      ) {
+        const result = await invoke(`project.session_${scenario}`, {
+          sessionId,
+          idempotencyKey: `manual-${scenario}-${crypto.randomUUID()}`,
+          ...(scenario === "complete"
+            ? { content: "The requested work is finished." }
+            : {}),
+          ...(scenario === "notify"
+            ? { content: "This result needs your attention." }
+            : {}),
+          ...(scenario === "spawn"
+            ? {
+                task: "Report that the delegated check is complete.",
+                title: "Delegated check",
+              }
+            : {}),
+        });
+        yield {
+          type: "text",
+          content: `Session ${scenario} recorded. ${JSON.stringify(result)}`,
+        };
+      } else {
+        const name = `session${scenario.replace(/[^a-z]/g, "")}`;
+        const source = sessionWorkflowFixture({ scenario, sessionId, name });
+        const result = z.object({ id: z.string() }).parse(
+          await invoke("project.create_watcher", {
+            workflowName: name,
+            source,
+            expiresInSeconds: 600,
+          }),
+        );
+        yield {
+          type: "text",
+          content: `Created [${scenario} workflow](artifact:${result.id}). It expires in ten minutes and stops after its intended result.`,
         };
       }
       yield { type: "done" };
@@ -1304,4 +1394,39 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       this.sessions.delete(session.providerSessionId);
     }
   }
+}
+
+/** Credential-free scenarios still author ordinary source and execute real host transitions. */
+function sessionWorkflowFixture({
+  scenario,
+  sessionId,
+  name,
+}: {
+  scenario: string;
+  sessionId: string;
+  name: string;
+}): string {
+  const triggerConfig =
+    scenario === "monitor"
+      ? `trigger("session.work-changed", { sessionId: ${JSON.stringify(sessionId)}, workStatus: "completed" })`
+      : `trigger("schedule", { at: ${JSON.stringify(new Date(Date.now() + 10_000).toISOString())} })`;
+  const action =
+    scenario === "quiet"
+      ? "return { changed: false };"
+      : scenario === "failure"
+        ? 'throw new Error("Controlled monitor failure");'
+        : scenario === "monitor"
+          ? `return context.host["catamorphic.sessions"].notify({ sessionId: ${JSON.stringify(sessionId)}, content: "Work completion observed.", idempotencyKey: "completion-observed" });`
+          : `return context.host["catamorphic.sessions"].deliver({ sessionId: ${JSON.stringify(sessionId)}, content: "Scheduled follow-up received.", mode: "next_turn", idempotencyKey: "scheduled-wake" });`;
+  return `import { defineWorkflow, trigger, type BoundaryContext } from "@catamorphic/workflow";
+/** @displayname Session ${scenario} */
+export const ${name} = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [${triggerConfig}],
+  steps: [
+    /** @displayname Check session */
+    defineBoundary({ run: (context: BoundaryContext<unknown>) => { ${action} } }),
+    /** @displayname Stop temporary activation */
+    defineBoundary({ run: (context: BoundaryContext<unknown>) => context.host["catamorphic.sessions"].stop({ idempotencyKey: "stop" }) }),
+  ],
+}));`;
 }

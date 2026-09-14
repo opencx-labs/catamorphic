@@ -6209,6 +6209,9 @@ export interface paths {
                     content: {
                         "application/json": {
                             items: {
+                                /** @enum {string} */
+                                workStatus: "open" | "completed";
+                                stateRevision: number;
                                 childCount?: number;
                                 /** Format: uuid */
                                 id: string;
@@ -6322,6 +6325,9 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @enum {string} */
+                            workStatus: "open" | "completed";
+                            stateRevision: number;
                             childCount?: number;
                             /** Format: uuid */
                             id: string;
@@ -6507,6 +6513,20 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
+                        /** @enum {string} */
+                        workStatus?: "open" | "completed";
+                        stateRevision?: number;
+                        events?: {
+                            /** Format: uuid */
+                            id: string;
+                            /** @enum {string} */
+                            kind: "session.created" | "session.message-received" | "session.message-sent" | "session.turn-changed" | "session.state-changed" | "session.work-changed" | "session.authority-changed";
+                            /** Format: date-time */
+                            occurredAt: string;
+                            payload: {
+                                [key: string]: components["schemas"]["JsonValueInput"];
+                            };
+                        }[];
                         authority: {
                             hostId: string;
                             revision: number;
@@ -6579,6 +6599,9 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @enum {string} */
+                            workStatus: "open" | "completed";
+                            stateRevision: number;
                             childCount?: number;
                             /** Format: uuid */
                             id: string;
@@ -6770,6 +6793,9 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @enum {string} */
+                            workStatus: "open" | "completed";
+                            stateRevision: number;
                             childCount?: number;
                             /** Format: uuid */
                             id: string;
@@ -6900,6 +6926,9 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @enum {string} */
+                            workStatus: "open" | "completed";
+                            stateRevision: number;
                             childCount?: number;
                             /** Format: uuid */
                             id: string;
@@ -7097,6 +7126,9 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @enum {string} */
+                            workStatus: "open" | "completed";
+                            stateRevision: number;
                             childCount?: number;
                             /** Format: uuid */
                             id: string;
@@ -7215,6 +7247,9 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @enum {string} */
+                            workStatus: "open" | "completed";
+                            stateRevision: number;
                             childCount?: number;
                             /** Format: uuid */
                             id: string;
@@ -7401,6 +7436,9 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @enum {string} */
+                            workStatus: "open" | "completed";
+                            stateRevision: number;
                             childCount?: number;
                             /** Format: uuid */
                             id: string;
@@ -7610,6 +7648,9 @@ export interface paths {
                             /** @enum {string} */
                             status: "running" | "completed" | "failed" | "interrupted" | "archived";
                             session: {
+                                /** @enum {string} */
+                                workStatus: "open" | "completed";
+                                stateRevision: number;
                                 childCount?: number;
                                 /** Format: uuid */
                                 id: string;
@@ -7739,6 +7780,9 @@ export interface paths {
                             /** @enum {string} */
                             status: "running" | "completed" | "failed" | "interrupted" | "archived";
                             session: {
+                                /** @enum {string} */
+                                workStatus: "open" | "completed";
+                                stateRevision: number;
                                 childCount?: number;
                                 /** Format: uuid */
                                 id: string;
@@ -7911,6 +7955,9 @@ export interface paths {
                             /** @enum {string} */
                             status: "running" | "completed" | "failed" | "interrupted" | "archived";
                             session: {
+                                /** @enum {string} */
+                                workStatus: "open" | "completed";
+                                stateRevision: number;
                                 childCount?: number;
                                 /** Format: uuid */
                                 id: string;
@@ -8108,6 +8155,9 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @enum {string} */
+                            workStatus: "open" | "completed";
+                            stateRevision: number;
                             childCount?: number;
                             /** Format: uuid */
                             id: string;
@@ -8680,6 +8730,9 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @enum {string} */
+                            workStatus: "open" | "completed";
+                            stateRevision: number;
                             childCount?: number;
                             /** Format: uuid */
                             id: string;
@@ -9097,6 +9150,9 @@ export interface paths {
                                 requiresConfirmation: boolean;
                             };
                             sessions: {
+                                /** @enum {string} */
+                                workStatus: "open" | "completed";
+                                stateRevision: number;
                                 childCount?: number;
                                 /** Format: uuid */
                                 id: string;
@@ -9239,6 +9295,9 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @enum {string} */
+                            workStatus: "open" | "completed";
+                            stateRevision: number;
                             childCount?: number;
                             /** Format: uuid */
                             id: string;
@@ -10454,6 +10513,12 @@ export interface paths {
                     content: {
                         "application/json": {
                             items: {
+                                lastRun: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    status: string;
+                                    error: string | null;
+                                } | null;
                                 /** Format: uuid */
                                 id: string;
                                 /** Format: uuid */

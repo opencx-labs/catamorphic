@@ -150,3 +150,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0135](0135-artifact-publication-before-admission.md) | Publish artifact candidates before admitting revisions | Accepted |
 | [0136](0136-local-work-and-project-proposals.md) | Local work and project proposals | Accepted |
 | [0137](0137-sign-in-recovery.md) | Sign-in recovery stays with the active attempt | Accepted |
+| [0138](0138-session-workflow-triggers-and-actions.md) | Session workflow triggers and actions | Accepted |

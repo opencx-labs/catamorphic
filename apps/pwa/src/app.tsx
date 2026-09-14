@@ -40,6 +40,7 @@ import {
 } from "./screens/connect-screen.js";
 import { ProfilesScreen } from "./screens/profiles-screen.js";
 import { ProjectsScreen } from "./screens/projects-screen.js";
+import { ResourceScreen } from "./screens/resource-screen.js";
 import { SessionsScreen } from "./screens/sessions-screen.js";
 
 const queryClient = new QueryClient({
@@ -223,7 +224,10 @@ export function App() {
 
   // The project's committed theme applies while you're inside it; root
   // screens use the default. Applied via CSS vars, so it's instant.
-  const inProject = route.kind === "sessions" || route.kind === "chat";
+  const inProject =
+    route.kind === "sessions" ||
+    route.kind === "chat" ||
+    route.kind === "resource";
   const themeConnectionId = inProject ? route.connectionId : null;
   const themeProjectId = inProject ? route.projectId : null;
   useEffect(() => {
@@ -300,12 +304,23 @@ function ScreenFor({
     case "profiles":
       return <ProfilesScreen animation={animation} />;
     case "sessions":
+    case "resource":
     case "chat": {
       const connection = connectionById(state, route.connectionId);
       if (!connection) {
         // A stale URL (removed connection, another profile's link).
         return <ProjectsScreen animation={animation} />;
       }
+      if (route.kind === "resource")
+        return (
+          <ResourceScreen
+            connection={connection}
+            projectId={route.projectId}
+            resourceType={route.resourceType}
+            resourceId={route.resourceId}
+            queryClient={queryClientFor(connection)}
+          />
+        );
       if (route.kind === "chat") {
         return (
           <ChatScreen

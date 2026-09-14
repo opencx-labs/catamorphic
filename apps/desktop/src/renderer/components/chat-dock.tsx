@@ -2302,9 +2302,15 @@ function ChatDockContent({
                         : "text-fg-faint"
                     }`}
                   />
-                  <span className="max-w-48 truncate">
+                  <button
+                    type="button"
+                    className="max-w-48 truncate rounded hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                    onClick={() =>
+                      onLinkClick?.(`artifact:${watcher.id}`, "tab")
+                    }
+                  >
                     {watcher.workflowName}
-                  </span>
+                  </button>
                   <span
                     className="text-fg-faint"
                     title={
@@ -2315,6 +2321,17 @@ function ChatDockContent({
                   >
                     {watcher.status}
                   </span>
+                  {watcher.lastRun && (
+                    <button
+                      type="button"
+                      className={`rounded hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${watcher.lastRun.status === "failed" ? "text-danger" : "text-fg-muted"}`}
+                      onClick={() =>
+                        onLinkClick?.(`run:${watcher.lastRun?.id}`, "tab")
+                      }
+                    >
+                      Last run: {watcher.lastRun.status}
+                    </button>
+                  )}
                   {watcher.lastError && (
                     <span
                       className="max-w-64 truncate text-danger"

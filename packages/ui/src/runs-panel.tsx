@@ -421,10 +421,20 @@ function BatchScopes({ run }: { run: Run }) {
   );
 }
 
-function RunDetail({ runId }: { runId: string }) {
+export function RunDetail({ runId }: { runId: string }) {
   const runQuery = useRun({ runId });
   const setSelectedNodeId = useSetAtom(selectedNodeIdAtom);
+  const [expandedId, setExpandedId] = useState<string>();
   const run = runQuery.data;
+  const expanded =
+    run?.workflowStepAttempts.find((attempt) => attempt.id === expandedId) ??
+    run?.steps.find((step) => step.id === expandedId);
+  if (runQuery.error && !run)
+    return (
+      <p role="alert" className="catamorphic-run-inline-error">
+        {runQuery.error.message}
+      </p>
+    );
   if (runQuery.isLoading || !run) {
     return <div className="catamorphic-run-detail-empty">Loading Run...</div>;
   }
@@ -466,7 +476,13 @@ function RunDetail({ runId }: { runId: string }) {
               <button
                 type="button"
                 key={attempt.id}
-                onClick={() => setSelectedNodeId(attempt.nodeId)}
+                aria-expanded={expandedId === attempt.id}
+                onClick={() => {
+                  setSelectedNodeId(attempt.nodeId);
+                  setExpandedId((current) =>
+                    current === attempt.id ? undefined : attempt.id,
+                  );
+                }}
               >
                 <span>
                   {attempt.executor === "batch"
@@ -489,7 +505,13 @@ function RunDetail({ runId }: { runId: string }) {
               <button
                 type="button"
                 key={step.id}
-                onClick={() => setSelectedNodeId(step.nodeId)}
+                aria-expanded={expandedId === step.id}
+                onClick={() => {
+                  setSelectedNodeId(step.nodeId);
+                  setExpandedId((current) =>
+                    current === step.id ? undefined : step.id,
+                  );
+                }}
               >
                 <span>{step.name}</span>
                 <span>
@@ -498,6 +520,23 @@ function RunDetail({ runId }: { runId: string }) {
               </button>
             ))}
           </div>
+        </section>
+      ) : null}
+      {expanded ? (
+        <section
+          className="catamorphic-run-section"
+          aria-label="Selected attempt"
+        >
+          <strong>
+            Attempt {expanded.attempt}: {expanded.status}
+          </strong>
+          {expanded.error ? (
+            <pre className="catamorphic-run-error-text">{expanded.error}</pre>
+          ) : null}
+          <strong>Input</strong>
+          <JsonView value={expanded.input} />
+          <strong>Output</strong>
+          <JsonView value={expanded.output} />
         </section>
       ) : null}
       {runQuery.error ? (

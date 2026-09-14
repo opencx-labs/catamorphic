@@ -167,6 +167,7 @@ describe("temporary watchers", () => {
             external_user_id: identity.externalUserId,
             workflow_enablement_id: String(input.enablementId),
             provenance: {},
+            correlation_key: String(input.correlationKey),
           })
           .execute();
         return { id };
@@ -220,10 +221,7 @@ describe("temporary watchers", () => {
               environment_name: String(input.environment ?? "local"),
               owner_kind: "member",
               owner_external_user_id: identity.externalUserId,
-              owner_identity: {
-                tenantId: identity.tenantId,
-                externalUserId: identity.externalUserId,
-              },
+              owner_identity: JSON.parse(JSON.stringify(input.identity)),
               capabilities: [],
               consent_digest: "d".repeat(64),
               temporary: true,
@@ -247,6 +245,17 @@ describe("temporary watchers", () => {
             .execute();
           return { id, environment: String(input.environment ?? "local") };
         }),
+        revalidate: vi.fn(
+          async ({ enablementId }: { enablementId: string }) => {
+            const row = await db
+              .selectFrom("workflow_enablements")
+              .selectAll()
+              .where("id", "=", enablementId)
+              .executeTakeFirstOrThrow();
+            if (row.status !== "active") throw new Error("Enablement disabled");
+            return { ownerIdentity: row.owner_identity };
+          },
+        ),
         disable: disableEnablement,
       } as unknown as WorkflowEnablementsService,
     });
@@ -421,12 +430,75 @@ describe("temporary watchers", () => {
     expect(triggered).toEqual([
       expect.objectContaining({
         enablementId: expect.stringMatching(/^[0-9a-f-]{36}$/),
-        correlationKey: `watcher:${watcher.id}:event:${appended.event.id}`,
+        correlationKey: expect.stringMatching(
+          new RegExp(`^event:[0-9a-f-]{36}:${appended.event.id}$`),
+        ),
         input: appended.event,
         workflowName: "watchIssue",
         environment: "edge",
       }),
     ]);
+  });
+
+  it("suppresses causal cycles and recovers a receipt after its run has already completed", async () => {
+    const watcher = (
+      await watchers.list({ identity, projectId, sessionId })
+    ).find((item) => item.workflowName === "watchIssue");
+    if (!watcher) throw new Error("Fixture watcher missing");
+    const enablement = await db
+      .selectFrom("watchers")
+      .select("workflow_enablement_id")
+      .where("id", "=", watcher.id)
+      .executeTakeFirstOrThrow();
+    const cycle = await events.append({
+      projectId,
+      source: "test",
+      kind: "issue.changed",
+      externalId: "cycle",
+      occurredAt: new Date().toISOString(),
+      payload: { causation: [enablement.workflow_enablement_id] },
+    });
+    expect(await watchers.dispatchPending()).toBe(0);
+    expect(
+      await db
+        .selectFrom("project_event_deliveries")
+        .select(["status", "error"])
+        .where("event_id", "=", cycle.event.id)
+        .executeTakeFirst(),
+    ).toMatchObject({ status: "completed", error: "Causal cycle suppressed" });
+    const event = await events.append({
+      projectId,
+      source: "test",
+      kind: "issue.changed",
+      externalId: "crash-after-run",
+      occurredAt: new Date().toISOString(),
+      payload: {},
+    });
+    expect(await watchers.dispatchPending()).toBe(1);
+    const admissions = triggered.length;
+    await db
+      .updateTable("workflow_runs")
+      .set({ status: "completed", completed_at: new Date() })
+      .where("correlation_key", "like", `%:${event.event.id}`)
+      .execute();
+    await db
+      .updateTable("project_event_deliveries")
+      .set({
+        status: "leased",
+        lease_owner: "dead-worker",
+        lease_expires_at: new Date(0),
+      })
+      .where("event_id", "=", event.event.id)
+      .execute();
+    await watchers.dispatchPending();
+    expect(triggered).toHaveLength(admissions);
+    expect(
+      await db
+        .selectFrom("project_event_deliveries")
+        .select("status")
+        .where("event_id", "=", event.event.id)
+        .executeTakeFirst(),
+    ).toEqual({ status: "completed" });
   });
 
   it("rejects a workflow without an ordinary inline trigger binding", async () => {
@@ -494,6 +566,11 @@ describe("temporary watchers", () => {
     ).toBe(first.event.sequence);
 
     failingEventId = null;
+    await db
+      .updateTable("project_event_deliveries")
+      .set({ next_attempt_at: new Date(0) })
+      .where("event_id", "=", second.event.id)
+      .execute();
     expect(await watchers.dispatchPending()).toBe(1);
     expect(attemptedEventIds.slice(-3)).toEqual([
       first.event.id,
@@ -508,7 +585,7 @@ describe("temporary watchers", () => {
       scope: [{ kind: "agent", projectId, name: "reviewer" }],
       executionScope: [{ projectId, name: "local" }],
     };
-    const watcher = await watchers.create({
+    await watchers.create({
       identity: scopedIdentity,
       projectId,
       sessionId,
@@ -537,14 +614,12 @@ describe("temporary watchers", () => {
 
     expect(await watchers.dispatchPending()).toBe(1);
     expect(
-      triggered.find(
-        (entry) =>
-          entry.correlationKey ===
-          `watcher:${watcher.id}:event:${appended.event.id}`,
+      triggered.find((entry) =>
+        String(entry.correlationKey).endsWith(`:${appended.event.id}`),
       )?.identity,
     ).toEqual(scopedIdentity);
   });
-  it("does no workflow lookup while idle and advances past unrelated events", async () => {
+  it("does no workflow lookup while idle or for unrelated events", async () => {
     await watchers.dispatchPending();
     const lookup = vi.spyOn(triggers, "listAtCommit");
     await watchers.dispatchPending();
@@ -558,7 +633,7 @@ describe("temporary watchers", () => {
       payload: {},
     });
     expect(await watchers.dispatchPending()).toBe(0);
-    expect(lookup).toHaveBeenCalled();
+    expect(lookup).not.toHaveBeenCalled();
     lookup.mockClear();
     expect(await watchers.dispatchPending()).toBe(0);
     expect(lookup).not.toHaveBeenCalled();

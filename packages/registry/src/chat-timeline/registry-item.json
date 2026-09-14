@@ -15,6 +15,10 @@
     {
       "path": "components/catamorphic/chat-timeline.tsx",
       "type": "registry:component"
+    },
+    {
+      "path": "components/catamorphic/session-attribution.tsx",
+      "type": "registry:component"
     }
   ]
 }

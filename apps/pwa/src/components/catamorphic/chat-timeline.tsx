@@ -21,6 +21,7 @@ import {
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
+import { SessionAttribution } from "./session-attribution.js";
 
 const REMARK_PLUGINS = [remarkGfm];
 
@@ -278,9 +279,21 @@ function Message({
       // entrance would snap while only opacity faded.
       className={`max-w-[85%] text-sm motion-safe:transition-[opacity,translate] motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${entered ? "motion-safe:translate-y-0 motion-safe:opacity-100" : "motion-safe:translate-y-1 motion-safe:opacity-0"} ${humanUserMessage ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2" : message.role === "user" ? "mr-auto rounded-xl rounded-bl-sm border border-border bg-bg-raised px-3 py-2" : "mr-auto"}`}
     >
-      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-fg-faint">
-        {deliveryAuthorLabel(message)}
-      </div>
+      {message.author && message.author.kind !== "user" ? (
+        <SessionAttribution
+          author={message.author}
+          metadata={message.metadata}
+          onOpen={onLinkClick}
+        />
+      ) : (
+        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-fg-faint">
+          {message.role === "assistant"
+            ? "Agent"
+            : message.role === "system"
+              ? "System"
+              : "You"}
+        </div>
+      )}
       {message.role === "assistant" && (
         <TurnSteps
           steps={turnSteps(message)}
@@ -709,23 +722,6 @@ function changedFiles(message: ChatTimelineMessage): string[] {
     const entry = asRecord(change);
     return typeof entry?.path === "string" ? [entry.path] : [];
   });
-}
-
-function deliveryAuthorLabel(message: ChatTimelineMessage): string {
-  if (message.role === "assistant") return "Agent";
-  if (message.role === "system") return "System";
-  switch (message.author?.kind) {
-    case "agent":
-      return "Agent message";
-    case "workflow":
-      return `Workflow · ${message.author.workflowName}`;
-    case "watcher":
-      return "Watcher";
-    case "system":
-      return "System";
-    default:
-      return "You";
-  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
