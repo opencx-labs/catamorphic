@@ -84,7 +84,7 @@ it("the reusable completion recipe is quiet for unrelated sessions and reacts on
       path.join(directory, "verify.ts"),
       `
       import { childCompletion } from "./recipe.ts";
-      const host = { "catamorphic.sessions": { notify: args => ({ operation: "notify", args }) } };
+      const host = { "catamorphic.sessions": { deliver: args => ({ operation: "deliver", args }) } };
       const run = parentSessionId => childCompletion.steps[0].run({ host, input: { id: "event-1", payload: { sessionId: "child", session: { parentSessionId, workStatus: "completed" } } } });
       console.log(JSON.stringify([await run("unrelated"), await run("REPLACE_WITH_PARENT_SESSION_ID")]));
     `,
@@ -96,9 +96,11 @@ it("the reusable completion recipe is quiet for unrelated sessions and reacts on
     expect(JSON.parse(result.stdout)).toEqual([
       { matched: false },
       {
-        operation: "notify",
+        operation: "deliver",
         args: {
           sessionId: "REPLACE_WITH_PARENT_SESSION_ID",
+          mode: "message_only",
+          attention: "required",
           content:
             "A child session finished its work. Inspect its result before continuing.",
           idempotencyKey: "child-finished:event-1",

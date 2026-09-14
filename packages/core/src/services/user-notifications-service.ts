@@ -113,7 +113,6 @@ export class UserNotificationsService {
         .where("external_user_id", "=", args.identity.externalUserId)
         .where("retired_at", "is", null)
         .execute();
-      if (subscriptions.length === 0) return;
       const inserted = await transaction
         .insertInto("user_notification_events")
         .values({
@@ -143,6 +142,7 @@ export class UserNotificationsService {
           .where("external_user_id", "=", args.identity.externalUserId)
           .where("collapse_key", "=", args.collapseKey)
           .executeTakeFirstOrThrow());
+      if (subscriptions.length === 0) return;
       await transaction
         .insertInto("notification_deliveries")
         .values(

@@ -59,23 +59,29 @@ export function playChime(kind: "done" | "question"): void {
 
 /**
  * Desktop notification, only when the app can't be seen (window unfocused
- * or hidden). Returns the notification so callers can wire onclick.
+ * or hidden). Retains the first alert while permission is being granted.
  */
 export function notifyDesktop(
   title: string,
   body: string,
-): Notification | null {
-  if (document.hasFocus()) return null;
+  onClick: () => void,
+): void {
+  if (document.hasFocus()) return;
   try {
     if (Notification.permission === "default") {
-      void Notification.requestPermission();
-      return null;
+      void Notification.requestPermission()
+        .then((permission) => {
+          if (permission === "granted") notifyDesktop(title, body, onClick);
+        })
+        .catch(() => {});
+      return;
     }
-    if (Notification.permission !== "granted") return null;
+    if (Notification.permission !== "granted") return;
     // silent: the in-app chime is the sound channel; the OS banner is the
     // visual one. Two sounds for one event would be noise.
-    return new Notification(title, { body, silent: true });
+    const notification = new Notification(title, { body, silent: true });
+    notification.onclick = onClick;
   } catch {
-    return null;
+    return;
   }
 }

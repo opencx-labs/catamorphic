@@ -24,6 +24,7 @@ export type Route =
       projectId: string;
       /** null = a fresh chat, created lazily on first send. */
       sessionId: string | null;
+      messageId?: string;
     };
 
 export function routeDepth(route: Route): number {
@@ -55,7 +56,7 @@ export function formatHash(route: Route): string {
     case "sessions":
       return `#/c/${route.connectionId}/p/${route.projectId}`;
     case "chat":
-      return `#/c/${route.connectionId}/p/${route.projectId}/s/${route.sessionId ?? "new"}`;
+      return `#/c/${route.connectionId}/p/${route.projectId}/s/${route.sessionId ?? "new"}${route.messageId ? `/m/${encodeURIComponent(route.messageId)}` : ""}`;
   }
 }
 
@@ -93,6 +94,7 @@ export function parseHash(hash: string): Route {
         kind: "chat",
         ...base,
         sessionId: parts[5] === "new" ? null : parts[5],
+        ...(parts[6] === "m" && parts[7] ? { messageId: parts[7] } : {}),
       };
     }
     return { kind: "sessions", ...base };

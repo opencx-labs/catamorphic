@@ -6,7 +6,6 @@ import { z } from "zod";
 import type { Identity } from "../identity.js";
 import type { AgentSessionsService } from "./agent-sessions-service.js";
 import type { SessionMessageAuthor } from "./agent-turns-service.js";
-import { UserNotificationsService } from "./user-notifications-service.js";
 import type { WatchersService } from "./watchers-service.js";
 
 const target = {
@@ -41,7 +40,6 @@ export const SESSION_ACTION_SCHEMAS = {
   archive: z.strictObject({ ...mutation, confirmStop: z.boolean().optional() }),
   unarchive: z.strictObject(mutation),
   interrupt: z.strictObject(mutation),
-  notify: z.strictObject({ ...mutation, content: z.string().min(1) }),
   complete: z.strictObject({ ...mutation, content: z.string().min(1) }),
   reopen: z.strictObject(mutation),
   stopWatcher: z.strictObject({ ...mutation, watcherId: z.string().uuid() }),
@@ -317,8 +315,7 @@ export class SessionActionsService {
             );
             if (
               input.operation === "complete" ||
-              input.operation === "reopen" ||
-              input.operation === "notify"
+              input.operation === "reopen"
             ) {
               const current = await trx
                 .selectFrom("agent_sessions")
@@ -344,47 +341,6 @@ export class SessionActionsService {
                 })
                 .where("id", "=", args.sessionId)
                 .execute();
-            if (input.operation === "notify")
-              await trx
-                .updateTable("agent_sessions")
-                .set(({ ref }) => ({
-                  attention_revision: sql`${ref("attention_revision")} + 1`,
-                  updated_at: new Date(),
-                }))
-                .where("id", "=", args.sessionId)
-                .execute();
-            if (input.operation === "notify")
-              await trx
-                .insertInto("agent_session_views")
-                .values({
-                  session_id: args.sessionId,
-                  tenant_id: input.identity.tenantId,
-                  external_user_id: input.identity.externalUserId,
-                  visibility: "promoted",
-                  previous_visibility: "promoted",
-                })
-                .onConflict((conflict) =>
-                  conflict
-                    .columns(["session_id", "tenant_id", "external_user_id"])
-                    .doUpdateSet(({ ref }) => ({
-                      visibility: sql`CASE WHEN ${ref("agent_session_views.visibility")} = 'archived' THEN 'archived' ELSE 'promoted' END`,
-                      previous_visibility: "promoted",
-                      updated_at: new Date(),
-                    })),
-                )
-                .execute();
-            if (input.operation === "notify")
-              await new UserNotificationsService(this.db).publish({
-                identity: input.identity,
-                projectId: input.projectId,
-                sessionId: args.sessionId,
-                kind: "session_attention",
-                title: "An agent requested your attention",
-                body: content,
-                route: `/?project=${encodeURIComponent(input.projectId)}&session=${encodeURIComponent(args.sessionId)}`,
-                collapseKey: sourceActionId,
-                transaction: trx,
-              });
             await this.sessions.turns.deliver({
               sessionId: args.sessionId,
               content,
@@ -473,7 +429,6 @@ function actionLabel(operation: SessionActionOperation): string {
     archive: "Archived this session",
     unarchive: "Unarchived this session",
     interrupt: "Interrupted this session",
-    notify: "Requested your attention",
     complete: "Marked work finished",
     reopen: "Reopened the work",
     stopWatcher: "Stopped a watcher",

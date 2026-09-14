@@ -560,7 +560,7 @@ export function surfaceTools(
       definition: {
         name: "send_agent_message",
         description:
-          "Deliver an attributed message from your current session to this or another agent session. message_only records it without waking the agent; next_turn wakes an idle session or queues behind its active turn; interrupt stops the active turn and runs this next. Use interrupt only when delay would make the work wrong.",
+          "Deliver an attributed message from your current session to this or another agent session. message_only records it without waking the agent; next_turn wakes an idle session or queues behind its active turn; interrupt stops the active turn and runs this next. Set attention to required to alert the user to this message, independently of whether the agent should run. Use interrupt only when delay would make the work wrong.",
         inputSchema: {
           type: "object",
           properties: {
@@ -571,6 +571,7 @@ export function surfaceTools(
               type: "string",
               enum: ["message_only", "next_turn", "interrupt"],
             },
+            attention: { type: "string", enum: ["none", "required"] },
             idempotencyKey: { type: "string" },
           },
           required: ["toSessionId", "message", "mode"],
@@ -593,6 +594,12 @@ export function surfaceTools(
             "fromSessionId, toSessionId, message, and a valid mode are required",
           );
         }
+        if (
+          args.attention !== undefined &&
+          args.attention !== "none" &&
+          args.attention !== "required"
+        )
+          throw new Error("attention must be none or required");
         const source = await sessions.get(identity, projectId, fromSessionId);
         return sessions.deliver(identity, projectId, toSessionId, {
           content: message,
@@ -602,6 +609,7 @@ export function surfaceTools(
             agentId: source.agentId,
           },
           mode,
+          attention: args.attention,
           ...(str(args.idempotencyKey)
             ? { idempotencyKey: str(args.idempotencyKey) }
             : {}),
@@ -670,10 +678,9 @@ export function surfaceTools(
                 environment: { type: "string" },
                 expiresInSeconds: {
                   type: "integer",
-                  minimum: 60,
-                  maximum: 2592000,
+                  minimum: 1,
                   description:
-                    "Activation lifetime in seconds; defaults to 24 hours. Stop earlier when the task completes.",
+                    "Optional expiry in seconds. Omit for reminders that must survive offline time. Defaults to no expiry; completion, stop, or archive ends execution.",
                 },
               },
               required: ["workflowName", "source"],
@@ -778,10 +785,9 @@ export function surfaceTools(
                 },
                 expiresInSeconds: {
                   type: "integer",
-                  minimum: 60,
-                  maximum: 2592000,
+                  minimum: 1,
                   description:
-                    "Activation lifetime in seconds; defaults to 24 hours. Stop earlier when the task completes.",
+                    "Optional expiry in seconds. Omit for reminders that must survive offline time. Defaults to no expiry; completion, stop, or archive ends execution.",
                 },
                 pollIntervalSeconds: { type: "integer", minimum: 5 },
               },

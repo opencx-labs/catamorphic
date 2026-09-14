@@ -6267,6 +6267,11 @@ export interface paths {
                                 attentionRevision: number;
                                 attentionSeenRevision: number;
                                 attentionRequired: boolean;
+                                attentionMessage?: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    content: string;
+                                };
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -6383,6 +6388,11 @@ export interface paths {
                             attentionRevision: number;
                             attentionSeenRevision: number;
                             attentionRequired: boolean;
+                            attentionMessage?: {
+                                /** Format: uuid */
+                                id: string;
+                                content: string;
+                            };
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -6657,6 +6667,11 @@ export interface paths {
                             attentionRevision: number;
                             attentionSeenRevision: number;
                             attentionRequired: boolean;
+                            attentionMessage?: {
+                                /** Format: uuid */
+                                id: string;
+                                content: string;
+                            };
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -6851,6 +6866,11 @@ export interface paths {
                             attentionRevision: number;
                             attentionSeenRevision: number;
                             attentionRequired: boolean;
+                            attentionMessage?: {
+                                /** Format: uuid */
+                                id: string;
+                                content: string;
+                            };
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -6984,6 +7004,11 @@ export interface paths {
                             attentionRevision: number;
                             attentionSeenRevision: number;
                             attentionRequired: boolean;
+                            attentionMessage?: {
+                                /** Format: uuid */
+                                id: string;
+                                content: string;
+                            };
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -7184,6 +7209,11 @@ export interface paths {
                             attentionRevision: number;
                             attentionSeenRevision: number;
                             attentionRequired: boolean;
+                            attentionMessage?: {
+                                /** Format: uuid */
+                                id: string;
+                                content: string;
+                            };
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -7305,6 +7335,11 @@ export interface paths {
                             attentionRevision: number;
                             attentionSeenRevision: number;
                             attentionRequired: boolean;
+                            attentionMessage?: {
+                                /** Format: uuid */
+                                id: string;
+                                content: string;
+                            };
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -7427,7 +7462,13 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": {
+                        observedRevision?: number;
+                    } | null;
+                };
+            };
             responses: {
                 /** @description Default Response */
                 200: {
@@ -7494,6 +7535,11 @@ export interface paths {
                             attentionRevision: number;
                             attentionSeenRevision: number;
                             attentionRequired: boolean;
+                            attentionMessage?: {
+                                /** Format: uuid */
+                                id: string;
+                                content: string;
+                            };
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -7706,6 +7752,11 @@ export interface paths {
                                 attentionRevision: number;
                                 attentionSeenRevision: number;
                                 attentionRequired: boolean;
+                                attentionMessage?: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    content: string;
+                                };
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -7838,6 +7889,11 @@ export interface paths {
                                 attentionRevision: number;
                                 attentionSeenRevision: number;
                                 attentionRequired: boolean;
+                                attentionMessage?: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    content: string;
+                                };
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -8013,6 +8069,11 @@ export interface paths {
                                 attentionRevision: number;
                                 attentionSeenRevision: number;
                                 attentionRequired: boolean;
+                                attentionMessage?: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    content: string;
+                                };
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -8213,6 +8274,11 @@ export interface paths {
                             attentionRevision: number;
                             attentionSeenRevision: number;
                             attentionRequired: boolean;
+                            attentionMessage?: {
+                                /** Format: uuid */
+                                id: string;
+                                content: string;
+                            };
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -8788,6 +8854,11 @@ export interface paths {
                             attentionRevision: number;
                             attentionSeenRevision: number;
                             attentionRequired: boolean;
+                            attentionMessage?: {
+                                /** Format: uuid */
+                                id: string;
+                                content: string;
+                            };
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -9108,6 +9179,81 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/archive-impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            sessionIds: string[];
+                            runningSessionIds: string[];
+                            watchers: {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                sessionId: string;
+                                name: string;
+                                environment: string | null;
+                                nextRunAt: string | null;
+                            }[];
+                            activeWatcherCount: number;
+                            activeProcessCount: number;
+                            requiresConfirmation: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{projectId}/agent/sessions/{sessionId}/archive": {
         parameters: {
             query?: never;
@@ -9145,6 +9291,15 @@ export interface paths {
                             impact: {
                                 sessionIds: string[];
                                 runningSessionIds: string[];
+                                watchers: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    /** Format: uuid */
+                                    sessionId: string;
+                                    name: string;
+                                    environment: string | null;
+                                    nextRunAt: string | null;
+                                }[];
                                 activeWatcherCount: number;
                                 activeProcessCount: number;
                                 requiresConfirmation: boolean;
@@ -9208,6 +9363,11 @@ export interface paths {
                                 attentionRevision: number;
                                 attentionSeenRevision: number;
                                 attentionRequired: boolean;
+                                attentionMessage?: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    content: string;
+                                };
                                 baseCommitSha: string | null;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -9241,6 +9401,15 @@ export interface paths {
                             impact: {
                                 sessionIds: string[];
                                 runningSessionIds: string[];
+                                watchers: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    /** Format: uuid */
+                                    sessionId: string;
+                                    name: string;
+                                    environment: string | null;
+                                    nextRunAt: string | null;
+                                }[];
                                 activeWatcherCount: number;
                                 activeProcessCount: number;
                                 requiresConfirmation: boolean;
@@ -9353,6 +9522,11 @@ export interface paths {
                             attentionRevision: number;
                             attentionSeenRevision: number;
                             attentionRequired: boolean;
+                            attentionMessage?: {
+                                /** Format: uuid */
+                                id: string;
+                                content: string;
+                            };
                             baseCommitSha: string | null;
                             /** Format: date-time */
                             createdAt: string;
@@ -10325,6 +10499,121 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/notifications/attention": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {string} */
+                            workStatus: "open" | "completed";
+                            stateRevision: number;
+                            childCount?: number;
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            projectId: string;
+                            externalUserId: string;
+                            provider: string;
+                            /** @enum {string} */
+                            source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
+                            providerSessionId: string | null;
+                            /** Format: uuid */
+                            sandboxId: string | null;
+                            environment: string | null;
+                            /** Format: uuid */
+                            allocationId: string | null;
+                            agentId: string | null;
+                            model: string | null;
+                            /** @enum {string|null} */
+                            modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
+                            title: string | null;
+                            icon: string | null;
+                            /** Format: uuid */
+                            forkedFromSessionId: string | null;
+                            /** Format: uuid */
+                            parentSessionId: string | null;
+                            /** @enum {string} */
+                            visibility: "latent" | "promoted" | "archived";
+                            /** Format: date-time */
+                            archivedAt: string | null;
+                            /** @enum {string} */
+                            status: "active" | "closed";
+                            activity: string | null;
+                            todos: {
+                                /** Format: uuid */
+                                id: string;
+                                title: string;
+                                description: string;
+                                /** @enum {string} */
+                                status: "pending" | "in_progress" | "completed";
+                            }[];
+                            authorityHostId: string;
+                            authorityRevision: number;
+                            /** Format: date-time */
+                            authoritySeenAt: string | null;
+                            mirrorMessageCount: number;
+                            /** @enum {string} */
+                            handoffStatus: "none" | "pending";
+                            handoffDestinationHostId: string | null;
+                            resumable: boolean;
+                            /** Format: date-time */
+                            pausedAt: string | null;
+                            running: boolean;
+                            attentionRevision: number;
+                            attentionSeenRevision: number;
+                            attentionRequired: boolean;
+                            attentionMessage?: {
+                                /** Format: uuid */
+                                id: string;
+                                content: string;
+                            };
+                            baseCommitSha: string | null;
+                            /** Format: date-time */
+                            createdAt: string;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/notifications/push/config": {
         parameters: {
             query?: never;
@@ -10540,6 +10829,8 @@ export interface paths {
                                 status: "active" | "paused" | "stopped" | "expired";
                                 /** Format: date-time */
                                 expiresAt: string | null;
+                                /** Format: date-time */
+                                nextRunAt: string | null;
                                 lastError: string | null;
                                 /** Format: date-time */
                                 createdAt: string;

@@ -44,6 +44,9 @@ export function SessionMonitors({
               {item.workflowName}
             </button>
             <span className="text-fg-muted">{item.status}</span>
+            {item.nextRunAt && (
+              <span>Next: {new Date(item.nextRunAt).toLocaleString()}</span>
+            )}
             {item.lastRun && (
               <button
                 type="button"

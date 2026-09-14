@@ -19,8 +19,15 @@ schedule config is exactly one of { at: "2026-09-14T12:00:00Z" } or
 { cron: "*/5 * * * *", timezone: "Asia/Amman" }. Resolve relative times from the
 current clock once when authoring. at fires once, including after an offline
 host returns, provided the activation has not expired. Cron coalesces missed
-occurrences. Input is { activationId, scheduledFor, firedAt }. Set expiry later
-than the desired wake and its reasonable offline grace period.
+occurrences. Input is { activationId, scheduledFor, firedAt }. Omit expiresInSeconds
+for reminders: they have no default expiry and survive months offline. An explicit
+expiry is a separate user-requested deadline, never a substitute for scheduled time.
+Local session watchers stay on the local host and use its Environment. They cannot
+run while that host is stopped; overdue one-shots run once when it returns. Closing
+a chat leaves reminders active. Archiving cancels all its watchers and those of
+its subsessions, including paused ones; restoring the chat does not restart them.
+When confirming a reminder, tell the user its resolved date and time, which host
+runs it, that an offline local host delivers it late, and that archiving cancels it.
 
 Session event kinds: session.created, session.message-received, session.message-sent,
 session.turn-changed, session.state-changed, session.work-changed, and
@@ -46,7 +53,7 @@ and session_reopen for new work. Observe session.work-changed with
 ## Host calls and authoring shape
 
 context.host["catamorphic.sessions"] provides typed inspect, list, history,
-deliver, wake, create, fork, spawn, archive, unarchive, interrupt, notify,
+deliver, wake, create, fork, spawn, archive, unarchive, interrupt,
 complete, reopen, stopWatcher, and stop operations. Every host call is a
 boundary transition: RETURN it. Consume its result as the next boundary's input.
 Do not await it, put it inside a use-step helper, or invoke a second host call
@@ -105,8 +112,10 @@ export const childCompletion = defineWorkflow(({ defineBoundary }) => ({
         if (event.payload.session.parentSessionId !== parentId || event.payload.session.workStatus !== "completed") {
           return { matched: false };
         }
-        return context.host["catamorphic.sessions"].notify({
+        return context.host["catamorphic.sessions"].deliver({
           sessionId: parentId,
+          mode: "message_only",
+          attention: "required",
           content: "A child session finished its work. Inspect its result before continuing.",
           idempotencyKey: "child-finished:" + event.id,
         });
@@ -120,7 +129,7 @@ This monitor intentionally remains enabled for later children. For one child,
 create a temporary watcher, filter its exact sessionId, and add a stop boundary
 after the matching action. The stop operation belongs to temporary activations.
 Use inspect in a preceding boundary if current state must supersede the event
-snapshot. An explicit notify requests user attention without running a model;
+snapshot. deliver with message_only and attention: "required" requests user attention without running a model;
 use deliver with next_turn when the parent agent should continue automatically.
 
 ## Session actions and delivery
@@ -136,8 +145,12 @@ use deliver with next_turn when the parent agent should continue automatically.
 - spawn respects the source agent's configured delegation routes. Fresh context
   is the default. fork explicitly copies transcript history; create makes an
   independent conversation. Do not simulate children as untracked shell agents.
-- notify records a user-facing result and attention without waking the model.
-  Use it only for meaningful results, failures, or required user decisions.
+- attention: "required" on deliver alerts the user to that exact message. It is
+  independent of mode and defaults to none. Use message_only for a reminder to
+  the user; use next_turn for work the agent should perform. Do not run a model
+  merely to display a reminder. Notification preferences affect alerts, not the
+  retained message or its unread attention. Repeated delivery with the same key
+  creates one message and one attention request.
 - archive stops the session tree's work and future temporary activations while
   preserving readable history. Live work requires confirmStop. Tab closure is
   unrelated. stop stops only the calling temporary activation and retains runs.
@@ -150,8 +163,9 @@ attempt to evade that protection by discarding provenance.
 
 ## Placement and verification
 
-The trigger source, workflow Environment, and session authority can be on different
-hosts. Remote delivery may remain queued while a desktop is offline. It does not
+Reusable project workflows can observe a trigger or target a session on another
+host. Session-owned watchers still run on their owner's host and Environment.
+Remote delivery may remain queued while a desktop is offline. It does not
 move session authority. A remote mutation returns delivery: "queued" and a messageId,
 not the completed action result or a newly created child. Branch on that receipt
 before using a create/fork/spawn result; inspect or watch for the resulting event.

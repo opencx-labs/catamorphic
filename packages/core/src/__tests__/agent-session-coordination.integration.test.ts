@@ -1408,7 +1408,16 @@ describe("agent session coordination", () => {
       .executeTakeFirstOrThrow();
     expect(
       await sessions.archiveImpact(identity, project.id, parent.id),
-    ).toMatchObject({ activeWatcherCount: 0, requiresConfirmation: false });
+    ).toMatchObject({
+      activeWatcherCount: 1,
+      requiresConfirmation: true,
+      watchers: [
+        expect.objectContaining({
+          id: pausedWatcher.id,
+          name: "pausedWatcher",
+        }),
+      ],
+    });
     await db
       .deleteFrom("watchers")
       .where("id", "=", pausedWatcher.id)
@@ -1617,6 +1626,111 @@ describe("agent session coordination", () => {
     );
   });
 
+  it("retains message attention without push subscriptions, respects scope, and never acknowledges unseen revisions", async () => {
+    const project = await projects.create(identity, {
+      name: "Durable attention",
+    });
+    const session = await sessions.create(identity, project.id);
+    const send = (idempotencyKey: string) =>
+      sessions.deliver(identity, project.id, session.id, {
+        author: { kind: "system", code: "reminder" },
+        mode: "message_only",
+        attention: "required",
+        content: "Submit application",
+        idempotencyKey,
+      });
+    const first = await send("first");
+    const pending = await sessions.attention({ identity });
+    expect(
+      pending.find((item) => item.id === session.id)?.attentionMessage,
+    ).toEqual({ id: first.messageId, content: "Submit application" });
+    expect(
+      await sessions.attention({ identity: { ...identity, scope: [] } }),
+    ).toEqual([]);
+    expect(
+      await sessions.attention({
+        identity: { ...identity, externalUserId: "another-user" },
+      }),
+    ).toEqual([]);
+    const event = await db
+      .selectFrom("user_notification_events")
+      .selectAll()
+      .where("session_id", "=", session.id)
+      .executeTakeFirstOrThrow();
+    expect(event.route).toContain(`message=${first.messageId}`);
+    await send("second");
+    await sessions.acknowledgeAttention(identity, project.id, session.id, {
+      observedRevision: 1,
+    });
+    expect(
+      (await sessions.get(identity, project.id, session.id)).attentionRequired,
+    ).toBe(true);
+    await sessions.acknowledgeAttention(identity, project.id, session.id, {
+      observedRevision: 2,
+    });
+    expect(
+      (await sessions.attention({ identity })).some(
+        (item) => item.id === session.id,
+      ),
+    ).toBe(false);
+    await send("third");
+    await sessions.archive(identity, project.id, session.id);
+    expect(
+      (await sessions.attention({ identity })).some(
+        (item) => item.id === session.id,
+      ),
+    ).toBe(false);
+  });
+
+  it.each(["message_only", "next_turn", "interrupt"] as const)(
+    "attention is atomic with %s delivery and does not survive a rollback",
+    async (mode) => {
+      const project = await projects.create(identity, {
+        name: "Atomic delivery",
+      });
+      const session = await sessions.create(identity, project.id);
+      await expect(
+        db.transaction().execute(async (transaction) => {
+          await sessions.turns.deliver({
+            sessionId: session.id,
+            author: { kind: "system", code: "test" },
+            content: "Rollback reminder",
+            mode,
+            attention: "required",
+            idempotencyKey: "rollback",
+            transaction,
+          });
+          throw new Error("Rollback");
+        }),
+      ).rejects.toThrow("Rollback");
+      expect(
+        (await sessions.get(identity, project.id, session.id))
+          .attentionRevision,
+      ).toBe(0);
+      expect(
+        await db
+          .selectFrom("user_notification_events")
+          .select("id")
+          .where("session_id", "=", session.id)
+          .execute(),
+      ).toHaveLength(0);
+      const receipt = await sessions.turns.deliver({
+        sessionId: session.id,
+        author: { kind: "system", code: "test" },
+        content: "Committed reminder",
+        mode,
+        attention: "required",
+        idempotencyKey: "rollback",
+      });
+      expect(receipt.created).toBe(true);
+      expect(Boolean(receipt.turnId)).toBe(mode !== "message_only");
+      expect(
+        (await sessions.get(identity, project.id, session.id))
+          .attentionRevision,
+      ).toBe(1);
+    },
+  );
+
   it("records attributed actions once, fences stale state, and retains archive history", async () => {
     const project = await projects.create(identity, {
       name: "Session actions",
@@ -1645,21 +1759,39 @@ describe("agent session coordination", () => {
       author,
       causation: ["activation-review"],
     };
-    const notify = {
-      ...base,
-      operation: "notify" as const,
-      args: {
-        sessionId: session.id,
-        content: "Review ready",
-        idempotencyKey: "notify",
-      },
+    const notificationInput = {
+      author,
+      metadata: { causation: base.causation },
+      content: "Review ready",
+      mode: "message_only" as const,
+      attention: "required" as const,
+      idempotencyKey: "notify",
     };
-    const result = await actions.execute(notify);
-    expect(
-      await new SessionActionsService(db, sessions, () => undefined).execute(
-        notify,
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        sessions.deliver(identity, project.id, session.id, notificationInput),
       ),
-    ).toEqual(result);
+    );
+    expect(new Set(results.map((result) => result.messageId)).size).toBe(1);
+    expect(results.filter((result) => result.created)).toHaveLength(1);
+    expect(results.every((result) => result.turnId === null)).toBe(true);
+    const attentionEvents = await db
+      .selectFrom("project_events")
+      .select("payload")
+      .where("project_id", "=", project.id)
+      .where("kind", "=", "session.state-changed")
+      .execute();
+    expect(attentionEvents).toEqual(
+      expect.arrayContaining([
+        {
+          payload: expect.objectContaining({
+            sessionId: session.id,
+            actor: expect.objectContaining(author),
+            causation: base.causation,
+          }),
+        },
+      ]),
+    );
     const notifications = await db
       .selectFrom("user_notification_events")
       .select("id")
@@ -1676,12 +1808,6 @@ describe("agent session coordination", () => {
     expect(
       (await sessions.get(identity, project.id, session.id)).attentionRevision,
     ).toBe(1);
-    await expect(
-      actions.execute({
-        ...notify,
-        args: { ...notify.args, content: "Different work" },
-      }),
-    ).rejects.toThrow("another action");
     await expect(
       actions.execute({
         ...base,
@@ -1724,7 +1850,7 @@ describe("agent session coordination", () => {
     expect(detail.visibility).toBe("archived");
     expect(
       detail.messages.filter((message) => message.metadata?.sessionAction),
-    ).toHaveLength(3);
+    ).toHaveLength(2);
     await actions.execute({
       ...base,
       operation: "unarchive",
@@ -1840,16 +1966,12 @@ describe("agent session coordination", () => {
       .set({ authority_host_id: "remote-host" })
       .where("id", "=", session.id)
       .execute();
-    await actions.execute({
-      identity,
-      projectId: project.id,
+    await sessions.deliver(identity, project.id, session.id, {
       author,
-      operation: "notify",
-      args: {
-        sessionId: session.id,
-        content: "Remote result",
-        idempotencyKey: "remote-notify",
-      },
+      content: "Remote result",
+      mode: "message_only",
+      attention: "required",
+      idempotencyKey: "remote-notify",
     });
     expect(
       (await sessions.get(identity, project.id, session.id)).attentionRevision,
@@ -1858,9 +1980,7 @@ describe("agent session coordination", () => {
       destinationHostId: "remote-host",
     });
     expect(items).toHaveLength(1);
-    expect(items[0]?.metadata?.sessionAction).toMatchObject({
-      operation: "notify",
-    });
+    expect(items[0]?.metadata?.attention).toBe("required");
     await db
       .updateTable("agent_sessions")
       .set({ authority_host_id: sessions.hostId })

@@ -145,7 +145,10 @@ export function DockHost({
     [],
   );
   const scoped = snapshot.chats.filter(
-    (chat) => snapshot.multiProject || chat.projectId === currentProjectId,
+    (chat) =>
+      snapshot.multiProject ||
+      chat.projectId === currentProjectId ||
+      chat.attention,
   );
   const active =
     scoped.find((chat) => chat.entry.localId === snapshot.activeChatId) ??

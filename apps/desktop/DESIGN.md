@@ -29,6 +29,14 @@ timelines, sessions, editors, runs) must be ported back to the installable
 packages/registry so embedders get it too. A desktop-only improvement to a
 shared surface is a process bug, not a win. See the [historical log](DESIGN-HISTORY.md) for its rationale.
 
+## Session reminders
+
+Session reminders persist until delivered or cancelled, with no default expiry
+(ADR 0139). Local reminders run when this desktop is available. Archiving lists
+and cancels the session tree's reminders and monitors; closing a chat leaves them
+enabled. Attention belongs to an attributed message, and notification clicks open
+that message. Late delivery shows the original scheduled time.
+
 ## Principles
 
 File and proposal lifecycle (ADR 0136): new personal files stay on this device

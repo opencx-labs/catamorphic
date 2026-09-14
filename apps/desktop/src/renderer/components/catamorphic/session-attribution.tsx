@@ -70,6 +70,19 @@ export function SessionAttribution({
       className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-fg-muted"
       data-testid="session-attribution"
     >
+      {detail?.attention === "required" && (
+        <span className="font-medium text-accent">Attention requested</span>
+      )}
+      {typeof provenance?.scheduledFor === "string" && (
+        <span>
+          {typeof provenance.firedAt === "string" &&
+          Date.parse(provenance.firedAt) - Date.parse(provenance.scheduledFor) >
+            60_000
+            ? "Delivered late. Scheduled for "
+            : "Scheduled for "}
+          {new Date(provenance.scheduledFor).toLocaleString()}
+        </span>
+      )}
       {href ? link(href, actor) : <span>{actor}</span>}
       {runId && link(`run:${encodeURIComponent(runId)}`, "View run")}
       {sessionId &&

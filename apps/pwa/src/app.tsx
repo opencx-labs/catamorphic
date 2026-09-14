@@ -179,6 +179,7 @@ export function App() {
                 connectionId: connection.id,
                 projectId,
                 sessionId,
+                messageId: params.get("message") ?? undefined,
               }
             : { kind: "sessions", connectionId: connection.id, projectId },
           { replace: true },
@@ -327,6 +328,7 @@ function ScreenFor({
             connection={connection}
             projectId={route.projectId}
             sessionId={route.sessionId}
+            messageId={route.messageId}
             queryClient={queryClientFor(connection)}
             animation={animation}
           />

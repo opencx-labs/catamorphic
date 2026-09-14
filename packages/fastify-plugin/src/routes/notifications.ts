@@ -3,7 +3,7 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
-import { ErrorSchema, OkSchema } from "../schemas.js";
+import { AgentSessionSchema, ErrorSchema, OkSchema } from "../schemas.js";
 
 const PushConfigSchema = z.object({
   enabled: z.boolean(),
@@ -23,6 +23,26 @@ export function registerNotificationRoutes(
   ctx: RouteContext,
 ) {
   const typed = app.withTypeProvider<ZodTypeProvider>();
+
+  typed.get(
+    "/notifications/attention",
+    {
+      schema: {
+        response: { 200: z.array(AgentSessionSchema), 503: ErrorSchema },
+      },
+    },
+    async (request, reply) => {
+      if (!ctx.core?.agentSessions)
+        return reply
+          .status(503)
+          .send({ error: "Agent sessions not configured" });
+      return reply.send(
+        await ctx.core.agentSessions.attention({
+          identity: resolveIdentity(request),
+        }),
+      );
+    },
+  );
 
   typed.get(
     "/notifications/push/config",

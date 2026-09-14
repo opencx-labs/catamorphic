@@ -550,6 +550,7 @@ export class CatamorphicCore {
                 causation: origin.causation,
               },
               mode: input.mode,
+              attention: input.attention,
               idempotencyKey: input.idempotencyKey,
             },
           );
@@ -1028,6 +1029,20 @@ export class CatamorphicCore {
         hostId: this.agentSessions?.hostId ?? "",
         runId: context.runId,
         workflowName: context.workflowName,
+        scheduledFor:
+          run.input &&
+          typeof run.input === "object" &&
+          !Array.isArray(run.input) &&
+          typeof run.input.scheduledFor === "string"
+            ? run.input.scheduledFor
+            : null,
+        firedAt:
+          run.input &&
+          typeof run.input === "object" &&
+          !Array.isArray(run.input) &&
+          typeof run.input.firedAt === "string"
+            ? run.input.firedAt
+            : null,
         enablementId: run.workflow_enablement_id,
         watcherId: watcher?.id ?? null,
         sessionId: watcher?.session_id ?? null,
@@ -1053,6 +1068,7 @@ function sessionDeliveryArgs(value: unknown): {
   sessionId: string;
   content: string;
   mode: "message_only" | "next_turn" | "interrupt";
+  attention?: "required" | "none";
   idempotencyKey?: string;
 } {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -1078,7 +1094,14 @@ function sessionDeliveryArgs(value: unknown): {
   ) {
     throw new Error("idempotencyKey must be a string");
   }
+  if (
+    input.attention !== undefined &&
+    input.attention !== "none" &&
+    input.attention !== "required"
+  )
+    throw new Error("attention must be none or required");
   return {
+    attention: input.attention,
     sessionId: input.sessionId,
     content: input.content,
     mode: input.mode,

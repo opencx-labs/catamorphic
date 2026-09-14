@@ -116,3 +116,96 @@ it("keeps quiet results inspectable and exposes failed runs with a working stop 
     "return button('sessionfailure').parentElement.textContent.includes('stopped');",
   );
 });
+
+it("alerts once for a timer in the background and opens its exact message", async () => {
+  await run(
+    `window.__nativeNotification = window.Notification; window.__workflowNotifications = []; Object.defineProperty(document, 'hasFocus', { configurable: true, value: () => false }); window.Notification = class { static permission = 'granted'; constructor(title, options) { this.title = title; this.body = options.body; window.__workflowNotifications.push(this); } };`,
+  );
+  try {
+    await send("reminder");
+    await wait(
+      `return window.__workflowNotifications.some(item => item.body === 'Reminder: submit the application.');`,
+    );
+    expect(
+      await run(
+        `return window.__workflowNotifications.filter(item => item.body === 'Reminder: submit the application.').length;`,
+      ),
+    ).toBe(1);
+    await run(
+      `delete document.hasFocus; window.__workflowNotifications.find(item => item.body === 'Reminder: submit the application.').onclick();`,
+    );
+    await wait(
+      `return [...document.querySelectorAll('[data-message-id]')].some(item => item.className.includes('outline-accent') && item.textContent.includes('Reminder: submit the application.'));`,
+    );
+    expect(
+      await run(
+        `const item = [...document.querySelectorAll('[data-message-id]')].find(item => item.className.includes('outline-accent')); const bounds = item.getBoundingClientRect(); return bounds.top >= 0 && bounds.bottom <= window.innerHeight;`,
+      ),
+    ).toBe(true);
+  } finally {
+    await run(
+      `delete document.hasFocus; window.Notification = window.__nativeNotification;`,
+    );
+  }
+});
+
+it("delivers an attention reminder without a model turn and shows late schedule context", async () => {
+  await send("overdue");
+  await wait(
+    "return document.body.textContent.includes('Reminder: submit the application.') && document.body.textContent.includes('Delivered late. Scheduled for');",
+  );
+  await wait(
+    "return !!button('sessionoverdue') && button('sessionoverdue').parentElement.textContent.includes('stopped');",
+  );
+  expect(
+    await run(
+      "return [...document.querySelectorAll('[data-testid=session-attribution]')].some(el => el.textContent.includes('Attention requested') && el.textContent.includes('View run'));",
+    ),
+  ).toBe(true);
+});
+
+it("lists a seven-day reminder before archive, preserves it on cancel, and cancels it on confirmation", async () => {
+  await send("longreminder");
+  await wait(
+    "return !!button('sessionlongreminder') && button('sessionlongreminder').parentElement.textContent.includes('Next:');",
+  );
+  const archive = async () => {
+    await run(
+      `const bubble = document.querySelector('[data-chat-bubble][data-session-id] button'); if (!bubble) throw new Error('Missing chat bubble'); bubble.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 420, clientY: 500 }));`,
+    );
+    await wait(
+      `return [...document.querySelectorAll('[role=menuitem]')].some(item => item.textContent.trim() === 'Archive');`,
+    );
+    await run(
+      `[...document.querySelectorAll('[role=menuitem]')].find(item => item.textContent.trim() === 'Archive').click();`,
+    );
+    await wait(
+      "return !!$('[data-testid=archive-session-confirm]:not(:disabled)');",
+    );
+  };
+  await archive();
+  expect(
+    await run("return document.querySelector('[role=dialog]').textContent;"),
+  ).toContain("sessionlongreminder");
+  expect(
+    await run("return document.querySelector('[role=dialog]').textContent;"),
+  ).toContain("Next:");
+  await run("button('Cancel').click();");
+  await wait(
+    "return !document.querySelector('[role=dialog]:not([aria-hidden=true]) [data-testid=archive-session-confirm]');",
+  );
+  expect(
+    await run(
+      "return button('sessionlongreminder').parentElement.textContent;",
+    ),
+  ).toContain("active");
+  await archive();
+  await run("$('[data-testid=archive-session-confirm]').click();");
+  await wait(
+    "return !document.querySelector('[role=dialog]:not([aria-hidden=true]) [data-testid=archive-session-confirm]') && !document.querySelector('[data-chat-local-id] [data-composer-input]');",
+  );
+  const statuses = await run<string[]>(
+    `const {url} = await window.catamorphicDesktop.getServerState(); const {items: projects} = await (await fetch(url + '/api/projects')).json(); const project = projects.find(item => item.name === 'Session workflows'); const {items: sessions} = await (await fetch(url + '/api/projects/' + project.id + '/agent/sessions')).json(); const statuses = []; for (const session of sessions) { const watchers = await (await fetch(url + '/api/projects/' + project.id + '/agent/sessions/' + session.id + '/watchers')).json(); statuses.push(...watchers.items.filter(item => item.workflowName === 'sessionlongreminder').map(item => item.status)); } return statuses;`,
+  );
+  expect(statuses).toEqual(["stopped"]);
+});

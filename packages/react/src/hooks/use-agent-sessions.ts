@@ -54,3 +54,20 @@ export function useAgentSessions(
     refetchInterval,
   });
 }
+
+/** Durable attention is independent of open tabs and session-list pagination. */
+export function useAgentAttention() {
+  const { apiClient } = useCatamorphic();
+  return useQuery({
+    queryKey: ["cat", "agent", "attention"],
+    queryFn: () =>
+      runWithCatamorphicError(async () =>
+        assertApiOk(
+          await apiClient.GET("/api/notifications/attention"),
+          "Attention response empty",
+        ),
+      ),
+    refetchInterval: 5_000,
+    refetchIntervalInBackground: true,
+  });
+}

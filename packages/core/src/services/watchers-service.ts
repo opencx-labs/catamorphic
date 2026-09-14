@@ -9,6 +9,7 @@ import { ProjectEventDispatcher } from "./project-event-dispatcher.js";
 import type { ProjectEventMonitorsService } from "./project-event-monitors-service.js";
 import type { ProjectEventsService } from "./project-events-service.js";
 import type { RunsService } from "./runs-service.js";
+import { nextScheduledTime } from "./schedules-service.js";
 import { SessionArtifactsService } from "./session-artifacts-service.js";
 import type { TriggersService } from "./triggers-service.js";
 import type { WorkflowEnablementsService } from "./workflow-enablements-service.js";
@@ -30,6 +31,7 @@ export interface Watcher {
   cursorSequence: number;
   status: "active" | "paused" | "stopped" | "expired";
   expiresAt: string | null;
+  nextRunAt: string | null;
   lastError: string | null;
   lastRun: { id: string; status: string; error: string | null } | null;
   createdAt: string;
@@ -173,12 +175,40 @@ export class WatchersService {
   }): Promise<Watcher> {
     const session = await this.db
       .selectFrom("agent_sessions")
-      .select("status")
+      .select(["status", "environment_name", "authority_host_id"])
       .where("id", "=", input.sessionId)
       .where("project_id", "=", input.projectId)
       .executeTakeFirstOrThrow();
     if (session.status !== "active")
       throw new Error("Cannot create a watcher for a closed session");
+    const presentation = await this.db
+      .selectFrom("agent_session_views")
+      .select("visibility")
+      .where("session_id", "=", input.sessionId)
+      .where("tenant_id", "=", input.identity.tenantId)
+      .where("external_user_id", "=", input.identity.externalUserId)
+      .executeTakeFirst();
+    if (presentation?.visibility === "archived")
+      throw new Error(
+        "Restore the session before creating a reminder or monitor",
+      );
+    if (
+      session.authority_host_id !== "unassigned" &&
+      session.authority_host_id !== this.deps.sessions.hostId
+    )
+      throw new Error(
+        "Create this session's reminders on its authoritative host",
+      );
+    if (
+      session.environment_name &&
+      input.environment &&
+      session.environment_name !== input.environment
+    )
+      throw new Error("Session reminders must use the session's Environment");
+    input = {
+      ...input,
+      environment: session.environment_name ?? input.environment,
+    };
     const source = await this.artifacts.create({
       identity: input.identity,
       projectId: input.projectId,
@@ -227,11 +257,34 @@ export class WatchersService {
         commitSha,
         remoteBranch,
       });
-      const expiresInSeconds = Math.min(
-        Math.max(input.expiresInSeconds ?? 86_400, 60),
-        30 * 86_400,
-      );
-      const expiresAt = new Date(Date.now() + expiresInSeconds * 1_000);
+      if (
+        input.expiresInSeconds !== undefined &&
+        (!Number.isSafeInteger(input.expiresInSeconds) ||
+          input.expiresInSeconds <= 0)
+      )
+        throw new Error("expiresInSeconds must be a positive integer");
+      const expiresAt =
+        input.expiresInSeconds === undefined
+          ? null
+          : new Date(Date.now() + input.expiresInSeconds * 1_000);
+      if (
+        expiresAt &&
+        (!Number.isFinite(expiresAt.getTime()) ||
+          bindings.some((binding) => {
+            const config = binding.config;
+            return (
+              binding.kind === "schedule" &&
+              config &&
+              typeof config === "object" &&
+              !Array.isArray(config) &&
+              typeof config.at === "string" &&
+              Date.parse(config.at) >= expiresAt.getTime()
+            );
+          }))
+      )
+        throw new Error(
+          "Expiry must be a valid date after the scheduled reminder",
+        );
       const preview = await this.deps.workflowEnablements.preview({
         identity: input.identity,
         projectId: input.projectId,
@@ -249,7 +302,7 @@ export class WatchersService {
         environment: input.environment,
         consentDigest: preview.consentDigest,
         temporary: true,
-        expiresAt,
+        ...(expiresAt ? { expiresAt } : {}),
       });
       enablementId = enablement.id;
       const row = await this.db
@@ -329,6 +382,13 @@ export class WatchersService {
             ...new Set(bindings.map((binding) => binding.trigger_kind)),
           ]),
           lastRun: lastRun ?? null,
+          nextRunAt:
+            row.status === "active" || row.status === "paused"
+              ? await nextScheduledTime({
+                  db: this.db,
+                  enablementId: row.workflow_enablement_id,
+                })
+              : null,
         };
       }),
     );
@@ -558,6 +618,7 @@ function mapWatcher(row: WatcherRow, triggerKinds: string[]): Watcher {
     cursorSequence: Number(row.cursor_sequence),
     status: watcherStatus(row.status),
     expiresAt: row.expires_at?.toISOString() ?? null,
+    nextRunAt: null,
     lastError: row.last_error,
     lastRun: null,
     createdAt: row.created_at.toISOString(),

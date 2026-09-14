@@ -87,6 +87,7 @@ import {
 } from "./program-reader.js";
 import { requireTenantProject } from "./projects-service.js";
 import { type SyncedFileChange, syncSandboxChanges } from "./sandbox-sync.js";
+import { nextScheduledTime } from "./schedules-service.js";
 import {
   SessionMailboxesService,
   type SessionMailboxItem,
@@ -196,6 +197,8 @@ export interface AgentSession {
   attentionSeenRevision: number;
   /** True when this session should pulse in the user's clients. */
   attentionRequired: boolean;
+  /** Most recent message explicitly requesting attention. */
+  attentionMessage?: { id: string; content: string };
   status: "active" | "closed";
   baseCommitSha: string | null;
   createdAt: string;
@@ -275,6 +278,13 @@ export interface AgentSubsession {
 export interface AgentSessionArchiveImpact {
   sessionIds: string[];
   runningSessionIds: string[];
+  watchers: Array<{
+    id: string;
+    sessionId: string;
+    name: string;
+    environment: string | null;
+    nextRunAt: string | null;
+  }>;
   activeWatcherCount: number;
   activeProcessCount: number;
   requiresConfirmation: boolean;
@@ -831,6 +841,64 @@ export class AgentSessionsService {
     this.sessionActionHandler = handler;
   }
 
+  /** Unread attention across authorized projects, including old closed tabs. */
+  async attention(input: { identity: Identity }): Promise<AgentSession[]> {
+    const { identity } = input;
+    const candidates = await this.db
+      .selectFrom("agent_sessions")
+      .innerJoin("projects", "projects.id", "agent_sessions.project_id")
+      .selectAll("agent_sessions")
+      .where("projects.tenant_id", "=", identity.tenantId)
+      .where("agent_sessions.external_user_id", "=", identity.externalUserId)
+      .whereRef("attention_revision", ">", "attention_seen_revision")
+      .orderBy("agent_sessions.updated_at", "desc")
+      .execute();
+    const rows = candidates.filter(
+      (row) =>
+        isBuilder(identity, row.project_id) ||
+        (row.agent_id !== null &&
+          this.coveredAgentIds(identity, row.project_id).includes(
+            row.agent_id,
+          )),
+    );
+    if (!rows.length) return [];
+    const presentations = await this.presentations(
+      identity,
+      rows.map((row) => row.id),
+    );
+    const messages = await this.db
+      .selectFrom("agent_messages")
+      .select(["id", "session_id", "content"])
+      .where(
+        "session_id",
+        "in",
+        rows.map((row) => row.id),
+      )
+      .where(sql<string>`metadata ->> 'attention'`, "=", "required")
+      .distinctOn("session_id")
+      .orderBy("session_id")
+      .orderBy("created_at", "desc")
+      .execute();
+    const bySession = new Map(
+      messages.map((message) => [
+        message.session_id,
+        { id: message.id, content: message.content },
+      ]),
+    );
+    return rows
+      .map((row) => ({
+        ...mapSession(
+          row,
+          this.runningTurns.has(row.id),
+          this.hostId,
+          this.authorityLeaseMs,
+          presentations.get(row.id),
+        ),
+        attentionMessage: bySession.get(row.id),
+      }))
+      .filter((session) => session.visibility !== "archived");
+  }
+
   async list(
     identity: Identity,
     projectId: string,
@@ -949,6 +1017,27 @@ export class AgentSessionsService {
       .executeTakeFirstOrThrow()
       .then((r) => Number(r.count));
 
+    const attentionMessages = rows.length
+      ? await this.db
+          .selectFrom("agent_messages")
+          .select(["id", "session_id", "content"])
+          .where(
+            "session_id",
+            "in",
+            rows.map((row) => row.id),
+          )
+          .where(sql<string>`metadata ->> 'attention'`, "=", "required")
+          .distinctOn("session_id")
+          .orderBy("session_id")
+          .orderBy("created_at", "desc")
+          .execute()
+      : [];
+    const attentionBySession = new Map(
+      attentionMessages.map((message) => [
+        message.session_id,
+        { id: message.id, content: message.content },
+      ]),
+    );
     const presentations = await this.presentations(
       identity,
       rows.map((row) => row.id),
@@ -992,6 +1081,7 @@ export class AgentSessionsService {
           presentations.get(row.id),
         ),
         childCount: counts.get(row.id) ?? 0,
+        attentionMessage: attentionBySession.get(row.id),
       })),
       total,
     };
@@ -1195,6 +1285,16 @@ export class AgentSessionsService {
         this.authorityLeaseMs,
         presentation,
       ),
+      attentionMessage: messages
+        .filter(
+          (message) =>
+            message.metadata &&
+            typeof message.metadata === "object" &&
+            !Array.isArray(message.metadata) &&
+            message.metadata.attention === "required",
+        )
+        .map((message) => ({ id: message.id, content: message.content }))
+        .at(-1),
       messages: messages.map(mapMessage),
       execution,
       pendingTurns,
@@ -1854,12 +1954,16 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     sessionId: string,
+    input: { observedRevision?: number } = {},
   ): Promise<AgentSession> {
     await this.requireSession(identity, projectId, sessionId);
     const row = await this.db
       .updateTable("agent_sessions")
       .set(({ ref }) => ({
-        attention_seen_revision: ref("attention_revision"),
+        attention_seen_revision:
+          input.observedRevision === undefined
+            ? ref("attention_revision")
+            : sql`greatest(${ref("attention_seen_revision")}, least(${ref("attention_revision")}, ${input.observedRevision}))`,
       }))
       .where("id", "=", sessionId)
       .returningAll()
@@ -2982,10 +3086,16 @@ export class AgentSessionsService {
       content: string;
       author: SessionMessageAuthor;
       mode: SessionDeliveryMode;
+      attention?: "required" | "none";
       idempotencyKey?: string;
       metadata?: JsonObject;
     },
   ): Promise<SessionDeliveryReceipt> {
+    if (input.attention)
+      input = {
+        ...input,
+        metadata: { ...input.metadata, attention: input.attention },
+      };
     if (input.author.kind === "agent" && !input.metadata?.causation) {
       input = {
         ...input,
@@ -4768,13 +4878,31 @@ export class AgentSessionsService {
         ...activeTurns.map((turn) => turn.session_id),
       ]),
     ];
-    const watchers = await this.db
+    const watcherRows = await this.db
       .selectFrom("watchers")
-      .select(({ fn }) => fn.countAll<number>().as("count"))
+      .select([
+        "id",
+        "session_id",
+        "workflow_name",
+        "environment_name",
+        "workflow_enablement_id",
+      ])
       .where("session_id", "in", sessionIds)
-      .where("status", "=", "active")
-      .executeTakeFirstOrThrow();
-    const activeWatcherCount = Number(watchers.count);
+      .where("status", "in", ["active", "paused"])
+      .execute();
+    const watchers = await Promise.all(
+      watcherRows.map(async (watcher) => ({
+        id: watcher.id,
+        sessionId: watcher.session_id,
+        name: watcher.workflow_name,
+        environment: watcher.environment_name,
+        nextRunAt: await nextScheduledTime({
+          db: this.db,
+          enablementId: watcher.workflow_enablement_id,
+        }),
+      })),
+    );
+    const activeWatcherCount = watchers.length;
     const { activeProcessCount } = (await this.archiveResources?.impact({
       identity,
       projectId,
@@ -4783,6 +4911,7 @@ export class AgentSessionsService {
     return {
       sessionIds,
       runningSessionIds,
+      watchers,
       activeWatcherCount,
       activeProcessCount,
       requiresConfirmation:

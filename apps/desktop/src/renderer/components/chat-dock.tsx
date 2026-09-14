@@ -2,6 +2,7 @@ import {
   type AgentChatAttachment,
   type AgentChatTextAttachment,
   messageWithAttachmentNames,
+  useAcknowledgeAgentSessionAttention,
   useAgentCatalog,
   useAgentChat,
   useAnswerAgentQuestion,
@@ -550,6 +551,33 @@ function ChatDockContent({
       onSessionCreated(entry.localId, sessionId);
     },
   });
+  const acknowledgeAttention = useAcknowledgeAgentSessionAttention(projectId);
+  const acknowledgingAttention = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const acknowledge = () => {
+      const session = chat.session;
+      if (
+        !refreshWhileIdle ||
+        !document.hasFocus() ||
+        !session?.attentionRequired
+      )
+        return;
+      const key = `${session.id}:${session.attentionRevision}`;
+      if (acknowledgingAttention.current === key) return;
+      acknowledgingAttention.current = key;
+      acknowledgeAttention.mutate(
+        { sessionId: session.id, observedRevision: session.attentionRevision },
+        {
+          onError: () => {
+            acknowledgingAttention.current = undefined;
+          },
+        },
+      );
+    };
+    acknowledge();
+    window.addEventListener("focus", acknowledge);
+    return () => window.removeEventListener("focus", acknowledge);
+  }, [refreshWhileIdle, chat.session, acknowledgeAttention]);
   const watcherQuery = useWatchers(
     projectId,
     chat.sessionId ?? entry.sessionId ?? undefined,
@@ -2321,6 +2349,11 @@ function ChatDockContent({
                   >
                     {watcher.status}
                   </span>
+                  {watcher.nextRunAt && (
+                    <span>
+                      Next: {new Date(watcher.nextRunAt).toLocaleString()}
+                    </span>
+                  )}
                   {watcher.lastRun && (
                     <button
                       type="button"
@@ -2366,6 +2399,7 @@ function ChatDockContent({
             onOpen={(url, mode) => onLinkClick?.(url, mode)}
           >
             <ChatTimeline
+              focusMessageId={entry.focusMessageId}
               className="min-h-0 flex-1"
               contentClassName={isTab ? "mx-auto w-full max-w-4xl pt-12" : ""}
               messages={messages}

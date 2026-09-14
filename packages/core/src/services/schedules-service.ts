@@ -409,3 +409,57 @@ function nextRun(config: ScheduleConfig, after: Date): Date {
   if (!next) throw new Error("Schedule has no next occurrence");
   return next;
 }
+
+/** Next intended occurrence, even before the scheduler's first enrollment tick. */
+export async function nextScheduledTime(input: {
+  db: Kysely<DB>;
+  enablementId: string | null;
+}): Promise<string | null> {
+  if (!input.enablementId) return null;
+  const schedules = await input.db
+    .selectFrom("workflow_enablement_triggers as activation")
+    .innerJoin(
+      "trigger_definitions as definition",
+      "definition.id",
+      "activation.trigger_definition_id",
+    )
+    .leftJoin(
+      "schedule_bindings as schedule",
+      "schedule.activation_id",
+      "activation.id",
+    )
+    .select([
+      "schedule.activation_id",
+      "schedule.next_fire_at",
+      "definition.config",
+      "activation.config_overlay",
+    ])
+    .where("activation.enablement_id", "=", input.enablementId)
+    .where("definition.trigger_kind", "=", "schedule")
+    .execute();
+  const dates = schedules
+    .flatMap((schedule) => {
+      if (schedule.activation_id)
+        return schedule.next_fire_at
+          ? [schedule.next_fire_at.toISOString()]
+          : [];
+      const base = schedule.config;
+      const overlay = schedule.config_overlay;
+      const config =
+        base &&
+        typeof base === "object" &&
+        !Array.isArray(base) &&
+        overlay &&
+        typeof overlay === "object" &&
+        !Array.isArray(overlay)
+          ? { ...base, ...overlay }
+          : base;
+      try {
+        return [nextRun(parseConfig(config), new Date()).toISOString()];
+      } catch {
+        return [];
+      }
+    })
+    .sort();
+  return dates[0] ?? null;
+}

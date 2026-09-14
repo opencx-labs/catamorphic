@@ -765,7 +765,7 @@ return context.host["catamorphic.sessions"].deliver({
 \`message_only\` records context without starting a turn. \`next_turn\` wakes
 an idle session or queues behind its active turn. Use \`interrupt\` only when
 letting the current turn finish would make the result wrong. Watcher source is
-pinned on an isolated git ref and expires automatically; it is never merged
+pinned on an isolated git ref with optional explicit expiry; it is never merged
 into the project's main branch.
 
 \`\`\`typescript

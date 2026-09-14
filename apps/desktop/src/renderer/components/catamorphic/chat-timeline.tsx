@@ -130,6 +130,7 @@ export interface AgentQuestion {
 }
 
 export interface ChatTimelineProps {
+  focusMessageId?: string;
   /** Persisted + optimistic messages, in order. */
   messages: ChatTimelineMessage[];
   /** Live activity line ("Thinking...", tool progress) shown under messages. */
@@ -225,6 +226,7 @@ export interface ChatTimelineProps {
  * `useAgentChat` (see `AgentChat`) or any other source.
  */
 export function ChatTimeline({
+  focusMessageId,
   messages,
   activity,
   queuedCount = 0,
@@ -277,22 +279,32 @@ export function ChatTimeline({
         {(() => {
           const keys = timelineKeys(messages);
           return messages.map((message, index) => (
-            <Message
+            <div
               key={keys[index]}
-              message={message}
-              isLast={message.id === lastConversationId}
-              resolveAgentName={resolveAgentName}
-              onLinkClick={onLinkClick}
-              renderLink={renderLink}
-              onFileClick={onFileClick}
-              resolveToolIcon={resolveToolIcon}
-              // Retry re-runs the last user turn; without one there is
-              // nothing to re-run — hide the button, never show a dead one.
-              onRetry={hasRetryableTurn ? onRetry : undefined}
-              onReauth={onReauth}
-              reauthLabel={reauthLabel}
-              onFork={onFork}
-            />
+              data-message-id={message.id}
+              tabIndex={-1}
+              className={
+                message.id === focusMessageId
+                  ? "rounded-md outline outline-1 outline-accent/50"
+                  : "contents"
+              }
+            >
+              <Message
+                message={message}
+                isLast={message.id === lastConversationId}
+                resolveAgentName={resolveAgentName}
+                onLinkClick={onLinkClick}
+                renderLink={renderLink}
+                onFileClick={onFileClick}
+                resolveToolIcon={resolveToolIcon}
+                // Retry re-runs the last user turn; without one there is
+                // nothing to re-run — hide the button, never show a dead one.
+                onRetry={hasRetryableTurn ? onRetry : undefined}
+                onReauth={onReauth}
+                reauthLabel={reauthLabel}
+                onFork={onFork}
+              />
+            </div>
           ));
         })()}
         {activity && (
@@ -340,6 +352,10 @@ export function ChatTimeline({
           register={registerJumpToPreviousUserMessage}
         />
       )}
+      <FocusMessage
+        messageId={focusMessageId}
+        ready={messages.some((message) => message.id === focusMessageId)}
+      />
       <ScrollToLatest />
     </StickToBottom>
   );
@@ -1549,4 +1565,37 @@ function ScrollToLatest() {
       <ArrowDown className="size-4" />
     </button>
   );
+}
+
+/** Stop following new output when opening a notification's exact message. */
+function FocusMessage({
+  messageId,
+  ready,
+}: {
+  messageId?: string;
+  ready: boolean;
+}) {
+  const { contentRef, scrollRef, stopScroll } = useStickToBottomContext();
+  useEffect(() => {
+    if (!messageId || !ready) return;
+    const frame = requestAnimationFrame(() => {
+      const target = contentRef.current?.querySelector<HTMLElement>(
+        `[data-message-id="${CSS.escape(messageId)}"]`,
+      );
+      const scroller = scrollRef.current;
+      if (!target || !scroller) return;
+      stopScroll();
+      scroller.scrollTo({
+        top:
+          scroller.scrollTop +
+          target.getBoundingClientRect().top -
+          scroller.getBoundingClientRect().top -
+          12,
+        behavior: "instant",
+      });
+      target.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [messageId, ready, contentRef, scrollRef, stopScroll]);
+  return null;
 }

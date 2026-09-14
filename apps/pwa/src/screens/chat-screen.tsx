@@ -36,12 +36,14 @@ export function ChatScreen({
   connection,
   projectId,
   sessionId,
+  messageId,
   queryClient,
   animation,
 }: {
   connection: PwaConnection;
   projectId: string;
   sessionId: string | null;
+  messageId?: string;
   queryClient: QueryClient;
   animation?: string;
 }) {
@@ -56,6 +58,7 @@ export function ChatScreen({
         connection={connection}
         projectId={projectId}
         sessionId={sessionId}
+        messageId={messageId}
         animation={animation}
       />
     </CatamorphicProvider>
@@ -66,11 +69,13 @@ function Chat({
   connection,
   projectId,
   sessionId,
+  messageId,
   animation,
 }: {
   connection: PwaConnection;
   projectId: string;
   sessionId: string | null;
+  messageId?: string;
   animation?: string;
 }) {
   const catalog = useAgentCatalog(projectId);
@@ -136,15 +141,21 @@ function Chat({
   useEffect(() => {
     const session = chat.session;
     if (
+      document.visibilityState !== "visible" ||
       !session?.attentionRequired ||
       session.attentionRevision <= acknowledgedRevisionRef.current
     ) {
       return;
     }
     acknowledgedRevisionRef.current = session.attentionRevision;
-    void acknowledgeAttention.mutateAsync(session.id).catch(() => {
-      acknowledgedRevisionRef.current = session.attentionSeenRevision;
-    });
+    void acknowledgeAttention
+      .mutateAsync({
+        sessionId: session.id,
+        observedRevision: session.attentionRevision,
+      })
+      .catch(() => {
+        acknowledgedRevisionRef.current = session.attentionSeenRevision;
+      });
   }, [chat.session, acknowledgeAttention]);
   const permissions = useToolPermissions(
     projectId,
@@ -275,6 +286,7 @@ function Chat({
           </nav>
         ) : null}
         <ChatTimeline
+          focusMessageId={messageId}
           onLinkClick={(href) => {
             const match = /^(session|run|artifact|workflow):(.+)$/.exec(href);
             if (match) {

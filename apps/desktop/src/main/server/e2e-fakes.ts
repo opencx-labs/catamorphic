@@ -456,22 +456,32 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
         scenario === "notify" ||
         scenario === "spawn"
       ) {
-        const result = await invoke(`project.session_${scenario}`, {
-          sessionId,
-          idempotencyKey: `manual-${scenario}-${crypto.randomUUID()}`,
-          ...(scenario === "complete"
-            ? { content: "The requested work is finished." }
-            : {}),
-          ...(scenario === "notify"
-            ? { content: "This result needs your attention." }
-            : {}),
-          ...(scenario === "spawn"
-            ? {
-                task: "Report that the delegated check is complete.",
-                title: "Delegated check",
-              }
-            : {}),
-        });
+        const result = await invoke(
+          scenario === "notify"
+            ? "project.send_agent_message"
+            : `project.session_${scenario}`,
+          {
+            sessionId,
+            idempotencyKey: `manual-${scenario}-${crypto.randomUUID()}`,
+            ...(scenario === "complete"
+              ? { content: "The requested work is finished." }
+              : {}),
+            ...(scenario === "notify"
+              ? {
+                  toSessionId: sessionId,
+                  message: "This result needs your attention.",
+                  mode: "message_only",
+                  attention: "required",
+                }
+              : {}),
+            ...(scenario === "spawn"
+              ? {
+                  task: "Report that the delegated check is complete.",
+                  title: "Delegated check",
+                }
+              : {}),
+          },
+        );
         yield {
           type: "text",
           content: `Session ${scenario} recorded. ${JSON.stringify(result)}`,
@@ -483,12 +493,11 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
           await invoke("project.create_watcher", {
             workflowName: name,
             source,
-            expiresInSeconds: 600,
           }),
         );
         yield {
           type: "text",
-          content: `Created [${scenario} workflow](artifact:${result.id}). It expires in ten minutes and stops after its intended result.`,
+          content: `Created [${scenario} workflow](artifact:${result.id}). It has no automatic expiry and stops after its intended result. Archiving this chat cancels it.`,
         };
       }
       yield { type: "done" };
@@ -1409,15 +1418,17 @@ function sessionWorkflowFixture({
   const triggerConfig =
     scenario === "monitor"
       ? `trigger("session.work-changed", { sessionId: ${JSON.stringify(sessionId)}, workStatus: "completed" })`
-      : `trigger("schedule", { at: ${JSON.stringify(new Date(Date.now() + 10_000).toISOString())} })`;
+      : `trigger("schedule", { at: ${JSON.stringify(new Date(Date.now() + (scenario === "longreminder" ? 7 * 86_400_000 : scenario === "overdue" ? -7 * 86_400_000 : 10_000)).toISOString())} })`;
   const action =
     scenario === "quiet"
       ? "return { changed: false };"
       : scenario === "failure"
         ? 'throw new Error("Controlled monitor failure");'
-        : scenario === "monitor"
-          ? `return context.host["catamorphic.sessions"].notify({ sessionId: ${JSON.stringify(sessionId)}, content: "Work completion observed.", idempotencyKey: "completion-observed" });`
-          : `return context.host["catamorphic.sessions"].deliver({ sessionId: ${JSON.stringify(sessionId)}, content: "Scheduled follow-up received.", mode: "next_turn", idempotencyKey: "scheduled-wake" });`;
+        : ["reminder", "longreminder", "overdue"].includes(scenario)
+          ? `return context.host["catamorphic.sessions"].deliver({ sessionId: ${JSON.stringify(sessionId)}, content: "Reminder: submit the application.", mode: "message_only", attention: "required", idempotencyKey: "reminder" });`
+          : scenario === "monitor"
+            ? `return context.host["catamorphic.sessions"].deliver({ mode: "message_only", attention: "required", sessionId: ${JSON.stringify(sessionId)}, content: "Work completion observed.", idempotencyKey: "completion-observed" });`
+            : `return context.host["catamorphic.sessions"].deliver({ sessionId: ${JSON.stringify(sessionId)}, content: "Scheduled follow-up received.", mode: "next_turn", idempotencyKey: "scheduled-wake" });`;
   return `import { defineWorkflow, trigger, type BoundaryContext } from "@catamorphic/workflow";
 /** @displayname Session ${scenario} */
 export const ${name} = defineWorkflow(({ defineBoundary }) => ({

@@ -188,6 +188,7 @@ describe("temporary watchers", () => {
       runs,
     });
     const sessions = {
+      hostId: "local-host",
       assertSession: vi.fn(async () => undefined),
     } as unknown as AgentSessionsService;
     const monitors = {} as ProjectEventMonitorsService;
@@ -225,6 +226,8 @@ describe("temporary watchers", () => {
               capabilities: [],
               consent_digest: "d".repeat(64),
               temporary: true,
+              expires_at:
+                input.expiresAt instanceof Date ? input.expiresAt : null,
               created_by_external_user_id: identity.externalUserId,
             })
             .execute();
@@ -768,4 +771,120 @@ describe("temporary watchers", () => {
       ).toBeGreaterThan(0);
     },
   );
+  it.each([
+    {
+      archived: true,
+      host: "local-host",
+      environment: "local",
+      error: "Restore the session",
+    },
+    {
+      archived: false,
+      host: "remote-host",
+      environment: "local",
+      error: "authoritative host",
+    },
+    {
+      archived: false,
+      host: "local-host",
+      environment: "remote",
+      error: "session's Environment",
+    },
+  ])(
+    "rejects invalid reminder ownership before creating artifacts: $error",
+    async ({ archived, host, environment, error }) => {
+      const targetId = crypto.randomUUID();
+      await db
+        .insertInto("agent_sessions")
+        .values({
+          id: targetId,
+          project_id: projectId,
+          external_user_id: identity.externalUserId,
+          provider: "test",
+          authority_host_id: host,
+          environment_name: "local",
+        })
+        .execute();
+      if (archived)
+        await db
+          .insertInto("agent_session_views")
+          .values({
+            session_id: targetId,
+            tenant_id: tenantId,
+            external_user_id: identity.externalUserId,
+            visibility: "archived",
+            archived_at: new Date(),
+          })
+          .execute();
+      await expect(
+        watchers.create({
+          identity,
+          projectId,
+          sessionId: targetId,
+          workflowName: "invalidReminder",
+          source: "export const invalidReminder = true;",
+          environment,
+        }),
+      ).rejects.toThrow(error);
+      expect(
+        await db
+          .selectFrom("session_artifacts")
+          .select("id")
+          .where("session_id", "=", targetId)
+          .execute(),
+      ).toEqual([]);
+    },
+  );
+
+  it("keeps a seven-day reminder enabled across months offline without an implicit expiry", async () => {
+    const at = new Date(Date.now() + 7 * 86_400_000).toISOString();
+    const reminder = await watchers.create({
+      identity,
+      projectId,
+      sessionId,
+      workflowName: "longReminder",
+      source: `import { defineWorkflow, trigger } from "@catamorphic/workflow";
+      export const longReminder = defineWorkflow(({ defineBoundary }) => ({
+        triggers: [trigger("schedule", { at: ${JSON.stringify(at)} })],
+        steps: [defineBoundary({ run: async ({ input }) => input })],
+      }));`,
+    });
+    expect(reminder.expiresAt).toBeNull();
+    expect(
+      (
+        await db
+          .selectFrom("workflow_enablements")
+          .select("expires_at")
+          .where("workflow_name", "=", "longReminder")
+          .executeTakeFirstOrThrow()
+      ).expires_at,
+    ).toBeNull();
+    const before = triggered.filter(
+      (run) => run.workflowName === "longReminder",
+    ).length;
+    const late = new Date(Date.now() + 100 * 86_400_000);
+    await new SchedulesService(db, triggers).tick({
+      identity,
+      projectId,
+      now: late,
+    });
+    await new SchedulesService(db, triggers).tick({
+      identity,
+      projectId,
+      now: late,
+    });
+    const runs = triggered.filter((run) => run.workflowName === "longReminder");
+    expect(runs).toHaveLength(before + 1);
+    expect(runs.at(-1)?.input).toMatchObject({ scheduledFor: at });
+    await watchers.stopForSessions({
+      identity,
+      projectId,
+      sessionIds: [sessionId],
+    });
+    expect(
+      (await watchers.list({ identity, projectId, sessionId })).find(
+        (item) => item.id === reminder.id,
+      )?.status,
+    ).toBe("stopped");
+  });
 });

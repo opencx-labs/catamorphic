@@ -215,7 +215,7 @@ describe("schedule trigger dispatcher", () => {
       await first.tick({
         identity,
         projectId,
-        now: new Date("2026-09-14T11:59:00Z"),
+        now: new Date("2026-09-07T12:00:00Z"),
       }),
     ).toEqual({ enrolled: 0 });
     const restarted = new SchedulesService(db, dispatcher);
@@ -223,7 +223,7 @@ describe("schedule trigger dispatcher", () => {
       await restarted.tick({
         identity,
         projectId,
-        now: new Date("2026-09-14T13:00:00Z"),
+        now: new Date("2027-01-14T13:00:00Z"),
       }),
     ).toEqual({ enrolled: 1 });
     expect(fired.at(-1)).toMatchObject({
@@ -234,7 +234,7 @@ describe("schedule trigger dispatcher", () => {
       await new SchedulesService(db, dispatcher).tick({
         identity,
         projectId,
-        now: new Date("2026-09-15T13:00:00Z"),
+        now: new Date("2027-02-14T13:00:00Z"),
       }),
     ).toEqual({ enrolled: 0 });
     expect(fired).toHaveLength(before + 1);

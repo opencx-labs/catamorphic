@@ -1040,6 +1040,9 @@ export const AgentSessionSchema = z.object({
   attentionRevision: z.number().int().nonnegative(),
   attentionSeenRevision: z.number().int().nonnegative(),
   attentionRequired: z.boolean(),
+  attentionMessage: z
+    .object({ id: z.string().uuid(), content: z.string() })
+    .optional(),
   baseCommitSha: z.string().length(40).nullable(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
@@ -1111,6 +1114,15 @@ export const ArchiveAgentSessionSchema = z.object({
 export const AgentSessionArchiveImpactSchema = z.object({
   sessionIds: z.array(z.string().uuid()),
   runningSessionIds: z.array(z.string().uuid()),
+  watchers: z.array(
+    z.object({
+      id: z.string().uuid(),
+      sessionId: z.string().uuid(),
+      name: z.string(),
+      environment: z.string().nullable(),
+      nextRunAt: z.string().nullable(),
+    }),
+  ),
   activeWatcherCount: z.number().int().nonnegative(),
   activeProcessCount: z.number().int().nonnegative(),
   requiresConfirmation: z.boolean(),
@@ -1326,6 +1338,7 @@ export const WatcherSchema = z.object({
   cursorSequence: z.number().int().nonnegative(),
   status: z.enum(["active", "paused", "stopped", "expired"]),
   expiresAt: z.string().datetime().nullable(),
+  nextRunAt: z.string().datetime().nullable(),
   lastError: z.string().nullable(),
   createdAt: z.string().datetime(),
 });

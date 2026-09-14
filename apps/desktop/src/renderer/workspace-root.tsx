@@ -1,8 +1,16 @@
-import { useProjects } from "@catamorphic/react";
+import {
+  type AgentSession,
+  useAgentAttention,
+  useProjects,
+} from "@catamorphic/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { App } from "./app.js";
 import { DockHost } from "./components/dock-host.js";
+import {
+  ProjectAuthorityProvider,
+  useRemoteAuthority,
+} from "./components/project-authority-provider.js";
 import { desktopApi } from "./lib/desktop-api.js";
 import { ProjectTheme } from "./lib/theme.js";
 import { WorkspaceContext } from "./lib/workspace-context.js";
@@ -11,6 +19,18 @@ import { WorkspaceContext } from "./lib/workspace-context.js";
 export function WorkspaceRoot() {
   const queryClient = useQueryClient();
   const projectList = useProjects();
+  const [attentionByProject, setAttentionByProject] = useState<
+    Record<string, AgentSession[]>
+  >({});
+  const onAttention = useCallback(
+    (projectId: string, sessions: AgentSession[]) => {
+      setAttentionByProject((current) => ({
+        ...current,
+        [projectId]: sessions,
+      }));
+    },
+    [],
+  );
   const [projects, setProjects] = useState<
     Array<{ key: string; projectId?: string }>
   >([{ key: "initial" }]);
@@ -30,6 +50,23 @@ export function WorkspaceRoot() {
           : [{ key: crypto.randomUUID() }];
     });
   }, [projectList.data, projectList.isFetching]);
+  useEffect(() => {
+    if (!ready) return;
+    const ids = Object.entries(attentionByProject)
+      .filter(([, sessions]) => sessions.length > 0)
+      .map(([id]) => id);
+    setProjects((items) => {
+      const missing = ids.filter(
+        (id) => !items.some((item) => item.projectId === id),
+      );
+      return missing.length
+        ? [
+            ...items,
+            ...missing.map((projectId) => ({ key: projectId, projectId })),
+          ]
+        : items;
+    });
+  }, [ready, attentionByProject]);
   useEffect(() => {
     const first = projects[0];
     if (first && !projects.some((project) => project.key === active))
@@ -53,6 +90,7 @@ export function WorkspaceRoot() {
   useEffect(() => {
     const reset = () => {
       setProjects([{ key: "initial" }]);
+      setAttentionByProject({});
       setActive("initial");
     };
     window.addEventListener("catamorphic:profile-refetch", reset);
@@ -115,6 +153,16 @@ export function WorkspaceRoot() {
   if (!ready) return <div className="size-full bg-bg" />;
   return (
     <div ref={root} className="relative isolate size-full" data-workspace-root>
+      <div hidden>
+        {(projectList.data?.items ?? []).map((project) => (
+          <ProjectAuthorityProvider key={project.id} projectId={project.id}>
+            <AttentionMonitor
+              projectId={project.id}
+              onAttention={onAttention}
+            />
+          </ProjectAuthorityProvider>
+        ))}
+      </div>
       {projects.map((project) => (
         <div
           key={project.key}
@@ -132,6 +180,9 @@ export function WorkspaceRoot() {
             value={{
               visible: project.key === active,
               projectId: project.projectId,
+              attention: project.projectId
+                ? attentionByProject[project.projectId]
+                : undefined,
             }}
           >
             <ProjectTheme projectId={project.projectId}>
@@ -153,4 +204,27 @@ export function WorkspaceRoot() {
       <DockHost activeProjectId={projectId} />
     </div>
   );
+}
+
+/** One cached attention query per authority, independent of open project tabs. */
+function AttentionMonitor({
+  projectId,
+  onAttention,
+}: {
+  projectId: string;
+  onAttention: (projectId: string, sessions: AgentSession[]) => void;
+}) {
+  const authority = useRemoteAuthority();
+  const attention = useAgentAttention();
+  const remoteProjectId = authority?.remoteProjectId ?? projectId;
+  useEffect(() => {
+    if (!attention.data) return;
+    onAttention(
+      projectId,
+      attention.data
+        .filter((session) => session.projectId === remoteProjectId)
+        .map((session) => ({ ...session, projectId })),
+    );
+  }, [attention.data, projectId, remoteProjectId, onAttention]);
+  return null;
 }

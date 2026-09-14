@@ -44,6 +44,7 @@ export interface SessionHostOperations {
       sessionId: string;
       content: string;
       mode: "message_only" | "next_turn" | "interrupt";
+      attention?: "required" | "none";
       idempotencyKey: string;
     },
     { messageId: string; turnId: string | null; created: boolean }
@@ -81,7 +82,6 @@ export interface SessionHostOperations {
   archive: Call<Action & { confirmStop?: boolean }>;
   unarchive: Call<Action>;
   interrupt: Call<Action>;
-  notify: Call<Action & { content: string }>;
   complete: Call<Action & { content: string }>;
   reopen: Call<Action>;
   stopWatcher: Call<Action & { watcherId: string }>;

@@ -9,6 +9,13 @@ describe("nav", () => {
     { kind: "sessions", connectionId: "c1", projectId: "p1" },
     { kind: "chat", connectionId: "c1", projectId: "p1", sessionId: "s1" },
     { kind: "chat", connectionId: "c1", projectId: "p1", sessionId: null },
+    {
+      kind: "chat",
+      connectionId: "c1",
+      projectId: "p1",
+      sessionId: "s1",
+      messageId: "m1",
+    },
   ];
 
   it("round-trips every route through the hash", () => {
