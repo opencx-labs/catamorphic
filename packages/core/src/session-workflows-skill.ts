@@ -6,12 +6,22 @@ description: Author Catamorphic workflows for timed wakeups, recurring checks, s
 
 # Session workflows
 
-Use the existing workflow-lifecycle and writing-workflows mechanics. Temporary
-and permanent workflows share defineWorkflow, trigger, boundaries, and host calls.
-Discover actual capabilities and trigger schemas on this host before authoring.
-Use create_watcher for bounded session-owned execution; keep reusable workflows
-in project source and explicitly enable them. Neither a file nor a deploy alone
-turns a trigger on.
+Use workflow-lifecycle to choose source ownership and activation, writing-workflows
+for TypeScript shape, and durable-workflows when designing transitions. Temporary
+and permanent enablements use the same defineWorkflow, trigger, and host calls.
+Discover this host's actual capabilities and schemas before authoring.
+
+## Choose the action
+
+| Request | Delivery | Lifetime |
+| --- | --- | --- |
+| Remind the user | deliver with mode: "message_only", attention: "required" | One-shot schedule owned by the session, no default expiry |
+| Wake an agent to do work | deliver with mode: "next_turn" | One-shot or conditional monitor; stop when its purpose is complete |
+| Monitor events without noise | Inspect the event/state, then deliver only a meaningful change | Session watcher or explicitly enabled reusable workflow |
+| Have an agent prepare a recurring result in a stable chat | wake with a stable workflow-scoped key | Member-owned enablement; reuse the same session |
+
+Neither saving source nor deploying alone turns a trigger on. A workflow return
+ends that run, not its recurring activation.
 
 ## Clock and event selection
 
@@ -60,7 +70,10 @@ Do not await it, put it inside a use-step helper, or invoke a second host call
 in the same boundary. Put ordinary network/file IO in use-step helpers with
 one destructured object parameter and JSDoc display names.
 
-A self-wake uses this shape, replacing the timestamp, session id, and content:
+### Agent wakeup
+
+A self-wake uses this shape. Replace the example timestamp from the current clock,
+and use the actual session id and requested work:
 
 \`\`\`typescript
 import { defineWorkflow, trigger, type BoundaryContext } from "@catamorphic/workflow";
@@ -94,6 +107,8 @@ identity. A failed HTTP request is not evidence that the monitored job failed.
 Use timeouts and limited retries. Return enough state between boundaries to keep
 the target session id, original event id, and decision evidence available.
 
+### Completion monitor
+
 A reusable completion monitor can use broad routing plus an ordinary predicate.
 Save this in project source, replace the target id, and explicitly enable it:
 
@@ -126,11 +141,46 @@ export const childCompletion = defineWorkflow(({ defineBoundary }) => ({
 \`\`\`
 
 This monitor intentionally remains enabled for later children. For one child,
-create a temporary watcher, filter its exact sessionId, and add a stop boundary
-after the matching action. The stop operation belongs to temporary activations.
+create a temporary watcher and filter its exact sessionId in trigger config. If
+predicates can reject an event, branch the stop boundary too: a quiet return from
+one boundary does not skip the next boundary. Stop only after a matching action. The stop operation belongs to temporary activations.
 Use inspect in a preceding boundary if current state must supersede the event
 snapshot. deliver with message_only and attention: "required" requests user attention without running a model;
 use deliver with next_turn when the parent agent should continue automatically.
+
+### User reminder
+
+For a reminder that needs no agent work, deliver the message directly and stop the
+temporary activation. Keep scheduledFor in the content so late delivery is clear.
+Replace the example date, target, and text before creating the watcher.
+
+\`\`\`typescript
+import { type BoundaryContext, defineWorkflow, trigger } from "@catamorphic/workflow";
+type Schedule = { activationId: string; scheduledFor: string; firedAt: string };
+
+/** @displayname Send reminder */
+export const remindUser = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [trigger("schedule", { at: "2026-09-21T09:00:00+03:00" })],
+  steps: [
+    /** @displayname Deliver reminder */
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<Schedule>) =>
+        host["catamorphic.sessions"].deliver({
+          sessionId: "REPLACE_WITH_CURRENT_SESSION_ID",
+          content: "Reminder: review the proposal. Scheduled for " + input.scheduledFor,
+          mode: "message_only",
+          attention: "required",
+          idempotencyKey: input.activationId + ":" + input.scheduledFor,
+        }),
+    }),
+    /** @displayname Stop reminder */
+    defineBoundary({
+      run: ({ host }: BoundaryContext<unknown>) =>
+        host["catamorphic.sessions"].stop({ idempotencyKey: "stop" }),
+    }),
+  ],
+}));
+\`\`\`
 
 ## Session actions and delivery
 
@@ -140,8 +190,11 @@ use deliver with next_turn when the parent agent should continue automatically.
   work when idle or queues behind the active turn; interrupt requests a course
   change. The host preserves origin in model input and in visible history.
   Authoring a workflow message does not grant system/developer instruction rank.
-- wake creates/reuses a stable member session. Use deliver when the session id
-  is already known. Choose a stable wake key to avoid one new chat per occurrence.
+- wake creates/reuses a stable member session and requests attention when its
+  agent turn settles. Its optional notification title/body customizes that alert.
+  It is member-only; service-owned enablements have no implicit personal recipient.
+  Grant the project agent and its required connections/Environment. Use deliver
+  when the session id is known. Choose a stable wake key to reuse the conversation.
 - spawn respects the source agent's configured delegation routes. Fresh context
   is the default. fork explicitly copies transcript history; create makes an
   independent conversation. Do not simulate children as untracked shell agents.
@@ -152,10 +205,11 @@ use deliver with next_turn when the parent agent should continue automatically.
   retained message or its unread attention. Repeated delivery with the same key
   creates one message and one attention request.
 - archive stops the session tree's work and future temporary activations while
-  preserving readable history. Live work requires confirmStop. Tab closure is
+  preserving readable history. Follow archive preview and confirmStop requirements for stopping live work. Tab closure is
   unrelated. stop stops only the calling temporary activation and retains runs.
 
-Mutations require stable idempotency keys. Reuse the same key for retries of the
+Use stable idempotencyKey values for operations that take them; wake uses its
+stable key and the host's run receipts. Reuse the same action key for retries of the
 same action; use a different key for a new action. Do not use a fresh random key
 on each boundary retry. Prefer event identity or activationId + scheduledFor.
 Causal chains prevent self-triggering and bounded multi-workflow loops; do not

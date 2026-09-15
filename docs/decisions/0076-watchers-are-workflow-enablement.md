@@ -1,9 +1,17 @@
 # 0076: Watchers are temporary workflow enablements
 
-- **Status:** Accepted
+- **Status:** Accepted (lifetime and placement superseded by 0139)
 - **Date:** 2026-08-29
 - **Supersedes in part:** 0074
 - **Refines:** 0039, 0040, 0068
+
+## Current scope
+
+[ADR 0139](0139-session-reminder-lifetime-and-attention.md) supersedes the expiry
+and placement rules below. Session-owned watchers have no implicit expiry, stay
+on their session's authoritative host and Environment, and are cancelled on
+archive, including paused watchers and subsessions. The older decision text is
+retained to explain the original design, not to prescribe current authoring.
 
 ## Context
 

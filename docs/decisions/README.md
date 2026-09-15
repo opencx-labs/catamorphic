@@ -86,9 +86,9 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0071](0071-stock-auth-and-agent-driven-setup.md) | Stock auth and agent-driven setup | Accepted |
 | [0072](0072-remote-oauth-admission-and-project-administration.md) | Remote OAuth, admission, and project administration | Accepted |
 | [0073](0073-recoverable-project-remotes-and-builder-checkout.md) | Recoverable project remotes and builder checkout | Accepted |
-| [0074](0074-temporary-watchers-and-session-delivery.md) | Temporary Watchers and durable session delivery | Accepted (Watcher trigger model superseded by 0076) |
+| [0074](0074-temporary-watchers-and-session-delivery.md) | Temporary Watchers and durable session delivery | Accepted (trigger model superseded by 0076; lifetime and placement superseded by 0139) |
 | [0075](0075-parallel-local-development-isolation.md) | Parallel local development isolation | Accepted |
-| [0076](0076-watchers-are-workflow-enablement.md) | Watchers are temporary workflow enablements | Accepted |
+| [0076](0076-watchers-are-workflow-enablement.md) | Watchers are temporary workflow enablements | Accepted (lifetime and placement superseded by 0139) |
 | [0077](0077-explicit-session-handoff-push-and-schedules.md) | Explicit session handoff, durable push, and schedule triggers | Accepted |
 | [0078](0078-agent-owned-session-todos.md) | Agent-owned session todo lists | Accepted |
 | [0079](0079-desktop-browser-credential-broker.md) | Desktop browser credential broker | Accepted |

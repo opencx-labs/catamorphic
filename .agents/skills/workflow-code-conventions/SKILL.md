@@ -1,224 +1,72 @@
 ---
 name: workflow-code-conventions
-description: Use when creating, reviewing, or changing Catamorphic workflow definitions, step functions, boundaries, batches, pauses, child workflows, or workflow authoring metadata.
+description: Change or review Catamorphic workflow authoring contracts, examples, and agent guidance in the framework repository.
 ---
 
-# Workflow Code Conventions
+# Workflow authoring contracts
 
-## Lifetime, files, and publishing
+Use this repository skill when changing workflow definitions, parser/runtime
+contracts, or the guidance shipped to agents. For user-project authoring, the
+shipped skills below are the maintained instructions. Read only what the change
+touches; keep host-specific doctrine separate from framework mechanics.
 
-Read the shipped [workflow-lifecycle guidance](../../../packages/core/src/workflow-lifecycle-skill.ts)
-when changing agent workflow creation. Keep this host-tier guide discoverable
-for existing projects; do not overwrite customized project skills to refresh it.
-The default standing prompt and every harness must preserve the same distinctions:
+## Sources of truth
 
-- Session checks pass TypeScript source directly to `create_watcher` or
-  `create_github_watcher`. The host writes `workflows/src/artifacts/<id>.ts` on
-  an isolated expiring ref. Imports resolve against the committed origin,
-  not the current session's uncommitted helpers. Never write the temporary
-  source into an automatically checkpointed project folder first.
-- Reusable project definitions live under `workflows/src/`; runtime dependencies
-  belong in `workflows/package.json`. Keep shared frontend/backend types in
-  `contracts/src/`, and expose through `app-api.ts` only when apps need access.
-- Personal **execution** is a member-owned enablement of reviewed shared code.
-  Private **source** requires a host-provided private artifact and invocation
-  capability. The desktop's reserved `.catamorphic/personal/<profile-id>/`
-  namespace is excluded from shared discovery and checkpoints; private workflow
-  discovery, invocation, and schedules remain unimplemented. Do not document
-  those as working features or treat an incognito chat as private source storage.
-- Checkpoint, sync/push, deployment, and unattended enablement are separate
-  outcomes. Desktop checkpoints and configured automatic sync may run after a
-  turn. Choose an isolated review flow before editing when sharing needs review.
-  Triggers remain inert until enabled, and enablements pin a revision.
+| Concern | Agent guidance | Implementation |
+| --- | --- | --- |
+| Source location, ownership, deploy/enable flow | [workflow-lifecycle](../../../packages/core/src/workflow-lifecycle-skill.ts) | [Watcher service](../../../packages/core/src/services/watchers-service.ts), [enablement service](../../../packages/core/src/services/workflow-enablements-service.ts) |
+| Definition shape, steps, triggers, app contracts | [writing-workflows](../../../packages/core/src/writing-workflows-skill.ts) | [Workflow API](../../../packages/workflow/src/workflow.ts), [parser](../../../packages/parser/src/index.ts) |
+| Retries, pauses, child/host transitions | [durable-workflows](../../../packages/core/src/durable-workflows-skill.ts) | [Workflow API](../../../packages/workflow/src/workflow.ts), [runtime](../../../packages/runtime/src/index.ts) |
+| Paged items, physical batching, sinks | [batch-workflows](../../../packages/core/src/batch-workflows-skill.ts) | [Batch API](../../../packages/workflow/src/batch.ts) |
+| Timers, lifecycle events, attention, session actions | [session-workflows](../../../packages/core/src/session-workflows-skill.ts) | [Session operations](../../../packages/workflow/src/session-operations.ts), [schedule service](../../../packages/core/src/services/schedules-service.ts) |
 
-Use behavioral tests for source isolation, selected-export validation, skill
-availability through host hooks, and checkpoint privacy. Text substring tests
-alone do not establish that agents can create or run the intended workflow.
+## Preserve the shared model
 
-## Workflow Definitions
+- An exported direct `defineWorkflow` call returns an inline builder object with
+  inline `steps`. `defineBoundary` and `defineBatch` are builder capabilities;
+  `defineBatchStep` is a package export used only inside batch processing.
+- Definitions, trigger bindings, and connection requirements are statically
+  inspectable TypeScript. Never introduce a parallel workflow DSL or make a
+  generated graph the source of truth. For AST changes, use
+  [code-first-architecture](../code-first-architecture/SKILL.md).
+- Boundary callbacks declare `BoundaryContext<Input>`. Step helpers have one
+  destructured object parameter and a `"use step"` directive. Workflow, scope,
+  step, and parameter metadata use JSDoc `@displayname`, with optional
+  `@description` and `@icon`. Keep examples parseable and honest about their IO.
+- A boundary is a retry unit, not an external transaction. Returned transitions
+  persist continuation; ordinary step helpers are not independent checkpoints.
+  Treat JSON boundaries and stable side-effect identity as runtime contracts.
+- Temporary means session-owned, with optional expiry. Preserve the lifetime,
+  host placement, archive cancellation, and independent attention rules in
+  [ADR 0139](../../../docs/decisions/0139-session-reminder-lifetime-and-attention.md).
 
-Every workflow is an exported `defineWorkflow` value.
+## Keep guidance discoverable
 
-```typescript
-import { type BoundaryContext, defineWorkflow } from "@catamorphic/workflow";
+The strings are assembled in [seeds.ts](../../../packages/core/src/seeds.ts).
+`writing-workflows`, `durable-workflows`, and `batch-workflows` are project seeds;
+`workflow-lifecycle` and `session-workflows` are host-tier skills, available to
+existing projects without overwriting customized files. Project skills shadow
+user and host skills of the same name. Preserve host injection and that precedence.
 
-/**
- * @displayname Human-Readable Name
- * @description What this workflow does
- */
-export const workflowName = defineWorkflow(({ defineBoundary }) => ({
-  steps: [
-    defineBoundary({
-      run: async ({ input }: BoundaryContext<{ param1: Type1 }>) => {
-        // orchestration body: awaited step calls, if/else, loops
-      },
-    }),
-  ],
-}));
-```
+Keep one maintained explanation per concern and route by skill name when a host
+reader cannot load repository paths. Host skill discovery reads `SKILL.md` by
+name; do not move essential recipes to an unserved reference file. Seed support
+files can use relative links when those files are actually shipped.
 
-## Step Functions
+A framework contract change needs updates to its skill, examples, affected
+sibling guidance, and ADR status/index when an older decision is superseded.
+Do not copy runtime API catalogs or the same lifecycle manual into every skill.
+Do not replace project customization merely to refresh shipped defaults.
 
-All steps use a single destructured object parameter. Never positional params.
+## Verify behavior
 
-```typescript
-/**
- * @displayname Step Display Name
- * @icon icon-name
- * @param propName - @displayname Display Name | @description Property description
- */
-async function stepName({ propName }: { propName: Type }) {
-  "use step";
-  // step body
-}
-```
+Run the repository's required checks. For authoring changes, parse and typecheck
+the actual examples against the public API and host trigger declarations. Execute
+meaningful branches: a rejected/timed-out approval must not call its child; a
+quiet monitor must not deliver; a reminder must request attention without a model
+turn; paged sources must replay and terminate correctly.
 
-Steps are the home of IO and business operations, called from boundary run
-bodies and batch process callbacks. Boundaries persist continuation; add more
-boundaries for explicit retry, pause, or child-call scopes and `defineBatch`
-for paged collections.
-
-## Persisted Workflow Scopes
-
-Import authoring primitives from the project's established SaaS wrapper, or
-directly from `@catamorphic/workflow` when no wrapper exists. Do not create
-project-local copies.
-
-```typescript
-import {
-  type BoundaryContext,
-  defineWorkflow,
-} from "@catamorphic/workflow";
-
-export const approveOrder = defineWorkflow(({ defineBoundary }) => ({
-  controls: { cancel: true },
-  steps: [
-    /**
-     * @displayname Request Approval
-     * @description Create and wait for an approval request
-     * @icon badge-check
-     * @param orderId - @displayname Order ID | @description Order to approve
-     */
-    defineBoundary({
-      retry: { maxAttempts: 3 },
-      run: async ({ input }: BoundaryContext<{ orderId: string }>) => ({
-        orderId: input.orderId,
-        requestId: `request-${input.orderId}`,
-      }),
-    }),
-    defineBoundary({
-      run: ({ input, pause }: BoundaryContext<{
-        orderId: string;
-        requestId: string;
-      }>) => pause<{ approved: boolean }>({ timeout: "24h" }),
-    }),
-  ],
-}));
-```
-
-- `defineBoundary` exists only on the `defineWorkflow` builder context.
-- `defineBatch` also exists only on that builder context. It owns finite paged
-  per-item processing and an optional sink.
-- `defineBatchStep` remains package-level so compatible calls may be physically
-  coalesced inside `defineBatch.process`. Never call it outside `process`, and
-  do not treat it as a Workflow or persisted scope.
-- `pause` and `callWorkflow` exist only on `BoundaryContext`.
-- Do not import `pause` or `callWorkflow` from `@catamorphic/workflow` and do
-  not call them as globals. Destructure the capability used by each boundary,
-  for example `({ input, pause }: BoundaryContext<Input>)`.
-- Return transitions directly; never `await pause(...)` or `await
-  callWorkflow(...)`.
-- Return `callWorkflow(child, { input })`, never a workflow definition.
-- Annotate every callback with `BoundaryContext<Input>`.
-- Inputs, outputs, pause state/value, and child inputs/outputs are
-  JSON-compatible.
-- A boundary is one atomic retry unit. Ordinary `"use step"` functions called
-  inside it are visual detail rather than separate persisted checkpoints.
-- Workflows, boundaries, and batch scopes use the same JSDoc attributes:
-  `@displayname`, `@description`, `@icon`, and `@param`. Place scope JSDoc
-  immediately above its `defineBoundary(...)` or `defineBatch(...)` array entry.
-- `controls: { cancel: true }` declares a host-issued terminal cancel control.
-  Never invent `BoundaryContext.cancel()` or add cancellation to `PauseResult`.
-
-Strict `defineWorkflow` definitions are statically visualizable and execute one
-boundary or batch scope at a time against an immutable production deployment.
-Postgres persists retries, pauses, child links, collection items, continuation
-state, and cancellation between invocations.
-
-## Availability, connections, and unattended execution
-
-Workflow code and access policy have separate jobs:
-
-- The exported workflow name is the value a committed `roles/<slug>.json`
-  lists under `workflows`. A member cannot see or run it without that grant.
-- The workflow's top-level `connections` array declares provider-neutral
-  aliases, member/service principal policy, and required actions. An MCP
-  connection satisfies the requirement when it exposes those actions.
-- The role must separately grant each connection alias under `connections`
-  and an allowed Environment under `environments`.
-- Trigger declarations are inert until each member explicitly chooses
-  **Automate** then **Enable for me** and reviews the pinned revision,
-  Environment, connections, actions, and triggers. Authentication may finish
-  that user-initiated enablement, but connecting an account alone never opts a
-  user into workflows.
-
-Use `trigger("schedule", { cron, timezone })` for cron schedules. Use
-`context.host["catamorphic.sessions"].wake(...)` when a member-owned workflow
-should create or reuse a stable project-agent session, queue a turn, and
-surface the settled result in desktop and PWA:
-
-```typescript
-return context.host["catamorphic.sessions"].wake({
-  key: "daily-inbox-summary",
-  agentSlug: "inbox-assistant",
-  title: "Daily inbox summary",
-  content: "Read my connected inbox and summarize what needs attention.",
-  notification: { title: "Your inbox summary is ready" },
-});
-```
-
-The role must grant both the workflow and `inbox-assistant`. The stable key is
-scoped to the workflow, retries are idempotent, and later schedule occurrences
-reuse the same conversation. `wake` is member-only because service enablements
-have no personal recipient. Use `catamorphic.sessions.deliver` when an exact
-session id is already available.
-
-## JSDoc Tags
-
-- `@displayname` — label shown in the UI node
-- `@description` — tooltip/detail text
-- `@icon` — icon identifier for the node
-- `@param name - @displayname X | @description Y` — per-property metadata
-
-## Supported Constructs
-
-- `await fn(args)` — sequential step call
-- `if (condition) { ... } else { ... }` — conditional branching
-- `for (const x of items) { ... }` — loop iteration
-- `Promise.all([fn1(), fn2()])` — parallel execution
-- durable waits — a boundary returns `pause(...)`
-- `return { ... }` — workflow output
-
-## Rules
-
-- Use one public Workflow model; never add a kind field or a public stage.
-- Every workflow is an exported `defineWorkflow` value; there is no
-  `"use workflow"` directive.
-- Steps must have `"use step"` directive
-- All function parameters must be destructured objects
-- Use JSDoc for all UI-facing metadata
-
-## Session triggers and actions
-
-Read the shipped [session-workflows guide](../../../packages/core/src/session-workflows-skill.ts)
-when authoring timers, monitors, or session actions. Use the same primitives for
-session-owned and durable enablements. A schedule has either an absolute `at`
-or a `cron` with `timezone`; it never needs another timer service. Session events
-carry event-time snapshots. Read current state through a returned host transition
-before acting on information that can become stale. Explicit work completion is
-separate from a settled turn. Preserve actor and causal provenance through local
-and remote delivery, and use stable idempotency keys for every mutation.
-
-Exercise the quiet, actionable, failure, restart, and stop paths. Check that source
-and exact runs remain accessible from chat. Never claim that writing or deploying
-source enabled an automation, or that a queued remote message has already run.
+Check source isolation, selected exports, skill discovery across host/project
+surfaces, and retained provenance when those contracts change. Wording substring
+tests do not prove usable guidance. Validate frontmatter and local links, and
+exercise applicable retry, restart, stop, and remote queued-delivery paths.

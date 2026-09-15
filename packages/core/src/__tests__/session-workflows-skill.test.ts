@@ -111,3 +111,64 @@ it("the reusable completion recipe is quiet for unrelated sessions and reacts on
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+it("the reminder alerts without a model turn and keeps its original deadline and retry identity", async () => {
+  const recipe = [
+    ...SESSION_WORKFLOWS_SKILL.matchAll(/```typescript\n([\s\S]*?)```/g),
+  ]
+    .map((match) => match[1])
+    .find((source) => source?.includes("export const remindUser"));
+  if (!recipe) throw new Error("Missing user reminder recipe");
+  expect(parseWorkflow(recipe).nodes.length).toBeGreaterThan(1);
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "reminder-recipe-"),
+  );
+  try {
+    await fs.writeFile(
+      path.join(directory, "recipe.ts"),
+      recipe.replace(
+        '"@catamorphic/workflow"',
+        JSON.stringify(
+          path.resolve(import.meta.dirname, "../../../workflow/src/index.ts"),
+        ),
+      ),
+    );
+    await fs.writeFile(
+      path.join(directory, "verify.ts"),
+      `
+      import { remindUser } from "./recipe.ts";
+      const host = { "catamorphic.sessions": Object.fromEntries(["deliver", "stop"].map(operation => [operation, args => ({ operation, args })])) };
+      const run = firedAt => remindUser.steps[0].run({ host, input: { activationId: "timer-1", scheduledFor: "2026-09-21T06:00:00Z", firedAt } });
+      const first = await run("2026-09-21T06:00:00Z");
+      const late = await run("2026-12-01T06:00:00Z");
+      console.log(JSON.stringify({ first, late, stop: await remindUser.steps[1].run({ host }) }));
+    `,
+    );
+    const result = JSON.parse(
+      (
+        await promisify(execFile)("bun", ["run", "verify.ts"], {
+          cwd: directory,
+          timeout: 10000,
+        })
+      ).stdout,
+    );
+    expect(result.first).toEqual({
+      operation: "deliver",
+      args: {
+        sessionId: "REPLACE_WITH_CURRENT_SESSION_ID",
+        content:
+          "Reminder: review the proposal. Scheduled for 2026-09-21T06:00:00Z",
+        mode: "message_only",
+        attention: "required",
+        idempotencyKey: "timer-1:2026-09-21T06:00:00Z",
+      },
+    });
+    expect(result.late).toEqual(result.first);
+    expect(result.stop).toEqual({
+      operation: "stop",
+      args: { idempotencyKey: "stop" },
+    });
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});

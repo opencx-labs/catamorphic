@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-09-14
 - **Refines:** 0138, 0077, 0124
+- **Supersedes in part:** 0074 and 0076 (watcher lifetime and placement)
 
 ## Context
 
