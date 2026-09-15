@@ -125,32 +125,7 @@ describe("parsePorcelain", () => {
 });
 
 describe("seed skill set", () => {
-  // The seed skills are the only scaffolding a project gets (ADR 0051), so
-  // the authoring-model guarantees live on SEED_SKILLS.
-  it("teaches the defineWorkflow authoring model", () => {
-    const skill = SEED_SKILLS[".agents/skills/writing-workflows/SKILL.md"];
-    const batchSkill = SEED_SKILLS[BATCH_WORKFLOW_SKILL_PATH];
-    const durableSkill = SEED_SKILLS[DURABLE_WORKFLOW_SKILL_PATH];
-    expect(skill).toBeDefined();
-    expect(batchSkill).toBeDefined();
-    expect(skill).toContain("name: writing-workflows");
-    expect(skill).toContain("defineWorkflow");
-    expect(skill).toContain('"use step"');
-    expect(skill).toContain("defineBatch");
-    expect(skill).toContain("defineBoundary");
-    // Plain "use workflow" functions are gone; the skill must not teach them.
-    expect(skill).not.toContain('"use workflow"');
-    expect(batchSkill).toContain("name: batch-workflows");
-    expect(batchSkill).toContain("defineBatchStep");
-    expect(batchSkill).toContain("acknowledgedKeys");
-    expect(durableSkill).toContain("name: durable-workflows");
-    expect(durableSkill).toContain("BoundaryContext");
-    expect(durableSkill).toContain("__catamorphicWorkflowTypeError");
-    expect(durableSkill).toContain("Return callWorkflow");
-    expect(durableSkill).toContain("controls: { cancel: true }");
-    expect(durableSkill).toContain("visualization");
-  });
-
+  // Workflow authoring is exercised in workflow-skill-recipes.test.ts.
   it("splits app mechanics from app doctrine (ADR 0049)", () => {
     const mechanics = SEED_SKILLS[".agents/skills/building-apps/SKILL.md"];
     const doctrine = SEED_SKILLS[".agents/skills/designing-apps/SKILL.md"];

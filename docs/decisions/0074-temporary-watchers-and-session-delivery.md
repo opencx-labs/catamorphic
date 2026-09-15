@@ -1,9 +1,17 @@
 # 0074: Temporary Watchers and durable session delivery
 
-- **Status:** Accepted (Watcher trigger model superseded by 0076)
+- **Status:** Accepted (trigger model superseded by 0076; lifetime and placement superseded by 0139)
 - **Date:** 2026-08-28
 - **Refines:** 0039, 0061, 0067
 - **Supersedes in part:** 0068, 0069
+
+## Current scope
+
+[ADR 0139](0139-session-reminder-lifetime-and-attention.md) supersedes the expiry
+and placement rules below. Session-owned watchers have no implicit expiry, stay
+on their session's authoritative host and Environment, and are cancelled on
+archive, including paused watchers and subsessions. The older decision text is
+retained to explain the original design, not to prescribe current authoring.
 
 ## Context
 

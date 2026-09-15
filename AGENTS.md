@@ -123,10 +123,17 @@ How the three connect (setting up / troubleshooting, read in this order):
 - `.agents/skills/using-catamorphic/SKILL.md` — embedding catamorphic in a host app (local dev linking)
 - `.agents/skills/embedding-guide/SKILL.md`, `.agents/skills/api-type-safety/SKILL.md`, `.agents/skills/code-first-architecture/SKILL.md`, `.agents/skills/database-conventions/SKILL.md`, `.agents/skills/sandbox-agent-integration/SKILL.md`, `.agents/skills/workflow-code-conventions/SKILL.md`
 
-Per-project seed skills that ship to every user project live in
-`packages/core/src/seeds.ts` (`SEED_SKILLS`): `catamorphic-projects`,
-`writing-workflows`, `batch-workflows`, `durable-workflows`,
-`building-apps` (mechanics), `designing-apps` (replaceable doctrine).
+`packages/core/src/seeds.ts` assembles `SEED_SKILLS`: `catamorphic-projects`,
+`writing-workflows`, `batch-workflows`, `durable-workflows`, `building-apps`
+(mechanics), and `designing-apps` (replaceable doctrine). Workflow guidance lives
+in the corresponding `packages/core/src/*-skill.ts` modules so each skill can be
+maintained and its examples exercised independently.
+
+`HOST_SKILLS` includes `workflow-lifecycle` (source placement and enablement),
+`session-workflows` (timers, events, attention, and actions), and `session-artifacts`.
+These reach existing projects without rewriting their seeded files. Read the
+relevant skill when changing its contract; keep sibling guidance consistent.
+Project and user skill overrides retain their existing precedence.
 
 Keep skills task-focused and route detailed procedures to linked references.
 When changing a public behavior or deployment contract, check the corresponding
