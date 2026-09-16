@@ -198,18 +198,16 @@ export class SidebarSourceRuntime {
       };
       let source = readSource();
       try {
-        this.watcher = watch(
-          path.dirname(this.opts.modulePath),
-          (_event, name) => {
-            if (name && name.toString() !== path.basename(this.opts.modulePath))
-              return;
-            const next = readSource();
-            if (next === source) return;
-            source = next;
-            this.stop(new Error("Sidebar source changed. Reloading."));
-            for (const notify of this.listeners) notify();
-          },
-        );
+        this.watcher = watch(path.dirname(this.opts.modulePath), () => {
+          // macOS coalesces directory events, and atomic replacement may
+          // report a temporary filename. Compare the entry's contents so
+          // those edits reload without restarting on unrelated changes.
+          const next = readSource();
+          if (next === source) return;
+          source = next;
+          this.stop(new Error("Sidebar source changed. Reloading."));
+          for (const notify of this.listeners) notify();
+        });
         this.watcher.on("error", (error) => {
           this.watcher?.close();
           this.watcher = undefined;

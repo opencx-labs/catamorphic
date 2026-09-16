@@ -182,6 +182,28 @@ it("ignores late protocol messages from a replaced worker", async () => {
   release();
 });
 
+it("reloads an atomically replaced entry without restarting for unrelated files", async () => {
+  const { root, modulePath, runtime, load } = setup(
+    `export default {async load(){return {items:[{id:String(process.pid),label:'Original'}]}}}`,
+  );
+  const notify = vi.fn();
+  const release = runtime.subscribe(notify);
+  const first = await load();
+  fs.writeFileSync(path.join(root, "notes.txt"), "unrelated change");
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  expect(notify).not.toHaveBeenCalled();
+  expect(await load()).toEqual(first);
+  const temporary = path.join(root, "replacement.tmp");
+  fs.writeFileSync(
+    temporary,
+    `export default {async load(){return {items:[{id:'updated',label:'Updated'}]}}}`,
+  );
+  fs.renameSync(temporary, modulePath);
+  await vi.waitFor(() => expect(notify).toHaveBeenCalled());
+  expect(await load()).toMatchObject({ items: [{ id: "updated" }] });
+  release();
+});
+
 it("releases subscriptions and retires idle processes", async () => {
   const { root, load, runtime } = setup(
     `import {writeFileSync} from 'node:fs'; export default {async load(){return {items:[{id:String(process.pid),label:'Process'}]}}, subscribe(){writeFileSync('watching','yes');return()=>writeFileSync('watching','no')}}`,
