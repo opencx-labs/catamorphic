@@ -172,7 +172,7 @@ export interface ProjectAgentInfo {
   description: string | null;
   model: string | null;
   effort: "low" | "medium" | "high" | "xhigh" | "max" | null;
-  /** Normalized operating mode (ADR 0056); null = the "edit" default. */
+  /** Normalized operating mode (ADR 0056); null = the local desktop default (full access). */
   mode: "read-only" | "edit" | "full-access" | null;
   coordination:
     | "shared-first"

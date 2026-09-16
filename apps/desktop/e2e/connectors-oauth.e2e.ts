@@ -165,8 +165,29 @@ describe("connector OAuth", () => {
     );
     await runWait(
       `const item = row()?.querySelector('[data-testid="tool-policy-tools"] li[data-tool="hello"]');
-       return !!item && item.dataset.effective === 'ask';`,
-      { label: "hello tool listed, auto → ask (no annotations)" },
+       return !!item && item.dataset.effective === 'agent';`,
+      { label: "hello tool follows the agent mode" },
+    );
+    // Explicit Auto must persist separately from inheriting the agent mode.
+    await run(
+      `row().querySelector('[data-testid="tool-policy-default"] button[data-value="auto"]').click(); return true;`,
+    );
+    await runWait(
+      `return row()?.querySelector('li[data-tool="hello"]')?.dataset.effective === 'ask';`,
+      { label: "explicit Auto asks for unannotated tools" },
+    );
+    const automatic = await app.eval<
+      Array<{ name: string; toolPolicy?: { default?: string } }>
+    >(`window.catamorphicDesktop.connectionsList()`);
+    expect(automatic.find((c) => c.name === "Fake OAuth")?.toolPolicy).toEqual({
+      default: "auto",
+    });
+    await run(
+      `row().querySelector('[data-testid="tool-policy-default"] button[data-value="agent"]').click(); return true;`,
+    );
+    await runWait(
+      `return row()?.querySelector('li[data-tool="hello"]')?.dataset.effective === 'agent';`,
+      { label: "inherit the agent mode again" },
     );
     // Turn it off.
     await run(`

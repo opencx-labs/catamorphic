@@ -17,6 +17,7 @@ import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
 import type { OpenMode } from "../shared/open-mode.js";
 import type { PrCommentInput, PrDecisionInput } from "../shared/pr-details.js";
 import type { SettingsScope } from "../shared/settings.js";
+import type { SidebarSourceRequest } from "../shared/sidebar-source.js";
 import type { DesktopUpdateState } from "../shared/update.js";
 
 export interface ServerInfo {
@@ -958,6 +959,29 @@ const api = {
   prFiles: (projectId: string, number: number): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:pr-files", projectId, number),
 
+  sidebarSourceRequest: (input: SidebarSourceRequest): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:sidebar-source-request", input),
+  sidebarSourceCancel: (id: string): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:sidebar-source-cancel", id),
+  sidebarSourceSubscribe: (input: {
+    projectId: string;
+    sectionId: string;
+    leaseId: string;
+  }): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:sidebar-source-subscribe", input),
+  sidebarSourceUnsubscribe: (id: string): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:sidebar-source-unsubscribe", id),
+  onSidebarSourceChanged: (
+    listener: (event: { leaseId: string; error?: string }) => void,
+  ) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: { leaseId: string; error?: string },
+    ) => listener(value);
+    ipcRenderer.on("catamorphic:sidebar-source-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:sidebar-source-changed", handler);
+  },
   // --- sidebar config ---
   sidebarConfigGet: (projectId?: string): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:sidebar-config-get", projectId),

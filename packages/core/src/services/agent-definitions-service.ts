@@ -417,7 +417,8 @@ export function definitionHash(
   const sensitive = {
     kind: definition.kind,
     model: definition.model ?? null,
-    mode: definition.mode ?? "edit",
+    // The host chooses its default. Omission and an explicit mode are distinct.
+    mode: definition.mode ?? null,
     credentials: {
       source: credentials.source,
       secret: credentials.secret ?? null,

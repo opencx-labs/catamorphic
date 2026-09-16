@@ -64,11 +64,10 @@ it("imports native Codex in place, preserves assignments and policy on refresh, 
     const first = await service.connectCodexComputerUse("profile", home);
     const id = first.connectionIds[0];
     if (!id) throw new Error("Missing connection");
-    expect(store.get(id)?.env?.CUA_REPL_ENABLED_SURFACES).toBe("computer");
-    expect(store.get(id)?.toolPolicy).toEqual({
-      default: "deny",
-      tools: { js: "allow", js_reset: "allow" },
-    });
+    expect(store.get(id)?.env?.CUA_REPL_ENABLED_SURFACES).toBe(
+      "browser,computer",
+    );
+    expect(store.get(id)?.toolPolicy).toBeUndefined();
     store.setToolPolicy(id, { default: "deny" });
     const latest = await writeVersion("1.10");
     await fs.rm(old, { recursive: true });

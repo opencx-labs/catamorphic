@@ -871,11 +871,11 @@ function ToolPolicyEditor({
 }) {
   const policy = connection.toolPolicy ?? {};
   const tools = connection.tools ?? [];
-  const setDefault = (value: ToolPermission | "auto") =>
+  const setDefault = (value: ToolPermission | "auto" | "agent") =>
     onChange(
       normalizePolicy({
         ...policy,
-        default: value === "auto" ? undefined : value,
+        default: value === "agent" ? undefined : value,
       }),
     );
   const setTool = (name: string, value: ToolPermission | "default") => {
@@ -888,7 +888,11 @@ function ToolPolicyEditor({
   // the same math the harness does, so the label never lies.
   const ceiling = connection.ceiling?.policy;
   const resolved = (tool: (typeof tools)[number]): ToolPermission =>
-    resolveAcross([ceiling, policy], tool.name, tool.annotations);
+    resolveAcross(
+      [ceiling, { default: "allow", ...policy }],
+      tool.name,
+      tool.annotations,
+    );
   return (
     <div
       className="mt-2 flex flex-col gap-2 border-t border-border pt-2"
@@ -913,25 +917,28 @@ function ToolPolicyEditor({
           Tools without a rule
           <span className="text-fg-faint">
             {" "}
-            — Auto runs read-only tools and asks about the rest
+            Agent follows operating mode; Auto asks about writes
           </span>
         </span>
         <Segmented
-          value={policy.default ?? "auto"}
+          value={policy.default ?? "agent"}
           options={[
+            { value: "agent", label: "Agent" },
             { value: "auto", label: "Auto" },
             { value: "allow", label: "Allow" },
             { value: "ask", label: "Ask" },
             { value: "deny", label: "Off" },
           ]}
-          onChange={(value) => setDefault(value as ToolPermission | "auto")}
+          onChange={(value) =>
+            setDefault(value as ToolPermission | "auto" | "agent")
+          }
           testId="tool-policy-default"
         />
       </div>
       <p className="text-[10px] text-fg-faint">
-        Ask opens a consent prompt when an agent reaches for the tool. Agents
-        can narrow these rules, never widen them. Codex agents can't ask — for
-        them, Ask means Off.
+        Agent follows the operating mode: full access allows tools; restricted
+        modes ask about writes. Explicit rules and organization limits still
+        apply. Auto runs read-only tools and asks about the rest.
       </p>
       {tools.length === 0 ? (
         <div className="flex items-center gap-2 text-[11px] text-fg-faint">
@@ -963,7 +970,9 @@ function ToolPolicyEditor({
                 key={tool.name}
                 className="flex items-center gap-2"
                 data-tool={tool.name}
-                data-effective={effective}
+                data-effective={
+                  !explicit && !policy.default && !ceiling ? "agent" : effective
+                }
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline gap-1.5">
@@ -993,7 +1002,9 @@ function ToolPolicyEditor({
                       value: "default",
                       label: explicit
                         ? "Default"
-                        : `${PERMISSION_LABELS[effective]} ·`,
+                        : !policy.default && !ceiling
+                          ? "Agent ·"
+                          : `${PERMISSION_LABELS[effective]} ·`,
                       title: "Follow the default above",
                     },
                     { value: "allow", label: "Allow" },
@@ -1013,15 +1024,13 @@ function ToolPolicyEditor({
   );
 }
 
-/** Drop empty policies so "auto, no rules" stores as nothing. */
+/** Preserve explicit Auto; an absent default follows the agent mode. */
 function normalizePolicy(policy: McpToolPolicy): McpToolPolicy | null {
   const tools = Object.fromEntries(
     Object.entries(policy.tools ?? {}).filter(([, value]) => value),
   );
   const next: McpToolPolicy = {
-    ...(policy.default && policy.default !== "auto"
-      ? { default: policy.default }
-      : {}),
+    ...(policy.default ? { default: policy.default } : {}),
     ...(Object.keys(tools).length > 0 ? { tools } : {}),
   };
   return Object.keys(next).length > 0 ? next : null;

@@ -1,6 +1,6 @@
 # 0132: Shared contextual sidebar contributions
 
-- **Status:** Accepted
+- **Status:** Accepted. Local executable sources refine the execution boundary in [ADR 0140](0140-local-agent-freedom-and-executable-sidebar-sources.md).
 - **Date:** 2026-09-11
 - **Builds on:** 0081, 0090, 0102, 0107, 0123, 0126
 

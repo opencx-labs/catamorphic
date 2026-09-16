@@ -1,3 +1,4 @@
+import type { CollectionPage } from "@catamorphic/app";
 import { shareEvent } from "@catamorphic/app";
 import type { ResourcePreview } from "@catamorphic/react";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
@@ -29,6 +30,10 @@ import type {
   SettingsScope,
   SettingsSnapshot,
 } from "../../shared/settings.js";
+import type {
+  SidebarSourceItem,
+  SidebarSourceRequest,
+} from "../../shared/sidebar-source.js";
 import type { TerminalAppearanceResult } from "../../shared/terminal-appearance.js";
 import type { ThemeFonts } from "../../shared/theme-fonts.js";
 import type { DesktopUpdateState } from "../../shared/update.js";
@@ -136,7 +141,7 @@ export interface ProjectAgentInfo {
   description: string | null;
   model: string | null;
   effort: AgentEffort | null;
-  /** Normalized operating mode; null = the "edit" default. */
+  /** Normalized operating mode; null = the local desktop default (full access). */
   mode: AgentMode | null;
   /** Checkout-coordination doctrine; null means shared-first. */
   coordination: AgentCoordinationStrategy | null;
@@ -182,9 +187,9 @@ export function projectAgentAsInfo(agent: ProjectAgentInfo): AgentInfo {
     auth: agent.credentialsSource === "secret" ? "api-key" : "local",
     hasApiKey: false,
     apiKeyMasked: null,
-    accepts: harness === "codex" ? [] : ["image", "document"],
+    accepts: ["image", "document"],
     instructions: "",
-    mode: agent.mode ?? "edit",
+    mode: agent.mode ?? "full-access",
     coordination: agent.coordination ?? "shared-first",
     memory: agent.memory === true,
     connections: { mode: "all" },
@@ -1365,6 +1370,19 @@ export interface CatamorphicDesktopApi {
   prList: (projectId: string) => Promise<PullRequestSummary[]>;
   prFiles: (projectId: string, number: number) => Promise<PullRequestFile[]>;
 
+  sidebarSourceRequest: (
+    input: SidebarSourceRequest,
+  ) => Promise<CollectionPage<SidebarSourceItem> | null>;
+  sidebarSourceCancel: (id: string) => Promise<void>;
+  sidebarSourceSubscribe: (input: {
+    projectId: string;
+    sectionId: string;
+    leaseId: string;
+  }) => Promise<void>;
+  sidebarSourceUnsubscribe: (id: string) => Promise<void>;
+  onSidebarSourceChanged: (
+    listener: (event: { leaseId: string; error?: string }) => void,
+  ) => () => void;
   sidebarConfigGet: (projectId?: string) => Promise<ResolvedSidebarConfig>;
   sidebarConfigFile: () => Promise<string>;
   sidebarConfigSource: () => Promise<string>;

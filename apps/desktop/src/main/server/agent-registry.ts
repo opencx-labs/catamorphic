@@ -452,7 +452,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         id,
         provider: cached.provider,
         topology: cached.topology,
-        privilege: config.mode ?? "edit",
+        privilege: config.mode ?? "full-access",
         ...(config.environment ? { environment: config.environment } : {}),
         defaults,
         delegation: config.delegation,
@@ -477,13 +477,13 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       config,
       provider,
       topology: built.topology,
-      privilege: config.mode ?? "edit",
+      privilege: config.mode ?? "full-access",
     });
     return {
       id,
       provider,
       topology: built.topology,
-      privilege: config.mode ?? "edit",
+      privilege: config.mode ?? "full-access",
       ...(config.environment ? { environment: config.environment } : {}),
       defaults,
       delegation: config.delegation,
@@ -751,7 +751,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         id,
         provider: cached.provider,
         topology: cached.topology,
-        privilege: def.mode ?? "edit",
+        privilege: def.mode ?? "full-access",
         ...(def.environment ? { environment: def.environment } : {}),
         ...(def.connections ? { connectionRequirements: def.connections } : {}),
         defaults,
@@ -786,13 +786,13 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       config,
       provider,
       topology: registered.topology,
-      privilege: def.mode ?? "edit",
+      privilege: def.mode ?? "full-access",
     });
     return {
       id,
       provider,
       topology: registered.topology,
-      privilege: def.mode ?? "edit",
+      privilege: def.mode ?? "full-access",
       ...(def.environment ? { environment: def.environment } : {}),
       ...(def.connections ? { connectionRequirements: def.connections } : {}),
       defaults,
@@ -996,7 +996,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                   model: config.model || undefined,
                   effort: config.effort,
                   permissionMode:
-                    CLAUDE_PERMISSION_MODES[config.mode ?? "edit"],
+                    CLAUDE_PERMISSION_MODES[config.mode ?? "full-access"],
                   memory: config.memory === true,
                   env: { ...environment, ...env },
                   pathToClaudeCodeExecutable: component.executablePath,
@@ -1048,6 +1048,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                   }),
                   mcpElicitationForSession: ({ sessionId }) =>
                     createCodexElicitation({
+                      allowAppAccess:
+                        (config.mode ?? "full-access") === "full-access",
                       askQuestion: () =>
                         this.mcp.questionForSession({ sessionId }),
                       elicit: this.deps.workspaceBridge?.elicit.bind(
@@ -1058,7 +1060,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                   effort: config.effort,
                   disableNativeSubagents: true,
                   disableNativeGoals: true,
-                  sandboxMode: CODEX_SANDBOX_MODES[config.mode ?? "edit"],
+                  sandboxMode:
+                    CODEX_SANDBOX_MODES[config.mode ?? "full-access"],
                   ...(config.auth === "api-key" && config.apiKey
                     ? { apiKey: config.apiKey }
                     : {}),
@@ -1083,6 +1086,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                         )
                       : undefined;
                     return {
+                      ...this.mcp.live({ config, profileId }).nativeServers,
                       ...(workspaceServer
                         ? { workspace: workspaceServer }
                         : {}),
@@ -1211,7 +1215,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       (tool) =>
         (all || tool.eager) &&
         (topology === "native" || !tool.nativeOnly) &&
-        ((config.mode ?? "edit") !== "read-only" || tool.readOnly),
+        ((config.mode ?? "full-access") !== "read-only" || tool.readOnly),
     );
   }
 

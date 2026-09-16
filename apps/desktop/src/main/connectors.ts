@@ -384,7 +384,6 @@ export class ConnectorsService {
         "This Codex installation does not expose the native computer-use runtime.",
       );
     await fs.promises.access(native.command, fs.constants.X_OK);
-    native.env = { ...native.env, CUA_REPL_ENABLED_SURFACES: "computer" };
     return this.registerPlugin(
       profileId,
       "Installed Codex",
@@ -455,12 +454,6 @@ export class ConnectorsService {
               oauthClient: info.mcpOAuth[serverName] ?? null,
             })
           : undefined) ?? connections.create(input);
-      if (!existing && pluginName === "codex-computer-use") {
-        connections.setToolPolicy(connection.id, {
-          default: "deny",
-          tools: { js: "allow", js_reset: "allow" },
-        });
-      }
       connectionIds.push(connection.id);
     }
 

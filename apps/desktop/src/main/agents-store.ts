@@ -88,7 +88,7 @@ export interface AgentConfig {
    * project agent's `agents/<slug>.md` (ADR 0056). Harness-neutral.
    */
   instructions?: string;
-  /** Operating mode; absent means "edit". */
+  /** Operating mode; absent means "full-access". */
   mode?: AgentModeSetting;
   /** Checkout doctrine; absent means "shared-first". */
   coordination?: AgentCoordinationStrategy;
@@ -151,7 +151,7 @@ export interface PublicAgentConfig {
   accepts: AgentAttachmentKind[];
   /** The agent's own main prompt ("" when none). */
   instructions: string;
-  /** Operating mode (always materialized; default "edit"). */
+  /** Operating mode (always materialized; default "full-access"). */
   mode: AgentModeSetting;
   /** Checkout-coordination doctrine (always materialized). */
   coordination: AgentCoordinationStrategy;
@@ -171,7 +171,8 @@ export interface PublicAgentConfig {
  * Attachment support by harness/provider: Anthropic models read images and
  * PDFs; other API providers get images only (model-dependent beyond that —
  * failures surface as friendly errors). Claude Code reads image and
- * document files natively via its Read tool; Codex has no media path yet.
+ * document files natively via its Read tool; Codex stages images and documents
+ * as native image inputs and files for the turn.
  */
 export function agentAccepts(config: {
   harness: AgentHarness;
@@ -185,7 +186,7 @@ export function agentAccepts(config: {
     case "claude-code":
       return ["image", "document"];
     case "codex":
-      return [];
+      return ["image", "document"];
   }
 }
 
@@ -360,7 +361,7 @@ export class AgentsStore {
       ...(input.instructions?.trim()
         ? { instructions: input.instructions.trim() }
         : {}),
-      ...(input.mode && input.mode !== "edit" ? { mode: input.mode } : {}),
+      ...(input.mode ? { mode: input.mode } : {}),
       ...(input.coordination && input.coordination !== "shared-first"
         ? { coordination: input.coordination }
         : {}),
@@ -397,8 +398,7 @@ export class AgentsStore {
       else delete stored.instructions;
     }
     if (patch.mode !== undefined) {
-      if (patch.mode === "edit") delete stored.mode;
-      else stored.mode = patch.mode;
+      stored.mode = patch.mode;
     }
     if (patch.coordination !== undefined) {
       if (patch.coordination === "shared-first") delete stored.coordination;
@@ -491,7 +491,7 @@ export function toPublicAgent(agent: AgentConfig): PublicAgentConfig {
     apiKeyMasked: apiKey ? `${apiKey.slice(0, 7)}…${apiKey.slice(-4)}` : null,
     accepts: agentAccepts(agent),
     instructions: agent.instructions ?? "",
-    mode: agent.mode ?? "edit",
+    mode: agent.mode ?? "full-access",
     coordination: agent.coordination ?? "shared-first",
     memory: agent.memory === true,
     connections: agent.connections ?? { mode: "all" },

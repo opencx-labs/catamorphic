@@ -21,7 +21,9 @@ const rememberField = "catamorphic_remember_app";
 export function createCodexElicitation({
   elicit,
   askQuestion,
+  allowAppAccess = false,
 }: {
+  allowAppAccess?: boolean;
   elicit: WorkspaceBridge["elicit"] | undefined;
   askQuestion?: () => TurnOptions["askQuestion"];
 }): ReturnType<NonNullable<CodexAgentOpts["mcpElicitationForSession"]>> {
@@ -30,7 +32,7 @@ export function createCodexElicitation({
     if (signal?.aborted) return { action: "cancel" };
     const parsed = parseElicitRequest(request);
     const ask = askQuestion?.();
-    if (!parsed || (!elicit && !ask)) return { action: "decline" };
+    if (!parsed) return { action: "decline" };
     const app = appConsent.safeParse(request._meta);
     const scope =
       app.success &&
@@ -42,7 +44,8 @@ export function createCodexElicitation({
             app.data.riskLevel,
           ])
         : undefined;
-    if (scope && allowed.has(scope)) return { action: "accept", content: {} };
+    if (scope && (allowAppAccess || allowed.has(scope)))
+      return { action: "accept", content: {} };
     if (ask && parsed.mode === "form" && parsed.fields.length === 0) {
       const answer = await ask({
         requestId: `consent:${crypto.randomUUID()}`,

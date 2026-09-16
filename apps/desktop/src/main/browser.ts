@@ -37,6 +37,7 @@ import type { WindowProfileRegistry } from "./index.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
 import { DEFAULT_SIDEBAR_FILE } from "./sidebar-config.js";
+import { registerSidebarSources } from "./sidebar-source-ipc.js";
 
 /**
  * Browser support for workspace tabs. Pages render in `<webview>` tags in
@@ -165,7 +166,15 @@ export function registerBrowserSupport(
   windows: WindowProfileRegistry,
   /** Project root lookup for layered sidebar resolution (embedded server). */
   projectRootFor: (projectId: string) => Promise<string | null>,
+  sidebarExecutable: () => Promise<string>,
 ): BrowserSupport {
+  const disposeSidebarSources = registerSidebarSources({
+    windows,
+    profiles,
+    config: profileConfig,
+    rootFor: projectRootFor,
+    executable: sidebarExecutable,
+  });
   const userData = app.getPath("userData");
   const profilesDir = path.join(userData, "profiles");
   const history = new BrowserHistoryStore(profilesDir);
@@ -1085,6 +1094,7 @@ export function registerBrowserSupport(
   return {
     history,
     dispose: () => {
+      disposeSidebarSources();
       app.removeListener("browser-window-created", attachBrowserCommands);
       for (const [window, listener] of appCommandListeners) {
         if (!window.isDestroyed())

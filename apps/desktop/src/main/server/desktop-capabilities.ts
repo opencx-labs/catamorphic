@@ -150,6 +150,9 @@ export function desktopCapabilitySource(deps: {
           !selection.name.startsWith(prefix)
         )
           continue;
+        // Stateful native computer use belongs to the initiating Codex process.
+        // Its REPL, media and consent must not run in the profile-wide tool pool.
+        if (surface.mcp.nativeServers?.[server]) continue;
         const make = (tool: McpToolInfo): AgentCapability =>
           defineAgentCapability({
             revision: JSON.stringify([revision, connectionId, tool]),

@@ -2,13 +2,33 @@ import path from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "electron-vite";
+import { dependencies } from "./package.json";
 
 // Entry points follow electron-vite's defaults (src/{main,preload}/index.ts,
 // src/renderer/index.html). Dependencies are auto-externalized in main and
 // preload (build.externalizeDeps defaults to true), which native/asset-bearing
 // packages (pglite wasm, microsandbox NAPI, migrations sql) rely on.
 export default defineConfig({
-  main: {},
+  main: {
+    build: {
+      rollupOptions: {
+        // Explicit multi-entry builds must keep asset-bearing dependencies
+        // external, including their subpath exports.
+        external: (id) =>
+          id === "electron" ||
+          Object.keys(dependencies).some(
+            (name) => id === name || id.startsWith(`${name}/`),
+          ),
+        input: {
+          index: path.resolve(import.meta.dirname, "src/main/index.ts"),
+          "sidebar-source-worker": path.resolve(
+            import.meta.dirname,
+            "src/main/sidebar-source-worker.ts",
+          ),
+        },
+      },
+    },
+  },
   preload: {
     build: {
       rollupOptions: {

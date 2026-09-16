@@ -1,6 +1,6 @@
 import { useItemActions } from "@catamorphic/app/ui";
 import * as icons from "lucide-react";
-import { ChevronRight, MoreHorizontal } from "lucide-react";
+import { ChevronRight, LoaderCircle, MoreHorizontal } from "lucide-react";
 import {
   type CSSProperties,
   type ReactNode,
@@ -129,7 +129,7 @@ export function SidebarItemRow<
   end?: ReactNode;
   disclosure?: { open: boolean; onToggle: () => void };
   onOpen: (mode: OpenMode) => void;
-  onAction: (entry: TMenuEntry) => void;
+  onAction: (entry: TMenuEntry) => void | Promise<void>;
   /** Swap the label for an inline rename field. */
   renaming?: boolean;
   style?: CSSProperties;
@@ -513,13 +513,21 @@ export function SidebarItemRow<
                   aria-label={entry.label}
                   disabled={Boolean(entry.disabledReason) || Boolean(pending)}
                   data-disabled-reason={
-                    entry.disabledReason ?? "Wait for the current action"
+                    entry.disabledReason ??
+                    (pending ? "Wait for the current action" : undefined)
                   }
                   aria-busy={pending === entry.action}
                   onClick={() => void invoke(entry)}
                   className="grid size-6 shrink-0 place-items-center rounded text-fg-muted hover:bg-bg-overlay disabled:opacity-40"
                 >
-                  <Icon className="size-3.5" />
+                  {pending === entry.action ? (
+                    <LoaderCircle
+                      aria-hidden="true"
+                      className="size-3.5 animate-spin motion-reduce:animate-none"
+                    />
+                  ) : (
+                    <Icon className="size-3.5" />
+                  )}
                 </button>
               </ShortcutHint>
             );
@@ -576,9 +584,15 @@ export function SidebarItemRow<
         />
       )}
       {actionError && (
-        <span role="alert" className="text-xs text-danger">
-          {actionError}
-        </span>
+        <ShortcutHint label={actionError}>
+          <span
+            role="alert"
+            className="mr-1 flex shrink-0 items-center gap-1 text-xs text-danger"
+          >
+            <icons.CircleAlert aria-hidden="true" className="size-3" />
+            Failed<span className="sr-only">: {actionError}</span>
+          </span>
+        </ShortcutHint>
       )}
       {previewEnabled && previewAnchor && (
         <SidebarPreviewPopover

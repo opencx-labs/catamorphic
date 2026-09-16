@@ -26,6 +26,7 @@ const WORKFLOWS_SERVER_KEY = PROJECT_TOOLS_SERVER_KEY;
  * directories for the harness that can load them natively. */
 export interface ResolvedMcp {
   servers: Record<string, AgentMcpServerConfig>;
+  nativeServers?: Record<string, AgentMcpServerConfig>;
   plugins: AgentPluginConfig[];
   /**
    * Tool policy layers per server key: the connection's own (the
@@ -43,7 +44,7 @@ export interface ResolvedMcp {
 
 interface DesktopAgentMcpDeps {
   profileConfig: ProfileConfigManager;
-  connectors?: ConnectorsService;
+  connectors?: Pick<ConnectorsService, "listInstalled">;
   hostSkills?: () => HostSkillsRuntime | undefined;
   workspaceBridge?: WorkspaceBridge;
   toolPermissions?: ToolPermissionBroker;
@@ -84,7 +85,7 @@ export class DesktopAgentMcp {
       if (!mapped) continue;
       servers[key] = mapped;
       connectionIds[key] = connection.id;
-      // Layers: the connection's policy (absent = auto), then the agent's
+      // Layers: the connection's policy (absent follows the local mode), then the agent's
       // (profile agents key by connection id; committed/remote definitions
       // by connector name or server key).
       const agentPolicy =
@@ -95,7 +96,11 @@ export class DesktopAgentMcp {
         // Layer zero when present: the provisioner's ceiling (an org's
         // shared credential). Then the user's own, then the agent's.
         ...(connection.ceiling ? [connection.ceiling.policy] : []),
-        connection.toolPolicy ?? {},
+        {
+          default:
+            (config.mode ?? "full-access") === "full-access" ? "allow" : "auto",
+          ...connection.toolPolicy,
+        },
         ...(agentPolicy ? [narrowingLayer(agentPolicy)] : []),
       ];
       // The FULL cached roster (empty hints when a tool has none): Codex
@@ -148,7 +153,35 @@ export class DesktopAgentMcp {
         policies[serverKey] = [narrowingLayer(policy)];
       }
     }
-    return { servers, plugins, policies, annotations, connectionIds };
+    const nativeConnectionIds = new Set(
+      (this.deps.connectors?.listInstalled(profileId) ?? [])
+        .filter(
+          (connector) =>
+            connector.external && connector.name === "codex-computer-use",
+        )
+        .flatMap((connector) => connector.connectionIds),
+    );
+    const nativeServers =
+      config.harness === "codex"
+        ? Object.fromEntries(
+            Object.entries(servers)
+              .filter(([key]) =>
+                nativeConnectionIds.has(connectionIds[key] ?? ""),
+              )
+              .map(([key, server]) => [
+                key,
+                { ...server, defaultToolsApprovalMode: "approve" as const },
+              ]),
+          )
+        : {};
+    return {
+      servers,
+      nativeServers,
+      plugins,
+      policies,
+      annotations,
+      connectionIds,
+    };
   }
 
   /**

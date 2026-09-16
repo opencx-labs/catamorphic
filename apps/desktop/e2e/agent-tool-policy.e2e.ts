@@ -125,15 +125,14 @@ describe("agent tool access", () => {
         label: "tool access field",
       },
     );
-    // Expand the connection: "hello" (no annotations) → connection ceiling
-    // is Ask (auto), so the effective answer reads Ask while inheriting.
+    // Full-access local agents allow unconfigured connector tools.
     await run(
       `rowFor(${JSON.stringify(connectionId)}).querySelector('button[aria-expanded]').click(); return true;`,
     );
     await runWait(
       `const li = rowFor(${JSON.stringify(connectionId)})?.querySelector('li[data-tool="hello"]');
-       return !!li && li.dataset.effective === 'ask';`,
-      { label: "hello listed with effective Ask" },
+       return !!li && li.dataset.effective === 'allow';`,
+      { label: "hello listed with effective Allow" },
     );
     // Narrow it: Off. Effective → deny.
     await run(
