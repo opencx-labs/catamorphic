@@ -358,3 +358,34 @@ it("uses one content snapshot for preview and full owners, retaining loaded dept
   await flush();
   emptyPreview();
 });
+
+it("exposes initial and background IO activity while preserving the ready snapshot", async () => {
+  let finish: (value: { items: Item[] }) => void = () => {};
+  const collection = createCollection<Item>({
+    source: {
+      load: () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    },
+  });
+  const first = collection.load();
+  expect(collection.getBranch(null)).toMatchObject({
+    status: "loading",
+    fetching: true,
+    ids: [],
+  });
+  finish({ items: [{ id: "one", label: "First" }] });
+  await first;
+  const refresh = collection.load();
+  expect(collection.getBranch(null)).toMatchObject({
+    status: "ready",
+    fetching: true,
+    ids: ["one"],
+  });
+  expect(collection.getItem("one")?.label).toBe("First");
+  finish({ items: [{ id: "one", label: "Updated" }] });
+  await refresh;
+  expect(collection.getBranch(null).fetching).toBeFalsy();
+  expect(collection.getItem("one")?.label).toBe("Updated");
+});

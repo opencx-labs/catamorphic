@@ -772,18 +772,17 @@ describe("context pills", () => {
     expect(echoed).toContain("[editor sel.md:1-1]");
     expect(echoed).toContain("Selection test");
   }, 60_000);
-  it("saves a clipboard screenshot for a text-only agent and sends its usable path", async () => {
+  it("sends a clipboard screenshot to Codex as native image media", async () => {
     const agent = await app.eval<{ id: string }>(
-      `window.catamorphicDesktop.agentsCreate({name:'Text-only paste',harness:'codex',auth:'local'})`,
+      `window.catamorphicDesktop.agentsCreate({name:'Codex paste',harness:'codex',auth:'local'})`,
     );
     await app.eval(
       `window.catamorphicDesktop.agentsSetDefault(${JSON.stringify(agent.id)})`,
     );
     await run(`pressKey('n', {metaKey:true});`);
-    await runWait(
-      `return frontDock()?.textContent.includes('Text-only paste');`,
-      { label: "text-only composer capabilities" },
-    );
+    await runWait(`return frontDock()?.textContent.includes('Codex paste');`, {
+      label: "Codex composer capabilities",
+    });
     await run(
       `composer().replaceChildren();composer().dispatchEvent(new InputEvent('input',{bubbles:true}));`,
     );
@@ -796,27 +795,32 @@ describe("context pills", () => {
       composer().dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));
     `);
     await runWait(
-      `return pills().some(p=>p.label==='Screenshot.png' && p.source==='path');`,
-      { label: "screenshot path instead of dropped image" },
+      `return pills().some(p=>p.label==='Screenshot.png' && p.source==='image');`,
+      { label: "native screenshot image pill" },
     );
-    const root = await app.eval<string>(
-      `(async()=>{const {url}=await window.catamorphicDesktop.getServerState();const {items}=await fetch(url+'/api/projects').then(r=>r.json());return window.catamorphicDesktop.projectRoot(items.find(p=>p.name==='pills-e2e').id)})()`,
+    const attachment = await app.waitFor<{
+      kind: string;
+      mediaType: string;
+      dataBase64: string;
+    }>(
+      `(async()=>{
+      const dock=[...document.querySelectorAll('[data-chat-local-id]')].find(el=>!el.closest('[inert]') && el.querySelector('[data-composer-input]'));
+      const draft=await window.catamorphicDesktop.dockDraftGet(dock.dataset.chatLocalId);
+      return draft?.attachments?.find(item=>item.name==='Screenshot.png') ?? false;
+    })()`,
+      { label: "persisted native screenshot bytes" },
     );
-    const directory = path.join(root, ".catamorphic", "attachments");
-    const saved = fs
-      .readdirSync(directory)
-      .find((name) => name.endsWith("-Screenshot.png"));
-    expect(saved).toBeTruthy();
-    expect(
-      fs.readFileSync(path.join(directory, saved ?? "")).toString("base64"),
-    ).toBe(png);
+    expect(attachment).toMatchObject({
+      kind: "image",
+      mediaType: "image/png",
+      dataBase64: png,
+    });
     await run(`composerKey('Enter');`);
     await runWait(
       `return timelineText().includes('Received 1 attachment: Screenshot.png');`,
     );
-    await runWait(
-      `return timelineText().includes('.catamorphic/attachments/');`,
-      { label: "agent streamed the saved screenshot path" },
+    expect(await run(`return timelineText();`)).not.toContain(
+      ".catamorphic/attachments/",
     );
   });
 });

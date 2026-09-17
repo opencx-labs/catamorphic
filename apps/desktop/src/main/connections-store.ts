@@ -58,9 +58,9 @@ export interface McpConnection {
   /** Pre-registered OAuth client the source (plugin) declared, if any. */
   oauthClient?: McpOAuthClientHint;
   /**
-   * The profile's ceiling for this connection's tools (see
-   * @catamorphic/sandbox tool-policy). Absent = `auto`: read-only tools
-   * run, the rest ask. Agents can only narrow this.
+   * The profile's explicit policy for this connection's tools (see
+   * @catamorphic/sandbox tool-policy). Absent follows the agent mode: full-access
+   * allows tools, restricted modes use auto. Explicit policies only narrow this.
    */
   toolPolicy?: McpToolPolicy;
   /**
@@ -291,7 +291,7 @@ export class ConnectionsStore {
     return this.decrypt(stored);
   }
 
-  /** The profile's tool policy for a connection (undefined = auto). */
+  /** The profile's tool policy for a connection (undefined follows the agent mode). */
   setToolPolicy(id: string, policy: McpToolPolicy | undefined): void {
     const stored = this.data.connections.find((entry) => entry.id === id);
     if (!stored) return;

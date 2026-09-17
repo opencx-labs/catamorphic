@@ -30,7 +30,8 @@ export type SidebarAction =
   | "new-chat"
   | "new-workflow"
   | "refresh"
-  | "search";
+  | "search"
+  | `run:${string}`;
 
 export interface SidebarMenuEntry {
   label: string;
@@ -61,6 +62,8 @@ export interface SidebarWhen extends ProjectExperienceWhen {
 }
 
 export interface SidebarSource {
+  /** Local TypeScript module exporting a collection source. */
+  module?: string;
   type: SidebarSectionConfig["type"];
   scope?: "project" | "session" | "children";
   filter?: Record<string, string | number | boolean>;

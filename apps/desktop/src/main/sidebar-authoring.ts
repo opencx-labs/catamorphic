@@ -93,5 +93,69 @@ renderer JavaScript may be exported from sidebar.js.
 
 After editing: read the actual winning file, validate the layout, check both sidebars,
 try ordinary click and right-click separately, change the current surface, and
-check empty/loading/error behavior. If a request requires new data, build an app or
-reuse a supported source; do not invent undocumented section types or fields.`;
+check empty/loading/error behavior. For new data, use a local executable source below, an app, or a supported source;
+do not invent undocumented section types or fields.
+
+## Executable local collection sources
+
+For a live JSON/file/API list, keep the native sidebar UI and use:
+{ id: "todos", type: "custom", title: "My todos",
+  source: { type: "custom", module: ".catamorphic/todos.ts" }, height: 280 }
+The module path is project-root-relative (absolute paths also work). Its default
+export is {load, subscribe?, action?}. This runs in a lazy Bun process with full
+filesystem, fetch, subprocess and npm access, not inside the static layout VM.
+Use normal TypeScript, not a data-source DSL. Local projects only; remote-connected
+projects retain host-authorized app widgets. No app build or workflow is required.
+
+load({projectRoot,parentId,cursor,signal}) returns {items,cursor?}. Items have unique
+stable id and label, optional parentId/hasChildren and all normal row presentation
+fields. Return one parent's page, at most 1000 items. Pass signal to fetch. Throw
+an Error on failed responses; the sidebar retains old rows and offers Retry.
+subscribe({projectRoot,invalidate}) returns cleanup. Use node:fs watch for files or
+an interval for HTTP; close watchers and timers in cleanup. Watch the directory
+and filter the filename so atomic file replacement is detected. An inactive view
+releases its subscription. hideEmpty:true retains a root availability preview;
+keep that work lightweight. Idle processes stop after 30 seconds. Entry-module
+edits restart the process. Reads should not write as a side effect of rendering.
+
+Example module:
+import {watch} from "node:fs";
+import {readFile,writeFile,rename} from "node:fs/promises";
+import path from "node:path";
+export default {
+  async load({projectRoot,parentId}) {
+    if(parentId) return {items:[]};
+    const todos=JSON.parse(await readFile(path.join(projectRoot,"todos.json"),"utf8"));
+    return {items:todos.map(todo=>({id:todo.id,label:todo.text,
+      icon:todo.done?"CircleCheck":"Circle",
+      actions:[{action:"run:toggle",label:todo.done?"Reopen":"Complete",icon:"Check"}]}))};
+  },
+  subscribe({projectRoot,invalidate}) {
+    const watcher=watch(projectRoot,(event,name)=>{
+      if(event === "rename" || !name || name.toString()==="todos.json") invalidate();
+    });
+    return ()=>watcher.close();
+  },
+  async action({projectRoot,itemId,action}) {
+    if(action!=="toggle") throw Error("Unknown action");
+    const file=path.join(projectRoot,"todos.json");
+    const todos=JSON.parse(await readFile(file,"utf8"));
+    const todo=todos.find(item=>item.id===itemId);
+    if(!todo) throw Error("Todo no longer exists");
+    todo.done=!todo.done;
+    const temporary=file+"."+crypto.randomUUID()+".tmp";
+    await writeFile(temporary,JSON.stringify(todos,null,2));
+    await rename(temporary,file);
+  }
+};
+
+Initialize todos.json with an array of {id,text,done}. Agent edits and clicks now
+share that file, with no sync script. Module actions use run:<name> in actions,
+menu or contextMenu; headerActions can invoke them too (itemId is empty). Actions
+are serialized per source and invalidate its loaded views on success. Throw for
+failures; the UI shows pending and error states. For APIs, implement load with
+fetch(url,{signal}), check response.ok, map response items to stable IDs/labels,
+and return the API's next cursor. A subscribe interval must return clearInterval
+cleanup. Do not pass credentials in row data. Validate loading, refresh, empty,
+failed fetch, retry and action feedback in the app.
+`;

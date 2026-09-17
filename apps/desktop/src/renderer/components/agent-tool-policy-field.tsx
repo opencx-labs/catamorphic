@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   type AgentConnectionsSetting,
   type AgentHarness,
+  type AgentMode,
   type ConnectionInfo,
   desktopApi,
   type McpToolPolicy,
@@ -90,6 +91,7 @@ export function AgentToolPolicyField({
   connections,
   assignment,
   harness,
+  mode = "full-access",
   projectId,
 }: {
   value: Record<string, McpToolPolicy>;
@@ -98,6 +100,7 @@ export function AgentToolPolicyField({
   connections: ConnectionInfo[];
   assignment: AgentConnectionsSetting;
   harness: AgentHarness;
+  mode?: AgentMode;
   /** The current project — its workflow tools are listed when known. */
   projectId?: string;
 }) {
@@ -170,7 +173,13 @@ export function AgentToolPolicyField({
             subtitle={`MCP · ${connection.transport}`}
             tools={connection.tools ?? []}
             emptyHint="No tool list yet — Test the connection in Connectors to fetch it."
-            ceiling={[connection.ceiling?.policy, connection.toolPolicy]}
+            ceiling={[
+              connection.ceiling?.policy,
+              {
+                default: mode === "full-access" ? "allow" : "auto",
+                ...connection.toolPolicy,
+              },
+            ]}
             ceilingSource={connection.ceiling?.source}
             policy={value[connection.id]}
             expanded={expanded === connection.id}

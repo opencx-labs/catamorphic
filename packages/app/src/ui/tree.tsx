@@ -476,6 +476,7 @@ export function useCollectionItem<T extends CollectionItem>({
 }
 
 export function CollectionTree<T extends CollectionItem>({
+  renderStatus,
   collection,
   active = true,
   label,
@@ -487,6 +488,9 @@ export function CollectionTree<T extends CollectionItem>({
   groupBy,
   project,
 }: {
+  renderStatus?: (
+    branch: import("../collection.js").CollectionBranch,
+  ) => ReactNode;
   collection: Collection<T>;
   active?: boolean;
   label: string;
@@ -565,7 +569,8 @@ export function CollectionTree<T extends CollectionItem>({
   );
   return (
     <>
-      {root.status === "error" && (
+      {renderStatus?.(root)}
+      {!renderStatus && root.status === "error" && (
         <p role="alert">
           {root.error}{" "}
           <button type="button" onClick={() => void collection.load()}>
@@ -573,7 +578,7 @@ export function CollectionTree<T extends CollectionItem>({
           </button>
         </p>
       )}
-      {root.status === "loading" && !items.length && (
+      {!renderStatus && root.status === "loading" && !items.length && (
         <p role="status">Loading…</p>
       )}
       <Tree

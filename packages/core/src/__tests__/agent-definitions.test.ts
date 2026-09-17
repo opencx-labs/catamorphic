@@ -188,9 +188,11 @@ describe("definitionHash", () => {
     expect(definitionHash({ ...def, mode: "full-access" })).not.toBe(
       definitionHash(def),
     );
-    // Absent mode hashes as the "edit" default, so adding it explicitly
-    // does not invalidate standing consent.
-    expect(definitionHash({ ...def, mode: "edit" })).toBe(definitionHash(def));
+    // Hosts choose different defaults, so explicit edit and omission must
+    // invalidate cached authority independently.
+    expect(definitionHash({ ...def, mode: "edit" })).not.toBe(
+      definitionHash(def),
+    );
     // Memory and skills stay outside: nothing personal is widened.
     expect(definitionHash({ ...def, memory: true })).toBe(definitionHash(def));
     expect(definitionHash({ ...def, skills: ["publishing-to-github"] })).toBe(

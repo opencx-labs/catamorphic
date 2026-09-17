@@ -66,12 +66,12 @@ const MODE_OPTIONS: Array<{
   {
     value: "edit",
     label: "Edit",
-    detail: "Work in the project folder without prompts (the default).",
+    detail: "Limit file writes to the project folder.",
   },
   {
     value: "full-access",
     label: "Full access",
-    detail: "The harness's own safety checks are off. For trusted work only.",
+    detail: "Run commands and edit local files freely (the local default).",
   },
 ];
 
@@ -752,6 +752,7 @@ function ProfileAgentBody({
                 projectId={projectId}
               />
               <AgentToolPolicyField
+                mode={mode}
                 value={toolPolicies}
                 onChange={setToolPolicies}
                 connections={profileConnections}
@@ -922,7 +923,7 @@ function ProjectAgentBody({
           {fact("Harness", agent.kind)}
           {fact("Model", agent.model ?? "harness default")}
           {fact("Effort", agent.effort ?? "medium")}
-          {fact("Mode", agent.mode ?? "edit")}
+          {fact("Mode", agent.mode ?? "full-access")}
           {fact("Concurrent work", agent.coordination ?? "shared-first")}
           {fact(
             "Memory",

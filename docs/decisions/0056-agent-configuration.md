@@ -1,6 +1,6 @@
 # 0056 — Agent configuration: one surface, layered defaults, enforced capabilities
 
-- **Status:** Accepted
+- **Status:** Accepted; local desktop defaults superseded by 0140
 - **Date:** 2026-08-21
 - **Builds on:** 0038 (coding-agent registry), 0050 (project agent
   definitions), 0052 (skills as commands), 0054 (tool permissions),

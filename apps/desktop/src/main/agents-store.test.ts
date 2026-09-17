@@ -93,7 +93,7 @@ describe("AgentsStore — ADR 0056 fields", () => {
     // The public shape materializes them for the renderer. Memory is
     // OPT-IN (ADR 0056): a fresh agent remembers nothing.
     const publicAgent = toPublicAgent(plain);
-    expect(publicAgent.mode).toBe("edit");
+    expect(publicAgent.mode).toBe("full-access");
     expect(publicAgent.memory).toBe(false);
     expect(publicAgent.skills).toEqual({ mode: "all" });
     expect(publicAgent.instructions).toBe("");
@@ -139,7 +139,7 @@ describe("AgentsStore — ADR 0056 fields", () => {
       },
     });
     expect(updated?.instructions).toBeUndefined();
-    expect(updated?.mode).toBeUndefined();
+    expect(updated?.mode).toBe("edit");
     expect(updated?.memory).toBeUndefined();
     expect(updated?.skills).toBeUndefined();
     expect(updated?.coordination).toBeUndefined();
@@ -175,4 +175,12 @@ describe("AgentsStore — layered defaults (ADR 0056)", () => {
     store.setProjectDefault(PROJECT, null);
     expect(store.projectDefaults()).toEqual({});
   });
+});
+
+it("advertises the native Codex attachment path to the composer", () => {
+  const store = new AgentsStore(storeFile());
+  expect(toPublicAgent(store.create({ harness: "codex" })).accepts).toEqual([
+    "image",
+    "document",
+  ]);
 });

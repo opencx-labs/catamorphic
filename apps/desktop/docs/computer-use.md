@@ -29,13 +29,15 @@ for external actions.
 
 Connectors has **Connect Codex Computer Use** when the runtime is installed in
 the user's Codex home (`CODEX_HOME`, otherwise `~/.codex`). This references the
-installation in place, exposes `js`/`js_reset`, and leaves OS and per-app access
+installation in place, preserves its configured surfaces and exposes `js`/`js_reset`, and leaves OS and per-app access
 under the native service's control. The imported runtime exposes computer surfaces;
 Catamorphic's browser tools control its embedded tabs. The native service can use
 apps across the desktop, not only browsers.
 
-Assign the connection to an agent as with any profile connector. It is explicitly
-opt-in. Codex handles its form/URL elicitation through the existing host permission
+Assign the connection to an agent as with any profile connector. Connecting the runtime is explicitly
+opt-in. Full-access local agents accept native app-consent requests without an
+additional Catamorphic prompt. Codex and OS restrictions still apply. Restricted
+agents retain the consent flow below. Codex handles its form/URL elicitation through the existing host permission
 UI. App consent offers an unchecked **Allow this app for this chat** choice.
 An explicit selection remembers only that server, app and risk level for the
 current native process; restarting it clears consent. Ordinary form answers and
@@ -60,3 +62,8 @@ denial, cancellation and resume. They use disposable homes and no model credenti
 OS access needs an explicitly authorized manual smoke test; fake model success is
 not proof. Test native app reading, a harmless action, and a screenshot through
 the imported runtime, then restore the test app's state.
+
+The assigned computer-use server runs directly in the initiating Codex app-server,
+not in the shared profile tool pool. Other profile connector catalogs remain
+deferred. Full-access defaults permit tools without an explicit policy; saved
+connection policies, agent restrictions and provisioner ceilings still intersect.

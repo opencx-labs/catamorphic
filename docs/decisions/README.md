@@ -152,3 +152,5 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0137](0137-sign-in-recovery.md) | Sign-in recovery stays with the active attempt | Accepted |
 | [0138](0138-session-workflow-triggers-and-actions.md) | Session workflow triggers and actions | Accepted |
 | [0139](0139-session-reminder-lifetime-and-attention.md) | Session reminder lifetime and message attention | Accepted |
+
+| [0140](0140-local-agent-freedom-and-executable-sidebar-sources.md) | Local agent freedom and executable sidebar sources | Accepted |

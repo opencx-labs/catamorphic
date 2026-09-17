@@ -67,6 +67,7 @@ import {
   useSidebarRefresh,
 } from "./sidebar-contribution.js";
 import { SidebarIcon, SidebarItemRow } from "./sidebar-item-row.js";
+import { SidebarLiveSource } from "./sidebar-live-source.js";
 import {
   type SessionCommand,
   SidebarSessionInspector,
@@ -211,6 +212,14 @@ export function ConfiguredSection({
   }, []);
   const commands = new Set([
     "new-chat",
+    ...(section.source?.module
+      ? [
+          "refresh",
+          ...(section.headerActions ?? [])
+            .filter((entry) => entry.action.startsWith("run:"))
+            .map((entry) => entry.action),
+        ]
+      : []),
     ...(!memberShell ? ["new-workflow"] : []),
     ...(["git", "prs", "files"].includes(section.type) ? ["search"] : []),
     ...([
@@ -519,11 +528,21 @@ export function ConfiguredSection({
             title={section.title ?? "Links"}
             defaultOpen={defaultOpen}
           >
-            <CustomItems
-              section={section}
-              experienceContext={experienceContext}
-              onOpenUrl={onOpenUrl}
-            />
+            {section.source?.module ? (
+              memberShell ? (
+                <p className="sidebar-empty-state">
+                  Local sources are unavailable in this project.
+                </p>
+              ) : (
+                <SidebarLiveSource projectId={projectId} />
+              )
+            ) : (
+              <CustomItems
+                section={section}
+                experienceContext={experienceContext}
+                onOpenUrl={onOpenUrl}
+              />
+            )}
           </SidebarSection>
         );
       default:
@@ -562,7 +581,16 @@ export function ConfiguredSection({
                     load: () => searchItems.current(),
                   },
             );
-          else if (action === "refresh")
+          else if (action.startsWith("run:") && section.source?.module) {
+            await desktopApi.sidebarSourceRequest({
+              projectId,
+              sectionId: section.id,
+              requestId: crypto.randomUUID(),
+              method: "action",
+              itemId: "",
+              action: action.slice(4),
+            });
+          } else if (action === "refresh")
             await Promise.all(
               [...refreshers.current].map((refresh) => refresh()),
             );

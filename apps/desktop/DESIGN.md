@@ -454,3 +454,10 @@ source and run history. Chat displays compact attributed action entries. Agent,
 workflow, run, originating chat, and child links use the workspace's resource
 opening behavior. Turn completion and explicit work completion stay distinct.
 Local and remote sessions share the same trigger and action contracts (ADR 0138).
+
+### 2026-09-17: Local agent freedom and live sidebar sources
+
+Local agents default to full access and edit real profile files. Executable sidebar
+sources use lazy Bun processes and the shared native collection/tree presentation.
+Initial loading, retained rows during refresh, recoverable errors and pending row
+actions remain visible; arrivals use existing list motion. See ADR 0140.

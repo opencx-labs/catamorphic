@@ -98,3 +98,24 @@ it("requires explicit consent and rejects a late answer after interruption", asy
   });
   expect(await handler(request, abort.signal)).toEqual({ action: "cancel" });
 });
+
+it("full-access local sessions accept native app requests without adding desktop consent", async () => {
+  const elicit = vi.fn<WorkspaceBridge["elicit"]>(async () => ({
+    action: "decline",
+  }));
+  const handler = createCodexElicitation({ elicit, allowAppAccess: true });
+  expect(await handler(request)).toEqual({ action: "accept", content: {} });
+  expect(elicit).not.toHaveBeenCalled();
+  const form = {
+    ...request,
+    requestedSchema: {
+      type: "object",
+      properties: { name: { type: "string" } },
+    },
+  };
+  expect(await handler(form)).toEqual({ action: "decline" });
+  expect(elicit).toHaveBeenCalledTimes(1);
+  const aborted = new AbortController();
+  aborted.abort();
+  expect(await handler(request, aborted.signal)).toEqual({ action: "cancel" });
+});

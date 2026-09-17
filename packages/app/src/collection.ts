@@ -13,6 +13,8 @@ export interface CollectionPage<T> {
 export interface CollectionBranch {
   ids: readonly string[];
   status: CollectionStatus;
+  /** Initial, refresh, or next-page IO without discarding the current snapshot. */
+  fetching?: boolean;
   cursor?: string;
   error?: string;
 }
@@ -100,6 +102,7 @@ export function createCollection<T extends CollectionItem>({
     if (
       previous &&
       previous.status === next.status &&
+      previous.fetching === next.fetching &&
       previous.cursor === next.cursor &&
       previous.error === next.error &&
       previous.ids.length === next.ids.length &&
@@ -148,8 +151,12 @@ export function createCollection<T extends CollectionItem>({
     const startedAt = mutation;
     const controller = new AbortController();
     requests.set(parentId, controller);
-    if (before.status === "idle")
-      setBranch(parentId, { ...before, status: "loading", error: undefined });
+    setBranch(parentId, {
+      ...before,
+      fetching: true,
+      status: before.status === "idle" ? "loading" : before.status,
+      error: undefined,
+    });
     try {
       const loaded: T[] = [];
       let cursor = more ? before.cursor : undefined;
@@ -201,6 +208,7 @@ export function createCollection<T extends CollectionItem>({
         setBranch(parentId, {
           ...branch(parentId),
           status: "error",
+          fetching: false,
           error: cause instanceof Error ? cause.message : String(cause),
         });
     } finally {
@@ -214,6 +222,8 @@ export function createCollection<T extends CollectionItem>({
   const abort = (parentId: string | null) => {
     requests.get(parentId)?.abort();
     requests.delete(parentId);
+    const current = branch(parentId);
+    if (current.fetching) setBranch(parentId, { ...current, fetching: false });
   };
   const publish = (change: CollectionChange<T>) => {
     if (change.type === "invalidate") {

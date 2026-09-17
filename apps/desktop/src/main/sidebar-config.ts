@@ -3,6 +3,7 @@ import path from "node:path";
 import vm from "node:vm";
 import type { OpenMode } from "../shared/open-mode.js";
 import { sanitizeProjectExperienceWhen } from "../shared/project-experience.js";
+import type { SidebarSourceItem } from "../shared/sidebar-source.js";
 import { SIDEBAR_AUTHORING_GUIDE } from "./sidebar-authoring.js";
 
 /**
@@ -169,7 +170,10 @@ function sanitizeMenu(raw: unknown): SidebarMenuEntry[] | undefined {
     if (
       typeof record.label !== "string" ||
       typeof record.action !== "string" ||
-      !VALID_ACTIONS.has(record.action as SidebarAction)
+      !(
+        VALID_ACTIONS.has(record.action as SidebarAction) ||
+        /^run:.+/.test(record.action)
+      )
     ) {
       throw new Error("Action needs a label and a supported action name.");
     }
@@ -279,6 +283,13 @@ function sanitizeSource(value: unknown): SidebarSource | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value) || !isSectionType(value.type))
     throw new Error("Source needs a supported type.");
+  if (
+    value.module !== undefined &&
+    (value.type !== "custom" ||
+      typeof value.module !== "string" ||
+      !value.module.trim())
+  )
+    throw new Error("Executable sources need type custom and a module path.");
   const scope = value.scope;
   if (
     scope !== undefined &&
@@ -323,6 +334,7 @@ function sanitizeSource(value: unknown): SidebarSource | undefined {
     throw new Error("Sort needs field and asc/desc direction.");
   return {
     type: value.type,
+    module: typeof value.module === "string" ? value.module : undefined,
     scope,
     filter,
     sort:
@@ -826,4 +838,39 @@ export class SidebarConfigStore {
     this.watcher?.close();
     clearTimeout(this.debounce);
   }
+}
+
+/** Validate executable source data before it crosses into the renderer. */
+export function sanitizeSidebarSourcePage(raw: unknown): {
+  items: SidebarSourceItem[];
+  cursor?: string;
+} {
+  if (!isRecord(raw) || !Array.isArray(raw.items) || raw.items.length > 1000)
+    throw new Error(
+      "Source load must return { items, cursor? }, with at most 1000 items per page.",
+    );
+  const ids = new Set<string>();
+  const items = raw.items.map((item): SidebarSourceItem => {
+    if (
+      !isRecord(item) ||
+      typeof item.id !== "string" ||
+      !item.id ||
+      ids.has(item.id) ||
+      typeof item.label !== "string"
+    )
+      throw new Error("Source items need unique stable IDs and labels.");
+    ids.add(item.id);
+    return {
+      ...sanitizePresentation(item),
+      id: item.id,
+      label: item.label,
+      parentId: typeof item.parentId === "string" ? item.parentId : null,
+      hasChildren: item.hasChildren === true,
+      url: typeof item.url === "string" ? item.url : undefined,
+    };
+  });
+  return {
+    items,
+    cursor: typeof raw.cursor === "string" ? raw.cursor : undefined,
+  };
 }
