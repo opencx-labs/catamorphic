@@ -54,6 +54,16 @@ describe("SessionCheckouts", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
+  it("lists no worktrees for an unversioned project without creating Git", async () => {
+    await fs.rm(path.join(rootPath, ".git"), { recursive: true });
+    expect(await checkouts.list(projectId)).toEqual([]);
+    expect(await checkouts.describe({ projectId, sessionId })).toMatchObject({
+      kind: "primary",
+      path: rootPath,
+    });
+    expect(await fs.readdir(rootPath)).not.toContain(".git");
+  });
+
   it.each(["primary", "worktree"])(
     "keeps private workflow files out of %s checkpoints",
     async (kind) => {

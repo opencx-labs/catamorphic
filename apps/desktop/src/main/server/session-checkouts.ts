@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { ensurePersonalFilesExcluded } from "@catamorphic/git";
+import { ensurePersonalFilesExcluded, hasLocalGit } from "@catamorphic/git";
 import type { PGlite } from "@electric-sql/pglite";
 
 const execFileAsync = promisify(execFile);
@@ -171,6 +171,7 @@ export class SessionCheckouts {
 
   async list(projectId: string): Promise<ClassifiedRepositoryWorktree[]> {
     const root = this.requireRoot(projectId);
+    if (!(await hasLocalGit({ path: root }))) return [];
     const primary = await canonicalPath(root);
     const configuredManagedRoot = path.resolve(
       root,

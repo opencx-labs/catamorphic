@@ -10,7 +10,7 @@ import {
   normalizeDocumentPath,
   type ProjectAgentEntry,
 } from "@catamorphic/core";
-import { discoverCheckout, isPersonalFile, nativeGit } from "@catamorphic/git";
+import { isPersonalFile, nativeGit } from "@catamorphic/git";
 import {
   buildInstallationUrl,
   GithubApi,
@@ -1639,31 +1639,6 @@ export function registerIpcHandlers(
       if (!server) throw new Error("Server not running");
       if (!path.isAbsolute(input.rootPath)) {
         throw new Error("rootPath must be an absolute path");
-      }
-      if (input.importExisting) {
-        try {
-          await discoverCheckout({ path: input.rootPath });
-        } catch (error) {
-          // An invalid repository is never reinitialized. Only a plain folder can opt in.
-          if (
-            !fs.statSync(input.rootPath).isDirectory() ||
-            fs.existsSync(path.join(input.rootPath, ".git"))
-          )
-            throw error;
-          const choice = await dialog.showMessageBox({
-            type: "question",
-            title: "Add local history?",
-            message: "This folder does not have Git history yet.",
-            detail:
-              "Catamorphic can add local history in this folder. Your files stay where they are. Nothing is committed or uploaded until you ask.",
-            buttons: ["Add local history and open", "Cancel"],
-            cancelId: 1,
-            defaultId: 0,
-          });
-          if (choice.response !== 0)
-            throw new Error("Opening the folder was cancelled.");
-          await nativeGit(input.rootPath, ["init", "--initial-branch=main"]);
-        }
       }
       const project = await server.projectRoots.register({
         rootPath: input.rootPath,

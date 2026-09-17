@@ -65,6 +65,8 @@ export function classifyAgentError(
   if (message.startsWith("Tool ")) return undefined;
   // A host-initiated interrupt is a user action, not a failure.
   if (/^interrupted\.?$/i.test(message.trim())) return undefined;
+  if (/model requires a newer version of Codex/i.test(message))
+    return undefined;
   return KIND_SIGNATURES.find(({ pattern }) => pattern.test(message))?.kind;
 }
 
@@ -181,6 +183,19 @@ export class FriendlyAgentErrors implements CodingAgentProvider {
             errorKind: undefined,
             content:
               "This chat is open in another Codex window or process. Close it there, then retry here. Your conversation is saved.",
+          };
+          continue;
+        }
+        if (
+          this.providerLabel === "Codex" &&
+          !event.content.startsWith("Tool ") &&
+          /model requires a newer version of Codex/i.test(event.content)
+        ) {
+          yield {
+            ...event,
+            errorKind: undefined,
+            content:
+              "This model requires a newer Codex component. Choose another model in the command palette, or update Catamorphic and try again.",
           };
           continue;
         }

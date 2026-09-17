@@ -29,6 +29,15 @@ timelines, sessions, editors, runs) must be ported back to the installable
 packages/registry so embedders get it too. A desktop-only improvement to a
 shared surface is a process bug, not a win. See the [historical log](DESIGN-HISTORY.md) for its rationale.
 
+## Opening existing projects
+
+Opening a folder adopts it in place without adding files, copying history, or
+requiring Git (ADR 0141). Existing repositories retain their branch, index,
+remotes, and pending changes. Plain folders support ordinary agent work; an
+explicit commit initializes Git when needed. Imports keep manual commits and
+sharing. While an import is running, its source and destination stay fixed and
+the modal shows progress until it completes or exposes a retryable error.
+
 ## Session reminders
 
 Session reminders persist until delivered or cancelled, with no default expiry

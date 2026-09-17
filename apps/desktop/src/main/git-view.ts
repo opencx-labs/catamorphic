@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { hasLocalGit } from "@catamorphic/git";
 import type {
   GitChangedFile,
   GitDiffInput,
@@ -136,6 +137,9 @@ async function readGitOverview(
 ): Promise<GitOverview> {
   let trees: ListedWorktree[];
   try {
+    await fs.access(rootPath);
+    if (!(await hasLocalGit({ path: rootPath })))
+      return { available: true, worktrees: [] };
     trees = await worktreeList(rootPath);
   } catch (error) {
     return {

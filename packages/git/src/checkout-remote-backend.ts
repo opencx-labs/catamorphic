@@ -1,4 +1,5 @@
 import {
+  hasLocalGit,
   INTERNAL_REMOTE_PREFIX,
   nativeGit,
   nativeGitBytes,
@@ -69,6 +70,7 @@ class CheckoutOrigin implements OriginRepo {
     );
   }
   async listRefs(prefix: string): Promise<Array<{ ref: string; sha: string }>> {
+    if (!(await hasLocalGit({ path: this.root }))) return [];
     const output = await nativeGit(this.root, [
       "for-each-ref",
       "--format=%(refname)%09%(objectname)",

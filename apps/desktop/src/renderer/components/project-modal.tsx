@@ -122,7 +122,10 @@ export function ProjectModal({
     });
     if (picked) {
       setImportDir(picked);
-      if (!name.trim()) {
+      if (
+        !name.trim() ||
+        name === importDir?.split("/").filter(Boolean).pop()
+      ) {
         setName(picked.split("/").filter(Boolean).pop() ?? "");
       }
     }
@@ -167,167 +170,182 @@ export function ProjectModal({
     <>
       <Modal
         open={open && githubGrant === null && !managingGithubAccess}
-        onClose={onClose}
+        onClose={() => {
+          if (!pending) onClose();
+        }}
       >
-        <form onSubmit={submit}>
-          <div className="px-5 pt-5 pb-1">
-            <div
-              className="grid grid-cols-3 gap-1 rounded-lg bg-bg-inset p-1"
-              role="tablist"
-              aria-label="Project source"
-            >
-              <ModalTab
-                active={mode === "create"}
-                onSelect={() => setMode("create")}
-                icon={<FolderPlus className="size-3.5" />}
-                label="New project"
-              />
-              <ModalTab
-                active={mode === "import"}
-                onSelect={() => setMode("import")}
-                icon={<Import className="size-3.5" />}
-                label="Import folder"
-              />
-              <ModalTab
-                active={mode === "github"}
-                onSelect={() => setMode("github")}
-                icon={<GithubIcon className="size-3.5" />}
-                label="GitHub"
-              />
-            </div>
-          </div>
-
-          <AnimatedHeight>
-            <div
-              // Re-mounting on mode swap restarts the fade-in for the new set
-              // of fields; height is animated by the wrapper.
-              key={mode}
-              className="animate-fade-in flex flex-col gap-4 px-5 py-4"
-            >
-              {mode === "import" && (
-                <label className="flex flex-col gap-1.5 text-xs text-fg-muted">
-                  Folder
-                  <button
-                    type="button"
-                    onClick={browseImport}
-                    data-testid="import-folder-picker"
-                    className="field flex h-8 cursor-pointer items-center gap-2 px-2.5 text-left text-[13px]"
-                  >
-                    <FolderOpen className="size-3.5 shrink-0 text-fg-faint" />
-                    {importDir ? (
-                      <span className="truncate text-fg" dir="rtl">
-                        {importDir}
-                      </span>
-                    ) : (
-                      <span className="text-fg-faint">
-                        Choose an existing folder…
-                      </span>
-                    )}
-                  </button>
-                </label>
-              )}
-
-              {mode === "github" && (
-                <GithubPanel
-                  selected={selectedRepo}
-                  onAuthorizationStarted={setGithubGrant}
-                  onManageAccess={() => {
-                    setManagingGithubAccess(true);
-                    void desktopApi.githubManageRepos().catch((cause) => {
-                      setManagingGithubAccess(false);
-                      setError(
-                        cause instanceof Error ? cause.message : String(cause),
-                      );
-                    });
-                  }}
-                  onSelect={(repo) => {
-                    setSelectedRepo(repo);
-                    if (repo && !name.trim()) setName(repo.name);
-                  }}
+        <form onSubmit={submit} aria-busy={pending}>
+          <fieldset disabled={pending} className="m-0 min-w-0 border-0 p-0">
+            <div className="px-5 pt-5 pb-1">
+              <div
+                className="grid grid-cols-3 gap-1 rounded-lg bg-bg-inset p-1"
+                role="tablist"
+                aria-label="Project source"
+              >
+                <ModalTab
+                  active={mode === "create"}
+                  onSelect={() => setMode("create")}
+                  icon={<FolderPlus className="size-3.5" />}
+                  label="New project"
                 />
-              )}
+                <ModalTab
+                  active={mode === "import"}
+                  onSelect={() => setMode("import")}
+                  icon={<Import className="size-3.5" />}
+                  label="Import folder"
+                />
+                <ModalTab
+                  active={mode === "github"}
+                  onSelect={() => setMode("github")}
+                  icon={<GithubIcon className="size-3.5" />}
+                  label="GitHub"
+                />
+              </div>
+            </div>
 
-              {(mode !== "github" || selectedRepo !== null) && (
-                <label className="flex flex-col gap-1.5 text-xs text-fg-muted">
-                  Project Name
-                  <input
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
-                    placeholder={
-                      mode === "create" ? "My project" : "Project name"
-                    }
-                    // biome-ignore lint/a11y/noAutofocus: modal's primary field
-                    autoFocus={mode !== "github"}
-                    data-testid="project-name-input"
-                    className="field h-8 px-2.5 text-[13px] text-fg placeholder:text-fg-faint"
-                  />
-                </label>
-              )}
-
-              {(mode === "create" ||
-                (mode === "github" && selectedRepo !== null)) && (
-                <label className="flex flex-col gap-1.5 text-xs text-fg-muted">
-                  Location
-                  <div className="flex items-center gap-1.5">
+            <AnimatedHeight>
+              <div
+                // Re-mounting on mode swap restarts the fade-in for the new set
+                // of fields; height is animated by the wrapper.
+                key={mode}
+                className="animate-fade-in flex flex-col gap-4 px-5 py-4"
+              >
+                {mode === "import" && (
+                  <label className="flex flex-col gap-1.5 text-xs text-fg-muted">
+                    Folder
                     <button
                       type="button"
-                      onClick={browseParent}
-                      data-testid="location-picker"
-                      className="field flex h-8 min-w-0 flex-1 cursor-pointer items-center gap-2 px-2.5 text-left text-[13px]"
+                      onClick={browseImport}
+                      data-testid="import-folder-picker"
+                      className="field flex h-8 cursor-pointer items-center gap-2 px-2.5 text-left text-[13px]"
                     >
                       <FolderOpen className="size-3.5 shrink-0 text-fg-faint" />
-                      <span className="truncate text-fg" dir="rtl">
-                        {parentDir || "…"}
-                      </span>
+                      {importDir ? (
+                        <span className="truncate text-fg" dir="rtl">
+                          {importDir}
+                        </span>
+                      ) : (
+                        <span className="text-fg-faint">
+                          Choose an existing folder…
+                        </span>
+                      )}
                     </button>
-                  </div>
-                </label>
-              )}
+                    <span className="text-fg-faint">
+                      Open in place. Git history and files stay unchanged.
+                    </span>
+                  </label>
+                )}
 
-              {targetPath && (
-                <p
-                  className="truncate text-xs text-fg-faint"
-                  data-testid="target-path"
-                >
-                  {mode === "import" ? "Linked to " : "Will be created at "}
-                  <span className="font-mono text-fg-muted">{targetPath}</span>
-                </p>
-              )}
+                {mode === "github" && (
+                  <GithubPanel
+                    selected={selectedRepo}
+                    onAuthorizationStarted={setGithubGrant}
+                    onManageAccess={() => {
+                      setManagingGithubAccess(true);
+                      void desktopApi.githubManageRepos().catch((cause) => {
+                        setManagingGithubAccess(false);
+                        setError(
+                          cause instanceof Error
+                            ? cause.message
+                            : String(cause),
+                        );
+                      });
+                    }}
+                    onSelect={(repo) => {
+                      setSelectedRepo(repo);
+                      if (repo && !name.trim()) setName(repo.name);
+                    }}
+                  />
+                )}
 
-              {error && <p className="text-xs text-danger">{error}</p>}
-            </div>
-          </AnimatedHeight>
+                {(mode !== "github" || selectedRepo !== null) && (
+                  <label className="flex flex-col gap-1.5 text-xs text-fg-muted">
+                    Project Name
+                    <input
+                      value={name}
+                      onChange={(event) => setName(event.target.value)}
+                      placeholder={
+                        mode === "create" ? "My project" : "Project name"
+                      }
+                      // biome-ignore lint/a11y/noAutofocus: modal's primary field
+                      autoFocus={mode !== "github"}
+                      data-testid="project-name-input"
+                      className="field h-8 px-2.5 text-[13px] text-fg placeholder:text-fg-faint"
+                    />
+                  </label>
+                )}
 
-          <footer className="flex items-center justify-end gap-2 border-t border-border px-5 py-3.5">
-            <button
-              type="button"
-              onClick={onClose}
-              className="h-8 cursor-pointer rounded-md px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-            >
-              Cancel
-            </button>
-            <PendingButton
-              type="submit"
-              pending={pending}
-              pendingLabel={
-                mode === "create"
-                  ? "Creating…"
+                {(mode === "create" ||
+                  (mode === "github" && selectedRepo !== null)) && (
+                  <label className="flex flex-col gap-1.5 text-xs text-fg-muted">
+                    Location
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={browseParent}
+                        data-testid="location-picker"
+                        className="field flex h-8 min-w-0 flex-1 cursor-pointer items-center gap-2 px-2.5 text-left text-[13px]"
+                      >
+                        <FolderOpen className="size-3.5 shrink-0 text-fg-faint" />
+                        <span className="truncate text-fg" dir="rtl">
+                          {parentDir || "…"}
+                        </span>
+                      </button>
+                    </div>
+                  </label>
+                )}
+
+                {targetPath && (
+                  <p
+                    className="truncate text-xs text-fg-faint"
+                    data-testid="target-path"
+                  >
+                    {mode === "import" ? "Linked to " : "Will be created at "}
+                    <span className="font-mono text-fg-muted">
+                      {targetPath}
+                    </span>
+                  </p>
+                )}
+
+                {error && (
+                  <p role="alert" className="text-xs text-danger">
+                    {error}
+                  </p>
+                )}
+              </div>
+            </AnimatedHeight>
+
+            <footer className="flex items-center justify-end gap-2 border-t border-border px-5 py-3.5">
+              <button
+                type="button"
+                onClick={onClose}
+                className="h-8 cursor-pointer rounded-md px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+              >
+                Cancel
+              </button>
+              <PendingButton
+                type="submit"
+                pending={pending}
+                pendingLabel={
+                  mode === "create"
+                    ? "Creating…"
+                    : mode === "github"
+                      ? "Cloning…"
+                      : "Importing…"
+                }
+                disabled={!canSubmit}
+                data-disabled-reason="Complete the project name and location first"
+                data-testid="project-submit"
+                className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {mode === "create"
+                  ? "Create project"
                   : mode === "github"
-                    ? "Cloning…"
-                    : "Importing…"
-              }
-              disabled={!canSubmit}
-              data-disabled-reason="Complete the project name and location first"
-              data-testid="project-submit"
-              className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {mode === "create"
-                ? "Create project"
-                : mode === "github"
-                  ? "Import from GitHub"
-                  : "Import project"}
-            </PendingButton>
-          </footer>
+                    ? "Import from GitHub"
+                    : "Import project"}
+              </PendingButton>
+            </footer>
+          </fieldset>
         </form>
       </Modal>
       {open &&

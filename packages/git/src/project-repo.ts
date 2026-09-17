@@ -54,11 +54,12 @@ export function assertSafePath(filePath: string): void {
   }
 }
 
-async function walkDirectory(
+export async function walkDirectory(
   dir: string,
   base: string,
   options?: {
     excludeNestedRepositories?: boolean;
+    includeHidden?: boolean;
     tracked: Set<string>;
     trackedDirectories: Set<string>;
     rules: Array<{ base: string; matcher: Ignore }>;
@@ -86,6 +87,7 @@ async function walkDirectory(
   for (const entry of entries) {
     if (IGNORED_DIRS.has(entry.name)) continue;
     if (
+      !options?.includeHidden &&
       entry.name.startsWith(".") &&
       !ALLOWED_DOT_DIRS.has(entry.name) &&
       !ALLOWED_DOT_FILES.has(entry.name)

@@ -9,6 +9,7 @@ import { GithubAuthorizationTray, ProjectModal } from "./project-modal.js";
 const desktop = vi.hoisted(() => ({
   connectedListener: null as ((result: unknown) => void) | null,
   defaultProjectsDir: vi.fn().mockResolvedValue("/tmp/projects"),
+  githubImport: vi.fn(),
   githubConnectStart: vi.fn().mockResolvedValue({
     userCode: "061F-9C19",
     verificationUri: "https://github.com/login/device",
@@ -227,4 +228,72 @@ describe("GithubAuthorizationTray", () => {
     ).not.toBeNull();
     expect(container.querySelector('[aria-hidden="true"]')).not.toBeNull();
   });
+});
+
+it("locks an import while pending and leaves the selection available for retry", async () => {
+  github.connected = true;
+  github.repos = [
+    {
+      id: 1,
+      name: "demo",
+      fullName: "owner/demo",
+      private: false,
+      defaultBranch: "main",
+      cloneUrl: "https://github.com/owner/demo.git",
+    },
+  ];
+  let rejectImport = (_error: Error) => {};
+  desktop.githubImport.mockImplementation(
+    () =>
+      new Promise((_resolve, reject) => {
+        rejectImport = reject;
+      }),
+  );
+  const onClose = vi.fn();
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  roots.push(root);
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ProjectModal open onClose={onClose} onCreated={() => {}} />
+      </QueryClientProvider>,
+    ),
+  );
+  const button = (text: string) =>
+    Array.from(container.querySelectorAll("button")).find((element) =>
+      element.textContent?.includes(text),
+    );
+  await act(async () => button("GitHub")?.click());
+  await act(async () => button("owner/demo")?.click());
+  const submit = container.querySelector<HTMLButtonElement>(
+    '[data-testid="project-submit"]',
+  );
+  expect(submit?.disabled).toBe(false);
+  await act(async () => submit?.click());
+  expect(desktop.githubImport).toHaveBeenCalledOnce();
+  expect(container.querySelector("fieldset")?.disabled).toBe(true);
+  expect(container.querySelector("form")?.getAttribute("aria-busy")).toBe(
+    "true",
+  );
+  await act(async () => {
+    button("Cancel")?.click();
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+  });
+  expect(onClose).not.toHaveBeenCalled();
+  await act(async () => rejectImport(new Error("Unable to clone. Try again.")));
+  expect(container.textContent).toContain("Unable to clone. Try again.");
+  expect(container.querySelector("fieldset")?.disabled).toBe(false);
+  expect(
+    container.querySelector<HTMLInputElement>(
+      '[data-testid="project-name-input"]',
+    )?.value,
+  ).toBe("demo");
+  expect(submit?.disabled).toBe(false);
 });

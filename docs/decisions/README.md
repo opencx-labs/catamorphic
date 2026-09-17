@@ -154,3 +154,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0139](0139-session-reminder-lifetime-and-attention.md) | Session reminder lifetime and message attention | Accepted |
 
 | [0140](0140-local-agent-freedom-and-executable-sidebar-sources.md) | Local agent freedom and executable sidebar sources | Accepted |
+| [0141](0141-open-plain-folders-without-git.md) | Open plain folders without initializing Git | Accepted |

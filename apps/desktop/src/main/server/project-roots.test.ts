@@ -94,3 +94,37 @@ it("relocates only projects inside the copied development profile", async () => 
     await database.close();
   }
 });
+
+it("deduplicates plain-folder aliases without conflating different unversioned folders", async () => {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "plain-roots-"));
+  const database = new PGlite();
+  try {
+    const store = new ProjectRootsStore(database);
+    await store.init();
+    const root = path.join(temporary, "first");
+    const second = path.join(temporary, "second");
+    await fs.mkdir(root);
+    await fs.mkdir(second);
+    const alias = path.join(temporary, "alias");
+    await fs.symlink(root, alias);
+    const register = (rootPath: string) =>
+      store.register({
+        rootPath,
+        existing: true,
+        create: async (id) => id,
+        reopen: async (id) => id,
+      });
+    const [first, duplicate, other] = await Promise.all([
+      register(root),
+      register(alias),
+      register(second),
+    ]);
+    expect(duplicate).toBe(first);
+    expect(other).not.toBe(first);
+    expect(store.checkpointsEnabled(first)).toBe(false);
+    expect(await fs.readdir(root)).toEqual([]);
+  } finally {
+    await database.close();
+    await fs.rm(temporary, { recursive: true, force: true });
+  }
+});

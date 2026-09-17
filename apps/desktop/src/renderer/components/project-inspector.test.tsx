@@ -146,7 +146,7 @@ describe("ProjectInspectorView", () => {
     expect(list?.querySelectorAll("[data-windowed-index]").length).toBeLessThan(
       25,
     );
-    expect(container.textContent).toContain("Local only");
+    expect(container.textContent).toContain("Not connected to a server");
   });
 
   it("shows session status only for another project", async () => {
@@ -225,5 +225,28 @@ describe("ProjectInspectorView", () => {
     expect(container.textContent).not.toContain("/projects/alpha");
     expect(container.textContent).not.toContain("Worktrees");
     expect(container.textContent).not.toContain("Open pull requests");
+  });
+  it("shows the Git remote independently of a Catamorphic server connection", async () => {
+    await act(async () => {
+      root.render(
+        <ProjectInspectorView
+          project={{
+            ...project,
+            remoteUrl: "https://github.com/example/demo.git",
+          }}
+          current
+          snapshot={snapshot}
+          sessions={[]}
+          sessionsLoading={false}
+          loading={false}
+          onDelete={() => undefined}
+        />,
+      );
+    });
+    expect(container.textContent).toContain(
+      "https://github.com/example/demo.git",
+    );
+    expect(container.textContent).toContain("Not connected to a server");
+    expect(container.textContent).not.toContain("Local only");
   });
 });
