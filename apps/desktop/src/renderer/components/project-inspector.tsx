@@ -294,11 +294,18 @@ export function ProjectInspectorView({
         </Section>
       )}
 
-      <Section icon={<Radio className="size-3.5" />} title="Remote">
+      {builder && (
+        <Section icon={<GitBranch className="size-3.5" />} title="Git remote">
+          <p className="break-all text-fg-muted">
+            {project.remoteUrl ?? "No Git remote"}
+          </p>
+        </Section>
+      )}
+      <Section icon={<Radio className="size-3.5" />} title="Catamorphic server">
         {loading ? (
           <EmptyLine loading empty="" />
         ) : snapshot.remote === null || snapshot.remote === undefined ? (
-          <p className="text-fg-faint">Local only</p>
+          <p className="text-fg-faint">Not connected to a server</p>
         ) : (
           <div className="flex items-center gap-2">
             {snapshot.remote.connection.state === "connected" ? (

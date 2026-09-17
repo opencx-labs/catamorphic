@@ -155,11 +155,26 @@ export class ProjectEnvironmentsService {
     projectId: string;
   }): Promise<ProjectEnvironmentPolicy> {
     await requireTenantProject(this.db, args.identity.tenantId, args.projectId);
+    const publishedOnly =
+      args.identity.scope !== undefined &&
+      Boolean(
+        await this.projectManager.localPath({
+          tenantId: args.identity.tenantId,
+          projectId: args.projectId,
+        }),
+      );
     const content = await withProgram(
       this.projectManager,
       args.identity.tenantId,
       args.projectId,
-      (repo, ref) => readProgramFile(repo, ref, PROJECT_MANIFEST_PATH),
+      (repo, ref) =>
+        publishedOnly && ref === null
+          ? Promise.resolve(null)
+          : readProgramFile(repo, ref, PROJECT_MANIFEST_PATH),
+      {
+        workingTree: args.identity.scope === undefined,
+        publishedOnly,
+      },
     );
     if (!content) {
       return defaultLocalEnvironmentPolicy();

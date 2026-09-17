@@ -19,7 +19,12 @@ export async function ensurePersonalFilesExcluded({
   repoPath: string;
 }): Promise<void> {
   const dotGit = path.join(repoPath, ".git");
-  const entry = await fs.stat(dotGit);
+  const entry = await fs.stat(dotGit).catch((error: unknown) => {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT")
+      return null;
+    throw error;
+  });
+  if (!entry) return;
   const gitDir = entry.isDirectory()
     ? dotGit
     : path.resolve(

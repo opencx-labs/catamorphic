@@ -11,9 +11,10 @@ export {
 export { InMemoryObjectStore } from "./in-memory-object-store.js";
 export { migrateWorkflowToProject } from "./migrate-workflow.js";
 export {
-  discoverCheckout,
+  discoverLocalFolder,
+  hasLocalGit,
   INTERNAL_REMOTE_PREFIX,
-  type LocalCheckout,
+  type LocalFolder,
   nativeGit,
 } from "./native-git.js";
 export { NativeProjectRepo } from "./native-project-repo.js";

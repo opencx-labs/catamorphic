@@ -56,20 +56,70 @@ export async function nativeGitBytes(
   return new Uint8Array((await command).stdout);
 }
 
-export interface LocalCheckout {
+export interface LocalFolder {
   path: string;
-  commonDirectory: string;
+  commonDirectory: string | null;
   branch: string | null;
   defaultBranch: string | null;
   remoteUrl: string | null;
   remoteBranch: string | null;
 }
 
-/** Resolve subfolders, symlink aliases and linked worktrees without modifying the checkout. */
-export async function discoverCheckout(input: {
+/** A .git directory or worktree pointer belongs to this folder, not an ancestor. */
+export async function hasLocalGit({
+  path: root,
+}: {
   path: string;
-}): Promise<LocalCheckout> {
+}): Promise<boolean> {
+  return fs.lstat(path.join(root, ".git")).then(
+    () => true,
+    (error: unknown) => {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT")
+        return false;
+      throw error;
+    },
+  );
+}
+
+/** Resolve subfolders, symlink aliases and linked worktrees without modifying the checkout. */
+export async function discoverLocalFolder(input: {
+  path: string;
+}): Promise<LocalFolder> {
   const requested = await fs.realpath(input.path);
+  if (!(await fs.stat(requested)).isDirectory())
+    throw new Error("Choose a folder to open as a project");
+  // Check ancestors too: a subfolder of a damaged checkout must not be
+  // accepted as a new plain folder, nor later initialized as a nested repo.
+  let ancestor = requested;
+  while (!(await hasLocalGit({ path: ancestor }))) {
+    if (
+      await fs.stat(path.join(ancestor, "HEAD")).then(
+        () => true,
+        () => false,
+      )
+    ) {
+      if (
+        (
+          await nativeGit(ancestor, [
+            "rev-parse",
+            "--is-bare-repository",
+          ]).catch(() => "")
+        ).trim() === "true"
+      )
+        throw new Error("Choose a working folder, not a bare Git repository");
+    }
+    const parent = path.dirname(ancestor);
+    if (parent === ancestor)
+      return {
+        path: requested,
+        commonDirectory: null,
+        branch: null,
+        defaultBranch: null,
+        remoteUrl: null,
+        remoteBranch: null,
+      };
+    ancestor = parent;
+  }
   const root = await fs.realpath(
     (await nativeGit(requested, ["rev-parse", "--show-toplevel"])).trim(),
   );

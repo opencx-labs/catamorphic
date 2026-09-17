@@ -37,6 +37,12 @@ describe("worktree Git views", () => {
     await fs.rm(temp, { recursive: true, force: true });
   });
 
+  it("treats a plain folder as an empty Git view without initializing it", async () => {
+    await fs.rm(path.join(root, ".git"), { recursive: true });
+    expect(await gitOverview(root)).toEqual({ available: true, worktrees: [] });
+    expect(await fs.readdir(root)).toEqual(["notes.txt"]);
+  });
+
   it("separates index, working files and committed branch diffs in every checkout without altering Git state", async () => {
     const tree = path.join(temp, 'feature "quoted"\ncheckout');
     await nativeGit(root, ["worktree", "add", "-b", "feature", tree]);
@@ -289,6 +295,9 @@ describe("worktree Git views", () => {
         mode: "untracked",
       }),
     ).rejects.toThrow("Invalid");
-    expect((await gitOverview(temp)).error).toBeTruthy();
+    expect((await gitOverview(temp)).worktrees).toEqual([]);
+    expect(
+      (await gitOverview(path.join(temp, "missing-folder"))).error,
+    ).toBeTruthy();
   });
 });

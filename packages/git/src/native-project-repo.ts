@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { type FileReadOptions, readFileSnapshot } from "./file-reads.js";
 import {
+  hasLocalGit,
   INTERNAL_REMOTE_PREFIX,
   nativeGit,
   nativeGitBytes,
@@ -10,7 +11,11 @@ import {
   ensurePersonalFilesExcluded,
   isPersonalFile,
 } from "./personal-files.js";
-import { assertSafePath, ProjectRepoImpl } from "./project-repo.js";
+import {
+  assertSafePath,
+  ProjectRepoImpl,
+  walkDirectory,
+} from "./project-repo.js";
 import type {
   BranchInfo,
   CommitInfo,
@@ -110,6 +115,19 @@ export class NativeProjectRepo extends ProjectRepoImpl {
   }
 
   override async listFiles(opts?: { prefix?: string }): Promise<string[]> {
+    if (!(await hasLocalGit({ path: this.repoPath }))) {
+      if (opts?.prefix) assertSafePath(opts.prefix);
+      const files = await walkDirectory(this.repoPath, this.repoPath, {
+        includeHidden: true,
+        excludeNestedRepositories: true,
+        tracked: new Set(),
+        trackedDirectories: new Set(),
+        rules: [],
+      });
+      return files
+        .filter((file) => !opts?.prefix || file.startsWith(opts.prefix))
+        .sort();
+    }
     const pathspec = opts?.prefix ? ["--", opts.prefix] : [];
     const [output, removed] = await Promise.all([
       nativeGit(this.repoPath, [
@@ -143,6 +161,23 @@ export class NativeProjectRepo extends ProjectRepoImpl {
     ref?: string;
     globs: readonly string[];
   }): Promise<string[]> {
+    if (!input.ref && !(await hasLocalGit({ path: this.repoPath }))) {
+      const matches = (file: string, glob: string) =>
+        path.matchesGlob(file, glob) ||
+        (!glob.includes("/") && path.matchesGlob(path.basename(file), glob));
+      const includes = input.globs.filter((glob) => !glob.startsWith(":!"));
+      const excludes = input.globs
+        .filter((glob) => glob.startsWith(":!"))
+        .map((glob) => glob.slice(2));
+      const files = await this.readAllFiles({
+        filter: (file) =>
+          includes.some((glob) => matches(file, glob)) &&
+          !excludes.some((glob) => matches(file, glob)),
+      });
+      return Object.entries(files)
+        .filter(([, content]) => content.includes(input.text))
+        .map(([file]) => file);
+    }
     const ref = input.ref ? await this.resolveRef(input.ref) : undefined;
     try {
       const output = await nativeGit(this.repoPath, [
@@ -182,6 +217,7 @@ export class NativeProjectRepo extends ProjectRepoImpl {
   }
 
   override async currentBranch(): Promise<string> {
+    if (!(await hasLocalGit({ path: this.repoPath }))) return "main";
     return (
       (await nativeGit(this.repoPath, ["branch", "--show-current"])).trim() ||
       "HEAD"
@@ -189,6 +225,18 @@ export class NativeProjectRepo extends ProjectRepoImpl {
   }
 
   override async status(): Promise<RepoStatus> {
+    if (!(await hasLocalGit({ path: this.repoPath }))) {
+      const modifiedFiles = await this.listFiles();
+      return {
+        branch: "main",
+        dirty: modifiedFiles.length > 0,
+        modifiedFiles,
+        baseCommit: null,
+        remoteHead: null,
+        ahead: 0,
+        behind: 0,
+      };
+    }
     const output = await nativeGit(this.repoPath, [
       "status",
       "--porcelain=v1",
@@ -244,6 +292,8 @@ export class NativeProjectRepo extends ProjectRepoImpl {
     const paths = opts?.paths;
     for (const file of paths ?? []) assertSafePath(file);
     if (paths?.length === 0) return this.resolveRef();
+    if (!(await hasLocalGit({ path: this.repoPath })))
+      await nativeGit(this.repoPath, ["init", "--initial-branch=main"]);
     const allIndexed = (
       await nativeGit(this.repoPath, ["ls-files", "-z"])
     ).split("\0");
@@ -374,6 +424,7 @@ export class NativeProjectRepo extends ProjectRepoImpl {
     await nativeGit(this.repoPath, ["update-ref", `refs/heads/${name}`, sha]);
   }
   override async listBranches(): Promise<BranchInfo[]> {
+    if (!(await hasLocalGit({ path: this.repoPath }))) return [];
     const current = await this.currentBranch();
     return (
       await nativeGit(this.repoPath, [

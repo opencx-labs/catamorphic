@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { discoverCheckout } from "@catamorphic/git";
+import { discoverLocalFolder } from "@catamorphic/git";
 import type { PGlite } from "@electric-sql/pglite";
 
 /**
@@ -73,7 +73,7 @@ export class ProjectRootsStore {
     await previous;
     try {
       const checkout = input.existing
-        ? await discoverCheckout({ path: input.rootPath })
+        ? await discoverLocalFolder({ path: input.rootPath })
         : null;
       const root = checkout?.path ?? path.resolve(input.rootPath);
       const canonical = await fs.realpath(root).catch(() => root);
@@ -82,8 +82,8 @@ export class ProjectRootsStore {
           (await fs.realpath(registered).catch(() => registered)) === canonical
         )
           return input.reopen(id);
-        if (checkout) {
-          const other = await discoverCheckout({ path: registered }).catch(
+        if (checkout?.commonDirectory) {
+          const other = await discoverLocalFolder({ path: registered }).catch(
             () => null,
           );
           if (other?.commonDirectory === checkout.commonDirectory)

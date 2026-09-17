@@ -310,97 +310,135 @@ describe("blank project onboarding", () => {
   });
 });
 
-describe("import an existing folder", () => {
-  const NOTES = "# Notes\n\nhand-written before Catamorphic existed\n";
-  const DATA = "nested,data\n1,2\n";
-  let importDir: string;
+describe.each([false, true])(
+  "import an existing folder (Git: %s)",
+  (versioned) => {
+    const NOTES = "# Notes\n\nhand-written before Catamorphic existed\n";
+    const DATA = "nested,data\n1,2\n";
+    let importDir: string;
 
-  beforeAll(async () => {
-    // A pre-existing folder the user "picks" — the seam stands in for the
-    // native dialog CDP cannot drive.
-    const parent = fs.mkdtempSync(
-      path.join(os.tmpdir(), "catamorphic-e2e-import-"),
-    );
-    importDir = path.join(parent, "imported-notes");
-    fs.mkdirSync(path.join(importDir, "nested"), { recursive: true });
-    fs.writeFileSync(path.join(importDir, "notes.md"), NOTES);
-    fs.writeFileSync(path.join(importDir, "nested", "data.txt"), DATA);
-    git(importDir, "init", "-b", "feature");
-    git(importDir, "add", ".");
-    git(
-      importDir,
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.com",
-      "commit",
-      "-m",
-      "Existing history",
-    );
-    fs.writeFileSync(path.join(importDir, "draft.txt"), "Private draft");
-    app = await launchApp({
-      env: { CATAMORPHIC_E2E_PICK_FOLDER: importDir },
+    beforeAll(async () => {
+      // A pre-existing folder the user "picks" — the seam stands in for the
+      // native dialog CDP cannot drive.
+      const parent = fs.mkdtempSync(
+        path.join(os.tmpdir(), "catamorphic-e2e-import-"),
+      );
+      importDir = path.join(parent, "imported-notes");
+      fs.mkdirSync(path.join(importDir, "nested"), { recursive: true });
+      fs.writeFileSync(path.join(importDir, "notes.md"), NOTES);
+      fs.writeFileSync(path.join(importDir, "nested", "data.txt"), DATA);
+      if (versioned) {
+        git(importDir, "init", "-b", "feature");
+        git(importDir, "add", ".");
+        git(
+          importDir,
+          "-c",
+          "user.name=Test",
+          "-c",
+          "user.email=test@example.com",
+          "commit",
+          "-m",
+          "Existing history",
+        );
+      }
+      fs.writeFileSync(path.join(importDir, "draft.txt"), "Private draft");
+      app = await launchApp({
+        env: { CATAMORPHIC_E2E_PICK_FOLDER: importDir },
+      });
     });
-  });
 
-  afterAll(async () => {
-    await app?.stop();
-    fs.rmSync(path.dirname(importDir), { recursive: true, force: true });
-  });
+    afterAll(async () => {
+      await app?.stop();
+      fs.rmSync(path.dirname(importDir), { recursive: true, force: true });
+    });
 
-  it("links the folder in place, inits git, and keeps the files intact", async () => {
-    await runWait(`return !!byText('button', 'New project');`, {
-      timeoutMs: 60_000,
-      label: "empty-state New project button",
-    });
-    await run(`byText('button', 'New project').click(); return true;`);
-    await runWait(`return !!byText('button', 'Import folder');`, {
-      label: "project modal with Import mode",
-    });
-    await run(`byText('button', 'Import folder').click(); return true;`);
-    await runWait(`return !!$('[data-testid="import-folder-picker"]');`, {
-      label: "import folder picker",
-    });
-    // The seeded pick fills the folder and auto-names the project. The
-    // click retries inside the poll: under full-suite load a single click
-    // can land before React attaches the handler and silently do nothing.
-    await runWait(
-      `const done = byText('[data-testid="target-path"]', 'imported-notes') &&
+    it("opens the folder in place without adding files or changing history", async () => {
+      await runWait(`return !!byText('button', 'New project');`, {
+        timeoutMs: 60_000,
+        label: "empty-state New project button",
+      });
+      await run(`byText('button', 'New project').click(); return true;`);
+      await runWait(`return !!byText('button', 'Import folder');`, {
+        label: "project modal with Import mode",
+      });
+      await run(`byText('button', 'Import folder').click(); return true;`);
+      await runWait(`return !!$('[data-testid="import-folder-picker"]');`, {
+        label: "import folder picker",
+      });
+      // The seeded pick fills the folder and auto-names the project. The
+      // click retries inside the poll: under full-suite load a single click
+      // can land before React attaches the handler and silently do nothing.
+      await runWait(
+        `const done = byText('[data-testid="target-path"]', 'imported-notes') &&
               $('[data-testid="project-name-input"]')?.value === 'imported-notes';
        if (done) return true;
        $('[data-testid="import-folder-picker"]')?.click();
        return false;`,
-      { label: "picked folder reflected in the modal", timeoutMs: 30_000 },
-    );
-    await runWait(
-      `const btn = $('[data-testid="project-submit"]');
+        { label: "picked folder reflected in the modal", timeoutMs: 30_000 },
+      );
+      await runWait(
+        `const btn = $('[data-testid="project-submit"]');
        if (btn && !btn.disabled) { btn.click(); return true; } return false;`,
-      { label: "import submit enabled" },
-    );
-    await runWait(
-      `return !!byText('[role="tab"], button', 'New Tab') &&
+        { label: "import submit enabled" },
+      );
+      await runWait(
+        `return !!byText('[role="tab"], button', 'New Tab') &&
               !!$('textarea[placeholder*="Search or ask"]');`,
-      { timeoutMs: 60_000, label: "workspace after import" },
-    );
+        { timeoutMs: 60_000, label: "workspace after import" },
+      );
 
-    // Original files intact, byte for byte.
-    expect(fs.readFileSync(path.join(importDir, "notes.md"), "utf-8")).toBe(
-      NOTES,
-    );
-    expect(
-      fs.readFileSync(path.join(importDir, "nested", "data.txt"), "utf-8"),
-    ).toBe(DATA);
+      // Original files intact, byte for byte.
+      expect(fs.readFileSync(path.join(importDir, "notes.md"), "utf-8")).toBe(
+        NOTES,
+      );
+      expect(
+        fs.readFileSync(path.join(importDir, "nested", "data.txt"), "utf-8"),
+      ).toBe(DATA);
 
-    expect(
-      fs.existsSync(path.join(importDir, ".catamorphic/project.json")),
-    ).toBe(false);
-    expect(git(importDir, "log", "--format=%s")).toBe("Existing history");
-    expect(git(importDir, "branch", "--show-current")).toBe("feature");
-    expect(git(importDir, "status", "--porcelain")).toBe("?? draft.txt");
+      expect(
+        fs.existsSync(path.join(importDir, ".catamorphic/project.json")),
+      ).toBe(false);
+      if (versioned) {
+        expect(git(importDir, "log", "--format=%s")).toBe("Existing history");
+        expect(git(importDir, "branch", "--show-current")).toBe("feature");
+        expect(git(importDir, "status", "--porcelain")).toBe("?? draft.txt");
+      } else {
+        expect(fs.existsSync(path.join(importDir, ".git"))).toBe(false);
+      }
 
-    // Import never scaffolds the workflow workspace either.
-    for (const file of ["package.json", "workflows", "contracts"]) {
-      expect(fs.existsSync(path.join(importDir, file)), file).toBe(false);
-    }
-  });
-});
+      // Import never scaffolds the workflow workspace either.
+      for (const file of ["package.json", "workflows", "contracts"]) {
+        expect(fs.existsSync(path.join(importDir, file)), file).toBe(false);
+      }
+    });
+    it("lets the agent edit without initializing or committing the imported folder", async () => {
+      await run(`pressKey('n', { metaKey: true }); return true;`);
+      await runWait(`return !!visibleDock();`);
+      await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'edit a file');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+      await runWait(
+        `return timelineMessages().some((m) => m.includes('I created HELLO.md for you.'));`,
+        { timeoutMs: 30_000 },
+      );
+      await until(
+        () => fs.existsSync(path.join(importDir, "HELLO.md")),
+        15_000,
+        "agent edit saved to imported folder",
+      );
+      expect(
+        fs.readFileSync(path.join(importDir, "HELLO.md"), "utf8"),
+      ).toContain("hello from the fake agent");
+      expect(fs.existsSync(path.join(importDir, ".agents"))).toBe(false);
+      expect(
+        fs.existsSync(path.join(importDir, ".catamorphic/project.json")),
+      ).toBe(false);
+      if (versioned)
+        expect(git(importDir, "log", "--format=%s")).toBe("Existing history");
+      else expect(fs.existsSync(path.join(importDir, ".git"))).toBe(false);
+    });
+  },
+);

@@ -6,7 +6,7 @@ import { CheckoutRemoteBackend } from "../checkout-remote-backend.js";
 import { FsBackend } from "../fs-backend.js";
 import { FsRemoteBackend } from "../fs-remote-backend.js";
 import { push } from "../git-sync.js";
-import { discoverCheckout, nativeGit } from "../native-git.js";
+import { discoverLocalFolder, nativeGit } from "../native-git.js";
 import { NativeProjectRepo } from "../native-project-repo.js";
 import { cloneFromRemote } from "../network.js";
 import { ProjectManager } from "../project-manager.js";
@@ -86,12 +86,12 @@ describe("opening a local repository", () => {
   it("resolves subfolders and linked worktrees without initializing nested repositories", async () => {
     await fs.mkdir(path.join(root, "nested"));
     expect(
-      (await discoverCheckout({ path: path.join(root, "nested") })).path,
+      (await discoverLocalFolder({ path: path.join(root, "nested") })).path,
     ).toBe(await fs.realpath(root));
     const worktree = path.join(temporary, "parallel");
     await nativeGit(root, ["worktree", "add", "-b", "parallel", worktree]);
-    const primary = await discoverCheckout({ path: root });
-    const alternate = await discoverCheckout({ path: worktree });
+    const primary = await discoverLocalFolder({ path: root });
+    const alternate = await discoverLocalFolder({ path: worktree });
     expect(alternate.commonDirectory).toBe(primary.commonDirectory);
     expect(alternate.path).toBe(await fs.realpath(worktree));
     expect(alternate.branch).toBe("parallel");
@@ -138,7 +138,7 @@ describe("opening a local repository", () => {
       url: root,
     });
     expect(cloned.remoteBranch).toBe("feature");
-    expect((await discoverCheckout({ path: destination })).branch).toBe(
+    expect((await discoverLocalFolder({ path: destination })).branch).toBe(
       "feature",
     );
     expect(await nativeGit(destination, ["remote", "get-url", "origin"])).toBe(
@@ -324,6 +324,148 @@ describe("opening a local repository", () => {
     expect(await fs.readFile(path.join(root, ".git/index"))).toEqual(index);
     expect((await nativeGit(root, ["rev-parse", "origin/main"])).trim()).toBe(
       head,
+    );
+  });
+});
+
+describe("plain local folders", () => {
+  let temporary: string;
+  let root: string;
+  beforeEach(async () => {
+    temporary = await fs.mkdtemp(path.join(os.tmpdir(), "catamorphic-folder-"));
+    root = path.join(temporary, "folder");
+    await fs.mkdir(root);
+    await fs.writeFile(path.join(root, "notes.md"), "Original notes");
+  });
+  afterEach(async () => {
+    await fs.rm(temporary, { recursive: true, force: true });
+  });
+
+  it("reads and edits directly without creating Git, seed files, or an internal copy", async () => {
+    const resolver = async () => root;
+    const remote = new CheckoutRemoteBackend(
+      resolver,
+      new FsRemoteBackend(path.join(temporary, "origins")),
+    );
+    const manager = new ProjectManager(
+      new FsBackend(path.join(temporary, "internal"), resolver),
+      remote,
+      resolver,
+    );
+    expect(await discoverLocalFolder({ path: root })).toMatchObject({
+      path: await fs.realpath(root),
+      commonDirectory: null,
+      remoteUrl: null,
+    });
+    const imported = await manager.create(tenant, project, {
+      rootPath: root,
+      importExisting: true,
+      initialFiles: { "seed.txt": "Never write this" },
+    });
+    await imported.dispose();
+    const repo = await manager.openDev(tenant, project, "developer");
+    try {
+      expect(await repo.readAllFiles()).toEqual({
+        "notes.md": "Original notes",
+      });
+      expect(await repo.listBranches()).toEqual([]);
+      expect(await repo.log()).toEqual([]);
+      await repo.writeFile("notes.md", "Edited locally");
+      expect(await repo.workdirDiff()).toEqual([
+        {
+          path: "notes.md",
+          kind: "added",
+          before: null,
+          after: "Edited locally",
+        },
+      ]);
+      expect(await repo.status()).toMatchObject({
+        dirty: true,
+        baseCommit: null,
+        remoteHead: null,
+      });
+      await remote.withOrigin(tenant, project, async (origin) => {
+        expect(await origin.resolveRef("refs/heads/main")).toBeNull();
+        expect(await origin.listRefs("refs/heads/")).toEqual([]);
+      });
+    } finally {
+      await repo.dispose();
+    }
+    expect(await fs.readdir(temporary)).toEqual(["folder"]);
+    expect(await fs.readdir(root)).toEqual(["notes.md"]);
+  });
+
+  it("honors ignores, hidden source files, nested repositories and private files before Git exists", async () => {
+    for (const directory of [
+      "src",
+      ".github",
+      "ignored",
+      ".catamorphic/personal",
+      "nested/.git",
+    ])
+      await fs.mkdir(path.join(root, directory), { recursive: true });
+    for (const file of [
+      "src/flow.ts",
+      ".github/flow.ts",
+      "ignored/flow.ts",
+      ".catamorphic/personal/flow.ts",
+      "nested/flow.ts",
+    ])
+      await fs.writeFile(path.join(root, file), "defineWorkflow");
+    await fs.writeFile(path.join(root, ".gitignore"), "ignored/\n");
+    const repo = new NativeProjectRepo(project, root, async () => {});
+    expect(await repo.listFiles()).toEqual([
+      ".github/flow.ts",
+      ".gitignore",
+      "notes.md",
+      "src/flow.ts",
+    ]);
+    expect(
+      await repo.findFilesContaining({
+        text: "defineWorkflow",
+        globs: ["*.ts", ":!.github/**"],
+      }),
+    ).toEqual(["src/flow.ts"]);
+    expect(await repo.listFiles({ prefix: "src/" })).toEqual(["src/flow.ts"]);
+  });
+
+  it("initializes Git only for an explicit commit and immediately supports external Git initialization", async () => {
+    const repo = new NativeProjectRepo(project, root, async () => {});
+    const sha = await repo.commit(
+      "Record notes",
+      { name: "Test", email: "test@example.com" },
+      { paths: ["notes.md"] },
+    );
+    expect(await repo.resolveRef()).toBe(sha);
+    expect(await repo.status()).toMatchObject({
+      dirty: false,
+      baseCommit: sha,
+      remoteHead: null,
+    });
+    expect(await fs.readdir(root)).toEqual([".git", "notes.md"]);
+    await fs.rm(path.join(root, ".git"), { recursive: true });
+    await nativeGit(root, ["init", "-b", "custom"]);
+    expect(await repo.currentBranch()).toBe("custom");
+    expect(await repo.listFiles()).toEqual(["notes.md"]);
+  });
+
+  it("rejects files, bare repositories and broken checkout pointers, including from subfolders", async () => {
+    await expect(
+      discoverLocalFolder({ path: path.join(root, "notes.md") }),
+    ).rejects.toThrow("Choose a folder");
+    const bare = path.join(temporary, "bare");
+    await fs.mkdir(bare);
+    await nativeGit(bare, ["init", "--bare"]);
+    await expect(discoverLocalFolder({ path: bare })).rejects.toThrow(
+      "bare Git repository",
+    );
+    await fs.mkdir(path.join(root, "subfolder"));
+    await fs.writeFile(path.join(root, ".git"), "gitdir: missing\n");
+    await expect(
+      discoverLocalFolder({ path: path.join(root, "subfolder") }),
+    ).rejects.toThrow();
+    expect(await fs.readFile(path.join(root, ".git"), "utf8")).toBe(
+      "gitdir: missing\n",
     );
   });
 });

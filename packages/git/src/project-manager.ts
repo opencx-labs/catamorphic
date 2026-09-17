@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { FsBackend } from "./fs-backend.js";
 import { push } from "./git-sync.js";
-import { discoverCheckout } from "./native-git.js";
+import { discoverLocalFolder } from "./native-git.js";
 import { NativeProjectRepo } from "./native-project-repo.js";
 import { cloneFromRemote } from "./network.js";
 import { ProjectRepoImpl } from "./project-repo.js";
@@ -240,7 +240,7 @@ export class ProjectManager {
     if (opts?.importExisting) {
       if (!opts.rootPath)
         throw new Error("Opening a repository requires its folder path");
-      const checkout = await discoverCheckout({ path: opts.rootPath });
+      const checkout = await discoverLocalFolder({ path: opts.rootPath });
       const local = await this.localPath({ tenantId, projectId });
       if (!local || (await fs.realpath(local)) !== checkout.path)
         throw new Error(

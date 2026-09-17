@@ -71,3 +71,35 @@ it("explains native writer ownership without classifying it for automatic retry"
   expect(events[0]?.errorKind).toBeUndefined();
   expect(events[1]?.content).toBe(`Tool read failed: ${original}`);
 });
+
+it("does not mistake an unsupported Codex model for an unrelated MCP sign-in failure", async () => {
+  const content =
+    "MCP connection failed: Unauthorized\nThis model requires a newer version of Codex";
+  expect(classifyAgentError(content)).toBeUndefined();
+  const session: ProviderSession = {
+    providerSessionId: "native",
+    sessionId: "session",
+    projectId: "project",
+    sandboxId: "local",
+    workingDirectory: "/test",
+  };
+  const inner: CodingAgentProvider = {
+    name: "codex",
+    async startSession() {
+      return session;
+    },
+    async *sendMessage() {
+      yield { type: "error", content, errorKind: "auth" };
+    },
+    async dispose() {},
+  };
+  const events = [];
+  for await (const event of new FriendlyAgentErrors(
+    inner,
+    "Codex",
+    "Codex",
+  ).sendMessage(session, "Hello"))
+    events.push(event);
+  expect(events[0]?.content).toContain("Choose another model");
+  expect(events[0]?.errorKind).toBeUndefined();
+});

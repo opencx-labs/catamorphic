@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { type DB, DEFAULT_SCHEMA, migrateToLatest } from "@catamorphic/db";
 import {
+  CheckoutRemoteBackend,
   FsBackend,
+  FsRemoteBackend,
   PROJECT_MANIFEST_PATH,
   ProjectManager,
 } from "@catamorphic/git";
@@ -69,5 +71,70 @@ describe("project Environment policy persistence", () => {
       },
     });
     expect(policy.invalid).toBeUndefined();
+  });
+  it("uses local working files for the owner and only published policy for scoped identities", async () => {
+    const identity: Identity = {
+      tenantId: crypto.randomUUID(),
+      externalUserId: "root",
+    };
+    const root = path.join(projectsPath, "plain-policy");
+    await fs.mkdir(root);
+    const resolver = async () => root;
+    const remote = new CheckoutRemoteBackend(
+      resolver,
+      new FsRemoteBackend(path.join(projectsPath, "unused")),
+    );
+    const manager = new ProjectManager(
+      new FsBackend(projectsPath, resolver),
+      remote,
+      resolver,
+    );
+    const projects = new ProjectsService(db, manager, [], { seedFiles: {} });
+    const project = await projects.create(identity, {
+      name: "Plain policy",
+      rootPath: root,
+      importExisting: true,
+    });
+    const repo = await manager.open(identity.tenantId, project.id);
+    const service = new ProjectEnvironmentsService(db, manager);
+    const scoped: Identity = {
+      ...identity,
+      scope: [{ kind: "project", projectId: project.id }],
+    };
+    const manifest = (name: string) =>
+      JSON.stringify({
+        environments: { [name]: { binding: "local", workloads: ["agent"] } },
+        defaultEnvironment: name,
+      });
+    try {
+      await repo.writeFile(PROJECT_MANIFEST_PATH, manifest("draft"));
+      expect(
+        (await service.list({ identity, projectId: project.id }))
+          .defaultEnvironment,
+      ).toBe("draft");
+      expect(
+        (await service.list({ identity: scoped, projectId: project.id }))
+          .defaultEnvironment,
+      ).toBe("local");
+      expect(await fs.readdir(root)).toEqual([".catamorphic"]);
+      const sha = await repo.commit("Publish policy", {
+        name: "Test",
+        email: "test@example.com",
+      });
+      await remote.withOrigin(identity.tenantId, project.id, (origin) =>
+        origin.updateRef({ ref: "refs/heads/main", sha }),
+      );
+      await repo.writeFile(PROJECT_MANIFEST_PATH, manifest("changed"));
+      expect(
+        (await service.list({ identity, projectId: project.id }))
+          .defaultEnvironment,
+      ).toBe("changed");
+      expect(
+        (await service.list({ identity: scoped, projectId: project.id }))
+          .defaultEnvironment,
+      ).toBe("draft");
+    } finally {
+      await repo.dispose();
+    }
   });
 });

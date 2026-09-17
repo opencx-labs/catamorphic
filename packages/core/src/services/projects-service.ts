@@ -6,7 +6,7 @@ import type {
   ProjectManager,
   ProjectRepo,
 } from "@catamorphic/git";
-import { discoverCheckout } from "@catamorphic/git";
+import { discoverLocalFolder } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely, Selectable, Transaction } from "kysely";
 import {
@@ -251,7 +251,7 @@ export class ProjectsService {
 
     const checkout =
       input.importExisting && input.rootPath
-        ? await discoverCheckout({ path: input.rootPath })
+        ? await discoverLocalFolder({ path: input.rootPath })
         : null;
     await this.ensureTenant(tenantId);
 
@@ -278,13 +278,14 @@ export class ProjectsService {
       // material — the agent knows the conventions from its first session)
       // but NO visible workspace scaffold; the workspace arrives on demand
       // via the catamorphic-projects skill (ADR 0043).
-      await this.projectManager.create(tenantId, projectId, {
+      const repo = await this.projectManager.create(tenantId, projectId, {
         name: input.name,
         initialFiles: this.seedFiles,
         rootPath: input.rootPath,
         importExisting: input.importExisting,
         cloneFrom: input.cloneFrom,
       });
+      await repo.dispose();
     } catch (err) {
       await this.db
         .deleteFrom("projects")
