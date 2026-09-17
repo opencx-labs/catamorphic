@@ -273,8 +273,8 @@ export interface CatamorphicCoreConfig {
    * Transform the default per-project seed files (skills). Receives the
    * framework defaults; return the final map. Replacing or removing entries
    * is legitimate — an embedder's own app-design doctrine belongs here
-   * (ADR 0049). A seed removed from the returned map is also never restored
-   * by the per-turn workflow-skill staging.
+   * (ADR 0049). The same set supplies the default host skill tier for projects
+   * without those files; agent turns never restore deleted seeds (ADR 0142).
    */
   projectSeeds?: (defaults: Record<string, string>) => Record<string, string>;
   /**
@@ -396,7 +396,7 @@ export class CatamorphicCore {
     );
     this.projectManager = config.projectManager;
     // Doctrine resolves ONCE, at boot: every consumer below (project
-    // creation, skill restore) sees the same host-final set (ADR 0049).
+    // creation, host skill discovery) sees the same host-final set (ADR 0049).
     this.seedFiles = config.projectSeeds?.({ ...SEED_SKILLS }) ?? SEED_SKILLS;
     // Imported repositories stay untouched. Offer their missing framework
     // skills through the existing host tier; project/user skills still win.
@@ -944,7 +944,6 @@ export class CatamorphicCore {
           }
           await config.onAgentTurnSettled?.(event);
         },
-        seedFiles: this.seedFiles,
         standingAgentPrompt: config.standingAgentPrompt,
         mcpToolNames: (identity, projectId) =>
           this.triggers.mcpToolNames({ identity, projectId }),

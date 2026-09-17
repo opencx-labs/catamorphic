@@ -1793,7 +1793,8 @@ export function registerIpcHandlers(
     return link;
   };
   // Materialized program files are committed so the Changes section stays
-  // about the user's own work (store/ is gitignored and never enters git).
+  // about the user's own work. Sync reports use logical document addresses;
+  // store/ entries map to app-data and must not enter this program checkpoint.
   const checkpointProgramSync = async (
     projectId: string,
     report: { pulled: string[]; removed: string[] },

@@ -1,5 +1,7 @@
 # 0018 - AI SDK ToolLoopAgent is the flagship coding agent
 
+> Project filesystem locations in this ADR are superseded by [ADR 0142](0142-contained-project-workspace.md). Capability source and configuration now live under `.catamorphic/`.
+
 - **Status**: accepted; registry/runtime behavior refined by 0038, 0067, and 0090
 - **Date**: 2026-07-21
 - **Supersedes**: 0009's choice of Flue as the flagship implementation

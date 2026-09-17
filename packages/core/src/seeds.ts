@@ -218,13 +218,13 @@ export const PROJECT_CHECK_SCRIPT = `/**
  *
  * Seeded by Catamorphic, owned by this project: edit it freely. The heavy
  * lifting lives in the \`@catamorphic/parser\` devDependency; this script is
- * just the how-to-run-it. (Missing the dependency? \`bun install\` at the
- * workspace root, or \`bun add -d @catamorphic/parser\`.)
+ * just the how-to-run-it. (Missing the dependency? \`bun install --cwd .catamorphic\`,
+ * or \`bun add --cwd .catamorphic -d @catamorphic/parser\`.)
  *
  * Usage:
- *   bun run check                # validate (exit 1 on errors) — CI-friendly
- *   bun run check -- --write     # also (re)write generated app-api types
- *   bun run check -- --host URL  # validate trigger bindings against a
+ *   bun run --cwd .catamorphic check                # validate (exit 1 on errors) — CI-friendly
+ *   bun run --cwd .catamorphic check -- --write     # also (re)write generated app-api types
+ *   bun run --cwd .catamorphic check -- --host URL  # validate trigger bindings against a
  *                                # running Catamorphic host (GET /api/trigger-kinds)
  */
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
@@ -391,7 +391,7 @@ Then:
 
 1. Set \`.catamorphic/package.json\` "name" to the project's name. Leave the imported project's root manifest, dependencies, and instruction files unchanged. Create \`.catamorphic/.gitignore\` with \`/app-data/\`, \`node_modules/\`, and \`dist/\` entries if it does not exist; preserve the user's existing ignore choices.
 2. Run \`bun install --cwd .catamorphic\`. Run workspace checks with \`bun run --cwd .catamorphic check\`.
-3. Consult \`.catamorphic/skills/writing-workflows/SKILL.md\` before writing workflow code, and \`.catamorphic/skills/building-apps/SKILL.md\` before creating an app under \`.catamorphic/apps/<name>/\`.
+3. Read \`writing-workflows\` before writing workflow code and \`building-apps\` before creating an app under \`.catamorphic/apps/<name>/\`. Use the host's skill listing and reader: imported projects may receive these skills from the host without copies in \`.catamorphic/skills/\`.
 
 Do NOT install the workspace preemptively — only when automations or apps are actually wanted.
 
@@ -405,8 +405,11 @@ file tools for private drafts. Saving does not mean uploading or committing.
 To share selected documents, use the host's sharing tools or UI and check the
 destination and audience. A desktop-local draft is not automatically available
 on a remote server. Follow the host's conflict and upload contract.
-To record a document in project history, put it outside \`.catamorphic/app-data/store/\`, review it,
-and explicitly commit it. Explain where it will go before pushing or sharing.
+For documents intended as shared project source, save a reviewed copy outside
+\`.catamorphic/app-data/\` and explicitly commit it. Owners may instead choose
+to track local data by editing ignore rules; that does not change document API
+permissions or upload it through store synchronization. Explain the destination
+before pushing or sharing.
 
 ## The program, the store, and who may reach what
 

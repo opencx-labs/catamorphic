@@ -1,5 +1,7 @@
 # 0073: Recoverable project remotes and builder checkout
 
+> Project filesystem locations in this ADR are superseded by [ADR 0142](0142-contained-project-workspace.md). Capability source and configuration now live under `.catamorphic/`. The local locator is `.catamorphic/app-data/remote.json`.
+
 - **Status:** Accepted
 - **Date:** 2026-08-26
 - **Refines:** 0044, 0055, 0072

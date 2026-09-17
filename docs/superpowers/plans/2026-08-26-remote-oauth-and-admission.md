@@ -1,5 +1,7 @@
 # Remote OAuth and Admission Cutover Plan
 
+> Project role paths now follow [ADR 0142](../../decisions/0142-contained-project-workspace.md): `.catamorphic/roles/`. This document records the earlier plan.
+
 > **For agentic workers:** Use `superpowers:test-driven-development` for each
 > behavior and `superpowers:verification-before-completion` before reporting
 > this replacement complete. Execute inline in the current task. Do not expose

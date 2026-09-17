@@ -1,5 +1,7 @@
 # 0035 — App entity, build pipeline, and bundle storage
 
+> Project filesystem locations in this ADR are superseded by [ADR 0142](0142-contained-project-workspace.md). Capability source and configuration now live under `.catamorphic/`. App bundle object-storage keys are unchanged.
+
 - **Status:** Accepted
 - **Date:** 2026-07-27
 - **Expands:** 0001 (code is the source of truth), 0013 (test and production modes), 0032 (workspace layout)

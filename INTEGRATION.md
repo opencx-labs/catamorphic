@@ -278,9 +278,9 @@ Most hosts do not want to hand-write scopes. Commit roles into the project — `
   "apps": ["customer-tracker"],
   "documents": ["docs/**", { "path": "store/customers/{customer}/**", "access": "write" }]
 }
-// roles/admin.json
+// .catamorphic/roles/admin.json
 { "version": 1, "name": "Admin", "builder": true, "documents": ["store/**"] }
-// roles/brain-maintainer.json
+// .catamorphic/roles/brain-maintainer.json
 { "version": 1, "name": "Brain Maintainer", "permissions": ["brain:maintain"], "agents": ["brain-maintainer"] }
 ```
 
@@ -705,8 +705,8 @@ entries is legitimate:
 - `projectSeeds` — the per-project seed files (`.catamorphic/skills/…`). The
   seeded `building-apps` skill is mechanics (framework contracts — keep it);
   `designing-apps` is design doctrine, the seed you most likely swap for
-  your own. A seed you remove also never resurrects via the per-turn
-  workflow-skill restore.
+  your own. These defaults also supply the host skill tier; agent turns never
+  restore missing or deliberately deleted project skill files.
 - `standingAgentPrompt` — the standing system prompt for coding-agent
   sessions: omit for the workflow-authoring default, a string to replace,
   `false` for none.
@@ -730,8 +730,9 @@ runs on the defaults.
 
 ## Validating projects in CI or a local editor
 
-Each project seeds `scripts/check.ts` (project-owned; the logic lives in the
-`@catamorphic/parser` devDependency). `bun run check` parses the workspace,
+Capability scaffolding includes `.catamorphic/scripts/check.ts` (project-owned;
+the logic lives in the `@catamorphic/parser` devDependency).
+`bun run --cwd .catamorphic check` parses the workspace,
 validates trigger bindings (add `--host <url>` to check against a live
 host's kind catalog), and fails on stale generated types; `--write`
 regenerates the app-api types. Sandbox installs strip the tooling

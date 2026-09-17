@@ -157,7 +157,7 @@ separate from fork lineage, and exposes spawn/list/wait/interrupt/attention
 operations. Native provider delegation is only an adapter optimization when it
 preserves that contract.
 
-Per-project skills live in the project repo under `.catamorphic/skills/<name>/SKILL.md` (Agent Skills layout, `docs/decisions/0010`); the agent reads relevant skills from the sandbox checkout with its filesystem tools. `core.skills.list(...)` / `GET /api/projects/:id/skills` enumerate them.
+Per-project skills live in the project repo under `.catamorphic/skills/<name>/SKILL.md` (Agent Skills layout, ADR 0142); the agent reads relevant skills from the sandbox checkout with its filesystem tools. `core.skills.list(...)` / `GET /api/projects/:id/skills` enumerate them.
 
 Project agents may declare provider-neutral connection requirements in
 `.catamorphic/agents/<slug>.json`. A workflow that wakes that agent should also declare the
@@ -176,12 +176,11 @@ turn increments server-owned attention state. Opening it calls
 
 ## Runtime Harness
 
-The plain-workflow test harness runs inside a disposable directory in the dev
-sandbox via `bun run harness.ts`. It:
-
-1. Installs the call-site step recorder used by parser-transformed source.
-2. Imports the requested workflow file and executes its exported function.
-3. Emits one safely serialized `CATAMORPHIC_REPORT:` JSON line on stdout.
+Deployment runtimes materialize the verified `.catamorphic/` capability snapshot
+and install its workspace dependencies independently of the imported repository.
+The parser transforms only this execution copy. The warm deployment supervisor
+executes immutable committed source through isolated Bun Workers; it never runs
+mutable dev files as a separate kind of Run.
 
 Production Runs are enqueued in Postgres. A host explicitly starts
 `catamorphic.startExecutionWorker(...)`; the worker advances the canonical Run
@@ -195,6 +194,7 @@ Environment variables:
 - `CATAMORPHIC_WORKFLOW_NAME` — Function name to execute
 - `CATAMORPHIC_WORKFLOW_FILE` — Project-relative workflow source path
 - `CATAMORPHIC_TRIGGER_DATA` — JSON trigger payload
+- `CATAMORPHIC_APP_DATA_DIR` — optional host-provided persistent local data directory, separate from source and absent when that storage is unavailable
 
 ## Database Tables
 
@@ -245,7 +245,7 @@ interface CodingAgentProvider {
 ## Storage Backend Selection
 
 - `FsBackend` / `FsRemoteBackend` (`@catamorphic/git`) — Local dev, CI, tests, simple hosts (default)
-- `ArtifactsRemoteBackend` (`@catamorphic/cloudflare`) — Cloudflare Artifacts remotes; implements `getCloneSource()` so sandboxes `git clone` with a short-lived token instead of receiving uploads
+- `ArtifactsRemoteBackend` (`@catamorphic/cloudflare`) — Cloudflare Artifacts remotes; may provide `getCloneSource()` for dev checkout hydration. Deployment runtimes receive only the verified `.catamorphic/` capability snapshot
 - `DaytonaBackend` (`@catamorphic/daytona`) — Uses Daytona sandboxes as Git repo storage (experimental)
 - `ObjectRemoteBackend` (`@catamorphic/git`) with `S3ObjectStore` (`@catamorphic/s3`) — Default git origin for R2, S3,
   MinIO, and compatible stores until Artifacts is generally available

@@ -1,5 +1,7 @@
 # 0072: Remote OAuth, admission, and project administration
 
+> Project filesystem locations in this ADR are superseded by [ADR 0142](0142-contained-project-workspace.md). Capability source and configuration now live under `.catamorphic/`.
+
 - **Status:** Accepted
 - **Date:** 2026-08-26
 - **Supersedes:** Remote authentication, invite, and privileged-user portions of 0055, 0059, 0060, and 0061

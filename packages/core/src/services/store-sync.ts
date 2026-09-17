@@ -38,7 +38,8 @@ import {
  * Two clients drive it: the desktop's HTTP client against a hosting
  * backend, and — on the server itself — {@link documentsClientFor}, which
  * lets an agent's working copy pull/ship `store/` around every turn AS THE
- * CALLER (so a member's agent writing `store/customers/acme/notes.md` in
+ * CALLER (so a member's agent writing
+ * `.catamorphic/app-data/store/customers/acme/notes.md` in
  * its folder lands in the store with the right author, and never anything
  * the member may not write).
  */
@@ -276,7 +277,7 @@ function writeServerCopy(
   return copy;
 }
 
-/** Every file under `store/` in the folder, relative, forward-slashed. */
+/** Local app-data/store files, returned as logical store/ document addresses. */
 function walkStore(root: string): string[] {
   const out: string[] = [];
   const storeDir = path.join(root, localDocumentRelativePath(STORE_PREFIX));

@@ -113,15 +113,18 @@ limits, batches, and child calls can require asynchronous execution; use
 \`.start()\` and the returned handle for that work.
 
 For direct service credentials, declare an inline \`defineSecrets\` object and
-read its returned accessor in step helpers. Never hardcode values or read
-\`process.env\` directly. Names are SCREAMING_SNAKE_CASE and cannot start with
-\`CATAMORPHIC_\`. Configure values through the host; an unset required secret
-throws. Secrets stay in backend execution, never app bundles or returned results.
-Prefer declared connections for member accounts and brokered access.
+read its returned accessor in step helpers. Never hardcode credentials or read
+them directly from \`process.env\`. Secret names are SCREAMING_SNAKE_CASE and
+cannot start with \`CATAMORPHIC_\`. Configure values through the host; an unset
+required secret throws. Secrets stay in backend execution, never app bundles or
+returned results. Prefer declared connections for member accounts and brokered access.
+
+The host-provided non-secret \`process.env.CATAMORPHIC_APP_DATA_DIR\` is the location
+for persistent local data. Follow \`catamorphic-projects\` for its storage contract.
 
 ## Verify the result
 
-Run the project's \`bun run check\` after structural changes. It checks parsing,
+Run \`bun run --cwd .catamorphic check\` after structural changes. It checks parsing,
 trigger bindings, and app contracts; \`--write\` refreshes generated app types.
 Fix the earliest boundary type mismatch instead of adding assertions or ignoring
 errors. Check the actual workflow through the host at the intended revision and

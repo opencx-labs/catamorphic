@@ -95,6 +95,45 @@ describeIf("doctrine hooks integration", () => {
     ).toBeUndefined();
   });
 
+  it("serves deleted project guidance from the host tier without rewriting the checkout", async () => {
+    const project = await core.projects.create(identity, {
+      name: "Existing workflow project",
+    });
+    const repo = await core.projectManager.openDev(
+      identity.tenantId,
+      project.id,
+      identity.externalUserId,
+    );
+    try {
+      await repo.writeFile(
+        ".catamorphic/workflows/package.json",
+        '{"private":true}',
+      );
+      await repo.deleteFile(MECHANICS_SKILL_PATH);
+      const head = await repo.resolveRef("HEAD");
+      const files = await repo.readAllFiles();
+      for (let turn = 0; turn < 2; turn++) {
+        const mechanics = await core.skills.read(
+          identity,
+          project.id,
+          "building-apps",
+        );
+        expect(mechanics?.skill.source).toBe("host");
+        expect(mechanics?.content).toBe(SEED_SKILLS[MECHANICS_SKILL_PATH]);
+        expect(
+          await core.skills.read(identity, project.id, "batch-workflows"),
+        ).toBeNull();
+        expect(
+          await core.skills.read(identity, project.id, "durable-workflows"),
+        ).toBeNull();
+      }
+      expect(await repo.readAllFiles()).toEqual(files);
+      expect(await repo.resolveRef("HEAD")).toBe(head);
+    } finally {
+      await repo.dispose();
+    }
+  });
+
   it("blank projects carry exactly the embedder's seed set", async () => {
     const project = await core.projects.create(identity, {
       name: "Blank under Acme",

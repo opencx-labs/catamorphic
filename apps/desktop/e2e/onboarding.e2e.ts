@@ -525,7 +525,17 @@ describe.each([false, true])(
           { timeoutMs: 30_000, label: name },
         );
       };
+      // A root store/ belongs to the imported project, not Catamorphic's data API.
+      fs.mkdirSync(path.join(importDir, "store"), { recursive: true });
+      fs.writeFileSync(
+        path.join(importDir, "store/inventory.txt"),
+        "user-owned inventory",
+      );
       await clickWorkflowButton("Run");
+      await runWait(
+        `return $('[data-testid="workflow-runs"]')?.textContent.includes('store/inventory.txt');`,
+        { label: "ordinary root store file is recordable" },
+      );
       await clickWorkflowButton("Record changes in Git");
       await clickWorkflowButton("Publish project version");
       expect(fs.existsSync(path.join(importDir, ".git"))).toBe(true);
@@ -546,6 +556,7 @@ describe.each([false, true])(
         );
       }
       expect(git(importDir, "status", "--porcelain")).toBe("");
+      expect(git(importDir, "ls-files")).toContain("store/inventory.txt");
       expect(git(importDir, "ls-files")).not.toContain("app-data");
       expect(app.getRendererErrors()).toEqual([]);
     }, 180_000);

@@ -21,7 +21,9 @@ TypeScript. Discovery and dependency installation use this boundary rather than
 interpreting an imported application's manifests or source as framework code.
 There is no root-layout fallback or automatic relocation of existing user files.
 Create the workspace only when a capability needs it. Existing repository agent
-instructions are honored without injecting root instruction files.
+instructions are honored without injecting root instruction files. Missing
+framework skills use the existing host tier; agent turns never restore deleted
+project seed files or create skill-baseline commits.
 
 Project-owned mutable data lives under `.catamorphic/app-data/`. A scoped
 `.catamorphic/.gitignore` ignores app-data, installed dependencies, and build

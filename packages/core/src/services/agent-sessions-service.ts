@@ -36,11 +36,6 @@ import {
   isBuilder,
   scopeCovers,
 } from "../identity.js";
-import {
-  BATCH_WORKFLOW_SKILL_PATH,
-  DURABLE_WORKFLOW_SKILL_PATH,
-  SEED_SKILLS,
-} from "../seeds.js";
 import type { AgentCapabilitiesService } from "./agent-capabilities-service.js";
 import {
   AgentDefinitionsService,
@@ -435,93 +430,6 @@ export function buildAgentSystemPrompt({
     .join("\n\n");
 }
 
-export async function ensureBatchWorkflowSkill({
-  sandboxProvider,
-  sandboxProviderId,
-  projectDir,
-  seedFiles,
-}: {
-  sandboxProvider: Pick<SandboxProvider, "executeCommand" | "uploadFiles">;
-  sandboxProviderId: string;
-  projectDir: string;
-  /** The host-resolved seed set (ADR 0049); defaults to `SEED_SKILLS`. */
-  seedFiles?: Record<string, string>;
-}): Promise<boolean> {
-  return ensureWorkflowSkill({
-    sandboxProvider,
-    sandboxProviderId,
-    projectDir,
-    seedFiles,
-    skillPath: BATCH_WORKFLOW_SKILL_PATH,
-  });
-}
-
-export async function ensureDurableWorkflowSkill({
-  sandboxProvider,
-  sandboxProviderId,
-  projectDir,
-  seedFiles,
-}: {
-  sandboxProvider: Pick<SandboxProvider, "executeCommand" | "uploadFiles">;
-  sandboxProviderId: string;
-  projectDir: string;
-  /** The host-resolved seed set (ADR 0049); defaults to `SEED_SKILLS`. */
-  seedFiles?: Record<string, string>;
-}): Promise<boolean> {
-  return ensureWorkflowSkill({
-    sandboxProvider,
-    sandboxProviderId,
-    projectDir,
-    seedFiles,
-    skillPath: DURABLE_WORKFLOW_SKILL_PATH,
-  });
-}
-
-async function ensureWorkflowSkill({
-  sandboxProvider,
-  sandboxProviderId,
-  projectDir,
-  skillPath,
-  seedFiles,
-}: {
-  sandboxProvider: Pick<SandboxProvider, "executeCommand" | "uploadFiles">;
-  sandboxProviderId: string;
-  projectDir: string;
-  skillPath: string;
-  seedFiles?: Record<string, string>;
-}): Promise<boolean> {
-  // Restore from the HOST-RESOLVED seed set, never the hardcoded defaults:
-  // an embedder that removed a workflow skill from its seeds must not have
-  // it resurrect in projects (ADR 0049).
-  const content = (seedFiles ?? SEED_SKILLS)[skillPath];
-  if (content === undefined) return false;
-
-  // Only projects with a workflows workspace get the skill restored — a
-  // docs-only project that deleted it must not have it resurrect (ADR 0043).
-  const workspace = await sandboxProvider.executeCommand(
-    sandboxProviderId,
-    `test -f ${shellQuote(`${projectDir}/.catamorphic/workflows/package.json`)}`,
-  );
-  if (workspace.exitCode !== 0) return false;
-
-  const absoluteSkillPath = `${projectDir}/${skillPath}`;
-  const exists = await sandboxProvider.executeCommand(
-    sandboxProviderId,
-    `test -f ${shellQuote(absoluteSkillPath)}`,
-  );
-  if (exists.exitCode === 0) return false;
-  if (exists.exitCode !== 1) {
-    throw new Error(`Failed to inspect workflow skill: ${exists.result}`);
-  }
-
-  await sandboxProvider.uploadFiles(
-    sandboxProviderId,
-    { [skillPath]: content },
-    projectDir,
-  );
-  return true;
-}
-
 /** A chat turn reaching a settled state, for host hooks (e.g. triggers). */
 export interface AgentTurnSettledEvent {
   identity: Identity;
@@ -584,12 +492,6 @@ interface AgentSessionsDeps {
    * exceptions are swallowed, and the turn's response never waits on it.
    */
   onTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
-  /**
-   * The host-resolved per-project seed files (ADR 0049); the workflow-skill
-   * restore reads from this set, so a seed the host removed never
-   * resurrects. Defaults to the framework's `SEED_SKILLS`.
-   */
-  seedFiles?: Record<string, string>;
   /**
    * The host's standing agent prompt: `undefined` = framework default,
    * string = replacement, `false` = none (ADR 0049).
@@ -661,7 +563,6 @@ export class AgentSessionsService {
   private readonly plugins?: PluginsService;
   private readonly pluginResolver?: PluginResolver;
   private readonly onTurnSettled?: AgentSessionsDeps["onTurnSettled"];
-  private readonly seedFiles?: Record<string, string>;
   private readonly agentCapabilities?: AgentCapabilitiesService;
   private readonly standingAgentPrompt?: string | false;
   private readonly mcpToolNames?: AgentSessionsDeps["mcpToolNames"];
@@ -817,7 +718,6 @@ export class AgentSessionsService {
     this.plugins = deps.plugins;
     this.pluginResolver = deps.pluginResolver;
     this.onTurnSettled = deps.onTurnSettled;
-    this.seedFiles = deps.seedFiles;
     this.standingAgentPrompt = deps.standingAgentPrompt;
     this.agentCapabilities = deps.agentCapabilities;
     this.mcpToolNames = deps.mcpToolNames;
@@ -4272,35 +4172,8 @@ export class AgentSessionsService {
             });
           }
 
-          if (anchor.sandboxProviderId && runtime.provider) {
-            const workingDirectory = this.projectDir(runtime.provider);
-            const batchSkillStaged = await ensureBatchWorkflowSkill({
-              sandboxProvider: runtime.provider,
-              sandboxProviderId: anchor.sandboxProviderId,
-              projectDir: workingDirectory,
-              seedFiles: this.seedFiles,
-            });
-            const durableSkillStaged = await ensureDurableWorkflowSkill({
-              sandboxProvider: runtime.provider,
-              sandboxProviderId: anchor.sandboxProviderId,
-              projectDir: workingDirectory,
-              seedFiles: this.seedFiles,
-            });
-            const stagedSkillPaths = [
-              ...(batchSkillStaged ? [BATCH_WORKFLOW_SKILL_PATH] : []),
-              ...(durableSkillStaged ? [DURABLE_WORKFLOW_SKILL_PATH] : []),
-            ];
-            if (stagedSkillPaths.length > 0) {
-              await this.commitWorkflowSkillBaseline(
-                runtime.provider,
-                anchor.sandboxProviderId,
-                stagedSkillPaths,
-              );
-            }
-          }
-
           // An interrupt can land while the turn is still anchoring (rows,
-          // sandbox, skills) — before any provider signal exists to abort. The
+          // sandbox) — before any provider signal exists to abort. The
           // latched flag catches it here: the turn settles as interrupted
           // without ever calling the provider. Checked with has() (not
           // delete()) so the finalization below still reads it as interrupted.
@@ -5849,43 +5722,11 @@ export class AgentSessionsService {
       projectId,
       refresh: true,
     });
-    await ensureBatchWorkflowSkill({
-      sandboxProvider: runtime.provider,
-      sandboxProviderId: prepared.providerId,
-      projectDir: this.projectDir(runtime.provider),
-      seedFiles: this.seedFiles,
-    });
-    await ensureDurableWorkflowSkill({
-      sandboxProvider: runtime.provider,
-      sandboxProviderId: prepared.providerId,
-      projectDir: this.projectDir(runtime.provider),
-      seedFiles: this.seedFiles,
-    });
     await this.ensureGitBaseline(runtime.provider, prepared.providerId);
     return {
       handle: { id: prepared.id, providerId: prepared.providerId },
       baseCommitSha: prepared.baseCommitSha,
     };
-  }
-
-  private async commitWorkflowSkillBaseline(
-    provider: SandboxProvider,
-    sandboxProviderId: string,
-    skillPaths: readonly string[],
-  ): Promise<void> {
-    const paths = skillPaths.map(shellQuote).join(" ");
-    const command = [
-      `git add -- ${paths}`,
-      `git -c user.name=catamorphic -c user.email=agent@catamorphic.dev commit -m catamorphic-workflow-skills --quiet -- ${paths}`,
-    ].join(" && ");
-    // cwd via ExecOpts: see syncSandboxChanges — a `cd /workspace/...`
-    // embedded in the command breaks providers without a mounted root.
-    const result = await provider.executeCommand(sandboxProviderId, command, {
-      cwd: this.projectDir(provider),
-    });
-    if (result.exitCode !== 0) {
-      throw new Error(`Failed to baseline workflow skills: ${result.result}`);
-    }
   }
 
   /**
@@ -6768,11 +6609,6 @@ export function hostChangedFiles(
     changes.push({ path, kind: "modified" });
   }
   return changes;
-}
-
-function shellQuote(value: string): string {
-  if (/^[A-Za-z0-9@%+=:,./_-]+$/.test(value)) return value;
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 function truncate(value: string, max: number): string {

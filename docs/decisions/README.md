@@ -22,7 +22,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0007](0007-bun-and-unrestricted-workflow-runtime.md) | Bun runtime; workflows run as regular, unrestricted code | Accepted |
 | [0008](0008-vendor-plugin-packages.md) | Vendor backends live in plugin packages (`@catamorphic/cloudflare`, `@catamorphic/daytona`) | Accepted |
 | [0009](0009-pluggable-coding-agents.md) | Coding agents are pluggable; Flue is the flagship server-side agent | Superseded by 0018 |
-| [0010](0010-skills-in-project-repo.md) | Per-project agent skills live in the project repo (`.agents/skills/`) | Accepted |
+| [0010](0010-skills-in-project-repo.md) | Per-project agent skills live in the project repo | Accepted; paths superseded by 0142 |
 | [0011](0011-registry-distributed-monaco-editor.md) | Code editor ships as a registry item; linking state lives in React hooks | Accepted |
 | [0012](0012-s3-compatible-origin-backend.md) | S3-compatible object storage as a git origin backend (`@catamorphic/s3`) | Accepted |
 | [0013](0013-test-and-production-run-modes.md) | Explicit test and production workflow run modes | Superseded by 0040 |
@@ -30,7 +30,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0015](0015-first-class-batch-workflows.md) | First-class batch workflows | Superseded by 0026 |
 | [0016](0016-durable-runtime-event-reporting.md) | Persisted runtime event reporting | Accepted (updated by 0024, 0026) |
 | [0017](0017-public-workflow-authoring-package.md) | Public workflow authoring package | Accepted (expanded by 0020, 0026) |
-| [0018](0018-ai-sdk-coding-agent.md) | AI SDK ToolLoopAgent is the built-in in-process coding agent | Accepted; registry/runtime behavior refined by 0038, 0067, and 0090 |
+| [0018](0018-ai-sdk-coding-agent.md) | AI SDK ToolLoopAgent is the built-in in-process coding agent | Accepted; registry/runtime behavior refined by 0038, 0067, and 0090; paths superseded by 0142 |
 | [0019](0019-headless-agent-chat-and-dock.md) | Agent chat is headless state plus a controlled dock | Accepted |
 | [0020](0020-typed-durable-workflow-boundaries.md) | Typed persisted workflow boundaries | Accepted (updated by 0026) |
 | [0021](0021-durable-workflow-visualization.md) | Persisted workflow visualization | Accepted (updated by 0026) |
@@ -44,34 +44,34 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0029](0029-queue-and-rate-correctness-at-scale.md) | Queue claim cost, lease fencing, and rate budget accuracy at scale | Accepted; retention gap it identified is closed by 0030 |
 | [0030](0030-run-retention.md) | Run retention | Accepted |
 | [0031](0031-execution-hot-path-costs.md) | Execution hot-path costs: parked deferrals, bucket round trips, heartbeat HOT updates | Accepted |
-| [0032](0032-projects-are-bun-workspaces.md) | Projects are bun workspaces holding workflows, contracts, and apps | Accepted |
+| [0032](0032-projects-are-bun-workspaces.md) | Projects are bun workspaces holding workflows, contracts, and apps | Accepted; paths superseded by 0142 |
 | [0033](0033-user-declared-secrets.md) | Projects declare their own secrets in code | Accepted (RunStage terminology refined by 0064) |
 | [0034](0034-batch-write-scalability-and-claim-receipts.md) | Batch admission counters, concurrent sinks, and claim receipts | Accepted |
-| [0035](0035-app-entity-and-build-pipeline.md) | App entity, build pipeline, and bundle storage | Accepted |
-| [0036](0036-app-authorization-and-audience.md) | App authorization: contract surface, frozen sets, audience identities | Accepted (audience headers superseded by 0053) |
-| [0037](0037-app-guest-runtime-and-mount.md) | App guest runtime (`@catamorphic/app`) and host mount | Accepted (mount headers + polling superseded by 0053) |
+| [0035](0035-app-entity-and-build-pipeline.md) | App entity, build pipeline, and bundle storage | Accepted; paths superseded by 0142 |
+| [0036](0036-app-authorization-and-audience.md) | App authorization: contract surface, frozen sets, audience identities | Accepted (audience headers superseded by 0053); paths superseded by 0142 |
+| [0037](0037-app-guest-runtime-and-mount.md) | App guest runtime (`@catamorphic/app`) and host mount | Accepted (mount headers + polling superseded by 0053); paths superseded by 0142 |
 | [0038](0038-coding-agent-registry-and-host-execution.md) | Coding-agent registry: per-session agents, host execution, effort | Accepted (runtime contract refined by 0067; topology model superseded by 0067) |
-| [0039](0039-custom-trigger-kinds.md) | Custom trigger kinds: host-defined events, typed bindings, sync firing | Accepted |
+| [0039](0039-custom-trigger-kinds.md) | Custom trigger kinds: host-defined events, typed bindings, sync firing | Accepted; paths superseded by 0142 |
 | [0040](0040-one-workflow-model.md) | One workflow model: every workflow is `defineWorkflow`, every run a deployed commit | Accepted |
-| [0041](0041-generated-projections.md) | Generated projections: schemas and types derived from code | Accepted |
+| [0041](0041-generated-projections.md) | Generated projections: schemas and types derived from code | Accepted; paths superseded by 0142 |
 | [0042](0042-parameterized-trigger-kinds-and-workflow-tools-mcp.md) | Parameterized trigger kinds (holes) and workflow tools over MCP | Accepted |
-| [0043](0043-general-purpose-projects.md) | Projects are general-purpose; the workflow workspace is scaffolded on demand | Accepted |
+| [0043](0043-general-purpose-projects.md) | Projects are general-purpose; the workflow workspace is scaffolded on demand | Accepted; paths superseded by 0142 |
 | [0044](0044-checkpoint-commits-and-remote-sync.md) | Checkpoint commits, remote sync, and the code-host seam | Accepted |
 | [0045](0045-desktop-as-dev-shell.md) | The desktop is a dev shell: harness fidelity, worktrees, diffs, PRs | Accepted |
 | [0046](0046-plugin-activation-planes.md) | Plugin activation planes: capability providers and project lifecycle hooks | Accepted |
 | [0047](0047-local-process-execution.md) | Sandboxless execution is a provider: `@catamorphic/local-process` | Accepted (provider selection refined by 0064) |
 | [0048](0048-app-feel-is-the-embedders.md) | An app's feel is entirely the embedder's: neutral kit defaults, host feel tokens | Accepted |
-| [0049](0049-doctrine-is-the-embedders.md) | Doctrine is the embedder's: seed/template/standing-prompt hooks, mechanics split from design doctrine | Accepted (templates part superseded by 0051) |
-| [0050](0050-project-agent-definitions.md) | Project agent definitions: committed `agents/*.json`, consent-bound credentials | Accepted |
-| [0051](0051-no-project-templates.md) | No project templates: agents build from skills | Accepted |
-| [0052](0052-skills-as-commands.md) | Skills as commands, and the agent-initiated auth loop | Accepted |
+| [0049](0049-doctrine-is-the-embedders.md) | Doctrine is the embedder's: seed/template/standing-prompt hooks, mechanics split from design doctrine | Accepted (templates part superseded by 0051); paths superseded by 0142 |
+| [0050](0050-project-agent-definitions.md) | Project agent definitions: committed definitions, consent-bound credentials | Accepted; paths superseded by 0142 |
+| [0051](0051-no-project-templates.md) | No project templates: agents build from skills | Accepted; paths superseded by 0142 |
+| [0052](0052-skills-as-commands.md) | Skills as commands, and the agent-initiated auth loop | Accepted; paths superseded by 0142 |
 | [0053](0053-identity-scope-and-app-routes.md) | Identity scope: one artifact vocabulary, structural narrowing, synchronous calls | Accepted |
 | [0054](0054-tool-permissions.md) | Tool permissions: layered connection/agent policies that intersect; ask via host prompt | Accepted (enforcement transport refined by 0067) |
-| [0055](0055-company-brain-roles-store-and-change-loop.md) | Company brain: program vs. project store, roles as files, scoped agents, the change loop | Accepted |
-| [0056](0056-agent-configuration.md) | Agent configuration: one surface, layered defaults, enforced capabilities | Accepted |
+| [0055](0055-company-brain-roles-store-and-change-loop.md) | Company brain: program vs. project store, roles as files, scoped agents, the change loop | Accepted; paths superseded by 0142 |
+| [0056](0056-agent-configuration.md) | Agent configuration: one surface, layered defaults, enforced capabilities | Accepted; paths superseded by 0142 |
 | [0057](0057-agent-usage-and-cost.md) | Agent usage and cost: transcript-scanned page, per-turn usage in metadata | Accepted |
 | [0058](0058-mobile-pwa.md) | The mobile PWA: chats on the go, wrapper-ready; tool asks answerable over HTTP | Accepted |
-| [0059](0059-stock-server.md) | The stock server: zero-dependency, disk-backed, invite-first; mDNS LAN discovery | Accepted (auth, invites, and administration superseded by 0071 and 0072; multi-machine storage superseded by 0099) |
+| [0059](0059-stock-server.md) | The stock server: zero-dependency, disk-backed, invite-first; mDNS LAN discovery | Accepted (auth, invites, and administration superseded by 0071 and 0072; multi-machine storage superseded by 0099); paths superseded by 0142 |
 | [0060](0060-continue-on-mobile.md) | Continue on mobile: QR pairing, bearer-gated LAN proxy, remote-link handoff | Accepted |
 | [0061](0061-session-mirroring.md) | Session mirroring: local-first chats pushed to the linked remote; fork-on-continuation | Accepted |
 | [0062](0062-session-privacy-and-fork-ux.md) | Session privacy & fork UX: incognito sessions, project policy, fork markers, admin usage | Accepted (admin-token usage route superseded by 0072) |
@@ -84,8 +84,8 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0069](0069-host-owned-processes-watches-and-schedules.md) | Host-owned processes, watches, wakeups, and schedules | Accepted |
 | [0070](0070-default-local-environment-policy.md) | Default local Environment policy | Accepted |
 | [0071](0071-stock-auth-and-agent-driven-setup.md) | Stock auth and agent-driven setup | Accepted |
-| [0072](0072-remote-oauth-admission-and-project-administration.md) | Remote OAuth, admission, and project administration | Accepted |
-| [0073](0073-recoverable-project-remotes-and-builder-checkout.md) | Recoverable project remotes and builder checkout | Accepted |
+| [0072](0072-remote-oauth-admission-and-project-administration.md) | Remote OAuth, admission, and project administration | Accepted; paths superseded by 0142 |
+| [0073](0073-recoverable-project-remotes-and-builder-checkout.md) | Recoverable project remotes and builder checkout | Accepted; paths superseded by 0142 |
 | [0074](0074-temporary-watchers-and-session-delivery.md) | Temporary Watchers and durable session delivery | Accepted (trigger model superseded by 0076; lifetime and placement superseded by 0139) |
 | [0075](0075-parallel-local-development-isolation.md) | Parallel local development isolation | Accepted |
 | [0076](0076-watchers-are-workflow-enablement.md) | Watchers are temporary workflow enablements | Accepted (lifetime and placement superseded by 0139) |

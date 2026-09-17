@@ -1,5 +1,7 @@
 # 0051 — No project templates: agents build from skills
 
+> Project filesystem locations in this ADR are superseded by [ADR 0142](0142-contained-project-workspace.md). Capability source and configuration now live under `.catamorphic/`.
+
 - **Status:** Accepted
 - **Date:** 2026-08-14
 - **Builds on:** 0043 (general-purpose projects), 0049 (doctrine is the

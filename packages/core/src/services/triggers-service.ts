@@ -242,7 +242,7 @@ export class TriggersService {
       const files = await repo.readAllFiles(WORKFLOW_READ_OPTIONS);
       // Generated types and the check script exist to serve the workflow
       // workspace. A project without one (docs-only, imported plain repo)
-      // must not have a workflows/ directory conjured into it (ADR 0043).
+      // must not have a .catamorphic/workflows/ directory conjured into it (ADR 0043).
       if (files[".catamorphic/workflows/package.json"] === undefined) {
         return { paths: [], updated: false };
       }

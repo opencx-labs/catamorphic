@@ -22,8 +22,8 @@ keep their own identity, database, runtime bindings, storage, and deployment.
    listener, using its operator bearer. The default operator port is 4701.
    Verify the new machine's id, label, availability, and execution capabilities.
 6. Commit a named Environment in `.catamorphic/project.json` with that machine id
-   as its `binding`. Grant the Environment through ordinary `roles/*.json` and
-   narrow/prefer it in the relevant `agents/*.json` definition. Enrollment alone
+   as its `binding`. Grant the Environment through ordinary `.catamorphic/roles/*.json` and
+   narrow/prefer it in the relevant `.catamorphic/agents/*.json` definition. Enrollment alone
    grants no member access. The `local` binding selects an available managed
    node at admission; a concrete machine id makes placement explicit.
 7. Use an ordinary member identity to inspect `GET /projects/:id/agent-catalog`
@@ -111,7 +111,7 @@ Set explicit budgets in containers: OS memory reporting may describe the host.
 
 Agent definitions reuse `environment.requirements.resources`; there is no second
 agent resource configuration file. For example, merge this into an ordinary
-`agents/developer.json` definition:
+`.catamorphic/agents/developer.json` definition:
 
 ```json
 {

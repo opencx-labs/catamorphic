@@ -5,7 +5,7 @@
 Catamorphic is an open-source, local-first framework for **agentic work
 environments**, plus a desktop app (`apps/desktop`) that is both the
 framework's reference implementation and a polished daily-use product. A
-*project* is a git repo that can hold any kind of work — docs, notes, data,
+*project* is a folder, optionally already a Git repository, that can hold any kind of work: docs, notes, data,
 code, automations (workflows), and apps (ADR 0043). The framework's
 co-equal capabilities: general-purpose projects, git-native work tracking
 (per-turn checkpoint commits, remote sync, the CodeHost seam — ADR 0044),
@@ -44,6 +44,22 @@ Concrete implications for any change you make:
 - When a tradeoff exists between "nice for a demo" vs. "nice for embedding", embedding wins unless the user explicitly says otherwise.
 - Mechanics vs. doctrine (ADR 0049): framework contracts belong in code and the `building-apps`-style mechanics seeds; anything about how work should *look* in a given host must stay replaceable via `projectSeeds` / `standingAgentPrompt`.
 
+### Contained project capabilities (ADR 0142)
+
+User-project capabilities live in `.catamorphic/`: its independent Bun workspace,
+workflows, apps, contracts, scripts, agents, roles, skills, and shared config.
+Run capability checks with `bun run --cwd .catamorphic check`. Opening an existing
+folder is inert, including plain folders without Git; initialize Git only for an
+operation that needs it (ADR 0141). Preserve root manifests and owner instructions.
+
+Project-owned mutable data lives in `.catamorphic/app-data/`, ignored by the scoped
+`.catamorphic/.gitignore` by default. Preserve ignore edits. Logical `store/...`
+document addresses map there locally; a root `store/` remains ordinary user content.
+Profiles, credentials, caches, staging, and managed worktrees stay in host storage.
+
+This framework repository's `.agents/skills/`, `apps/`, and `packages/` are its own
+engineering layout. They are not generated user-project paths and stay in place.
+
 ### Infrastructure priorities
 
 - **Every dependency is an axis.** Postgres or pglite; cloud sandboxes (`@catamorphic/cloudflare` default cloud provider, `@catamorphic/daytona` alternate), local sandboxes (`@catamorphic/microsandbox`), or plain subprocesses (`@catamorphic/local-process`, trusted single-tenant only — ADR 0047); S3-compatible or filesystem code storage. Hosts construct backends explicitly at boot (ADRs 0008, 0012, 0047; see `apps/desktop/src/main/server/boot.ts` and `CLOUDFLARE.md`).
@@ -80,7 +96,7 @@ Internal packages:
 - `packages/db` — Kysely instance, schema-scoped raw SQL migrations, programmatic `migrateToLatest`, codegen types.
 - `packages/git` — vendor-neutral git-backed project storage (isomorphic-git): `StorageBackend`/`RemoteBackend` contracts, `ProjectManager`, the remote sync engine (`syncWithNetworkRemote` — fetch/merge/push/rescue branches, ADR 0044), filesystem backends.
 - `packages/github` — **`@catamorphic/github`**: GitHub OAuth + device-flow helpers, REST API client, token stores. Consumed by core's `GithubService` (which implements `CodeHost`).
-- `packages/parser` — ts-morph AST-to-WorkflowGraph parser; also the engine behind each project's seeded `scripts/check.ts`.
+- `packages/parser` — ts-morph AST-to-WorkflowGraph parser; also the engine behind each capability workspace's `.catamorphic/scripts/check.ts`.
 - `packages/sandbox` — vendor-neutral sandbox + coding-agent contracts (`SandboxProvider`, `SandboxManager`, `RunExecutor`, `CodingAgentProvider`), the stdio supervisor transport, `instrumentSandboxProvider`, plugin-doc staging helpers. No vendor SDKs here.
 - `packages/microsandbox` — **`@catamorphic/microsandbox`**: local sandbox provider (the desktop's default execution).
 - `packages/local-process` — **`@catamorphic/local-process`**: sandboxless subprocess execution with an explicit env; trusted single-tenant hosts only (ADR 0047).

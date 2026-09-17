@@ -1,5 +1,7 @@
 # 0036 — App authorization: contract surface, frozen sets, audience identities
 
+> Project filesystem locations in this ADR are superseded by [ADR 0142](0142-contained-project-workspace.md). Capability source and configuration now live under `.catamorphic/`.
+
 - **Status:** Accepted — audience identity headers superseded by
   [0053](0053-identity-scope-and-app-routes.md): `appAudience` became the
   general `Identity.scope` (artifact refs by name), narrowing is structural

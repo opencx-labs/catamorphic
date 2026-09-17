@@ -10,7 +10,11 @@ alwaysApply: false
 
 A workflow is identified by its **exported function name** inside a project. There is no separate workflow table or workflow UUID. When referencing a workflow, use `(projectId, workflowName)`.
 
-A **project** is an npm package — a git repository — that can export many workflow functions. The project is the unit of versioning, storage, and access control.
+A **project** is a general-purpose folder and the unit of access control. It may
+be an existing Git repository or a plain folder. Git is initialized only when a
+requested operation needs history (ADR 0141). Catamorphic capabilities use an
+independent Bun workspace under `.catamorphic/` (ADR 0142); the imported project
+keeps its own package ecosystem and root files.
 
 ## Multi-Tenancy
 
@@ -23,15 +27,21 @@ The hierarchy is: **tenant → project → workflow**.
 
 ## Git Is the Version Control
 
-Every project **is** a git repository. Version control is not bolted on — it is the storage model:
+Git supplies versioned source and immutable execution provenance:
 
-- `ProjectManager.create` writes `package.json` + `tsconfig.json` (ES2022, strict) and makes an **initial commit** authored as the system user.
-- Every subsequent edit that should be versioned produces a commit.
-- **Runs retain immutable provenance.** Every Run executes a deployed commit;
-  its provenance contains the deployed commit SHA and deployment artifact.
-  There is no mutable-source or test mode.
-- `isomorphic-git` is used for all git operations — portable, no native CLI dependency, works inside sandboxes.
-- Default branch is **`main`**.
+- Opening an existing folder is inert: no Git initialization, manifest writes,
+  seed installation, dependency installation, or copied history.
+- GitHub import clones once, preserving history and the actual default branch.
+- New managed projects start with `.catamorphic/project.json`, scoped ignore
+  rules, and the host-selected seeds. No root package manifest is scaffolded.
+- Local imported projects use explicit commits and sharing. Hosts may configure
+  checkpointing for managed projects; a settled turn alone does not authorize
+  publishing imported work.
+- Every Run executes an immutable committed deployment or session artifact.
+  There is no mutable-source test mode.
+- Native Git operates on adopted local checkouts; portable managed working
+  copies use isomorphic-git. New repositories default to `main`; preserve
+  imported repository branches.
 
 ## Storage Backends
 
@@ -42,7 +52,7 @@ Every project **is** a git repository. Version control is not bolted on — it i
 | `FsBackend` | Local dev, CI, simple hosts — stores repos under a base path on disk |
 | `S3RemoteBackend` (`@catamorphic/s3`) | Default origin until Artifacts is generally available — direct object/ref storage in R2, S3, MinIO, or a compatible bucket |
 | `DaytonaBackend` (`@catamorphic/daytona`) | Cloud — creates a Daytona sandbox per project, stores the repo inside it |
-| `ArtifactsRemoteBackend` (`@catamorphic/cloudflare`) | Cloudflare Artifacts — remote-first git repos; implements `getCloneSource()` so sandboxes `git clone` with a short-lived token instead of receiving uploads (see `docs/decisions/0004`, `0008`) |
+| `ArtifactsRemoteBackend` (`@catamorphic/cloudflare`) | Cloudflare Artifacts — remote-first git origins; optional clone credentials hydrate dev checkouts. Deployment runtimes materialize the verified capability snapshot (ADR 0142) |
 
 Path safety rules are enforced by working-copy backends: no absolute paths, no
 `..`, and no `.git` access through file APIs. Remote backends enforce
@@ -50,15 +60,22 @@ tenant/project key isolation and compare-and-swap ref updates.
 
 ## Project Creation
 
-There are no project templates (ADR 0051) — agents build everything from
-the seed skills. When a user creates a project:
+New managed projects may receive host-selected seeds and an initial commit.
+Adopting a local folder or cloning an existing repository skips that path.
+Missing framework skills are exposed through the host tier without being written
+into the imported repository.
 
-1. A real project is created (DB row + git repo).
-2. The host-resolved seed files (`.agents/skills/…`, ADR 0049) are written.
-3. An **initial commit** is made — the project has at least one commit before any run.
+Apps, workflows, contracts, tooling, project agents, roles, and project skills
+live under `.catamorphic/`. Create the Bun workspace on first capability use,
+preserving any existing manifests within it. Never merge framework dependencies
+into the imported repository's root manifest.
 
-This ensures production provenance is always available and avoids
-special-casing projects that have never been committed.
+Project-owned mutable files live under `.catamorphic/app-data/`, ignored by the
+scoped `.catamorphic/.gitignore` by default. Preserve owner edits to ignore rules.
+Logical `store/...` document API addresses map to `app-data/store/...` locally;
+a root `store/` directory is ordinary user content. Personal artifact privacy is
+separately enforced. Host profiles, credentials, caches, staging, and managed
+worktrees remain outside the project. Database exports are not provided.
 
 ## Host Frontend Uses the API Only
 

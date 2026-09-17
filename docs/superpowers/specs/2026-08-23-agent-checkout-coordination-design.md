@@ -1,5 +1,7 @@
 # Agent Checkout Coordination Design
 
+> Project agent paths now follow [ADR 0142](../../decisions/0142-contained-project-workspace.md): `.catamorphic/agents/`. This document records the earlier design.
+
 ## Status
 
 Approved in conversation on 2026-08-23.

@@ -1,5 +1,7 @@
 # 0049 — Doctrine is the embedder's
 
+> Project filesystem locations in this ADR are superseded by [ADR 0142](0142-contained-project-workspace.md). Capability source and configuration now live under `.catamorphic/`. Missing framework skills use the host tier; the per-turn file-restoration mechanism below is superseded.
+
 - **Status:** Accepted (the `projectTemplates` hook and template
   composition are superseded by 0051 — templates are removed)
 - **Date:** 2026-08-14
