@@ -33,23 +33,14 @@ it("accepts a screenshot into the Codex composer as native image media", async (
   await app.waitFor(
     `!!document.querySelector('textarea[placeholder*="Search or ask"]')`,
   );
-  const modifiers = await app.eval<number>(
-    `/Mac/.test(navigator.platform)?4:2`,
+  // A reloaded page can render before global shortcut bindings settle.
+  // Open through the rendered control; this test covers media, not shortcuts.
+  await app.waitFor(
+    `!!document.querySelector('button[aria-label="New chat"]')`,
   );
-  await app.cdp("Input.dispatchKeyEvent", {
-    type: "keyDown",
-    key: "n",
-    code: "KeyN",
-    modifiers,
-    windowsVirtualKeyCode: 78,
-  });
-  await app.cdp("Input.dispatchKeyEvent", {
-    type: "keyUp",
-    key: "n",
-    code: "KeyN",
-    modifiers,
-    windowsVirtualKeyCode: 78,
-  });
+  await app.eval(
+    `document.querySelector('button[aria-label="New chat"]').click()`,
+  );
   await app.waitFor(`!!document.querySelector('[data-composer-input]')`);
   expect(
     await app.eval(
