@@ -18,7 +18,7 @@ it("shipped workflow recipes typecheck against the public API and real host trig
   try {
     const skills = [
       ...["writing-workflows", "durable-workflows", "batch-workflows"].map(
-        (name) => SEED_SKILLS[`.agents/skills/${name}/SKILL.md`],
+        (name) => SEED_SKILLS[`.catamorphic/skills/${name}/SKILL.md`],
       ),
       HOST_SKILLS["session-workflows/SKILL.md"],
     ];

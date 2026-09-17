@@ -127,7 +127,7 @@ export interface AgentsData {
 }
 
 /**
- * A PROJECT agent: a committed `agents/<slug>.json` definition (ADR 0050),
+ * A PROJECT agent: a committed `.catamorphic/agents/<slug>.json` definition (ADR 0050),
  * listed for the active project. `consent` gates running it on the user's
  * own credentials; `invalid` marks unusable definitions (shown disabled).
  */

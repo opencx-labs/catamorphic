@@ -1,6 +1,6 @@
 # 0010 — Per-project agent skills live in the project repo (`.agents/skills/`)
 
-- **Status**: accepted
+- **Status**: accepted; skill location superseded by [0142](0142-contained-project-workspace.md)
 - **Date**: 2026-07-02
 
 ## Context

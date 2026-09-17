@@ -51,6 +51,8 @@ import {
 import type { ZodRawShape } from "zod";
 
 export interface ClaudeCodeAgentOpts {
+  /** Host-owned plugin reference directory; defaults to the working directory. */
+  pluginDirectory?: string;
   /** Default model for sessions (e.g. "claude-sonnet-4-5"). */
   model?: string;
   /** Default reasoning effort; maps to the SDK's `effort` level. */
@@ -358,8 +360,13 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
   }
 
   async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
-    await stagePluginDocs(opts.workingDirectory, opts.attachedPlugins);
-    const preamble = buildPluginsPreamble(opts.attachedPlugins);
+    await stagePluginDocs(
+      this.opts.pluginDirectory ?? opts.workingDirectory,
+      opts.attachedPlugins,
+    );
+    const preamble = buildPluginsPreamble(opts.attachedPlugins, {
+      directory: this.opts.pluginDirectory,
+    });
     const systemPrompt =
       [preamble, opts.systemPrompt ?? ""].filter(Boolean).join("\n\n") ||
       undefined;

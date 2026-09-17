@@ -245,8 +245,8 @@ describe("blank project onboarding", () => {
 
     // Seed skills: reference material plus the scaffold's support files.
     for (const file of [
-      ".agents/skills/catamorphic-projects/SKILL.md",
-      ".agents/skills/catamorphic-projects/files/package.json",
+      ".catamorphic/skills/catamorphic-projects/SKILL.md",
+      ".catamorphic/skills/catamorphic-projects/files/package.json",
     ]) {
       expect(fs.existsSync(path.join(projectDir, file)), file).toBe(true);
     }
@@ -440,5 +440,114 @@ describe.each([false, true])(
         expect(git(importDir, "log", "--format=%s")).toBe("Existing history");
       else expect(fs.existsSync(path.join(importDir, ".git"))).toBe(false);
     });
+    it("adds capabilities inside .catamorphic while keeping the imported root and Git unchanged", async () => {
+      const before = fs.readdirSync(importDir).sort();
+      const existingPackage =
+        '{"name":"existing","packageManager":"pnpm@10.0.0"}\n';
+      fs.writeFileSync(path.join(importDir, "package.json"), existingPackage);
+      await run(`
+        const ta = visibleDock().querySelector('[data-composer-input]');
+        setReactValue(ta, 'Create a contained workspace');
+        ta.closest('form').requestSubmit();
+        return true;
+      `);
+      await runWait(
+        `return timelineMessages().some((m) => m.includes('Created the workflow, app, and local data inside'));`,
+        { timeoutMs: 30_000 },
+      );
+      await until(
+        () =>
+          fs.existsSync(
+            path.join(importDir, ".catamorphic/app-data/catalog/items.json"),
+          ),
+        15_000,
+        "contained app data",
+      );
+      expect(
+        fs.readFileSync(path.join(importDir, "package.json"), "utf8"),
+      ).toBe(existingPackage);
+      expect(
+        fs
+          .readdirSync(importDir)
+          .filter((name) => name !== ".catamorphic" && name !== "package.json")
+          .sort(),
+      ).toEqual(before);
+      expect(
+        fs.existsSync(
+          path.join(importDir, ".catamorphic/workflows/src/catalog.ts"),
+        ),
+      ).toBe(true);
+      expect(
+        fs.existsSync(
+          path.join(importDir, ".catamorphic/apps/catalog/package.json"),
+        ),
+      ).toBe(true);
+      await runWait(
+        `const button = document.querySelector('[role="tree"][aria-label="Apps"] button'); if (!button) return false; button.click(); return true;`,
+        { label: "new app in sidebar" },
+      );
+      await runWait(
+        `return document.body.textContent.includes('This app has no successful build yet. Ask the assistant to build it.');`,
+        { label: "unbuilt app guidance" },
+      );
+      if (versioned) {
+        expect(git(importDir, "log", "--format=%s")).toBe("Existing history");
+        expect(
+          git(
+            importDir,
+            "check-ignore",
+            ".catamorphic/app-data/catalog/items.json",
+          ),
+        ).toBe(".catamorphic/app-data/catalog/items.json");
+      } else expect(fs.existsSync(path.join(importDir, ".git"))).toBe(false);
+    });
+    it("builds contained apps and persists workflow data across runs", async () => {
+      await run(`
+        const ta = visibleDock().querySelector('[data-composer-input]');
+        setReactValue(ta, 'build contained app');
+        ta.closest('form').requestSubmit();
+        return true;
+      `);
+      await runWait(
+        `return timelineMessages().some(message => message.includes('preview_ready'));`,
+        { timeoutMs: 90_000, label: "contained app compiled" },
+      );
+      await run(
+        `visibleDock().querySelector('[aria-label="Minimize chat to bubble"]').click(); return true;`,
+      );
+      await runWait(
+        `const row = document.querySelector('[role="tree"][aria-label="Workflows"] button'); if (!row) return false; row.click(); return true;`,
+        { label: "open contained workflow" },
+      );
+      const clickWorkflowButton = async (name: string) => {
+        await runWait(
+          `const button = $$('.workflow-workbench button').find(el => !el.closest('[inert]') && el.innerText.trim() === ${JSON.stringify(name)}); if (!button || button.disabled) return false; button.click(); return true;`,
+          { timeoutMs: 30_000, label: name },
+        );
+      };
+      await clickWorkflowButton("Run");
+      await clickWorkflowButton("Record changes in Git");
+      await clickWorkflowButton("Publish project version");
+      expect(fs.existsSync(path.join(importDir, ".git"))).toBe(true);
+      for (const count of [1, 2]) {
+        await clickWorkflowButton("Start run");
+        await until(
+          () =>
+            fs.readFileSync(
+              path.join(importDir, ".catamorphic/app-data/catalog/runs.txt"),
+              "utf8",
+            ) === String(count),
+          60_000,
+          "persistent workflow data",
+        );
+        await runWait(
+          `return $$('.workflow-run-row').filter(row => row.textContent.includes('completed')).length === ${count};`,
+          { timeoutMs: 30_000, label: "workflow completed" },
+        );
+      }
+      expect(git(importDir, "status", "--porcelain")).toBe("");
+      expect(git(importDir, "ls-files")).not.toContain("app-data");
+      expect(app.getRendererErrors()).toEqual([]);
+    }, 180_000);
   },
 );

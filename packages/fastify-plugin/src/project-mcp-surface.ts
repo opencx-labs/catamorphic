@@ -514,7 +514,7 @@ export function surfaceTools(
       .filter((ref) => ref.kind === "agent" && ref.projectId === projectId)
       .map((ref) => (ref as { name: string }).name);
     const hint = isBuilder(identity, projectId)
-      ? "any committed project agent (agents/<slug>.json)"
+      ? "any committed project agent (.catamorphic/agents/<slug>.json)"
       : agentNames.length > 0
         ? `one of: ${agentNames.join(", ")}`
         : "none available to you";
@@ -664,7 +664,7 @@ export function surfaceTools(
           definition: {
             name: "create_watcher",
             description:
-              'Temporarily enable an ordinary TypeScript workflow owned by this session. For periodic monitoring, declare a normal schedule trigger and do the check with workflow IO. For event-driven work, use normalized Project Events already supplied by this host. Stop, expiry, or session close/archive disables future invocations. The source must export the named defineWorkflow and declare one or more inline triggers, for example triggers: [trigger("issue.changed")]. Event triggers receive the normalized Project Event envelope; schedule triggers receive their normal scheduled payload. To notify or wake a session, return context.host["catamorphic.sessions"].deliver({ sessionId, content, mode, idempotencyKey }) from a boundary. Pass source directly; do not write it to the user working tree. The host places it at workflows/src/artifacts/<id>.ts in an isolated committed-origin checkout, so imports must already exist in that origin. workflowName must be exported by this source. The workflow is committed to an isolated catamorphic/artifacts/<id> ref, pinned, and never merged into project main. This is temporary execution, not private storage. Call stop_watcher when the task is complete. Load the workflow-lifecycle skill for lifetime and publishing guidance.',
+              'Temporarily enable an ordinary TypeScript workflow owned by this session. For periodic monitoring, declare a normal schedule trigger and do the check with workflow IO. For event-driven work, use normalized Project Events already supplied by this host. Stop, expiry, or session close/archive disables future invocations. The source must export the named defineWorkflow and declare one or more inline triggers, for example triggers: [trigger("issue.changed")]. Event triggers receive the normalized Project Event envelope; schedule triggers receive their normal scheduled payload. To notify or wake a session, return context.host["catamorphic.sessions"].deliver({ sessionId, content, mode, idempotencyKey }) from a boundary. Pass source directly; do not write it to the user working tree. The host places it at .catamorphic/workflows/src/artifacts/<id>.ts in an isolated committed-origin checkout, so imports must already exist in that origin. workflowName must be exported by this source. The workflow is committed to an isolated catamorphic/artifacts/<id> ref, pinned, and never merged into project main. This is temporary execution, not private storage. Call stop_watcher when the task is complete. Load the workflow-lifecycle skill for lifetime and publishing guidance.',
             inputSchema: {
               type: "object",
               properties: {
@@ -673,7 +673,7 @@ export function surfaceTools(
                 source: {
                   type: "string",
                   description:
-                    "TypeScript source exporting workflowName; no Markdown fences. It runs from workflows/src/artifacts/<id>.ts against the committed project origin.",
+                    "TypeScript source exporting workflowName; no Markdown fences. It runs from .catamorphic/workflows/src/artifacts/<id>.ts against the committed project origin.",
                 },
                 environment: { type: "string" },
                 expiresInSeconds: {
@@ -776,7 +776,7 @@ export function surfaceTools(
                 source: {
                   type: "string",
                   description:
-                    "TypeScript source exporting workflowName; no Markdown fences. It runs from workflows/src/artifacts/<id>.ts against the committed project origin.",
+                    "TypeScript source exporting workflowName; no Markdown fences. It runs from .catamorphic/workflows/src/artifacts/<id>.ts against the committed project origin.",
                 },
                 environment: { type: "string" },
                 placement: {

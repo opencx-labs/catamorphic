@@ -4,7 +4,7 @@ import { parseProject } from "../index.js";
 describe("workflow IO schema extraction", () => {
   it("derives input and output schemas from boundary types", () => {
     const result = parseProject({
-      "workflows/src/tickets.ts": `
+      ".catamorphic/workflows/src/tickets.ts": `
 import { type BoundaryContext, defineWorkflow } from "@catamorphic/workflow";
 
 interface TicketInput {
@@ -64,10 +64,10 @@ export const escalate = defineWorkflow(({ defineBoundary }) => ({
 
   it("resolves types imported from @project/contracts", () => {
     const result = parseProject({
-      "contracts/src/index.ts": `
+      ".catamorphic/contracts/src/index.ts": `
 export interface Order { id: string; total: number; status: "open" | "shipped" }
 `,
-      "workflows/src/orders.ts": `
+      ".catamorphic/workflows/src/orders.ts": `
 import type { Order } from "@project/contracts";
 import { type BoundaryContext, defineWorkflow } from "@catamorphic/workflow";
 
@@ -100,7 +100,7 @@ export const shipOrder = defineWorkflow(({ defineBoundary }) => ({
 
   it("resolves pause transitions in output schemas", () => {
     const result = parseProject({
-      "workflows/src/approval.ts": `
+      ".catamorphic/workflows/src/approval.ts": `
 import { type BoundaryContext, defineWorkflow } from "@catamorphic/workflow";
 
 export const approve = defineWorkflow(({ defineBoundary }) => ({
@@ -128,7 +128,7 @@ export const approve = defineWorkflow(({ defineBoundary }) => ({
 
   it("degrades unknowable types to the permissive schema", () => {
     const result = parseProject({
-      "workflows/src/loose.ts": `
+      ".catamorphic/workflows/src/loose.ts": `
 import { type BoundaryContext, defineWorkflow } from "@catamorphic/workflow";
 
 export const loose = defineWorkflow(({ defineBoundary }) => ({
@@ -152,7 +152,7 @@ export const loose = defineWorkflow(({ defineBoundary }) => ({
 
   it("joins schemas onto app-api entries", () => {
     const result = parseProject({
-      "workflows/src/orders.ts": `
+      ".catamorphic/workflows/src/orders.ts": `
 import { type BoundaryContext, defineWorkflow } from "@catamorphic/workflow";
 
 export const listOrders = defineWorkflow(({ defineBoundary }) => ({
@@ -165,7 +165,7 @@ export const listOrders = defineWorkflow(({ defineBoundary }) => ({
   ],
 }));
 `,
-      "workflows/src/app-api.ts": `
+      ".catamorphic/workflows/src/app-api.ts": `
 import { listOrders } from "./orders.js";
 
 export const appApi = { listOrders };

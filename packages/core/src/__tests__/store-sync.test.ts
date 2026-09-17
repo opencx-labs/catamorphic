@@ -113,10 +113,24 @@ class FakeServer implements RemoteDocumentsClient {
 }
 
 const read = (root: string, p: string) =>
-  fs.readFileSync(path.join(root, p), "utf8");
+  fs.readFileSync(
+    path.join(root, p.startsWith("store/") ? `.catamorphic/app-data/${p}` : p),
+    "utf8",
+  );
 const write = (root: string, p: string, text: string) => {
-  fs.mkdirSync(path.dirname(path.join(root, p)), { recursive: true });
-  fs.writeFileSync(path.join(root, p), text);
+  fs.mkdirSync(
+    path.dirname(
+      path.join(
+        root,
+        p.startsWith("store/") ? `.catamorphic/app-data/${p}` : p,
+      ),
+    ),
+    { recursive: true },
+  );
+  fs.writeFileSync(
+    path.join(root, p.startsWith("store/") ? `.catamorphic/app-data/${p}` : p),
+    text,
+  );
 };
 
 describe("remote project sync (ADR 0055)", () => {
@@ -280,7 +294,9 @@ describe("remote project sync (ADR 0055)", () => {
   it("deletions travel both ways, but never over someone's newer edit", async () => {
     await syncRemoteProject(root, server);
     // Local delete → remote tombstone.
-    fs.rmSync(path.join(root, "store/customers/acme/notes.md"));
+    fs.rmSync(
+      path.join(root, ".catamorphic/app-data/store/customers/acme/notes.md"),
+    );
     expect(localStatus(root).deleted).toEqual([
       "store/customers/acme/notes.md",
     ]);
@@ -296,14 +312,18 @@ describe("remote project sync (ADR 0055)", () => {
       deleted: false,
     });
     await syncRemoteProject(root, server);
-    expect(fs.existsSync(path.join(root, "store/customers/acme/plan.md"))).toBe(
-      true,
-    );
+    expect(
+      fs.existsSync(
+        path.join(root, ".catamorphic/app-data/store/customers/acme/plan.md"),
+      ),
+    ).toBe(true);
     server.store.get("store/customers/acme/plan.md")!.deleted = true;
     const report = await syncRemoteProject(root, server);
     expect(report.removed).toEqual(["store/customers/acme/plan.md"]);
-    expect(fs.existsSync(path.join(root, "store/customers/acme/plan.md"))).toBe(
-      false,
-    );
+    expect(
+      fs.existsSync(
+        path.join(root, ".catamorphic/app-data/store/customers/acme/plan.md"),
+      ),
+    ).toBe(false);
   });
 });

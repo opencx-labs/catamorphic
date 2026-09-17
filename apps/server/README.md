@@ -45,9 +45,9 @@ The owner-only operational credential under `CATAMORPHIC_DATA_DIR` is machine
 authority, not a Catamorphic identity or super-admin account.
 
 After initial provisioning, the company brain is configured through its
-ordinary reviewed project files. `roles/*.json` grants artifacts,
+ordinary reviewed project files. `.catamorphic/roles/*.json` grants artifacts,
 Environments, connection aliases, document paths, and namespaced permissions;
-`agents/*` defines the project agents; `.catamorphic/sidebar.js` and
+`.catamorphic/agents/*` defines the project agents; `.catamorphic/sidebar.js` and
 `.catamorphic/project.json` can shape the desktop sidebar and starting actions
 from resolved builder state and permissions. There is no parallel stock-server
 bootstrap config.

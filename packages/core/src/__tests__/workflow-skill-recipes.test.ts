@@ -9,7 +9,7 @@ import { SEED_SKILLS } from "../seeds.js";
 
 const skills = ["writing-workflows", "durable-workflows", "batch-workflows"];
 const sources = skills.map((skill) => {
-  const text = SEED_SKILLS[`.agents/skills/${skill}/SKILL.md`];
+  const text = SEED_SKILLS[`.catamorphic/skills/${skill}/SKILL.md`];
   const source = text && /```typescript\n([\s\S]*?)```/.exec(text)?.[1];
   if (!source) throw new Error(`Missing ${skill} recipe`);
   return { name: skill, source };
@@ -18,7 +18,10 @@ const sources = skills.map((skill) => {
 it("the shipped authoring recipes parse as ordinary workflows", () => {
   const result = parseProject(
     Object.fromEntries(
-      sources.map(({ name, source }) => [`workflows/src/${name}.ts`, source]),
+      sources.map(({ name, source }) => [
+        `.catamorphic/workflows/src/${name}.ts`,
+        source,
+      ]),
     ),
   );
   expect(result.errors).toEqual([]);

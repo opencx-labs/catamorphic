@@ -43,6 +43,7 @@ export {
 } from "./personal-files.js";
 export {
   generateWorkBranchName,
+  PROJECT_GITIGNORE,
   PROJECT_MANIFEST_PATH,
   ProjectManager,
   WORK_BRANCH_PREFIX,

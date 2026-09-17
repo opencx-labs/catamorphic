@@ -1431,7 +1431,7 @@ describe("agent session coordination", () => {
           externalUserId: identity.externalUserId,
         },
         workflow_name: "pausedWatcher",
-        source_path: "workflows/src/watchers/paused.ts",
+        source_path: ".catamorphic/workflows/src/watchers/paused.ts",
         remote_branch: "catamorphic/watchers/paused",
         commit_sha: "a".repeat(40),
         deployment_artifact_id: artifact.id,

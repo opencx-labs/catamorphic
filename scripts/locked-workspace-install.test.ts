@@ -42,11 +42,12 @@ it("installs a locked execution snapshot without frontend or dev packages", asyn
   const files: Record<string, string> = {
     ...Object.fromEntries(
       Object.entries(manifests).map(([name, value]) => [
-        name,
+        `.catamorphic/${name}`,
         JSON.stringify(value),
       ]),
     ),
-    "apps/dashboard/src/main.tsx": "export default function App() {}",
+    ".catamorphic/apps/dashboard/src/main.tsx":
+      "export default function App() {}",
   };
   const write = async (root: string, contents: Record<string, string>) => {
     for (const [name, content] of Object.entries(contents)) {
@@ -56,32 +57,60 @@ it("installs a locked execution snapshot without frontend or dev packages", asyn
     }
   };
   try {
-    await write(original, files);
+    const importedManifest = JSON.stringify({
+      name: "imported-app",
+      private: true,
+      packageManager: "pnpm@10.0.0",
+      workspaces: ["packages/*"],
+    });
+    await write(original, { ...files, "package.json": importedManifest });
     // Only local file dependencies; this test never contacts a registry.
     execFileSync("bun", ["install", "--lockfile-only", "--ignore-scripts"], {
-      cwd: original,
+      cwd: path.join(original, ".catamorphic"),
       stdio: "pipe",
     });
-    const lock = await readFile(path.join(original, "bun.lock"), "utf8");
-    await write(runtime, executionFiles({ ...files, "bun.lock": lock }));
+    expect(await readFile(path.join(original, "package.json"), "utf8")).toBe(
+      importedManifest,
+    );
+    expect(existsSync(path.join(original, "bun.lock"))).toBe(false);
+    expect(existsSync(path.join(original, "node_modules"))).toBe(false);
+    const lock = await readFile(
+      path.join(original, ".catamorphic/bun.lock"),
+      "utf8",
+    );
+    await write(
+      runtime,
+      executionFiles({ ...files, ".catamorphic/bun.lock": lock }),
+    );
     execFileSync(
       "bun",
       ["install", "--frozen-lockfile", "--production", "--filter", "!./apps/*"],
-      { cwd: runtime, stdio: "pipe" },
+      { cwd: path.join(runtime, ".catamorphic"), stdio: "pipe" },
     );
-    expect(await readFile(path.join(runtime, "bun.lock"), "utf8")).toBe(lock);
     expect(
-      existsSync(path.join(runtime, "workflows/node_modules/runtime-lib")),
-    ).toBe(true);
-    expect(existsSync(path.join(runtime, "node_modules/dev-tool"))).toBe(false);
+      await readFile(path.join(runtime, ".catamorphic/bun.lock"), "utf8"),
+    ).toBe(lock);
     expect(
       existsSync(
-        path.join(runtime, "apps/dashboard/node_modules/frontend-lib"),
+        path.join(runtime, ".catamorphic/workflows/node_modules/runtime-lib"),
+      ),
+    ).toBe(true);
+    expect(
+      existsSync(path.join(runtime, ".catamorphic/node_modules/dev-tool")),
+    ).toBe(false);
+    expect(
+      existsSync(
+        path.join(
+          runtime,
+          ".catamorphic/apps/dashboard/node_modules/frontend-lib",
+        ),
       ),
     ).toBe(false);
-    expect(existsSync(path.join(runtime, "apps/dashboard/src/main.tsx"))).toBe(
-      false,
-    );
+    expect(
+      existsSync(
+        path.join(runtime, ".catamorphic/apps/dashboard/src/main.tsx"),
+      ),
+    ).toBe(false);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

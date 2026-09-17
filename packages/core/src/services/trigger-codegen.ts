@@ -3,11 +3,11 @@ import type { TriggerKindRuntime } from "./trigger-kinds.js";
 
 /**
  * Conventional location of the generated trigger-kinds augmentation inside a
- * project workspace. Lives under `workflows/src` so the workflows package
+ * project workspace. Lives under `.catamorphic/workflows/src` so the workflows package
  * picks it up without tsconfig changes.
  */
 export const TRIGGER_TYPES_SOURCE_PATH =
-  "workflows/src/catamorphic-triggers.d.ts";
+  ".catamorphic/workflows/src/catamorphic-triggers.d.ts";
 
 /**
  * Renders the module augmentation that projects `trigger()` calls type-check

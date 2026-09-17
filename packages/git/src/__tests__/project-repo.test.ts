@@ -118,7 +118,7 @@ describe("ProjectRepo", () => {
       expect(files).toContain("src/b.ts");
       expect(files).toContain(".catamorphic/project.json");
       // The seeded ignore rules are project content…
-      expect(files).toContain(".gitignore");
+      expect(files).toContain(".catamorphic/.gitignore");
       // …but the .git directory itself never lists.
       expect(files.some((f) => f === ".git" || f.startsWith(".git/"))).toBe(
         false,
@@ -265,7 +265,7 @@ describe("ProjectRepo", () => {
       await repo.writeFile("src/changed.ts", "before");
       await repo.writeFile("src/deleted.ts", "delete me");
       await repo.commit("Baseline", author);
-      const ignore = await repo.readFile(".gitignore");
+      const ignore = await repo.readFile(".catamorphic/.gitignore");
       await repo.writeFile(".gitignore", `${ignore}\n*.log\n`);
       await repo.writeFile("src/changed.ts", "after");
       await repo.writeFile("src/added.ts", "new");

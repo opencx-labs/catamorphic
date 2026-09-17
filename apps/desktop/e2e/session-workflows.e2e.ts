@@ -63,7 +63,7 @@ it("authors a temporary one-shot, wakes once, stops and links its retained sourc
     "document.querySelector('.cat-markdown a[href^=\"artifact:\"]').click();",
   );
   await wait(
-    "return document.body.textContent.includes('workflows/src/artifacts/');",
+    "return document.body.textContent.includes('.catamorphic/workflows/src/artifacts/');",
   );
   await app.screenshot("/tmp/catamorphic-session-wakeup.png");
 });

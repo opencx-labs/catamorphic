@@ -1521,7 +1521,7 @@ export const SkillSchema = z.object({
 });
 
 // --- Project agent definitions (ADR 0050) ---
-// Committed `agents/<slug>.json` files, parsed and validated by core's
+// Committed `.catamorphic/agents/<slug>.json` files, parsed and validated by core's
 // AgentDefinitionsService. Broken files come back as invalid entries with
 // the error — never a failed request.
 export const ProjectAgentDefinitionSchema = z.object({
@@ -1564,7 +1564,7 @@ export const ProjectAgentDefinitionSchema = z.object({
 export const ProjectAgentEntrySchema = z.object({
   slug: z.string(),
   definition: ProjectAgentDefinitionSchema.optional(),
-  /** Content of the sibling `agents/<slug>.md` persona file. */
+  /** Content of the sibling `.catamorphic/agents/<slug>.md` persona file. */
   promptFile: z.string().optional(),
   invalid: z.object({ error: z.string() }).optional(),
 });

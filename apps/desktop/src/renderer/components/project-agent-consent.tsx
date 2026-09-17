@@ -19,7 +19,7 @@ const SOURCE_LABELS: Record<ProjectAgentInfo["credentialsSource"], string> = {
 
 /**
  * Consent dialog for PROJECT agents (ADR 0050). A committed
- * `agents/<slug>.json` is collaborator-authored code; before it runs on
+ * `.catamorphic/agents/<slug>.json` is collaborator-authored code; before it runs on
  * the user's own credentials the profile records approval bound to the
  * definition's hash. This dialog shows what would run — kind, model,
  * credential source, the persona's opening lines — and whether this is a
@@ -119,7 +119,7 @@ export function ProjectAgentConsentDialog({
           {agent.promptPreview && (
             <div className="mb-4">
               <div className="mb-1 text-[11px] font-medium text-fg-faint">
-                Persona (agents/{agent.slug}.md)
+                Persona (.catamorphic/agents/{agent.slug}.md)
               </div>
               <pre className="max-h-28 overflow-y-auto whitespace-pre-wrap rounded-lg border border-border bg-bg-inset p-2 text-[11px] text-fg-muted">
                 {agent.promptPreview}

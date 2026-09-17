@@ -16,7 +16,7 @@ the host's actual capabilities and schemas; a skill does not enable a missing to
 | User intent | Source | Activation |
 | --- | --- | --- |
 | Remind me, wake this session, or watch until a condition is met | Pass TypeScript directly to \`create_watcher\` or \`create_github_watcher\`. The host retains an isolated revision with this session. | Session-owned, with no default expiry. See \`session-workflows\` for time, attention, and cancellation. |
-| Save reusable automation for the project | Follow the existing layout, normally \`workflows/src/<name>.ts\`. | Deploy an immutable revision, then enable it for unattended execution. |
+| Save reusable automation for the project | Follow the existing layout, normally \`.catamorphic/workflows/src/<name>.ts\`. | Deploy an immutable revision, then enable it for unattended execution. |
 | Run a reviewed workflow for one member | Reuse committed project source. | A member-owned enablement uses that member's authorized connections and Environment. |
 | Keep workflow source private | Use a private artifact capability only if this host provides one. | Follow that capability's execution support. An unpushed branch or incognito chat is not private source storage. |
 
@@ -29,7 +29,7 @@ an id or claim that saving there creates a runnable private workflow.
 
 - Pass the source string to the watcher tool, without first writing it into an
   automatically checkpointed project folder. \`workflowName\` must match the export.
-- The host writes \`workflows/src/artifacts/<artifact-id>.ts\` on
+- The host writes \`.catamorphic/workflows/src/artifacts/<artifact-id>.ts\` on
   \`catamorphic/artifacts/<artifact-id>\` from the committed project origin.
   Imports resolve there, not against this session's uncommitted helper files.
   Keep the source self-contained or use dependencies already committed in origin.
@@ -57,8 +57,8 @@ privacy boundary; discarding it prevents new use without erasing retained runs.
 
 For a project without a workflows workspace, use the copyable support files in
 \`catamorphic-projects\`. Merge with existing package files instead of replacing
-customizations. Put runtime dependencies in \`workflows/package.json\`, shared
-app/workflow types in \`contracts/src/\`, and expose workflows through \`app-api.ts\`
+customizations. Put runtime dependencies in \`.catamorphic/workflows/package.json\`, shared
+app/workflow types in \`.catamorphic/contracts/src/\`, and expose workflows through \`app-api.ts\`
 only when apps need access. Follow the established wrapper package, otherwise
 use \`@catamorphic/workflow\`; do not copy the runtime helpers into the project.
 

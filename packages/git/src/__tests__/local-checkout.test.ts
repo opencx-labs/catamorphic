@@ -103,8 +103,13 @@ describe("opening a local repository", () => {
     await fs.writeFile(path.join(root, "file.txt"), "primary changes");
     await fs.writeFile(path.join(linked, "file.txt"), "discard this");
     await nativeGit(linked, ["add", "file.txt"]);
-    await fs.mkdir(path.join(linked, "store"));
-    await fs.writeFile(path.join(linked, "store/private.txt"), "keep private");
+    await fs.mkdir(path.join(linked, ".catamorphic/app-data/store"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(linked, ".catamorphic/app-data/store/private.txt"),
+      "keep private",
+    );
     await fs.writeFile(path.join(linked, "untracked.txt"), "discard this too");
     await new NativeProjectRepo(
       project,
@@ -118,7 +123,10 @@ describe("opening a local repository", () => {
       "original",
     );
     expect(
-      await fs.readFile(path.join(linked, "store/private.txt"), "utf8"),
+      await fs.readFile(
+        path.join(linked, ".catamorphic/app-data/store/private.txt"),
+        "utf8",
+      ),
     ).toBe("keep private");
     expect(
       await fs.access(path.join(linked, "untracked.txt")).then(

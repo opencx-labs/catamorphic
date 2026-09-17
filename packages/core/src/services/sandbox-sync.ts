@@ -9,7 +9,12 @@ export interface SyncedFileChange {
 }
 
 /** Files the agent stages for its own use — never synced back to the repo. */
-const SYNC_IGNORED_PREFIXES = ["_plugins/", "node_modules/", ".git/"];
+const SYNC_IGNORED_PREFIXES = [
+  "_plugins/",
+  "node_modules/",
+  ".git/",
+  ".catamorphic/node_modules/",
+];
 
 /**
  * Diff a sandbox project dir against its git baseline and mirror every

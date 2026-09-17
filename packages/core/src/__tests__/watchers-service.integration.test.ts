@@ -288,7 +288,7 @@ describe("temporary watchers", () => {
     );
     try {
       await repo.writeFile(
-        "workflows/src/existing.ts",
+        ".catamorphic/workflows/src/existing.ts",
         `
         import { defineWorkflow, trigger } from "@catamorphic/workflow";
         export const existingWorkflow = defineWorkflow(({ defineBoundary }) => ({
@@ -395,7 +395,7 @@ describe("temporary watchers", () => {
       });
       const files = await repo.readAllFilesAtRef(watcher.commitSha);
       const payload = await resolveWorkflowPackageFallback({
-        packageJson: files["package.json"],
+        packageJson: files[".catamorphic/workflows/package.json"],
       });
       if (!payload) throw new Error("Watcher runtime dependency is missing");
       // Load the committed source with only its resolved runtime payload,
@@ -405,7 +405,7 @@ describe("temporary watchers", () => {
         ...files,
         ...Object.fromEntries(
           Object.entries(payload.files).map(([name, content]) => [
-            `node_modules/${payload.packageName}/${name}`,
+            `.catamorphic/node_modules/${payload.packageName}/${name}`,
             content,
           ]),
         ),

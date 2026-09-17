@@ -276,7 +276,7 @@ describeIf("scoped identity run reads", () => {
         kind: "app",
         name: "review",
         title: "Review",
-        source_path: "apps/review/src/App.tsx",
+        source_path: ".catamorphic/apps/review/src/App.tsx",
         remote_branch: `catamorphic/artifacts/${sourceId}`,
         commit_sha: commitSha,
       })

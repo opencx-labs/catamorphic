@@ -13,7 +13,7 @@ export {
 } from "@catamorphic/core";
 
 /**
- * Prepends the agent's persona file (`agents/<slug>.md`) to the session
+ * Prepends the agent's persona file (`.catamorphic/agents/<slug>.md`) to the session
  * system prompt — the persona leads, the host's standing prompt and
  * playbooks follow. Optional harness methods are mirrored, never
  * fabricated (hosts feature-detect by method presence).

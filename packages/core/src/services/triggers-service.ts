@@ -224,8 +224,8 @@ export class TriggersService {
   /**
    * Writes every generated type projection into the project's dev tree and
    * commits when drifted: the trigger-kinds augmentation
-   * (`workflows/src/catamorphic-triggers.d.ts`) and, per app workspace, the
-   * typed app-api client (`apps/<name>/src/catamorphic-app-api.d.ts`).
+   * (`.catamorphic/workflows/src/catamorphic-triggers.d.ts`) and, per app workspace, the
+   * typed app-api client (`.catamorphic/apps/<name>/src/catamorphic-app-api.d.ts`).
    * Generated files are projections of code the host or project owns —
    * regenerated on change, never hand-edited.
    */
@@ -243,7 +243,7 @@ export class TriggersService {
       // Generated types and the check script exist to serve the workflow
       // workspace. A project without one (docs-only, imported plain repo)
       // must not have a workflows/ directory conjured into it (ADR 0043).
-      if (files["workflows/package.json"] === undefined) {
+      if (files[".catamorphic/workflows/package.json"] === undefined) {
         return { paths: [], updated: false };
       }
       const changes = new Map<string, string>();

@@ -16,6 +16,7 @@ import type { SandboxProvider } from "@catamorphic/sandbox";
 import {
   loadAppPackagePayload,
   removePackageDependencies,
+  resolveWorkflowPackageFallback,
   uploadPluginPayloads,
 } from "@catamorphic/sandbox";
 import type { Kysely, Selectable } from "kysely";
@@ -146,7 +147,7 @@ export class AppPublishStateError extends Error {
 /**
  * Builds, publishes, and serves user-built frontend apps.
  *
- * Which apps exist is derived from the project repo (`apps/<name>/package.json`)
+ * Which apps exist is derived from the project repo (`.catamorphic/apps/<name>/package.json`)
  * — code is the source of truth, and the `apps` table is only an anchor for
  * built artifacts and publish state, created lazily on first build.
  *
@@ -964,17 +965,27 @@ export class AppsService {
       // registry. Bun resolves the whole workspace at once, so strip the
       // dependency from every manifest that names it, install, then restore
       // the manifests and upload the runtime payload into node_modules.
-      const manifests = await this.readAppPackageManifests({
-        sandboxId: sandbox.providerId,
-        buildRoot,
-        appName: args.appName,
+      const manifests = Object.fromEntries(
+        Object.entries(args.files).filter(([file]) =>
+          file.endsWith("/package.json"),
+        ),
+      );
+      const workflowPackage = await resolveWorkflowPackageFallback({
+        packageJson: manifests[".catamorphic/workflows/package.json"],
+        hasLockfile:
+          ".catamorphic/bun.lock" in args.files ||
+          ".catamorphic/bun.lockb" in args.files,
       });
+      const suppliedPackages = [
+        ...SANDBOX_STRIPPED_PACKAGES,
+        ...(workflowPackage ? [workflowPackage.packageName] : []),
+      ];
       const stripped = Object.fromEntries(
         Object.entries(manifests).map(([path, content]) => [
           path,
           removePackageDependencies({
             packageJson: content,
-            packageNames: SANDBOX_STRIPPED_PACKAGES,
+            packageNames: suppliedPackages,
           }),
         ]),
       );
@@ -988,7 +999,7 @@ export class AppsService {
       const install = await this.deps.provider.executeCommand(
         sandbox.providerId,
         "bun install",
-        { cwd: buildRoot, timeout: INSTALL_TIMEOUT_SECONDS },
+        { cwd: `${buildRoot}/.catamorphic`, timeout: INSTALL_TIMEOUT_SECONDS },
       );
       if (Object.keys(manifests).length > 0) {
         await this.deps.provider.uploadFiles(
@@ -1001,8 +1012,11 @@ export class AppsService {
         await uploadPluginPayloads({
           provider: this.deps.provider,
           sandboxId: sandbox.providerId,
-          projectDir: buildRoot,
-          plugins: [await loadAppPackagePayload()],
+          projectDir: `${buildRoot}/.catamorphic`,
+          plugins: [
+            await loadAppPackagePayload(),
+            ...(workflowPackage ? [workflowPackage] : []),
+          ],
         });
       }
       if (install.exitCode !== 0) {
@@ -1058,8 +1072,16 @@ export class AppsService {
     );
     try {
       return args.kind === "published" && args.commitSha
-        ? await repo.readAllFilesAtRef(args.commitSha)
-        : await repo.readAllFiles();
+        ? await repo.readAllFilesAtRef(args.commitSha, {
+            filter: (file) =>
+              file.startsWith(".catamorphic/") &&
+              !file.startsWith(".catamorphic/app-data/"),
+          })
+        : await repo.readAllFiles({
+            filter: (file) =>
+              file.startsWith(".catamorphic/") &&
+              !file.startsWith(".catamorphic/app-data/"),
+          });
     } finally {
       await repo.dispose();
     }
@@ -1112,34 +1134,6 @@ export class AppsService {
     };
   }
 
-  /** Manifests under the build root that declare @catamorphic/app. */
-  private async readAppPackageManifests(args: {
-    sandboxId: string;
-    buildRoot: string;
-    appName: string;
-  }): Promise<Record<string, string>> {
-    const candidates = [
-      "package.json",
-      "contracts/package.json",
-      `${APP_SOURCE_ROOT}/${args.appName}/package.json`,
-    ];
-    const manifests: Record<string, string> = {};
-    await Promise.all(
-      candidates.map(async (relative) => {
-        const content = await this.deps.provider
-          .downloadFile(args.sandboxId, `${args.buildRoot}/${relative}`)
-          .catch(() => undefined);
-        if (
-          content &&
-          SANDBOX_STRIPPED_PACKAGES.some((name) => content.includes(name))
-        ) {
-          manifests[relative] = content;
-        }
-      }),
-    );
-    return manifests;
-  }
-
   private async appNamesFromRepo(args: {
     identity: Identity;
     projectId: string;
@@ -1153,7 +1147,7 @@ export class AppsService {
       const files = await repo.listFiles();
       const names = new Set<string>();
       const pattern = new RegExp(
-        `^${APP_SOURCE_ROOT}/([a-z0-9][a-z0-9-]*)/package\\.json$`,
+        `^${APP_SOURCE_ROOT.replaceAll(".", "\\.")}/([a-z0-9][a-z0-9-]*)/package\\.json$`,
       );
       for (const file of files) {
         const match = pattern.exec(file);

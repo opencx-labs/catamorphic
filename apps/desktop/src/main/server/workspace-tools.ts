@@ -558,12 +558,12 @@ export function buildWorkspaceToolkit(
     {
       name: "build_app",
       description:
-        "Build a project app preview from apps/<name>/. Set publish: true only when publication is requested. Preview is the default and can be opened with open_surface target app:<name>. Load building-apps for authoring.",
+        "Build a project app preview from .catamorphic/apps/<name>/. Set publish: true only when publication is requested. Preview is the default and can be opened with open_surface target app:<name>. Load building-apps for authoring.",
       parameters: {
         name: z
           .string()
           .regex(/^[a-z0-9][a-z0-9-]*$/)
-          .describe("The app's directory name under apps/"),
+          .describe("The app's directory name under .catamorphic/apps/"),
         publish: z
           .boolean()
           .optional()
@@ -1008,7 +1008,7 @@ export function buildWorkspaceToolkit(
     {
       name: "read_skill",
       description:
-        "Load a skill (a reusable playbook) by its declared name and return its SKILL.md content. Covers both tiers: project skills (files under .agents/skills/ in this project) and app skills shipped by the app. Use it when the user invokes a skill by name ('use the X skill', a palette or / command) or a task matches a skill's description from your skill listing — then follow the returned instructions.",
+        "Load a skill (a reusable playbook) by its declared name and return its SKILL.md content. Covers both tiers: project skills (files under .catamorphic/skills/ in this project) and app skills shipped by the app. Use it when the user invokes a skill by name ('use the X skill', a palette or / command) or a task matches a skill's description from your skill listing — then follow the returned instructions.",
       parameters: {
         name: z
           .string()

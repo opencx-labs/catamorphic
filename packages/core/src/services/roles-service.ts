@@ -19,8 +19,8 @@ import {
 import { requireTenantProject } from "./projects-service.js";
 
 /**
- * Roles as committed files (ADR 0055): `roles/<name>.json`, next to
- * `agents/`. A role is a reviewable, agent-authorable statement of what a
+ * Roles as committed files (ADR 0055): `.catamorphic/roles/<name>.json`, next to
+ * `.catamorphic/agents/`. A role is a reviewable, agent-authorable statement of what a
  * class of member may reach — agents, workflows, apps, documents, and
  * whether they build the program — expressed in the one enforcement
  * vocabulary core has (`Identity.scope`). Membership (which user has which
@@ -32,7 +32,7 @@ import { requireTenantProject } from "./projects-service.js";
  * ref per value; an entry whose placeholders are not all granted yields
  * nothing — never a wildcard.
  */
-export const ROLES_DIR = "roles";
+export const ROLES_DIR = ".catamorphic/roles";
 
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -75,7 +75,7 @@ const ProjectPermissionSchema = z
     "Expected a namespaced capability such as memberships:manage",
   );
 
-/** The committed `roles/<name>.json` schema, version 1. */
+/** The committed `.catamorphic/roles/<name>.json` schema, version 1. */
 export const RoleDefinitionSchema = z.object({
   version: z.literal(1),
   /** Display name. */
@@ -317,7 +317,7 @@ export interface ResolveRolesInput {
   tenantId: string;
   projectId: string;
   externalUserId: string;
-  /** Role slugs (`roles/<slug>.json`). Unknown slugs grant nothing. */
+  /** Role slugs (`.catamorphic/roles/<slug>.json`). Unknown slugs grant nothing. */
   roles: readonly string[];
   grants?: RoleGrants;
 }
@@ -331,7 +331,7 @@ interface CachedRoles {
 }
 
 /**
- * Read-only view over a project's committed `roles/` directory, and the
+ * Read-only view over a project's committed `.catamorphic/roles/` directory, and the
  * expansion of a member's roles into an {@link Identity}. Mirrors
  * {@link AgentDefinitionsService}: never throws on a bad file (each is an
  * invalid entry). Reads the program as shared (see `program-reader`):
@@ -471,7 +471,7 @@ export class RolesService {
     return entries;
   }
 
-  /** `roles/*.json` (top level only) → content, from the program as shared. */
+  /** `.catamorphic/roles/*.json` (top level only) → content, from the program as shared. */
   private async readRoleFiles(
     tenantId: string,
     projectId: string,

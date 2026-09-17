@@ -20,7 +20,7 @@ const wait = (body: string, label: string) =>
   app.waitFor(`(() => { ${helpers} ${body} })()`, { label });
 const writeSource = (content: string) =>
   run(
-    `const {url} = await window.catamorphicDesktop.getServerState(); const response = await fetch(url + '/api/projects/${projectId}/files/linked-workflow.ts', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({content:${JSON.stringify(content)}})}); if (!response.ok) throw new Error(await response.text()); return true;`,
+    `const {url} = await window.catamorphicDesktop.getServerState(); const response = await fetch(url + '/api/projects/${projectId}/files/.catamorphic/workflows/linked-workflow.ts', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({content:${JSON.stringify(content)}})}); if (!response.ok) throw new Error(await response.text()); return true;`,
   );
 
 afterEach(async (context) => {
@@ -304,7 +304,7 @@ describe("workflow authoring", { retry: 0 }, () => {
     await run(`button('Save').click(); return true;`);
     await wait(`return !!button('Saved');`, "workflow save completed");
     await app.waitFor(
-      `(async()=>{const {url}=await window.catamorphicDesktop.getServerState(); const response=await fetch(url+'/api/projects/${projectId}/files/linked-workflow.ts'); if(!response.ok) throw new Error('Read saved workflow failed ('+response.status+'): '+await response.text()); const file=await response.json(); const state=await window.catamorphicDesktop.workspaceStateGet('${projectId}'); return file.content.includes('Team report') && state?.tabs?.some(tab=>tab.name==='linkedWorkflow'&&!tab.workflowDraft);})()`,
+      `(async()=>{const {url}=await window.catamorphicDesktop.getServerState(); const response=await fetch(url+'/api/projects/${projectId}/files/.catamorphic/workflows/linked-workflow.ts'); if(!response.ok) throw new Error('Read saved workflow failed ('+response.status+'): '+await response.text()); const file=await response.json(); const state=await window.catamorphicDesktop.workspaceStateGet('${projectId}'); return file.content.includes('Team report') && state?.tabs?.some(tab=>tab.name==='linkedWorkflow'&&!tab.workflowDraft);})()`,
       { label: "source saved and draft cleared" },
     );
   });

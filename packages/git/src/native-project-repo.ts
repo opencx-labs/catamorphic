@@ -146,12 +146,7 @@ export class NativeProjectRepo extends ProjectRepoImpl {
       const tracked = /^(\d{6}) [a-f0-9]+ [0-3]\t(.*)$/s.exec(record);
       if (tracked?.[1] === "160000") continue;
       const file = tracked?.[2] ?? record;
-      if (
-        !isPersonalFile(file) &&
-        !deleted.has(file) &&
-        !file.startsWith(".catamorphic/worktrees/")
-      )
-        files.add(file);
+      if (!isPersonalFile(file) && !deleted.has(file)) files.add(file);
     }
     return [...files].sort();
   }
@@ -392,11 +387,12 @@ export class NativeProjectRepo extends ProjectRepoImpl {
     await nativeGit(this.repoPath, [
       "clean",
       "-fd",
+      "-e",
+      ".catamorphic/app-data/",
+      "-e",
+      ".catamorphic/personal/",
       "--",
       ".",
-      ":!store/",
-      ":!.catamorphic/worktrees/",
-      ":!.catamorphic/personal/",
     ]);
   }
 

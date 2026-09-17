@@ -157,10 +157,10 @@ separate from fork lineage, and exposes spawn/list/wait/interrupt/attention
 operations. Native provider delegation is only an adapter optimization when it
 preserves that contract.
 
-Per-project skills live in the project repo under `.agents/skills/<name>/SKILL.md` (Agent Skills layout, `docs/decisions/0010`); the agent reads relevant skills from the sandbox checkout with its filesystem tools. `core.skills.list(...)` / `GET /api/projects/:id/skills` enumerate them.
+Per-project skills live in the project repo under `.catamorphic/skills/<name>/SKILL.md` (Agent Skills layout, `docs/decisions/0010`); the agent reads relevant skills from the sandbox checkout with its filesystem tools. `core.skills.list(...)` / `GET /api/projects/:id/skills` enumerate them.
 
 Project agents may declare provider-neutral connection requirements in
-`agents/<slug>.json`. A workflow that wakes that agent should also declare the
+`.catamorphic/agents/<slug>.json`. A workflow that wakes that agent should also declare the
 same aliases in its own `connections` array so the member reviews and
 authenticates everything needed before enabling unattended execution. MCP
 credentials use the same connection broker and are sufficient when the server

@@ -44,6 +44,7 @@ describe("SessionCheckouts", () => {
     pglite = new PGlite();
     checkouts = new SessionCheckouts({
       pglite,
+      worktreesDirectory: path.join(tmpDir, "worktrees"),
       projectRoot: (id) => (id === projectId ? rootPath : undefined),
     });
     await checkouts.init();
@@ -168,12 +169,7 @@ describe("SessionCheckouts", () => {
   });
 
   it("cleans up a managed worktree rejected by the locked policy check", async () => {
-    const managedPath = path.join(
-      rootPath,
-      ".catamorphic",
-      "worktrees",
-      sessionId,
-    );
+    const managedPath = path.join(tmpDir, "worktrees", projectId, sessionId);
     await expect(
       checkouts.createManaged({
         projectId,

@@ -113,7 +113,9 @@ suite("session artifact source lifecycle", () => {
       });
       expect(artifact.appName).toBe(`session-${artifact.id}`);
       expect(await repo.resolveRef("HEAD")).toBe(head);
-      expect(await repo.listFiles()).not.toContain("apps/review/src/App.tsx");
+      expect(await repo.listFiles()).not.toContain(
+        ".catamorphic/apps/review/src/App.tsx",
+      );
       const files = await artifacts.files({
         identity,
         projectId,
@@ -121,7 +123,9 @@ suite("session artifact source lifecycle", () => {
       });
       expect(files[artifact.sourcePath]).toBe(source);
       expect(files["unrelated.txt"]).toBeUndefined();
-      expect(files["contracts/package.json"]).toContain("@project/contracts");
+      expect(files[".catamorphic/contracts/package.json"]).toContain(
+        "@project/contracts",
+      );
     } finally {
       await repo.dispose();
     }
@@ -502,8 +506,8 @@ suite("session artifact source lifecycle", () => {
         name: "ambiguous",
         source,
         files: {
-          "workflows/src/first.ts": helper,
-          "workflows/src/second.ts": helper,
+          ".catamorphic/workflows/src/first.ts": helper,
+          ".catamorphic/workflows/src/second.ts": helper,
         },
       }),
     ).rejects.toThrow("Workflow export helper is ambiguous");
@@ -541,20 +545,24 @@ suite("session artifact source lifecycle", () => {
       kind: "app",
       name: "cleanup",
       source,
-      files: { "apps/cleanup/src/unused.ts": "export const old = true" },
+      files: {
+        ".catamorphic/apps/cleanup/src/unused.ts": "export const old = true",
+      },
     });
     const address = { identity, projectId, artifactId: artifact.id };
     await artifacts.update({
       ...address,
       revision: 1,
-      files: { "apps/cleanup/src/unused.ts": null },
+      files: { ".catamorphic/apps/cleanup/src/unused.ts": null },
     });
     expect(
-      (await artifacts.files(address))["apps/cleanup/src/unused.ts"],
+      (await artifacts.files(address))[
+        ".catamorphic/apps/cleanup/src/unused.ts"
+      ],
     ).toBeUndefined();
     expect(
       (await artifacts.files({ ...address, commitSha: artifact.commitSha }))[
-        "apps/cleanup/src/unused.ts"
+        ".catamorphic/apps/cleanup/src/unused.ts"
       ],
     ).toContain("old");
   });

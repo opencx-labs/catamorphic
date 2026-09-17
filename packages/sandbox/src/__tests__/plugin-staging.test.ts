@@ -65,6 +65,29 @@ describe("stagePluginDocs", () => {
     expect(types).toContain("number");
   });
 
+  it("stages host-owned references outside the project and points the agent there", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "plugin-host-"));
+    const project = path.join(tmpDir, "project");
+    const directory = path.join(tmpDir, "host", "plugin-docs");
+    await fs.mkdir(project);
+    const plugins = [
+      {
+        packageName: "@acme/example-sdk",
+        displayName: "Acme",
+        description: "",
+        files: { "README.md": "# Acme" },
+      },
+    ];
+    await stagePluginDocs(directory, plugins);
+    const docPath = path.join(
+      directory,
+      "_plugins/acme__example-sdk/README.md",
+    );
+    expect(await fs.readFile(docPath, "utf8")).toBe("# Acme");
+    expect(buildPluginsPreamble(plugins, { directory })).toContain(docPath);
+    expect(await fs.readdir(project)).toEqual([]);
+  });
+
   it("is a no-op when no plugins are passed", async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-stage-empty-"));
     await stagePluginDocs(tmpDir, undefined);

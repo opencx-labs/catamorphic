@@ -122,7 +122,7 @@ export interface CatamorphicCoreConfig {
   /** Distinct leased execution instance beneath the logical host authority. */
   workerNode?: { id: string; token: string };
   /**
-   * How long a project's parsed `roles/*.json` set is trusted before it is
+   * How long a project's parsed `.catamorphic/roles/*.json` set is trusted before it is
    * re-read from the shared origin (ADR 0055). Role *definitions* may lag
    * by this much; membership is read fresh on every resolve. Default 10s.
    */
@@ -279,7 +279,7 @@ export interface CatamorphicCoreConfig {
   projectSeeds?: (defaults: Record<string, string>) => Record<string, string>;
   /**
    * Transform the default host-tier skills (ADR 0049): playbooks the host
-   * ships, listed alongside a project's own `.agents/skills/` without being
+   * ships, listed alongside a project's own `.catamorphic/skills/` without being
    * written into the project repo. Receives the framework defaults keyed by
    * `<name>/SKILL.md`; return the final map. Replacing or removing entries
    * is legitimate. A project skill with the same name shadows a host skill.
@@ -341,7 +341,7 @@ export class CatamorphicCore {
   readonly connectionAdmission?: ConnectionAdmissionService;
   readonly connectionBroker?: ConnectionBroker;
   readonly connectionGrants?: ConnectionCapabilityGrantsService;
-  /** Committed `roles/*.json` and their expansion into identities (ADR 0055). */
+  /** Committed `.catamorphic/roles/*.json` and their expansion into identities (ADR 0055). */
   readonly roles: RolesService;
   /** Stock `user → roles + grants` per project (ADR 0055). */
   readonly memberships: MembershipsService;
@@ -400,7 +400,7 @@ export class CatamorphicCore {
     this.seedFiles = config.projectSeeds?.({ ...SEED_SKILLS }) ?? SEED_SKILLS;
     // Imported repositories stay untouched. Offer their missing framework
     // skills through the existing host tier; project/user skills still win.
-    const skillPrefix = ".agents/skills/";
+    const skillPrefix = ".catamorphic/skills/";
     const defaultHostSkills = {
       ...Object.fromEntries(
         Object.entries(this.seedFiles)

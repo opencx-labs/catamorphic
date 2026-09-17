@@ -14,7 +14,7 @@ export class ProjectRootsStore {
    * In-memory mirror of the table, warmed at init and maintained by
    * set/delete. Exists for {@link getSync}: the coding-agent registry's
    * `get(id)` is synchronous (core contract) but project-agent resolution
-   * needs the project's folder to read `agents/<slug>.json`.
+   * needs the project's folder to read `.catamorphic/agents/<slug>.json`.
    */
   private readonly cache = new Map<string, string>();
   private readonly automaticCheckpoints = new Set<string>();

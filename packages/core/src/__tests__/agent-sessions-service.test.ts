@@ -127,8 +127,8 @@ describe("parsePorcelain", () => {
 describe("seed skill set", () => {
   // Workflow authoring is exercised in workflow-skill-recipes.test.ts.
   it("splits app mechanics from app doctrine (ADR 0049)", () => {
-    const mechanics = SEED_SKILLS[".agents/skills/building-apps/SKILL.md"];
-    const doctrine = SEED_SKILLS[".agents/skills/designing-apps/SKILL.md"];
+    const mechanics = SEED_SKILLS[".catamorphic/skills/building-apps/SKILL.md"];
+    const doctrine = SEED_SKILLS[".catamorphic/skills/designing-apps/SKILL.md"];
     expect(mechanics).toBeDefined();
     expect(doctrine).toBeDefined();
 
@@ -211,7 +211,7 @@ const fakeSandbox = ({
   skill: boolean;
 }) => ({
   executeCommand: vi.fn(async (_id: string, command: string) => ({
-    exitCode: command.includes("workflows/package.json")
+    exitCode: command.includes(".catamorphic/workflows/package.json")
       ? workspace
         ? 0
         : 1

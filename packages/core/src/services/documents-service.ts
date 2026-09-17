@@ -23,6 +23,7 @@ import {
   readProgramFiles,
   withProgram,
 } from "./program-reader.js";
+import { isProjectDataPath } from "./project-workspace.js";
 import { requireTenantProject } from "./projects-service.js";
 
 /**
@@ -246,6 +247,7 @@ export function documentAccessAllowed(
   path: string,
   access: "read" | "write",
 ): boolean {
+  if (isProjectDataPath(path)) return false;
   if (identity.scope === undefined) return true;
   const store = isStorePath(path);
   if (!store) {

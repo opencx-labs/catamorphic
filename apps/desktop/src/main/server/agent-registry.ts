@@ -9,6 +9,7 @@ import type {
   ToolPermissionBroker,
 } from "@catamorphic/core";
 import {
+  AGENT_DEFINITIONS_DIR,
   connectionMcpServerName,
   definitionHash,
   projectAgentId,
@@ -83,7 +84,7 @@ export interface DesktopAgentRegistryDeps {
   ) => AgentMcpServerConfig | undefined;
   /**
    * Project folder lookup for PROJECT agents (`project:<id>:<slug>`), whose
-   * committed `agents/<slug>.json` definitions are read from disk here —
+   * committed `.catamorphic/agents/<slug>.json` definitions are read from disk here —
    * synchronously, because the registry contract is synchronous.
    */
   projectRootPath?: (projectId: string) => string | undefined;
@@ -588,7 +589,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         missing: true,
       };
     }
-    const agentsDir = path.join(rootPath, "agents");
+    const agentsDir = path.join(rootPath, AGENT_DEFINITIONS_DIR);
     let rawText: string;
     try {
       rawText = fs.readFileSync(path.join(agentsDir, `${slug}.json`), "utf-8");
@@ -993,6 +994,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             return this.wrapErrors(
               this.withWorkspace(
                 new ClaudeCodeAgent({
+                  pluginDirectory: path.join(
+                    this.agentHome(config.id),
+                    "plugin-docs",
+                  ),
                   model: config.model || undefined,
                   effort: config.effort,
                   permissionMode:
@@ -1042,6 +1047,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             return this.wrapErrors(
               this.withWorkspace(
                 new CodexAgent({
+                  pluginDirectory: path.join(
+                    this.agentHome(config.id),
+                    "plugin-docs",
+                  ),
                   onToolPermission: this.mcp.permissionHandler({
                     config,
                     profileId,
@@ -1248,7 +1257,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     try {
       const raw = JSON.parse(
         fs.readFileSync(
-          path.join(root, "agents", `${project.slug}.json`),
+          path.join(root, AGENT_DEFINITIONS_DIR, `${project.slug}.json`),
           "utf8",
         ),
       );
@@ -1274,7 +1283,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     try {
       const raw = JSON.parse(
         fs.readFileSync(
-          path.join(root, "agents", `${project.slug}.json`),
+          path.join(root, AGENT_DEFINITIONS_DIR, `${project.slug}.json`),
           "utf8",
         ),
       );

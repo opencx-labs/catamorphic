@@ -22,10 +22,9 @@ const STAGING_BATCH_SIZE = 128;
 
 /**
  * Dot-directories that are project content despite the hidden-file skip
- * below. `.agents/` holds per-project agent skills (`.agents/skills/…`) and
- * `.catamorphic/` holds the project manifest and project-scoped config
- * (ADR 0043); both must be committed, uploaded to sandboxes, and listed
- * like any other file.
+ * below. `.catamorphic/` holds authored capabilities and shared config;
+ * `.agents/` may contain the owner's harness instructions. Git ignore rules
+ * distinguish local data and build outputs from versioned content.
  */
 const ALLOWED_DOT_DIRS = new Set([".agents", ".catamorphic"]);
 

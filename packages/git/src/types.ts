@@ -108,7 +108,7 @@ export interface ProjectRepo {
     options?: FileReadOptions,
   ): Promise<Record<string, string>>;
   /**
-   * The files under one directory prefix at a ref (e.g. `roles/`), without
+   * The files under one directory prefix at a ref (e.g. `.catamorphic/roles/`), without
    * materializing the whole tree. `prefix` is a directory path with its
    * trailing slash; results are keyed by full path.
    */

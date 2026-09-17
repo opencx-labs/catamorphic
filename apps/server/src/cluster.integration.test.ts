@@ -87,14 +87,15 @@ it.skipIf(!process.env.DATABASE_URL)(
               defaultEnvironment: "primary",
               defaultAgent: "researcher",
             }),
-            "agents/researcher.json": JSON.stringify({
+            ".catamorphic/agents/researcher.json": JSON.stringify({
               version: 1,
               name: "Researcher",
               kind: "builtin",
               environment: { allowed: ["secondary"], preferred: ["secondary"] },
             }),
-            "agents/researcher.md": "Use the shared company sources.",
-            "roles/member.json": JSON.stringify({
+            ".catamorphic/agents/researcher.md":
+              "Use the shared company sources.",
+            ".catamorphic/roles/member.json": JSON.stringify({
               version: 1,
               name: "Member",
               agents: ["researcher"],

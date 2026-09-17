@@ -90,23 +90,21 @@ export class DevSandboxService {
       }
       const workflowPackage = await resolveWorkflowPackageFallback({
         hasLockfile: await Promise.all(
-          ["bun.lock", "bun.lockb"].map((file) =>
+          [".catamorphic/bun.lock", ".catamorphic/bun.lockb"].map((file) =>
             repo.readFile(file).then(
               () => true,
               () => false,
             ),
           ),
         ).then((present) => present.some(Boolean)),
-        packageJson:
-          (await repo
-            .readFile(`${WORKFLOW_SOURCE_ROOT}/package.json`)
-            .catch(() => undefined)) ??
-          (await repo.readFile("package.json").catch(() => undefined)),
+        packageJson: await repo
+          .readFile(`${WORKFLOW_SOURCE_ROOT}/package.json`)
+          .catch(() => undefined),
       });
       await uploadPluginPayloads({
         provider: this.deps.provider,
         sandboxId: handle.providerId,
-        projectDir: this.projectDirectory,
+        projectDir: `${this.projectDirectory}/.catamorphic`,
         plugins: workflowPackage ? [workflowPackage] : undefined,
       });
       return {

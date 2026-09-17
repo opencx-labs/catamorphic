@@ -1209,7 +1209,7 @@ describe("agents and profiles", () => {
       `return $$('[role="log"] article').some((el) =>
         el.textContent.includes('terminal result:') &&
         el.textContent.includes('coordination-same-turn.txt') &&
-        el.textContent.includes('/.catamorphic/worktrees/'));`,
+        el.textContent.includes('/worktrees/'));`,
       {
         timeoutMs: 30_000,
         label: "same-turn worktree edit checkpointed before next turn",

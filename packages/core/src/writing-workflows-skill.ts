@@ -77,7 +77,7 @@ Labels describe real behavior: a formatting example must not claim to send mail.
 
 Declare \`triggers: [trigger("literal-kind", { constant: "config" })]\` alongside
 \`steps\`. Kind names and config/payload shapes come from the host-generated
-\`workflows/src/catamorphic-triggers.d.ts\`. Config is inline constant data, not an
+\`.catamorphic/workflows/src/catamorphic-triggers.d.ts\`. Config is inline constant data, not an
 expression evaluated at runtime. Conditions belong in ordinary workflow code.
 
 The trigger payload is the first scope's input. Multiple triggers require an
@@ -103,7 +103,7 @@ needs a stable member session to perform agent work, not just display a reminder
 
 ## App contracts and secrets
 
-Expose only intended workflows from \`workflows/src/app-api.ts\`; use \`building-apps\`
+Expose only intended workflows from \`.catamorphic/workflows/src/app-api.ts\`; use \`building-apps\`
 for the app contract and client. App inputs are untrusted: validate identifiers,
 clamp numbers, and bound arrays before acting. Inputs and outputs must survive
 JSON: use ISO strings and plain data, not dates, maps, streams, or functions.

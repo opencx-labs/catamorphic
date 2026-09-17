@@ -3,6 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  appScaffold,
+  projectDataDirectory,
+  workspaceFiles,
+} from "@catamorphic/core";
 import type {
   AgentEvent,
   CodingAgentProvider,
@@ -45,10 +50,14 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
     mkdirp: async (_sandboxId, directory) => {
       fs.mkdirSync(directory, { recursive: true });
     },
-    openSupervisor: async ({ runtimeDirectory, env }) => {
+    openSupervisor: async ({ sandboxId, runtimeDirectory, env }) => {
       const child = spawn("bun", ["run", "entry.mjs"], {
         cwd: runtimeDirectory,
-        env: { PATH: process.env.PATH, ...env },
+        env: {
+          PATH: process.env.PATH,
+          ...this.environments.get(sandboxId),
+          ...env,
+        },
         stdio: ["pipe", "pipe", "inherit"],
       });
       return {
@@ -66,20 +75,49 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
     },
   });
   private readonly roots = new Map<string, string>();
+  private readonly environments = new Map<string, Record<string, string>>();
+  private readonly deploymentDirectories = new Map<string, string>();
   private counter = 0;
 
-  constructor() {
+  constructor(
+    private readonly projectDataDirectory?: (input: {
+      projectId: string;
+    }) => Promise<string | undefined>,
+  ) {
     this.workspaceRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "catamorphic-e2e-sbx-"),
     );
   }
 
-  async createSandbox(_opts: CreateSandboxOpts): Promise<SandboxHandle> {
+  async createSandbox(opts: CreateSandboxOpts): Promise<SandboxHandle> {
     this.counter += 1;
     const id = `e2e-sandbox-${this.counter}`;
     // All sandboxes share workspaceRoot (callers only ever use one dev
     // sandbox per project/user in these tests).
     this.roots.set(id, this.workspaceRoot);
+    if (
+      opts.labels?.purpose === "deployment-runtime" &&
+      opts.labels.deploymentArtifactId
+    ) {
+      this.deploymentDirectories.set(
+        id,
+        path.join(
+          this.workspaceRoot,
+          "deployments",
+          opts.labels.deploymentArtifactId,
+        ),
+      );
+    }
+    const data =
+      opts.labels?.purpose === "deployment-runtime" && opts.labels.projectId
+        ? await this.projectDataDirectory?.({
+            projectId: opts.labels.projectId,
+          })
+        : undefined;
+    this.environments.set(id, {
+      ...opts.envVars,
+      ...(data ? { CATAMORPHIC_APP_DATA_DIR: data } : {}),
+    });
     return { id, providerId: id, sandboxType: "dev", status: "started" };
   }
 
@@ -89,6 +127,14 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
   }
   async destroySandbox(sandboxId: string): Promise<void> {
     await this.deploymentRuntime.releaseSandbox({ sandboxId });
+    const directory = this.deploymentDirectories.get(sandboxId);
+    if (directory && fs.existsSync(directory)) {
+      await execFileAsync("chmod", ["-R", "u+w", directory]);
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+    this.deploymentDirectories.delete(sandboxId);
+    this.environments.delete(sandboxId);
+    this.roots.delete(sandboxId);
   }
 
   async getSandboxStatus(_sandboxId: string): Promise<SandboxStatus> {
@@ -96,7 +142,7 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
   }
 
   async executeCommand(
-    _sandboxId: string,
+    sandboxId: string,
     command: string,
     opts?: ExecOpts,
   ): Promise<ExecResult> {
@@ -106,7 +152,11 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
         ["-c", command],
         {
           cwd: opts?.cwd ?? this.workspaceRoot,
-          env: { ...process.env, ...opts?.env },
+          env: {
+            ...process.env,
+            ...this.environments.get(sandboxId),
+            ...opts?.env,
+          },
           timeout: (opts?.timeout ?? 120) * 1000,
           maxBuffer: 16 * 1024 * 1024,
         },
@@ -781,6 +831,64 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       return;
     }
 
+    if (prompt.includes("build contained app")) {
+      const build = workspaceTools.find((tool) => tool.name === "build_app");
+      if (!build) throw new Error("App building is unavailable");
+      const result = await build.execute(
+        { name: "catalog" },
+        state.toolContext,
+      );
+      yield {
+        type: "text",
+        content: `Catalog build: ${JSON.stringify(result)}`,
+      };
+      yield { type: "done" };
+      return;
+    }
+
+    if (prompt.includes("contained workspace")) {
+      await this.sandboxProvider.uploadFiles(
+        state.sandboxId,
+        {
+          ...workspaceFiles({ name: "contained-capabilities" }),
+          ...appScaffold({ name: "catalog" }),
+          ".catamorphic/apps/catalog/src/app.tsx":
+            "export function App() { return <main><h1>Catalog</h1><p>The contained workspace is ready.</p></main>; }\n",
+          ".catamorphic/workflows/src/catalog.ts": `import { defineWorkflow } from "@catamorphic/workflow";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+/** @displayname Save catalog
+ * @param name - @displayname Catalog name
+ */
+async function saveCatalog({ name }: { name: string }) {
+  "use step";
+  const root = process.env.CATAMORPHIC_APP_DATA_DIR;
+  if (!root) throw new Error("Persistent project data is unavailable");
+  const directory = root + "/" + name;
+  await mkdir(directory, { recursive: true });
+  const file = directory + "/runs.txt";
+  const runs = Number(await readFile(file, "utf8").catch(() => "0")) + 1;
+  await writeFile(file, String(runs));
+  return { ready: true, runs };
+}
+export const catalog = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: async () => saveCatalog({ name: "catalog" }) })],
+}));
+`,
+        },
+        state.workingDirectory,
+      );
+      const data = projectDataDirectory({ root: state.workingDirectory });
+      fs.mkdirSync(path.join(data, "catalog"), { recursive: true });
+      fs.writeFileSync(path.join(data, "catalog", "items.json"), "[]\n");
+      yield {
+        type: "text",
+        content:
+          "Created the workflow, app, and local data inside .catamorphic/. [Open catalog](catamorphic://workflow/catalog).",
+      };
+      yield { type: "done" };
+      return;
+    }
+
     if (prompt.includes("artifact links")) {
       const files = {
         "artifact.pdf": pdfArtifactSource,
@@ -788,9 +896,9 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
           "# Linked notes\n\nAn artifact opened from an agent reply.\n",
         "linked-source.ts":
           "// Linked source\nexport const first = 1;\nexport const second = 2;\n",
-        "linked-workflow.ts":
+        ".catamorphic/workflows/linked-workflow.ts":
           'import { defineWorkflow } from "@catamorphic/workflow";\n/** @displayname Make greeting\n * @param name - @displayname Name\n */\nasync function greet({ name }: { name: string }) { "use step"; return { greeting: "Hello " + name }; }\n/** @displayname Linked workflow */\nexport const linkedWorkflow = defineWorkflow(({ defineBoundary }) => ({ steps: [defineBoundary({ run: async () => greet({ name: "World" }) })] }));\n',
-        "apps/linked-app/package.json":
+        ".catamorphic/apps/linked-app/package.json":
           '{"name":"linked-app","catamorphic":{"displayName":"Linked app"}}',
       };
       await this.sandboxProvider.uploadFiles(

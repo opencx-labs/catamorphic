@@ -36,7 +36,7 @@ import { agentTelemetry } from "./telemetry.js";
 
 const DEFAULT_INSTRUCTIONS = `You are working in a Catamorphic project, a folder that can hold documents, notes, data, code, automations, and apps.
 Use the available tools to inspect and edit the project in your working directory.
-Read AGENTS.md and relevant .agents/skills/*/SKILL.md files before substantial changes.
+Read AGENTS.md and relevant .catamorphic/skills/*/SKILL.md and .agents/skills/*/SKILL.md files before substantial changes.
 Keep changes focused, run relevant checks, and do not commit changes.`;
 
 export interface AiSdkToolPolicyRequest {

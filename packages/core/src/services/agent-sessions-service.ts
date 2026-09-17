@@ -413,7 +413,7 @@ function checkpointMessage(userMessage: string): string {
  * replace it (or drop it) with `CatamorphicCoreConfig.standingAgentPrompt`
  * (ADR 0049).
  */
-const WORKFLOW_AUTHORING_SYSTEM_PROMPT = `A Catamorphic project is a folder that can hold any kind of work — documents, notes, data, code, automations (workflows), and apps, in any mix. Read what is actually in the project before assuming what it is about; many projects contain no workflows at all. The rules below apply only when you create or edit workflows: Every workflow is an exported defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps })) value; runs execute ordered boundary and batch scopes against an immutable deployment, with continuation state persisted in Postgres. There is no "use workflow" directive — IO and business operations live in "use step" functions called from boundary run bodies. Cancellation is a host-issued terminal control declared with controls: { cancel: true }, never a BoundaryContext transition. A workflow may subscribe to host-defined trigger kinds with triggers: [trigger("kind", config)] — the kind name must be a string literal, the config a constant expression, both typed by the generated workflows/src/catamorphic-triggers.d.ts; the fired payload becomes the first step's input. Declare provider-neutral connections at workflow definition level; roles separately grant workflow, agent, Environment, and connection aliases, and each member explicitly enables unattended execution. Use context.host["catamorphic.sessions"].wake with a stable key and project-agent slug when a member-owned workflow should run an agent and surface its reusable session in desktop and PWA; service-owned enablements cannot create personal notifications. Only exported defineBatchStep calls inside defineBatch.process are physically coalesced. For authoring primitives, use the project's established SaaS wrapper when present; otherwise use @catamorphic/workflow. Never create local copies. For session monitors, wakeups, and session actions, load the host session-workflows skill. Before authoring, load the host workflow-lifecycle skill when offered and choose session lifetime, source visibility, and execution Environment separately. Temporary checks use the available create_watcher/create_github_watcher tool with source passed directly, never files added to the shared working tree. Reusable project definitions belong under workflows/src/. Member-owned enablement does not make source private; use only a host-supported private artifact capability for private saved workflows. Project files may be checkpointed and automatically synced; neither an uncommitted file nor an unpushed branch is a privacy boundary. Saving, sharing, deploying, and enabling are separate outcomes; report only those confirmed by the host. Consult .agents/skills/writing-workflows/SKILL.md, .agents/skills/durable-workflows/SKILL.md, and .agents/skills/batch-workflows/SKILL.md, when present, before creating or restructuring workflows.`;
+const WORKFLOW_AUTHORING_SYSTEM_PROMPT = `A Catamorphic project is a folder that can hold any kind of work — documents, notes, data, code, automations (workflows), and apps, in any mix. Read what is actually in the project before assuming what it is about; many projects contain no workflows at all. The rules below apply only when you create or edit workflows: Every workflow is an exported defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps })) value; runs execute ordered boundary and batch scopes against an immutable deployment, with continuation state persisted in Postgres. There is no "use workflow" directive — IO and business operations live in "use step" functions called from boundary run bodies. Cancellation is a host-issued terminal control declared with controls: { cancel: true }, never a BoundaryContext transition. A workflow may subscribe to host-defined trigger kinds with triggers: [trigger("kind", config)] — the kind name must be a string literal, the config a constant expression, both typed by the generated .catamorphic/workflows/src/catamorphic-triggers.d.ts; the fired payload becomes the first step's input. Declare provider-neutral connections at workflow definition level; roles separately grant workflow, agent, Environment, and connection aliases, and each member explicitly enables unattended execution. Use context.host["catamorphic.sessions"].wake with a stable key and project-agent slug when a member-owned workflow should run an agent and surface its reusable session in desktop and PWA; service-owned enablements cannot create personal notifications. Only exported defineBatchStep calls inside defineBatch.process are physically coalesced. For authoring primitives, use the project's established SaaS wrapper when present; otherwise use @catamorphic/workflow. Never create local copies. For session monitors, wakeups, and session actions, load the host session-workflows skill. Before authoring, load the host workflow-lifecycle skill when offered and choose session lifetime, source visibility, and execution Environment separately. Temporary checks use the available create_watcher/create_github_watcher tool with source passed directly, never files added to the shared working tree. Reusable project definitions belong under .catamorphic/workflows/src/. Member-owned enablement does not make source private; use only a host-supported private artifact capability for private saved workflows. Project files may be checkpointed and automatically synced; neither an uncommitted file nor an unpushed branch is a privacy boundary. Saving, sharing, deploying, and enabling are separate outcomes; report only those confirmed by the host. Consult .catamorphic/skills/writing-workflows/SKILL.md, .catamorphic/skills/durable-workflows/SKILL.md, and .catamorphic/skills/batch-workflows/SKILL.md, when present, before creating or restructuring workflows.`;
 
 export function buildAgentSystemPrompt({
   systemPrompt,
@@ -500,7 +500,7 @@ async function ensureWorkflowSkill({
   // docs-only project that deleted it must not have it resurrect (ADR 0043).
   const workspace = await sandboxProvider.executeCommand(
     sandboxProviderId,
-    `test -f ${shellQuote(`${projectDir}/workflows/package.json`)}`,
+    `test -f ${shellQuote(`${projectDir}/.catamorphic/workflows/package.json`)}`,
   );
   if (workspace.exitCode !== 0) return false;
 
@@ -608,9 +608,9 @@ interface AgentSessionsDeps {
   /** Tenant app policy, for scope resolution (app refs). */
   appPolicies?: AppPoliciesService;
   /**
-   * The documents surface. When present, `store/` in the caller's working
+   * The documents surface. When present, `.catamorphic/app-data/store/` in the caller's working
    * copy is pulled before each turn and shipped after it AS THE CALLER
-   * (ADR 0055): a member's agent writing `store/customers/acme/notes.md`
+   * (ADR 0055): a member's agent writing `.catamorphic/app-data/store/customers/acme/notes.md`
    * lands it in the store with the right author, and never anything the
    * member may not write. Hosts whose working copies are the truth (the
    * desktop's local projects) leave it unset.
@@ -5965,7 +5965,7 @@ export class AgentSessionsService {
    * clean or the commit failed — a checkpoint must never break a turn.
    */
   /**
-   * The folder whose `store/` mirrors the caller's store view: the caller's
+   * The folder whose `.catamorphic/app-data/store/` mirrors the caller's store view: the caller's
    * own dev copy, which sandbox agents' edits sync back into. Host-execution
    * agents work in ONE folder per project shared by every caller, so their
    * store/ is never synced (one member's pulled files would be readable by

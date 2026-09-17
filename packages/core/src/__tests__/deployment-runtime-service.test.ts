@@ -51,7 +51,6 @@ describe("DeploymentRuntimeService lifecycle", () => {
         projectId: "project-1",
         artifact,
         files: {},
-        originalFiles: {},
       }),
     ).rejects.toThrow("incompatible transform or runtime versions");
     expect(provider.createSandbox).not.toHaveBeenCalled();
@@ -97,8 +96,10 @@ describe("DeploymentRuntimeService lifecycle", () => {
             readyAt: old.toISOString(),
             lastUsedAt: old.toISOString(),
           },
-          files: { "package.json": "{}", "bun.lock": "locked" },
-          originalFiles: {},
+          files: {
+            ".catamorphic/package.json": "{}",
+            ".catamorphic/bun.lock": "locked",
+          },
         }),
       ).rejects.toThrow(
         failure === "upload" ? "Upload failed" : "Install failed",
@@ -157,7 +158,6 @@ describe("DeploymentRuntimeService lifecycle", () => {
         lastUsedAt: old.toISOString(),
       },
       files: {},
-      originalFiles: {},
     });
 
     expect(provider.startSandbox).toHaveBeenCalledWith("sandbox-stopped");

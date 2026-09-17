@@ -21,6 +21,11 @@ import {
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 
 export interface LocalProcessProviderConfig {
+  /** Host-owned persistent data for a project's deployment runtimes. Never copied into source snapshots. */
+  projectDataDirectory?: (input: {
+    projectId: string;
+  }) => Promise<string | undefined>;
+
   /**
    * Directory that holds one subdirectory per sandbox. Defaults to a stable
    * path under the OS temp dir; pass a persistent directory for deployments
@@ -59,6 +64,7 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
   readonly workspaceRoot = "/workspace";
   readonly deploymentRuntime: DeploymentRuntimeProvider;
   private readonly root: string;
+  private readonly projectDataDirectory: LocalProcessProviderConfig["projectDataDirectory"];
   private readonly processes = new Map<string, Set<ChildProcess>>();
   private readonly stopped = new Set<string>();
   private readonly baseEnv: Record<string, string>;
@@ -68,6 +74,7 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
   >();
 
   constructor(config?: LocalProcessProviderConfig) {
+    this.projectDataDirectory = config?.projectDataDirectory;
     this.root =
       config?.root ?? path.join(os.tmpdir(), "catamorphic-local-process");
     fs.mkdirSync(this.root, { recursive: true });
@@ -94,7 +101,18 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     for (const dir of ["workspace", "home", "tmp"]) {
       fs.mkdirSync(path.join(this.root, id, dir), { recursive: true });
     }
-    this.sandboxes.set(id, { envVars: opts.envVars ?? {} });
+    const dataDirectory =
+      opts.labels?.purpose === "deployment-runtime" && opts.labels.projectId
+        ? await this.projectDataDirectory?.({
+            projectId: opts.labels.projectId,
+          })
+        : undefined;
+    this.sandboxes.set(id, {
+      envVars: {
+        ...opts.envVars,
+        ...(dataDirectory ? { CATAMORPHIC_APP_DATA_DIR: dataDirectory } : {}),
+      },
+    });
     return { id, providerId: id, sandboxType: "execution", status: "started" };
   }
 

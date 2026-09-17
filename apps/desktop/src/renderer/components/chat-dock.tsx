@@ -258,9 +258,9 @@ interface TurnEvent {
   filePath?: string;
 }
 
-/** Project-app name from a file path under apps/<name>/, if any. */
+/** Project-app name from a file path under .catamorphic/apps/<name>/, if any. */
 const appNameFromPath = (filePath: string | undefined): string | undefined =>
-  filePath?.match(/(?:^|\/)apps\/([a-z0-9][a-z0-9-]*)\//)?.[1];
+  filePath?.match(/(?:^|\/)\.catamorphic\/apps\/([a-z0-9][a-z0-9-]*)\//)?.[1];
 
 const firstLine = (value: string | undefined): string =>
   (value ?? "").split("\n", 1)[0]?.trim() ?? "";
@@ -288,7 +288,7 @@ function activityChips(
   let currentTurnEvents: TurnEvent[] = [];
   let currentTurnHasSubagents = false;
   const watchers = new Map<string, { label: string; ended: boolean }>();
-  // Apps the agent worked on (file edits under apps/<name>/); active while
+  // Apps the agent worked on (file edits under .catamorphic/apps/<name>/); active while
   // the CURRENT turn touches them.
   const apps = new Map<string, { active: boolean }>();
   // Tool calls whose tool declares an MCP Apps view; later events with the

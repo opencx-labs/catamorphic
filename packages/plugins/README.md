@@ -474,8 +474,10 @@ system prompt, which is exactly why early demos hallucinated SDK calls.
 
 - The shared staging helpers (`stagedPluginFiles` / `stagePluginDocs` in
   `packages/sandbox/src/coding-agent/plugin-staging.ts`) write each plugin's
-  README + d.ts into `<workingDirectory>/_plugins/<slug>/` inside the dev
-  sandbox, where the agent can read them directly.
+  README + d.ts into `<pluginDirectory>/_plugins/<slug>/`, where the agent
+  can read them directly. Hosts may supply `pluginDirectory` on any harness;
+  it defaults to the working directory. The desktop supplies a host-owned
+  directory outside the project for all three harnesses.
 - `buildPluginsPreamble()` generates a Markdown block listing each plugin
   and the absolute on-disk path of its staged docs.
 - The preamble is prepended to the first message passed to

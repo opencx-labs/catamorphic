@@ -56,7 +56,7 @@ host policy; Catamorphic enforces the resolved result. Never hardcode ids or
 use missing scope as an ordinary builder shortcut.
 
 For company-brain hosts, commit reusable access policy as
-`roles/<slug>.json`. A role grants workflow names, project-agent slugs,
+`.catamorphic/roles/<slug>.json`. A role grants workflow names, project-agent slugs,
 Environment names, provider-neutral connection aliases, document paths, and
 namespaced project permissions. Catamorphic reserves `memberships:manage` and
 `roles:manage`; embedders may interpret additional names in their own services

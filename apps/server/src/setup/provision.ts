@@ -60,7 +60,7 @@ export async function provisionStockUser(args: {
       );
       if (!valid) {
         throw new Error(
-          `Project ${assignment.projectId} has no valid committed role "${role}". Add roles/${role}.json before provisioning this membership.`,
+          `Project ${assignment.projectId} has no valid committed role "${role}". Add .catamorphic/roles/${role}.json before provisioning this membership.`,
         );
       }
     }

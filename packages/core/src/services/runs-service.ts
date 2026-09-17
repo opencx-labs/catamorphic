@@ -1,9 +1,5 @@
 import type { DB, Json } from "@catamorphic/db";
-import {
-  fetchRemote,
-  type CloneSource as GitCloneSource,
-  type ProjectManager,
-} from "@catamorphic/git";
+import { fetchRemote, type ProjectManager } from "@catamorphic/git";
 import { getTracer, setSpanCorrelation, withSpan } from "@catamorphic/otel";
 import {
   executionFiles,
@@ -493,11 +489,9 @@ interface RunsServiceDeps {
 
 interface PreparedSource {
   files: Record<string, string>;
-  originalFiles: Record<string, string>;
   workflowFile: string;
   graph: WorkflowGraph;
   commitSha: string | null;
-  cloneSource?: GitCloneSource & { commitSha: string };
   workflowPackage?: WorkflowPackagePayload;
 }
 
@@ -1497,8 +1491,6 @@ export class RunsService {
       projectId: args.projectId,
       artifact,
       files: source.files,
-      originalFiles: source.originalFiles,
-      cloneSource: source.cloneSource,
       plugins: runtimePackages({
         plugins: plugins?.plugins,
         workflowPackage: source.workflowPackage,
@@ -1591,8 +1583,6 @@ export class RunsService {
           projectId: args.projectId,
           artifact,
           files: source.files,
-          originalFiles: source.originalFiles,
-          cloneSource: source.cloneSource,
           plugins: runtimePackagesForArtifact,
         });
         const base = {
@@ -2059,23 +2049,7 @@ export class RunsService {
           preparedSourceKey({ ...args, commitSha: args.commitSha }),
         )
       : undefined;
-    const resolved = await (cached ??
-      this.loadProductionSource({ ...args, remote }));
-
-    // Clone credentials are short-lived, so they are fetched per call and
-    // layered onto the cached parse rather than cached with it.
-    const cloneSource = remote.getCloneSource
-      ? await remote.getCloneSource(args.identity.tenantId, args.projectId, {
-          scope: "read",
-        })
-      : undefined;
-    return {
-      ...resolved,
-      cloneSource:
-        cloneSource && resolved.commitSha
-          ? { ...cloneSource, commitSha: resolved.commitSha }
-          : undefined,
-    };
+    return cached ?? this.loadProductionSource({ ...args, remote });
   }
 
   /**
@@ -2121,13 +2095,14 @@ export class RunsService {
         if (!commitSha)
           throw new ProductionDeploymentNotFoundError(args.projectId);
         const files = await repo.readAllFilesAtRef(commitSha, {
-          filter: (file) => !file.startsWith("apps/"),
+          filter: (file) =>
+            file.startsWith(".catamorphic/") &&
+            !file.startsWith(".catamorphic/app-data/"),
         });
         return await prepareSource({
           projectId: args.projectId,
           workflowName: args.workflowName,
           files,
-          originalFiles: files,
           commitSha,
         });
       } finally {
@@ -2289,7 +2264,6 @@ async function prepareSource(args: {
   projectId: string;
   workflowName: string;
   files: Record<string, string>;
-  originalFiles: Record<string, string>;
   commitSha: string | null;
 }): Promise<PreparedSource> {
   const files = executionFiles(args.files);
@@ -2302,25 +2276,24 @@ async function prepareSource(args: {
   }
   return {
     files: prepared.files,
-    originalFiles: executionFiles(args.originalFiles),
     workflowFile: prepared.graph.filePath,
     graph: prepared.graph,
     commitSha: args.commitSha,
     workflowPackage: await resolveWorkflowPackageFallback({
       packageJson: workflowPackageJson(files),
-      hasLockfile: "bun.lock" in files || "bun.lockb" in files,
+      hasLockfile:
+        ".catamorphic/bun.lock" in files || ".catamorphic/bun.lockb" in files,
     }),
   };
 }
 
 /**
- * The workflow package declaration lives in the workflows workspace member;
- * projects predating the workspace layout keep it at the root.
+ * The workflow package declaration lives in the contained workflows member.
  */
 function workflowPackageJson(
   files: Record<string, string>,
 ): string | undefined {
-  return files[`${WORKFLOW_SOURCE_ROOT}/package.json`] ?? files["package.json"];
+  return files[`${WORKFLOW_SOURCE_ROOT}/package.json`];
 }
 
 function mapRun(args: {

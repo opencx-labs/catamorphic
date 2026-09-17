@@ -83,7 +83,7 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
     };
 
     await commitRoles({
-      "roles/csm.json": JSON.stringify({
+      ".catamorphic/roles/csm.json": JSON.stringify({
         version: 1,
         name: "CSM",
         agents: ["csm-assistant"],
@@ -93,19 +93,19 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
           { path: "store/customers/{customer}/**", access: "write" },
         ],
       }),
-      "roles/admin.json": JSON.stringify({
+      ".catamorphic/roles/admin.json": JSON.stringify({
         version: 1,
         name: "Admin",
         builder: true,
         permissions: ["memberships:manage", "roles:manage"],
         documents: ["store/**"],
       }),
-      "roles/membership-manager.json": JSON.stringify({
+      ".catamorphic/roles/membership-manager.json": JSON.stringify({
         version: 1,
         name: "Membership manager",
         permissions: ["memberships:manage"],
       }),
-      "roles/broken.json": "{ nope",
+      ".catamorphic/roles/broken.json": "{ nope",
     });
     admin = await core.roles.resolve({
       tenantId: root.tenantId,
@@ -298,7 +298,7 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
     );
     try {
       await secondRepo.writeFile(
-        "roles/viewer.json",
+        ".catamorphic/roles/viewer.json",
         JSON.stringify({
           version: 1,
           name: "Viewer",
@@ -373,7 +373,7 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
       roles: ["csm"],
     });
     await commitRoles({
-      "roles/csm.json": JSON.stringify({
+      ".catamorphic/roles/csm.json": JSON.stringify({
         version: 1,
         name: "CSM",
         agents: ["csm-assistant"],
@@ -395,12 +395,17 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
 
   it("protects committed role policy from ordinary builders", async () => {
     await expect(
-      core.projects.writeFile(builder, projectId, "roles/new.json", {
-        content: JSON.stringify({ version: 1, name: "New" }),
-      }),
+      core.projects.writeFile(
+        builder,
+        projectId,
+        ".catamorphic/roles/new.json",
+        {
+          content: JSON.stringify({ version: 1, name: "New" }),
+        },
+      ),
     ).rejects.toThrow(AccessDeniedError);
     await expect(
-      core.projects.writeFile(admin, projectId, "roles/new.json", {
+      core.projects.writeFile(admin, projectId, ".catamorphic/roles/new.json", {
         content: JSON.stringify({ version: 1, name: "New" }),
       }),
     ).resolves.toContain('"name":"New"');

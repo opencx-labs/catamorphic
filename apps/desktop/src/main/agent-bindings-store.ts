@@ -6,7 +6,7 @@ import { safeStorage } from "electron";
  * Per-profile bindings for PROJECT agents:
  * `<userData>/profiles/<id>/agent-bindings.json`.
  *
- * A project agent definition (`agents/<slug>.json`, ADR 0050) is
+ * A project agent definition (`.catamorphic/agents/<slug>.json`, ADR 0050) is
  * collaborator-authored code committed to the repo. Before it may run with
  * this user's OWN credentials, the profile must hold a consent record for
  * `(projectId, slug)` whose `consentHash` matches the definition's current

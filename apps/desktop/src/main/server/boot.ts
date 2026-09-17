@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   type ConnectionProvider,
+  projectDataDirectory,
   startProjectEventMonitorWorker,
   startWatcherDispatcher,
   ToolPermissionBroker,
@@ -151,9 +152,15 @@ export async function startEmbeddedServer(
 
   // E2E runs swap the real sandbox + agents for deterministic local fakes.
   const e2eFakeAgent = process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1";
+  const resolveProjectData = async ({ projectId }: { projectId: string }) => {
+    const root = projectRoots.getSync(projectId);
+    return root ? projectDataDirectory({ root }) : undefined;
+  };
   const sandboxProvider = e2eFakeAgent
-    ? new E2eLocalSandboxProvider()
-    : new MicrosandboxSandboxProvider();
+    ? new E2eLocalSandboxProvider(resolveProjectData)
+    : new MicrosandboxSandboxProvider({
+        projectDataDirectory: resolveProjectData,
+      });
   const clientRunners = new RemoteClientRunners(profileConfig, sandboxProvider);
   const environmentProvider = defineStaticEnvironments([
     {
@@ -184,6 +191,7 @@ export async function startEmbeddedServer(
   );
   const sessionCheckouts = new SessionCheckouts({
     pglite,
+    worktreesDirectory: path.join(paths.root, "worktrees"),
     projectRoot: (projectId) => projectRoots.getSync(projectId),
   });
   await sessionCheckouts.init();

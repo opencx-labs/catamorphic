@@ -408,7 +408,7 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
             name: "writing-briefs",
             title: "Writing briefs",
             description: "How we brief",
-            path: ".agents/skills/writing-briefs/SKILL.md",
+            path: ".catamorphic/skills/writing-briefs/SKILL.md",
             source: "project",
           },
         ]),

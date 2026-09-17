@@ -1461,7 +1461,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
     },
   });
 
-  // Committed project agent definitions (`agents/*.json`, ADR 0050) —
+  // Committed project agent definitions (`.catamorphic/agents/*.json`, ADR 0050) —
   // parsed and validated; unusable files are reported per entry.
   typed.route({
     method: "GET",

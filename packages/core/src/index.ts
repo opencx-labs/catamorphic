@@ -355,6 +355,13 @@ export {
   ProjectEventsService,
 } from "./services/project-events-service.js";
 export {
+  ensureProjectWorkspace,
+  isProjectDataPath,
+  localDocumentRelativePath,
+  PROJECT_DATA_ROOT,
+  projectDataDirectory,
+} from "./services/project-workspace.js";
+export {
   type CreateProjectInput,
   type ListProjectsInput,
   type ListProjectsResult,
