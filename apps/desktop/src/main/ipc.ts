@@ -7,10 +7,11 @@ import { promisify } from "node:util";
 import {
   definitionHash,
   formatProjectAgentId,
+  isProjectDataPath,
   normalizeDocumentPath,
   type ProjectAgentEntry,
 } from "@catamorphic/core";
-import { isPersonalFile, nativeGit } from "@catamorphic/git";
+import { isPersonalFile } from "@catamorphic/git";
 import {
   buildInstallationUrl,
   GithubApi,
@@ -697,7 +698,7 @@ export function registerIpcHandlers(
     },
   );
 
-  // --- project agents (committed agents/<slug>.json definitions, ADR 0050) ---
+  // --- project agents (committed .catamorphic/agents/<slug>.json definitions, ADR 0050) ---
 
   const kindHarness = (kind: string): "ai-sdk" | "claude-code" | "codex" =>
     kind === "claude-code"
@@ -1792,7 +1793,8 @@ export function registerIpcHandlers(
     return link;
   };
   // Materialized program files are committed so the Changes section stays
-  // about the user's own work (store/ is gitignored and never enters git).
+  // about the user's own work. Sync reports use logical document addresses;
+  // store/ entries map to app-data and must not enter this program checkpoint.
   const checkpointProgramSync = async (
     projectId: string,
     report: { pulled: string[]; removed: string[] },
@@ -1936,11 +1938,6 @@ export function registerIpcHandlers(
       });
       // The store is never program: keep it out of the local git history.
       profiles.claimProject(joiningProfileId, project.id);
-      await appendLocalGitExcludes(input.rootPath, [
-        "store/",
-        ".catamorphic/remote-sync.json",
-        REMOTE_PROJECT_LOCATOR_PATH,
-      ]);
       const remoteLink = {
         connectionId: crypto.randomUUID(),
         serverUrl,
@@ -2176,7 +2173,7 @@ export function registerIpcHandlers(
       const selected = [...new Set(input.paths.map(normalizeDocumentPath))];
       const root = fs.realpathSync(rootPath);
       const changes = selected.map((relative) => {
-        if (isPersonalFile(relative) || relative.startsWith("store/"))
+        if (isPersonalFile(relative) || isProjectDataPath(relative))
           throw new Error(
             "Choose project files for this proposal. Personal files must be prepared for sharing first.",
           );
@@ -2187,7 +2184,7 @@ export function registerIpcHandlers(
           isPersonalFile(canonical) ||
           canonical === ".git" ||
           canonical.startsWith(".git/") ||
-          canonical.startsWith("store/")
+          isProjectDataPath(canonical)
         )
           throw new Error(
             "A proposal cannot include a link to personal files, the store, or repository internals",
@@ -2603,12 +2600,11 @@ export function registerIpcHandlers(
                 (segment) =>
                   segment === ".." || segment === "." || segment === "",
               ) ||
-            file === "store" ||
-            file.startsWith("store/"),
+            isPersonalFile(file),
         )
       )
         throw new Error(
-          "Private store documents cannot be recorded in project history",
+          "Choose valid project paths. Personal files cannot be recorded in project history",
         );
       await requireRoot(input.projectId);
       const sha = await server.catamorphic.core.projects.commitAll(
@@ -3036,31 +3032,6 @@ export function registerIpcHandlers(
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
-
-/** Keep connection state out of history without editing tracked ignore rules. */
-async function appendLocalGitExcludes(
-  rootPath: string,
-  lines: string[],
-): Promise<void> {
-  const file = path.resolve(
-    rootPath,
-    (
-      await nativeGit(rootPath, ["rev-parse", "--git-path", "info/exclude"])
-    ).trim(),
-  );
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  let current = "";
-  try {
-    current = fs.readFileSync(file, "utf8");
-  } catch {
-    current = "";
-  }
-  const present = new Set(current.split("\n").map((line) => line.trim()));
-  const missing = lines.filter((line) => !present.has(line));
-  if (missing.length === 0) return;
-  const suffix = current.length > 0 && !current.endsWith("\n") ? "\n" : "";
-  fs.writeFileSync(file, `${current}${suffix}${missing.join("\n")}\n`);
 }
 
 /** Tell every window a project's files moved under it. */

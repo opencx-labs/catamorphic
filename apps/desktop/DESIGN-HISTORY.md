@@ -3,6 +3,8 @@
 Historical rationale, not the current interaction contract. Start with
 [DESIGN.md](DESIGN.md) and its topic guides. Later decisions can supersede
 parts of an entry; do not restore an old behavior merely because it is recorded here.
+Project paths, local data placement, and managed worktree locations now follow
+[ADR 0142](../../docs/decisions/0142-contained-project-workspace.md).
 
 
 ### 2026-09-09: Chat delivery state and floating previews

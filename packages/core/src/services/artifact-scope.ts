@@ -56,7 +56,7 @@ export function assertMayManageRolePolicy(
 
 export function isRolePolicyPath(path: string): boolean {
   const normalized = path.replaceAll("\\", "/").replace(/^\.\//, "");
-  return /^roles\/[^/]+\.json$/.test(normalized);
+  return /^\.catamorphic\/roles\/[^/]+\.json$/.test(normalized);
 }
 
 export interface ResolvedScope {

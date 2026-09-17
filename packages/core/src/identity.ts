@@ -177,7 +177,7 @@ export interface ProjectRef {
 }
 
 /**
- * A committed project agent (ADR 0050, `agents/<slug>.json`) a scoped
+ * A committed project agent (ADR 0050, `.catamorphic/agents/<slug>.json`) a scoped
  * identity may open sessions on. `toolPolicies` is the caller's own
  * narrowing of that agent's tools (ADR 0055): per server key (a connector's
  * `serverKeyOf(name)`, or `catamorphic` for the project's workflow tools),
@@ -186,7 +186,7 @@ export interface ProjectRef {
 export interface AgentRef {
   kind: "agent";
   projectId: string;
-  /** The agent's slug (`agents/<slug>.json`). */
+  /** The agent's slug (`.catamorphic/agents/<slug>.json`). */
   name: string;
   toolPolicies?: Readonly<Record<string, AgentRefToolPolicy>>;
 }
@@ -201,7 +201,7 @@ export interface AgentRefToolPolicy {
 export interface AppRef {
   kind: "app";
   projectId: string;
-  /** The app's name (its `apps/<name>` workspace). */
+  /** The app's name (its `.catamorphic/apps/<name>` workspace). */
   name: string;
   /**
    * Which build the ref resolves to — a resolution hint, not part of the

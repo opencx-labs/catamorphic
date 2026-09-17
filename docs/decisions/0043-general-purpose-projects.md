@@ -1,5 +1,7 @@
 # 0043 — Projects are general-purpose; the workflow workspace is scaffolded on demand
 
+> Project filesystem locations in this ADR are superseded by [ADR 0142](0142-contained-project-workspace.md). Capability source and configuration now live under `.catamorphic/`.
+
 - **Status:** Accepted
 - **Date:** 2026-08-13
 - **Revises:** 0032 (the workspace layout stands, but its *presence* becomes optional)

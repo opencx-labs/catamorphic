@@ -130,9 +130,7 @@ export function WorkflowRuns({
       : !published.data
         ? "Publish a project version containing this workflow first"
         : undefined;
-  const recordableFiles = (status.data?.modifiedFiles ?? []).filter(
-    (file) => !file.startsWith("store/"),
-  );
+  const recordableFiles = status.data?.modifiedFiles ?? [];
   const record = async () => {
     if (dirty || !canPublish || recording || !recordableFiles.length) return;
     setRecording(true);

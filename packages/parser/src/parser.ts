@@ -1304,7 +1304,7 @@ interface FoundObsoleteBatchWorkflow {
 
 type FoundWorkflow = FoundDefinedWorkflow | FoundObsoleteBatchWorkflow;
 
-/** Matches project convention: `workflows/src/<kebab>.ts` for a workflow identifier. */
+/** Matches project convention: `.catamorphic/workflows/src/<kebab>.ts` for a workflow identifier. */
 export function defaultWorkflowSourcePath(workflowName: string): string {
   const fileSafe = workflowName
     .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
@@ -2782,7 +2782,7 @@ export function parseProject(
 }
 
 /**
- * Resolves the app-facing contract surface: `workflows/src/app-api.ts` exports
+ * Resolves the app-facing contract surface: `.catamorphic/workflows/src/app-api.ts` exports
  * an object literal (conventionally `appApi`) whose property values reference
  * workflow functions. The property names become the callable set apps are
  * authorized against, so resolution is strict — every value must resolve, via

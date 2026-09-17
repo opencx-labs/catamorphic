@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { nativeGit } from "@catamorphic/git";
+import {
+  ensureProjectWorkspace,
+  localDocumentRelativePath,
+} from "./project-workspace.js";
 
 /** Local working documents. Symlinks cannot redirect document tools outside the selected folder. */
 export async function localDocumentPath(
@@ -17,7 +20,7 @@ export async function localDocumentPath(
   )
     throw new Error("Choose a file under store/");
   const canonical = await fs.realpath(root);
-  const target = path.resolve(canonical, relative);
+  const target = path.resolve(canonical, localDocumentRelativePath(relative));
   for (
     let current = target;
     current !== canonical;
@@ -53,29 +56,24 @@ export async function listLocalDocuments(root: string): Promise<string[]> {
       const target = path.join(directory, entry.name);
       if (entry.isDirectory()) await walk(target);
       else if (entry.isFile())
-        files.push(path.relative(root, target).split(path.sep).join("/"));
+        files.push(
+          "store/" +
+            path
+              .relative(
+                path.join(root, localDocumentRelativePath("store/")),
+                target,
+              )
+              .split(path.sep)
+              .join("/"),
+        );
     }
   };
   await localDocumentPath(root, "store/.probe");
-  await walk(path.join(root, "store"));
+  await walk(path.join(root, localDocumentRelativePath("store/")));
   return files.sort();
 }
 
-/** First document creation opts into private store files without modifying tracked ignore rules. */
+/** First document creation opts into ignored project-local data, including plain folders. */
 export async function protectLocalDocuments(root: string): Promise<void> {
-  const gitPath = (
-    await nativeGit(root, ["rev-parse", "--git-path", "info/exclude"])
-  ).trim();
-  const target = path.resolve(root, gitPath);
-  const current = await fs.readFile(target, "utf8").catch(() => "");
-  const rules = ["/store/", "/.catamorphic/remote-sync.json"];
-  const missing = rules.filter(
-    (rule) => !current.split(/\r?\n/).includes(rule),
-  );
-  if (missing.length === 0) return;
-  await fs.mkdir(path.dirname(target), { recursive: true });
-  await fs.appendFile(
-    target,
-    `${current && !current.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`,
-  );
+  ensureProjectWorkspace({ root });
 }

@@ -106,7 +106,7 @@
   agent conversations begun through Claude appear in the project's ordinary
   session history with their source attributed.
 - **TS `defineAgent` layer over project agent JSON.** The committed
-  `agents/<slug>.json` files are the substrate (ADR 0050); add the
+  `.catamorphic/agents/<slug>.json` files are the substrate (ADR 0050); add the
   authoring layer: `defineAgent({...})` in project code, discovered by
   `@catamorphic/parser` like `defineSecrets`, compiled/projected into the
   JSON files (generated-projections style, ADR 0041) so the registry,

@@ -36,11 +36,6 @@ import {
   isBuilder,
   scopeCovers,
 } from "../identity.js";
-import {
-  BATCH_WORKFLOW_SKILL_PATH,
-  DURABLE_WORKFLOW_SKILL_PATH,
-  SEED_SKILLS,
-} from "../seeds.js";
 import type { AgentCapabilitiesService } from "./agent-capabilities-service.js";
 import {
   AgentDefinitionsService,
@@ -413,7 +408,7 @@ function checkpointMessage(userMessage: string): string {
  * replace it (or drop it) with `CatamorphicCoreConfig.standingAgentPrompt`
  * (ADR 0049).
  */
-const WORKFLOW_AUTHORING_SYSTEM_PROMPT = `A Catamorphic project is a folder that can hold any kind of work — documents, notes, data, code, automations (workflows), and apps, in any mix. Read what is actually in the project before assuming what it is about; many projects contain no workflows at all. The rules below apply only when you create or edit workflows: Every workflow is an exported defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps })) value; runs execute ordered boundary and batch scopes against an immutable deployment, with continuation state persisted in Postgres. There is no "use workflow" directive — IO and business operations live in "use step" functions called from boundary run bodies. Cancellation is a host-issued terminal control declared with controls: { cancel: true }, never a BoundaryContext transition. A workflow may subscribe to host-defined trigger kinds with triggers: [trigger("kind", config)] — the kind name must be a string literal, the config a constant expression, both typed by the generated workflows/src/catamorphic-triggers.d.ts; the fired payload becomes the first step's input. Declare provider-neutral connections at workflow definition level; roles separately grant workflow, agent, Environment, and connection aliases, and each member explicitly enables unattended execution. Use context.host["catamorphic.sessions"].wake with a stable key and project-agent slug when a member-owned workflow should run an agent and surface its reusable session in desktop and PWA; service-owned enablements cannot create personal notifications. Only exported defineBatchStep calls inside defineBatch.process are physically coalesced. For authoring primitives, use the project's established SaaS wrapper when present; otherwise use @catamorphic/workflow. Never create local copies. For session monitors, wakeups, and session actions, load the host session-workflows skill. Before authoring, load the host workflow-lifecycle skill when offered and choose session lifetime, source visibility, and execution Environment separately. Temporary checks use the available create_watcher/create_github_watcher tool with source passed directly, never files added to the shared working tree. Reusable project definitions belong under workflows/src/. Member-owned enablement does not make source private; use only a host-supported private artifact capability for private saved workflows. Project files may be checkpointed and automatically synced; neither an uncommitted file nor an unpushed branch is a privacy boundary. Saving, sharing, deploying, and enabling are separate outcomes; report only those confirmed by the host. Consult .agents/skills/writing-workflows/SKILL.md, .agents/skills/durable-workflows/SKILL.md, and .agents/skills/batch-workflows/SKILL.md, when present, before creating or restructuring workflows.`;
+const WORKFLOW_AUTHORING_SYSTEM_PROMPT = `A Catamorphic project is a folder that can hold any kind of work — documents, notes, data, code, automations (workflows), and apps, in any mix. Read what is actually in the project before assuming what it is about; many projects contain no workflows at all. The rules below apply only when you create or edit workflows: Every workflow is an exported defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps })) value; runs execute ordered boundary and batch scopes against an immutable deployment, with continuation state persisted in Postgres. There is no "use workflow" directive — IO and business operations live in "use step" functions called from boundary run bodies. Cancellation is a host-issued terminal control declared with controls: { cancel: true }, never a BoundaryContext transition. A workflow may subscribe to host-defined trigger kinds with triggers: [trigger("kind", config)] — the kind name must be a string literal, the config a constant expression, both typed by the generated .catamorphic/workflows/src/catamorphic-triggers.d.ts; the fired payload becomes the first step's input. Declare provider-neutral connections at workflow definition level; roles separately grant workflow, agent, Environment, and connection aliases, and each member explicitly enables unattended execution. Use context.host["catamorphic.sessions"].wake with a stable key and project-agent slug when a member-owned workflow should run an agent and surface its reusable session in desktop and PWA; service-owned enablements cannot create personal notifications. Only exported defineBatchStep calls inside defineBatch.process are physically coalesced. For authoring primitives, use the project's established SaaS wrapper when present; otherwise use @catamorphic/workflow. Never create local copies. For session monitors, wakeups, and session actions, load the host session-workflows skill. Before authoring, load the host workflow-lifecycle skill when offered and choose session lifetime, source visibility, and execution Environment separately. Temporary checks use the available create_watcher/create_github_watcher tool with source passed directly, never files added to the shared working tree. Reusable project definitions belong under .catamorphic/workflows/src/. Member-owned enablement does not make source private; use only a host-supported private artifact capability for private saved workflows. Project files may be checkpointed and automatically synced; neither an uncommitted file nor an unpushed branch is a privacy boundary. Saving, sharing, deploying, and enabling are separate outcomes; report only those confirmed by the host. Consult .catamorphic/skills/writing-workflows/SKILL.md, .catamorphic/skills/durable-workflows/SKILL.md, and .catamorphic/skills/batch-workflows/SKILL.md, when present, before creating or restructuring workflows.`;
 
 export function buildAgentSystemPrompt({
   systemPrompt,
@@ -433,93 +428,6 @@ export function buildAgentSystemPrompt({
   return [standing, systemPrompt]
     .filter((part): part is string => typeof part === "string" && part !== "")
     .join("\n\n");
-}
-
-export async function ensureBatchWorkflowSkill({
-  sandboxProvider,
-  sandboxProviderId,
-  projectDir,
-  seedFiles,
-}: {
-  sandboxProvider: Pick<SandboxProvider, "executeCommand" | "uploadFiles">;
-  sandboxProviderId: string;
-  projectDir: string;
-  /** The host-resolved seed set (ADR 0049); defaults to `SEED_SKILLS`. */
-  seedFiles?: Record<string, string>;
-}): Promise<boolean> {
-  return ensureWorkflowSkill({
-    sandboxProvider,
-    sandboxProviderId,
-    projectDir,
-    seedFiles,
-    skillPath: BATCH_WORKFLOW_SKILL_PATH,
-  });
-}
-
-export async function ensureDurableWorkflowSkill({
-  sandboxProvider,
-  sandboxProviderId,
-  projectDir,
-  seedFiles,
-}: {
-  sandboxProvider: Pick<SandboxProvider, "executeCommand" | "uploadFiles">;
-  sandboxProviderId: string;
-  projectDir: string;
-  /** The host-resolved seed set (ADR 0049); defaults to `SEED_SKILLS`. */
-  seedFiles?: Record<string, string>;
-}): Promise<boolean> {
-  return ensureWorkflowSkill({
-    sandboxProvider,
-    sandboxProviderId,
-    projectDir,
-    seedFiles,
-    skillPath: DURABLE_WORKFLOW_SKILL_PATH,
-  });
-}
-
-async function ensureWorkflowSkill({
-  sandboxProvider,
-  sandboxProviderId,
-  projectDir,
-  skillPath,
-  seedFiles,
-}: {
-  sandboxProvider: Pick<SandboxProvider, "executeCommand" | "uploadFiles">;
-  sandboxProviderId: string;
-  projectDir: string;
-  skillPath: string;
-  seedFiles?: Record<string, string>;
-}): Promise<boolean> {
-  // Restore from the HOST-RESOLVED seed set, never the hardcoded defaults:
-  // an embedder that removed a workflow skill from its seeds must not have
-  // it resurrect in projects (ADR 0049).
-  const content = (seedFiles ?? SEED_SKILLS)[skillPath];
-  if (content === undefined) return false;
-
-  // Only projects with a workflows workspace get the skill restored — a
-  // docs-only project that deleted it must not have it resurrect (ADR 0043).
-  const workspace = await sandboxProvider.executeCommand(
-    sandboxProviderId,
-    `test -f ${shellQuote(`${projectDir}/workflows/package.json`)}`,
-  );
-  if (workspace.exitCode !== 0) return false;
-
-  const absoluteSkillPath = `${projectDir}/${skillPath}`;
-  const exists = await sandboxProvider.executeCommand(
-    sandboxProviderId,
-    `test -f ${shellQuote(absoluteSkillPath)}`,
-  );
-  if (exists.exitCode === 0) return false;
-  if (exists.exitCode !== 1) {
-    throw new Error(`Failed to inspect workflow skill: ${exists.result}`);
-  }
-
-  await sandboxProvider.uploadFiles(
-    sandboxProviderId,
-    { [skillPath]: content },
-    projectDir,
-  );
-  return true;
 }
 
 /** A chat turn reaching a settled state, for host hooks (e.g. triggers). */
@@ -585,12 +493,6 @@ interface AgentSessionsDeps {
    */
   onTurnSettled?: (event: AgentTurnSettledEvent) => void | Promise<void>;
   /**
-   * The host-resolved per-project seed files (ADR 0049); the workflow-skill
-   * restore reads from this set, so a seed the host removed never
-   * resurrects. Defaults to the framework's `SEED_SKILLS`.
-   */
-  seedFiles?: Record<string, string>;
-  /**
    * The host's standing agent prompt: `undefined` = framework default,
    * string = replacement, `false` = none (ADR 0049).
    */
@@ -608,9 +510,9 @@ interface AgentSessionsDeps {
   /** Tenant app policy, for scope resolution (app refs). */
   appPolicies?: AppPoliciesService;
   /**
-   * The documents surface. When present, `store/` in the caller's working
+   * The documents surface. When present, `.catamorphic/app-data/store/` in the caller's working
    * copy is pulled before each turn and shipped after it AS THE CALLER
-   * (ADR 0055): a member's agent writing `store/customers/acme/notes.md`
+   * (ADR 0055): a member's agent writing `.catamorphic/app-data/store/customers/acme/notes.md`
    * lands it in the store with the right author, and never anything the
    * member may not write. Hosts whose working copies are the truth (the
    * desktop's local projects) leave it unset.
@@ -661,7 +563,6 @@ export class AgentSessionsService {
   private readonly plugins?: PluginsService;
   private readonly pluginResolver?: PluginResolver;
   private readonly onTurnSettled?: AgentSessionsDeps["onTurnSettled"];
-  private readonly seedFiles?: Record<string, string>;
   private readonly agentCapabilities?: AgentCapabilitiesService;
   private readonly standingAgentPrompt?: string | false;
   private readonly mcpToolNames?: AgentSessionsDeps["mcpToolNames"];
@@ -817,7 +718,6 @@ export class AgentSessionsService {
     this.plugins = deps.plugins;
     this.pluginResolver = deps.pluginResolver;
     this.onTurnSettled = deps.onTurnSettled;
-    this.seedFiles = deps.seedFiles;
     this.standingAgentPrompt = deps.standingAgentPrompt;
     this.agentCapabilities = deps.agentCapabilities;
     this.mcpToolNames = deps.mcpToolNames;
@@ -4272,35 +4172,8 @@ export class AgentSessionsService {
             });
           }
 
-          if (anchor.sandboxProviderId && runtime.provider) {
-            const workingDirectory = this.projectDir(runtime.provider);
-            const batchSkillStaged = await ensureBatchWorkflowSkill({
-              sandboxProvider: runtime.provider,
-              sandboxProviderId: anchor.sandboxProviderId,
-              projectDir: workingDirectory,
-              seedFiles: this.seedFiles,
-            });
-            const durableSkillStaged = await ensureDurableWorkflowSkill({
-              sandboxProvider: runtime.provider,
-              sandboxProviderId: anchor.sandboxProviderId,
-              projectDir: workingDirectory,
-              seedFiles: this.seedFiles,
-            });
-            const stagedSkillPaths = [
-              ...(batchSkillStaged ? [BATCH_WORKFLOW_SKILL_PATH] : []),
-              ...(durableSkillStaged ? [DURABLE_WORKFLOW_SKILL_PATH] : []),
-            ];
-            if (stagedSkillPaths.length > 0) {
-              await this.commitWorkflowSkillBaseline(
-                runtime.provider,
-                anchor.sandboxProviderId,
-                stagedSkillPaths,
-              );
-            }
-          }
-
           // An interrupt can land while the turn is still anchoring (rows,
-          // sandbox, skills) — before any provider signal exists to abort. The
+          // sandbox) — before any provider signal exists to abort. The
           // latched flag catches it here: the turn settles as interrupted
           // without ever calling the provider. Checked with has() (not
           // delete()) so the finalization below still reads it as interrupted.
@@ -5849,43 +5722,11 @@ export class AgentSessionsService {
       projectId,
       refresh: true,
     });
-    await ensureBatchWorkflowSkill({
-      sandboxProvider: runtime.provider,
-      sandboxProviderId: prepared.providerId,
-      projectDir: this.projectDir(runtime.provider),
-      seedFiles: this.seedFiles,
-    });
-    await ensureDurableWorkflowSkill({
-      sandboxProvider: runtime.provider,
-      sandboxProviderId: prepared.providerId,
-      projectDir: this.projectDir(runtime.provider),
-      seedFiles: this.seedFiles,
-    });
     await this.ensureGitBaseline(runtime.provider, prepared.providerId);
     return {
       handle: { id: prepared.id, providerId: prepared.providerId },
       baseCommitSha: prepared.baseCommitSha,
     };
-  }
-
-  private async commitWorkflowSkillBaseline(
-    provider: SandboxProvider,
-    sandboxProviderId: string,
-    skillPaths: readonly string[],
-  ): Promise<void> {
-    const paths = skillPaths.map(shellQuote).join(" ");
-    const command = [
-      `git add -- ${paths}`,
-      `git -c user.name=catamorphic -c user.email=agent@catamorphic.dev commit -m catamorphic-workflow-skills --quiet -- ${paths}`,
-    ].join(" && ");
-    // cwd via ExecOpts: see syncSandboxChanges — a `cd /workspace/...`
-    // embedded in the command breaks providers without a mounted root.
-    const result = await provider.executeCommand(sandboxProviderId, command, {
-      cwd: this.projectDir(provider),
-    });
-    if (result.exitCode !== 0) {
-      throw new Error(`Failed to baseline workflow skills: ${result.result}`);
-    }
   }
 
   /**
@@ -5965,7 +5806,7 @@ export class AgentSessionsService {
    * clean or the commit failed — a checkpoint must never break a turn.
    */
   /**
-   * The folder whose `store/` mirrors the caller's store view: the caller's
+   * The folder whose `.catamorphic/app-data/store/` mirrors the caller's store view: the caller's
    * own dev copy, which sandbox agents' edits sync back into. Host-execution
    * agents work in ONE folder per project shared by every caller, so their
    * store/ is never synced (one member's pulled files would be readable by
@@ -6768,11 +6609,6 @@ export function hostChangedFiles(
     changes.push({ path, kind: "modified" });
   }
   return changes;
-}
-
-function shellQuote(value: string): string {
-  if (/^[A-Za-z0-9@%+=:,./_-]+$/.test(value)) return value;
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 function truncate(value: string, max: number): string {

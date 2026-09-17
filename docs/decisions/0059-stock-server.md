@@ -1,5 +1,7 @@
 # 0059 — The stock server: zero-dependency, disk-backed, invite-first
 
+> Project filesystem locations in this ADR are superseded by [ADR 0142](0142-contained-project-workspace.md). Capability source and configuration now live under `.catamorphic/`.
+
 Status: Accepted (2026-08-21; auth, invites, and administration superseded by 0071 and 0072)
 
 Single-node storage assumption superseded by

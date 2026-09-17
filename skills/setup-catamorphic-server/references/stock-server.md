@@ -17,7 +17,7 @@ server as an Environment of an existing brain.
 2. Inspect configured auth providers. If none are configured, ask whether the
    operator wants Google Workspace, another OAuth/OIDC provider, or local
    username/password. Do not assume local credentials.
-3. Inspect existing projects and committed `roles/*.json`. Never invent a role
+3. Inspect existing projects and committed `.catamorphic/roles/*.json`. Never invent a role
    name or silently write authorization policy.
 4. Confirm how invited members will reach the server: desktop, PWA, MCP, or a
    combination.

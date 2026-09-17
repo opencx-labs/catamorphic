@@ -65,7 +65,7 @@ types. It adds only:
 - in-memory multi-turn message history;
 - plugin documentation staging and Catamorphic `AgentEvent` mapping.
 
-Project skills remain normal files at `.agents/skills/<name>/SKILL.md`. The
+Project skills remain normal files at `.catamorphic/skills/<name>/SKILL.md`. The
 agent is instructed to inspect relevant skills through its filesystem tools.
 Provider state remains in memory. After a host restart,
 `AgentSessionsService` detects the missing provider anchor and starts a fresh

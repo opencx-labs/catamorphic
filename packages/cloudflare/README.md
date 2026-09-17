@@ -78,9 +78,10 @@ const catamorphic = createCatamorphic({
   the same `OriginRepo` interface as `FsRemoteBackend`, then pushes any
   changed `refs/heads/*` back. The mirror is a disposable cache.
 - `getCloneSource` mints a short-lived scoped repo token and returns
-  `{ url, username, password }` so **sandboxes `git clone` the project
-  directly from Artifacts** instead of receiving file uploads from the host.
-  Production deployment runtimes and dev sandboxes use this path.
+  `{ url, username, password }` so dev sandboxes can clone the complete
+  editable project directly from Artifacts when its working copy is in sync.
+  Deployment runtimes instead receive the verified `.catamorphic/` capability
+  snapshot, excluding app data and unrelated imported files (ADR 0142).
 
 Artifacts is in closed beta. Accounts without access get REST error `10004`
 ("Access denied by feature gate") — `ArtifactsApiError.codes` exposes it so

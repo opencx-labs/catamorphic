@@ -122,7 +122,7 @@ export interface CatamorphicCoreConfig {
   /** Distinct leased execution instance beneath the logical host authority. */
   workerNode?: { id: string; token: string };
   /**
-   * How long a project's parsed `roles/*.json` set is trusted before it is
+   * How long a project's parsed `.catamorphic/roles/*.json` set is trusted before it is
    * re-read from the shared origin (ADR 0055). Role *definitions* may lag
    * by this much; membership is read fresh on every resolve. Default 10s.
    */
@@ -273,13 +273,13 @@ export interface CatamorphicCoreConfig {
    * Transform the default per-project seed files (skills). Receives the
    * framework defaults; return the final map. Replacing or removing entries
    * is legitimate — an embedder's own app-design doctrine belongs here
-   * (ADR 0049). A seed removed from the returned map is also never restored
-   * by the per-turn workflow-skill staging.
+   * (ADR 0049). The same set supplies the default host skill tier for projects
+   * without those files; agent turns never restore deleted seeds (ADR 0142).
    */
   projectSeeds?: (defaults: Record<string, string>) => Record<string, string>;
   /**
    * Transform the default host-tier skills (ADR 0049): playbooks the host
-   * ships, listed alongside a project's own `.agents/skills/` without being
+   * ships, listed alongside a project's own `.catamorphic/skills/` without being
    * written into the project repo. Receives the framework defaults keyed by
    * `<name>/SKILL.md`; return the final map. Replacing or removing entries
    * is legitimate. A project skill with the same name shadows a host skill.
@@ -341,7 +341,7 @@ export class CatamorphicCore {
   readonly connectionAdmission?: ConnectionAdmissionService;
   readonly connectionBroker?: ConnectionBroker;
   readonly connectionGrants?: ConnectionCapabilityGrantsService;
-  /** Committed `roles/*.json` and their expansion into identities (ADR 0055). */
+  /** Committed `.catamorphic/roles/*.json` and their expansion into identities (ADR 0055). */
   readonly roles: RolesService;
   /** Stock `user → roles + grants` per project (ADR 0055). */
   readonly memberships: MembershipsService;
@@ -396,11 +396,11 @@ export class CatamorphicCore {
     );
     this.projectManager = config.projectManager;
     // Doctrine resolves ONCE, at boot: every consumer below (project
-    // creation, skill restore) sees the same host-final set (ADR 0049).
+    // creation, host skill discovery) sees the same host-final set (ADR 0049).
     this.seedFiles = config.projectSeeds?.({ ...SEED_SKILLS }) ?? SEED_SKILLS;
     // Imported repositories stay untouched. Offer their missing framework
     // skills through the existing host tier; project/user skills still win.
-    const skillPrefix = ".agents/skills/";
+    const skillPrefix = ".catamorphic/skills/";
     const defaultHostSkills = {
       ...Object.fromEntries(
         Object.entries(this.seedFiles)
@@ -944,7 +944,6 @@ export class CatamorphicCore {
           }
           await config.onAgentTurnSettled?.(event);
         },
-        seedFiles: this.seedFiles,
         standingAgentPrompt: config.standingAgentPrompt,
         mcpToolNames: (identity, projectId) =>
           this.triggers.mcpToolNames({ identity, projectId }),

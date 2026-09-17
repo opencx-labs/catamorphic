@@ -38,6 +38,53 @@ describe("LocalProcessSandboxProvider", () => {
     }
   });
 
+  it("keeps project data across runtime replacement without exposing it to build sandboxes", async () => {
+    const data = path.join(root, "project-data");
+    fs.mkdirSync(data);
+    const requests: string[] = [];
+    const isolated = new LocalProcessSandboxProvider({
+      root: path.join(root, "runtimes"),
+      projectDataDirectory: async ({ projectId }) => {
+        requests.push(projectId);
+        return data;
+      },
+    });
+    const first = await isolated.createSandbox({
+      labels: { purpose: "deployment-runtime", projectId: "one" },
+    });
+    const written = await isolated.executeCommand(
+      first.id,
+      'printf saved > "$CATAMORPHIC_APP_DATA_DIR/items.txt"',
+    );
+    expect(written.exitCode).toBe(0);
+    await isolated.destroySandbox(first.id);
+    const next = await isolated.createSandbox({
+      labels: { purpose: "deployment-runtime", projectId: "one" },
+    });
+    expect(
+      (
+        await isolated.executeCommand(
+          next.id,
+          'cat "$CATAMORPHIC_APP_DATA_DIR/items.txt"',
+        )
+      ).result,
+    ).toBe("saved");
+    await isolated.destroySandbox(next.id);
+    const build = await isolated.createSandbox({
+      labels: { purpose: "app-build", projectId: "one" },
+    });
+    expect(
+      (
+        await isolated.executeCommand(
+          build.id,
+          'printf "%s" "$CATAMORPHIC_APP_DATA_DIR"',
+        )
+      ).result,
+    ).toBe("");
+    await isolated.destroySandbox(build.id);
+    expect(requests).toEqual(["one", "one"]);
+  });
+
   it("rejects resource promises it cannot enforce", async () => {
     await expect(
       provider.createSandbox({ resources: { memoryMb: 512 } }),

@@ -86,7 +86,7 @@ export const leafChild = defineWorkflow(({ defineBoundary }) => ({
 
   it("is unchanged by frontend app sources", async () => {
     const workflowFiles = {
-      "workflows/src/deployed.ts": `
+      ".catamorphic/workflows/src/deployed.ts": `
 export const deployed = defineWorkflow(({ defineBoundary }) => ({
   steps: [defineBoundary({
     run: ({ input }) => finish({ input }),
@@ -96,8 +96,8 @@ export const deployed = defineWorkflow(({ defineBoundary }) => ({
     };
     const withApp = {
       ...workflowFiles,
-      "apps/dashboard/src/main.tsx": "export const ui = 1;\n",
-      "apps/dashboard/package.json": '{ "name": "dashboard" }',
+      ".catamorphic/apps/dashboard/src/main.tsx": "export const ui = 1;\n",
+      ".catamorphic/apps/dashboard/package.json": '{ "name": "dashboard" }',
     };
 
     const baseline = await createDeploymentArtifactIdentity({

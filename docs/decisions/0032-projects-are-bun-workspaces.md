@@ -1,6 +1,6 @@
 # 0032 — Projects are bun workspaces holding workflows, contracts, and apps
 
-- **Status:** Accepted
+- **Status:** Superseded in part by [0142](0142-contained-project-workspace.md) (project layout)
 - **Date:** 2026-07-27
 - **Expands:** 0001 (code is the source of truth for workflows and apps)
 

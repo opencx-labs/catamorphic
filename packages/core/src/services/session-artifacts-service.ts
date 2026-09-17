@@ -11,10 +11,9 @@ import {
 } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { parseProject } from "@catamorphic/parser";
-import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
 import { type Kysely, type Selectable, sql } from "kysely";
 import { type Identity, identityCovers } from "../identity.js";
-import { appScaffold } from "../seeds.js";
+import { appScaffold, workspaceFiles } from "../seeds.js";
 import { assertAgentSessionAccess } from "./agent-session-access.js";
 import type { AppBundleStore } from "./app-bundle-store.js";
 import { AccessDeniedError } from "./artifact-scope.js";
@@ -112,26 +111,14 @@ export class SessionArtifactsService {
         const id = randomUUID();
         const sourcePath =
           input.kind === "app"
-            ? `apps/${input.name}/src/App.tsx`
-            : `workflows/src/artifacts/${id}.ts`;
+            ? `.catamorphic/apps/${input.name}/src/App.tsx`
+            : `.catamorphic/workflows/src/artifacts/${id}.ts`;
         const remoteBranch = artifactCandidateBranch(id);
         const defaults =
           input.kind === "app"
             ? {
                 ...appScaffold({ name: input.name }),
-                "package.json": JSON.stringify({
-                  private: true,
-                  type: "module",
-                  workspaces: ["apps/*", "packages/*", "contracts"],
-                }),
-                "contracts/package.json": JSON.stringify({
-                  name: "@project/contracts",
-                  private: true,
-                  type: "module",
-                  exports: { ".": "./src/index.ts" },
-                }),
-                "contracts/src/index.ts": "export {};\n",
-                [`apps/${input.name}/src/main.tsx`]:
+                [`.catamorphic/apps/${input.name}/src/main.tsx`]:
                   'import { createRoot } from "react-dom/client";\nimport App from "./App";\ncreateRoot(document.getElementById("root")!).render(<App />);\n',
               }
             : {};
@@ -580,18 +567,12 @@ export class SessionArtifactsService {
       await repo.checkout("main");
     }
     const files = { ...input.files };
-    if (
-      input.kind === "workflow" &&
-      !(await repo.listFiles()).includes("package.json") &&
-      !("package.json" in files)
-    ) {
-      files["package.json"] = JSON.stringify({
-        private: true,
-        type: "module",
-        dependencies: { "@catamorphic/workflow": WORKFLOW_PACKAGE_VERSION },
-      });
-    }
     const existingPaths = new Set(await repo.listFiles());
+    for (const [file, content] of Object.entries(
+      workspaceFiles({ name: input.name }),
+    )) {
+      if (!existingPaths.has(file) && !(file in files)) files[file] = content;
+    }
     for (const [file, content] of Object.entries(files)) {
       await assertNoSymlink(repo.repoPath, file);
       if (content === null) {

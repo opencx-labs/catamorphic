@@ -100,9 +100,9 @@ describe("document paths (pure)", () => {
     expect(documentAccessAllowed(csm, p, "docs/handbook.md", "read")).toBe(
       true,
     );
-    expect(documentAccessAllowed(csm, p, "workflows/src/x.ts", "read")).toBe(
-      false,
-    );
+    expect(
+      documentAccessAllowed(csm, p, ".catamorphic/workflows/src/x.ts", "read"),
+    ).toBe(false);
     expect(
       documentAccessAllowed(csm, p, "store/customers/acme/notes.md", "write"),
     ).toBe(true);
@@ -170,7 +170,7 @@ describeIf("DocumentsService (ADR 0055)", () => {
         "# Pricing\n\nEnterprise refunds are custom.\n",
       );
       await repo.writeFile(
-        "workflows/src/secret.ts",
+        ".catamorphic/workflows/src/secret.ts",
         "export const key = 'refunds-internal';\n",
       );
       await repo.commit("program", { name: "root", email: "root@example.com" });
@@ -219,15 +219,31 @@ describeIf("DocumentsService (ADR 0055)", () => {
       content: bytes,
       ifVersion: 0,
     });
-    expect(await fs.readFile(path.join(directory, args.path))).toEqual(
-      Buffer.from(bytes),
-    );
+    expect(
+      await fs.readFile(
+        path.join(directory, ".catamorphic/app-data", args.path),
+      ),
+    ).toEqual(Buffer.from(bytes));
     expect((await local.documents.readBytes(args)).bytes).toEqual(bytes);
-    expect((await nativeGit(directory, ["status", "--porcelain"])).trim()).toBe(
-      "",
+    const localFiles = await local.projects.listFiles(identity, project.id);
+    expect(localFiles.map((file) => file.path)).toContain(
+      ".catamorphic/app-data/store/report.pdf",
     );
+    expect(localFiles.map((file) => file.path)).not.toContain(
+      "store/report.pdf",
+    );
+    expect(
+      (
+        await nativeGit(directory, [
+          "status",
+          "--porcelain",
+          "--",
+          ".catamorphic/app-data",
+        ])
+      ).trim(),
+    ).toBe("");
     await fs.writeFile(
-      path.join(directory, args.path),
+      path.join(directory, ".catamorphic/app-data", args.path),
       new Uint8Array([1, 2, 3]),
     );
     await expect(
@@ -245,7 +261,7 @@ describeIf("DocumentsService (ADR 0055)", () => {
         .bytes,
     ).toEqual(bytes);
     await fs.writeFile(
-      path.join(directory, "store/notes.md"),
+      path.join(directory, ".catamorphic/app-data/store/notes.md"),
       "Private research notes",
     );
     expect(
@@ -258,7 +274,7 @@ describeIf("DocumentsService (ADR 0055)", () => {
         })
       ).map((entry) => entry.path),
     ).toEqual(["store/notes.md"]);
-    await fs.rm(path.join(directory, "store/notes.md"));
+    await fs.rm(path.join(directory, ".catamorphic/app-data/store/notes.md"));
     const history = await local.documents.history({
       identity,
       projectId: project.id,
@@ -291,8 +307,11 @@ describeIf("DocumentsService (ADR 0055)", () => {
       }),
     ).toEqual([]);
     await fs.writeFile(path.join(directory, "notes.md"), "committed only here");
+    await fs.mkdir(path.join(directory, ".catamorphic/workflows"), {
+      recursive: true,
+    });
     await fs.writeFile(
-      path.join(directory, "flow.ts"),
+      path.join(directory, ".catamorphic/workflows/flow.ts"),
       `
       import { defineWorkflow } from "@catamorphic/workflow";
       export const importedFlow = defineWorkflow(({ defineBoundary }) => ({
@@ -300,7 +319,11 @@ describeIf("DocumentsService (ADR 0055)", () => {
       }));
     `,
     );
-    await nativeGit(directory, ["add", "notes.md", "flow.ts"]);
+    await nativeGit(directory, [
+      "add",
+      "notes.md",
+      ".catamorphic/workflows/flow.ts",
+    ]);
     await nativeGit(directory, [
       "-c",
       "user.name=Test",
@@ -344,7 +367,7 @@ describeIf("DocumentsService (ADR 0055)", () => {
       "HEAD",
     ]);
     await fs.writeFile(
-      path.join(directory, "flow.ts"),
+      path.join(directory, ".catamorphic/workflows/flow.ts"),
       "private incomplete draft",
     );
     expect(
@@ -378,7 +401,10 @@ describeIf("DocumentsService (ADR 0055)", () => {
         })
       ).text,
     ).toBe("private working edit");
-    await fs.symlink(tmpDir, path.join(directory, "store/outside"));
+    await fs.symlink(
+      tmpDir,
+      path.join(directory, ".catamorphic/app-data/store/outside"),
+    );
     await expect(
       local.documents.write({
         ...args,
@@ -456,7 +482,7 @@ describeIf("DocumentsService (ADR 0055)", () => {
       expect.arrayContaining([
         "docs/handbook.md",
         "docs/pricing.md",
-        "workflows/src/secret.ts",
+        ".catamorphic/workflows/src/secret.ts",
         ".catamorphic/project.json",
       ]),
     );
@@ -486,7 +512,7 @@ describeIf("DocumentsService (ADR 0055)", () => {
       core.documents.read({
         identity: csm,
         projectId,
-        path: "workflows/src/secret.ts",
+        path: ".catamorphic/workflows/src/secret.ts",
       }),
     ).rejects.toThrow(AccessDeniedError);
     // The program is read-only through this surface, even for builders.
@@ -669,14 +695,18 @@ describeIf("DocumentsService (ADR 0055)", () => {
       "store:store/customers/acme/notes.md",
     ]);
     // The workflow file mentions refunds too — invisible to the CSM…
-    expect(grep.some((m) => m.path.startsWith("workflows/"))).toBe(false);
+    expect(grep.some((m) => m.path.startsWith(".catamorphic/workflows/"))).toBe(
+      false,
+    );
     // …visible to a builder, whose search never reaches the store.
     const adminGrep = await core.documents.search({
       identity: admin,
       projectId,
       query: "refunds",
     });
-    expect(adminGrep.map((m) => m.path)).toContain("workflows/src/secret.ts");
+    expect(adminGrep.map((m) => m.path)).toContain(
+      ".catamorphic/workflows/src/secret.ts",
+    );
     expect(adminGrep.some((m) => m.source === "store")).toBe(false);
     // Full text: words in any order; lines carry the hits.
     const text = await core.documents.search({

@@ -1,13 +1,20 @@
 import path from "node:path";
 import type { FileReadOptions, ProjectRepo } from "@catamorphic/git";
+import {
+  APP_SOURCE_ROOT,
+  PROJECT_WORKSPACE_ROOT,
+  WORKFLOW_SOURCE_ROOT,
+} from "@catamorphic/parser";
 
 /** Select parser inputs before opening files in general-purpose projects. */
 export const WORKFLOW_READ_OPTIONS: FileReadOptions = {
   excludeNestedRepositories: true,
   filter: (file) =>
-    /(^|\/)(package|tsconfig)\.json$/.test(file) ||
-    (!file.startsWith("apps/") && /\.[cm]?tsx?$/.test(file)) ||
-    (file.startsWith("apps/") && file.endsWith(".d.ts")),
+    file.startsWith(`${PROJECT_WORKSPACE_ROOT}/`) &&
+    !file.startsWith(`${PROJECT_WORKSPACE_ROOT}/app-data/`) &&
+    (/(^|\/)(package|tsconfig)\.json$/.test(file) ||
+      (!file.startsWith(`${APP_SOURCE_ROOT}/`) && /\.[cm]?tsx?$/.test(file)) ||
+      (file.startsWith(`${APP_SOURCE_ROOT}/`) && file.endsWith(".d.ts"))),
 };
 
 /** Native Git narrows discovery before ts-morph sees source; relative imports bring their dependencies. */
@@ -33,12 +40,18 @@ export async function workflowSourceFiles(
       ? await repo.readAllFilesAtRef(ref, WORKFLOW_READ_OPTIONS)
       : await repo.readAllFiles(WORKFLOW_READ_OPTIONS);
     for (const [file, content] of Object.entries(sources)) {
-      if (/\.(?:[cm]?tsx?|json)$/.test(file) && !file.startsWith("apps/"))
+      if (
+        /\.(?:[cm]?tsx?|json)$/.test(file) &&
+        !file.startsWith(".catamorphic/apps/")
+      )
         files[file] = content;
     }
     return files;
   }
-  const globs = ["*.ts", "*.tsx", "*.mts", "*.cts", ":!apps/**", ":!store/**"];
+  const globs = ["ts", "tsx", "mts", "cts"].flatMap((extension) => [
+    `${WORKFLOW_SOURCE_ROOT}/*.${extension}`,
+    `${WORKFLOW_SOURCE_ROOT}/**/*.${extension}`,
+  ]);
   const pending = [
     ...new Set(
       (
@@ -50,7 +63,7 @@ export async function workflowSourceFiles(
     ),
   ];
   if (pending.length === 0) return files;
-  pending.push("contracts/src/index.ts");
+  pending.push(".catamorphic/contracts/src/index.ts");
   const visited = new Set<string>();
   let totalBytes = 0;
   while (pending.length > 0) {
@@ -71,7 +84,11 @@ export async function workflowSourceFiles(
       const base = path.posix.normalize(
         path.posix.join(path.posix.dirname(file), specifier),
       );
-      if (base.startsWith("../")) continue;
+      if (
+        !base.startsWith(`${PROJECT_WORKSPACE_ROOT}/`) ||
+        base.startsWith(`${PROJECT_WORKSPACE_ROOT}/app-data/`)
+      )
+        continue;
       for (const candidate of [
         base,
         base.replace(/\.js$/, ".ts"),
@@ -83,7 +100,10 @@ export async function workflowSourceFiles(
       }
     }
   }
-  for (const file of ["tsconfig.json", "package.json"]) {
+  for (const file of [
+    ".catamorphic/tsconfig.json",
+    ".catamorphic/package.json",
+  ]) {
     const content = await read(file);
     if (content !== null) files[file] = content;
   }

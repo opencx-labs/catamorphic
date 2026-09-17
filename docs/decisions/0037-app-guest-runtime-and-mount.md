@@ -1,5 +1,7 @@
 # 0037 — App guest runtime (`@catamorphic/app`) and host mount
 
+> Project filesystem locations in this ADR are superseded by [ADR 0142](0142-contained-project-workspace.md). Capability source and configuration now live under `.catamorphic/`.
+
 - **Status:** Accepted — updated by
   [0053](0053-identity-scope-and-app-routes.md): the mount forwards calls to
   the app's own routes (no audience headers) and `invoke` is a synchronous

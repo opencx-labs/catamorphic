@@ -30,9 +30,9 @@ const APP_MANIFEST = JSON.stringify({ name: "dashboard", private: true });
 
 function projectFiles(extra: Record<string, string> = {}) {
   return {
-    "workflows/src/orders.ts": WORKFLOW,
-    "workflows/src/app-api.ts": APP_API,
-    "apps/dashboard/package.json": APP_MANIFEST,
+    ".catamorphic/workflows/src/orders.ts": WORKFLOW,
+    ".catamorphic/workflows/src/app-api.ts": APP_API,
+    ".catamorphic/apps/dashboard/package.json": APP_MANIFEST,
     ...extra,
   };
 }
@@ -74,7 +74,7 @@ describe("checkProject", () => {
 
   it("fails on parse errors, including non-constant trigger config", () => {
     const result = checkProject({
-      "workflows/src/bad.ts": `
+      ".catamorphic/workflows/src/bad.ts": `
 const description = "computed";
 export const bad = defineWorkflow(({ defineBoundary }) => ({
   triggers: [trigger("ai.tool-call", { description })],
@@ -137,7 +137,7 @@ export const bad = defineWorkflow(({ defineBoundary }) => ({
       payloadJsonSchema: { "x-catamorphic-hole": "Args" },
     };
     const files = (input: string) => ({
-      "workflows/src/tool.ts": `
+      ".catamorphic/workflows/src/tool.ts": `
 import { type BoundaryContext, defineWorkflow, trigger } from "@catamorphic/workflow";
 
 export const searchTool = defineWorkflow(({ defineBoundary }) => ({

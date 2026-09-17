@@ -1,14 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
-import {
-  BATCH_WORKFLOW_SKILL_PATH,
-  DURABLE_WORKFLOW_SKILL_PATH,
-  SEED_SKILLS,
-} from "../seeds.js";
+import { describe, expect, it } from "vitest";
+import { SEED_SKILLS } from "../seeds.js";
 import {
   activityLabel,
   buildAgentSystemPrompt,
-  ensureBatchWorkflowSkill,
-  ensureDurableWorkflowSkill,
   modelVisibleDelivery,
   parsePorcelain,
 } from "../services/agent-sessions-service.js";
@@ -127,8 +121,8 @@ describe("parsePorcelain", () => {
 describe("seed skill set", () => {
   // Workflow authoring is exercised in workflow-skill-recipes.test.ts.
   it("splits app mechanics from app doctrine (ADR 0049)", () => {
-    const mechanics = SEED_SKILLS[".agents/skills/building-apps/SKILL.md"];
-    const doctrine = SEED_SKILLS[".agents/skills/designing-apps/SKILL.md"];
+    const mechanics = SEED_SKILLS[".catamorphic/skills/building-apps/SKILL.md"];
+    const doctrine = SEED_SKILLS[".catamorphic/skills/designing-apps/SKILL.md"];
     expect(mechanics).toBeDefined();
     expect(doctrine).toBeDefined();
 
@@ -195,134 +189,5 @@ describe("buildAgentSystemPrompt", () => {
       }),
     ).toBe("Use the host's billing plugin.");
     expect(buildAgentSystemPrompt({ standingPrompt: false })).toBe("");
-  });
-});
-
-/**
- * The ensure* probes run two `test -f` checks: the workflows workspace
- * gate (ADR 0043) and then the skill file itself. This fake answers each
- * by path, so tests state the project's shape declaratively.
- */
-const fakeSandbox = ({
-  workspace,
-  skill,
-}: {
-  workspace: boolean;
-  skill: boolean;
-}) => ({
-  executeCommand: vi.fn(async (_id: string, command: string) => ({
-    exitCode: command.includes("workflows/package.json")
-      ? workspace
-        ? 0
-        : 1
-      : skill
-        ? 0
-        : 1,
-    result: "",
-  })),
-  uploadFiles: vi.fn().mockResolvedValue(undefined),
-});
-
-describe("ensureDurableWorkflowSkill", () => {
-  it("stages the skill for a workflow project that does not have it", async () => {
-    const sandboxProvider = fakeSandbox({ workspace: true, skill: false });
-
-    const staged = await ensureDurableWorkflowSkill({
-      sandboxProvider,
-      sandboxProviderId: "sandbox-1",
-      projectDir: "/workspace/project",
-    });
-
-    expect(staged).toBe(true);
-    expect(sandboxProvider.uploadFiles).toHaveBeenCalledWith(
-      "sandbox-1",
-      {
-        [DURABLE_WORKFLOW_SKILL_PATH]: SEED_SKILLS[DURABLE_WORKFLOW_SKILL_PATH],
-      },
-      "/workspace/project",
-    );
-  });
-
-  it("never resurrects the skill in a project without a workflows workspace (ADR 0043)", async () => {
-    const sandboxProvider = fakeSandbox({ workspace: false, skill: false });
-
-    const staged = await ensureDurableWorkflowSkill({
-      sandboxProvider,
-      sandboxProviderId: "sandbox-1",
-      projectDir: "/workspace/project",
-    });
-
-    expect(staged).toBe(false);
-    expect(sandboxProvider.uploadFiles).not.toHaveBeenCalled();
-  });
-});
-
-describe("ensureBatchWorkflowSkill", () => {
-  it("stages the skill for a workflow project that does not have it", async () => {
-    const sandboxProvider = fakeSandbox({ workspace: true, skill: false });
-
-    const staged = await ensureBatchWorkflowSkill({
-      sandboxProvider,
-      sandboxProviderId: "sandbox-1",
-      projectDir: "/workspace/project",
-    });
-
-    expect(staged).toBe(true);
-    expect(sandboxProvider.uploadFiles).toHaveBeenCalledWith(
-      "sandbox-1",
-      {
-        [BATCH_WORKFLOW_SKILL_PATH]: SEED_SKILLS[BATCH_WORKFLOW_SKILL_PATH],
-      },
-      "/workspace/project",
-    );
-  });
-
-  it("preserves a project-provided batch skill", async () => {
-    const sandboxProvider = {
-      executeCommand: vi.fn().mockResolvedValue({ exitCode: 0, result: "" }),
-      uploadFiles: vi.fn().mockResolvedValue(undefined),
-    };
-
-    const staged = await ensureBatchWorkflowSkill({
-      sandboxProvider,
-      sandboxProviderId: "sandbox-1",
-      projectDir: "/workspace/project",
-    });
-
-    expect(staged).toBe(false);
-    expect(sandboxProvider.uploadFiles).not.toHaveBeenCalled();
-  });
-
-  it("restores from the host-resolved seed set, not the defaults (ADR 0049)", async () => {
-    const sandboxProvider = fakeSandbox({ workspace: true, skill: false });
-
-    const staged = await ensureBatchWorkflowSkill({
-      sandboxProvider,
-      sandboxProviderId: "sandbox-1",
-      projectDir: "/workspace/project",
-      seedFiles: { [BATCH_WORKFLOW_SKILL_PATH]: "# Acme batch conventions" },
-    });
-
-    expect(staged).toBe(true);
-    expect(sandboxProvider.uploadFiles).toHaveBeenCalledWith(
-      "sandbox-1",
-      { [BATCH_WORKFLOW_SKILL_PATH]: "# Acme batch conventions" },
-      "/workspace/project",
-    );
-  });
-
-  it("never resurrects a skill the host removed from its seeds (ADR 0049)", async () => {
-    const sandboxProvider = fakeSandbox({ workspace: true, skill: false });
-
-    const staged = await ensureBatchWorkflowSkill({
-      sandboxProvider,
-      sandboxProviderId: "sandbox-1",
-      projectDir: "/workspace/project",
-      seedFiles: {},
-    });
-
-    expect(staged).toBe(false);
-    expect(sandboxProvider.executeCommand).not.toHaveBeenCalled();
-    expect(sandboxProvider.uploadFiles).not.toHaveBeenCalled();
   });
 });

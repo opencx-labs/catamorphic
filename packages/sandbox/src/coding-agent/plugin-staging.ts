@@ -3,7 +3,7 @@ import path from "node:path";
 import type { AttachedPluginForAgent } from "./types.js";
 
 /**
- * Directory name (inside the agent's working directory) where plugin docs
+ * Directory name (inside the host-selected staging directory) where plugin docs
  * are staged. The preamble tells the agent to look here; it's kept separate
  * from the workflow author's own `node_modules/` so nothing shadows real
  * package resolution at run time.
@@ -51,13 +51,16 @@ export function stagedPluginFiles(
 
 export function buildPluginsPreamble(
   plugins?: AttachedPluginForAgent[],
+  options?: { directory?: string },
 ): string {
   if (!plugins || plugins.length === 0) return "";
   const lines = plugins.map((plugin) => {
     const slug = slugifyPackage(plugin.packageName);
     const fileList = Object.keys(plugin.files).sort();
     const paths = fileList
-      .map((f) => `${PLUGIN_STAGE_DIR}/${slug}/${f}`)
+      .map((f) =>
+        path.join(options?.directory ?? "", PLUGIN_STAGE_DIR, slug, f),
+      )
       .join(", ");
     const description = plugin.description ? ` — ${plugin.description}` : "";
     return `- ${plugin.packageName} (${plugin.displayName})${description}. Docs: ${paths}`;

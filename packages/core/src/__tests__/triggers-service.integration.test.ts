@@ -235,7 +235,7 @@ describeIf("TriggersService end to end", () => {
     await core.projects.writeFile(
       identity,
       projectId,
-      "workflows/src/tickets.ts",
+      ".catamorphic/workflows/src/tickets.ts",
       {
         content: TRIGGERED_WORKFLOWS,
         commitMessage: "Add triggered workflows",
@@ -544,7 +544,7 @@ describeIf("TriggersService end to end", () => {
     await core.projects.writeFile(
       identity,
       project.id,
-      "workflows/src/bad.ts",
+      ".catamorphic/workflows/src/bad.ts",
       {
         content: `
 export const bad = defineWorkflow(({ defineBoundary }) => ({
@@ -588,7 +588,7 @@ export const bad = defineWorkflow(({ defineBoundary }) => ({
     await core.projects.writeFile(
       identity,
       project.id,
-      "workflows/src/inert.ts",
+      ".catamorphic/workflows/src/inert.ts",
       {
         content: `
 export const inert = defineWorkflow(({ defineBoundary }) => ({
@@ -626,7 +626,7 @@ export const inert = defineWorkflow(({ defineBoundary }) => ({
     await core.projects.writeFile(
       identity,
       projectId,
-      "workflows/src/tickets.ts",
+      ".catamorphic/workflows/src/tickets.ts",
       {
         content: `${TRIGGERED_WORKFLOWS}\n// A newer production revision.\n`,
         commitMessage: "Revise triggered workflows",

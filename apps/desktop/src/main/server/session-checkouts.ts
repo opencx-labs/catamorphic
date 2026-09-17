@@ -35,6 +35,7 @@ export interface ClassifiedRepositoryWorktree extends RepositoryWorktree {
 
 interface SessionCheckoutsOptions {
   pglite: PGlite;
+  worktreesDirectory: string;
   projectRoot: (projectId: string) => string | undefined;
 }
 
@@ -115,10 +116,12 @@ export function parseWorktreePorcelain(output: string): RepositoryWorktree[] {
  */
 export class SessionCheckouts {
   private readonly pglite: PGlite;
+  private readonly worktreesDirectory: string;
   private readonly projectRoot: SessionCheckoutsOptions["projectRoot"];
 
   constructor(options: SessionCheckoutsOptions) {
     this.pglite = options.pglite;
+    this.worktreesDirectory = options.worktreesDirectory;
     this.projectRoot = options.projectRoot;
   }
 
@@ -174,9 +177,8 @@ export class SessionCheckouts {
     if (!(await hasLocalGit({ path: root }))) return [];
     const primary = await canonicalPath(root);
     const configuredManagedRoot = path.resolve(
-      root,
-      ".catamorphic",
-      "worktrees",
+      this.worktreesDirectory,
+      projectId,
     );
     const managedRoot = await canonicalPath(configuredManagedRoot).catch(
       () => configuredManagedRoot,
@@ -262,9 +264,8 @@ export class SessionCheckouts {
         await input.ensureAvailable?.(existing.path);
         return existing;
       }
-      const worktreesRoot = path.join(root, ".catamorphic", "worktrees");
+      const worktreesRoot = path.join(this.worktreesDirectory, input.projectId);
       const worktreePath = path.join(worktreesRoot, input.sessionId);
-      await this.excludeManagedWorktrees(root);
       await fs.mkdir(worktreesRoot, { recursive: true });
       const pathExists = await fs.access(worktreePath).then(
         () => true,
@@ -524,23 +525,6 @@ export class SessionCheckouts {
     await this.pglite.query(
       "DELETE FROM desktop.session_checkouts WHERE session_id = $1",
       [sessionId],
-    );
-  }
-
-  private async excludeManagedWorktrees(root: string): Promise<void> {
-    const gitDir = (await git(root, ["rev-parse", "--git-dir"])).trim();
-    const excludePath = path.join(
-      path.isAbsolute(gitDir) ? gitDir : path.resolve(root, gitDir),
-      "info",
-      "exclude",
-    );
-    await fs.mkdir(path.dirname(excludePath), { recursive: true });
-    const current = await fs.readFile(excludePath, "utf8").catch(() => "");
-    const rule = "/.catamorphic/worktrees/";
-    if (current.split(/\r?\n/).includes(rule)) return;
-    await fs.appendFile(
-      excludePath,
-      `${current && !current.endsWith("\n") ? "\n" : ""}${rule}\n`,
     );
   }
 

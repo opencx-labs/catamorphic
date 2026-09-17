@@ -1,5 +1,7 @@
 # Workflow creation during sessions
 
+> This is a historical audit. Current source paths and scaffolding follow [ADR 0142](decisions/0142-contained-project-workspace.md); session artifact refs and reminder lifetimes follow the linked current workflow-lifecycle skill.
+
 Audit date: 2026-09-08. The primary agent-facing reference is the host-tier
 `workflow-lifecycle` skill in `packages/core/src/workflow-lifecycle-skill.ts`.
 It is offered through the existing SkillsService/MCP and desktop skill

@@ -29,7 +29,7 @@ Ask only those not answered in the visible app or deployment.
 
 ## Roles and operators
 
-Roles live in `roles/<slug>.json` and are reviewed with the project. Memberships
+Roles live in `.catamorphic/roles/<slug>.json` and are reviewed with the project. Memberships
 bind a stable external user id to those roles and grants. Builder access,
 membership management, and protected role-policy management are separate
 capabilities; do not make every builder an administrator by accident.

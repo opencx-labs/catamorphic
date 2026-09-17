@@ -1,5 +1,7 @@
 # 0052 — Skills as commands, and the agent-initiated auth loop
 
+> Project filesystem locations in this ADR are superseded by [ADR 0142](0142-contained-project-workspace.md). Capability source and configuration now live under `.catamorphic/`.
+
 - **Status:** Accepted
 - **Date:** 2026-08-14
 - **Builds on:** 0010 (skills in the project repo), 0049 (doctrine is the

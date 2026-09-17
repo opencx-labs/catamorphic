@@ -31,6 +31,11 @@ function mapMsbStatus(
 }
 
 export interface MicrosandboxProviderConfig {
+  /** Host-owned persistent data for a project's deployment runtimes. Never copied into source snapshots. */
+  projectDataDirectory?: (input: {
+    projectId: string;
+  }) => Promise<string | undefined>;
+
   image?: string;
   memoryMib?: number;
   cpus?: number;
@@ -56,11 +61,15 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
   readonly workspaceRoot = "/workspace";
   readonly resourceLimits = ["cpuMillis", "memoryMb"] as const;
   readonly deploymentRuntime: DeploymentRuntimeProvider;
-  private readonly config: Required<MicrosandboxProviderConfig>;
+  private readonly config: Required<
+    Omit<MicrosandboxProviderConfig, "projectDataDirectory">
+  > &
+    Pick<MicrosandboxProviderConfig, "projectDataDirectory">;
   private readonly connections = new Map<string, Sandbox>();
 
   constructor(config?: MicrosandboxProviderConfig) {
     this.config = {
+      projectDataDirectory: config?.projectDataDirectory,
       image: config?.image ?? DEFAULT_IMAGE,
       memoryMib: config?.memoryMib ?? DEFAULT_MEMORY_MIB,
       cpus: config?.cpus ?? DEFAULT_CPUS,
@@ -98,6 +107,17 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       .detached(true);
     if (opts.envVars) builder = builder.envs(opts.envVars);
     if (opts.labels) builder = builder.labels(opts.labels);
+    const dataDirectory =
+      opts.labels?.purpose === "deployment-runtime" && opts.labels.projectId
+        ? await this.config.projectDataDirectory?.({
+            projectId: opts.labels.projectId,
+          })
+        : undefined;
+    if (dataDirectory) {
+      builder = builder
+        .volume("/catamorphic-app-data", (mount) => mount.bind(dataDirectory))
+        .env("CATAMORPHIC_APP_DATA_DIR", "/catamorphic-app-data");
+    }
     const sandbox = await builder.create();
     this.connections.set(name, sandbox);
     if (this.config.setupCommand) {

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { projectDataDirectory } from "@catamorphic/core";
 import { safeStorage } from "electron";
 import type { RemoteOAuthCredentials } from "./remote-oauth.js";
 
@@ -57,7 +58,7 @@ interface StoreFile {
   credentials: Record<string, StoredCredentials>;
 }
 
-export const REMOTE_PROJECT_LOCATOR_PATH = ".catamorphic/remote.json";
+export const REMOTE_PROJECT_LOCATOR_PATH = ".catamorphic/app-data/remote.json";
 
 interface RemoteProjectLocatorFile {
   version: 1;
@@ -306,6 +307,7 @@ export function writeRemoteProjectLocator(
   rootPath: string,
   link: RemoteProjectLink,
 ): void {
+  projectDataDirectory({ root: rootPath });
   const filePath = path.join(rootPath, REMOTE_PROJECT_LOCATOR_PATH);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const locator: RemoteProjectLocatorFile = {

@@ -219,7 +219,7 @@ export interface CreateCatamorphicConfig {
   projectSeeds?: (defaults: Record<string, string>) => Record<string, string>;
   /**
    * Transform the default host-tier skills: playbooks the host ships,
-   * listed alongside a project's own `.agents/skills/` without being
+   * listed alongside a project's own `.catamorphic/skills/` without being
    * written into the project repo. Same contract as `projectSeeds`
    * (ADR 0049); a project skill with the same name shadows a host skill.
    */

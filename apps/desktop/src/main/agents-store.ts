@@ -85,7 +85,7 @@ export interface AgentConfig {
   /**
    * The agent's own main prompt (its persona) — prepended at the provider
    * boundary so it leads and the host playbooks follow, exactly like a
-   * project agent's `agents/<slug>.md` (ADR 0056). Harness-neutral.
+   * project agent's `.catamorphic/agents/<slug>.md` (ADR 0056). Harness-neutral.
    */
   instructions?: string;
   /** Operating mode; absent means "full-access". */

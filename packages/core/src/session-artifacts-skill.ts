@@ -15,7 +15,7 @@ and component libraries take precedence over these defaults.
 - For an app, call action create with kind app, a lowercase name, a clear title,
   icon (review, dashboard, report, tracker, form, calculator or default),
   and source containing a React component with a default export. The host creates
-  the ordinary apps/<name> scaffold and builds it. A static app needs no workflow
+  the ordinary .catamorphic/apps/<name> scaffold and builds it. A static app needs no workflow
   contract. Do not create a second HTML renderer or inject UI into host chrome.
 - Supply additional explicit workspace files in files. They can include CSS,
   data snapshots, project-local component libraries, helpers and package

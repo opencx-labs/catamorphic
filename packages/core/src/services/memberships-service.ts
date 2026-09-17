@@ -13,7 +13,7 @@ import type { RoleGrants, RolesService } from "./roles-service.js";
  * Stock project memberships (ADR 0055): `user → roles + grants` per project.
  * The one piece every host would rebuild identically, so it ships — but as
  * a *source* for {@link RolesService.resolve}, not as policy: what a role
- * may do lives in the committed `roles/<slug>.json`, and a host with its own
+ * may do lives in the committed `.catamorphic/roles/<slug>.json`, and a host with its own
  * entitlement tables never touches this table.
  *
  * Who the user *is* (signup, SSO, tokens, the invite email) stays the

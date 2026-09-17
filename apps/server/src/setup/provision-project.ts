@@ -119,7 +119,7 @@ export async function provisionStockProject(args: {
     [...parsed.roles]
       .sort((left, right) => left.slug.localeCompare(right.slug))
       .map((role) => [
-        `roles/${role.slug}.json`,
+        `.catamorphic/roles/${role.slug}.json`,
         `${JSON.stringify(role.definition, null, 2)}\n`,
       ]),
   );

@@ -241,7 +241,7 @@ An identity is either **root** (`scope` absent: every project of the tenant, eve
 | `{ kind: "project", projectId }` | **Builder** of that project: files, deploys, secrets, agent definitions, every workflow, app and agent — the whole program surface (not the store, see below). |
 | `{ kind: "app", projectId, name }` | The app's served document plus, transitively, the workflows frozen into its *active published* version. |
 | `{ kind: "workflow", projectId, name }` | One workflow directly (a per-customer MCP tool, a host-triggered action). |
-| `{ kind: "agent", projectId, name, toolPolicies? }` | Chat sessions on the committed project agent `agents/<name>.json` (ADR 0050). Inside those sessions the caller's scope intersects the agent's tool policy: the project's tools server is narrowed to the caller's workflow refs, and `toolPolicies` (per connector server key, ADR 0054's shape) is one more narrowing layer. Own sessions only. |
+| `{ kind: "agent", projectId, name, toolPolicies? }` | Chat sessions on the committed project agent `.catamorphic/agents/<name>.json` (ADR 0050). Inside those sessions the caller's scope intersects the agent's tool policy: the project's tools server is narrowed to the caller's workflow refs, and `toolPolicies` (per connector server key, ADR 0054's shape) is one more narrowing layer. Own sessions only. |
 | `{ kind: "document", projectId, path, access? }` | A file (`docs/handbook.md`) or subtree (`store/customers/acme/**`) of the project's path namespace; `access` defaults to `read`, `write` implies read. Git paths are read-only through this ref; `store/…` paths are the project store, reachable ONLY through document refs — builders included. |
 
 ```ts
@@ -266,10 +266,10 @@ Which users are builders and which artifacts each viewer gets is host policy (a 
 
 ### Roles as files, memberships as the stock source (ADR 0055)
 
-Most hosts do not want to hand-write scopes. Commit roles into the project — `roles/<slug>.json`, next to `agents/` — and let core expand them:
+Most hosts do not want to hand-write scopes. Commit roles into the project — `.catamorphic/roles/<slug>.json`, next to `.catamorphic/agents/` — and let core expand them:
 
 ```jsonc
-// roles/csm.json
+// .catamorphic/roles/csm.json
 {
   "version": 1,
   "name": "CSM",
@@ -278,9 +278,9 @@ Most hosts do not want to hand-write scopes. Commit roles into the project — `
   "apps": ["customer-tracker"],
   "documents": ["docs/**", { "path": "store/customers/{customer}/**", "access": "write" }]
 }
-// roles/admin.json
+// .catamorphic/roles/admin.json
 { "version": 1, "name": "Admin", "builder": true, "documents": ["store/**"] }
-// roles/brain-maintainer.json
+// .catamorphic/roles/brain-maintainer.json
 { "version": 1, "name": "Brain Maintainer", "permissions": ["brain:maintain"], "agents": ["brain-maintainer"] }
 ```
 
@@ -702,11 +702,11 @@ like* in your product is yours. Two `createCatamorphic` hooks receive the
 framework defaults and return the host-final set — replacing or removing
 entries is legitimate:
 
-- `projectSeeds` — the per-project seed files (`.agents/skills/…`). The
+- `projectSeeds` — the per-project seed files (`.catamorphic/skills/…`). The
   seeded `building-apps` skill is mechanics (framework contracts — keep it);
   `designing-apps` is design doctrine, the seed you most likely swap for
-  your own. A seed you remove also never resurrects via the per-turn
-  workflow-skill restore.
+  your own. These defaults also supply the host skill tier; agent turns never
+  restore missing or deliberately deleted project skill files.
 - `standingAgentPrompt` — the standing system prompt for coding-agent
   sessions: omit for the workflow-authoring default, a string to replace,
   `false` for none.
@@ -718,8 +718,8 @@ export const catamorphic = createCatamorphic({
   environmentProvider,
   projectSeeds: (defaults) => {
     const seeds = { ...defaults };
-    delete seeds[".agents/skills/designing-apps/SKILL.md"];
-    seeds[".agents/skills/acme-design/SKILL.md"] = ACME_DESIGN_SKILL;
+    delete seeds[".catamorphic/skills/designing-apps/SKILL.md"];
+    seeds[".catamorphic/skills/acme-design/SKILL.md"] = ACME_DESIGN_SKILL;
     return seeds;
   },
 });
@@ -730,8 +730,9 @@ runs on the defaults.
 
 ## Validating projects in CI or a local editor
 
-Each project seeds `scripts/check.ts` (project-owned; the logic lives in the
-`@catamorphic/parser` devDependency). `bun run check` parses the workspace,
+Capability scaffolding includes `.catamorphic/scripts/check.ts` (project-owned;
+the logic lives in the `@catamorphic/parser` devDependency).
+`bun run --cwd .catamorphic check` parses the workspace,
 validates trigger bindings (add `--host <url>` to check against a live
 host's kind catalog), and fails on stale generated types; `--write`
 regenerates the app-api types. Sandbox installs strip the tooling
@@ -874,3 +875,30 @@ The [React host examples](packages/registry/src/examples/embedding.tsx) compile 
 the registry on every check. They demonstrate controlled chat selection and a
 host-owned workflow inspector. [Chat delivery responsibilities](apps/desktop/docs/chat-state.md)
 separate reusable mechanics from the desktop reference presentation.
+
+### Contained project workspace and local data
+
+Catamorphic source lives in an independent `.catamorphic/` Bun workspace.
+Run `bun install --cwd .catamorphic` and `bun run --cwd .catamorphic check`.
+Imports and ordinary agent work leave existing repository files untouched.
+The workspace is created when workflows, apps, or other capabilities need it.
+
+Local-process and microsandbox hosts can inject `projectDataDirectory` into
+their provider, an async callback receiving `{ projectId }` and returning
+an absolute persistent directory or `undefined`. For a project attached to a
+local folder, core's `projectDataDirectory({ root })` prepares
+`.catamorphic/app-data/` and creates `.catamorphic/.gitignore` only if absent.
+Deployment runtimes expose this storage as `CATAMORPHIC_APP_DATA_DIR`;
+workflow code should create its own named subdirectory there. Microsandbox
+bind-mounts the folder; local-process uses its absolute host path. The data
+outlives a runtime or deployment. Build and agent sandboxes do not receive it.
+Cloud providers retain their existing storage contracts.
+
+The scoped ignore file excludes app data by default. Owners can edit it to
+track ordinary data deliberately. Mutable data is excluded from immutable
+execution snapshots and the shared program/document surface. Documents retain
+logical `store/...` API addresses, backed locally by
+`.catamorphic/app-data/store/...`. Personal artifact privacy remains separately
+enforced. Per-user app view preferences, credentials, and conversation state
+remain in the host's database or private data directory. Database export and
+restore are not provided.

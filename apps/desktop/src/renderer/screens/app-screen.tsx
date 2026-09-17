@@ -61,6 +61,8 @@ export function AppScreen({
   onContentState?: (state: AppContentState) => void;
 }) {
   const theme = useTheme();
+  const apps = useApps(projectId);
+  const sourceExists = apps.data?.some((app) => app.name === appName) ?? false;
   return (
     <div className={compact ? "min-w-0" : "flex min-h-0 flex-1 flex-col bg-bg"}>
       <AppMount
@@ -91,9 +93,9 @@ export function AppScreen({
         channel="dev"
         renderState={(state) => (
           <div className="grid h-60 place-items-center text-sm text-fg-muted">
-            {state === "loading"
+            {state === "loading" || (state === "not_found" && apps.isPending)
               ? "Loading app…"
-              : state === "not_published"
+              : state === "not_published" || sourceExists
                 ? "This app has no successful build yet. Ask the assistant to build it."
                 : "App not found."}
           </div>

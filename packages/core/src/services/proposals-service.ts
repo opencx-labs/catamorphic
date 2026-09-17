@@ -22,6 +22,7 @@ import {
   isStorePath,
   normalizeDocumentPath,
 } from "./documents-service.js";
+import { isProjectDataPath } from "./project-workspace.js";
 import { ProjectNotFoundError } from "./projects-service.js";
 
 /**
@@ -209,6 +210,7 @@ export class ProposalsService {
     return [file.path, ...(file.previousPath ? [file.previousPath] : [])].every(
       (path) =>
         !isPersonalFile(path) &&
+        !isProjectDataPath(path) &&
         documentAccessAllowed(input.identity, input.projectId, path, "read"),
     );
   }
@@ -261,7 +263,7 @@ export class ProposalsService {
         throw new DocumentPathError(
           "Personal files stay on this device. Choose a project location before proposing them.",
         );
-      if (isStorePath(path)) {
+      if (isStorePath(path) || isProjectDataPath(path)) {
         throw new DocumentPathError(
           `${path} is in the store; write it directly instead of proposing`,
         );

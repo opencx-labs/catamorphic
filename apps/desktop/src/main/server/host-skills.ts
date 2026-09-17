@@ -147,7 +147,7 @@ export function composeSkillsNote(opts: SkillsNoteOpts): string | undefined {
 
   const userSkills = opts.userSkills ?? [];
   const tiers = [
-    "- Project skills: files in this project under `.agents/skills/<name>/SKILL.md`.",
+    "- Project skills: files in this project under `.catamorphic/skills/<name>/SKILL.md`.",
     ...(userSkills.length > 0
       ? [`- The user's personal skills (theirs alone):\n${listing(userSkills)}`]
       : []),

@@ -1,5 +1,7 @@
 # 0056 — Agent configuration: one surface, layered defaults, enforced capabilities
 
+> Project filesystem locations in this ADR are superseded by [ADR 0142](0142-contained-project-workspace.md). Capability source and configuration now live under `.catamorphic/`.
+
 - **Status:** Accepted; local desktop defaults superseded by 0140
 - **Date:** 2026-08-21
 - **Builds on:** 0038 (coding-agent registry), 0050 (project agent

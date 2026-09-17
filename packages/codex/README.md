@@ -34,8 +34,9 @@ and `.git`. Full access is an explicit host/user choice, never an automatic
 fallback after a denied write. A host with project-editing tools can handle
 an authorized skill edit through that existing surface.
 
-Project `.agents/skills` are discovered by Codex. Host skill listings and
-`read_skill` are injected by the host. Text attachments retain their context;
+The owner's `.agents/skills` are discovered natively by Codex. Catamorphic
+project skills live in `.catamorphic/skills`; the host exposes them through
+the same skill listing and `read_skill` surfaces as host skills. Text attachments retain their context;
 images use SDK `local_image` inputs, and documents are staged as readable local
 files. All staged bytes are removed when the turn ends or startup fails.
 

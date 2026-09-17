@@ -22,10 +22,8 @@ import {
   assertMayManageRolePolicy,
   assertRootIdentity,
 } from "./artifact-scope.js";
-import {
-  listLocalDocuments,
-  protectLocalDocuments,
-} from "./local-document-files.js";
+import { listLocalDocuments } from "./local-document-files.js";
+import { localDocumentRelativePath } from "./project-workspace.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -482,7 +480,11 @@ export class ProjectsService {
           const filePaths = [
             ...new Set([
               ...(await repo.listFiles()),
-              ...(root ? await listLocalDocuments(root) : []),
+              ...(root
+                ? (await listLocalDocuments(root)).map(
+                    localDocumentRelativePath,
+                  )
+                : []),
             ]),
           ];
           return filePaths.map((p) => ({ path: p, size: 0 }));
@@ -625,14 +627,6 @@ export class ProjectsService {
             (await repo.readFile(filePath)) !== input.expectedContent
           )
             throw new ProjectFileConflictError();
-          if (
-            filePath.startsWith("store/") &&
-            (await this.projectManager.localPath({
-              tenantId: identity.tenantId,
-              projectId,
-            }))
-          )
-            await protectLocalDocuments(repo.repoPath);
           await repo.writeFile(filePath, input.content);
           if (input.commitMessage) {
             await repo.commit(

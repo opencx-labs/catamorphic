@@ -1,5 +1,7 @@
 # 0041 - Generated projections: schemas and types derived from code
 
+> Project filesystem locations in this ADR are superseded by [ADR 0142](0142-contained-project-workspace.md). Capability source and configuration now live under `.catamorphic/`.
+
 - **Status**: accepted
 - **Date**: 2026-08-11
 

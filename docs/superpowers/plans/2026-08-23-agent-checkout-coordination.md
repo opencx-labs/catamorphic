@@ -1,5 +1,7 @@
 # Agent Checkout Coordination Implementation Plan
 
+> Managed worktrees now live in host-managed storage outside the project, per [ADR 0142](../../decisions/0142-contained-project-workspace.md). The project-local worktree path below is superseded.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Give every desktop harness project-scoped peer awareness and an agent-controlled choice between a shared primary checkout, waiting, and an optional managed or external Git worktree.

@@ -74,7 +74,7 @@ app.register(catamorphicPlugin, {
 
 - A **root** identity (no `scope`) reaches every project and surface — a host's service calls, the desktop's own local projects.
 - A **scoped** identity may reach exactly the listed artifacts — `{ kind: "project", projectId }` (a builder: the whole program surface), `{ kind: "app", projectId, name }` (the app's document plus its active version's frozen workflow set), `{ kind: "workflow", projectId, name }`, `{ kind: "agent", projectId, name, toolPolicies? }` (chat sessions on a committed project agent) or `{ kind: "document", projectId, path, access? }` (a file or `dir/**` subtree; the project store is reachable only this way) — and nothing else. Denials are a uniform 403.
-- Most hosts do not hand-write scopes: commit `roles/<slug>.json` in the project and resolve members through `core.memberships.identityFor(...)` (the stock table) or `resolveRoles(core, { roles, grants })`; members with a host-issued token use `identityFromBearer(verify)`. See INTEGRATION.md "Roles as files".
+- Most hosts do not hand-write scopes: commit `.catamorphic/roles/<slug>.json` in the project and resolve members through `core.memberships.identityFor(...)` (the stock table) or `resolveRoles(core, { roles, grants })`; members with a host-issued token use `identityFromBearer(verify)`. See INTEGRATION.md "Roles as files".
 - Role permissions use the namespaced `domain:capability` form. Core reserves
   `memberships:manage` and `roles:manage`; unknown valid names grant no
   framework authority but remain available to explicit embedder policy and

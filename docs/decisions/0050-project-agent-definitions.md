@@ -1,6 +1,6 @@
 # 0050 — Project agent definitions: committed agents, consent-bound credentials
 
-- **Status:** Accepted
+- **Status:** Superseded in part by [0142](0142-contained-project-workspace.md) (project layout)
 - **Date:** 2026-08-14
 - **Builds on:** 0033 (user-declared secrets), 0038 (coding-agent registry),
   0043 (general-purpose projects), 0049 (doctrine is the embedder's)

@@ -233,10 +233,15 @@ describeIf("host calls from workflows (ADR 0055)", () => {
     });
     const project = await core.projects.create(root, { name: "brain" });
     projectId = project.id;
-    await core.projects.writeFile(root, projectId, "workflows/src/brain.ts", {
-      content: WORKFLOWS,
-      commitMessage: "Add workflows",
-    });
+    await core.projects.writeFile(
+      root,
+      projectId,
+      ".catamorphic/workflows/src/brain.ts",
+      {
+        content: WORKFLOWS,
+        commitMessage: "Add workflows",
+      },
+    );
     const deployed = await core.deployment.deploy(
       root.tenantId,
       projectId,

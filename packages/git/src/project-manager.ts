@@ -29,14 +29,11 @@ export const PROJECT_MANIFEST_PATH = ".catamorphic/project.json";
  * checkpoint walker's IGNORED_DIRS so git status and the walker agree on
  * what a project's history never contains.
  */
-export const PROJECT_GITIGNORE = `node_modules/
+export const PROJECT_GITIGNORE = `/app-data/
+node_modules/
 dist/
 .turbo/
 .DS_Store
-# The project store (ADR 0055): data made by using the project, versioned on
-# the server per write, never in git.
-store/
-.catamorphic/remote-sync.json
 `;
 
 const SYSTEM_AUTHOR = {
@@ -312,7 +309,7 @@ export class ProjectManager {
     // Every project gets ignore rules from birth: without them the first
     // `bun install` floods git status (and every changes UI) with the
     // whole node_modules tree. Never overwrite one the user already has.
-    const gitignorePath = path.join(repoPath, ".gitignore");
+    const gitignorePath = path.join(repoPath, ".catamorphic", ".gitignore");
     const gitignoreExists = await fs.access(gitignorePath).then(
       () => true,
       () => false,

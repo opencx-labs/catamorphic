@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 
 /**
  * A skill as the palette and composer see it: the tiers merged by core
- * (`GET /projects/:id/skills`) — project skills from `.agents/skills/`, the
+ * (`GET /projects/:id/skills`) — project skills from `..catamorphic/agents/skills/`, the
  * user's personal skills (ADR 0056), host skills shipped by the app
  * (ADR 0049); name collisions resolve project > user > host.
  */

@@ -92,19 +92,19 @@ flowchart LR
   bridge -->|DO binding| sandbox
   fastify -->|Bearer CLOUDFLARE_API_TOKEN| artifactsREST
   fastify -->|isomorphic-git Bearer token| artifactsGit
-  sandbox -->|git clone short lived token| artifactsGit
+  sandbox -->|dev checkout clone only| artifactsGit
 ```
 
 ### How a production Run executes
 
 1. The Runs service resolves deployed `origin/main`, creates one canonical Run row, and enqueues Postgres work.
 2. An explicitly started host execution worker claims the job and resolves the immutable deployment artifact.
-3. If the project's `RemoteBackend` supports `getCloneSource()` (Artifacts does), the deployment runtime receives the repo URL plus a short-lived token. Other backends upload the resolved files.
+3. Core reads the committed capability source under `.catamorphic/`, excludes `app-data/`, and uploads the verified execution snapshot. Deployment runtimes never clone the full imported repository (ADR 0142).
 4. `CloudflareSandboxProvider` creates or reuses the deployment-scoped sandbox through the Bridge Worker and materializes the immutable artifact.
 5. A warm Bun supervisor dispatches plain Workflow execution, boundary callbacks, or batch source/process/sink operations in isolated Bun Workers.
 6. Sequenced runtime events update `workflow_runs` and supporting state. Postgres schedules retries, pauses, child Runs, and subsequent scopes; the deployment sandbox may sleep between invocations.
 
-Dev sandboxes (coding-agent sessions) use the same two materialization paths via `SandboxManager.ensureDevSandbox({ cloneSource? })`.
+Dev sandboxes (coding-agent sessions) need the complete editable checkout. They may clone with short-lived credentials when the working copy matches the origin, or receive uploaded working files through `SandboxManager.ensureDevSandbox({ cloneSource? })`.
 
 The `RemoteBackend` interface isolates the paths — swapping filesystem remotes for `ArtifactsRemoteBackend` does not change the provider/executor contract; `getCloneSource()` is an optional capability.
 

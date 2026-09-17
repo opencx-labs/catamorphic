@@ -5746,13 +5746,18 @@ export function App({
                         onEditorState(editor.localId, { dirty })
                       }
                       onShare={
-                        editor.filePath?.startsWith("store/") &&
+                        editor.filePath?.startsWith(
+                          ".catamorphic/app-data/store/",
+                        ) &&
                         remoteSurfaceStatus &&
                         remoteSurfaceStatus.capabilities?.features
                           .publications !== false
                           ? (path) =>
                               setRemotePublish({
-                                path,
+                                path: path.replace(
+                                  /^\.catamorphic\/app-data\//,
+                                  "",
+                                ),
                                 features:
                                   remoteSurfaceStatus.capabilities?.features,
                               })
@@ -5762,7 +5767,9 @@ export function App({
                         remoteSurfaceStatus &&
                         remoteSurfaceStatus.capabilities?.features.proposals !==
                           false &&
-                        !editor.filePath?.startsWith("store/")
+                        !editor.filePath?.startsWith(
+                          ".catamorphic/app-data/store/",
+                        )
                           ? (path) =>
                               setRemotePropose({
                                 files: [path],

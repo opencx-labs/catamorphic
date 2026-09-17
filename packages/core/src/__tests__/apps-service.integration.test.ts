@@ -141,7 +141,7 @@ describeIf("AppsService integration", () => {
       name: "apps-project",
       externalUserId: identity.externalUserId,
       initialFiles: {
-        "workflows/src/orders.ts": [
+        ".catamorphic/workflows/src/orders.ts": [
           'import { defineWorkflow } from "@catamorphic/workflow";',
           "",
           "export const listOrders = defineWorkflow(({ defineBoundary }) => ({",
@@ -149,17 +149,17 @@ describeIf("AppsService integration", () => {
           "}));",
           "",
         ].join("\n"),
-        "workflows/src/app-api.ts": [
+        ".catamorphic/workflows/src/app-api.ts": [
           'import { listOrders } from "./orders.js";',
           "",
           "export const appApi = { listOrders };",
           "",
         ].join("\n"),
-        "apps/ops-dashboard/package.json": JSON.stringify({
+        ".catamorphic/apps/ops-dashboard/package.json": JSON.stringify({
           name: "ops-dashboard",
           private: true,
         }),
-        "apps/ops-dashboard/src/main.tsx": "export {};",
+        ".catamorphic/apps/ops-dashboard/src/main.tsx": "export {};",
       },
     });
     try {
@@ -229,7 +229,7 @@ describeIf("AppsService integration", () => {
     const buildCommand = provider.commands.find(
       (entry) => entry.command === "NODE_ENV=production bun run build",
     );
-    expect(buildCommand?.cwd).toContain("apps/ops-dashboard");
+    expect(buildCommand?.cwd).toContain(".catamorphic/apps/ops-dashboard");
   });
 
   it("persists presentation without rebuilding and keeps the default for unknown icons", async () => {
@@ -571,9 +571,9 @@ describeIf("AppsService integration", () => {
       artifactId: source.id,
       revision: 1,
       files: {
-        "workflows/src/helper.ts":
+        ".catamorphic/workflows/src/helper.ts":
           'import { defineWorkflow } from "@catamorphic/workflow"; export const echo = defineWorkflow(({ defineBoundary }) => ({ steps: [defineBoundary({ run: async () => "ok" })] }));',
-        "workflows/src/app-api.ts":
+        ".catamorphic/workflows/src/app-api.ts":
           'import { echo } from "./helper"; export const appApi = { echo };',
       },
     });

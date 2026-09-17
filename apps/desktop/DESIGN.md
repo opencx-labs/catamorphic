@@ -29,6 +29,15 @@ timelines, sessions, editors, runs) must be ported back to the installable
 packages/registry so embedders get it too. A desktop-only improvement to a
 shared surface is a process bug, not a win. See the [historical log](DESIGN-HISTORY.md) for its rationale.
 
+## Contained project workspace
+
+Catamorphic capabilities live in `.catamorphic/`, including the independent Bun
+workspace, workflows, apps, agent definitions, skills, and shared settings
+(ADR 0142). Persistent project data lives in its ignored `app-data/` directory.
+Opening an existing folder creates nothing. Desktop-wide state and temporary
+build/runtime files remain outside the project. Existing package manifests and
+root instruction files belong to the user's project and are never scaffolded.
+
 ## Opening existing projects
 
 Opening a folder adopts it in place without adding files, copying history, or

@@ -24,8 +24,8 @@ const dummyCore = (
     ...config,
   });
 
-const DESIGN_SKILL_PATH = ".agents/skills/designing-apps/SKILL.md";
-const MECHANICS_SKILL_PATH = ".agents/skills/building-apps/SKILL.md";
+const DESIGN_SKILL_PATH = ".catamorphic/skills/designing-apps/SKILL.md";
+const MECHANICS_SKILL_PATH = ".catamorphic/skills/building-apps/SKILL.md";
 
 describe("projectSeeds hook", () => {
   it("defaults to the framework seed skills", () => {
@@ -37,14 +37,14 @@ describe("projectSeeds hook", () => {
     const projectSeeds = vi.fn((defaults: Record<string, string>) => {
       const seeds = { ...defaults };
       delete seeds[DESIGN_SKILL_PATH];
-      seeds[".agents/skills/acme-design/SKILL.md"] = "# Acme design";
+      seeds[".catamorphic/skills/acme-design/SKILL.md"] = "# Acme design";
       return seeds;
     });
     const core = dummyCore({ projectSeeds });
 
     expect(projectSeeds).toHaveBeenCalledTimes(1);
     expect(core.seedFiles[DESIGN_SKILL_PATH]).toBeUndefined();
-    expect(core.seedFiles[".agents/skills/acme-design/SKILL.md"]).toBe(
+    expect(core.seedFiles[".catamorphic/skills/acme-design/SKILL.md"]).toBe(
       "# Acme design",
     );
     // Mechanics survive untouched alongside the host's doctrine.
@@ -79,8 +79,8 @@ describe("hostSkills hook", () => {
   it("offers the host's resolved project skills without seeding imported repositories", () => {
     const core = dummyCore({
       projectSeeds: () => ({
-        ".agents/skills/acme/SKILL.md": "# Acme",
-        ".agents/skills/acme/example.ts": "export const example = true;",
+        ".catamorphic/skills/acme/SKILL.md": "# Acme",
+        ".catamorphic/skills/acme/example.ts": "export const example = true;",
         "package.json": "{}",
       }),
     });

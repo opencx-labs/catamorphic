@@ -559,7 +559,7 @@ function ProfileAgentBody({
                 <span className="text-fg-faint">
                   The agent's own main prompt. It leads every session — the
                   app's playbooks follow it — like a project agent's
-                  agents/&lt;slug&gt;.md persona.
+                  .catamorphic/agents/&lt;slug&gt;.md persona.
                 </span>
               </label>
 
@@ -866,7 +866,7 @@ function ProfileAgentBody({
 /**
  * A committed project agent is code: the modal shows what the definition
  * says, its consent state, and the default-agent actions — editing means
- * editing `agents/<slug>.json` (and the `<slug>.md` persona) in the repo.
+ * editing `.catamorphic/agents/<slug>.json` (and the `<slug>.md` persona) in the repo.
  */
 function ProjectAgentBody({
   agent,
@@ -991,11 +991,12 @@ function ProjectAgentBody({
       />
 
       <p className="text-[11px] text-fg-faint">
-        This agent is defined by <code>agents/{agent.slug}.json</code>
+        This agent is defined by{" "}
+        <code>.catamorphic/agents/{agent.slug}.json</code>
         {agent.promptPreview ? (
           <>
             {" "}
-            and <code>agents/{agent.slug}.md</code>
+            and <code>.catamorphic/agents/{agent.slug}.md</code>
           </>
         ) : null}{" "}
         in the project — edit those files (or ask a chat to) to change it.

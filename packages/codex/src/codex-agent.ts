@@ -45,6 +45,8 @@ import {
 type CodexConfigObject = NonNullable<CodexOptions["config"]>;
 
 export interface CodexAgentOpts {
+  /** Host-owned plugin reference directory; defaults to the working directory. */
+  pluginDirectory?: string;
   onToolPermission?: ToolPermissionHandler;
   /** A handler per native session lifetime; discarded on restart or disposal. */
   mcpElicitationForSession?: (context: {
@@ -225,8 +227,13 @@ export class CodexAgent implements CodingAgentProvider {
   }
 
   async startSession(opts: StartSessionOpts): Promise<ProviderSession> {
-    await stagePluginDocs(opts.workingDirectory, opts.attachedPlugins);
-    const preamble = buildPluginsPreamble(opts.attachedPlugins);
+    await stagePluginDocs(
+      this.opts.pluginDirectory ?? opts.workingDirectory,
+      opts.attachedPlugins,
+    );
+    const preamble = buildPluginsPreamble(opts.attachedPlugins, {
+      directory: this.opts.pluginDirectory,
+    });
     const instructions = [preamble, opts.systemPrompt ?? ""]
       .filter(Boolean)
       .join("\n\n");

@@ -310,7 +310,7 @@ async function buildStockServerInner(
     triggerKinds: [schedule, ...SESSION_TRIGGER_KINDS],
     projectSeeds: (defaults) => ({
       ...defaults,
-      "agents/assistant.json": JSON.stringify({
+      ".catamorphic/agents/assistant.json": JSON.stringify({
         version: 1,
         name: "Assistant",
         kind: "builtin",

@@ -53,7 +53,9 @@ export function FilesNav({
           name: node.name,
           path: node.path,
           hasChildren: Boolean(node.children),
-          collapsed: node.path !== "store",
+          collapsed: !(
+            contentOnly && ".catamorphic/app-data/store".startsWith(node.path)
+          ),
         });
         if (node.children) visit(node.children, node.path);
       }
@@ -126,10 +128,11 @@ export function isVisibleProjectFile(
   return (
     !path.startsWith(".git/") &&
     !path.startsWith("node_modules/") &&
-    path !== ".catamorphic/remote.json" &&
+    path !== ".catamorphic/app-data/remote.json" &&
     (!contentOnly ||
       !path.startsWith(".") ||
-      path.startsWith(".catamorphic/personal/"))
+      path.startsWith(".catamorphic/personal/") ||
+      path.startsWith(".catamorphic/app-data/store/"))
   );
 }
 

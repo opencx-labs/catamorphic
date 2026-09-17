@@ -24,9 +24,13 @@ it("workflow graph reads exclude large media and other repositories before loadi
   );
   try {
     await repo.writeFile(
-      "workflows/main.ts",
+      ".catamorphic/workflows/main.ts",
       `import { defineWorkflow } from "@catamorphic/workflow";
       export const example = defineWorkflow(({ defineBoundary }) => ({ steps: [defineBoundary({ run: () => "ok" })] }));`,
+    );
+    await repo.writeFile(
+      "workflows/unrelated.ts",
+      'import { defineWorkflow } from "@catamorphic/workflow"; export const unrelated = defineWorkflow(({ defineBoundary }) => ({ steps: [defineBoundary({ run: () => true })] }));',
     );
     await repo.writeFile("nested/.git/HEAD", "ref: refs/heads/main");
     await repo.writeFile(
@@ -54,7 +58,9 @@ it("workflow graph reads exclude large media and other repositories before loadi
       projectId: "f1e2d3c4-b5a6-7890-dcba-fedcba987654",
       workflowName: "example",
     });
-    expect(detail.allFiles["workflows/main.ts"]).toContain("defineWorkflow");
+    expect(detail.allFiles[".catamorphic/workflows/main.ts"]).toContain(
+      "defineWorkflow",
+    );
     expect(detail.allFiles["video.mp4"]).toBeUndefined();
     expect(detail.allFiles["nested/workflows/unrelated.ts"]).toBeUndefined();
     expect(JSON.stringify(detail).length).toBeLessThan(20_000);

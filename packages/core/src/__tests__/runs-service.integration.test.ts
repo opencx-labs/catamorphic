@@ -2553,13 +2553,13 @@ class FakeSandboxProvider implements SandboxProvider {
 
 function projectFiles(): Record<string, string> {
   return {
-    "package.json": JSON.stringify({
+    ".catamorphic/workflows/package.json": JSON.stringify({
       name: "unified-runs",
       private: true,
       type: "module",
       dependencies: { "@catamorphic/workflow": "0.0.1" },
     }),
-    "src/workflows.ts": `import {
+    ".catamorphic/workflows/src/workflows.ts": `import {
   type BoundaryContext,
   defineBatchStep,
   defineWorkflow,

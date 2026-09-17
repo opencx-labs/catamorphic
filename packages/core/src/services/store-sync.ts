@@ -10,6 +10,11 @@ import {
   type DocumentVersion,
   normalizeDocumentPath,
 } from "./documents-service.js";
+import {
+  ensureProjectWorkspace,
+  localDocumentRelativePath,
+  projectDataDirectory,
+} from "./project-workspace.js";
 
 /**
  * Store sync (ADR 0055): a folder is a working copy of the scoped tree a
@@ -26,14 +31,15 @@ import {
  *   reported; local deletions delete remotely. Edits outside `store/`
  *   are reported as not shippable (the program changes by commit/PR).
  *
- * State lives in `.catamorphic/remote-sync.json` in the folder: per path,
+ * State lives in `.catamorphic/app-data/remote-sync.json` in the folder: per path,
  * what was last synced (source, version/digest, content hash). Local
  * modification = current hash ≠ manifest hash.
  *
  * Two clients drive it: the desktop's HTTP client against a hosting
  * backend, and — on the server itself — {@link documentsClientFor}, which
  * lets an agent's working copy pull/ship `store/` around every turn AS THE
- * CALLER (so a member's agent writing `store/customers/acme/notes.md` in
+ * CALLER (so a member's agent writing
+ * `.catamorphic/app-data/store/customers/acme/notes.md` in
  * its folder lands in the store with the right author, and never anything
  * the member may not write).
  */
@@ -91,7 +97,7 @@ interface Manifest {
   serverCopies?: string[];
 }
 
-export const MANIFEST_PATH = ".catamorphic/remote-sync.json";
+export const MANIFEST_PATH = ".catamorphic/app-data/remote-sync.json";
 export const STORE_PREFIX = "store/";
 
 export interface SyncReport {
@@ -150,6 +156,7 @@ function readManifest(root: string): Manifest {
 }
 
 function writeManifest(root: string, manifest: Manifest): void {
+  projectDataDirectory({ root });
   const target = path.join(root, MANIFEST_PATH);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const sorted: Manifest = {
@@ -168,7 +175,7 @@ function localPath(root: string, relative: string): string {
   normalizeDocumentPath(relative);
   if (relative === MANIFEST_PATH)
     throw new Error("The synchronization manifest is local state");
-  const target = path.resolve(root, relative);
+  const target = path.resolve(root, localDocumentRelativePath(relative));
   if (!target.startsWith(`${path.resolve(root)}${path.sep}`))
     throw new Error(`Path escapes the project: ${relative}`);
   const canonicalRoot = fs.realpathSync(root);
@@ -201,6 +208,7 @@ function readLocal(root: string, relative: string): Uint8Array | null {
 }
 
 function writeLocal(root: string, relative: string, bytes: Uint8Array): void {
+  ensureProjectWorkspace({ root });
   const target = localPath(root, relative);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, bytes);
@@ -269,10 +277,10 @@ function writeServerCopy(
   return copy;
 }
 
-/** Every file under `store/` in the folder, relative, forward-slashed. */
+/** Local app-data/store files, returned as logical store/ document addresses. */
 function walkStore(root: string): string[] {
   const out: string[] = [];
-  const storeDir = path.join(root, STORE_PREFIX);
+  const storeDir = path.join(root, localDocumentRelativePath(STORE_PREFIX));
   const walk = (dir: string) => {
     let entries: fs.Dirent[];
     try {
@@ -284,7 +292,10 @@ function walkStore(root: string): string[] {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
       else if (entry.isFile()) {
-        out.push(path.relative(root, full).split(path.sep).join("/"));
+        out.push(
+          STORE_PREFIX +
+            path.relative(storeDir, full).split(path.sep).join("/"),
+        );
       }
     }
   };

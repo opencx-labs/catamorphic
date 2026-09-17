@@ -11,8 +11,8 @@ import { requireTenantProject } from "./projects-service.js";
  * live, following the Agent Skills spec layout:
  *
  * ```
- * .agents/skills/<name>/SKILL.md
- * .agents/skills/<name>/references/…
+ * .catamorphic/skills/<name>/SKILL.md
+ * .catamorphic/skills/<name>/references/…
  * ```
  *
  * The project repo is the single source of truth for these skills — its
@@ -21,7 +21,7 @@ import { requireTenantProject } from "./projects-service.js";
  * by construction. Coding agents read them from the dev sandbox checkout; no
  * separate skill store exists.
  */
-export const SKILLS_DIR = ".agents/skills";
+export const SKILLS_DIR = ".catamorphic/skills";
 
 export interface ProjectSkill {
   /** Directory name == declared skill name. */
@@ -47,7 +47,7 @@ export interface ProjectSkill {
 }
 
 /**
- * Read-only view over a project's `.agents/skills/` directory, merged with
+ * Read-only view over a project's `.catamorphic/skills/` directory, merged with
  * the calling user's personal tier (ADR 0056) and the host-tier skill set
  * (ADR 0049). Writes go through the normal project file APIs (project
  * skills are just files in the repo); host skills are config, resolved once
@@ -260,7 +260,7 @@ function skillsFromTier(
     });
 }
 
-/** `.agents/skills/<name>/SKILL.md` files → skills, sorted by name. */
+/** `.catamorphic/skills/<name>/SKILL.md` files → skills, sorted by name. */
 function skillsFromFiles(files: Record<string, string>): ProjectSkill[] {
   return Object.entries(files)
     .filter(

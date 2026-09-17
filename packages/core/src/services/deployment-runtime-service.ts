@@ -5,7 +5,6 @@ import {
 } from "@catamorphic/parser";
 import type { SandboxResources } from "@catamorphic/sandbox";
 import {
-  type CloneSource,
   DEPLOYMENT_RUNTIME_VERSION,
   type DeploymentRuntime,
   type DeploymentRuntimeStatus,
@@ -78,8 +77,6 @@ export class DeploymentRuntimeService {
     projectId: string;
     artifact: DeploymentArtifact;
     files: Record<string, string>;
-    originalFiles: Record<string, string>;
-    cloneSource?: CloneSource;
     plugins?: readonly RunPluginPayload[];
   }): Promise<DeploymentRuntime> {
     const runtimeProvider = this.deps.provider.deploymentRuntime;
@@ -145,8 +142,6 @@ export class DeploymentRuntimeService {
                   sandboxId,
                   projectDirectory,
                   files: args.files,
-                  originalFiles: args.originalFiles,
-                  cloneSource: args.cloneSource,
                   plugins: args.plugins,
                 });
               } else {
@@ -522,60 +517,24 @@ export class DeploymentRuntimeService {
     sandboxId: string;
     projectDirectory: string;
     files: Record<string, string>;
-    originalFiles: Record<string, string>;
-    cloneSource?: CloneSource;
     plugins?: readonly RunPluginPayload[];
   }): Promise<void> {
-    if (args.cloneSource) {
-      await this.deps.provider.gitClone(
-        args.sandboxId,
-        args.cloneSource.url,
-        args.projectDirectory,
-        {
-          branch: args.cloneSource.branch,
-          commitId: args.cloneSource.commitSha,
-          username: args.cloneSource.username,
-          password: args.cloneSource.password,
-        },
-      );
-      const transformed = changedFiles({
-        before: args.originalFiles,
-        after: args.files,
-      });
-      if (Object.keys(transformed).length > 0) {
-        await uploadWorkspace({
-          provider: this.deps.provider,
-          sandboxId: args.sandboxId,
-          projectDir: args.projectDirectory,
-          files: transformed,
-        });
-      }
-    } else {
-      await uploadWorkspace({
-        provider: this.deps.provider,
-        sandboxId: args.sandboxId,
-        projectDir: args.projectDirectory,
-        files: args.files,
-      });
-    }
+    // Materialize the verified capability snapshot, never the imported repository.
+    await uploadWorkspace({
+      provider: this.deps.provider,
+      sandboxId: args.sandboxId,
+      projectDir: args.projectDirectory,
+      files: args.files,
+    });
     const workflowFallback = args.plugins?.find(
       (plugin) => plugin.packageName === WORKFLOW_PACKAGE_NAME,
     );
-    // The workflow package is declared by the workflows workspace member;
-    // projects predating the workspace layout keep it at the repo root.
-    const packageJsonPath =
-      `${WORKFLOW_SOURCE_ROOT}/package.json` in args.files ||
-      `${WORKFLOW_SOURCE_ROOT}/package.json` in args.originalFiles
-        ? `${WORKFLOW_SOURCE_ROOT}/package.json`
-        : "package.json";
-    const packageJson =
-      args.files[packageJsonPath] ?? args.originalFiles[packageJsonPath];
+    const packageJsonPath = `${WORKFLOW_SOURCE_ROOT}/package.json`;
+    const packageJson = args.files[packageJsonPath];
     if (
       workflowFallback &&
-      ("bun.lock" in args.files ||
-        "bun.lockb" in args.files ||
-        "bun.lock" in args.originalFiles ||
-        "bun.lockb" in args.originalFiles)
+      (".catamorphic/bun.lock" in args.files ||
+        ".catamorphic/bun.lockb" in args.files)
     ) {
       throw new Error(
         "The local @catamorphic/workflow fallback cannot be used with a lockfile",
@@ -601,7 +560,7 @@ export class DeploymentRuntimeService {
         ? "bun install --no-save"
         : "if [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile --production --filter '!./apps/*'; else bun install --no-save; fi",
       {
-        cwd: args.projectDirectory,
+        cwd: `${args.projectDirectory}/.catamorphic`,
         timeout: 300,
       },
     );
@@ -620,7 +579,7 @@ export class DeploymentRuntimeService {
     await uploadPluginPayloads({
       provider: this.deps.provider,
       sandboxId: args.sandboxId,
-      projectDir: args.projectDirectory,
+      projectDir: `${args.projectDirectory}/.catamorphic`,
       plugins: args.plugins ? [...args.plugins] : undefined,
     });
     const protect = await this.deps.provider.executeCommand(
@@ -632,17 +591,6 @@ export class DeploymentRuntimeService {
       throw new Error(`Failed to protect deployment files: ${protect.result}`);
     }
   }
-}
-
-function changedFiles(args: {
-  before: Record<string, string>;
-  after: Record<string, string>;
-}): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(args.after).filter(
-      ([filePath, content]) => args.before[filePath] !== content,
-    ),
-  );
 }
 
 type RetirementOutcome = "retired" | "pinned" | "failed";
