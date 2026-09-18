@@ -28,6 +28,11 @@ export interface SidebarStatus {
   state: SidebarContentState;
   /** Rows are on screen while a newer read is in flight. */
   refreshing?: boolean;
+  /**
+   * Nothing is in flight: the first read waits until the section is shown.
+   * The chrome keeps the skeleton but never spins for an idle section.
+   */
+  idle?: boolean;
   error?: string;
   retry?: () => unknown;
   /** Default empty sentence; the section config's `empty` wins. */
@@ -64,16 +69,17 @@ export function useSidebarContent(input: SidebarContentState | SidebarStatus) {
   const status = typeof input === "string" ? { state: input } : input;
   const retry = useRef(status.retry);
   retry.current = status.retry;
-  const { state, refreshing = false, error, empty } = status;
+  const { state, refreshing = false, idle = false, error, empty } = status;
   useEffect(() => {
     report?.({
       state,
       refreshing,
+      idle,
       error,
       empty,
       retry: () => retry.current?.(),
     });
-  }, [report, state, refreshing, error, empty]);
+  }, [report, state, refreshing, idle, error, empty]);
 }
 
 export function sidebarItemPresentation({

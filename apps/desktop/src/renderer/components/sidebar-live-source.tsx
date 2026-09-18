@@ -148,6 +148,7 @@ export function SidebarLiveSource({ projectId }: { projectId: string }) {
             ? "ready"
             : "empty",
     refreshing: root.fetching && root.ids.length > 0,
+    idle: !root.fetching,
     error: subscriptionError ?? root.error,
     retry: refresh,
     empty: "No items yet.",

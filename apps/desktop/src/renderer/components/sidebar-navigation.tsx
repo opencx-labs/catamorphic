@@ -728,7 +728,11 @@ function SidebarSection({
   const contribution = useSidebarContribution();
   const headerActions = contribution?.section.headerActions;
   const status = contribution?.status;
-  const busy = status?.state === "loading" || Boolean(status?.refreshing);
+  // The header spins only while a read is in flight, never for a section
+  // that is merely waiting to be shown.
+  const busy =
+    (status?.state === "loading" && !status.idle) ||
+    Boolean(status?.refreshing);
   const refresh = contribution?.commands?.has("refresh")
     ? () => contribution?.command?.("refresh")
     : undefined;
@@ -1002,6 +1006,7 @@ function SessionsNav({
             ? "ready"
             : "empty",
     refreshing: root.fetching && contentIds.length > 0,
+    idle: !root.fetching,
     error: root.error,
     retry: collection.load,
     empty: "No chats yet.",

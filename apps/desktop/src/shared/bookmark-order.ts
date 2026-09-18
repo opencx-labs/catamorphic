@@ -54,8 +54,8 @@ export function siblingRanks(scope: OrderedScope): Map<string, number> {
     ...scope.folders.map((folder) => folder.id),
   ]);
   for (const parentId of parents)
-    orderedSiblings(scope, parentId).forEach((sibling, index) =>
-      ranks.set(sibling.id, index),
-    );
+    orderedSiblings(scope, parentId).forEach((sibling, index) => {
+      ranks.set(sibling.id, index);
+    });
   return ranks;
 }

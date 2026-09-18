@@ -197,6 +197,12 @@ the desktop shell, including its registry components and document task lists.
 - Sidebar rows are 28px tall; workspace tab rows are 32px; sidebar width
   260px; right panel 380px.
 - Borders over shadows: `1px solid var(--color-border)`.
+- **One border, one ring, one radius.** A control, row, tile, card or popover
+  is one rounded box: its focus ring is drawn on that box with that box's
+  radius (inside it when neighbours could cover it), never on an unrounded
+  child inside it, and never in addition to the box's own border. Nested
+  bordered boxes, square rings inside rounded ones, and a ring beside a border
+  are defects; check every new surface with keyboard focus before shipping.
 
 ## Motion contract
 

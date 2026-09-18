@@ -193,6 +193,18 @@ switch (cmd) {
       });
       await new Promise((resolve) => setTimeout(resolve, 16));
     }
+    if (args[3]) {
+      // drag <selector> <dx> <dy> <shot.png>: capture mid-drag, then release.
+      const shot = await send("Page.captureScreenshot", { format: "png" });
+      const fs = await import("node:fs");
+      fs.writeFileSync(args[3], Buffer.from(shot.data, "base64"));
+      console.log(
+        "mid-drag",
+        await evalJs(
+          `JSON.stringify({targets:[...document.querySelectorAll("[data-dock-target]")].map(t=>t.dataset.dockTarget+(t.dataset.active?"*":"")),dragging:document.querySelector("[data-dock-rail]")?.dataset.dockDragging})`,
+        ),
+      );
+    }
     await send("Input.dispatchMouseEvent", {
       type: "mouseReleased",
       x: box.x + dx,

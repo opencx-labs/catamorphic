@@ -25,7 +25,6 @@ import {
 import { ChatBubbles } from "./chat-bubbles.js";
 import { ChatDock } from "./chat-dock.js";
 import { DockDialogs } from "./dock-dialogs.js";
-import { ShortcutHint } from "./shortcut-hint.js";
 
 const EMPTY: DockSnapshot = {
   chats: [],
@@ -71,6 +70,9 @@ export function DockHost({
   } | null>(null);
   const suppressClick = useRef(false);
   const [dragLeft, setDragLeft] = useState<number | null>(null);
+  const [dragTarget, setDragTarget] = useState<
+    "left" | "center" | "right" | null
+  >(null);
   const positionRevision = useRef(0);
   const [positionError, setPositionError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
@@ -324,6 +326,7 @@ export function DockHost({
     suppressClick.current = dragStart.current?.moved ?? false;
     dragStart.current = null;
     setDragLeft(null);
+    setDragTarget(null);
   };
   /**
    * Dragging the collapsed bubble picks its corner; dragging the arrows of
@@ -362,6 +365,20 @@ export function DockHost({
       event.preventDefault();
       if (detachedWindow) nativeDrag("move", event.screenX);
       else setDragLeft(Math.max(32, Math.min(start.max, start.left + delta)));
+      const host = event.currentTarget
+        .closest("[data-dock-host]")
+        ?.getBoundingClientRect();
+      const x = detachedWindow ? event.screenX : event.clientX;
+      if (intent === "side" || !host)
+        setDragTarget(x < start.middle ? "left" : "right");
+      else
+        setDragTarget(
+          x < host.left + host.width / 3
+            ? "left"
+            : x > host.left + (host.width * 2) / 3
+              ? "right"
+              : "center",
+        );
     },
     onPointerUp: (event: PointerEvent<HTMLButtonElement>) => {
       const start = dragStart.current;
@@ -386,6 +403,7 @@ export function DockHost({
           );
       }
       setDragLeft(null);
+      setDragTarget(null);
       event.currentTarget.releasePointerCapture(event.pointerId);
     },
     onPointerCancel: cancelDrag,
@@ -565,6 +583,7 @@ export function DockHost({
               if (chat) invoke(chat, { kind: "menu", entry });
             }}
             dragLeft={dragLeft}
+            dragTarget={dragTarget}
             placement={snapshot.placement}
             dragHandlers={dragHandlersFor("side")}
             placementDragHandlers={dragHandlersFor("placement")}

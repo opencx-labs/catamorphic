@@ -138,6 +138,7 @@ export function GitNav({
   useSidebarRefresh(() => setRefreshVersion((value) => value + 1));
   // Only another project starts from nothing. Collapsing and re-expanding
   // keeps the last overview on screen while a fresh read runs behind it.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the project id is the reset key, not a value the effect reads.
   useEffect(() => {
     setOverview(null);
     setError(null);
@@ -286,6 +287,7 @@ export function GitNav({
           ? "empty"
           : "ready",
     refreshing: overview !== null && fetching,
+    idle: !fetching,
     error: error ?? undefined,
     retry: () => setRefreshVersion((value) => value + 1),
     empty: "No changes.",

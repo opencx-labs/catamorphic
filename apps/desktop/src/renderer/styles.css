@@ -873,6 +873,18 @@ kbd {
   height: 8px;
 }
 
+/* A sidebar row or tile is one rounded box. When keyboard focus lands on
+   the control inside it, the ring is drawn on that box with its radius and
+   over its border; the inner control never draws its own square ring. */
+[data-sidebar-item-id]:has(:focus-visible) {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -1px;
+}
+/* Outranks the global ring rule's :not() specificity. */
+[data-sidebar-item-id] :focus-visible:not([hidden]) {
+  outline: none;
+}
+
 /* A focused row wears its ring inside its own box and above its siblings:
    rows are absolutely stacked, so an outside ring was covered top and
    bottom by the neighbours and clipped left and right by the tree. */

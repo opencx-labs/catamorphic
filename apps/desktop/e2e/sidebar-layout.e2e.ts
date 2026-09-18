@@ -167,7 +167,10 @@ describe("configurable browser workspace", () => {
     await run(
       "$('[aria-label=\"Pinned bookmarks\"] button').dispatchEvent(new MouseEvent('mouseout', {bubbles:true}))",
     );
-    await run("$('button[aria-label=\"More actions for Reference\"]').click()");
+    // Tiles have no hover dots; their menu opens on right-click.
+    await run(
+      "const tile=$('[aria-label=\"Pinned bookmarks\"] [data-point-key=\"sidebar:Reference\"] button'); const r=tile.getBoundingClientRect(); tile.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, cancelable:true, clientX:r.x+r.width/2, clientY:r.y+r.height/2}))",
+    );
     await app.waitFor("!!document.querySelector('[data-sidebar-menu]')");
     expect(
       await run(
@@ -183,7 +186,10 @@ describe("configurable browser workspace", () => {
   });
 
   it("removes a folder while keeping its remaining bookmarks", async () => {
-    await run("$('button[aria-label=\"More actions for Reference\"]').click()");
+    // Reference is still a pinned tile here: right-click opens its menu.
+    await run(
+      "const tile=$('[aria-label=\"Pinned bookmarks\"] [data-point-key=\"sidebar:Reference\"] button'); const r=tile.getBoundingClientRect(); tile.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, cancelable:true, clientX:r.x+r.width/2, clientY:r.y+r.height/2}))",
+    );
     await app.waitFor("!!document.querySelector('[data-sidebar-menu]')");
     await run("button('Unpin').click()");
     await app.waitFor(

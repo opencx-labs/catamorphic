@@ -353,7 +353,8 @@ export function SettingsScreen({
           if (
             lastSection &&
             root.scrollTop > 0 &&
-            root.scrollHeight - root.clientHeight - root.scrollTop <= 1
+            // Fractional scroll positions (macOS) can leave a pixel or two.
+            root.scrollHeight - root.clientHeight - root.scrollTop <= 2
           ) {
             setSelected(lastSection.id);
             return;

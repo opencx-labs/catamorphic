@@ -9,6 +9,7 @@ import {
   type CSSProperties,
   type DOMAttributes,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -32,6 +33,8 @@ export interface ChatBubblesProps {
   dragHandlers?: DOMAttributes<HTMLButtonElement>;
   /** Drag surface of the expanded strip's arrows: picks the placement. */
   placementDragHandlers?: DOMAttributes<HTMLButtonElement>;
+  /** The resting spot the current drag would choose; null when not dragging. */
+  dragTarget?: "left" | "center" | "right" | null;
   newChatProjectName?: string;
   side?: "left" | "right";
   themes?: Record<string, CSSProperties>;
@@ -236,6 +239,7 @@ export function ChatBubbles({
   placement = "center",
   dragHandlers,
   placementDragHandlers,
+  dragTarget = null,
   newChatProjectName,
   side = "right",
   themes,
@@ -362,6 +366,60 @@ export function ChatBubbles({
     ),
   };
 
+  // The rail rests at a corner (collapsed) or at its placement (expanded),
+  // anchored by its own edge so growing or shrinking never moves that edge.
+  // Moving between resting spots is a FLIP slide: measure, switch anchors,
+  // animate the difference. Nothing else in the rail transitions position.
+  const railRef = useRef<HTMLDivElement>(null);
+  const railWidthRef = useRef(0);
+  useEffect(() => {
+    const rail = railRef.current;
+    if (!rail || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      railWidthRef.current = rail.getBoundingClientRect().width;
+    });
+    observer.observe(rail);
+    return () => observer.disconnect();
+  }, []);
+  const spot = collapsed ? side : placement;
+  const lastRect = useRef<DOMRect | null>(null);
+  const lastSpot = useRef(spot);
+  useLayoutEffect(() => {
+    const rail = railRef.current;
+    if (!rail) return;
+    const previous = lastRect.current;
+    const rect = rail.getBoundingClientRect();
+    lastRect.current = rect;
+    if (lastSpot.current === spot || dragLeft !== null) {
+      lastSpot.current = spot;
+      return;
+    }
+    lastSpot.current = spot;
+    if (
+      !previous ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    )
+      return;
+    // Compare the edge that anchors the new spot so a width change during
+    // the same commit does not read as travel.
+    const delta =
+      spot === "right"
+        ? previous.right - rect.right
+        : spot === "left"
+          ? previous.left - rect.left
+          : (previous.left + previous.right - rect.left - rect.right) / 2;
+    if (Math.abs(delta) < 1) return;
+    rail.animate(
+      [{ transform: `translateX(${delta}px)` }, { transform: "translateX(0)" }],
+      { duration: 200, easing: "cubic-bezier(0.2, 0, 0, 1)", composite: "add" },
+    );
+  }, [spot, dragLeft]);
+  const spotClass =
+    spot === "left"
+      ? "left-8"
+      : spot === "right"
+        ? "right-8"
+        : "left-1/2 -translate-x-1/2";
   // The arrows point at the corner the strip collapses into and sit on that
   // side of the strip. They are also the handle that moves open chats.
   const Arrows = side === "left" ? ChevronsLeft : ChevronsRight;
@@ -386,25 +444,45 @@ export function ChatBubbles({
   );
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex justify-center pb-3">
-      {/* The pill slides between centered (expanded) and right-docked
-          (collapsed) via left+transform, both animatable. */}
+      {/* Resting spots the drag can choose. The one under the pointer glows. */}
+      {dragTarget !== null &&
+        (collapsed
+          ? (["left", "right"] as const)
+          : (["left", "center", "right"] as const)
+        ).map((target) => (
+          <span
+            key={target}
+            aria-hidden="true"
+            data-dock-target={target}
+            data-active={target === dragTarget || undefined}
+            className={`pointer-events-none absolute bottom-3 h-11 rounded-full border transition-[opacity,box-shadow,border-color,background-color] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+              target === "left"
+                ? "left-8"
+                : target === "right"
+                  ? "right-8"
+                  : "left-1/2 -translate-x-1/2"
+            } ${
+              target === dragTarget
+                ? "border-accent/70 bg-accent/10 opacity-100 shadow-[0_0_0_1px_var(--color-accent),0_0_18px_color-mix(in_srgb,var(--color-accent)_45%,transparent)]"
+                : "border-dashed border-border-strong/60 bg-bg-raised/40 opacity-70"
+            }`}
+            style={{
+              width: collapsed ? 44 : Math.max(44, railWidthRef.current),
+            }}
+          />
+        ))}
       <div
+        ref={railRef}
         data-dock-rail
         data-dock-collapsed={collapsed}
         data-dock-dragging={dragLeft !== null || undefined}
         style={
-          dragLeft === null ? undefined : { left: dragLeft, translate: "0" }
+          dragLeft === null
+            ? undefined
+            : { left: dragLeft, right: "auto", translate: "0" }
         }
-        className={`pointer-events-auto absolute bottom-3 flex items-center rounded-full border border-border bg-bg-raised shadow-2xl ${dragLeft === null ? "transition-[left,translate,padding] duration-200" : "transition-none"} ease-[cubic-bezier(0.2,0,0,1)] ${
-          collapsed
-            ? side === "left"
-              ? "left-8 p-1"
-              : "left-full -translate-x-[calc(100%+32px)] p-1"
-            : placement === "center"
-              ? "left-1/2 -translate-x-1/2 gap-1.5 p-1.5"
-              : placement === "left"
-                ? "left-8 gap-1.5 p-1.5"
-                : "left-full -translate-x-[calc(100%+32px)] gap-1.5 p-1.5"
+        className={`pointer-events-auto absolute bottom-3 flex items-center rounded-full border border-border bg-bg-raised shadow-2xl transition-[padding] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${spotClass} ${
+          collapsed ? "p-1" : "gap-1.5 p-1.5"
         }`}
       >
         {/* Expanded strip content folds its width away when collapsed. */}

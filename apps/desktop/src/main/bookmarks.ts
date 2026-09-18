@@ -228,18 +228,15 @@ export class BookmarksStore {
    * the root. Siblings share one order regardless of kind.
    */
   move({ projectId, profileId, scope, id, folderId, beforeId }: BookmarkMove) {
-    const target =
+    const lists =
       scope === "project"
-        ? (this.data.byProject[projectId] ??= { folders: [], bookmarks: [] })
+        ? this.data.byProject
         : scope === "pinned"
-          ? (this.data.pinnedByProfile[profileId] ??= {
-              folders: [],
-              bookmarks: [],
-            })
-          : (this.data.libraryByProfile[profileId] ??= {
-              folders: [],
-              bookmarks: [],
-            });
+          ? this.data.pinnedByProfile
+          : this.data.libraryByProfile;
+    const key = scope === "project" ? projectId : profileId;
+    lists[key] ??= { folders: [], bookmarks: [] };
+    const target = lists[key];
     const parentId = folderId ?? undefined;
     if (parentId && !target.folders.some((folder) => folder.id === parentId))
       throw new Error("This bookmark folder no longer exists.");
