@@ -339,6 +339,14 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   children are the only "inside" targets. No section owns drop zones, drop-zone
   classes or payload formats of its own; `data-bookmark-drop`-style private
   attributes are defects.
+- **Rows and tiles.** A row's overflow menu button appears on hover; a tile
+  has no room for one and opens the same menu on right-click only. Keyboard
+  focus rings sit inside the row (negative outline offset, above siblings) so
+  stacked rows never cover or clip them.
+- **Popovers grow, never jump.** Hover inspectors measure their content and
+  transition height and position, so a section that loads after the popover
+  opens expands it smoothly. A popover that shifts its layout on load is a
+  defect.
 - **Primitives, not presets.** Anything a built-in section can do, a `sidebar.js`
   section can do with the same fields: `empty`, `headerActions`, `itemDefaults`,
   `itemOverrides`, `height`, `rowHeight`, and a source that exports `load`,

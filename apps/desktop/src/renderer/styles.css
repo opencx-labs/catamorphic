@@ -873,6 +873,16 @@ kbd {
   height: 8px;
 }
 
+/* A focused row wears its ring inside its own box and above its siblings:
+   rows are absolutely stacked, so an outside ring was covered top and
+   bottom by the neighbours and clipped left and right by the tree. */
+[role="tree"] [role="treeitem"]:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-md);
+  z-index: 1;
+}
+
 /* Expanding or collapsing a branch moves the rows below it and resizes the
    tree with the same 200ms standard curve the section collapsible uses. */
 [role="tree"] {

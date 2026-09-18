@@ -176,12 +176,30 @@ switch (cmd) {
     if (!box) throw new Error(`not found: ${args[0]}`);
     const dx = Number(args[1] ?? 0);
     const dy = Number(args[2] ?? 0);
-    await send("Input.dispatchMouseEvent", { type: "mousePressed", x: box.x, y: box.y, button: "left", clickCount: 1 });
+    await send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: box.x,
+      y: box.y,
+      button: "left",
+      clickCount: 1,
+    });
     for (let step = 1; step <= 8; step += 1) {
-      await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: box.x + (dx * step) / 8, y: box.y + (dy * step) / 8, button: "left", buttons: 1 });
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: box.x + (dx * step) / 8,
+        y: box.y + (dy * step) / 8,
+        button: "left",
+        buttons: 1,
+      });
       await new Promise((resolve) => setTimeout(resolve, 16));
     }
-    await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: box.x + dx, y: box.y + dy, button: "left", clickCount: 1 });
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: box.x + dx,
+      y: box.y + dy,
+      button: "left",
+      clickCount: 1,
+    });
     console.log("dragged", args[0], dx, dy);
     break;
   }
