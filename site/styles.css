@@ -274,47 +274,6 @@ site-nav .nav-links a[aria-current] {
   font-size: 13px;
 }
 
-/* install line */
-.install {
-  margin-top: 12px;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  font-family: var(--font-mono);
-  font-size: 13px;
-  color: var(--fg-muted);
-  background: var(--bg-inset);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 9px 14px;
-  cursor: pointer;
-  transition:
-    border-color 150ms var(--ease),
-    color 150ms var(--ease);
-}
-
-.install:hover {
-  border-color: var(--border-strong);
-  color: var(--fg);
-}
-.install {
-  max-width: 100%;
-}
-.install #install-cmd {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.install .prompt {
-  color: var(--accent);
-  user-select: none;
-}
-.install .copy-hint {
-  color: var(--fg-faint);
-  font-family: var(--font-sans);
-  font-size: 12px;
-}
-
 /* ---------- code + graph duo ---------- */
 .duo {
   display: grid;
@@ -850,8 +809,20 @@ footer {
     grid-template-columns: 1fr;
     gap: 4px;
   }
+  .nav-inner {
+    height: auto;
+    min-height: 60px;
+    padding-block: 14px;
+    flex-wrap: wrap;
+    gap: 14px;
+  }
+  .nav-links {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
   .nav-links a:not(.btn) {
-    display: none;
+    padding: 6px 8px;
+    font-size: 13px;
   }
   .hero {
     padding: 72px 0 56px;
@@ -862,4 +833,21 @@ footer {
   .hero p.lede {
     font-size: 16px;
   }
+}
+
+/* Package availability is informational, never a copyable install command. */
+.package-notice {
+  max-width: 680px;
+  margin: 24px auto 0;
+  color: var(--muted, #9a9aa3);
+  font-size: 14px;
+  line-height: 1.7;
+}
+.package-notice strong {
+  color: var(--fg, #e6e6e9);
+  font-weight: 500;
+}
+.package-notice a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
