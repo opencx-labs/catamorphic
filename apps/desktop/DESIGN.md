@@ -285,7 +285,7 @@ that friction is intentional.
   40px. No dead space above tabs.
 - Workspace tabs host workflows, apps, and chats alike; minimized chats live
   in the bottom bubble strip (see the design log for collapse behavior).
-- Empty states are quiet: one sentence of `--color-fg-muted` + one action.
+- Empty states are quiet: one sentence of `--color-fg-faint` + one action. Errors stay `--color-fg-muted`.
 
 ## Page surfaces
 

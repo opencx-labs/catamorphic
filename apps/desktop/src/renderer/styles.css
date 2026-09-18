@@ -126,6 +126,28 @@ body,
   overscroll-behavior: none;
 }
 
+/* Reduced motion is honoured everywhere at once: every transition and
+   keyframe collapses to an instant change (a hair above zero so
+   animationend and transitionend still fire for the code that unmounts on
+   them), and nothing loops. Script-driven motion reads the same preference
+   through lib/motion.ts. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: this override must beat every specific animation and transition rule in the app. */
+    animation-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: same override. */
+    animation-iteration-count: 1 !important;
+    /* biome-ignore lint/complexity/noImportantStyles: same override. */
+    transition-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: same override. */
+    transition-delay: 0s !important;
+    /* biome-ignore lint/complexity/noImportantStyles: same override. */
+    scroll-behavior: auto !important;
+  }
+}
+
 body {
   background: var(--color-bg);
   color: var(--color-fg);
@@ -1023,6 +1045,9 @@ kbd {
   text-wrap: balance;
   font-size: 12px;
   line-height: 1.5;
+  color: var(--color-fg-faint);
+}
+.sidebar-empty-state[role="alert"] {
   color: var(--color-fg-muted);
 }
 

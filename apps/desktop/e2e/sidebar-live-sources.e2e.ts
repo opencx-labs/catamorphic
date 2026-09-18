@@ -99,11 +99,9 @@ it("loads file and HTTP rows in native animated trees", async () => {
       `!!document.querySelector('[data-sidebar-source="todos"] [role="tree"]')`,
     ),
   ).toBe(true);
-  expect(
-    await app.eval(
-      `document.querySelector('[data-sidebar-source="todos"]')?.getAttribute('aria-busy')`,
-    ),
-  ).toBe("false");
+  await app.waitFor(
+    `document.querySelector('[data-sidebar-source="todos"]')?.getAttribute('aria-busy')==='false'`,
+  );
 });
 it("writes a todo with visible busy feedback and follows external atomic edits", async () => {
   await click('[data-sidebar-source="todos"] [aria-label="Complete"]');

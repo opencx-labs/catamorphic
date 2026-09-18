@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { themeStyle, useTheme } from "../lib/theme.js";
 
 export const RESOURCE_INSPECTOR_DELAY_MS = 400;
 const CLOSE_GRACE_MS = 120;
@@ -358,6 +359,8 @@ export function InspectorPortal({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
+  // Portaled to the body, the panel keeps the theme of the scope it opened in.
+  const theme = useTheme();
   // The panel's height follows its content through a transition, so async
   // sections that arrive after the popover opens grow it instead of
   // snapping it. The first measurement lands before paint, untransitioned.
@@ -448,7 +451,9 @@ export function InspectorPortal({
       data-open={open || undefined}
       aria-hidden={!open}
       inert={!open}
+      data-theme={theme?.appearance}
       style={{
+        ...themeStyle(theme),
         left: position.left,
         top: position.top,
         height: height ?? undefined,

@@ -1,6 +1,7 @@
 import type { Editor } from "@tiptap/core";
 import { Link2, RemoveFormatting } from "lucide-react";
 import { Fragment, forwardRef, useEffect, useRef } from "react";
+import { motionMs } from "../../lib/motion.js";
 import { EASE_STANDARD } from "./motion.js";
 
 /**
@@ -65,7 +66,7 @@ export const MarkdownBubbleMenu = forwardRef<
           { opacity: 0, transform: "translateY(4px) scale(0.97)" },
           { opacity: 1, transform: "none" },
         ],
-        { duration: 160, easing: EASE_STANDARD },
+        { duration: motionMs(160), easing: EASE_STANDARD },
       );
 
     // Entrance animation when the extension flips the element visible.

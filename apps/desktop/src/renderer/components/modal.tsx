@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { themeStyle, useTheme } from "../lib/theme.js";
 
 export function Modal({
   open,
@@ -14,6 +15,7 @@ export function Modal({
   width?: number;
   labelledBy?: string;
 }) {
+  const theme = useTheme();
   const [mounted, setMounted] = useState(open);
   useEffect(() => {
     if (open) setMounted(true);
@@ -89,6 +91,8 @@ export function Modal({
   // pane would otherwise position itself relative to that pane.
   return createPortal(
     <div
+      data-theme={theme?.appearance}
+      style={themeStyle(theme)}
       className={`fixed inset-0 z-[100] grid place-items-center transition-opacity duration-150 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:duration-0 ${
         open
           ? "pointer-events-auto animate-fade-in"

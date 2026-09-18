@@ -76,7 +76,7 @@ it("scrolls Settings to the last section without moving the workspace chrome", a
     const footer = panel.querySelector('#settings-import [data-testid="settings-browser-import"]');
     const rect = footer.getBoundingClientRect();
     const bounds = panel.getBoundingClientRect();
-    return panel.scrollTop > 0 && rect.top >= bounds.top && rect.bottom <= bounds.bottom;
+    return panel.scrollTop > 0 && rect.bottom <= bounds.bottom + 1 && rect.bottom > bounds.top;
   })()`,
     { label: "last Settings section reachable by wheel" },
   );

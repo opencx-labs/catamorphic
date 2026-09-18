@@ -249,7 +249,7 @@ export const APP_KIT_CSS = `
   display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:10px;padding:24px 16px;text-align:center;
 }
-.cat-empty-message{margin:0;font-size:var(--cat-font-size);color:var(--color-fg-muted)}
+.cat-empty-message{margin:0;font-size:var(--cat-font-size);color:var(--color-fg-faint,var(--color-fg-muted))}
 
 /* ------------------------------------------------------ key/value rows */
 .cat-kv-list{display:flex;flex-direction:column;min-width:0}

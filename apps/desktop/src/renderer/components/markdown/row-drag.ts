@@ -1,4 +1,5 @@
 import type { Editor } from "@tiptap/core";
+import { motionMs } from "../../lib/motion.js";
 import { moveTableRow } from "./guardrails.js";
 import { EASE_STANDARD } from "./motion.js";
 
@@ -167,7 +168,7 @@ export function installRowDrag(
         if (Math.abs(dy) > 2) {
           row.animate(
             [{ transform: `translateY(${dy}px)` }, { transform: "none" }],
-            { duration: 220, easing: EASE_STANDARD },
+            { duration: motionMs(220), easing: EASE_STANDARD },
           );
         }
       });

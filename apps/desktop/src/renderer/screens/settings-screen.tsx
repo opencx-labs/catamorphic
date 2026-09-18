@@ -373,7 +373,7 @@ export function SettingsScreen({
           });
           if (current) setSelected(current.id);
         }}
-        className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain"
+        className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
       >
         <div className="mx-auto flex w-full max-w-5xl items-start">
           <nav
