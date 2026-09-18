@@ -157,3 +157,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0141](0141-open-plain-folders-without-git.md) | Open plain folders without initializing Git | Accepted |
 
 | [0142](0142-contained-project-workspace.md) | A contained project workspace and local app data | Accepted |
+| [0143](0143-work-product-identity.md) | Work is the home for the end-user experiences | Accepted |

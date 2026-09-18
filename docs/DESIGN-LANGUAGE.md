@@ -1,7 +1,10 @@
 # Catamorphic Design Language
 
-One visual language across everything Catamorphic ships: the desktop app,
-the website, future docs and screenshots. Two implementations exist:
+Catamorphic's framework site and desktop implementation share a visual
+foundation. Work is the end-user product identity at work.software
+([ADR 0143](decisions/0143-work-product-identity.md)); its website uses the same
+dark palette, orange accent, and Inter typography with more spacious layouts
+for a general audience. Two Catamorphic implementations exist:
 
 - **Desktop app**: [`apps/desktop/DESIGN.md`](../apps/desktop/DESIGN.md) is
   the detailed system (tokens, motion contract, component rules) and the
@@ -9,10 +12,12 @@ the website, future docs and screenshots. Two implementations exist:
   `apps/desktop/src/renderer/styles.css` + `src/main/theme.ts`.
 - **Website**: `site/styles.css` mirrors the desktop tokens by hand.
 
-**The rule: the desktop app leads, the site follows.** If a token or pattern
+**For the Catamorphic framework site, the desktop app leads.** If a token or pattern
 changes in the app, the site inherits it. Never the reverse, and never a
 site-only invention. Anything new the site needs must be composed from the
-existing palette and patterns.
+existing palette and patterns. The Work website is an explicit exception:
+its product presentation can inform a future desktop theme. This does not
+itself change the desktop app's current design or release identity.
 
 ## Identity
 
@@ -62,6 +67,11 @@ existing palette and patterns.
   "agents can do real work now". Lead with what the user gets done on real
   surfaces; visibility, take-over, and diffs support the claim and must not
   headline every section. Trust is one card, not the chorus.
+- **Work and the framework have distinct public homes.** Work at work.software
+  covers desktop, company brain, and mobile. Catamorphic at catamorphic.ai
+  covers the open-source framework, with short desktop and brain pages linking
+  to Work. Framework pages state that installable packages are coming soon
+  and keep the GitHub source prominent.
 - **Desktop and framework relate as reference implementation.** The desktop
   app is the framework's reference implementation, a working demo of what
   embedders can build. Use that phrase; don't invent new relationship
