@@ -1,5 +1,5 @@
 import { Check, Globe } from "lucide-react";
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { DefaultBrowserState } from "../../shared/default-browser.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { PendingButton } from "./pending-button.js";
@@ -14,34 +14,51 @@ export function DefaultBrowserButton({
   const [state, setState] = useState<DefaultBrowserState>();
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string>();
+  const generation = useRef(0);
+  const requesting = useRef(false);
   const refresh = useCallback(() => {
+    if (requesting.current) return;
+    const current = ++generation.current;
     void desktopApi
       .defaultBrowserState()
-      .then(setState)
+      .then((next) => {
+        if (current !== generation.current) return;
+        setState(next);
+        setMessage(undefined);
+      })
       .catch(() => {
+        if (current !== generation.current) return;
         setMessage("Could not check your default browser. Try again.");
       });
   }, []);
   useEffect(() => {
     refresh();
     window.addEventListener("focus", refresh);
-    return () => window.removeEventListener("focus", refresh);
+    return () => {
+      generation.current++;
+      window.removeEventListener("focus", refresh);
+    };
   }, [refresh]);
   const request = async () => {
-    if (pending) return;
+    if (requesting.current) return;
+    requesting.current = true;
+    const current = ++generation.current;
     setPending(true);
     setMessage(undefined);
     try {
       const next = await desktopApi.defaultBrowserRequest();
+      if (current !== generation.current) return;
       setState(next);
       if (!next.isDefault && next.available)
         setMessage(
           "Choose Catamorphic in your system's default browser settings.",
         );
     } catch {
+      if (current !== generation.current) return;
       setMessage("Could not change your default browser. Try again.");
     } finally {
-      setPending(false);
+      requesting.current = false;
+      if (current === generation.current) setPending(false);
     }
   };
   return (

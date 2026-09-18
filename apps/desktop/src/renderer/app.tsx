@@ -6284,6 +6284,7 @@ export function App({
           </div>
         ) : (
           <EmptyState
+            key={activeProfile?.id}
             loading={projectsLoading}
             loadError={projectsLoadError}
             retrying={projectsFetching}

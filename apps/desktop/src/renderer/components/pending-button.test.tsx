@@ -54,4 +54,42 @@ describe("PendingButton layout", () => {
       expect(button?.textContent).toContain("Save");
     }
   });
+  it("keeps one active label when completion arrives before the request settles", async () => {
+    for (const [pending, done, label] of [
+      [false, false, "Install"],
+      [true, false, "Installing…"],
+      [true, true, "Installing…"],
+      [false, true, "Installed"],
+    ] as const) {
+      await act(async () => {
+        root.render(
+          <PendingButton
+            pending={pending}
+            done={done}
+            pendingLabel="Installing…"
+            doneLabel="Installed"
+          >
+            Install
+          </PendingButton>,
+        );
+      });
+      const visible = container.querySelectorAll('[aria-hidden="false"]');
+      expect(visible).toHaveLength(1);
+      expect(visible[0]?.textContent).toBe(label);
+    }
+  });
+
+  it("retains the action label when a completed button has no replacement label", async () => {
+    await act(async () => {
+      root.render(
+        <PendingButton pending={false} done>
+          Save
+        </PendingButton>,
+      );
+    });
+    expect(container.querySelector('[aria-hidden="false"]')?.textContent).toBe(
+      "Save",
+    );
+    expect(container.querySelector("button")?.disabled).toBe(true);
+  });
 });

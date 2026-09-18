@@ -31,7 +31,8 @@ export function PendingButton({
   children: ReactNode;
   "data-disabled-reason"?: string;
 } & ButtonHTMLAttributes<HTMLButtonElement>) {
-  const showIdle = !pending && !done;
+  const showDone = !pending && done && doneLabel !== undefined;
+  const showIdle = !pending && !showDone;
   return (
     <button
       data-disabled-reason={
@@ -67,8 +68,8 @@ export function PendingButton({
         </span>
         {doneLabel !== undefined && (
           <span
-            aria-hidden={!done}
-            className={`catamorphic-pending-label col-start-1 row-start-1 whitespace-nowrap transition-opacity duration-150 motion-reduce:transition-none ${done ? "opacity-100" : "opacity-0"}`}
+            aria-hidden={!showDone}
+            className={`catamorphic-pending-label col-start-1 row-start-1 whitespace-nowrap transition-opacity duration-150 motion-reduce:transition-none ${showDone ? "opacity-100" : "opacity-0"}`}
           >
             {doneLabel}
           </span>

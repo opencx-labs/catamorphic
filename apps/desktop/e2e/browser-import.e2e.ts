@@ -237,6 +237,42 @@ describe("shared browser import and personal history", () => {
     ).toHaveProperty("browserImportCompletedAt");
   });
 
+  it("keeps onboarding import completion scoped to the selected profile", async () => {
+    await app.eval(
+      "window.catamorphicDesktop.profilesCreate('Fresh import profile')",
+    );
+    await click('[aria-label="Switch profile: Default Profile"]');
+    await app.eval(
+      `[...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Fresh import profile' && !button.getAttribute('aria-label')).click()`,
+    );
+    await app.waitFor(
+      `!!document.querySelector('[aria-label="Switch profile: Fresh import profile"]')`,
+    );
+    await app.waitFor(
+      `document.querySelector('[data-testid="onboarding-browser-import"]')?.dataset.actionState === 'idle'`,
+    );
+    expect(
+      await app.eval(
+        `document.querySelector('[data-testid="onboarding-browser-import"]').disabled`,
+      ),
+    ).toBe(false);
+    await click('[data-testid="onboarding-browser-import"]');
+    await app.waitFor(
+      `!!document.querySelector('[data-testid="browser-import-dialog"]')`,
+    );
+    await app.press("Escape");
+    await app.waitFor(
+      `!document.querySelector('[data-testid="browser-import-dialog"]')`,
+    );
+    await click('[aria-label="Switch profile: Fresh import profile"]');
+    await app.eval(
+      `[...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Default Profile' && !button.getAttribute('aria-label')).click()`,
+    );
+    await app.waitFor(
+      `document.querySelector('[data-testid="onboarding-browser-import"]')?.dataset.actionState === 'done'`,
+    );
+  });
+
   it("history Space searches the full imported archive; the page uses that palette", async () => {
     await palette();
     await app.insertText("history");

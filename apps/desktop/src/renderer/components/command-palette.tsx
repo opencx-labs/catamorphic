@@ -2112,7 +2112,8 @@ export function CommandPalette({
     if (item.disabled) return;
     if (
       item.id === "pick:model:catalog-status" ||
-      item.id === "section:status"
+      item.id === "section:status" ||
+      item.id === "history:status"
     ) {
       item.run("replace");
       return;
