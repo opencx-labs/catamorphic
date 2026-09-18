@@ -55,6 +55,7 @@ import {
   useKeybindings,
 } from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
+import { EASE_STANDARD, motionMs } from "../lib/motion.js";
 import { useTerminalAppearance } from "../lib/terminal-appearance.js";
 import { useAppPreferences } from "../lib/use-app-preferences.js";
 
@@ -296,7 +297,7 @@ export function SettingsScreen({
           },
           { opacity: 1, transform: "translateY(0)" },
         ],
-        { duration: 200, easing: "cubic-bezier(0.2, 0, 0, 1)" },
+        { duration: motionMs(200), easing: EASE_STANDARD },
       );
     });
   };
@@ -556,7 +557,7 @@ function AgentsSection({
                     type="button"
                     onClick={() => void desktopApi.agentsSetDefault(agent.id)}
                     className={`grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg ${
-                      isDefault ? "" : "opacity-0 group-hover:opacity-100"
+                      isDefault ? "" : "row-reveal"
                     }`}
                     aria-label={
                       isDefault
@@ -572,7 +573,7 @@ function AgentsSection({
                   <button
                     type="button"
                     onClick={() => onConfigureAgent(agent.id)}
-                    className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint opacity-0 transition-colors duration-150 hover:text-fg group-hover:opacity-100"
+                    className="row-reveal grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors hover:text-fg"
                     aria-label={`Edit ${agent.name}`}
                     title="Edit"
                   >
@@ -583,7 +584,7 @@ function AgentsSection({
                     onClick={() =>
                       void desktopApi.agentsRemove(agent.id).then(refresh)
                     }
-                    className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint opacity-0 transition-colors duration-150 hover:text-danger group-hover:opacity-100"
+                    className="row-reveal grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors hover:text-danger"
                     aria-label={`Remove ${agent.name}`}
                     title="Remove"
                   >

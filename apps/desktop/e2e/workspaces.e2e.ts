@@ -175,7 +175,7 @@ it("keeps an unsent draft when detached and reattached, and supports either edge
     );
   await toggleNative();
   await dock.waitFor(
-    `innerHeight <= 80 && innerWidth < 350 && !document.querySelector('[data-floating-chat]:not([inert])')`,
+    `innerHeight <= 130 && innerWidth < 350 && !document.querySelector('[data-floating-chat]:not([inert])')`,
     {
       label: "native dock shrinks to its bubbles",
     },

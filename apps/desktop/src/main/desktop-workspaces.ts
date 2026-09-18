@@ -266,6 +266,18 @@ export class DesktopWorkspaces {
         } satisfies WorkspaceEvent);
       },
     );
+    // The detached dock carries transparent headroom above its strip so
+    // hints can open above bubbles. The renderer reports whether the pointer
+    // is over content; over empty space the window lets clicks through.
+    ipcMain.handle(
+      "catamorphic:dock-ignore-mouse",
+      (event, ignore: boolean) => {
+        const profileId = options.windows.profileFor(event.sender);
+        const window = this.floating.get(profileId);
+        if (!window || window.webContents !== event.sender) return;
+        window.setIgnoreMouseEvents(ignore === true, { forward: true });
+      },
+    );
     ipcMain.handle("catamorphic:dock-resize", (event, size: DockSize) => {
       const profileId = options.windows.profileFor(event.sender);
       const window = this.floating.get(profileId);
@@ -574,9 +586,9 @@ export class DesktopWorkspaces {
         prefs.dockSide === "left"
           ? area.x + 12
           : area.x + area.width - width - 12,
-      y: area.y + area.height - 88,
+      y: area.y + area.height - 136,
       width,
-      height: 76,
+      height: 124,
     });
     this.floating.set(profileId, window);
     window.setAlwaysOnTop(true, "floating");

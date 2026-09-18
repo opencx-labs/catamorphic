@@ -201,11 +201,15 @@ it("previews content padding smoothly in both directions and honors reduced moti
   await app.cdp("Emulation.setEmulatedMedia", {
     features: [{ name: "prefers-reduced-motion", value: "reduce" }],
   });
+  // Reduced motion collapses every transition to an instant (a hair above
+  // zero so transitionend still fires).
   expect(
-    await app.eval(
-      `getComputedStyle(document.querySelector('.workspace-surface')).transitionDuration`,
+    Number.parseFloat(
+      await app.eval(
+        `getComputedStyle(document.querySelector('.workspace-surface')).transitionDuration`,
+      ),
     ),
-  ).toBe("0s");
+  ).toBeLessThanOrEqual(0.001);
   expect(app.getRendererErrors()).toEqual([]);
 });
 

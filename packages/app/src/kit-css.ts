@@ -33,6 +33,11 @@ export const APP_KIT_CSS = `
 .cat-datepicker-clear:focus-visible{
   outline:2px solid var(--color-accent);outline-offset:1px;
 }
+/* Rows stack: their ring sits inside the row and above its neighbours. */
+[role="tree"] [role="treeitem"]:focus-visible,.cat-collection-item:has(:focus-visible){
+  outline:2px solid var(--color-accent);outline-offset:-2px;border-radius:var(--radius-md);z-index:1;
+}
+.cat-collection-item :focus-visible{outline:none}
 
 /* -------------------------------------------------------------- buttons */
 .cat-btn{
@@ -272,7 +277,7 @@ export const APP_KIT_CSS = `
 }
 .cat-dialog{
   position:fixed;inset:0;z-index:101;display:grid;place-items:center;
-  padding:24px;overflow:auto;
+  padding:24px;overflow:auto;scrollbar-gutter:stable;
 }
 .cat-dialog-panel{
   background:var(--color-bg-overlay);border:1px solid var(--color-border);
@@ -341,7 +346,7 @@ export const APP_KIT_CSS = `
 
 /* ---------------------------------------------------------------- table */
 .cat-table-wrap{
-  overflow:auto;border:1px solid var(--color-border);
+  overflow:auto;scrollbar-gutter:stable;border:1px solid var(--color-border);
   border-radius:var(--radius-md);background:var(--color-bg-raised);
 }
 .cat-table{
@@ -482,7 +487,7 @@ export const APP_KIT_CSS = `
 
 /* ---------------------------------------------------------- scroll hint */
 .cat-scrollhint{position:relative;--cat-fade-color:var(--color-bg-raised)}
-.cat-scrollhint-viewport{overflow:auto;max-height:inherit;min-width:0}
+.cat-scrollhint-viewport{overflow:auto;scrollbar-gutter:stable;max-height:inherit;min-width:0}
 .cat-scrollhint-fade{
   position:absolute;z-index:2;pointer-events:none;opacity:0;
   transition:opacity var(--cat-motion-base) var(--ease-standard);
@@ -551,6 +556,16 @@ export const APP_KIT_CSS = `
 }
 
 /* ------------------------------------------------------- reduced motion */
+/* Everything collapses to an instant change first (a hair above zero so
+   animationend and transitionend still fire for code that unmounts on
+   them); the kit's own surfaces then get a 50ms opacity-only fallback. */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{
+    animation-duration:0.01ms !important;animation-iteration-count:1 !important;
+    transition-duration:0.01ms !important;transition-delay:0s !important;
+    scroll-behavior:auto !important;
+  }
+}
 @media (prefers-reduced-motion:reduce){
   .cat-dialog-overlay,.cat-dialog-panel,
   .cat-tooltip[data-side],.cat-popover[data-side],
@@ -571,15 +586,35 @@ export const APP_KIT_CSS = `
   .cat-datepicker-clear{transition-duration:1ms}
 }
 
-.cat-collection-item{display:flex;align-items:center;gap:var(--spacing,4px);min-height:28px;position:relative;border-radius:var(--radius-md,6px);color:var(--color-fg);font-size:13px}
+.cat-collection-item{display:flex;align-items:center;gap:var(--spacing,4px);min-height:var(--cat-row-h);position:relative;border-radius:var(--radius-md);color:var(--color-fg);font-size:var(--cat-font-size)}
 .cat-collection-item:hover,.cat-collection-item[data-active=true]{background:var(--color-bg-overlay)}
 .cat-collection-label{display:flex;align-items:center;gap:8px;flex:1;min-width:0;background:none;border:0;color:inherit;text-align:left;cursor:pointer}
 .cat-collection-label>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cat-collection-label small{display:block;color:var(--color-fg-muted);font-size:11px}
+.cat-collection-label small{display:block;color:var(--color-fg-muted);font-size:var(--cat-font-size-sm)}
 .cat-collection-item progress{width:48px;height:4px;accent-color:var(--color-accent)}
-.cat-collection-menu{position:fixed;z-index:1000;display:flex;flex-direction:column;min-width:180px;max-height:320px;overflow:auto;background:var(--color-bg-overlay);border:1px solid var(--color-border);border-radius:var(--radius-lg,8px);padding:4px}
+.cat-collection-menu{position:fixed;z-index:1000;display:flex;flex-direction:column;min-width:180px;max-height:320px;overflow:auto;scrollbar-gutter:stable;background:var(--color-bg-overlay);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:4px}
 .cat-collection-menu button{text-align:left;justify-content:flex-start}
-.cat-collection-inspector{position:fixed;z-index:1000;width:320px;max-width:calc(100vw - 16px);max-height:320px;overflow:auto;padding:12px;background:var(--color-bg-overlay);border:1px solid var(--color-border);border-radius:var(--radius-lg,8px)}
+.cat-collection-inspector{position:fixed;z-index:1000;width:320px;max-width:calc(100vw - 16px);max-height:320px;overflow:auto;scrollbar-gutter:stable;padding:12px;background:var(--color-bg-overlay);border:1px solid var(--color-border);border-radius:var(--radius-lg)}
 .cat-collection-item [data-danger=true],.cat-collection-menu [data-danger=true]{color:var(--color-danger,var(--color-fg))}
 .cat-collection-menu small{display:block;color:var(--color-fg-muted)}
+
+/* ----------------------------------------------------------- collapsible */
+.cat-collapsible{display:grid;grid-template-rows:1fr;opacity:1;transition:grid-template-rows var(--cat-motion-base) var(--ease-standard),opacity var(--cat-motion-base) var(--ease-standard)}
+.cat-collapsible[data-state="closed"]{grid-template-rows:0fr;opacity:0}
+.cat-collapsible-inner{min-height:0;overflow:hidden}
+
+/* ------------------------------------------------------- tree drag/drop */
+/* One drop presentation for every tree: an accent insertion line between
+   rows and an accent outline on the row (or tree) that becomes the parent.
+   Rows slide and the tree resizes on expand/collapse with the base curve. */
+[role="tree"]{transition:height var(--cat-motion-base) var(--ease-standard)}
+[role="tree"] [role="treeitem"]{transition:top var(--cat-motion-base) var(--ease-standard)}
+[role="tree"][data-dragging] [role="treeitem"]{transition:none}
+[data-tree-drop-line]{height:2px;background:var(--color-accent);border-radius:1px;z-index:1;animation:cat-fade-in var(--cat-motion-fast) var(--ease-standard)}
+[data-tree-drop-line]::before{content:"";position:absolute;left:4px;top:-3px;width:8px;height:8px;border-radius:50%;background:var(--color-accent)}
+[role="treeitem"][data-drop="inside"]>*,[role="tree"][data-drop-root="inside"]{border-radius:var(--radius-md);box-shadow:inset 0 0 0 1px var(--color-accent);background:color-mix(in srgb,var(--color-accent) 10%,transparent)}
+[role="tree"] [role="treeitem"]>*{transition-property:box-shadow,background-color,color;transition-duration:var(--cat-motion-fast);transition-timing-function:var(--ease-standard)}
+
+/* ------------------------------------------------------ popover growth */
+.cat-popover[data-settled]{transition:height var(--cat-motion-base) var(--ease-standard),top var(--cat-motion-base) var(--ease-standard)}
 `;

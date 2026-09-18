@@ -15,6 +15,7 @@ import {
 } from "react";
 import type { ChatSessionMenuEntry } from "../lib/chat-session-actions.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
+import { EASE_STANDARD, motionMs } from "../lib/motion.js";
 import type { ChatDockEntry } from "./chat-dock";
 import { ChatGlyph } from "./chat-icon";
 import { type ChatSignals, SignalBadge, SignalGlyph } from "./chat-signals";
@@ -35,6 +36,9 @@ export interface ChatBubblesProps {
   placementDragHandlers?: DOMAttributes<HTMLButtonElement>;
   /** The resting spot the current drag would choose; null when not dragging. */
   dragTarget?: "left" | "center" | "right" | null;
+  /** Whether the dock lives in its own window; the bubble menu flips it. */
+  detached?: boolean;
+  onToggleDetached?: () => void;
   newChatProjectName?: string;
   side?: "left" | "right";
   themes?: Record<string, CSSProperties>;
@@ -240,6 +244,8 @@ export function ChatBubbles({
   dragHandlers,
   placementDragHandlers,
   dragTarget = null,
+  detached = false,
+  onToggleDetached,
   newChatProjectName,
   side = "right",
   themes,
@@ -261,6 +267,35 @@ export function ChatBubbles({
   onCollapse,
 }: ChatBubblesProps) {
   const keybindings = useKeybindings();
+  // Right-click on the collapsed bubble: the one place to move the dock
+  // between the window and its own always-on-top window.
+  const [dockMenuAt, setDockMenuAt] = useState<{ x: number; y: number } | null>(
+    null,
+  );
+  const [dockMenuOpen, setDockMenuOpen] = useState(false);
+  useEffect(() => {
+    if (!dockMenuOpen) return;
+    const dismiss = (event: Event) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest("[data-sidebar-menu]")
+      )
+        return;
+      setDockMenuOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setDockMenuOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", dismiss);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", dismiss);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [dockMenuOpen]);
   // User override: true = collapsed, false = expanded, null = follow
   // autoCollapse. Re-arms (back to null) whenever autoCollapse turns on, so
   // focusing a chat tab folds the strip again even after a manual expand.
@@ -411,7 +446,7 @@ export function ChatBubbles({
     if (Math.abs(delta) < 1) return;
     rail.animate(
       [{ transform: `translateX(${delta}px)` }, { transform: "translateX(0)" }],
-      { duration: 200, easing: "cubic-bezier(0.2, 0, 0, 1)", composite: "add" },
+      { duration: motionMs(200), easing: EASE_STANDARD, composite: "add" },
     );
   }, [spot, dragLeft]);
   const spotClass =
@@ -548,6 +583,15 @@ export function ChatBubbles({
             type="button"
             {...dragHandlers}
             onClick={() => setCollapseOverride(false)}
+            onContextMenu={
+              onToggleDetached
+                ? (event) => {
+                    event.preventDefault();
+                    setDockMenuAt({ x: event.clientX, y: event.clientY });
+                    setDockMenuOpen(true);
+                  }
+                : undefined
+            }
             className={`relative grid touch-none cursor-grab active:cursor-grabbing place-items-center overflow-visible rounded-full border border-border bg-bg-overlay text-fg-muted transition-[max-width,opacity,background-color,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] hover:border-border-strong hover:text-fg ${
               collapsed
                 ? "size-9 max-w-9 opacity-100"
@@ -577,6 +621,25 @@ export function ChatBubbles({
           </button>
         </ShortcutHint>
       </div>
+      {dockMenuAt && onToggleDetached && (
+        <MenuPortal
+          open={dockMenuOpen}
+          position={dockMenuAt}
+          entries={[
+            {
+              label: detached
+                ? "Return dock to the window"
+                : "Float dock in its own window",
+              action: "detach",
+            },
+          ]}
+          onPick={() => {
+            setDockMenuOpen(false);
+            onToggleDetached();
+          }}
+          onExited={() => setDockMenuAt(null)}
+        />
+      )}
     </div>
   );
 }

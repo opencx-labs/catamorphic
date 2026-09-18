@@ -24,7 +24,13 @@ export function Popover({
   align?: "start" | "end";
 }) {
   const popRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const [present, setPresent] = useState(open);
+  // Height follows the content through a transition once the first
+  // measurement has landed, so late-loading content grows the panel
+  // instead of snapping it.
+  const [height, setHeight] = useState<number | null>(null);
+  const [settled, setSettled] = useState(false);
   const closing = present && !open;
   const [side, setSide] = useState<"top" | "bottom">("bottom");
   const [position, setPosition] = useState<CSSProperties>({ opacity: 0 });
@@ -50,7 +56,37 @@ export function Popover({
     };
   }, [closing]);
 
-  // Place relative to the anchor; re-place on resize and (captured) scroll.
+  useLayoutEffect(() => {
+    if (!present) {
+      setHeight(null);
+      setSettled(false);
+      return;
+    }
+    const node = contentRef.current;
+    const pop = popRef.current;
+    if (!node || !pop || typeof ResizeObserver === "undefined") return;
+    const measure = () => {
+      const style = getComputedStyle(pop);
+      setHeight(
+        node.offsetHeight +
+          Number.parseFloat(style.paddingTop) +
+          Number.parseFloat(style.paddingBottom) +
+          Number.parseFloat(style.borderTopWidth) +
+          Number.parseFloat(style.borderBottomWidth),
+      );
+    };
+    measure();
+    const frame = requestAnimationFrame(() => setSettled(true));
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [present]);
+
+  // Place relative to the anchor; re-place on resize, (captured) scroll and
+  // the panel's own growth.
   useLayoutEffect(() => {
     if (!present) return;
     const place = () => {
@@ -75,6 +111,13 @@ export function Popover({
     };
     place();
     const controller = new AbortController();
+    const pop = popRef.current;
+    const observer =
+      pop && typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(place)
+        : undefined;
+    if (pop) observer?.observe(pop);
+    controller.signal.addEventListener("abort", () => observer?.disconnect());
     window.addEventListener("resize", place, { signal: controller.signal });
     window.addEventListener("scroll", place, {
       signal: controller.signal,
@@ -114,9 +157,10 @@ export function Popover({
       className="cat-popover"
       data-side={side}
       data-state={closing ? "closing" : undefined}
-      style={position}
+      data-settled={settled || undefined}
+      style={{ ...position, height: height ?? undefined }}
     >
-      {children}
+      <div ref={contentRef}>{children}</div>
     </div>,
     document.body,
   );

@@ -208,6 +208,34 @@ describe("design-system bounds (static sweep)", () => {
     }
   });
 
+  it("reduced motion collapses every animation and transition", async () => {
+    await app.cdp("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+    });
+    try {
+      const longest = await run<number>(`
+        return Math.max(0, ...allStyleRules()
+          .filter((rule) => rule.selectorText)
+          .map((rule) => Math.max(
+            toMs(getComputedStyle(document.body).animationDuration) || 0,
+            0,
+          )));
+      `);
+      expect(longest).toBeLessThanOrEqual(1);
+      const running = await run<number[]>(`
+        document.body.offsetHeight;
+        return document.getAnimations().map((animation) => Number(animation.effect?.getTiming().duration) || 0);
+      `);
+      for (const duration of running) expect(duration).toBeLessThanOrEqual(1);
+      const rail = await run<number>(
+        `const el = document.querySelector('[data-dock-rail]') ?? document.body; return parseFloat(getComputedStyle(el).transitionDuration) * 1000;`,
+      );
+      expect(rail).toBeLessThanOrEqual(1);
+    } finally {
+      await app.cdp("Emulation.setEmulatedMedia", { features: [] });
+    }
+  });
+
   it("transition duration utilities stay within bounds", async () => {
     const durations = await run<{ selector: string; ms: number }[]>(`
       return allStyleRules()

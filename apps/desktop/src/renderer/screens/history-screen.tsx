@@ -173,7 +173,7 @@ export function HistoryScreen({
                       type="button"
                       aria-label={`Remove ${entry.title} from history`}
                       onClick={() => void remove(entry.id)}
-                      className="mr-1 grid size-7 shrink-0 place-items-center rounded-md text-fg-muted opacity-0 transition-opacity duration-150 hover:bg-bg-raised group-hover:opacity-100 group-focus-within:opacity-100"
+                      className="row-reveal mr-1 grid size-7 shrink-0 place-items-center rounded-md text-fg-muted hover:bg-bg-raised"
                     >
                       <X className="size-3.5" />
                     </button>

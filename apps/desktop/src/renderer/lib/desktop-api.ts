@@ -906,6 +906,7 @@ export interface CatamorphicDesktopApi {
   ) => Promise<void>;
   dockDrag: (input: DockDrag) => Promise<void>;
   dockResize: (size: DockSize) => Promise<void>;
+  dockIgnoreMouse: (ignore: boolean) => Promise<void>;
   onDockSnapshot: (listener: (snapshot: DockSnapshot) => void) => () => void;
   onWorkspaceEvent: (listener: (event: WorkspaceEvent) => void) => () => void;
   windowProfile: () => Promise<string>;

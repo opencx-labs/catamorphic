@@ -374,10 +374,14 @@ it("centers expanded chats on request and drags the collapsed bubble between bot
     features: [{ name: "prefers-reduced-motion", value: "reduce" }],
   });
   expect(
-    await run(
-      `return getComputedStyle($('[data-dock-rail]')).transitionDuration;`,
+    Number.parseFloat(
+      String(
+        await run(
+          `return getComputedStyle($('[data-dock-rail]')).transitionDuration;`,
+        ),
+      ),
     ),
-  ).toBe("0s");
+  ).toBeLessThanOrEqual(0.001);
   await app.cdp("Emulation.setEmulatedMedia", { features: [] });
   await run(`$('[aria-label="Expand chat bubbles"]').click();`);
   await wait(`return $('[data-dock-rail]')?.dataset.dockCollapsed==='false';`);

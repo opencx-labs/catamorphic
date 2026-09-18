@@ -84,6 +84,8 @@ const api = {
     ipcRenderer.invoke("catamorphic:dock-drag", input),
   dockResize: (size: DockSize): Promise<void> =>
     ipcRenderer.invoke("catamorphic:dock-resize", size),
+  dockIgnoreMouse: (ignore: boolean): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:dock-ignore-mouse", ignore),
   onDockSnapshot: (
     listener: (snapshot: DockSnapshot) => void,
   ): (() => void) => {

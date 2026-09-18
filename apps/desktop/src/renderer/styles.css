@@ -80,6 +80,16 @@
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
 }
 
+/* A lurking chat (floating, working behind the tab the user focused) is a
+   peek, not a workspace: no scrollbars and no message navigation. */
+[data-lurking] * {
+  scrollbar-width: none;
+}
+[data-lurking] button[aria-label="Scroll to latest message"],
+[data-lurking] button[aria-label="Jump to your previous message"] {
+  display: none;
+}
+
 /* Framed content is a preference, off by default: content sits flush with
    the sidebars and draws no border. Turning it on insets the workspace as a
    rounded window with a 1px border. Independent of palette and tab placement.

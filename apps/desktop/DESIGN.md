@@ -214,6 +214,12 @@ the animation is wrong, not the test.
 
 ### The rules
 
+0. **Reduced motion is universal.** `styles.css` collapses every transition
+   and keyframe to an instant change under `prefers-reduced-motion: reduce`
+   (a hair above zero so `animationend`/`transitionend` still fire) and
+   nothing loops. Script-driven motion takes its duration from
+   `lib/motion.ts` (`motionMs`), never a literal.
+
 1. **One easing.** All motion uses `--ease-standard`
    (`cubic-bezier(0.2, 0, 0, 1)`). No `ease-in-out`, no springs, no bounces.
 2. **Duration bounds: 100–300ms.** Micro-feedback (hover, color) sits at
@@ -360,6 +366,16 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   row is hovered or holds keyboard focus, fading in and out over 150ms. Mouse
   focus alone never reveals them, so a clicked row does not keep its controls
   lit after the pointer leaves. No component ships its own opacity toggle.
+- **Overlays render at the body.** Modals, popovers, hover inspectors and
+  tooltips portal to `document.body` and carry the theme of the scope they
+  opened from (`useTheme` + `themeStyle`). A `position: fixed` element inside
+  a transformed, translated or filtered ancestor (the sidebar tab panel, a
+  floating surface) positions itself relative to that ancestor: never mount a
+  fixed panel inside pane content.
+- **Tooltips always hide.** A hint closes on the anchor's leave event and on
+  any pointer movement elsewhere, a drag or scroll start, or the pointer
+  leaving the window; one of those always fires even when the anchor
+  re-renders or turns inert under the pointer.
 - **Popovers grow, never jump.** Hover inspectors measure their content and
   transition height and position, so a section that loads after the popover
   opens expands it smoothly. A popover that shifts its layout on load is a

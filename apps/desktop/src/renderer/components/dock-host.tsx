@@ -169,14 +169,43 @@ export function DockHost({
         780,
         scoped.filter((chat) => chat.entry.mode !== "tab").length * 42 + 132,
       );
+  // Transparent headroom above the strip gives hints room to open above a
+  // bubble instead of being clamped onto it.
+  const DOCK_HEADROOM = 48;
   useEffect(() => {
     if (detachedWindow)
       void desktopApi.dockResize({
         width: expanded || dialogOpen ? 780 : railWidth,
-        height: expanded || dialogOpen ? 560 : 76,
+        height: expanded || dialogOpen ? 560 : 76 + DOCK_HEADROOM,
         expanded: !collapsed,
       });
   }, [detachedWindow, expanded, dialogOpen, railWidth, collapsed]);
+  // Over the headroom (or any empty space) the window lets clicks through.
+  useEffect(() => {
+    if (!detachedWindow) return;
+    let ignoring = false;
+    const update = (interactive: boolean) => {
+      if (ignoring === !interactive) return;
+      ignoring = !interactive;
+      void desktopApi.dockIgnoreMouse(ignoring).catch(() => {});
+    };
+    const move = (event: MouseEvent) => {
+      const target = document.elementFromPoint(event.clientX, event.clientY);
+      update(
+        Boolean(target) &&
+          target !== document.body &&
+          target !== document.documentElement,
+      );
+    };
+    const leave = () => update(true);
+    document.addEventListener("mousemove", move);
+    document.documentElement.addEventListener("mouseleave", leave);
+    return () => {
+      document.removeEventListener("mousemove", move);
+      document.documentElement.removeEventListener("mouseleave", leave);
+      update(true);
+    };
+  }, [detachedWindow]);
 
   const invoke = (chat: DockData, event: ChatEvent) => {
     if (chat.local) {
@@ -584,6 +613,10 @@ export function DockHost({
             }}
             dragLeft={dragLeft}
             dragTarget={dragTarget}
+            detached={snapshot.detached}
+            onToggleDetached={() => {
+              void desktopApi.setPrefs({ dockDetached: !snapshot.detached });
+            }}
             placement={snapshot.placement}
             dragHandlers={dragHandlersFor("side")}
             placementDragHandlers={dragHandlersFor("placement")}
@@ -616,7 +649,9 @@ export function DockHost({
             )}
             side={snapshot.side}
             activeLocalId={active?.entry.localId}
-            autoCollapse={Boolean(tabbed)}
+            // A detached dock is its own window; the main window's tab
+            // focus must not fold it and move it between corner and spot.
+            autoCollapse={!detachedWindow && Boolean(tabbed)}
             onCollapsedChange={setCollapsed}
             onToggle={toggle}
             onClose={(id) => actions.current.get(id)?.close?.()}
