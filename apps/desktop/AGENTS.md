@@ -1,6 +1,6 @@
 # Desktop App — Agent Instructions
 
-The Catamorphic desktop app (Electron + React): the framework's reference
+The Work desktop app (Electron + React): the framework's reference
 implementation and a daily-use product. Root `AGENTS.md` applies; this file
 adds desktop-specific context and checks. Design system, interaction
 principles, and the running design log live in `DESIGN.md` — read it before

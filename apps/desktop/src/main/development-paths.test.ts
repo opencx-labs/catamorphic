@@ -11,18 +11,18 @@ describe("desktopApplicationName", () => {
       desktopApplicationName({
         isPackaged: false,
       }),
-    ).toBe("Catamorphic Development");
+    ).toBe("Work Development");
     expect(
       desktopApplicationName({
         isPackaged: true,
         isolatedDataDir: "/tmp/catamorphic-dev",
       }),
-    ).toBe("Catamorphic Development");
+    ).toBe("Work Development");
     expect(
       desktopApplicationName({
         isPackaged: true,
       }),
-    ).toBe("Catamorphic");
+    ).toBe("Work");
   });
 });
 
@@ -54,7 +54,7 @@ describe("defaultDesktopProjectsDir", () => {
         },
         homeDir: "/Users/catamorphic",
       }),
-    ).toBe("/tmp/cata-a/desktop/Catamorphic");
+    ).toBe("/tmp/cata-a/desktop/Work");
   });
 
   it("keeps the home directory default outside isolated development", () => {
@@ -63,6 +63,6 @@ describe("defaultDesktopProjectsDir", () => {
         env: {},
         homeDir: "/Users/catamorphic",
       }),
-    ).toBe("/Users/catamorphic/Catamorphic");
+    ).toBe("/Users/catamorphic/Work");
   });
 });

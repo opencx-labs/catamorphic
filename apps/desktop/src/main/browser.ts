@@ -994,7 +994,7 @@ export function registerBrowserSupport(
   // --- import from other browsers ---
   // Detection + parsing lives in ./browser-import (pure, per-browser).
   // Imported bookmarks land in a profile's bookmark library; a source profile
-  // can also become a brand-new Catamorphic profile.
+  // can also become a brand-new Work profile.
   const passwordHelperPath = app.isPackaged
     ? path.join(process.resourcesPath, "..", "MacOS", "browser-keychain")
     : path.join(
@@ -1026,11 +1026,11 @@ export function registerBrowserSupport(
         !BrowserWindow.fromWebContents(event.sender) ||
         event.senderFrame !== event.sender.mainFrame
       )
-        throw new Error("Open browser import in Catamorphic.");
+        throw new Error("Open browser import in Work.");
       const input = browserImportRequestSchema.parse(raw);
       const profileId = input.targetProfileId;
       if (!profiles.get(profileId))
-        throw new Error("Choose a Catamorphic profile again.");
+        throw new Error("Choose a Work profile again.");
       if (importingProfiles.has(profileId))
         throw new Error("An import is already running.");
       const importer = BROWSER_IMPORTERS.find(

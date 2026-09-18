@@ -1,6 +1,6 @@
 # 0082: Desktop prerelease distribution
 
-- **Status:** Accepted; update policy superseded by [0083](0083-desktop-updates-and-migration-backups.md), bundled harness packaging superseded by [0091](0091-on-demand-desktop-harness-components.md)
+- **Status:** Accepted; application identity and cask naming superseded by [0146](0146-work-application-identity.md); update policy superseded by [0083](0083-desktop-updates-and-migration-backups.md), bundled harness packaging superseded by [0091](0091-on-demand-desktop-harness-components.md)
 - **Date:** 2026-08-29
 
 ## Context

@@ -1,7 +1,7 @@
 /**
  * A credential-free remote locator. Authentication happens separately in
  * the browser with OAuth authorization code plus PKCE.
- *   catamorphic://connect?server=<api base>&project=<id>&name=<display>
+ *   work://connect?server=<api base>&project=<id>&name=<display>
  *
  * Mirrors the desktop parser (apps/desktop/src/main/connect-link.ts), plus
  * one pwa-only form: an http(s) URL carrying the same query params —
@@ -37,10 +37,9 @@ export function parseConnectLink(raw: string): ConnectLink | null {
   } catch {
     return null;
   }
-  const isCatamorphic =
-    url.protocol === "catamorphic:" && url.hostname === "connect";
+  const isWork = url.protocol === "work:" && url.hostname === "connect";
   const isWeb = url.protocol === "https:" || url.protocol === "http:";
-  if (!isCatamorphic && !isWeb) return null;
+  if (!isWork && !isWeb) return null;
   return connectLinkFromParams(url.searchParams);
 }
 

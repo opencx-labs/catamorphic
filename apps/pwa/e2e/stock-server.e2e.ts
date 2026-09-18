@@ -165,7 +165,7 @@ describe.skipIf(!chromeBinary())("pwa against the stock server", () => {
           );
         }
         const invitation = (await invitationResponse.json()) as { id: string };
-        return `catamorphic://connect?server=${encodeURIComponent(apiBase)}&project=${project.project.id}&name=brain&invitation=${invitation.id}`;
+        return `work://connect?server=${encodeURIComponent(apiBase)}&project=${project.project.id}&name=brain&invitation=${invitation.id}`;
       },
       backendTimeoutMs: 120_000,
     });

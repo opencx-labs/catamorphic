@@ -342,7 +342,7 @@ describe("remote projects (ADR 0055)", () => {
       label: "connect modal",
     });
 
-    const link = `catamorphic://connect?server=${encodeURIComponent(serverUrl)}&project=remote-1&name=Acme%20brain`;
+    const link = `work://connect?server=${encodeURIComponent(serverUrl)}&project=remote-1&name=Acme%20brain`;
     await run(
       `setReactValue($('[data-testid="remote-link-input"]'), ${JSON.stringify(link)}); return true;`,
     );
@@ -376,7 +376,7 @@ describe("remote projects (ADR 0055)", () => {
     await runWait(`return !!$('[data-testid="remote-sync"]');`, {
       label: "member download control",
     });
-    projectDir = path.join(app.userDataDir, "Catamorphic", "acme-brain");
+    projectDir = path.join(app.userDataDir, "Work", "acme-brain");
     expect(
       fs.readFileSync(path.join(projectDir, "docs/handbook.md"), "utf8"),
     ).toContain("Refunds take 5 days");

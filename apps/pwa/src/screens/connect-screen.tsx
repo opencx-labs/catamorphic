@@ -53,7 +53,7 @@ export function ConnectScreen({
     if (link.remoteProjectName) params.set("name", link.remoteProjectName);
     if (link.invitationId) params.set("invitation", link.invitationId);
     if (link.sessionId) params.set("session", link.sessionId);
-    return `catamorphic://connect?${params.toString()}`;
+    return `work://connect?${params.toString()}`;
   });
   const [busy, setBusy] = useState(false);
   const [hostedServerUrl, setHostedServerUrl] = useState<string | null>(null);
@@ -147,14 +147,14 @@ export function ConnectScreen({
             </button>
             <div className="grid grid-cols-2 gap-2">
               <a
-                href="https://catamorphic.ai/desktop/"
+                href="https://work.software/desktop/"
                 className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-border px-3 text-center text-xs font-medium text-fg-muted"
               >
                 <Download className="size-4" />
                 Get the desktop app
               </a>
               <a
-                href="https://catamorphic.ai/agents/"
+                href="https://work.software/brain/"
                 className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-border px-3 text-center text-xs font-medium text-fg-muted"
               >
                 <PlugZap className="size-4" />
@@ -169,7 +169,7 @@ export function ConnectScreen({
         >
           <textarea
             className="field min-h-24 w-full resize-none p-3 font-mono text-[16px] leading-6 outline-none placeholder:text-fg-faint"
-            placeholder="catamorphic://connect?server=…&project=…"
+            placeholder="work://connect?server=…&project=…"
             value={raw}
             onChange={(event) => {
               setRaw(event.target.value);

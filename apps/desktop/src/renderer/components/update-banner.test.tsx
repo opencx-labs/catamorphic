@@ -75,9 +75,7 @@ describe("UpdateBanner", () => {
       },
     );
     const container = await mount(initial);
-    expect(container.textContent).toContain(
-      "Catamorphic 0.1.0-alpha.2 is available",
-    );
+    expect(container.textContent).toContain("Work 0.1.0-alpha.2 is available");
   });
 
   it("offers an explicit download for an available update", async () => {
@@ -91,9 +89,7 @@ describe("UpdateBanner", () => {
         "https://github.com/opencx-labs/catamorphic/releases/tag/desktop-v0.1.0-alpha.2",
     });
 
-    expect(container.textContent).toContain(
-      "Catamorphic 0.1.0-alpha.2 is available",
-    );
+    expect(container.textContent).toContain("Work 0.1.0-alpha.2 is available");
     const download = Array.from(container.querySelectorAll("button")).find(
       (button) => button.textContent === "Download update",
     );
@@ -154,7 +150,7 @@ it("keeps a dismissed download quiet through progress events and reveals readine
       container.querySelector('[data-testid="desktop-update-banner"]'),
     ).toBeNull();
     act(() => receive?.({ ...state, percent: 40, manualCheckId: 1 }));
-    expect(container.textContent).toContain("Downloading Catamorphic 2");
+    expect(container.textContent).toContain("Downloading Work 2");
     act(() => receive?.({ ...state, phase: "downloaded" }));
     expect(container.textContent).toContain("Update ready");
   } finally {

@@ -21,6 +21,11 @@ itself change the desktop app's current design or release identity.
 
 ## Identity
 
+Work is the end-user desktop and mobile brand at work.software. Its orange W
+mark is defined in `apps/desktop/build/icon.svg`; mobile uses the same mark.
+Catamorphic retains the framework identity below. Work Dark and Work Light
+share this visual language. See [ADR 0146](decisions/0146-work-application-identity.md).
+
 - **Logo**: the banana-bracket C, an open circular arc plus vertical bar, a
   nod to catamorphism's ⦇f⦈ banana brackets. Stroke `#f95225`, round caps.
   Canonical files: `site/assets/logo.svg`, `favicon.svg`.

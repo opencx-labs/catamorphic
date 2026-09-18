@@ -31,12 +31,12 @@ Connectors has **Connect Codex Computer Use** when the runtime is installed in
 the user's Codex home (`CODEX_HOME`, otherwise `~/.codex`). This references the
 installation in place, preserves its configured surfaces and exposes `js`/`js_reset`, and leaves OS and per-app access
 under the native service's control. The imported runtime exposes computer surfaces;
-Catamorphic's browser tools control its embedded tabs. The native service can use
+Work's browser tools control its embedded tabs. The native service can use
 apps across the desktop, not only browsers.
 
 Assign the connection to an agent as with any profile connector. Connecting the runtime is explicitly
 opt-in. Full-access local agents accept native app-consent requests without an
-additional Catamorphic prompt. Codex and OS restrictions still apply. Restricted
+additional Work prompt. Codex and OS restrictions still apply. Restricted
 agents retain the consent flow below. Codex handles its form/URL elicitation through the existing host permission
 UI. App consent offers an unchecked **Allow this app for this chat** choice.
 An explicit selection remembers only that server, app and risk level for the
@@ -45,7 +45,7 @@ once-only approvals are never cached. Missing approval handlers and cancelled tu
 runtime paths while retaining connection IDs, agent assignments, and user policy.
 Old version paths removed by Codex updates refresh on the normal connector refresh.
 Disconnecting never deletes the upstream installation. Permission changes may
-require restarting the native helper; quitting Catamorphic is not a general fix.
+require restarting the native helper; quitting Work is not a general fix.
 
 Codex's native app-server process retains the MCP REPL between turns. Five idle
 minutes, configuration changes, or disposal close it; a later turn retains the

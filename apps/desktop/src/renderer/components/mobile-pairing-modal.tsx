@@ -196,7 +196,7 @@ export function MobilePairingModal({
           >
             {state.kind === "loading" &&
               (isMac
-                ? "Checking local network access. macOS may ask you to allow Catamorphic."
+                ? "Checking local network access. macOS may ask you to allow Work."
                 : "Checking that this device can accept a mobile connection.")}
             {state.kind === "error" && state.message}
             {state.kind === "ready" && target === "remote" && state.remote

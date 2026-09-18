@@ -4,52 +4,42 @@
 
 # Catamorphic
 
-**A really good place to get work done.** Catamorphic puts everything you
-need for real work in one place: projects, documents, browser tabs, terminals,
-editors, apps, automations, and agents that work on those same surfaces. It is
-free, open source, and local-first. Your work is made of files, git history,
-and databases you control.
+**The open-source core for agentic work environments.** Catamorphic brings
+projects, agents, documents, browser tabs, terminals, apps, and automations
+into products whose identity and deployment belong to their host.
 
-Use Catamorphic as a personal brain on your Mac, run a shared brain on your own
-server, or embed the same foundations in a product you already operate.
+[Work](https://work.software) is the desktop, company brain, and mobile product
+built on Catamorphic. It is designed for anyone with work to do. This repository
+contains the framework and Work's reference applications.
 
-## Install the desktop app
+## Install Work
 
-The first public desktop line supports Apple silicon Macs running macOS 12 or
-newer. The initial releases use the Preview channel for frequent alpha builds.
-The Stable channel begins with the first vetted non-prerelease build.
+Work supports Apple silicon Macs running macOS 12 or newer. The rename ships
+with the next desktop release. Until then, existing published alpha downloads
+still carry the Catamorphic name. Find the available build at
+[work.software](https://work.software/desktop/).
 
-Preview:
+After the first Work Preview is published:
 
 ```bash
-brew install --cask opencx-labs/tap/catamorphic@alpha
+brew install --cask opencx-labs/tap/work@alpha
 ```
 
-Stable, after the first stable release is published:
+After the first Work Stable is published:
 
 ```bash
-brew install --cask opencx-labs/tap/catamorphic
+brew install --cask opencx-labs/tap/work
 ```
 
 You can also download the signed and notarized DMG from
 [GitHub Releases](https://github.com/opencx-labs/catamorphic/releases) and drag
-Catamorphic into Applications.
+Work into Applications. Installed builds let you choose when to download and
+restart. Switch channels under **Help > Update Channel**, or use `brew upgrade`
+with the same cask you installed. Work keeps a pre-migration database backup.
 
-Installed builds check their selected channel and let you choose when to
-download and restart. Switch channels under **Help > Update Channel**.
-Homebrew users can also update explicitly with the same cask they installed:
-
-```bash
-brew upgrade --cask opencx-labs/tap/catamorphic
-brew upgrade --cask opencx-labs/tap/catamorphic@alpha
-```
-
-Before a new packaged version first opens the local database, Catamorphic
-keeps a pre-migration backup of it.
-
-> Catamorphic is in alpha. Project files and git history are durable, but app
-> state and APIs may change between prereleases. Back up important projects
-> and read the release notes before upgrading.
+Work uses a fresh application identity and storage directory. Alpha data and
+credentials from the previous app are not migrated automatically. Project
+folders remain ordinary files you can import.
 
 ## One system, three ways to use it
 

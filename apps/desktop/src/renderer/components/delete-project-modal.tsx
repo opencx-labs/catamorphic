@@ -77,8 +77,8 @@ export function DeleteProjectModal({
         </h2>
         <p className="mt-2 text-[13px] leading-relaxed text-fg-muted">
           {remoteMember !== false
-            ? "This removes the local copy from Catamorphic and moves its folder to the Trash. The shared project and its server history stay available to the team."
-            : `The project is removed from Catamorphic. Its chats, workflows, and run history are deleted.${rootPath ? " The folder on disk is kept unless you say otherwise." : ""}`}
+            ? "This removes the local copy from Work and moves its folder to the Trash. The shared project and its server history stay available to the team."
+            : `The project is removed from Work. Its chats, workflows, and run history are deleted.${rootPath ? " The folder on disk is kept unless you say otherwise." : ""}`}
         </p>
 
         {rootPath && remoteMember === false && (

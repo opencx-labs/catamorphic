@@ -77,7 +77,7 @@ export function AuthorizationInspector() {
               </p>
               <p>
                 If you still cannot sign in, continue in your usual browser.
-                Catamorphic will keep this attempt active.
+                Work will keep this attempt active.
               </p>
               <button
                 type="button"

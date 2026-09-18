@@ -252,7 +252,7 @@ function invitationLinks(
     name: projectName,
   });
   return {
-    connect: `catamorphic://connect?${params.toString()}`,
+    connect: `work://connect?${params.toString()}`,
     web: `${base}/?${params.toString()}`,
   };
 }

@@ -5,10 +5,10 @@ describe("macOS application menu", () => {
   it("offers update checking beside About without losing native app actions", () => {
     const checkForUpdates = vi.fn();
     const menu = macApplicationMenu({
-      appName: "Catamorphic",
+      appName: "Work",
       checkForUpdates,
     });
-    expect(menu.label).toBe("Catamorphic");
+    expect(menu.label).toBe("Work");
     const check = menu.submenu.find(
       (item) => item.label === "Check for Updates…",
     );

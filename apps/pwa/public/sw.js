@@ -7,7 +7,7 @@
  * falls back to the cached shell when offline. API calls (cross-origin —
  * the server is another host) never touch the cache.
  */
-const CACHE = "pwa-shell-v1";
+const CACHE = "work-shell-v1";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(["/"])));

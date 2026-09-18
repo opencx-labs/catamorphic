@@ -197,7 +197,7 @@ describe("httpDocumentsClient", () => {
           return Response.json({
             id: "invite-1",
             expiresAt: "2026-09-02T00:00:00.000Z",
-            connectLinks: ["catamorphic://connect?project=p-1"],
+            connectLinks: ["work://connect?project=p-1"],
             webLinks: [],
           });
         }

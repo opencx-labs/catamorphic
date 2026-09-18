@@ -15,7 +15,7 @@ import {
  * Connect a remote project (ADR 0055): a folder on this machine becomes a
  * working copy of what a hosting backend lets this member see — company
  * docs read-only, their store subtrees read/write. Paste the connect link
- * an invite carried (or arrive here from `catamorphic://connect?…`), pick
+ * an invite carried (or arrive here from `work://connect?…`), pick
  * a folder, done: the first sync runs on connect.
  */
 export function RemoteConnectModal({
@@ -127,7 +127,7 @@ export function RemoteConnectModal({
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!parsedLink) {
-      setError("Paste the complete Catamorphic invitation link.");
+      setError("Paste the complete Work invitation link.");
       return;
     }
     if (!targetPath) {
@@ -223,7 +223,7 @@ export function RemoteConnectModal({
                   name="invitationLink"
                   value={pasted}
                   onChange={(event) => void applyPasted(event.target.value)}
-                  placeholder="catamorphic://connect?server=…&project=…"
+                  placeholder="work://connect?server=…&project=…"
                   required
                   aria-describedby="remote-link-help"
                   autoCapitalize="none"
@@ -385,7 +385,7 @@ export function RemoteConnectModal({
 }
 
 function formatConnectLink(link: ConnectLink): string {
-  const url = new URL("catamorphic://connect");
+  const url = new URL("work://connect");
   url.searchParams.set("server", link.serverUrl);
   url.searchParams.set("project", link.remoteProjectId);
   if (link.remoteProjectName)

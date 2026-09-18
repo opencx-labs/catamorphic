@@ -1,4 +1,4 @@
-// Catamorphic browser import helper, protocol version 1.
+// Work browser import helper, protocol version 1.
 // System frameworks only. No Electron/Node ABI and no database/file access.
 #import <Foundation/Foundation.h>
 #import <Security/Security.h>
@@ -14,7 +14,7 @@ static int authenticateUser(NSString *account) {
   dispatch_semaphore_t done = dispatch_semaphore_create(0);
   __block int result = 4;
   [context evaluatePolicy:LAPolicyDeviceOwnerAuthentication
-    localizedReason:[NSString stringWithFormat:@"Import browser data from %@ into Catamorphic", account]
+    localizedReason:[NSString stringWithFormat:@"Import browser data from %@ into Work", account]
     reply:^(BOOL success, NSError *failure) {
       result = success ? 0 : (failure.code == LAErrorUserCancel || failure.code == LAErrorSystemCancel || failure.code == LAErrorAppCancel ? 2 : 4);
       dispatch_semaphore_signal(done);
@@ -31,7 +31,7 @@ static int authenticateUser(NSString *account) {
 int main(int argc, const char *argv[]) {
   @autoreleasepool {
     if (argc == 2 && strcmp(argv[1], "--version") == 0) {
-      puts("catamorphic-browser-keychain 1");
+      puts("work-browser-keychain 1");
       return 0;
     }
     if (argc != 3 || isatty(STDOUT_FILENO)) return 64;

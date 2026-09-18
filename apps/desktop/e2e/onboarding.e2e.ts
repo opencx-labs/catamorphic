@@ -107,7 +107,7 @@ describe("agent-first onboarding", () => {
   });
 
   it("creates a collision-safe Default Project and opens the agent wizard", async () => {
-    const projectsDir = path.join(app.userDataDir, "Catamorphic");
+    const projectsDir = path.join(app.userDataDir, "Work");
     const occupiedDir = path.join(projectsDir, "default-project");
     fs.mkdirSync(occupiedDir, { recursive: true });
     fs.writeFileSync(path.join(occupiedDir, "KEEP.txt"), "leave me alone\n");
@@ -232,8 +232,8 @@ describe("blank project onboarding", () => {
 
   it("creates a blank project with only manifest + seed skills, committed", async () => {
     await createProjectViaUi("onboard-blank");
-    // E2E projects land under <userDataDir>/Catamorphic/<slug>.
-    projectDir = path.join(app.userDataDir, "Catamorphic", "onboard-blank");
+    // E2E projects land under <userDataDir>/Work/<slug>.
+    projectDir = path.join(app.userDataDir, "Work", "onboard-blank");
     expect(fs.existsSync(projectDir)).toBe(true);
 
     // The manifest names the project (ADR 0043).
@@ -315,7 +315,7 @@ describe("blank project onboarding", () => {
 describe.each([false, true])(
   "import an existing folder (Git: %s)",
   (versioned) => {
-    const NOTES = "# Notes\n\nhand-written before Catamorphic existed\n";
+    const NOTES = "# Notes\n\nhand-written before Work existed\n";
     const DATA = "nested,data\n1,2\n";
     let importDir: string;
 
@@ -529,7 +529,7 @@ describe.each([false, true])(
           { timeoutMs: 30_000, label: name },
         );
       };
-      // A root store/ belongs to the imported project, not Catamorphic's data API.
+      // A root store/ belongs to the imported project, not Work's data API.
       fs.mkdirSync(path.join(importDir, "store"), { recursive: true });
       fs.writeFileSync(
         path.join(importDir, "store/inventory.txt"),

@@ -56,7 +56,7 @@ interface OpenVault {
   deviceAuthed: boolean;
 }
 
-const VAULT_GROUP = "Catamorphic Browser";
+const VAULT_GROUP = "Work Browser";
 
 export function normalizeCredentialOrigin(raw: string): string {
   const value = raw.trim();

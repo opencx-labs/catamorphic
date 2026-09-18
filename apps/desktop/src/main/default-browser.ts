@@ -15,8 +15,7 @@ export function defaultBrowserState({
     isDefault: packaged && schemes.every(isDefault),
     ...(!packaged
       ? {
-          reason:
-            "Use the installed Catamorphic app to set your default browser.",
+          reason: "Use the installed Work app to set your default browser.",
         }
       : {}),
   };
@@ -58,7 +57,7 @@ export function registerDefaultBrowser() {
       !BrowserWindow.fromWebContents(event.sender) ||
       event.senderFrame !== event.sender.mainFrame
     )
-      throw new Error("Open this setting in Catamorphic.");
+      throw new Error("Open this setting in Work.");
   };
   ipcMain.handle("catamorphic:default-browser-state", (event) => {
     ownsWindow(event);

@@ -2,7 +2,7 @@
 @import "@catamorphic/ui/styles.css";
 
 /*
- * Catamorphic Pwa design tokens — the same vocabulary as the desktop
+ * Work Pwa design tokens — the same vocabulary as the desktop
  * (apps/desktop/src/renderer/styles.css); change both together. Dark-first:
  * :root is the dark theme; light lives behind [data-theme=light]. The
  * ThemeController rewrites the --color-* vars live when a project ships a

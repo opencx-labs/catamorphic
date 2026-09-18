@@ -24,7 +24,7 @@ beforeAll(async () => {
   fs.writeFileSync(
     path.join(stubDist, "manifest.webmanifest"),
     JSON.stringify({
-      name: "Catamorphic",
+      name: "Work",
       start_url: "/",
       display: "standalone",
     }),

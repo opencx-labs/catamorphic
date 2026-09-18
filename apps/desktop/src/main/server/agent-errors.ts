@@ -195,7 +195,7 @@ export class FriendlyAgentErrors implements CodingAgentProvider {
             ...event,
             errorKind: undefined,
             content:
-              "This model requires a newer Codex component. Choose another model in the command palette, or update Catamorphic and try again.",
+              "This model requires a newer Codex component. Choose another model in the command palette, or update Work and try again.",
           };
           continue;
         }

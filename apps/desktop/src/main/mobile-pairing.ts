@@ -175,7 +175,7 @@ export class MobilePairingService {
           ? "this Mac"
           : "this computer";
       throw new Error(
-        `Catamorphic could not find a local network address. Connect ${device} and your phone to the same Wi-Fi, then try again.`,
+        `Work could not find a local network address. Connect ${device} and your phone to the same Wi-Fi, then try again.`,
       );
     }
     await this.requestLocalNetworkAccess();
@@ -551,7 +551,7 @@ export class MobilePairingService {
     const index = path.join(dist, "index.html");
     if (!fs.existsSync(index)) {
       throw new Error(
-        "The mobile app bundle is missing. Rebuild or reinstall Catamorphic, then try again.",
+        "The mobile app bundle is missing. Rebuild or reinstall Work, then try again.",
       );
     }
     const html = fs.readFileSync(index, "utf8");
@@ -570,7 +570,7 @@ export class MobilePairingService {
     });
     if (missing) {
       throw new Error(
-        `The mobile app bundle is incomplete. Rebuild or reinstall Catamorphic, then try again. Missing: /${missing}`,
+        `The mobile app bundle is incomplete. Rebuild or reinstall Work, then try again. Missing: /${missing}`,
       );
     }
   }
@@ -592,7 +592,7 @@ export class MobilePairingService {
         ? "this Mac"
         : "this computer";
     throw new Error(
-      `Catamorphic could not access ${device} on your local network. In System Settings > Privacy & Security > Local Network, allow Catamorphic, then try again.`,
+      `Work could not access ${device} on your local network. In System Settings > Privacy & Security > Local Network, allow Work, then try again.`,
     );
   }
 

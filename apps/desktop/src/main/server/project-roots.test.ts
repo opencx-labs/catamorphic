@@ -77,7 +77,7 @@ it("relocates only projects inside the copied development profile", async () => 
     const internal = crypto.randomUUID();
     const external = crypto.randomUUID();
     const neighbor = crypto.randomUUID();
-    await store.set(internal, "/tmp/old/desktop/Catamorphic/project");
+    await store.set(internal, "/tmp/old/desktop/Work/project");
     await store.set(external, "/Users/test/my-project");
     await store.set(neighbor, "/tmp/old/desktop-other/project");
     const reopened = new ProjectRootsStore(database);
@@ -86,7 +86,7 @@ it("relocates only projects inside the copied development profile", async () => 
       to: "/Users/test/.catamorphic/dev/desktop",
     });
     expect(reopened.getSync(internal)).toBe(
-      "/Users/test/.catamorphic/dev/desktop/Catamorphic/project",
+      "/Users/test/.catamorphic/dev/desktop/Work/project",
     );
     expect(reopened.getSync(external)).toBe("/Users/test/my-project");
     expect(reopened.getSync(neighbor)).toBe("/tmp/old/desktop-other/project");

@@ -1,6 +1,6 @@
 ---
 name: desktop-release
-description: Use when preparing, dry-running, publishing, repairing, or verifying a Catamorphic Stable or Preview desktop release through GitHub Releases and opencx-labs/homebrew-tap. Do not use for ordinary desktop development or framework package publishing.
+description: Use when preparing, dry-running, publishing, repairing, or verifying a Work Stable or Preview desktop release through GitHub Releases and opencx-labs/homebrew-tap. Do not use for ordinary desktop development or framework package publishing.
 ---
 
 # Desktop Release
@@ -100,7 +100,7 @@ release verifier once more.
 Create an annotated `desktop-v<version>` tag at that exact SHA and push that
 specific tag ref. Never reuse, move, delete, or force-push a published release
 tag. The tag-triggered workflow is the only publisher. A Preview tag creates a
-GitHub prerelease and advances `catamorphic@alpha` plus `alpha-mac.yml`. A
+GitHub prerelease and advances `work@alpha` plus `alpha-mac.yml`. A
 Stable tag creates the latest normal GitHub release and advances both casks
 plus both update feeds so Preview users converge onto Stable.
 
@@ -119,10 +119,10 @@ Verify all of the following before reporting success:
   is correct;
 - the DMG, ZIP, both blockmaps, channel metadata, and `SHA256SUMS.txt` exist;
 - downloaded assets match the published checksums;
-- a Preview release updates `Casks/catamorphic@alpha.rb` and
+- a Preview release updates `Casks/work@alpha.rb` and
   `updates/alpha-mac.yml` only;
-- a Stable release updates `Casks/catamorphic.rb`,
-  `Casks/catamorphic@alpha.rb`, `updates/latest-mac.yml`, and
+- a Stable release updates `Casks/work.rb`,
+  `Casks/work@alpha.rb`, `updates/latest-mac.yml`, and
   `updates/alpha-mac.yml` together;
 - each updated cask contains the intended version and DMG checksum;
 - each updated feed points only to assets from the intended GitHub release;
@@ -134,7 +134,7 @@ Verify all of the following before reporting success:
   starts again from the cached component without network access.
 
 Use a temporary directory for downloads and tap inspection. Do not run
-`brew install`, replace `/Applications/Catamorphic.app`, or exercise an updater
+`brew install`, replace `/Applications/Work.app`, or exercise an updater
 against the user's installed copy without explicit permission.
 
 Report any remaining manual checks separately. A first release cannot prove

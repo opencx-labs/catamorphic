@@ -401,7 +401,7 @@ export function GithubAuthorizationTray({
             id="github-authorization-title"
             className="text-[13px] font-medium text-fg"
           >
-            Authorize Catamorphic on GitHub
+            Authorize GitHub access
           </p>
           <p className="mt-0.5 text-xs text-fg-muted" aria-live="polite">
             Enter code{" "}
@@ -586,7 +586,7 @@ function GithubPanel({
           repos.length === 0 ? (
             <div className="flex flex-col items-center gap-2 px-3 py-4 text-center">
               <p className="text-xs text-fg-faint">
-                No repositories granted to Catamorphic yet.
+                No repositories granted to this GitHub connection yet.
               </p>
               <button
                 type="button"

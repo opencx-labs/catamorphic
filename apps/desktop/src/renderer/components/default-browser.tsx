@@ -50,9 +50,7 @@ export function DefaultBrowserButton({
       if (current !== generation.current) return;
       setState(next);
       if (!next.isDefault && next.available)
-        setMessage(
-          "Choose Catamorphic in your system's default browser settings.",
-        );
+        setMessage("Choose Work in your system's default browser settings.");
     } catch {
       if (current !== generation.current) return;
       setMessage("Could not change your default browser. Try again.");

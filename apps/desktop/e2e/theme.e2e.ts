@@ -81,7 +81,7 @@ it("applies font edits to body and utility text, preserves them across presets, 
     `getComputedStyle(document.querySelector('.font-mono')).fontFamily === 'Menlo, monospace'`,
   );
   await app.eval(`[...document.querySelectorAll('button')].find(
-    el => el.textContent.includes('Catamorphic Light')).click()`);
+    el => el.textContent.includes('Work Light')).click()`);
   await app.waitFor(`document.documentElement.dataset.theme === 'light'`);
   expect(
     await app.eval(

@@ -13,7 +13,7 @@ import { ConfigFile, readConfigObject } from "./config-file.js";
  * it. The file is watched and changes apply live — no restart.
  *
  * Format: `{ "selection": "system", "overrides": { "accent": "#ff5500" } }`.
- * `system` follows the operating system with the two Catamorphic presets.
+ * `system` follows the operating system with the two Work presets.
  * The resolved theme is the selected preset's colors with overrides on top,
  * so a fully custom theme is just a selection with every token overridden.
  * Optional `fonts.sans` and `fonts.mono` override the desktop font stacks.
@@ -48,10 +48,10 @@ export type ThemeAppearance = "dark" | "light";
 
 export const THEME_PRESETS: ThemePreset[] = [
   {
-    // The canonical Catamorphic look; must match the :root block in
+    // The canonical Work look; must match the :root block in
     // renderer/styles.css (the pre-JS first-paint fallback).
     id: "dark",
-    label: "Catamorphic Dark",
+    label: "Work Dark",
     colors: {
       bg: "#0a0a0b",
       "bg-raised": "#101012",
@@ -75,7 +75,7 @@ export const THEME_PRESETS: ThemePreset[] = [
   },
   {
     id: "light",
-    label: "Catamorphic Light",
+    label: "Work Light",
     colors: {
       bg: "#f7f8fa",
       "bg-raised": "#ffffff",

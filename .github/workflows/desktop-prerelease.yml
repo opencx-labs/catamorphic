@@ -105,9 +105,9 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
           UPDATE_METADATA: ${{ steps.release.outputs.update_metadata }}
         run: |
-          app="apps/desktop/release/mac-arm64/Catamorphic.app"
-          dmg="apps/desktop/release/Catamorphic-${VERSION}-arm64.dmg"
-          zip="apps/desktop/release/Catamorphic-${VERSION}-arm64.zip"
+          app="apps/desktop/release/mac-arm64/Work.app"
+          dmg="apps/desktop/release/Work-${VERSION}-arm64.dmg"
+          zip="apps/desktop/release/Work-${VERSION}-arm64.zip"
           dmg_blockmap="${dmg}.blockmap"
           zip_blockmap="${zip}.blockmap"
           update_metadata="apps/desktop/release/${UPDATE_METADATA}"
@@ -122,28 +122,28 @@ jobs:
           xcrun stapler validate "${app}"
           bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${app}/Contents/Info.plist")"
           scheme="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "${app}/Contents/Info.plist")"
-          test "${bundle_id}" = "dev.catamorphic.desktop"
-          test "${scheme}" = "catamorphic"
+          test "${bundle_id}" = "software.work.desktop"
+          test "${scheme}" = "work"
           (
             cd apps/desktop/release
             shasum -a 256 \
-              "Catamorphic-${VERSION}-arm64.dmg" \
-              "Catamorphic-${VERSION}-arm64.dmg.blockmap" \
-              "Catamorphic-${VERSION}-arm64.zip" \
-              "Catamorphic-${VERSION}-arm64.zip.blockmap" \
+              "Work-${VERSION}-arm64.dmg" \
+              "Work-${VERSION}-arm64.dmg.blockmap" \
+              "Work-${VERSION}-arm64.zip" \
+              "Work-${VERSION}-arm64.zip.blockmap" \
               "${UPDATE_METADATA}" > SHA256SUMS.txt
           )
 
       - uses: actions/upload-artifact@v4
         with:
-          name: catamorphic-${{ steps.release.outputs.version }}-macos-arm64
+          name: work-${{ steps.release.outputs.version }}-macos-arm64
           if-no-files-found: error
           retention-days: 14
           path: |
-            apps/desktop/release/Catamorphic-${{ steps.release.outputs.version }}-arm64.dmg
-            apps/desktop/release/Catamorphic-${{ steps.release.outputs.version }}-arm64.dmg.blockmap
-            apps/desktop/release/Catamorphic-${{ steps.release.outputs.version }}-arm64.zip
-            apps/desktop/release/Catamorphic-${{ steps.release.outputs.version }}-arm64.zip.blockmap
+            apps/desktop/release/Work-${{ steps.release.outputs.version }}-arm64.dmg
+            apps/desktop/release/Work-${{ steps.release.outputs.version }}-arm64.dmg.blockmap
+            apps/desktop/release/Work-${{ steps.release.outputs.version }}-arm64.zip
+            apps/desktop/release/Work-${{ steps.release.outputs.version }}-arm64.zip.blockmap
             apps/desktop/release/${{ steps.release.outputs.update_metadata }}
             apps/desktop/release/SHA256SUMS.txt
 
@@ -158,22 +158,22 @@ jobs:
           UPDATE_METADATA: ${{ steps.release.outputs.update_metadata }}
         run: |
           assets=(
-            "apps/desktop/release/Catamorphic-${VERSION}-arm64.dmg"
-            "apps/desktop/release/Catamorphic-${VERSION}-arm64.dmg.blockmap"
-            "apps/desktop/release/Catamorphic-${VERSION}-arm64.zip"
-            "apps/desktop/release/Catamorphic-${VERSION}-arm64.zip.blockmap"
+            "apps/desktop/release/Work-${VERSION}-arm64.dmg"
+            "apps/desktop/release/Work-${VERSION}-arm64.dmg.blockmap"
+            "apps/desktop/release/Work-${VERSION}-arm64.zip"
+            "apps/desktop/release/Work-${VERSION}-arm64.zip.blockmap"
             "apps/desktop/release/${UPDATE_METADATA}"
             "apps/desktop/release/SHA256SUMS.txt"
           )
           if gh release view "${TAG}" >/dev/null 2>&1; then
             gh release upload "${TAG}" "${assets[@]}" --clobber
             if [[ "${RELEASE_KIND}" == "preview" ]]; then
-              gh release edit "${TAG}" --prerelease --latest=false --title "Catamorphic ${VERSION} for macOS"
+              gh release edit "${TAG}" --prerelease --latest=false --title "Work ${VERSION} for macOS"
             else
-              gh release edit "${TAG}" --prerelease=false --latest=true --title "Catamorphic ${VERSION} for macOS"
+              gh release edit "${TAG}" --prerelease=false --latest=true --title "Work ${VERSION} for macOS"
             fi
           else
-            release_flags=(--verify-tag --generate-notes --title "Catamorphic ${VERSION} for macOS")
+            release_flags=(--verify-tag --generate-notes --title "Work ${VERSION} for macOS")
             if [[ "${RELEASE_KIND}" == "preview" ]]; then
               release_flags+=(--prerelease --latest=false --notes "Apple silicon Preview release for macOS 12 or newer. Preview builds may contain regressions, so back up important projects before upgrading.")
             else
@@ -197,12 +197,12 @@ jobs:
           mkdir -p "$(dirname "${tap_path}")"
           gh auth setup-git
           gh repo clone opencx-labs/homebrew-tap "${tap_path}"
-          cask_files=("catamorphic@alpha.rb")
+          cask_files=("work@alpha.rb")
           if [[ "${RELEASE_KIND}" == "stable" ]]; then
-            cask_files=("catamorphic.rb" "catamorphic@alpha.rb")
+            cask_files=("work.rb" "work@alpha.rb")
           fi
           for cask_file in "${cask_files[@]}"; do
-            if [[ "${cask_file}" == "catamorphic.rb" ]]; then
+            if [[ "${cask_file}" == "work.rb" ]]; then
               cask_channel="stable"
             else
               cask_channel="preview"
@@ -229,6 +229,6 @@ jobs:
             git -C "${tap_path}" add "updates/${update_file}"
           done
           if ! git -C "${tap_path}" diff --cached --quiet; then
-            git -C "${tap_path}" commit -m "catamorphic ${VERSION}"
+            git -C "${tap_path}" commit -m "work ${VERSION}"
             git -C "${tap_path}" push origin HEAD:main
           fi

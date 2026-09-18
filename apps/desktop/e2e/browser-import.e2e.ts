@@ -94,7 +94,7 @@ describe("shared browser import and personal history", () => {
       })()`),
     ).toEqual({
       disabled: true,
-      reason: "Use the installed Catamorphic app to set your default browser.",
+      reason: "Use the installed Work app to set your default browser.",
     });
     await click('[data-testid="onboarding-browser-import"]');
     await app.waitFor(

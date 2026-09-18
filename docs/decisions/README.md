@@ -160,3 +160,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0143](0143-profile-history-and-browser-import.md) | Profile history and shared browser import | Accepted |
 | [0144](0144-desktop-controls-and-default-browser.md) | App-styled controls and default browser | Accepted |
 | [0145](0145-work-product-identity.md) | Work is the home for the end-user experiences | Accepted |
+| [0146](0146-work-application-identity.md) | Work application identity | Accepted |

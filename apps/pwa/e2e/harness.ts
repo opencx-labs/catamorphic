@@ -245,7 +245,7 @@ export async function launchPwa(
     });
     const connectLink =
       (await opts.mintLink?.(apiBase, `http://127.0.0.1:${operatorPort}`)) ??
-      `catamorphic://connect?server=${encodeURIComponent(apiBase)}&project=11111111-1111-4111-8111-111111111111&name=Acme%20Brain`;
+      `work://connect?server=${encodeURIComponent(apiBase)}&project=11111111-1111-4111-8111-111111111111&name=Acme%20Brain`;
     // Do not give Chrome a one-shot navigation before Vite is listening.
     // Chrome keeps its network error page open instead of retrying, which
     // used to make a healthy built PWA look like a blank-screen regression.

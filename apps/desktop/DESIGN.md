@@ -66,7 +66,7 @@ own repository identity. Worktrees serve independent repository work, not
 ordinary documents, privacy, or the existence of a proposal.
 
 1. **System-first.** New profiles follow the operating system, resolving to
-   Catamorphic Light or Catamorphic Dark. An explicit theme selection stays
+   Work Light or Work Dark. An explicit theme selection stays
    fixed until the user changes it.
 2. **Flat depth.** Hierarchy comes from surface steps and 1px borders, not drop
    shadows. Shadows are reserved for true overlays (menus, dialogs).
@@ -167,7 +167,7 @@ Low-chroma so run states don't scream: `--color-success`, `--color-warning`,
 
 ## Dropdowns and checkboxes
 
-Every desktop dropdown and checkbox must look like Catamorphic, including those
+Every desktop dropdown and checkbox must look like Work, including those
 inside registry components. Never use operating-system select menus or browser
 default checkbox chrome. The single implementation is
 [`form-controls.css`](src/renderer/form-controls.css), imported by the host.
@@ -299,12 +299,12 @@ that friction is intentional.
   documented here — then used via Tailwind (`bg-bg-raised`, `text-fg-muted`, …).
 - The active theme lives in `<userData>/profiles/<id>/theme.json`
   (`{ selection, overrides, fonts? }`) — profile-local, file-watched, agent-editable.
-  `selection: "system"` resolves to the Catamorphic Light or Dark preset and
+  `selection: "system"` resolves to the Work Light or Dark preset and
   follows operating-system changes live.
   ThemeProvider writes each resolved color as an inline CSS variable on
   `<html>`, sets `color-scheme`, and mirrors the appearance to
   `data-theme` for anything keyed on it.
-- The Catamorphic Light and Dark presets in `theme.ts` and the paired
+- The Work Light and Dark presets in `theme.ts` and the paired
   `light-dark()` values in `styles.css` must stay identical. `:root` follows
   the operating system for the pre-JS first paint.
 - Tokens are mapped into Tailwind 4 via `@theme inline` so utilities and
@@ -531,3 +531,11 @@ vertical sequence of optional browser setup actions followed by project actions.
 Default-browser status comes from the OS, shared with Settings (ADR 0144).
 Async actions use the shared size-stable PendingButton with short label fades;
 modal status space is reserved before loading so the action row stays in place.
+
+## Work identity (2026-09-18)
+
+The desktop product is Work, powered by the Catamorphic framework. Its icon is
+the orange W in `build/icon.svg`, shared with Work mobile and work.software.
+Theme presets are Work Dark and Work Light; the existing palette and motion
+contract continue to apply. Packaging, invitations and storage identity follow
+[ADR 0146](../../docs/decisions/0146-work-application-identity.md).

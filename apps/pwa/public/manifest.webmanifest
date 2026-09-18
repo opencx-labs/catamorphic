@@ -1,6 +1,6 @@
 {
-  "name": "Catamorphic",
-  "short_name": "Catamorphic",
+  "name": "Work",
+  "short_name": "Work",
   "description": "Your projects and agent sessions, on the go.",
   "start_url": "/",
   "display": "standalone",
