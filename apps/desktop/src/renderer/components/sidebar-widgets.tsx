@@ -81,6 +81,11 @@ export function SidebarActivity({
         : states.some((state) => state?.error)
           ? "Could not load workflow activity."
           : undefined,
+    idle: !(
+      sessions.isFetching ||
+      workflows.isFetching ||
+      states.some((state) => state?.loading)
+    ),
     retry: () => {
       void sessions.refetch();
       void workflows.refetch();
@@ -208,15 +213,21 @@ export function SidebarNote({
       }),
     enabled: Boolean(file) && visible,
   });
-  useSidebarContent(
-    note.isError || files.isError
-      ? "error"
-      : file && note.isPending
-        ? "loading"
-        : file
-          ? "ready"
-          : "empty",
-  );
+  useSidebarContent({
+    state:
+      note.isError || files.isError
+        ? "error"
+        : file && note.isPending
+          ? "loading"
+          : file
+            ? "ready"
+            : "empty",
+    idle: !(note.isFetching || files.isFetching),
+    retry: () => {
+      void files.refetch();
+      void note.refetch();
+    },
+  });
   useSidebarRefresh(note.refetch);
   const refetch = note.refetch;
   const refetchFiles = files.refetch;

@@ -207,6 +207,8 @@ export function GitNav({
     });
     return () => {
       cancelled = true;
+      // A read cut short by hiding the section is no longer in flight.
+      setFetching(false);
       window.clearTimeout(timer);
       window.removeEventListener("focus", focus);
       document.removeEventListener("visibilitychange", focus);

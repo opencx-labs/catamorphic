@@ -38,11 +38,13 @@ beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(desktopApi.browserImportList).mockResolvedValue([browser]);
   container = document.createElement("div");
+  document.body.appendChild(container);
   document.body.append(container);
   root = createRoot(container);
 });
 afterEach(() => {
   act(() => root.unmount());
+  container.remove();
   container.remove();
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
 });
@@ -58,7 +60,7 @@ const render = () =>
     );
   });
 const start = () =>
-  container.querySelector<HTMLButtonElement>(
+  document.body.querySelector<HTMLButtonElement>(
     '[data-testid="browser-import-start"]',
   );
 
@@ -67,10 +69,10 @@ describe("shared browser import", () => {
     await render();
     expect(desktopApi.browserImportRun).not.toHaveBeenCalled();
     await act(async () => {
-      container
+      document.body
         .querySelector<HTMLInputElement>('[aria-label="Passwords"]')
         ?.click();
-      container
+      document.body
         .querySelector<HTMLInputElement>('[aria-label="Signed-in sessions"]')
         ?.click();
     });
@@ -104,10 +106,12 @@ describe("shared browser import", () => {
       },
     ]);
     await render();
-    expect(container.querySelector('[aria-label="Bookmarks"]')).toBeNull();
-    expect(container.querySelector('[aria-label="Passwords"]')).toBeNull();
-    expect(container.querySelector('[aria-label="History"]')).not.toBeNull();
-    expect(container.textContent).not.toMatch(
+    expect(document.body.querySelector('[aria-label="Bookmarks"]')).toBeNull();
+    expect(document.body.querySelector('[aria-label="Passwords"]')).toBeNull();
+    expect(
+      document.body.querySelector('[aria-label="History"]'),
+    ).not.toBeNull();
+    expect(document.body.textContent).not.toMatch(
       /unsupported|skipped|could not import/i,
     );
   });
@@ -126,8 +130,9 @@ describe("shared browser import", () => {
     expect(desktopApi.browserImportRun).toHaveBeenCalledOnce();
     expect(start()?.disabled).toBe(true);
     expect(
-      container.querySelector<HTMLButtonElement>('[aria-label="Close import"]')
-        ?.disabled,
+      document.body.querySelector<HTMLButtonElement>(
+        '[aria-label="Close import"]',
+      )?.disabled,
     ).toBe(true);
     await act(async () =>
       window.dispatchEvent(
@@ -147,18 +152,18 @@ describe("shared browser import", () => {
     expect(complete).not.toHaveBeenCalled();
     expect(start()?.disabled).toBe(false);
     await act(async () =>
-      container
+      document.body
         .querySelector<HTMLInputElement>('[aria-label="Passwords"]')
         ?.click(),
     );
-    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(document.body.querySelector('[role="alert"]')).toBeNull();
     vi.mocked(desktopApi.browserImportRun).mockRejectedValueOnce(
       new Error("Close the source browser and try again."),
     );
     await act(async () => start()?.click());
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-      "try again",
-    );
+    expect(
+      document.body.querySelector('[role="alert"]')?.textContent,
+    ).toContain("try again");
     expect(close).not.toHaveBeenCalled();
   });
   it("shows an actionable unlock failure without Electron IPC internals or marking completion", async () => {
@@ -169,10 +174,10 @@ describe("shared browser import", () => {
     });
     await render();
     await act(async () => start()?.click());
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-      "Check Keychain Access",
-    );
-    expect(container.textContent).not.toMatch(
+    expect(
+      document.body.querySelector('[role="alert"]')?.textContent,
+    ).toContain("Check Keychain Access");
+    expect(document.body.textContent).not.toMatch(
       /remote method|browser-import-run/,
     );
     expect(complete).not.toHaveBeenCalled();

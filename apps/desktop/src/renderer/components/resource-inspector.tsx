@@ -365,8 +365,20 @@ export function InspectorPortal({
   const [settled, setSettled] = useState(false);
   useLayoutEffect(() => {
     const node = content.current;
-    if (!node) return;
-    const measure = () => setHeight(node.offsetHeight);
+    const panel = ref.current;
+    if (!node || !panel) return;
+    // Border-box height: content plus the panel's own padding and border,
+    // so the measured height never leaves a sliver that scrolls.
+    const chrome = () => {
+      const style = getComputedStyle(panel);
+      return (
+        Number.parseFloat(style.paddingTop) +
+        Number.parseFloat(style.paddingBottom) +
+        Number.parseFloat(style.borderTopWidth) +
+        Number.parseFloat(style.borderBottomWidth)
+      );
+    };
+    const measure = () => setHeight(node.offsetHeight + chrome());
     measure();
     const frame = requestAnimationFrame(() => setSettled(true));
     const observer =
@@ -439,8 +451,7 @@ export function InspectorPortal({
       style={{
         left: position.left,
         top: position.top,
-        // Padding (12px each side) is outside the measured content.
-        height: height === null ? undefined : height + 24,
+        height: height ?? undefined,
       }}
       data-settled={settled || undefined}
       onPointerEnter={onEnter}

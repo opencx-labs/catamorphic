@@ -79,6 +79,7 @@ export function FilesNav({
           ? "ready"
           : "empty",
     refreshing: query.isFetching && !query.isLoading,
+    idle: !query.isFetching,
     error: query.isError ? "Could not load files." : undefined,
     retry: () => refetch(),
     empty: "No files yet.",

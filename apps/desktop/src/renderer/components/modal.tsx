@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 export function Modal({
   open,
@@ -84,7 +85,9 @@ export function Modal({
   }, [open, mounted]);
 
   if (!mounted) return null;
-  return (
+  // Rendered at the body: a "fixed" panel inside a sidebar or a transformed
+  // pane would otherwise position itself relative to that pane.
+  return createPortal(
     <div
       className={`fixed inset-0 z-[100] grid place-items-center transition-opacity duration-150 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:duration-0 ${
         open
@@ -122,6 +125,7 @@ export function Modal({
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

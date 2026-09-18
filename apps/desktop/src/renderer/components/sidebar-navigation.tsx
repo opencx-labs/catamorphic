@@ -730,9 +730,11 @@ function SidebarSection({
   const status = contribution?.status;
   // The header spins only while a read is in flight, never for a section
   // that is merely waiting to be shown.
-  const busy =
-    (status?.state === "loading" && !status.idle) ||
-    Boolean(status?.refreshing);
+  // A first load shows the skeleton; the header spins only while rows on
+  // screen are being refreshed, so nothing loops while a section waits.
+  const loading = status?.state === "loading" && !status.idle;
+  const refreshing = Boolean(status?.refreshing);
+  const busy = loading || refreshing;
   const refresh = contribution?.commands?.has("refresh")
     ? () => contribution?.command?.("refresh")
     : undefined;
@@ -767,14 +769,15 @@ function SidebarSection({
         >
           <span className="truncate">{title}</span>
         </button>
-        {busy && (
+        {refreshing && (
           <span
             role="status"
-            aria-label={`Loading ${title}`}
+            aria-label={`Refreshing ${title}`}
             className="grid size-7 shrink-0 place-items-center text-fg-muted"
           >
             <LoaderCircle
               aria-hidden="true"
+              data-loading-for={contribution?.section.id}
               className="size-3 animate-spin motion-reduce:animate-none"
             />
           </span>
@@ -883,6 +886,7 @@ function WorkflowsNav({
           ? "ready"
           : "empty",
     refreshing: query.isFetching && !query.isLoading,
+    idle: !query.isFetching,
     error: query.isError ? "Could not load workflows." : undefined,
     retry: query.refetch,
     empty: "No workflows yet.",
@@ -934,6 +938,7 @@ function AppsNav({
           ? "ready"
           : "empty",
     refreshing: query.isFetching && !query.isLoading,
+    idle: !query.isFetching,
     error: query.isError ? "Could not load apps." : undefined,
     retry: query.refetch,
     empty: "No apps yet.",

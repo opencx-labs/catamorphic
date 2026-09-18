@@ -873,6 +873,13 @@ kbd {
   height: 8px;
 }
 
+/* Every control in a sidebar wears its ring inside its own rounded box, so
+   neighbours and the panel's edges never cut it. */
+[data-sidebar-section] button:focus-visible:not([hidden]),
+[data-sidebar-section] a:focus-visible:not([hidden]) {
+  outline-offset: -2px;
+}
+
 /* A sidebar row or tile is one rounded box. When keyboard focus lands on
    the control inside it, the ring is drawn on that box with its radius and
    over its border; the inner control never draws its own square ring. */
