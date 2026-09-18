@@ -1,6 +1,7 @@
 import { GitPullRequest } from "lucide-react";
 import { type RefObject, useEffect, useState } from "react";
 import type { OpenMode } from "../../shared/open-mode.js";
+import type { PullRequestListResult } from "../../shared/pr-list.js";
 import { desktopApi, type PullRequestSummary } from "../lib/desktop-api.js";
 import { useAppPreferences } from "../lib/use-app-preferences.js";
 import type { PaletteItem } from "./command-palette.js";
@@ -33,7 +34,9 @@ export function PrsNav({
   const filter = prefs.prDefaultView;
   const setFilter = (prDefaultView: "all" | "for-you" | "created") =>
     void update({ prDefaultView });
-  const [prs, setPrs] = useState<PullRequestSummary[] | null>(null);
+  const [result, setResult] = useState<PullRequestListResult | null>(null);
+  const prs = result?.status === "ready" ? result.items : null;
+  const unavailable = result?.status === "unavailable" ? result : null;
   const [error, setError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
   const [company, setCompany] = useState(false);
@@ -52,22 +55,32 @@ export function PrsNav({
   useSidebarRefresh(() => setRefresh((value) => value + 1));
   const isEmpty = !error && prs !== null && prs.length === 0;
   useSidebarContent(
-    error ? "error" : prs === null ? "loading" : isEmpty ? "empty" : "ready",
+    error
+      ? "error"
+      : unavailable
+        ? "ready"
+        : prs === null
+          ? "loading"
+          : isEmpty
+            ? "empty"
+            : "ready",
   );
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reconnect and Retry invalidate remote data
   useEffect(() => {
     let cancelled = false;
-    setPrs(null);
+    setResult(null);
     setError(null);
     let revision = 0;
+    let automaticRefresh = true;
     const load = () => {
       const request = ++revision;
       void desktopApi
         .prList(projectId)
         .then((next) => {
           if (!cancelled && request === revision) {
-            setPrs(next);
+            setResult(next);
+            automaticRefresh = next.status === "ready";
             setError(null);
           }
         })
@@ -86,16 +99,19 @@ export function PrsNav({
         cancelled = true;
       };
     const timer = window.setInterval(() => {
-      if (!document.hidden) load();
+      if (!document.hidden && automaticRefresh) load();
     }, REFRESH_MS);
-    window.addEventListener("focus", load);
+    const onFocus = () => {
+      if (automaticRefresh) load();
+    };
+    window.addEventListener("focus", onFocus);
     const unsubscribe = desktopApi.onGitChanged((change) => {
       if (change.projectId === projectId) load();
     });
     return () => {
       cancelled = true;
       window.clearInterval(timer);
-      window.removeEventListener("focus", load);
+      window.removeEventListener("focus", onFocus);
       unsubscribe();
     };
   }, [projectId, refresh, prefs.githubCliEnabled, visible]);
@@ -123,8 +139,10 @@ export function PrsNav({
       mode,
     );
   if (searchItems)
-    searchItems.current = async () =>
-      inScope(await desktopApi.prList(projectId)).map((pr) => ({
+    searchItems.current = async () => {
+      const next = await desktopApi.prList(projectId);
+      if (next.status === "unavailable") throw new Error(next.message);
+      return inScope(next.items).map((pr) => ({
         id: `pr:${pr.number}`,
         icon: GitPullRequest,
         label: `#${pr.number} ${pr.title}`,
@@ -133,42 +151,39 @@ export function PrsNav({
         kind: "navigate",
         run: (mode) => openReview(pr, mode),
       }));
-  if (
-    error?.includes("[github-cli-required]") ||
-    error?.includes("[github-cli-disabled]")
-  )
+    };
+  if (unavailable && !error)
     return (
       <div
         className="flex flex-col gap-2 px-2 py-1 text-xs"
         data-testid="prs-connect-github"
       >
-        <p className="text-fg-muted">
-          Choose the optional GitHub CLI connection in Settings to see pull
-          requests.
-        </p>
-        <button
-          type="button"
-          className="text-left text-accent"
-          onClick={() =>
-            onOpenDiff({
-              kind: "settings",
-              name: "settings",
-              label: "Settings",
-              destination: {
-                id: "connections",
-                requestId: crypto.randomUUID(),
-              },
-            })
-          }
-        >
-          Open connection settings
-        </button>
+        <p className="text-fg-muted">{unavailable.message}</p>
+        {unavailable.reason !== "no-github-remote" && (
+          <button
+            type="button"
+            className="text-left text-accent"
+            onClick={() =>
+              onOpenDiff({
+                kind: "settings",
+                name: "settings",
+                label: "Settings",
+                destination: {
+                  id: "connections",
+                  requestId: crypto.randomUUID(),
+                },
+              })
+            }
+          >
+            Open connection settings
+          </button>
+        )}
         <button
           type="button"
           className="text-left text-accent"
           onClick={() => setRefresh((value) => value + 1)}
         >
-          Retry after signing in
+          Retry
         </button>
       </div>
     );

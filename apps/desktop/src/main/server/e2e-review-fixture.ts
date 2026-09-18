@@ -47,6 +47,7 @@ export function e2eReviewFixture() {
         body: "Reject empty input before processing.\n\n<details><summary>Verification</summary>Review the guard and its callers.</details>",
         url: "https://github.com/example/repository/pull/7",
         requestedReviewers: ["reviewer"],
+        updatedAt: "2026-09-18T00:00:00.000Z",
       },
     ],
     files: paths.map((path) => ({

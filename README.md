@@ -692,10 +692,17 @@ server host or an application that boots Catamorphic in-process. For local
 development, `bun run dev` starts the combined desktop and stock-server manual
 environment. `bun run dev:desktop` and `bun run dev:server` are focused
 variants of the same orchestrator, which assigns each worktree its own data
-directories and loopback ports. To iterate on Catamorphic alongside your own
+directories and loopback ports. Desktop startup also prepares the pinned Electron
+runtime if installation left its executable missing. Server-only startup and
+`--print` do not download Electron. To iterate on Catamorphic alongside your own
 host, link the packages via `file:` (see
 `.agents/skills/using-catamorphic/SKILL.md` and its "Local dev linking"
 section).
+
+Before testing dependency installation or standalone builds in a user project,
+prepare the unpublished packages with `bun run dev:packages`. Follow the
+[local registry guide](infra/local-registry/README.md) for project-scoped
+configuration; a working desktop preview does not verify a standalone install.
 
 ## Scripts
 
@@ -705,6 +712,7 @@ bun run dev         # Combined desktop and stock-server manual environment
 bun run dev:desktop # Desktop-focused development environment
 bun run dev:server  # Stock-server-focused development environment
 bun run dev:infra   # Optional OTel, ClickHouse, and sandbox-bridge services
+bun run dev:packages # Publish user-project packages to the loopback dev registry
 bun run build       # Build all packages
 bun run test        # Deterministic root and Postgres-complete workspace tests
 bun run test:external # Explicit opt-in for credentialed external integrations

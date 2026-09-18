@@ -31,16 +31,19 @@ const snapshot: ProjectInspectorSnapshot = {
       },
     ],
   },
-  prs: Array.from({ length: 5 }, (_, index) => ({
-    number: 42 + index,
-    title: `Improve desktop ${index + 1}`,
-    url: "https://example.test/42",
-    author: "tabaza",
-    head: "feature",
-    base: "main",
-    draft: false,
-    updatedAt: "2026-08-29T00:00:00.000Z",
-  })),
+  prs: {
+    status: "ready",
+    items: Array.from({ length: 5 }, (_, index) => ({
+      number: 42 + index,
+      title: `Improve desktop ${index + 1}`,
+      url: "https://example.test/42",
+      author: "tabaza",
+      head: "feature",
+      base: "main",
+      draft: false,
+      updatedAt: "2026-08-29T00:00:00.000Z",
+    })),
+  },
   remote: null,
   checkouts: [],
   errors: [],
@@ -225,6 +228,32 @@ describe("ProjectInspectorView", () => {
     expect(container.textContent).not.toContain("/projects/alpha");
     expect(container.textContent).not.toContain("Worktrees");
     expect(container.textContent).not.toContain("Open pull requests");
+  });
+  it("does not report zero PRs when the connection is unavailable", async () => {
+    await act(async () =>
+      root.render(
+        <ProjectInspectorView
+          project={project}
+          current
+          snapshot={{
+            ...snapshot,
+            prs: {
+              status: "unavailable",
+              reason: "connection-disabled",
+              message: "Connect GitHub CLI in Settings to see pull requests.",
+            },
+          }}
+          sessions={[]}
+          sessionsLoading={false}
+          loading={false}
+          onDelete={() => {}}
+        />,
+      ),
+    );
+    expect(container.textContent).toContain("Unavailable");
+    expect(container.textContent).toContain("Connect GitHub CLI in Settings");
+    expect(container.textContent).not.toContain("No open pull requests");
+    expect(container.textContent).not.toContain("Some details could not load");
   });
   it("shows the Git remote independently of a Catamorphic server connection", async () => {
     await act(async () => {

@@ -211,8 +211,9 @@ export function useSidebarAppCollections({
             actions: [{ id: "open", label: "Open app" }],
           }));
         } else if (source === "prs") {
-          const prs = await desktopApi.prList(projectId);
-          items = prs.map((pr) => ({
+          const result = await desktopApi.prList(projectId);
+          if (result.status === "unavailable") throw new Error(result.message);
+          items = result.items.map((pr) => ({
             id: String(pr.number),
             label: pr.title,
             description: pr.author,

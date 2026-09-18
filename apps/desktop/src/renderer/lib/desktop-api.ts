@@ -37,6 +37,10 @@ import type {
   PrDetails,
 } from "../../shared/pr-details.js";
 import type {
+  PullRequestListResult,
+  PullRequestSummary,
+} from "../../shared/pr-list.js";
+import type {
   SettingsPatch,
   SettingsScope,
   SettingsSnapshot,
@@ -620,24 +624,7 @@ import type {
   GitRecordInput,
 } from "../../shared/git.js";
 
-/** Mirror of core's host-neutral PR shapes. */
-export interface PullRequestSummary {
-  body?: string;
-  headSha?: string;
-  viewerLogin?: string;
-  requestedReviewers?: string[];
-  reviewRequestedForViewer?: boolean;
-  reviewRequestsUnavailable?: boolean;
-
-  number: number;
-  title: string;
-  url: string;
-  author: string;
-  head: string;
-  base: string;
-  draft: boolean;
-  updatedAt: string;
-}
+export type { PullRequestSummary } from "../../shared/pr-list.js";
 
 export interface PullRequestFile {
   path: string;
@@ -1354,7 +1341,7 @@ export interface CatamorphicDesktopApi {
     projectId: string,
     number: number,
   ) => Promise<{ proposal: PullRequestSummary; files: PullRequestFile[] }>;
-  prList: (projectId: string) => Promise<PullRequestSummary[]>;
+  prList: (projectId: string) => Promise<PullRequestListResult>;
   prFiles: (projectId: string, number: number) => Promise<PullRequestFile[]>;
 
   sidebarSourceRequest: (

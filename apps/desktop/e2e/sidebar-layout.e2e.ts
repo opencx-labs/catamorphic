@@ -452,7 +452,7 @@ it("does not use GitHub CLI for PRs without profile opt-in", async () => {
   );
   expect(
     await app.eval(
-      "window.catamorphicDesktop.prList('unconfigured-project').then(() => 'unexpected success', error => error.message.includes('[github-cli-disabled]'))",
+      "window.catamorphicDesktop.prList('unconfigured-project').then(result => result.status === 'unavailable' && result.reason === 'connection-disabled')",
     ),
   ).toBe(true);
   await app.reload();

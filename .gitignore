@@ -37,3 +37,6 @@ data/
 
 # Isolated desktop test diagnostics
 /test-results/
+
+# Local development registry package storage
+/infra/local-registry/storage/

@@ -3,6 +3,7 @@ import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { migrateDevData } from "./dev-data.js";
+import { prepareDesktopRuntime } from "./dev-desktop-runtime.js";
 import { createDevPlan, type DevTarget } from "./dev-plan.js";
 import {
   type DevChildExit,
@@ -162,6 +163,12 @@ if (import.meta.main) {
     process.once("SIGTERM", onSigterm);
 
     try {
+      if (target !== "server")
+        await prepareDesktopRuntime({
+          rootPath,
+          runtime,
+          signal: allocatorAbort.signal,
+        });
       await migrateDevData({
         legacyRoot: path.join(
           tempPath,

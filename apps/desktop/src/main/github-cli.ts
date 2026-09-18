@@ -8,6 +8,7 @@ import {
   postedCommentSchema,
   prDetailsSchema,
 } from "../shared/pr-details.js";
+import type { PullRequestListResult } from "../shared/pr-list.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -51,8 +52,8 @@ async function runCommand(
   return { stdout: String(result.stdout) };
 }
 
-/** Use the local repository remote and the CLI account for desktop PR reads. */
-export async function githubCliRepository(rootPath: string) {
+/** Read the GitHub origin without accessing credentials. */
+async function githubRepositoryName(rootPath: string) {
   let remote: string;
   try {
     remote = (
@@ -69,6 +70,12 @@ export async function githubCliRepository(rootPath: string) {
     )
   )
     return null;
+  return fullName;
+}
+
+export async function githubCliRepository(rootPath: string) {
+  const fullName = await githubRepositoryName(rootPath);
+  if (!fullName) return null;
   const token = await githubCliToken();
   if (!token) return null;
   return {
@@ -180,4 +187,42 @@ export async function githubCliPrComment({
       "Could not confirm the comment was posted. Check GitHub before trying again. Your draft is preserved.",
     );
   }
+}
+
+export async function listLocalPullRequests({
+  enabled,
+  resolveRoot,
+}: {
+  enabled: boolean;
+  resolveRoot: () => Promise<string>;
+}): Promise<PullRequestListResult> {
+  if (!enabled)
+    return {
+      status: "unavailable",
+      reason: "connection-disabled",
+      message: "Connect GitHub CLI in Settings to see pull requests.",
+    };
+  const fullName = await githubRepositoryName(await resolveRoot());
+  if (!fullName)
+    return {
+      status: "unavailable",
+      reason: "no-github-remote",
+      message: "This project has no GitHub origin remote.",
+    };
+  const token = await githubCliToken();
+  if (!token)
+    return {
+      status: "unavailable",
+      reason: "sign-in-required",
+      message: "Sign in with gh auth login, then try again.",
+    };
+  const api = new GithubApi(token, { signal: AbortSignal.timeout(30000) });
+  const [viewer, items] = await Promise.all([
+    api.getUser(),
+    api.listPullRequests(fullName),
+  ]);
+  return {
+    status: "ready",
+    items: items.map((pr) => ({ ...pr, viewerLogin: viewer.login })),
+  };
 }

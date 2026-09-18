@@ -46,6 +46,7 @@
       "!**/*.d.ts",
       "!**/packages/api-client/src/schema.d.ts",
       "!**/packages/db/src/generated",
+      "!**/infra/local-registry/storage",
       "!demo"
     ]
   }

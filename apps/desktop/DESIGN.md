@@ -47,6 +47,16 @@ explicit commit initializes Git when needed. Imports keep manual commits and
 sharing. While an import is running, its source and destination stay fixed and
 the modal shows progress until it completes or exposes a retryable error.
 
+## Pull request availability
+
+The PR sidebar and project inspector distinguish a disconnected GitHub CLI,
+a missing GitHub origin remote, an empty inbox, and a failed request. Expected
+connection/project states return typed availability through desktop IPC, with
+contextual settings or retry actions. They do not produce exception logs or
+report zero PRs. Automatic refresh pauses while unavailable; explicit retry,
+connection changes, and project Git changes can recheck availability. Connected
+company proposals continue through their server regardless of local CLI opt-in.
+
 ## Session reminders
 
 Session reminders persist until delivered or cancelled, with no default expiry

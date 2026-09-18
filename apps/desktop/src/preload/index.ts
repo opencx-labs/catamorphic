@@ -18,6 +18,7 @@ import type { FileSearchInput } from "../shared/file-search.js";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
 import type { OpenMode } from "../shared/open-mode.js";
 import type { PrCommentInput, PrDecisionInput } from "../shared/pr-details.js";
+import type { PullRequestListResult } from "../shared/pr-list.js";
 import type { SettingsScope } from "../shared/settings.js";
 import type { SidebarSourceRequest } from "../shared/sidebar-source.js";
 import type { DesktopUpdateState } from "../shared/update.js";
@@ -968,7 +969,7 @@ const api = {
     ipcRenderer.invoke("catamorphic:pr-details", projectId, number),
   prReview: (projectId: string, number: number): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:pr-review", projectId, number),
-  prList: (projectId: string): Promise<unknown> =>
+  prList: (projectId: string): Promise<PullRequestListResult> =>
     ipcRenderer.invoke("catamorphic:pr-list", projectId),
   prFiles: (projectId: string, number: number): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:pr-files", projectId, number),

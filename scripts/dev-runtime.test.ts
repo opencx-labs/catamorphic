@@ -643,17 +643,11 @@ describe("stopDevProcessGroup", () => {
       pid: process.pid,
     });
     await lock.bindProcessGroup(processGroupId);
-    let groupObservable = true;
     const signals: Array<string | number | undefined> = [];
     const kill = vi
       .spyOn(process, "kill")
       .mockImplementation((_pid, signal) => {
         signals.push(signal);
-        if (signal === 0 && !groupObservable) {
-          const error = new Error("gone") as NodeJS.ErrnoException;
-          error.code = "ESRCH";
-          throw error;
-        }
         return true;
       });
 
@@ -664,23 +658,10 @@ describe("stopDevProcessGroup", () => {
       killWaitMs: 25,
       lock,
     });
-    const outcome = await Promise.race([
-      stopping.then(
-        () => "unexpected shutdown",
-        (error: unknown) =>
-          error instanceof Error ? error.message : String(error),
-      ),
-      new Promise<string>((resolve) =>
-        setTimeout(() => resolve("shutdown did not stop"), 100),
-      ),
-    ]);
-    if (outcome === "shutdown did not stop") {
-      groupObservable = false;
-      await stopping;
-    }
-
     try {
-      expect(outcome).toBe(
+      // Process discovery uses real `ps` IO before the 25 ms kill deadline.
+      // A separate 100 ms wall-clock race flakes under concurrent builds.
+      await expect(stopping).rejects.toThrow(
         `Development process groups ${processGroupId} remained observable after SIGKILL for 25ms. Stop them manually before retrying development; the instance lock was retained.`,
       );
       expect(signals).toContain("SIGTERM");

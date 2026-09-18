@@ -11,20 +11,22 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import type { PullRequestListResult } from "../../shared/pr-list.js";
 import {
   desktopApi,
   type GitOverview,
-  type PullRequestSummary,
   type RemoteProjectStatus,
   type SessionCheckoutInfo,
 } from "../lib/desktop-api";
+
+import { useAppPreferences } from "../lib/use-app-preferences.js";
 
 import { LazyList } from "./lazy-list";
 
 export interface ProjectInspectorSnapshot {
   root: string | null;
   git: GitOverview | null;
-  prs: PullRequestSummary[] | null;
+  prs: PullRequestListResult | null;
   remote: RemoteProjectStatus | null | undefined;
   checkouts: SessionCheckoutInfo[] | null;
   errors: string[];
@@ -48,12 +50,14 @@ export function ProjectInspector({
   current: boolean;
   onDelete: () => void;
 }) {
+  const { prefs } = useAppPreferences();
   const sessionsQuery = useAgentSessions(current ? undefined : project.id, {
     limit: 100,
   });
   const [snapshot, setSnapshot] = useState(EMPTY_SNAPSHOT);
   const [loading, setLoading] = useState(true);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: connection preferences invalidate the host-owned PR result
   useEffect(() => {
     let alive = true;
     setLoading(true);
@@ -100,7 +104,7 @@ export function ProjectInspector({
     return () => {
       alive = false;
     };
-  }, [project.id]);
+  }, [project.id, prefs.githubCliEnabled]);
 
   return (
     <ProjectInspectorView
@@ -151,7 +155,9 @@ export function ProjectInspectorView({
       count + new Set(worktree.changes.map((file) => file.path)).size,
     0,
   );
-  const prs = snapshot.prs ?? [];
+  const prs = snapshot.prs?.status === "ready" ? snapshot.prs.items : [];
+  const prsUnavailable =
+    snapshot.prs?.status === "unavailable" ? snapshot.prs.message : null;
   const ongoingSessions = sessions.filter(
     (session) => session.running || session.status !== "closed",
   );
@@ -221,7 +227,16 @@ export function ProjectInspectorView({
             value={loading ? "…" : String(changed)}
             tone={changed ? "warning" : "normal"}
           />
-          <Metric label="Open PRs" value={loading ? "…" : String(prs.length)} />
+          <Metric
+            label="Open PRs"
+            value={
+              loading
+                ? "…"
+                : snapshot.prs?.status !== "ready"
+                  ? "Unavailable"
+                  : String(prs.length)
+            }
+          />
         </div>
       )}
 
@@ -265,8 +280,17 @@ export function ProjectInspectorView({
           icon={<GitPullRequest className="size-3.5" />}
           title="Open pull requests"
         >
-          {prs.length === 0 ? (
-            <EmptyLine loading={loading} empty="No open pull requests" />
+          {prsUnavailable ? (
+            <p className="text-fg-faint">{prsUnavailable}</p>
+          ) : prs.length === 0 ? (
+            <EmptyLine
+              loading={loading}
+              empty={
+                snapshot.prs
+                  ? "No open pull requests"
+                  : "Could not load pull requests"
+              }
+            />
           ) : (
             <LazyList
               label="Project pull requests"

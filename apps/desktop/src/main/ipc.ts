@@ -39,6 +39,7 @@ import {
   prCommentInputSchema,
   prDecisionInputSchema,
 } from "../shared/pr-details.js";
+import type { PullRequestListResult } from "../shared/pr-list.js";
 import type { SettingsPatch, SettingsScope } from "../shared/settings.js";
 import type { UsageSummary, UsageWindowDays } from "../shared/usage.js";
 import type { BindingAuth } from "./agent-bindings-store.js";
@@ -82,6 +83,7 @@ import {
   githubCliPrDetails,
   githubCliRepository,
   githubCliToken,
+  listLocalPullRequests,
 } from "./github-cli.js";
 import {
   type HarnessExecutable,
@@ -2851,27 +2853,27 @@ export function registerIpcHandlers(
     },
   );
 
-  ipcMain.handle("catamorphic:pr-list", async (event, projectId: string) => {
-    const fixture = e2eReviewFixture();
-    if (fixture) return fixture.prs;
-    const link = storesFor(event).remoteProjects.get(projectId);
-    if (link) return storedRemoteClient(event, projectId, link).listProposals();
-    requireGithubCli(event);
-    const server = state.current;
-    if (!server) return [];
-    const root = await server.projectRoots.get(projectId);
-    const cli = root ? await githubCliRepository(root) : null;
-    if (cli) {
-      const [viewer, prs] = await Promise.all([
-        cli.api.getUser(),
-        cli.api.listPullRequests(cli.fullName),
-      ]);
-      return prs.map((pr) => ({ ...pr, viewerLogin: viewer.login }));
-    }
-    throw new Error(
-      "[github-cli-required] Sign in with gh auth login to load pull requests.",
-    );
-  });
+  ipcMain.handle(
+    "catamorphic:pr-list",
+    async (event, projectId: string): Promise<PullRequestListResult> => {
+      const fixture = e2eReviewFixture();
+      if (fixture) return { status: "ready", items: fixture.prs };
+      const link = storesFor(event).remoteProjects.get(projectId);
+      if (link)
+        return {
+          status: "ready",
+          items: await storedRemoteClient(
+            event,
+            projectId,
+            link,
+          ).listProposals(),
+        };
+      return listLocalPullRequests({
+        enabled: storesFor(event).prefs.load().githubCliEnabled,
+        resolveRoot: () => requireRoot(projectId),
+      });
+    },
+  );
 
   ipcMain.handle(
     "catamorphic:pr-files",
