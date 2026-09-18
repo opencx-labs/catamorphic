@@ -1,11 +1,13 @@
 # Film brief
 
 - Product / release:
-- Main user benefit:
+- Main user benefit and completed task:
 - Audience and placement:
 - Source repository and relevant revision:
 - Feature availability confirmed from:
 - Runtime / preview setup (real UI, demo data, known limits):
+- Actual agent/session provenance and working artifact:
+- Real elapsed generation time / edited speed-up:
 - Reference inspected and specific motion lessons:
 - Official logo source:
 - Duration / sound / palette / export:
@@ -14,7 +16,7 @@
 
 ## Shot list
 
-| Time | Actual product action | Capture/source | Camera and transition | Readable hold | Caption |
+| Time | Actual product action and purpose | Capture/source and speed | Camera and transition | Readable hold | Caption |
 | --- | --- | --- | --- | --- | --- |
 | | | | | | |
 

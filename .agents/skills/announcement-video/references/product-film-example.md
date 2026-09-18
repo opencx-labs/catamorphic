@@ -2,7 +2,7 @@
 
 This is a reusable example, not a claim about a shipped feature.
 
-A 24-second silent desktop film can establish a real project, move into its working document, reveal a useful app or visual workflow, and settle on the complete workspace. Capture genuine transitions. Use prepared, non-sensitive project content and identify that setup in the brief.
+A short single-feature silent desktop film can establish a real project, move into its working document, reveal a useful app or visual workflow, and settle on the complete workspace. Capture genuine transitions. Use prepared, non-sensitive project content and identify that setup in the brief.
 
 | Review finding | Reusable correction |
 | --- | --- |
@@ -16,3 +16,5 @@ A 24-second silent desktop film can establish a real project, move into its work
 | The outro disappears too soon | Hold the benefit long enough to read at normal speed. |
 
 Preserve the accepted palette and copy across revisions. Never substitute an invented interface for footage of the real app.
+
+For the longer Work browse → ask → build → use story, follow [work-demo.md](work-demo.md). Its actual conversation and usable result take precedence over this older compact composition example.
