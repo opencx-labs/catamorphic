@@ -119,8 +119,8 @@ export function Modal({
         aria-labelledby={labelledBy}
         tabIndex={-1}
         style={{ width, maxWidth: "calc(100vw - 48px)" }}
-        className={`relative max-h-[calc(100dvh-48px)] overflow-y-auto overscroll-contain rounded-xl border border-border bg-bg-raised shadow-2xl outline-none transition-transform duration-150 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transform-none motion-reduce:duration-0 ${
-          open ? "scale-100" : "scale-95"
+        className={`relative max-h-[calc(100dvh-48px)] overflow-y-auto overscroll-contain rounded-xl border border-border bg-bg-raised shadow-2xl outline-none motion-reduce:animate-none ${
+          open ? "animate-modal-in" : "animate-modal-out"
         }`}
       >
         {children}
