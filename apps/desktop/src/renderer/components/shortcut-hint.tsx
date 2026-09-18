@@ -118,6 +118,41 @@ export function ShortcutHint({
     setVisible(false);
   };
 
+  // The anchor's own leave event is not enough: a drag, a scroll, a row that
+  // re-renders or turns inert under the pointer, or the pointer leaving the
+  // window can all skip it. While a hint shows, anything that moves the
+  // pointer elsewhere or shifts the page hides it.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: hide is a stable closure over refs; the listeners live only while a hint is positioned.
+  useEffect(() => {
+    if (!position) return;
+    const outside = (event: Event) => {
+      const anchor = anchorRef.current;
+      if (
+        !anchor?.isConnected ||
+        !(event.target instanceof Node) ||
+        !anchor.contains(event.target)
+      )
+        hide();
+    };
+    const away = () => hide();
+    document.addEventListener("pointerover", outside, true);
+    document.addEventListener("pointerdown", away, true);
+    document.addEventListener("dragstart", away, true);
+    document.addEventListener("scroll", away, true);
+    document.addEventListener("wheel", away, { capture: true, passive: true });
+    document.documentElement.addEventListener("mouseleave", away);
+    window.addEventListener("blur", away);
+    return () => {
+      document.removeEventListener("pointerover", outside, true);
+      document.removeEventListener("pointerdown", away, true);
+      document.removeEventListener("dragstart", away, true);
+      document.removeEventListener("scroll", away, true);
+      document.removeEventListener("wheel", away, { capture: true });
+      document.documentElement.removeEventListener("mouseleave", away);
+      window.removeEventListener("blur", away);
+    };
+  }, [position]);
+
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: hover-only hint anchor; the wrapped control stays the interactive element
     <span

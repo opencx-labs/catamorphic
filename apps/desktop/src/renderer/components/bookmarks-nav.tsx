@@ -36,6 +36,7 @@ import {
   useSidebarRefresh,
 } from "./sidebar-contribution.js";
 import { SidebarItemRow } from "./sidebar-item-row.js";
+import { SidebarSubsection } from "./sidebar-subsection.js";
 import { SidebarTree } from "./sidebar-tree.js";
 import { SiteFavicon } from "./site-favicon.js";
 
@@ -636,83 +637,85 @@ export function BookmarksNav({
 
   return (
     <div className="flex flex-col gap-2">
-      <h3 className="px-2 pt-1 text-xs font-medium text-fg-muted">Pinned</h3>
-      <section
-        className="max-h-[min(40vh,24rem)] overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
-        aria-label="Pinned bookmarks scroll area"
-      >
-        {data && (
-          <ul
-            role="list"
-            aria-label="Pinned bookmarks"
-            data-drop-zone="pinned"
-            data-drop={gridDrop?.id === null ? gridDrop.position : undefined}
-            {...gridHandlers()}
-            className={
-              pinnedStyle === "tiles"
-                ? "grid grid-cols-4 gap-2 px-1 py-1"
-                : "flex flex-col gap-0.5"
-            }
-          >
-            {data.pinned.bookmarks.filter((bookmark) => !bookmark.folderId)
-              .length === 0 && (
-              <li className="col-span-4 px-2 py-3 text-center text-xs text-fg-muted">
-                Drop a tab here to pin across projects
-              </li>
-            )}
-            {projectSidebarItems(data.pinned.bookmarks, contribution?.section)
-              .filter(
-                (bookmark) =>
-                  !contribution?.section.itemOverrides?.[bookmark.id]?.hide,
-              )
-              .filter((bookmark) => !bookmark.folderId)
-              .map((bookmark) => row(bookmark, true))}
-          </ul>
-        )}
-        {data && (
-          <ul role="list" className="flex flex-col gap-0.5">
-            {renderTree(data.pinned, true, false, true)}
-          </ul>
-        )}
-      </section>
+      {/* The section title already says "Bookmarks": the profile-wide pins
+          and the saved library are unlabelled groups, and the project list
+          is the one labelled, collapsible group. */}
+      <SidebarSubsection>
+        <section
+          className="max-h-[min(40vh,24rem)] overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
+          aria-label="Pinned bookmarks scroll area"
+        >
+          {data && (
+            <ul
+              role="list"
+              aria-label="Pinned bookmarks"
+              data-drop-zone="pinned"
+              data-drop={gridDrop?.id === null ? gridDrop.position : undefined}
+              {...gridHandlers()}
+              className={
+                pinnedStyle === "tiles"
+                  ? "grid grid-cols-4 gap-2 px-1 py-1"
+                  : "flex flex-col gap-0.5"
+              }
+            >
+              {data.pinned.bookmarks.filter((bookmark) => !bookmark.folderId)
+                .length === 0 && (
+                <li className="col-span-4 px-2 py-3 text-center text-xs text-fg-muted">
+                  Drop a tab here to pin across projects
+                </li>
+              )}
+              {projectSidebarItems(data.pinned.bookmarks, contribution?.section)
+                .filter(
+                  (bookmark) =>
+                    !contribution?.section.itemOverrides?.[bookmark.id]?.hide,
+                )
+                .filter((bookmark) => !bookmark.folderId)
+                .map((bookmark) => row(bookmark, true))}
+            </ul>
+          )}
+          {data && (
+            <ul role="list" className="flex flex-col gap-0.5">
+              {renderTree(data.pinned, true, false, true)}
+            </ul>
+          )}
+        </section>
+      </SidebarSubsection>
       {data?.library &&
         (data.library.bookmarks.length > 0 ||
           data.library.folders.length > 0) && (
-          <section aria-label="Bookmark library">
-            <h3 className="px-2 py-2 text-xs font-medium text-fg-muted">
-              Saved bookmarks
-            </h3>
-            <ul role="list" className="flex flex-col gap-0.5">
-              {renderTree(data.library, false, true)}
-            </ul>
-          </section>
+          <SidebarSubsection>
+            <section aria-label="Bookmark library">
+              <ul role="list" className="flex flex-col gap-0.5">
+                {renderTree(data.library, false, true)}
+              </ul>
+            </section>
+          </SidebarSubsection>
         )}
-      <h3 className="px-2 pt-1 text-xs font-medium text-fg-muted">
-        Project bookmarks
-      </h3>
-      <ul role="list" className="flex flex-col gap-0.5">
-        {data && renderTree(data.project, false)}
-      </ul>
-      <div className="flex items-center gap-1 px-1">
-        <button
-          type="button"
-          onClick={() => setEdit({ kind: "bookmark" })}
-          className="flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-1 text-xs text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
-        >
-          <Plus className="size-4 shrink-0" />
-          Add bookmark
-        </button>
-        <ShortcutHint label="New bookmark folder">
+      <SidebarSubsection label="This project" collapsible>
+        <ul role="list" className="flex flex-col gap-0.5">
+          {data && renderTree(data.project, false)}
+        </ul>
+        <div className="flex items-center gap-1 px-1">
           <button
             type="button"
-            aria-label="New bookmark folder"
-            onClick={() => setEdit({ kind: "folder" })}
-            className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
+            onClick={() => setEdit({ kind: "bookmark" })}
+            className="flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-1 text-xs text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
           >
-            <FolderPlus className="size-4 shrink-0" />
+            <Plus className="size-4 shrink-0" />
+            Add bookmark
           </button>
-        </ShortcutHint>
-      </div>
+          <ShortcutHint label="New bookmark folder">
+            <button
+              type="button"
+              aria-label="New bookmark folder"
+              onClick={() => setEdit({ kind: "folder" })}
+              className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
+            >
+              <FolderPlus className="size-4 shrink-0" />
+            </button>
+          </ShortcutHint>
+        </div>
+      </SidebarSubsection>
       {error && (
         <p role="alert" className="px-2 text-xs text-danger">
           {error}

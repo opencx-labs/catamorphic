@@ -349,6 +349,11 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   has no room for one and opens the same menu on right-click only. Keyboard
   focus rings sit inside the row (negative outline offset, above siblings) so
   stacked rows never cover or clip them.
+- **Groups inside a section are subsections.** `SidebarSubsection` is the only
+  way to label a sub-list: the same quiet label row every section uses, with
+  the section chevron and collapsible motion when `collapsible`. A section whose
+  title already names its content leaves its main groups unlabelled; Bookmarks
+  labels only "This project".
 - **Hover controls share one reveal.** Overflow dots, close and open-in-window
   buttons on rows, tabs and bubbles use the `row-reveal` class: hidden until the
   row is hovered or holds keyboard focus, fading in and out over 150ms. Mouse
