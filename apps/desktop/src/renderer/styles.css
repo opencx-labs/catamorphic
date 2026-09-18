@@ -873,6 +873,44 @@ kbd {
   height: 8px;
 }
 
+/* The one drop presentation for every tree: an accent insertion line
+   between rows and an accent outline on the row (or tree) that will
+   become the parent. */
+[data-tree-drop-line] {
+  height: 2px;
+  background: var(--color-accent);
+  border-radius: 1px;
+  z-index: 1;
+}
+[data-tree-drop-line]::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+[role="treeitem"][data-drop="inside"] > * {
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+/* Tiles in a grid mark their slot on the side the drop will land. */
+[data-drop-zone] > [data-drop="before"] {
+  box-shadow: -2px 0 0 var(--color-accent);
+}
+[data-drop-zone] > [data-drop="after"] {
+  box-shadow: 2px 0 0 var(--color-accent);
+}
+[role="tree"][data-drop-root="inside"],
+[data-drop-zone][data-drop="inside"] {
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
 .sidebar-empty-state {
   padding: 8px;
   text-align: center;

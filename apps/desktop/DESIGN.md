@@ -331,6 +331,19 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   re-expanding never discards what was already loaded.
 - **No private loading text.** "Loading…", spinners, skeletons, empty copy and
   error paragraphs inside a section component are defects.
+- **One drag-and-drop model.** The shared `Tree` owns pointer math, the accent
+  insertion line between rows and the accent outline on the row (or tree) that
+  becomes the parent. A section only declares what a row offers when dragged and
+  what a target accepts, through the same `move`/`drop` contract custom sources
+  export; built-in sections implement that contract over their stores. Rows with
+  children are the only "inside" targets. No section owns drop zones, drop-zone
+  classes or payload formats of its own; `data-bookmark-drop`-style private
+  attributes are defects.
+- **Primitives, not presets.** Anything a built-in section can do, a `sidebar.js`
+  section can do with the same fields: `empty`, `headerActions`, `itemDefaults`,
+  `itemOverrides`, `height`, `rowHeight`, and a source that exports `load`,
+  `subscribe`, `action`, `move`, `drop`. A sidebar an agent writes looks like a
+  built-in one without extra effort, and cannot break the chrome.
 
 ## Registry component rules
 
@@ -583,6 +596,15 @@ vertical sequence of optional browser setup actions followed by project actions.
 Default-browser status comes from the OS, shared with Settings (ADR 0144).
 Async actions use the shared size-stable PendingButton with short label fades;
 modal status space is reserved before loading so the action row stays in place.
+
+### 2026-09-18: Uniform sidebar sections
+
+[ADR 0147](../../docs/decisions/0147-uniform-sidebar-sections.md): one status
+language drawn by the section chrome and one drag-and-drop model in the shared
+tree, both available to custom sections through the source contract
+(`move`, `drop`, `section.empty`). Bookmarks became an ordinary section over
+its store; chat rows carry the tab's signals; section headers end with the
+chevron; the tab panel reserves its scrollbar gutter.
 
 ### 2026-09-18: Page surfaces and sidebar scrolling
 

@@ -1,5 +1,6 @@
 import {
   type CSSProperties,
+  type DragEvent,
   type ReactNode,
   useCallback,
   useEffect,
@@ -28,6 +29,54 @@ export interface TreeRenderContext {
   expanded: boolean;
   hasChildren: boolean;
   toggle: () => void;
+}
+
+/**
+ * One drag-and-drop model for every tree. A host describes what a row
+ * offers when dragged and what a target accepts; the tree owns the
+ * pointer math, the insertion line, the "inside" highlight and the
+ * keyboard-free HTML5 wiring. Positions are relative to a row: `before`
+ * and `after` are siblings of that row, `inside` makes it the parent.
+ * A `null` item means the tree's root (append at the end).
+ */
+export type TreeDropPosition = "before" | "after" | "inside";
+export interface TreeDragSpec {
+  /** MIME type → serialized payload, exactly as set on the DataTransfer. */
+  data: Record<string, string>;
+  effectAllowed?: "copy" | "move" | "copyMove";
+}
+export interface TreeDropTarget<T> {
+  item: T | null;
+  position: TreeDropPosition;
+}
+export interface TreeDragAndDrop<T> {
+  /** Payload for dragging a row; null keeps the row static. */
+  drag?: (item: T) => TreeDragSpec | null;
+  /** Whether a payload with these MIME types may land on this target. */
+  accept: (types: readonly string[], target: TreeDropTarget<T>) => boolean;
+  onDrop: (transfer: DataTransfer, target: TreeDropTarget<T>) => void;
+}
+
+/**
+ * Where a pointer over a row wants to drop: the outer quarters mean a
+ * sibling slot, the middle means inside when the row can hold children.
+ */
+export function dropPositionFor({
+  clientY,
+  rect,
+  allowInside,
+}: {
+  clientY: number;
+  rect: { top: number; height: number };
+  allowInside: boolean;
+}): TreeDropPosition {
+  const ratio = (clientY - rect.top) / Math.max(1, rect.height);
+  if (allowInside) {
+    if (ratio < 0.25) return "before";
+    if (ratio > 0.75) return "after";
+    return "inside";
+  }
+  return ratio < 0.5 ? "before" : "after";
 }
 
 function indexTree({
@@ -101,10 +150,12 @@ export function Tree<T extends TreeItem>({
   className,
   style,
   motionClasses,
+  dragAndDrop,
 }: {
   items: readonly T[];
   label: string;
   renderItem: (item: T, context: TreeRenderContext) => ReactNode;
+  dragAndDrop?: TreeDragAndDrop<T>;
   loadChildren?: (id: string) => void;
   onLoadMore?: () => void;
   selectedId?: string;
@@ -133,6 +184,11 @@ export function Tree<T extends TreeItem>({
     new Map(),
   );
   const [focusedId, setFocusedId] = useState<string>();
+  const [drop, setDrop] = useState<{
+    id: string | null;
+    position: TreeDropPosition;
+  } | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
   const byId = useMemo(
     () => new Map(items.map((item) => [item.id, item])),
     [items],
@@ -261,6 +317,139 @@ export function Tree<T extends TreeItem>({
         element.closest<HTMLElement>("[data-tree-id]")?.dataset.treeId,
     ),
   );
+  const dropTargetFor = (
+    id: string | null,
+    position: TreeDropPosition,
+  ): TreeDropTarget<T> => ({
+    item: id === null ? null : (byId.get(id) ?? null),
+    position,
+  });
+  const clearDrop = () => {
+    setDrop(null);
+    setDraggingId(null);
+  };
+  const rootDropHandlers = dragAndDrop
+    ? {
+        onDragOver: (event: DragEvent<HTMLElement>) => {
+          // Rows handle their own drops; the space past the last row
+          // appends to the root.
+          if (
+            event.target instanceof HTMLElement &&
+            event.target.closest("[data-tree-id]")
+          )
+            return;
+          const target = dropTargetFor(null, "inside");
+          if (!dragAndDrop.accept(event.dataTransfer.types, target)) {
+            setDrop(null);
+            return;
+          }
+          event.preventDefault();
+          event.dataTransfer.dropEffect =
+            event.dataTransfer.effectAllowed === "copy" ? "copy" : "move";
+          setDrop((current) =>
+            current?.id === null && current.position === "inside"
+              ? current
+              : { id: null, position: "inside" },
+          );
+        },
+        onDragLeave: (event: DragEvent<HTMLElement>) => {
+          if (
+            event.relatedTarget instanceof Node &&
+            event.currentTarget.contains(event.relatedTarget)
+          )
+            return;
+          setDrop(null);
+        },
+        onDrop: (event: DragEvent<HTMLElement>) => {
+          if (
+            event.target instanceof HTMLElement &&
+            event.target.closest("[data-tree-id]")
+          )
+            return;
+          const target = dropTargetFor(null, "inside");
+          if (!dragAndDrop.accept(event.dataTransfer.types, target)) return;
+          event.preventDefault();
+          clearDrop();
+          dragAndDrop.onDrop(event.dataTransfer, target);
+        },
+        onDragEnd: clearDrop,
+      }
+    : {};
+  const rowDropHandlers = (item: T, hasChildren: boolean) =>
+    dragAndDrop
+      ? {
+          onDragOver: (event: DragEvent<HTMLElement>) => {
+            const position = dropPositionFor({
+              clientY: event.clientY,
+              rect: event.currentTarget.getBoundingClientRect(),
+              allowInside:
+                hasChildren &&
+                dragAndDrop.accept(
+                  event.dataTransfer.types,
+                  dropTargetFor(item.id, "inside"),
+                ),
+            });
+            const target = dropTargetFor(item.id, position);
+            if (
+              item.id === draggingId ||
+              !dragAndDrop.accept(event.dataTransfer.types, target)
+            ) {
+              setDrop(null);
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            event.dataTransfer.dropEffect =
+              event.dataTransfer.effectAllowed === "copy" ? "copy" : "move";
+            setDrop((current) =>
+              current?.id === item.id && current.position === position
+                ? current
+                : { id: item.id, position },
+            );
+          },
+          onDrop: (event: DragEvent<HTMLElement>) => {
+            const position =
+              drop?.id === item.id
+                ? drop.position
+                : dropPositionFor({
+                    clientY: event.clientY,
+                    rect: event.currentTarget.getBoundingClientRect(),
+                    allowInside: hasChildren,
+                  });
+            const target = dropTargetFor(item.id, position);
+            if (!dragAndDrop.accept(event.dataTransfer.types, target)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            clearDrop();
+            dragAndDrop.onDrop(event.dataTransfer, target);
+          },
+        }
+      : {};
+  const dragHandlers = (item: T) => {
+    const spec = dragAndDrop?.drag?.(item);
+    if (!spec) return {};
+    return {
+      draggable: true,
+      onDragStart: (event: DragEvent<HTMLElement>) => {
+        for (const [type, value] of Object.entries(spec.data))
+          event.dataTransfer.setData(type, value);
+        event.dataTransfer.effectAllowed = spec.effectAllowed ?? "copyMove";
+        setDraggingId(item.id);
+      },
+      onDragEnd: clearDrop,
+    };
+  };
+  const dropLineIndex =
+    drop && drop.id !== null && drop.position !== "inside"
+      ? tree.indexById.get(drop.id)
+      : undefined;
+  const dropLineTop =
+    dropLineIndex === undefined
+      ? drop?.id === null
+        ? tree.rows.length * rowHeight
+        : undefined
+      : dropLineIndex * rowHeight +
+        (drop?.position === "after" ? rowHeight : 0);
   return (
     <>
       <div
@@ -268,6 +457,9 @@ export function Tree<T extends TreeItem>({
         role="tree"
         aria-label={label}
         className={className}
+        data-drop-root={drop?.id === null ? drop.position : undefined}
+        data-dragging={draggingId ? "true" : undefined}
+        {...rootDropHandlers}
         style={{
           overflow: "auto",
           // A tree that fits its rows must not trap the wheel: containment
@@ -367,6 +559,19 @@ export function Tree<T extends TreeItem>({
           role="presentation"
           style={{ height: tree.rows.length * rowHeight, position: "relative" }}
         >
+          {dropLineTop !== undefined && (
+            <div
+              aria-hidden="true"
+              data-tree-drop-line
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                top: dropLineTop,
+                pointerEvents: "none",
+              }}
+            />
+          )}
           {[
             ...new Set([
               ...Array.from(
@@ -402,6 +607,13 @@ export function Tree<T extends TreeItem>({
                         : undefined
                   }
                   data-tree-id={row.id}
+                  data-drop={
+                    drop?.id === row.id && drop.position === "inside"
+                      ? "inside"
+                      : undefined
+                  }
+                  {...dragHandlers(item)}
+                  {...rowDropHandlers(item, hasChildren)}
                   aria-level={row.depth + 1}
                   aria-posinset={row.position}
                   aria-setsize={row.siblings}
@@ -491,7 +703,9 @@ export function CollectionTree<T extends CollectionItem>({
   motionClasses,
   groupBy,
   project,
+  dragAndDrop,
 }: {
+  dragAndDrop?: TreeDragAndDrop<T>;
   renderStatus?: (
     branch: import("../collection.js").CollectionBranch,
   ) => ReactNode;
@@ -596,6 +810,36 @@ export function CollectionTree<T extends CollectionItem>({
         onExpandedChange={setExpanded}
         onLoadMore={
           root.cursor ? () => void collection.load({ more: true }) : undefined
+        }
+        dragAndDrop={
+          dragAndDrop
+            ? {
+                drag: (entry) =>
+                  "itemId" in entry
+                    ? (dragAndDrop.drag?.(
+                        collection.getItem(entry.itemId) as T,
+                      ) ?? null)
+                    : null,
+                accept: (types, target) =>
+                  dragAndDrop.accept(types, {
+                    item:
+                      target.item && "itemId" in target.item
+                        ? ((collection.getItem(target.item.itemId) as T) ??
+                          null)
+                        : null,
+                    position: target.position,
+                  }),
+                onDrop: (transfer, target) =>
+                  dragAndDrop.onDrop(transfer, {
+                    item:
+                      target.item && "itemId" in target.item
+                        ? ((collection.getItem(target.item.itemId) as T) ??
+                          null)
+                        : null,
+                    position: target.position,
+                  }),
+              }
+            : undefined
         }
         renderItem={(item, context) =>
           "itemId" in item ? (

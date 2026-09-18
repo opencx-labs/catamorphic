@@ -1,8 +1,19 @@
 import { createCollection } from "@catamorphic/app";
 import { CollectionTree, useCollection } from "@catamorphic/app/ui";
 import { useCallback, useMemo, useState } from "react";
-import type { SidebarSourceItem } from "../../shared/sidebar-source.js";
+import type {
+  SidebarSourceCapabilities,
+  SidebarSourceItem,
+} from "../../shared/sidebar-source.js";
+import { readBookmarkDrop } from "../lib/bookmark-drag.js";
 import { desktopApi } from "../lib/desktop-api.js";
+import {
+  currentSidebarDrag,
+  isOwnSidebarDrag,
+  readSidebarItemDrag,
+  sidebarItemDragSpec,
+} from "../lib/sidebar-drag.js";
+import { TAB_DRAG_TYPE } from "../lib/tab-drag.js";
 import {
   projectSidebarItems,
   sidebarItemPresentation,
@@ -27,6 +38,10 @@ export function SidebarLiveSource({ projectId }: { projectId: string }) {
   const sectionId = section?.id ?? "";
   const api = desktopApi;
   const [subscriptionError, setSubscriptionError] = useState<string>();
+  const [capabilities, setCapabilities] = useState<SidebarSourceCapabilities>({
+    move: false,
+    drop: false,
+  });
   // biome-ignore lint/correctness/useExhaustiveDependencies: switching the configured module must replace its cache and release old leases.
   const collection = useMemo(
     () =>
@@ -51,6 +66,16 @@ export function SidebarLiveSource({ projectId }: { projectId: string }) {
               });
               signal.throwIfAborted();
               if (!page) throw new Error("Source returned no collection page.");
+              const reported = (
+                page as { capabilities?: SidebarSourceCapabilities }
+              ).capabilities;
+              if (reported)
+                setCapabilities((current) =>
+                  current.move === reported.move &&
+                  current.drop === reported.drop
+                    ? current
+                    : reported,
+                );
               return page;
             } catch (cause) {
               throw sourceError(cause);
@@ -128,6 +153,37 @@ export function SidebarLiveSource({ projectId }: { projectId: string }) {
     empty: "No items yet.",
   });
   const title = section?.title ?? "Items";
+  const request = (
+    input: Omit<
+      Parameters<typeof api.sidebarSourceRequest>[0],
+      "projectId" | "sectionId" | "requestId"
+    >,
+  ) =>
+    api
+      .sidebarSourceRequest({
+        projectId,
+        sectionId,
+        requestId: crypto.randomUUID(),
+        ...input,
+      })
+      .catch((cause: unknown) => {
+        throw sourceError(cause);
+      });
+  /** Before: the target itself. After: whatever follows it among its siblings. */
+  const slotFor = (target: {
+    item: SidebarSourceItem | null;
+    position: "before" | "after" | "inside";
+  }) => {
+    if (!target.item) return { parentId: null, beforeId: undefined };
+    if (target.position === "inside")
+      return { parentId: target.item.id, beforeId: undefined };
+    const parentId = target.item.parentId ?? null;
+    if (target.position === "before")
+      return { parentId, beforeId: target.item.id };
+    const siblings = collection.getBranch(parentId).ids;
+    const index = siblings.indexOf(target.item.id);
+    return { parentId, beforeId: index >= 0 ? siblings[index + 1] : undefined };
+  };
   return (
     <div
       className="sidebar-live-source"
@@ -146,6 +202,72 @@ export function SidebarLiveSource({ projectId }: { projectId: string }) {
           exit: "animate-session-row-out",
         }}
         renderStatus={() => null}
+        dragAndDrop={{
+          drag: (item) =>
+            sidebarItemDragSpec(
+              {
+                sectionId,
+                id: item.id,
+                parentId: item.parentId ?? null,
+                kind: item.hasChildren ? "folder" : "item",
+                label: item.label,
+                url: item.url,
+              },
+              item.url
+                ? {
+                    key: `${sectionId}:${item.id}`,
+                    kind: "bookmark",
+                    title: item.label,
+                    bookmarkUrl: item.url,
+                  }
+                : undefined,
+            ),
+          accept: (types, target) => {
+            if (target.position === "inside" && !target.item?.hasChildren)
+              return false;
+            if (isOwnSidebarDrag(types, sectionId)) {
+              const drag = currentSidebarDrag();
+              return (
+                capabilities.move &&
+                drag !== null &&
+                drag.id !== target.item?.id
+              );
+            }
+            return capabilities.drop && types.includes(TAB_DRAG_TYPE);
+          },
+          onDrop: (transfer, target) => {
+            const slot = slotFor(target);
+            const own = isOwnSidebarDrag(transfer.types, sectionId)
+              ? readSidebarItemDrag(transfer)
+              : null;
+            const call = own
+              ? request({ method: "move", itemId: own.id, ...slot })
+              : (() => {
+                  const dropped = readBookmarkDrop(transfer);
+                  if (!dropped)
+                    return Promise.reject(
+                      new Error(
+                        "Only pages, chats and bookmarks can be dropped here.",
+                      ),
+                    );
+                  const raw = transfer.getData(TAB_DRAG_TYPE);
+                  let kind = "bookmark";
+                  try {
+                    kind = String(JSON.parse(raw).kind ?? kind);
+                  } catch {}
+                  return request({
+                    method: "drop",
+                    ...slot,
+                    payload: { kind, label: dropped.label, url: dropped.url },
+                  });
+                })();
+            void call.catch((cause: unknown) =>
+              setSubscriptionError(
+                cause instanceof Error ? cause.message : String(cause),
+              ),
+            );
+          },
+        }}
         renderItem={(item, tree) => (
           <SidebarItemRow
             itemId={item.id}

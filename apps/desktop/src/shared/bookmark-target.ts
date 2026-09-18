@@ -31,4 +31,18 @@ export interface BookmarkPlacement {
   url: string;
   folderId?: string;
   pinned?: boolean;
+  /** Sibling to land before; omitted appends at the end of the folder. */
+  beforeId?: string;
+}
+
+/** Reorder or reparent an existing bookmark or folder within one scope. */
+export interface BookmarkMove {
+  projectId: string;
+  profileId: string;
+  scope: "project" | "pinned" | "library";
+  id: string;
+  /** New parent folder; null or omitted means the scope root. */
+  folderId?: string | null;
+  /** Sibling to land before; omitted appends at the end of the folder. */
+  beforeId?: string;
 }

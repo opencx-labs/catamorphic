@@ -21,6 +21,105 @@ afterEach(() => {
 });
 
 describe("BookmarksStore", () => {
+  it("reorders and reparents bookmarks and folders with one move", () => {
+    const { value } = store();
+    const a = value.addBookmark("p", { label: "A", url: "https://a.test" });
+    const b = value.addBookmark("p", { label: "B", url: "https://b.test" });
+    const c = value.addBookmark("p", { label: "C", url: "https://c.test" });
+    const folder = value.addFolder("p", "Docs");
+    const nested = value.addFolder("p", "Deep", folder.id);
+    // C before A at the root.
+    value.move({
+      projectId: "p",
+      profileId: "x",
+      scope: "project",
+      id: c.id,
+      beforeId: a.id,
+    });
+    expect(value.forProject("p").bookmarks.map((entry) => entry.label)).toEqual(
+      ["C", "A", "B"],
+    );
+    // B into the folder, then A before it inside the folder.
+    value.move({
+      projectId: "p",
+      profileId: "x",
+      scope: "project",
+      id: b.id,
+      folderId: folder.id,
+    });
+    value.move({
+      projectId: "p",
+      profileId: "x",
+      scope: "project",
+      id: a.id,
+      folderId: folder.id,
+      beforeId: b.id,
+    });
+    expect(
+      value
+        .forProject("p")
+        .bookmarks.filter((entry) => entry.folderId === folder.id)
+        .map((entry) => entry.label),
+    ).toEqual(["A", "B"]);
+    // A back to the root, appended.
+    value.move({
+      projectId: "p",
+      profileId: "x",
+      scope: "project",
+      id: a.id,
+      folderId: null,
+    });
+    expect(value.forProject("p").bookmarks.map((entry) => entry.label)).toEqual(
+      ["C", "B", "A"],
+    );
+    // Folders reparent but never into their own subtree.
+    value.move({
+      projectId: "p",
+      profileId: "x",
+      scope: "project",
+      id: nested.id,
+      folderId: null,
+    });
+    expect(
+      value.forProject("p").folders.find((entry) => entry.id === nested.id)
+        ?.parentId,
+    ).toBeUndefined();
+    expect(() =>
+      value.move({
+        projectId: "p",
+        profileId: "x",
+        scope: "project",
+        id: folder.id,
+        folderId: nested.id,
+        beforeId: undefined,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      value.move({
+        projectId: "p",
+        profileId: "x",
+        scope: "project",
+        id: nested.id,
+        folderId: folder.id,
+      }),
+    ).toThrow(/inside itself/);
+  });
+
+  it("places a dropped tab before a sibling", () => {
+    const { value } = store();
+    const a = value.addBookmark("p", { label: "A", url: "https://a.test" });
+    value.place({
+      projectId: "p",
+      profileId: "x",
+      label: "Z",
+      url: "https://z.test",
+      beforeId: a.id,
+    });
+    expect(value.forProject("p").bookmarks.map((entry) => entry.label)).toEqual(
+      ["Z", "A"],
+    );
+  });
+
   it("places a tab in an imported pinned folder and preserves its identity on moves", () => {
     const { value, file } = store();
     value.importPinned("profile", {

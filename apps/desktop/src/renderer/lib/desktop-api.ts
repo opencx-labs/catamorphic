@@ -4,7 +4,10 @@ import type { ResourcePreview } from "@catamorphic/react";
 import type { ImportableBrowser } from "../../main/browser-import/types.js";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
 import type { AppPrefs } from "../../shared/app-prefs.js";
-import type { BookmarkPlacement } from "../../shared/bookmark-target.js";
+import type {
+  BookmarkMove,
+  BookmarkPlacement,
+} from "../../shared/bookmark-target.js";
 import type {
   BrowserImportRequest,
   BrowserImportResult,
@@ -1262,6 +1265,7 @@ export interface CatamorphicDesktopApi {
     faviconUrl?: string;
   }) => Promise<Bookmark>;
   bookmarksPlace: (input: BookmarkPlacement) => Promise<Bookmark>;
+  bookmarksMove: (input: BookmarkMove) => Promise<void>;
   bookmarksAddFolder: (input: {
     projectId: string;
     profileId: string;

@@ -3,16 +3,23 @@ import { type FSWatcher, readFileSync, watch } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { z } from "zod";
-import type { SidebarSourceRequest } from "../shared/sidebar-source.js";
+import type {
+  SidebarSourceCapabilities,
+  SidebarSourceRequest,
+} from "../shared/sidebar-source.js";
 
 const responseSchema = z.object({
   id: z.string().optional(),
   type: z.string().optional(),
   error: z.string().optional(),
   result: z.unknown().optional(),
+  move: z.boolean().optional(),
+  drop: z.boolean().optional(),
 });
 /** A shared, lazy process per module. Idle sources cost no process or polling. */
 export class SidebarSourceRuntime {
+  /** Reported by the worker once its module loads; false until then. */
+  capabilities: SidebarSourceCapabilities = { move: false, drop: false };
   private child?: ChildProcess;
   private starting?: Promise<ChildProcess>;
   private idle?: ReturnType<typeof setTimeout>;
@@ -72,7 +79,12 @@ export class SidebarSourceRuntime {
         if (this.child !== child) return;
         try {
           const message = responseSchema.parse(JSON.parse(line));
-          if (message.type === "subscription-error") {
+          if (message.type === "capabilities") {
+            this.capabilities = {
+              move: message.move === true,
+              drop: message.drop === true,
+            };
+          } else if (message.type === "subscription-error") {
             this.stop(
               new Error(message.error ?? "Source subscription failed."),
               true,

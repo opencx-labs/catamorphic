@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { BookmarkPlacement } from "../shared/bookmark-target.js";
+import type {
+  BookmarkMove,
+  BookmarkPlacement,
+} from "../shared/bookmark-target.js";
 
 /**
  * Browser bookmarks. Both project and profile-wide scopes support the same
@@ -45,6 +48,17 @@ interface SerializedBookmarksFile {
 }
 
 const EMPTY: ProjectBookmarks = { folders: [], bookmarks: [] };
+
+/** Insert before the sibling with `beforeId`, or append when it is absent. */
+function insertBefore<T extends { id: string }>(
+  list: T[],
+  entry: T,
+  beforeId: string | undefined,
+): void {
+  const index = beforeId ? list.findIndex((item) => item.id === beforeId) : -1;
+  if (index < 0) list.push(entry);
+  else list.splice(index, 0, entry);
+}
 
 export class BookmarksStore {
   private data: BookmarksFile;
@@ -139,6 +153,7 @@ export class BookmarksStore {
     url,
     folderId,
     pinned = false,
+    beforeId,
   }: BookmarkPlacement): Bookmark {
     this.data.byProject[projectId] ??= { folders: [], bookmarks: [] };
     const project = this.data.byProject[projectId];
@@ -167,10 +182,62 @@ export class BookmarksStore {
     favorites.bookmarks = favorites.bookmarks.filter(
       (entry) => entry.url !== url,
     );
-    if (pinned) favorites.bookmarks.push(bookmark);
-    else project.bookmarks.push(bookmark);
+    insertBefore(destination.bookmarks, bookmark, beforeId);
     this.save();
     return bookmark;
+  }
+
+  /**
+   * One drag model for every bookmark scope: a bookmark or folder lands
+   * before a sibling (or last) inside a folder or at the root. Folders
+   * list before bookmarks, so a bookmark dropped before a folder lands
+   * first among the bookmarks of that parent.
+   */
+  move({ projectId, profileId, scope, id, folderId, beforeId }: BookmarkMove) {
+    const target =
+      scope === "project"
+        ? (this.data.byProject[projectId] ??= { folders: [], bookmarks: [] })
+        : scope === "pinned"
+          ? (this.data.pinnedByProfile[profileId] ??= {
+              folders: [],
+              bookmarks: [],
+            })
+          : (this.data.libraryByProfile[profileId] ??= {
+              folders: [],
+              bookmarks: [],
+            });
+    const parentId = folderId ?? undefined;
+    if (parentId && !target.folders.some((folder) => folder.id === parentId))
+      throw new Error("This bookmark folder no longer exists.");
+    const folder = target.folders.find((entry) => entry.id === id);
+    if (folder) {
+      // A folder cannot move into itself or one of its descendants.
+      for (let cursor = parentId; cursor; ) {
+        if (cursor === id)
+          throw new Error("A folder cannot be moved inside itself.");
+        cursor = target.folders.find((entry) => entry.id === cursor)?.parentId;
+      }
+      target.folders = target.folders.filter((entry) => entry.id !== id);
+      insertBefore(
+        target.folders,
+        { ...folder, ...(parentId ? { parentId } : { parentId: undefined }) },
+        beforeId,
+      );
+      this.save();
+      return;
+    }
+    const bookmark = target.bookmarks.find((entry) => entry.id === id);
+    if (!bookmark) throw new Error("This bookmark no longer exists.");
+    target.bookmarks = target.bookmarks.filter((entry) => entry.id !== id);
+    insertBefore(
+      target.bookmarks,
+      {
+        ...bookmark,
+        ...(parentId ? { folderId: parentId } : { folderId: undefined }),
+      },
+      beforeId,
+    );
+    this.save();
   }
 
   update(

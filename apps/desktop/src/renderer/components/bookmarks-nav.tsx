@@ -1,4 +1,10 @@
 /* biome-ignore-all lint/a11y/noRedundantRoles: list-style resets need explicit list semantics */
+
+import {
+  dropPositionFor,
+  type TreeDragAndDrop,
+  type TreeDropTarget,
+} from "@catamorphic/app/ui";
 import { FolderPlus, MessageSquare, Plus } from "lucide-react";
 import { type DragEvent as ReactDragEvent, useEffect, useState } from "react";
 import { parseChatBookmarkUrl } from "../../shared/bookmark-target.js";
@@ -11,6 +17,12 @@ import {
   type ProjectBookmarks,
   type SidebarMenuEntry,
 } from "../lib/desktop-api.js";
+import {
+  currentSidebarDrag,
+  isOwnSidebarDrag,
+  readSidebarItemDrag,
+  sidebarItemDragSpec,
+} from "../lib/sidebar-drag.js";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
@@ -88,12 +100,13 @@ export function BookmarksNav({
   const [data, setData] = useState<BookmarksData | null>(null);
   const [edit, setEdit] = useState<BookmarkEdit | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [status, setStatus] = useState("");
+  const [gridDrop, setGridDrop] = useState<{
+    id: string | null;
+    position: "before" | "after" | "inside";
+  } | null>(null);
   useEffect(() => {
-    const end = () => {
-      setDropTarget(null);
-    };
+    const end = () => setGridDrop(null);
     document.addEventListener("dragend", end);
     document.addEventListener("drop", end);
     return () => {
@@ -170,13 +183,210 @@ export function BookmarksNav({
   };
   const open = (url: string, mode?: OpenMode) =>
     perform(Promise.resolve().then(() => onOpen(url, mode)));
-  const dropHandlers = (target: string) => ({
+  /**
+   * One drag model for the three bookmark lists. A list accepts its own
+   * rows (reorder, reparent) and, except the library archive, pages and
+   * chats dragged from tabs or other sections. Folders are the only
+   * "inside" targets; everything else lands before or after a sibling.
+   */
+  type Scope = "project" | "pinned" | "library";
+  type Entry = {
+    id: string;
+    parentId: string | null;
+    label: string;
+    hasChildren: boolean;
+    bookmark?: Bookmark;
+  };
+  const sectionId = contribution?.section.id ?? "bookmarks";
+  const scopeData = (scope: Scope): ProjectBookmarks | undefined =>
+    scope === "project"
+      ? data?.project
+      : scope === "pinned"
+        ? data?.pinned
+        : data?.library;
+  const acceptsExternal = (scope: Scope) => scope !== "library";
+  const accepts = (
+    scope: Scope,
+    types: readonly string[],
+    target: TreeDropTarget<Entry>,
+  ) => {
+    if (target.position === "inside" && target.item && !target.item.hasChildren)
+      return false;
+    if (isOwnSidebarDrag(types, sectionId, scope)) {
+      const drag = currentSidebarDrag();
+      if (!drag || drag.id === target.item?.id) return false;
+      // A folder never lands inside its own subtree.
+      if (drag.kind === "folder") {
+        const folders = scopeData(scope)?.folders ?? [];
+        let cursor: string | undefined =
+          target.position === "inside"
+            ? target.item?.id
+            : (target.item?.parentId ?? undefined);
+        while (cursor) {
+          if (cursor === drag.id) return false;
+          cursor = folders.find((folder) => folder.id === cursor)?.parentId;
+        }
+      }
+      return true;
+    }
+    return acceptsExternal(scope) && types.includes(TAB_DRAG_TYPE);
+  };
+  /** Folder and sibling for a target: inside a folder, or beside a row. */
+  const slotFor = (
+    scope: Scope,
+    target: TreeDropTarget<Entry>,
+    kind: "item" | "folder",
+  ) => {
+    if (!target.item) return { folderId: undefined, beforeId: undefined };
+    if (target.position === "inside")
+      return { folderId: target.item.id, beforeId: undefined };
+    const folderId = target.item.parentId ?? undefined;
+    if (target.position === "before")
+      return {
+        folderId,
+        beforeId:
+          (kind === "folder") === target.item.hasChildren
+            ? target.item.id
+            : undefined,
+      };
+    // After: before the next sibling of the same kind in that folder.
+    const lists = scopeData(scope);
+    const siblings = target.item.hasChildren
+      ? (lists?.folders ?? [])
+          .filter((folder) => (folder.parentId ?? undefined) === folderId)
+          .map((folder) => folder.id)
+      : (lists?.bookmarks ?? [])
+          .filter((bookmark) => (bookmark.folderId ?? undefined) === folderId)
+          .map((bookmark) => bookmark.id);
+    const index = siblings.indexOf(target.item.id);
+    const sameKind = (kind === "folder") === target.item.hasChildren;
+    return {
+      folderId,
+      beforeId: sameKind && index >= 0 ? siblings[index + 1] : undefined,
+    };
+  };
+  const dropInto = (
+    scope: Scope,
+    transfer: DataTransfer,
+    target: TreeDropTarget<Entry>,
+  ) => {
+    const own = isOwnSidebarDrag(transfer.types, sectionId, scope)
+      ? readSidebarItemDrag(transfer)
+      : null;
+    if (own) {
+      const slot = slotFor(scope, target, own.kind);
+      perform(
+        desktopApi.bookmarksMove({
+          projectId,
+          profileId,
+          scope,
+          id: own.id,
+          folderId: slot.folderId ?? null,
+          beforeId: slot.beforeId,
+        }),
+      );
+      return;
+    }
+    const bookmark = readBookmarkDrop(transfer);
+    if (!bookmark) {
+      setError("Open a page or send a chat message before pinning it.");
+      return;
+    }
+    const slot = slotFor(scope, target, "item");
+    perform(
+      desktopApi
+        .bookmarksPlace({
+          projectId,
+          profileId,
+          ...bookmark,
+          folderId: slot.folderId,
+          beforeId: slot.beforeId,
+          pinned: scope === "pinned",
+        })
+        .then(() => {
+          const location = slot.folderId
+            ? scopeData(scope)?.folders.find(
+                (folder) => folder.id === slot.folderId,
+              )?.label
+            : scope === "pinned"
+              ? "Pinned bookmarks"
+              : "Bookmarks";
+          setStatus(`Saved ${bookmark.label} to ${location ?? "folder"}.`);
+        }),
+    );
+  };
+  const dragAndDropFor = (scope: Scope): TreeDragAndDrop<Entry> => ({
+    drag: (entry) =>
+      sidebarItemDragSpec(
+        {
+          sectionId,
+          scope,
+          id: entry.id,
+          parentId: entry.parentId,
+          kind: entry.hasChildren ? "folder" : "item",
+          label: entry.label,
+          url: entry.bookmark?.url,
+        },
+        entry.bookmark
+          ? {
+              key: `bookmark:${entry.bookmark.id}`,
+              kind: "bookmark",
+              title: entry.bookmark.label,
+              bookmarkUrl: entry.bookmark.url,
+            }
+          : undefined,
+      ),
+    accept: (types, target) => accepts(scope, types, target),
+    onDrop: (transfer, target) => dropInto(scope, transfer, target),
+  });
+  /** The pinned tile grid is not a tree; it shares the same policy. */
+  const gridEntry = (bookmark: Bookmark): Entry => ({
+    id: bookmark.id,
+    parentId: null,
+    label: bookmark.label,
+    hasChildren: false,
+    bookmark,
+  });
+  const gridTarget = (
+    event: ReactDragEvent<HTMLElement>,
+    bookmark?: Bookmark,
+  ): TreeDropTarget<Entry> =>
+    bookmark
+      ? {
+          item: gridEntry(bookmark),
+          position:
+            pinnedStyle === "tiles"
+              ? (event.clientX -
+                  event.currentTarget.getBoundingClientRect().left) /
+                  Math.max(
+                    1,
+                    event.currentTarget.getBoundingClientRect().width,
+                  ) <
+                0.5
+                ? "before"
+                : "after"
+              : dropPositionFor({
+                  clientY: event.clientY,
+                  rect: event.currentTarget.getBoundingClientRect(),
+                  allowInside: false,
+                }),
+        }
+      : { item: null, position: "inside" };
+  const gridHandlers = (bookmark?: Bookmark) => ({
     onDragOver: (event: ReactDragEvent<HTMLElement>) => {
-      if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return;
+      const target = gridTarget(event, bookmark);
+      if (
+        (bookmark && currentSidebarDrag()?.id === bookmark.id) ||
+        !accepts("pinned", event.dataTransfer.types, target)
+      ) {
+        if (bookmark) setGridDrop(null);
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
-      event.dataTransfer.dropEffect = "copy";
-      setDropTarget(target);
+      event.dataTransfer.dropEffect =
+        event.dataTransfer.effectAllowed === "copy" ? "copy" : "move";
+      setGridDrop({ id: bookmark?.id ?? null, position: target.position });
     },
     onDragLeave: (event: ReactDragEvent<HTMLElement>) => {
       if (
@@ -184,42 +394,17 @@ export function BookmarksNav({
         event.currentTarget.contains(event.relatedTarget)
       )
         return;
-      setDropTarget((current) => (current === target ? null : current));
+      setGridDrop((current) =>
+        current?.id === (bookmark?.id ?? null) ? null : current,
+      );
     },
     onDrop: (event: ReactDragEvent<HTMLElement>) => {
-      if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE)) return;
+      const target = gridTarget(event, bookmark);
+      if (!accepts("pinned", event.dataTransfer.types, target)) return;
       event.preventDefault();
       event.stopPropagation();
-      setDropTarget(null);
-      const bookmark = readBookmarkDrop(event.dataTransfer);
-      if (!bookmark) {
-        setError("Open a page or send a chat message before pinning it.");
-        return;
-      }
-      const pinned = target === "pinned" || target.startsWith("pinned-folder:");
-      const folderId = target.includes("folder:")
-        ? target.slice(target.indexOf("folder:") + 7)
-        : undefined;
-      perform(
-        desktopApi
-          .bookmarksPlace({
-            projectId,
-            profileId,
-            ...bookmark,
-            folderId,
-            pinned,
-          })
-          .then(() => {
-            const location = folderId
-              ? (pinned ? data?.pinned : data?.project)?.folders.find(
-                  (folder) => folder.id === folderId,
-                )?.label
-              : target === "pinned"
-                ? "Pinned bookmarks"
-                : "Bookmarks";
-            setStatus(`Saved ${bookmark.label} to ${location ?? "folder"}.`);
-          }),
-      );
+      setGridDrop(null);
+      dropInto("pinned", event.dataTransfer, target);
     },
   });
   const runAction = (
@@ -270,19 +455,30 @@ export function BookmarksNav({
     <li
       key={bookmark.id}
       draggable
+      data-drop={gridDrop?.id === bookmark.id ? gridDrop.position : undefined}
       onDragStart={(event) => {
-        event.dataTransfer.setData(
-          TAB_DRAG_TYPE,
-          JSON.stringify({
+        const spec = sidebarItemDragSpec(
+          {
+            sectionId,
+            scope: "pinned",
+            id: bookmark.id,
+            parentId: bookmark.folderId ?? null,
+            kind: "item",
+            label: bookmark.label,
+            url: bookmark.url,
+          },
+          {
             key: `bookmark:${bookmark.id}`,
             kind: "bookmark",
             title: bookmark.label,
             bookmarkUrl: bookmark.url,
-          } satisfies TabDragPayload),
+          } satisfies TabDragPayload,
         );
-        event.dataTransfer.setData("text/uri-list", bookmark.url);
+        for (const [type, value] of Object.entries(spec.data))
+          event.dataTransfer.setData(type, value);
         event.dataTransfer.effectAllowed = "copyMove";
       }}
+      {...gridHandlers(bookmark)}
     >
       <SidebarItemRow
         itemId={bookmark.id}
@@ -326,19 +522,52 @@ export function BookmarksNav({
     </li>
   );
 
+  const treeRow = (bookmark: Bookmark, pinned: boolean, library = false) => (
+    <SidebarItemRow
+      itemId={bookmark.id}
+      label={bookmark.label}
+      title={`${bookmark.label} · ${bookmark.url}`}
+      icon={<SiteIcon key={bookmark.url} bookmark={bookmark} />}
+      menu={menuOverride}
+      defaultMenu={
+        pinned
+          ? PINNED_MENU
+          : library
+            ? PROJECT_MENU.map((entry) =>
+                entry.action === "edit"
+                  ? { label: "Rename…", action: "rename" }
+                  : entry,
+              )
+            : PROJECT_MENU
+      }
+      resource
+      defaultOpenMode={defaultOpenMode}
+      onOpen={(mode) => open(bookmark.url, mode)}
+      onAction={(entry) =>
+        library && entry.action === "remove"
+          ? perform(
+              desktopApi.bookmarksRemoveLibrary({
+                projectId,
+                profileId,
+                id: bookmark.id,
+              }),
+            )
+          : runAction(entry, bookmark, pinned)
+      }
+    />
+  );
+
   const renderTree = (
     scope: ProjectBookmarks,
     pinned: boolean,
     library = false,
     foldersOnly = false,
   ) => {
-    type Entry = {
-      id: string;
-      parentId: string | null;
-      label: string;
-      hasChildren: boolean;
-      bookmark?: Bookmark;
-    };
+    const scopeName: Scope = library
+      ? "library"
+      : pinned
+        ? "pinned"
+        : "project";
     const folderIds = new Set(scope.folders.map((folder) => folder.id));
     const items: Entry[] = [
       ...scope.folders.map((folder) => ({
@@ -375,21 +604,14 @@ export function BookmarksNav({
         // around a virtualized tree gives two competing scrollbars.
         height={pinned ? undefined : 256}
         defaultExpanded={false}
+        dragAndDrop={dragAndDropFor(scopeName)}
         renderItem={(item, tree) =>
           item.bookmark ? (
             <div style={{ marginLeft: tree.depth * 14 }}>
-              {row(item.bookmark, pinned, library)}
+              {treeRow(item.bookmark, pinned, library)}
             </div>
           ) : (
-            <div
-              style={{ marginLeft: tree.depth * 14 }}
-              data-bookmark-drop={`${pinned ? "pinned-folder" : "folder"}:${item.id}`}
-              {...(library
-                ? {}
-                : dropHandlers(
-                    `${pinned ? "pinned-folder" : "folder"}:${item.id}`,
-                  ))}
-            >
+            <div style={{ marginLeft: tree.depth * 14 }}>
               <SidebarItemRow
                 itemId={item.id}
                 label={item.label}
@@ -423,11 +645,7 @@ export function BookmarksNav({
   };
 
   return (
-    <div
-      data-bookmark-drop="root"
-      {...dropHandlers("root")}
-      className={`flex flex-col gap-2 rounded-md ${dropTarget === "root" ? "bg-accent/10 ring-1 ring-accent" : ""}`}
-    >
+    <div className="flex flex-col gap-2">
       <h3 className="px-2 pt-1 text-xs font-medium text-fg-muted">Pinned</h3>
       <section
         className="max-h-[min(40vh,24rem)] overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
@@ -437,13 +655,14 @@ export function BookmarksNav({
           <ul
             role="list"
             aria-label="Pinned bookmarks"
-            data-bookmark-drop="pinned"
-            {...dropHandlers("pinned")}
-            className={`${dropTarget === "pinned" ? "rounded-md bg-accent/10 ring-1 ring-accent" : ""} ${
+            data-drop-zone="pinned"
+            data-drop={gridDrop?.id === null ? gridDrop.position : undefined}
+            {...gridHandlers()}
+            className={
               pinnedStyle === "tiles"
                 ? "grid grid-cols-4 gap-2 px-1 py-1"
                 : "flex flex-col gap-0.5"
-            }`}
+            }
           >
             {data.pinned.bookmarks.filter((bookmark) => !bookmark.folderId)
               .length === 0 && (
@@ -469,17 +688,7 @@ export function BookmarksNav({
       {data?.library &&
         (data.library.bookmarks.length > 0 ||
           data.library.folders.length > 0) && (
-          <section
-            aria-label="Bookmark library"
-            onDragOver={(event) => {
-              event.stopPropagation();
-              event.dataTransfer.dropEffect = "none";
-            }}
-            onDrop={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-            }}
-          >
+          <section aria-label="Bookmark library">
             <h3 className="px-2 py-2 text-xs font-medium text-fg-muted">
               Saved bookmarks
             </h3>

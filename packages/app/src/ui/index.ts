@@ -60,7 +60,12 @@ export { Textarea } from "./textarea.js";
 export { Tooltip } from "./tooltip.js";
 export {
   CollectionTree,
+  dropPositionFor,
   Tree,
+  type TreeDragAndDrop,
+  type TreeDragSpec,
+  type TreeDropPosition,
+  type TreeDropTarget,
   type TreeItem,
   type TreeRenderContext,
   useCollection,

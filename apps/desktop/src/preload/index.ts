@@ -1,7 +1,10 @@
 import type { ResourcePreview } from "@catamorphic/react";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { AgentCommandsResult } from "../shared/agent-commands.js";
-import type { BookmarkPlacement } from "../shared/bookmark-target.js";
+import type {
+  BookmarkMove,
+  BookmarkPlacement,
+} from "../shared/bookmark-target.js";
 import type { DefaultBrowserState } from "../shared/default-browser.js";
 import type {
   ChatDraft,
@@ -879,6 +882,8 @@ const api = {
     ipcRenderer.invoke("catamorphic:bookmarks-add", input),
   bookmarksPlace: (input: BookmarkPlacement): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:bookmarks-place", input),
+  bookmarksMove: (input: BookmarkMove): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:bookmarks-move", input),
   bookmarksAddFolder: (input: {
     projectId: string;
     profileId: string;

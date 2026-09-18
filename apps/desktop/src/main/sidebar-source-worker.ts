@@ -15,6 +15,11 @@ const source: SidebarSourceModule = (
 ).default;
 if (typeof source?.load !== "function")
   throw new Error("Sidebar source must export default { load }.");
+send({
+  type: "capabilities",
+  move: typeof source.move === "function",
+  drop: typeof source.drop === "function",
+});
 const controllers = new Map<string, AbortController>();
 let cleanup: (() => void) | undefined;
 let subscribed = false;
@@ -57,15 +62,39 @@ input.on("line", (line) => {
               cursor: message.cursor,
               signal: controller.signal,
             })
-          : await source.action?.({
-              projectRoot,
-              itemId: message.itemId,
-              action: message.action,
-              signal: controller.signal,
-            });
-      if (message.method === "action") {
-        if (!source.action)
-          throw new Error("This source does not export an action handler.");
+          : message.method === "move"
+            ? await source.move?.({
+                projectRoot,
+                itemId: message.itemId,
+                parentId: message.parentId ?? null,
+                beforeId: message.beforeId,
+                signal: controller.signal,
+              })
+            : message.method === "drop"
+              ? await source.drop?.({
+                  projectRoot,
+                  parentId: message.parentId ?? null,
+                  beforeId: message.beforeId,
+                  payload: message.payload,
+                  signal: controller.signal,
+                })
+              : await source.action?.({
+                  projectRoot,
+                  itemId: message.itemId,
+                  action: message.action,
+                  signal: controller.signal,
+                });
+      if (message.method !== "load") {
+        const handler =
+          message.method === "move"
+            ? source.move
+            : message.method === "drop"
+              ? source.drop
+              : source.action;
+        if (!handler)
+          throw new Error(
+            `This source does not export a ${message.method} handler.`,
+          );
         invalidate();
       }
       if (!controller.signal.aborted)
@@ -81,7 +110,7 @@ input.on("line", (line) => {
     }
   };
   // Writes from multiple views of the same source cannot race one another.
-  if (message.method === "action") actions = actions.then(run);
+  if (message.method !== "load") actions = actions.then(run);
   else void run();
 });
 input.on("close", () => {
