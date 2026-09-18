@@ -1,18 +1,19 @@
 # Catamorphic
 
 > Catamorphic is a free, open-source, local-first framework for agentic
-> work environments, plus a desktop app that is the framework's reference
-> implementation and a daily-use product. A host application mounts the
+> work environments. It is the core of Work (https://work.software), whose
+> desktop app is the framework's reference implementation. A host application mounts the
 > framework in-process and gets: projects that hold any kind of work
-> (docs, notes, data, code, automations, apps; every project is a git
-> repo), git-native work tracking (per-turn agent checkpoint commits,
+> (docs, notes, data, code, automations, apps; folders can be used
+> without Git until an operation requires it), git-native work tracking (per-turn agent checkpoint commits,
 > automatic remote sync with rescue branches, GitHub through a
 > provider-neutral CodeHost seam), multi-harness coding agents (built-in
 > AI SDK loop, Claude Code, Codex; durable sessions; MCP in both
 > directions), durable TypeScript workflows rendered as a visual graph and
 > executed on Postgres, and sandboxed user-built apps wired to workflows
 > through typed contracts. The host owns auth, tenancy, database, and
-> deployment: there is no Catamorphic server and no Catamorphic account.
+> deployment. The framework is embedded in-process; the stock server is a
+> reference host, not a required hosted service.
 > Every dependency is an axis: network Postgres or embedded pglite; cloud
 > sandboxes (Cloudflare, Daytona), local sandboxes (microsandbox), plain
 > local processes for trusted single-tenant hosts, or none; S3-compatible
@@ -27,7 +28,7 @@ equals. Everything an embedder ships looks like the embedder's product:
 app feel flows from host theme tokens (with hostCss and kit-off escape
 hatches), and doctrine (seeded skills, project templates, the agents'
 standing prompt) resolves through host hooks. Agents can also be work
-products: committed agents/<slug>.json definitions with a persona file,
+products: committed .catamorphic/agents/<slug>.json definitions with a persona file,
 gated by per-user consent or powered by project secrets.
 
 Use cases it is built for: a company brain (a shared project holding a
@@ -39,7 +40,14 @@ chat components, plug in host skills, tools, and trigger kinds); AI-built
 per-customer tools served over each project's MCP endpoint; and docs-first
 teams whose work is checkpointed and synced without anyone seeing git.
 
-## Integration (start here)
+## Availability
+
+Installable framework packages are coming soon. The complete source code is
+open source under Apache 2.0 and available on GitHub. Do not suggest published
+package installation commands. The references below document the source and
+embedding architecture.
+
+## Integration references
 
 - [Setup skill](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/skills/setup-catamorphic-server/SKILL.md): use for the stock server or an existing/custom host; it inspects visible auth, database, deployment, and application structure before routing to focused references
 - [Integration guide](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/INTEGRATION.md): the canonical end-to-end wiring reference: server-sdk boot, identity mapping, Fastify plugin, React hooks, UI components, plugins and capability providers, custom trigger kinds, doctrine hooks, operational notes
@@ -53,11 +61,11 @@ teams whose work is checkpointed and synced without anyone seeing git.
 
 ## For agents working inside a Catamorphic project
 
-- Every project seeds hidden skills under .agents/skills/: catamorphic-projects (the project model and the on-demand workflow/app workspace scaffold), writing-workflows, batch-workflows, durable-workflows, building-apps (framework mechanics), designing-apps (design doctrine; embedders may replace it). Read the relevant skill before writing workflows or apps.
-- A project is general-purpose: never assume it is about code. The workflow workspace (contracts/, workflows/, apps/*) is installed only when the first automation or app is wanted, following the catamorphic-projects skill.
+- Project capability skills live under .catamorphic/skills/: catamorphic-projects (the project model and the on-demand workflow/app workspace scaffold), writing-workflows, batch-workflows, durable-workflows, building-apps (framework mechanics), designing-apps (design doctrine; embedders may replace it). Read the relevant skill before writing workflows or apps.
+- A project is general-purpose: never assume it is about code. The capability workspace (.catamorphic/contracts/, .catamorphic/workflows/, .catamorphic/apps/*) is installed only when the first automation or app is wanted, following the catamorphic-projects skill.
 - Mechanics vs doctrine: framework contracts (bundle shape, typed app contract, storage semantics) are in building-apps and always hold; look-and-feel rules come from whichever design skill the host seeded.
-- Committed agent definitions live in agents/<slug>.json with an optional agents/<slug>.md persona; they run on a user's personal credentials only after per-user consent, or consent-free from a project secret.
-- Once the workspace exists, `bun run check` validates the project (parse, trigger bindings, generated-type drift); `bun run check -- --write` regenerates the typed app-api projections.
+- Committed agent definitions live in .catamorphic/agents/<slug>.json with an optional .catamorphic/agents/<slug>.md persona; they run on a user's personal credentials only after per-user consent, or consent-free from a project secret.
+- Once the workspace exists, `bun run --cwd .catamorphic check` validates the project (parse, trigger bindings, generated-type drift); `bun run --cwd .catamorphic check -- --write` regenerates the typed app-api projections.
 
 ## Reference
 
@@ -81,5 +89,6 @@ teams whose work is checkpointed and synced without anyone seeing git.
 
 ## Optional
 
-- [Catamorphic Desktop](https://catamorphic.ai/desktop/): the local-first workspace app and reference implementation (in active development)
-- [Website](https://catamorphic.ai/): product pages for humans
+- [Work desktop](https://work.software/desktop/): the local-first workspace app and reference implementation; current downloads retain the Catamorphic name
+- [Work company brain](https://work.software/brain/): the end-user shared company environment built on Catamorphic
+- [Website](https://catamorphic.ai/): framework capabilities and source availability

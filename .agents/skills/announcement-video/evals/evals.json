@@ -1,0 +1,45 @@
+{
+  "skill_name": "announcement-video",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Prepare a timed brief for a 24-second silent Work desktop hero film using the real app. Show a project, a document, and a useful app. Planning only: do not claim any inspection or rendering has happened.",
+      "expectations": [
+        "Actual UI and safe demo data verification remain pending.",
+        "Calm opening, connected motion, restrained captions.",
+        "Editable source, playable MP4, poster, and embedded-size checks."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Revise a dark desktop film: its opening is rushed and a floating window covers the document. Preserve the accepted duration, silent soundtrack, palette, and outro.",
+      "expectations": [
+        "Scoped pacing and collision corrections.",
+        "Review complete motion paths at normal speed and embedded size.",
+        "Leave validation pending until performed."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "The Work video shows unsent drafts and aimless chat resizing. Replace it with a purposeful demo: browse and scroll, create a floating chat through the palette, ask about Work, expand with the keyboard shortcut, then send a follow-up asking for a relevant app. Speed up creation, but type at human speed so the animations show.",
+      "expectations": [
+        "A coherent goal connects the browser question, real answer, follow-up, and usable generated app.",
+        "Both messages visibly send; an echo test harness or injected transcript is not accepted as a real demo.",
+        "The expansion creates room for the follow-up; shrinking makes room to use the result.",
+        "Typing, palette mode changes, and chat transitions stay readable at normal speed. Only build waits are accelerated, with that timing edit identified.",
+        "The final app is actually interacted with, and evidence distinguishes compilation, visual checks, and failures.",
+        "Duration follows the meaningful story rather than forcing the whole sequence into the older 24-second default."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Make a narrow revision to the Work website film. Keep the homepage title Work and the secondary titles Work · Page. We already removed the prepared-demo caption and the About this film section. The public site still has the older content, and Google search hits a CAPTCHA.",
+      "expectations": [
+        "Preserve the accepted page titles and removed sections.",
+        "Do not reintroduce explanatory copy on the page to document capture setup.",
+        "Record the actual capture source and limitations in production notes. Do not splice direct navigation to imply a successful web search.",
+        "Leave unrelated product source, credentials, and other running worktrees undisturbed."
+      ]
+    }
+  ]
+}

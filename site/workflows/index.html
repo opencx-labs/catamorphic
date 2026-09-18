@@ -32,16 +32,12 @@
   <div class="container hero-inner">
     <span class="hero-badge"><span class="dot"></span>Free &amp; open source · TypeScript-native · Composable</span>
     <h1>Let your users automate <span class="accent">your product</span> with AI</h1>
-    <p class="lede">Catamorphic Workflows is a framework you embed inside your SaaS so your users can build their own automations, with an AI agent doing the heavy lifting and real code underneath. Pair it with <a href="/apps/">Apps</a> to give those automations a frontend, and the <a href="/copilot/">Copilot</a> to put an agent in front of both. It's the same engine that powers <a href="/desktop/">Catamorphic Desktop</a>, the framework's reference implementation.</p>
+    <p class="lede">Catamorphic Workflows is a framework you embed inside your SaaS so your users can build their own automations, with an AI agent doing the heavy lifting and real code underneath. Pair it with <a href="/apps/">Apps</a> to give those automations a frontend, and the <a href="/copilot/">Copilot</a> to put an agent in front of both. It's the same engine that powers <a href="/desktop/">Work for desktop</a>, the framework's reference implementation.</p>
+    <p class="package-notice"><strong>Installable packages are coming soon.</strong> The full source code is open source and available on <a href="https://github.com/opencx-labs/catamorphic">GitHub</a>.</p>
     <div class="hero-actions">
-      <a class="btn btn-primary" href="https://github.com/opencx-labs/catamorphic">Get started</a>
+      <a class="btn btn-primary" href="https://github.com/opencx-labs/catamorphic">Explore the source</a>
       <a class="btn btn-ghost" href="#how">See how it works</a>
     </div>
-    <button class="install" id="install" type="button" aria-label="Copy install command">
-      <span class="prompt">$</span>
-      <span id="install-cmd">bun add @catamorphic/server-sdk</span>
-      <span class="copy-hint" id="copy-hint">copy</span>
-    </button>
 
     <div class="duo reveal">
       <div class="code-window">
@@ -255,7 +251,7 @@
     <div class="section-header reveal">
       <p class="eyebrow">// agent-native</p>
       <h2>Or just tell your agent</h2>
-      <p>Catamorphic is built to be integrated <em>by</em> coding agents, not only documented for humans. Point Claude Code, Cursor, or Codex at <a href="/llms.txt">catamorphic.ai/llms.txt</a> (or install the <a href="/agents/">embedding skill</a>) and it handles the wiring: dependency checks, identity mapping, the HTTP surface, and the React UI, asking you only the questions that are actually yours to answer.</p>
+      <p>Catamorphic is built to be integrated <em>by</em> coding agents, not only documented for humans. Point Claude Code, Cursor, or Codex at <a href="/llms.txt">catamorphic.ai/llms.txt</a> and the <a href="/agents/">source guidance</a> to explore the architecture and reference implementations. Installable packages are coming soon.</p>
     </div>
   </div>
 </section>
@@ -263,7 +259,7 @@
 <section class="cta">
   <div class="container">
     <h2>Free, open source, yours</h2>
-    <p>Catamorphic is completely free and open source: no paid tiers, no usage meters, no strings. Star the repo, read the integration guide, and embed it in an afternoon.</p>
+    <p>Catamorphic is completely free and open source: no paid tiers, no usage meters, no strings. Installable packages are coming soon. Explore the source and architecture on GitHub today.</p>
     <div class="hero-actions">
       <a class="btn btn-primary" href="https://github.com/opencx-labs/catamorphic">
         <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
@@ -282,13 +278,6 @@
   }, { threshold: 0.12 });
   for (const el of document.querySelectorAll(".reveal")) io.observe(el);
 
-  const install = document.getElementById("install");
-  install.addEventListener("click", async () => {
-    await navigator.clipboard.writeText(document.getElementById("install-cmd").textContent);
-    const hint = document.getElementById("copy-hint");
-    hint.textContent = "copied";
-    setTimeout(() => (hint.textContent = "copy"), 1500);
-  });
 </script>
 
 </body>

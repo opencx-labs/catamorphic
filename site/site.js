@@ -14,10 +14,11 @@ const GITHUB_ICON = `<svg width="15" height="15" viewBox="0 0 16 16" fill="curre
 const REPO = "https://github.com/opencx-labs/catamorphic";
 
 const PAGES = [
-  { href: "/desktop/", label: "Desktop" },
   { href: "/workflows/", label: "Workflows" },
   { href: "/apps/", label: "Apps" },
   { href: "/copilot/", label: "Copilot" },
+  { href: "/desktop/", label: "Desktop" },
+  { href: "/brain/", label: "Brain" },
 ];
 
 const current = (href) =>
