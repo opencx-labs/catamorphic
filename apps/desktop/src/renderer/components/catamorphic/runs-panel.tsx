@@ -257,7 +257,7 @@ export function RunDetail({ runId }: { runId: string }) {
                   return;
                 }
               }}
-              className="button-primary button-sm w-fit"
+              className="w-fit rounded bg-accent px-3 py-1.5 text-xs text-accent-fg"
             >
               Submit input
             </button>
@@ -388,7 +388,7 @@ export function RunsPanel({
             onClick={startRun}
             disabled={trigger.isPending || !environment}
             data-disabled-reason="Choose an environment, or wait for the run to start"
-            className="button-primary button-sm"
+            className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-50"
           >
             Run
           </PendingButton>

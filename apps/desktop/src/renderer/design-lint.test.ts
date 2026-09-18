@@ -51,11 +51,20 @@ describe("design lint", () => {
     expect(literal).toEqual([]);
   });
   it("rectangular actions use a button role, never a private accent recipe", () => {
-    // Debt: the remaining accent recipes are icon-only send buttons and two
-    // pills; lower this when you convert one to `button-primary`.
-    expect(
-      count(/className="[^"]*\bbg-accent\s[^"]*\b(px-|text-accent-fg)/g).length,
-    ).toBeLessThanOrEqual(4);
+    // Registry mirrors under components/catamorphic style through tokens
+    // only: the desktop button classes do not exist for their other hosts.
+    // Debt elsewhere: icon-only send buttons and pills; lower this when you
+    // convert one to `button-primary`.
+    const recipes = sources()
+      .filter(({ file }) => !file.startsWith("components/catamorphic/"))
+      .flatMap(({ file, text }) =>
+        [
+          ...text.matchAll(
+            /className="[^"]*\bbg-accent\s[^"]*\b(px-|text-accent-fg)/g,
+          ),
+        ].map(() => file),
+      );
+    expect(recipes.length).toBeLessThanOrEqual(3);
   });
   it("destructive confirms use the danger role, never solid red with white text", () => {
     expect(count(/className="[^"]*\bbg-danger\b[^"]*\btext-white\b/g)).toEqual(

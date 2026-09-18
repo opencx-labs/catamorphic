@@ -1351,7 +1351,7 @@ function ErrorCard({
             <button
               type="button"
               onClick={onReauth}
-              className="button-primary button-sm"
+              className="flex cursor-pointer items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-accent-fg transition-opacity duration-100 hover:opacity-90"
               data-testid="chat-reauth"
             >
               <KeyRound className="size-3" />

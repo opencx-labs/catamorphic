@@ -351,7 +351,7 @@ export function AgentQuestionPanel({
           type="button"
           onClick={submit}
           disabled={!allAnswered || disabled}
-          className="button-primary button-sm"
+          className="h-7 shrink-0 cursor-pointer rounded-md bg-accent px-3 text-[12px] font-medium text-accent-fg transition-[opacity,transform] duration-150 hover:opacity-90 active:scale-[0.98] disabled:cursor-default disabled:opacity-35"
         >
           {questions.length > 1 ? "Submit answers" : "Submit"}
         </button>

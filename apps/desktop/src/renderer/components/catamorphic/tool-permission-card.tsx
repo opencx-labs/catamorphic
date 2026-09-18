@@ -79,7 +79,7 @@ export function ToolPermissionCard({
           type="button"
           disabled={busy}
           onClick={() => onAnswer({ decision: "allow" })}
-          className="button-primary"
+          className="h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:opacity-50"
           data-testid="tool-permission-allow"
         >
           Allow once
