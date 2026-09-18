@@ -479,3 +479,11 @@ Local agents default to full access and edit real profile files. Executable side
 sources use lazy Bun processes and the shared native collection/tree presentation.
 Initial loading, retained rows during refresh, recoverable errors and pending row
 actions remain visible; arrivals use existing list motion. See ADR 0140.
+
+### 2026-09-18: Observed Git changes
+
+The Changes section subscribes to the checkout being viewed. Native file events
+trigger debounced Git reads, with a slow reconciliation for missed events. Hidden
+consumers release their watches; returning refreshes immediately. Refresh retains
+existing rows and disclosure state. See [ADR 0143](../../docs/decisions/0143-observed-git-overviews.md)
+and the [measurement report](docs/performance.md#changes-subscriptions).

@@ -60,3 +60,10 @@ export interface GitRecordInput {
   paths: string[];
   message: string;
 }
+
+/** A visible consumer retains a scoped main-process observation. */
+export interface GitOverviewSubscription {
+  projectId: string;
+  paths?: string[] | "all";
+  sessionId?: string;
+}
