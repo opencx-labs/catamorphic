@@ -105,11 +105,13 @@ const paletteEscape = `
 
 describe("project agents", () => {
   it("boots into a project workspace", async () => {
-    await runWait(`return !!byText('button', 'New project');`, {
+    await runWait(`return !!byText('button', 'Create or import project');`, {
       timeoutMs: 60_000,
       label: "empty state",
     });
-    await run(`byText('button', 'New project').click(); return true;`);
+    await run(
+      `byText('button', 'Create or import project').click(); return true;`,
+    );
     await runWait(`return !!$('[data-testid="project-name-input"]');`);
     await run(`
       setReactValue($('[data-testid="project-name-input"]'), 'e2e-proj-agents');

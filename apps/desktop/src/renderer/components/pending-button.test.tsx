@@ -39,4 +39,57 @@ describe("PendingButton layout", () => {
       expect(label.classList.contains("whitespace-nowrap")).toBe(true);
     }
   });
+  it("exposes only the active label and stops the spinner after pending", async () => {
+    for (const pending of [false, true, false]) {
+      await act(async () => {
+        root.render(<PendingButton pending={pending}>Save</PendingButton>);
+      });
+      const button = container.querySelector("button");
+      expect(button?.disabled).toBe(pending);
+      expect(button?.getAttribute("aria-busy")).toBe(pending ? "true" : null);
+      expect(container.querySelectorAll('[aria-hidden="false"]')).toHaveLength(
+        1,
+      );
+      expect(container.querySelector(".animate-spin") !== null).toBe(pending);
+      expect(button?.textContent).toContain("Save");
+    }
+  });
+  it("keeps one active label when completion arrives before the request settles", async () => {
+    for (const [pending, done, label] of [
+      [false, false, "Install"],
+      [true, false, "Installing…"],
+      [true, true, "Installing…"],
+      [false, true, "Installed"],
+    ] as const) {
+      await act(async () => {
+        root.render(
+          <PendingButton
+            pending={pending}
+            done={done}
+            pendingLabel="Installing…"
+            doneLabel="Installed"
+          >
+            Install
+          </PendingButton>,
+        );
+      });
+      const visible = container.querySelectorAll('[aria-hidden="false"]');
+      expect(visible).toHaveLength(1);
+      expect(visible[0]?.textContent).toBe(label);
+    }
+  });
+
+  it("retains the action label when a completed button has no replacement label", async () => {
+    await act(async () => {
+      root.render(
+        <PendingButton pending={false} done>
+          Save
+        </PendingButton>,
+      );
+    });
+    expect(container.querySelector('[aria-hidden="false"]')?.textContent).toBe(
+      "Save",
+    );
+    expect(container.querySelector("button")?.disabled).toBe(true);
+  });
 });

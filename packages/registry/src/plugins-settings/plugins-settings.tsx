@@ -1,4 +1,6 @@
-"use client";
+import { PendingButton } from "@catamorphic/ui";
+
+("use client");
 
 import {
   type AttachedPlugin,
@@ -315,13 +317,15 @@ function SecretField({
           onChange={(e) => setValue(e.target.value)}
           className="flex-1 h-8 rounded border border-border-strong bg-bg-inset px-2 text-sm font-mono text-fg focus:border-accent focus:outline-none"
         />
-        <button
+        <PendingButton
+          pending={upsert.isPending}
+          pendingLabel="Saving…"
           type="submit"
           disabled={!value || upsert.isPending}
           className="h-8 cursor-pointer rounded border border-border-strong bg-bg-overlay px-3 text-xs font-medium text-fg transition-colors hover:border-border-strong disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {upsert.isPending ? "Saving…" : "Save"}
-        </button>
+          Save
+        </PendingButton>
       </div>
       {err ? <p className="text-[11px] text-danger">{err}</p> : null}
       <code className="text-[10px] text-fg-faint font-mono">{secret.name}</code>

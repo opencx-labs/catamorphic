@@ -18,6 +18,7 @@ import type {
 } from "@catamorphic/react/types";
 import { useSetAtom } from "jotai";
 import { useEffect, useState } from "react";
+import { PendingButton } from "./components/access/pending-button.js";
 
 export interface RunsPanelProps {
   projectId: string;
@@ -142,7 +143,9 @@ function RunControls({ run }: { run: Run }) {
           {inputError ? (
             <span className="catamorphic-run-inline-error">{inputError}</span>
           ) : null}
-          <button
+          <PendingButton
+            pending={submit.isPending}
+            pendingLabel="Submitting…"
             type="button"
             className="catamorphic-run-action catamorphic-run-action-primary"
             disabled={submit.isPending}
@@ -158,40 +161,46 @@ function RunControls({ run }: { run: Run }) {
               }
             }}
           >
-            {submit.isPending ? "Submitting..." : "Submit input"}
-          </button>
+            Submit input
+          </PendingButton>
         </div>
       ) : null}
       <div className="catamorphic-run-control-row">
         {run.capabilities.pauseProcessing ? (
-          <button
+          <PendingButton
+            pending={pause.isPending}
+            pendingLabel="Pausing…"
             type="button"
             className="catamorphic-run-action"
             disabled={pause.isPending}
             onClick={() => pause.mutate()}
           >
-            {pause.isPending ? "Pausing..." : "Pause processing"}
-          </button>
+            Pause processing
+          </PendingButton>
         ) : null}
         {run.capabilities.resumeProcessing ? (
-          <button
+          <PendingButton
+            pending={resume.isPending}
+            pendingLabel="Resuming…"
             type="button"
             className="catamorphic-run-action"
             disabled={resume.isPending}
             onClick={() => resume.mutate()}
           >
-            {resume.isPending ? "Resuming..." : "Resume processing"}
-          </button>
+            Resume processing
+          </PendingButton>
         ) : null}
         {run.capabilities.cancel ? (
-          <button
+          <PendingButton
+            pending={cancel.isPending}
+            pendingLabel="Canceling…"
             type="button"
             className="catamorphic-run-action catamorphic-run-action-danger"
             disabled={cancel.isPending}
             onClick={() => cancel.mutate(undefined)}
           >
-            {cancel.isPending ? "Canceling..." : "Cancel Run"}
-          </button>
+            Cancel Run
+          </PendingButton>
         ) : null}
       </div>
       {error ? (

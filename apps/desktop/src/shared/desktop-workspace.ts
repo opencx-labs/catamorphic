@@ -77,8 +77,13 @@ export interface DockSnapshot {
   side: "left" | "right";
   alignment: "edge" | "center";
 }
+export interface WorkspaceNavigation {
+  projectId: string;
+  newWindow?: boolean;
+  surface?: { url: string; title: string; mode: OpenMode; nonce: string };
+}
 export type WorkspaceEvent =
-  | { kind: "navigate"; projectId: string }
+  | ({ kind: "navigate" } & WorkspaceNavigation)
   | { kind: "chat"; command: DockCommand }
   | { kind: "newChat"; projectId: string }
   | {

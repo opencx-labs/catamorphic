@@ -42,10 +42,10 @@ beforeAll(async () => {
   origin = `http://127.0.0.1:${address.port}`;
   app = await launchApp();
   await app.waitFor(
-    "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='New project')",
+    "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Create or import project')",
   );
   await run(
-    "[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='New project').click()",
+    "[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Create or import project').click()",
   );
   await app.waitFor(
     "!!document.querySelector('[data-testid=project-name-input]')",

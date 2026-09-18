@@ -2,19 +2,14 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  desktopApi,
-  type NativePasswordImportResult,
-} from "../lib/desktop-api.js";
-import { BrowserImport } from "./browser-import.js";
+import { desktopApi } from "../lib/desktop-api.js";
+import { BrowserImportDialog } from "./browser-import.js";
 
 vi.mock("../lib/desktop-api.js", () => ({
   desktopApi: {
-    browserImportSupport: vi.fn(),
     browserImportList: vi.fn(),
     browserImportRun: vi.fn(),
     browserImportPasswords: vi.fn(),
-    browserImportNativePasswords: vi.fn(),
   },
 }));
 vi.mock("./shortcut-hint.js", () => ({
@@ -23,28 +18,25 @@ vi.mock("./shortcut-hint.js", () => ({
 const browser = {
   id: "chrome",
   label: "Google Chrome",
-  supportsPasswordImport: true,
   profiles: [
-    { id: "Default", name: "Work", bookmarkCount: 2, hasPasswords: true },
+    {
+      id: "Default",
+      name: "Work",
+      bookmarkCount: 2,
+      hasHistory: true,
+      hasPasswords: true,
+      hasSessions: true,
+    },
   ],
-};
-const empty: NativePasswordImportResult = {
-  imported: 0,
-  existing: 0,
-  invalid: 0,
-  failed: 0,
-  cancelled: false,
 };
 let container: HTMLDivElement;
 let root: Root;
+const close = vi.fn();
+const complete = vi.fn();
 beforeEach(() => {
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
   vi.resetAllMocks();
   vi.mocked(desktopApi.browserImportList).mockResolvedValue([browser]);
-  vi.mocked(desktopApi.browserImportSupport).mockResolvedValue({
-    available: true,
-    reason: null,
-  });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -56,87 +48,134 @@ afterEach(() => {
 });
 const render = () =>
   act(async () => {
-    root.render(<BrowserImport />);
+    root.render(
+      <BrowserImportDialog
+        open
+        profileId="destination"
+        onClose={close}
+        onComplete={complete}
+      />,
+    );
   });
-const nativeButton = () =>
+const start = () =>
   container.querySelector<HTMLButtonElement>(
-    '[aria-label="Import passwords from Google Chrome, Work"]',
+    '[data-testid="browser-import-start"]',
   );
 
-describe("browser import settings", () => {
-  it("offers direct import only when main reports platform support, keeping CSV available", async () => {
-    vi.mocked(desktopApi.browserImportSupport).mockResolvedValue({
-      available: false,
-      reason: "Direct password import requires macOS 11 or later.",
-    });
+describe("shared browser import", () => {
+  it("lets users select categories before touching source data", async () => {
     await render();
-    expect(nativeButton()).toBeNull();
-    expect(container.textContent).toContain("macOS 11 or later");
-    expect(container.textContent).toContain("Import CSV");
-    expect(
-      container.querySelector(
-        '[aria-label="Import bookmarks from Google Chrome, Work"]',
-      ),
-    ).not.toBeNull();
+    expect(desktopApi.browserImportRun).not.toHaveBeenCalled();
+    await act(async () => {
+      container
+        .querySelector<HTMLInputElement>('[aria-label="Passwords"]')
+        ?.click();
+      container
+        .querySelector<HTMLInputElement>('[aria-label="Signed-in sessions"]')
+        ?.click();
+    });
+    vi.mocked(desktopApi.browserImportRun).mockResolvedValue({
+      cancelled: false,
+    });
+    await act(async () => start()?.click());
+    expect(desktopApi.browserImportRun).toHaveBeenCalledWith({
+      browserId: "chrome",
+      sourceProfileId: "Default",
+      targetProfileId: "destination",
+      categories: ["bookmarks", "history"],
+    });
+    expect(complete).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
   });
-  it("disables direct import for profiles without password stores", async () => {
+  it("offers only available categories without unsupported-item messaging", async () => {
     vi.mocked(desktopApi.browserImportList).mockResolvedValue([
       {
         ...browser,
         profiles: [
           {
+            ...browser.profiles[0],
             id: "Default",
             name: "Work",
-            bookmarkCount: 2,
+            bookmarkCount: 0,
             hasPasswords: false,
+            hasSessions: false,
           },
         ],
       },
     ]);
     await render();
-    expect(nativeButton()?.disabled).toBe(true);
+    expect(container.querySelector('[aria-label="Bookmarks"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Passwords"]')).toBeNull();
+    expect(container.querySelector('[aria-label="History"]')).not.toBeNull();
+    expect(container.textContent).not.toMatch(
+      /unsupported|skipped|could not import/i,
+    );
   });
-  it("shows progress, prevents duplicate actions, and reports meaningful partial results", async () => {
-    let finish: (result: NativePasswordImportResult) => void = () => undefined;
-    vi.mocked(desktopApi.browserImportNativePasswords).mockReturnValue(
+  it("keeps selection and close controls stable during an import and prevents duplicate starts", async () => {
+    let finish: (result: { cancelled: boolean }) => void = () => {};
+    vi.mocked(desktopApi.browserImportRun).mockReturnValue(
       new Promise((resolve) => {
         finish = resolve;
       }),
     );
     await render();
-    await act(async () => nativeButton()?.click());
-    expect(nativeButton()?.disabled).toBe(true);
-    expect(container.querySelector('[role="status"]')?.textContent).toContain(
-      "Keychain prompts",
-    );
-    expect(desktopApi.browserImportNativePasswords).toHaveBeenCalledWith({
-      browserId: "chrome",
-      profileId: "Default",
+    await act(async () => {
+      start()?.click();
+      start()?.click();
     });
+    expect(desktopApi.browserImportRun).toHaveBeenCalledOnce();
+    expect(start()?.disabled).toBe(true);
+    expect(
+      container.querySelector<HTMLButtonElement>('[aria-label="Close import"]')
+        ?.disabled,
+    ).toBe(true);
     await act(async () =>
-      finish({ ...empty, imported: 3, existing: 2, invalid: 1, failed: 4 }),
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
     );
-    expect(container.textContent).toContain("Imported 3 passwords.");
-    expect(container.textContent).toContain("Kept 2 existing accounts.");
-    expect(container.textContent).toContain("Could not decrypt 4 entries.");
-    expect(nativeButton()?.disabled).toBe(false);
+    expect(close).not.toHaveBeenCalled();
+    await act(async () => finish({ cancelled: false }));
+    expect(complete).toHaveBeenCalledOnce();
   });
-  it("lets the user retry after denial or cancellation", async () => {
-    vi.mocked(desktopApi.browserImportNativePasswords).mockRejectedValueOnce(
-      new Error("Keychain access denied"),
-    );
-    await render();
-    await act(async () => nativeButton()?.click());
-    expect(container.querySelector('[role="alert"]')?.textContent).toBe(
-      "Keychain access denied",
-    );
-    expect(nativeButton()?.disabled).toBe(false);
-    vi.mocked(desktopApi.browserImportNativePasswords).mockResolvedValueOnce({
-      ...empty,
+  it("allows retry after cancellation or a whole-operation failure without marking import done", async () => {
+    vi.mocked(desktopApi.browserImportRun).mockResolvedValueOnce({
       cancelled: true,
     });
-    await act(async () => nativeButton()?.click());
+    await render();
+    await act(async () => start()?.click());
+    expect(complete).not.toHaveBeenCalled();
+    expect(start()?.disabled).toBe(false);
+    await act(async () =>
+      container
+        .querySelector<HTMLInputElement>('[aria-label="Passwords"]')
+        ?.click(),
+    );
     expect(container.querySelector('[role="alert"]')).toBeNull();
-    expect(container.textContent).toContain("Password import cancelled.");
+    vi.mocked(desktopApi.browserImportRun).mockRejectedValueOnce(
+      new Error("Close the source browser and try again."),
+    );
+    await act(async () => start()?.click());
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "try again",
+    );
+    expect(close).not.toHaveBeenCalled();
+  });
+  it("shows an actionable unlock failure without Electron IPC internals or marking completion", async () => {
+    vi.mocked(desktopApi.browserImportRun).mockResolvedValue({
+      cancelled: false,
+      error:
+        "macOS could not unlock this browser's encryption key. Check Keychain Access.",
+    });
+    await render();
+    await act(async () => start()?.click());
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Check Keychain Access",
+    );
+    expect(container.textContent).not.toMatch(
+      /remote method|browser-import-run/,
+    );
+    expect(complete).not.toHaveBeenCalled();
+    expect(start()?.disabled).toBe(false);
   });
 });

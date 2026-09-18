@@ -139,8 +139,10 @@ const collectAnimationRules = () =>
 
 describe("setup", () => {
   it("creates a project workspace", async () => {
-    await runWait(`return !!byText('button', 'New project');`);
-    await run(`byText('button', 'New project').click(); return true;`);
+    await runWait(`return !!byText('button', 'Create or import project');`);
+    await run(
+      `byText('button', 'Create or import project').click(); return true;`,
+    );
     await runWait(`return !!$('[data-testid="project-name-input"]');`);
     await run(`
       setReactValue($('[data-testid="project-name-input"]'), 'motion-project');

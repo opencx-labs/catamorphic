@@ -104,6 +104,8 @@ export interface AppHandle {
 }
 
 export interface LaunchOpts {
+  /** OS-style web links delivered on cold launch. */
+  urls?: string[];
   /** Installed/packaged binary for release performance checks with isolated data. */
   executablePath?: string;
   /** Reuse an existing userData dir (relaunch scenarios). */
@@ -143,13 +145,16 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
   const port = await freeCdpPort();
   const child = spawn(
     electronBinary,
-    electronLaunchArgs({
-      cdpPort: port,
-      ci: process.env.CI,
-      platform: process.platform,
-      // Only fake-credential tests use Chromium's test key. Real-provider evals retain OS encryption.
-      useMockKeychain: (opts.env?.CATAMORPHIC_E2E_FAKE_AGENT ?? "1") === "1",
-    }),
+    [
+      ...electronLaunchArgs({
+        cdpPort: port,
+        ci: process.env.CI,
+        platform: process.platform,
+        // Only fake-credential tests use Chromium's test key. Real-provider evals retain OS encryption.
+        useMockKeychain: (opts.env?.CATAMORPHIC_E2E_FAKE_AGENT ?? "1") === "1",
+      }),
+      ...(opts.urls ?? []),
+    ],
     {
       cwd: DESKTOP_DIR,
       env: {
@@ -525,6 +530,8 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
 export type KeyName = keyof typeof KEY_CODES;
 
 const KEY_CODES = {
+  p: { windowsVirtualKeyCode: 80, code: "KeyP" },
+  Space: { key: " ", windowsVirtualKeyCode: 32, code: "Space", text: " " },
   a: { windowsVirtualKeyCode: 65, code: "KeyA" },
   Enter: { windowsVirtualKeyCode: 13, code: "Enter", text: "\r" },
   Backspace: { windowsVirtualKeyCode: 8, code: "Backspace" },

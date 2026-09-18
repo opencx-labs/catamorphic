@@ -127,6 +127,13 @@ test without an explicit request. Prefer the isolated Electron harness.
 | Idle CPU and memory | [Performance](docs/performance.md) | `scripts/desktop-soak.ts`, `e2e/runtime-idle.e2e.ts` |
 | Browser control and native computer use | [Computer use](docs/computer-use.md) | `main/browser-driver.ts`, `packages/codex` |
 | Styling and animation | [Design system](DESIGN.md) | tokens, list motion and native motion tests |
+| Loading buttons and modal stability | [Button contract](DESIGN.md#buttons) | `@catamorphic/ui` PendingButton, reserved status space |
+| Dropdowns and checkboxes | [Control contract](DESIGN.md#dropdowns-and-checkboxes) | `renderer/form-controls.css`, semantic select/checkbox HTML |
+
+All desktop dropdowns and checkboxes use the app's shared control styling, never
+OS-native dropdown menus or browser-default checkboxes. Read the linked control
+contract before changing a form. Onboarding and Settings reuse the same import
+and default-browser actions.
 
 [DESIGN-HISTORY.md](DESIGN-HISTORY.md) records prior rationale. Current contracts
 win over superseded entries. Significant accepted choices need an ADR and a short

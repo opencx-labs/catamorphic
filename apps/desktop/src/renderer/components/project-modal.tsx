@@ -524,7 +524,9 @@ function GithubPanel({
         <p className="text-xs text-fg-muted">
           Connect your GitHub account to import a repository.
         </p>
-        <button
+        <PendingButton
+          pending={authPending}
+          pendingLabel="Opening GitHub…"
           type="button"
           onClick={startConnect}
           disabled={authPending}
@@ -532,8 +534,8 @@ function GithubPanel({
           data-testid="github-connect"
           className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
         >
-          {authPending ? "Opening GitHub…" : "Connect GitHub"}
-        </button>
+          Connect GitHub
+        </PendingButton>
         {authError && <p className="text-xs text-danger">{authError}</p>}
       </div>
     );

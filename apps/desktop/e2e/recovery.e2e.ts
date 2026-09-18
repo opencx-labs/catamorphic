@@ -53,11 +53,13 @@ const runWait = <T>(
 describe("interrupted turn recovery", () => {
   it("a turn killed mid-flight settles as interrupted on relaunch", async () => {
     app = await launchApp();
-    await runWait(`return !!byText('button', 'New project');`, {
+    await runWait(`return !!byText('button', 'Create or import project');`, {
       timeoutMs: 60_000,
       label: "empty state",
     });
-    await run(`byText('button', 'New project').click(); return true;`);
+    await run(
+      `byText('button', 'Create or import project').click(); return true;`,
+    );
     await runWait(`return !!$('[data-testid="project-name-input"]');`);
     await run(`
       setReactValue($('[data-testid="project-name-input"]'), 'e2e-recovery');

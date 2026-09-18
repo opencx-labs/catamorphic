@@ -1,4 +1,6 @@
-"use client";
+import { PendingButton } from "@catamorphic/ui";
+
+("use client");
 
 import { useProjectFiles, useWriteProjectFile } from "@catamorphic/react";
 import { useCallback, useState } from "react";
@@ -110,14 +112,16 @@ export function ProjectEditor({
               {activeFile ?? "(no file selected)"}
             </span>
             {activeFile && drafts[activeFile] !== undefined ? (
-              <button
+              <PendingButton
+                pending={writeFile.isPending}
+                pendingLabel="Saving…"
                 type="button"
                 onClick={handleSave}
                 disabled={writeFile.isPending}
                 className="h-7 cursor-pointer rounded border border-border-strong bg-bg-overlay px-2 text-xs text-fg hover:border-border-strong disabled:opacity-50"
               >
-                {writeFile.isPending ? "Saving…" : "Save"}
-              </button>
+                Save
+              </PendingButton>
             ) : null}
           </div>
           <div className="flex-1 min-h-0">

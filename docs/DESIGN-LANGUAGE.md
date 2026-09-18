@@ -2,7 +2,7 @@
 
 Catamorphic's framework site and desktop implementation share a visual
 foundation. Work is the end-user product identity at work.software
-([ADR 0143](decisions/0143-work-product-identity.md)); its website uses the same
+([ADR 0145](decisions/0145-work-product-identity.md)); its website uses the same
 dark palette, orange accent, and Inter typography with more spacious layouts
 for a general audience. Two Catamorphic implementations exist:
 
@@ -96,3 +96,16 @@ itself change the desktop app's current design or release identity.
 5. Motion within the contract; verify visually before calling it done.
 6. Dark-first; check light mode if the surface supports it.
 7. Zero em/en-dashes in any string a user or agent will read.
+
+## Desktop form controls
+
+Desktop dropdowns and checkboxes follow the app-owned
+[control contract](../apps/desktop/DESIGN.md#dropdowns-and-checkboxes), with one
+[host stylesheet](../apps/desktop/src/renderer/form-controls.css). Keep semantic
+HTML and keyboard behavior; never introduce OS-native select menus or unstyled
+checkboxes in desktop chrome. Use the same tokens and motion as project/profile
+menus. This is host design guidance, not a restriction on library embedders.
+
+Async actions follow the [button contract](../apps/desktop/DESIGN.md#buttons):
+use the shared PendingButton, preserve its dimensions and reserve loading status
+space so a click cannot shift the surrounding layout.

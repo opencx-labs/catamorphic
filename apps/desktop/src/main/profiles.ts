@@ -20,6 +20,7 @@ export interface Profile {
   color: string;
   projectIds: string[];
   defaultProjectId?: string;
+  browserImportCompletedAt?: number;
 }
 
 export interface ProfilesFile {
@@ -126,6 +127,13 @@ export class ProfilesStore {
     }
     this.save();
     return profile;
+  }
+
+  markBrowserImported(id: string): void {
+    const profile = this.get(id);
+    if (!profile) return;
+    profile.browserImportCompletedAt = Date.now();
+    this.save();
   }
 
   setDefaultProfile(id: string): void {

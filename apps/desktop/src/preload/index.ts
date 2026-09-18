@@ -2,6 +2,7 @@ import type { ResourcePreview } from "@catamorphic/react";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { AgentCommandsResult } from "../shared/agent-commands.js";
 import type { BookmarkPlacement } from "../shared/bookmark-target.js";
+import type { DefaultBrowserState } from "../shared/default-browser.js";
 import type {
   ChatDraft,
   ChatDraftUpdate,
@@ -9,6 +10,7 @@ import type {
   DockData,
   DockSnapshot,
   WorkspaceEvent,
+  WorkspaceNavigation,
 } from "../shared/desktop-workspace.js";
 import type { DockDrag, DockSize } from "../shared/dock-position.js";
 import type { FilePreviewInput } from "../shared/file-preview.js";
@@ -26,6 +28,17 @@ export interface ServerInfo {
 }
 
 const api = {
+  defaultBrowserState: (): Promise<DefaultBrowserState> =>
+    ipcRenderer.invoke("catamorphic:default-browser-state"),
+  defaultBrowserRequest: (): Promise<DefaultBrowserState> =>
+    ipcRenderer.invoke("catamorphic:default-browser-request"),
+  browserTakePendingUrls: (): Promise<string[]> =>
+    ipcRenderer.invoke("catamorphic:browser-take-pending-urls"),
+  onPendingBrowserUrls: (listener: () => void): (() => void) => {
+    ipcRenderer.on("catamorphic:pending-browser-urls", listener);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:pending-browser-urls", listener);
+  },
   workspaceInitial: (): Promise<string | undefined> =>
     ipcRenderer.invoke("catamorphic:workspace-initial"),
   dockDraftGet: (localId: string): Promise<ChatDraft | null> =>
@@ -42,8 +55,8 @@ const api = {
   },
   workspaceClaim: (projectId: string): Promise<boolean> =>
     ipcRenderer.invoke("catamorphic:workspace-claim", projectId),
-  workspaceNavigate: (projectId: string, newWindow = false): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:workspace-navigate", projectId, newWindow),
+  workspaceNavigate: (input: WorkspaceNavigation): Promise<void> =>
+    ipcRenderer.invoke("catamorphic:workspace-navigate", input),
   workspaceActive: (projectId: string): Promise<void> =>
     ipcRenderer.invoke("catamorphic:workspace-active", projectId),
   dockPublish: (data: DockData): Promise<void> =>
@@ -318,19 +331,25 @@ const api = {
     ipcRenderer.invoke("catamorphic:openrouter-models"),
 
   // --- import from other browsers ---
-  browserImportSupport: () =>
-    ipcRenderer.invoke("catamorphic:browser-import-support"),
-  browserImportNativePasswords: (input: {
-    browserId: string;
-    profileId: string;
-  }) =>
-    ipcRenderer.invoke("catamorphic:browser-import-native-passwords", input),
+  historyQuery: (input: unknown) =>
+    ipcRenderer.invoke("catamorphic:history-query", input),
+  historyRecord: (input: unknown) =>
+    ipcRenderer.invoke("catamorphic:history-record", input),
+  historyRemove: (id: string) =>
+    ipcRenderer.invoke("catamorphic:history-remove", id),
+  historyClear: () => ipcRenderer.invoke("catamorphic:history-clear"),
+  onHistoryChanged: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on("catamorphic:history-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:history-changed", handler);
+  },
   browserImportList: (): Promise<unknown[]> =>
     ipcRenderer.invoke("catamorphic:browser-import-list"),
   browserImportRun: (input: unknown): Promise<unknown> =>
     ipcRenderer.invoke("catamorphic:browser-import-run", input),
-  browserImportPasswords: (): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:browser-import-passwords"),
+  browserImportPasswords: (input: { profileId: string }): Promise<unknown> =>
+    ipcRenderer.invoke("catamorphic:browser-import-passwords", input),
 
   devWindow: (action: string, width?: number, height?: number) =>
     ipcRenderer.invoke("catamorphic:dev-window", action, width, height),
@@ -599,11 +618,6 @@ const api = {
     faviconUrl: string;
   }): Promise<void> =>
     ipcRenderer.invoke("catamorphic:browser-history-favicon", input),
-  browserRecentHistory: (input: {
-    profileId: string;
-    limit?: number;
-  }): Promise<{ url: string; title: string; faviconUrl?: string }[]> =>
-    ipcRenderer.invoke("catamorphic:browser-history-recent", input),
   browserSuggest: (input: {
     profileId: string;
     query: string;

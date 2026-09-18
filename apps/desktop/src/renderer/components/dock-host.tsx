@@ -185,7 +185,7 @@ export function DockHost({
         ) ||
         (event.kind === "entry" && event.entry.mode === "tab")
       )
-        void desktopApi.workspaceNavigate(chat.projectId);
+        void desktopApi.workspaceNavigate({ projectId: chat.projectId });
       if (localPresentations.invoke(chat.entry.localId, event)) return;
     }
     void desktopApi.dockCommand({

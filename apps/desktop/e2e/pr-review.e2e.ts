@@ -116,8 +116,8 @@ async function verifyReviewTheme(frame: FrameHandle) {
 }
 beforeAll(async () => {
   app = await launchApp({ env: { CATAMORPHIC_E2E_REVIEW: "1" } });
-  await wait("return !!button('New project');");
-  await run("button('New project').click();");
+  await wait("return !!button('Create or import project');");
+  await run("button('Create or import project').click();");
   await wait("return !!$('[data-testid=project-name-input]');");
   await run(
     "setReactValue($('[data-testid=project-name-input]'), 'Review fixture');",

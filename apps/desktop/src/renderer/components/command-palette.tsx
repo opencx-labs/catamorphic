@@ -57,6 +57,7 @@ import {
   type KeybindingAction,
 } from "../../shared/actions.js";
 import type { FileSearchResult } from "../../shared/file-search.js";
+import type { HistoryEntry } from "../../shared/history.js";
 import type { OpenMode as CommitMode } from "../../shared/open-mode.js";
 import { SETTINGS_CATALOG } from "../../shared/settings-catalog.js";
 import { sidebarSections } from "../../shared/sidebar.js";
@@ -76,6 +77,7 @@ import {
   type SidebarConfig,
   type SidebarItem,
 } from "../lib/desktop-api.js";
+import { HISTORY_ICONS, historyDetail, useHistory } from "../lib/history.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
 import {
@@ -327,12 +329,19 @@ const LIST_MAX_HEIGHT = 350;
  * input pops the chip (cmdk convention).
  */
 export type PaletteSearchRequest = { nonce: string } & (
-  | { mode: "files" | "content" }
+  | { mode: "files" | "content" | "history" }
   | { mode: "section"; label: string; load: () => Promise<PaletteItem[]> }
 );
 
 export interface PaletteMode {
-  id: "agent" | "web" | "settings" | "files" | "content" | "section";
+  id:
+    | "agent"
+    | "web"
+    | "settings"
+    | "files"
+    | "content"
+    | "section"
+    | "history";
   /** Typed trigger, matched with or without the leading @. */
   trigger: string;
   /** Alternate typed names that commit the same mode (e.g. "chat"). */
@@ -347,6 +356,15 @@ export interface PaletteMode {
 }
 
 export const PALETTE_MODES: PaletteMode[] = [
+  {
+    id: "history",
+    trigger: "history",
+    chip: "History",
+    icon: History,
+    label: "Search history",
+    description: "Find pages and work you opened",
+    placeholder: "Search history…",
+  },
   {
     id: "files",
     trigger: "files",
@@ -533,6 +551,7 @@ export function CommandPalette({
   onHighlightTarget,
   pickerRequest,
   searchRequest,
+  onOpenHistory,
   incognitoAllowed = true,
 }: {
   variant: "overlay" | "tab";
@@ -612,6 +631,7 @@ export function CommandPalette({
   /** Overlay only: open straight into a picker (Cmd+P agent commands). */
   pickerRequest?: { kind: PaletteInPicker; nonce: string } | null;
   searchRequest?: PaletteSearchRequest | null;
+  onOpenHistory: (entry: HistoryEntry, mode: CommitMode) => void;
   /** Project policy (ADR 0062): hide the incognito command when false. */
   incognitoAllowed?: boolean;
 }) {
@@ -854,7 +874,7 @@ export function CommandPalette({
   // Keep the exiting list intact, but always start a fresh opening even if
   // the user reopens before its exit animation has finished. This precedes
   // pickerRequest so an explicit picker can initialize the fresh palette.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const reset = () => {
       setQuery("");
       setSelectedIndex(0);
@@ -966,23 +986,14 @@ export function CommandPalette({
     };
   }, [projectId, profileId]);
 
-  // Refetched on every open — the overlay stays mounted while closed, so
-  // a mount-only fetch would serve stale history forever.
-  const [history, setHistory] = useState<
-    { url: string; title: string; faviconUrl?: string }[]
-  >([]);
-  useEffect(() => {
-    if (!profileId || !open) return;
-    let cancelled = false;
-    void desktopApi
-      .browserRecentHistory({ profileId, limit: 150 })
-      .then((entries) => {
-        if (!cancelled) setHistory(entries);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [profileId, open]);
+  const historyResults = useHistory({
+    query,
+    limit: 80,
+    enabled: Boolean(profileId) && (variant === "tab" || open),
+    profileId,
+  });
+  const historyOpenRef = useRef(onOpenHistory);
+  historyOpenRef.current = onOpenHistory;
 
   // A palette tab is the only thing on its page, so returning to the
   // window (Cmd+Tab, a click from another app) should land the caret in
@@ -1299,28 +1310,48 @@ export function CommandPalette({
     onOpenUrl,
   ]);
 
-  const historyItems = useMemo<PaletteItem[]>(() => {
-    const bookmarkedUrls = new Set(
-      bookmarks.map((bookmark) => bookmark.url.replace(/\/$/, "")),
-    );
-    return history.map((entry) => ({
-      id: `history:${entry.url}`,
-      icon: Globe,
-      iconNode: (
-        <SiteFavicon
-          url={entry.url}
-          faviconUrl={entry.faviconUrl}
-          className="size-4"
-        />
-      ),
-      label: entry.title || entry.url,
-      detail: hostOf(entry.url),
-      keywords: [entry.title, hostOf(entry.url), bareUrl(entry.url)],
-      kind: "navigate" as const,
-      bookmarked: bookmarkedUrls.has(entry.url.replace(/\/$/, "")),
-      run: (mode) => onOpenUrl(entry.url, mode),
-    }));
-  }, [history, bookmarks, onOpenUrl]);
+  const historyItems = useMemo<PaletteItem[]>(
+    () =>
+      historyResults.entries.map((entry) => ({
+        id: `history:${entry.id}`,
+        icon: HISTORY_ICONS[entry.target.kind],
+        iconNode:
+          entry.target.kind === "web" && entry.faviconUrl ? (
+            <SiteFavicon
+              url={entry.target.url}
+              faviconUrl={entry.faviconUrl}
+              className="size-4"
+            />
+          ) : undefined,
+        bookmarked:
+          entry.target.kind === "web" &&
+          bookmarks.some(
+            (bookmark) =>
+              entry.target.kind === "web" &&
+              bookmark.url.replace(/\/$/, "") ===
+                entry.target.url.replace(/\/$/, ""),
+          ),
+        label: entry.title,
+        detail: historyDetail(entry),
+        keywords: [historyDetail(entry)],
+        kind: "navigate",
+        run: (mode) => historyOpenRef.current(entry, mode),
+      })),
+    [historyResults.entries, bookmarks],
+  );
+  const historyPageItem = useMemo<PaletteItem>(
+    () => ({
+      id: "open-history",
+      icon: History,
+      label: "History",
+      detail: "Pages and work you've opened",
+      keywords: ["history", "recent", "visited"],
+      kind: "navigate",
+      run: (mode) =>
+        onOpenTab({ kind: "history", name: "history", label: "History" }, mode),
+    }),
+    [onOpenTab],
+  );
 
   const settingItems = useMemo<PaletteItem[]>(
     () =>
@@ -1363,6 +1394,7 @@ export function CommandPalette({
         ...profileItems,
         ...sidebarItems,
         ...historyItems,
+        historyPageItem,
         ...settingItems,
       ]),
     [
@@ -1373,6 +1405,7 @@ export function CommandPalette({
       profileItems,
       sidebarItems,
       historyItems,
+      historyPageItem,
       settingItems,
     ],
   );
@@ -1742,6 +1775,24 @@ export function CommandPalette({
     // Chip mode active: the whole input belongs to that mode. One row —
     // Enter commits it — so typing never drifts into unrelated matches.
     if (mode) {
+      if (mode.id === "history") {
+        if (
+          historyResults.error ||
+          (historyResults.loading && !historyItems.length)
+        )
+          return [
+            {
+              id: "history:status",
+              icon: History,
+              label: historyResults.error ?? "Searching…",
+              keywords: [],
+              kind: "action",
+              disabled: !historyResults.error,
+              run: historyResults.refresh,
+            },
+          ];
+        return historyItems;
+      }
       if (mode.id === "section" && searchRequest?.mode === "section") {
         if (sectionLoading || sectionError)
           return [
@@ -1899,6 +1950,7 @@ export function CommandPalette({
         ...projectItems,
         ...profileItems,
         ...sidebarItems,
+        historyPageItem,
         ...historyItems.slice(0, 8),
       ];
     }
@@ -1964,6 +2016,10 @@ export function CommandPalette({
     profileItems,
     sidebarItems,
     historyItems,
+    historyPageItem,
+    historyResults.error,
+    historyResults.loading,
+    historyResults.refresh,
     onSendToAgent,
     onOpenUrl,
     onOpenTab,
@@ -2056,7 +2112,8 @@ export function CommandPalette({
     if (item.disabled) return;
     if (
       item.id === "pick:model:catalog-status" ||
-      item.id === "section:status"
+      item.id === "section:status" ||
+      item.id === "history:status"
     ) {
       item.run("replace");
       return;

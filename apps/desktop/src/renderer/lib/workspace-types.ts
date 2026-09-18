@@ -86,6 +86,7 @@ export type WorkspaceTab = (
       destination?: SettingsDestination;
     }
   | { kind: "profile-settings"; name: string; label?: string }
+  | { kind: "history"; name: string; label?: string }
   | { kind: "usage"; name: string; label?: string }
   | { kind: "palette"; name: string; label?: string }
   | { kind: "agent-setup"; name: string; label?: string }

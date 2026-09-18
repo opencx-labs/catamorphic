@@ -23,6 +23,12 @@ export interface SettingsEntry {
 
 /** Search metadata and stable navigation ids, shared by the UI and agent reference. */
 export const SETTINGS_CATALOG: readonly SettingsEntry[] = [
+  {
+    id: "defaultBrowser",
+    label: "Default browser",
+    category: "workspace",
+    keywords: ["default", "browser", "links", "http", "https", "system"],
+  },
   ...SETTING_KEYS.map((key): SettingsEntry => {
     const definition = SETTINGS[key];
     return {

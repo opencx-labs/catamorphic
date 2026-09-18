@@ -154,7 +154,7 @@ describe("GithubAuthorizationTray", () => {
     );
     act(() => githubTab?.click());
     const connect = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent === "Connect GitHub",
+      (button) => button.dataset.testid === "github-connect",
     );
     await act(async () => connect?.click());
 

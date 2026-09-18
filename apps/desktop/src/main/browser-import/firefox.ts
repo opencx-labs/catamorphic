@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { readBrowserDatabase } from "./database.js";
 import type {
+  BrowserCookieSource,
   BrowserImporter,
   ImportableBrowser,
   ImportedBookmark,
@@ -73,11 +74,12 @@ function parseProfiles(baseDir: string): FirefoxProfile[] {
 }
 
 function queryBookmarks(file: string): ImportedBookmarks {
-  let database: DatabaseSync | undefined;
   try {
-    database = new DatabaseSync(file, { readOnly: true });
-    const rows = database
-      .prepare(`
+    return readBrowserDatabase({
+      file,
+      read: (database) => {
+        const rows = database
+          .prepare(`
         SELECT b.id AS id, b.type AS type, b.parent AS parent,
                b.title AS title, b.guid AS guid, p.url AS url
         FROM moz_bookmarks AS b
@@ -87,68 +89,68 @@ function queryBookmarks(file: string): ImportedBookmarks {
                (p.url LIKE 'http://%' OR p.url LIKE 'https://%'))
         ORDER BY b.id
       `)
-      .all() as Array<Record<string, unknown>>;
-    const rootGuids = new Set([
-      "root________",
-      "menu________",
-      "toolbar_____",
-      "unfiled_____",
-      "mobile______",
-    ]);
-    const byId = new Map<number, Record<string, unknown>>();
-    for (const row of rows) {
-      if (typeof row.id === "number") byId.set(row.id, row);
-    }
-    const folderPath = (parentId: unknown): string[] => {
-      const path: string[] = [];
-      const seen = new Set<number>();
-      let id = typeof parentId === "number" ? parentId : undefined;
-      while (id !== undefined && !seen.has(id)) {
-        seen.add(id);
-        const folder = byId.get(id);
-        if (!folder) break;
-        if (rootGuids.has(String(folder.guid))) break;
-        if (typeof folder.title === "string" && folder.title.trim()) {
-          path.unshift(folder.title.trim());
+          .all();
+        const rootGuids = new Set([
+          "root________",
+          "menu________",
+          "toolbar_____",
+          "unfiled_____",
+          "mobile______",
+        ]);
+        const byId = new Map<number, Record<string, unknown>>();
+        for (const row of rows) {
+          if (typeof row.id === "number") byId.set(row.id, row);
         }
-        id = typeof folder.parent === "number" ? folder.parent : undefined;
-      }
-      return path;
-    };
-    const folders = rows
-      .filter(
-        (row) =>
-          row.type === 2 &&
-          !rootGuids.has(String(row.guid)) &&
-          typeof row.title === "string" &&
-          row.title.trim(),
-      )
-      .map((row) => ({
-        path: [...folderPath(row.parent), String(row.title).trim()],
-      }));
-    const bookmarks: ImportedBookmark[] = [];
-    const bookmarkSeen = new Set<string>();
-    for (const row of rows) {
-      if (row.type !== 1 || typeof row.url !== "string") continue;
-      const title =
-        typeof row.title === "string" && row.title.trim()
-          ? row.title.trim()
-          : row.url;
-      const path = folderPath(row.parent);
-      const key = `${row.url}\n${title}\n${JSON.stringify(path)}`;
-      if (bookmarkSeen.has(key)) continue;
-      bookmarkSeen.add(key);
-      bookmarks.push({
-        label: title,
-        url: row.url,
-        ...(path.length > 0 ? { folderPath: path } : {}),
-      });
-    }
-    return { folders, bookmarks };
+        const folderPath = (parentId: unknown): string[] => {
+          const path: string[] = [];
+          const seen = new Set<number>();
+          let id = typeof parentId === "number" ? parentId : undefined;
+          while (id !== undefined && !seen.has(id)) {
+            seen.add(id);
+            const folder = byId.get(id);
+            if (!folder) break;
+            if (rootGuids.has(String(folder.guid))) break;
+            if (typeof folder.title === "string" && folder.title.trim()) {
+              path.unshift(folder.title.trim());
+            }
+            id = typeof folder.parent === "number" ? folder.parent : undefined;
+          }
+          return path;
+        };
+        const folders = rows
+          .filter(
+            (row) =>
+              row.type === 2 &&
+              !rootGuids.has(String(row.guid)) &&
+              typeof row.title === "string" &&
+              row.title.trim(),
+          )
+          .map((row) => ({
+            path: [...folderPath(row.parent), String(row.title).trim()],
+          }));
+        const bookmarks: ImportedBookmark[] = [];
+        const bookmarkSeen = new Set<string>();
+        for (const row of rows) {
+          if (row.type !== 1 || typeof row.url !== "string") continue;
+          const title =
+            typeof row.title === "string" && row.title.trim()
+              ? row.title.trim()
+              : row.url;
+          const path = folderPath(row.parent);
+          const key = `${row.url}\n${title}\n${JSON.stringify(path)}`;
+          if (bookmarkSeen.has(key)) continue;
+          bookmarkSeen.add(key);
+          bookmarks.push({
+            label: title,
+            url: row.url,
+            ...(path.length > 0 ? { folderPath: path } : {}),
+          });
+        }
+        return { folders, bookmarks };
+      },
+    });
   } catch {
     return EMPTY;
-  } finally {
-    database?.close();
   }
 }
 
@@ -167,6 +169,20 @@ export function firefoxImporter(
       ? queryBookmarks(path.join(profile.directory, "places.sqlite"))
       : EMPTY;
   };
+  const historyFile = (profileId: string): string | null => {
+    const profile = find(profileId);
+    return profile ? path.join(profile.directory, "places.sqlite") : null;
+  };
+  const cookieSource = (profileId: string): BrowserCookieSource | null => {
+    const profile = find(profileId);
+    if (!profile) return null;
+    const file = path.join(profile.directory, "cookies.sqlite");
+    try {
+      return fs.lstatSync(file).isFile() ? { file, format: "firefox" } : null;
+    } catch {
+      return null;
+    }
+  };
   return {
     id: "firefox",
     label: "Firefox",
@@ -176,6 +192,8 @@ export function firefoxImporter(
       const profiles = parseProfiles(baseDir).map((profile) => ({
         id: profile.id,
         name: profile.name,
+        hasHistory: true,
+        hasSessions: cookieSource(profile.id) !== null,
         bookmarkCount: queryBookmarks(
           path.join(profile.directory, "places.sqlite"),
         ).bookmarks.length,
@@ -185,5 +203,7 @@ export function firefoxImporter(
         : null;
     },
     readBookmarks,
+    historyFile,
+    cookieSource,
   };
 }

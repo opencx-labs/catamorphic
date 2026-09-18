@@ -8,9 +8,9 @@ let app: AppHandle;
 beforeAll(async () => {
   app = await launchApp();
   await app.waitFor(`!![...document.querySelectorAll('button')].find(
-    el => el.textContent.trim() === 'New project')`);
+    el => el.textContent.trim() === 'Create or import project')`);
   await app.eval(`[...document.querySelectorAll('button')].find(
-    el => el.textContent.trim() === 'New project').click()`);
+    el => el.textContent.trim() === 'Create or import project').click()`);
   await app.waitFor(
     `!!document.querySelector('[data-testid="project-name-input"]')`,
   );

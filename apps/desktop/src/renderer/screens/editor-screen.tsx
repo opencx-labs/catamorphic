@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { ExternalLink, FileText } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { FileInspector } from "../components/file-inspector.js";
+import { PendingButton } from "../components/pending-button.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import {
   notifyEditorSelectionChange,
@@ -273,7 +274,9 @@ export function EditorScreen({
             }
           />
           {draft !== undefined && (
-            <button
+            <PendingButton
+              pending={writeFile.isPending}
+              pendingLabel="Saving…"
               type="button"
               data-testid="editor-save"
               onClick={() => saveRef.current()}
@@ -281,8 +284,8 @@ export function EditorScreen({
               data-disabled-reason="Saving this file"
               className="ml-auto h-6 shrink-0 cursor-pointer rounded border border-border-strong bg-bg-overlay px-2 text-xs text-fg transition-colors duration-150 hover:border-accent disabled:opacity-50"
             >
-              {writeFile.isPending ? "Saving…" : "Save"}
-            </button>
+              Save
+            </PendingButton>
           )}
         </span>
       </div>

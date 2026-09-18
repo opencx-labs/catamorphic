@@ -1,145 +1,233 @@
 import fs from "node:fs";
 import path from "node:path";
-
-/**
- * Per-profile browsing history backing the address-bar autocomplete.
- * Stored as plain JSON at `<userData>/profiles/<profileId>/history.json`.
- */
-export interface HistoryEntry {
-  url: string;
-  title: string;
-  visitCount: number;
-  lastVisitAt: number;
-  faviconUrl?: string;
-}
+import {
+  type HistoryEntry,
+  type HistoryPage,
+  type HistoryQuery,
+  type HistoryVisit,
+  historyEntrySchema,
+  historyIdentity,
+  isHistoryUrl,
+} from "../shared/history.js";
+import type { ImportedHistoryEntry } from "./browser-import/types.js";
 
 export interface HistorySuggestion {
   url: string;
   title: string;
   faviconUrl?: string;
 }
-
-const MAX_ENTRIES = 2000;
+const MAX_ENTRIES = 50_000;
 const WRITE_DEBOUNCE_MS = 500;
 
-export class BrowserHistoryStore {
+/** Personal desktop history. Project resources and web visits share one store. */
+export class HistoryStore {
   private cache = new Map<string, HistoryEntry[]>();
   private writes = new Map<string, ReturnType<typeof setTimeout>>();
-
   constructor(private readonly profilesDir: string) {}
-
   private file(profileId: string): string {
     return path.join(this.profilesDir, profileId, "history.json");
   }
-
   private load(profileId: string): HistoryEntry[] {
     const cached = this.cache.get(profileId);
     if (cached) return cached;
-    let entries: HistoryEntry[] = [];
+    const entries: HistoryEntry[] = [];
     try {
-      const raw = JSON.parse(fs.readFileSync(this.file(profileId), "utf-8"));
-      if (Array.isArray(raw)) {
-        entries = raw.filter(
-          (entry): entry is HistoryEntry =>
-            typeof entry?.url === "string" && typeof entry?.title === "string",
-        );
-      }
+      const raw: unknown = JSON.parse(
+        fs.readFileSync(this.file(profileId), "utf-8"),
+      );
+      if (Array.isArray(raw))
+        for (const value of raw) {
+          const parsed = historyEntrySchema.safeParse(value);
+          if (parsed.success) entries.push(parsed.data);
+        }
     } catch {
-      // No history yet.
+      /* A new profile has no history. */
     }
     this.cache.set(profileId, entries);
     return entries;
   }
-
-  private scheduleWrite(profileId: string): void {
+  private flush(profileId: string): void {
+    const entries = this.cache.get(profileId);
+    if (!entries) return;
+    const file = this.file(profileId);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(`${file}.tmp`, JSON.stringify(entries), { mode: 0o600 });
+    fs.renameSync(`${file}.tmp`, file);
+  }
+  private changed(profileId: string): void {
+    const entries = this.load(profileId);
+    if (entries.length > MAX_ENTRIES)
+      this.cache.set(
+        profileId,
+        entries
+          .sort((a, b) => b.lastVisitAt - a.lastVisitAt)
+          .slice(0, MAX_ENTRIES),
+      );
     clearTimeout(this.writes.get(profileId));
     this.writes.set(
       profileId,
       setTimeout(() => {
         this.writes.delete(profileId);
-        const entries = this.cache.get(profileId) ?? [];
-        const file = this.file(profileId);
         try {
-          fs.mkdirSync(path.dirname(file), { recursive: true });
-          fs.writeFileSync(file, JSON.stringify(entries));
-        } catch (cause) {
-          console.warn("[desktop] failed to persist history:", cause);
+          this.flush(profileId);
+        } catch {
+          console.warn("[desktop] Could not save history");
         }
       }, WRITE_DEBOUNCE_MS),
     );
   }
-
-  record(profileId: string, url: string, title: string): void {
-    if (!/^https?:/.test(url)) return;
-    let entries = this.load(profileId);
-    const existing = entries.find((entry) => entry.url === url);
-    if (existing) {
-      existing.visitCount += 1;
-      existing.lastVisitAt = Date.now();
-      if (title) existing.title = title;
-    } else {
-      entries.push({
-        url,
-        title: title || url,
-        visitCount: 1,
-        lastVisitAt: Date.now(),
+  recordVisit({
+    profileId,
+    visit,
+    revisit = true,
+  }: {
+    profileId: string;
+    visit: HistoryVisit;
+    revisit?: boolean;
+  }): void {
+    if (visit.target.kind === "web" && !isHistoryUrl(visit.target.url)) return;
+    const entries = this.load(profileId);
+    const id = historyIdentity(visit.target);
+    const existing = entries.find((entry) => entry.id === id);
+    if (existing)
+      Object.assign(existing, visit, {
+        lastVisitAt: revisit ? Date.now() : existing.lastVisitAt,
+        visitCount: existing.visitCount + (revisit ? 1 : 0),
       });
-      if (entries.length > MAX_ENTRIES) {
-        entries = entries
-          .sort((a, b) => b.lastVisitAt - a.lastVisitAt)
-          .slice(0, MAX_ENTRIES);
+    else if (revisit)
+      entries.push({ ...visit, id, lastVisitAt: Date.now(), visitCount: 1 });
+    else return;
+    this.changed(profileId);
+  }
+  record(profileId: string, url: string, title: string): void {
+    this.recordVisit({
+      profileId,
+      visit: { target: { kind: "web", url }, title: title || url },
+    });
+  }
+  import({
+    profileId,
+    entries: imported,
+  }: {
+    profileId: string;
+    entries: ImportedHistoryEntry[];
+  }): number {
+    const entries = this.load(profileId);
+    const byId = new Map(entries.map((entry) => [entry.id, entry]));
+    let added = 0;
+    for (const item of imported) {
+      if (
+        !isHistoryUrl(item.url) ||
+        !Number.isFinite(item.lastVisitAt) ||
+        item.lastVisitAt <= 0 ||
+        item.lastVisitAt > Date.now() + 60_000
+      )
+        continue;
+      const target = {
+        kind: "web",
+        url: item.url,
+      } satisfies HistoryVisit["target"];
+      const id = historyIdentity(target);
+      const existing = byId.get(id);
+      const visitCount = Number.isFinite(item.visitCount)
+        ? Math.max(1, Math.floor(item.visitCount))
+        : 1;
+      if (existing) {
+        if (item.lastVisitAt > existing.lastVisitAt) {
+          existing.lastVisitAt = item.lastVisitAt;
+          existing.title = item.title || item.url;
+        }
+        existing.visitCount = Math.max(existing.visitCount, visitCount);
+      } else {
+        const entry = {
+          id,
+          target,
+          title: item.title || item.url,
+          lastVisitAt: item.lastVisitAt,
+          visitCount,
+        };
+        entries.push(entry);
+        byId.set(id, entry);
+        added++;
       }
     }
-    this.cache.set(profileId, entries);
-    this.scheduleWrite(profileId);
+    this.changed(profileId);
+    return added;
   }
-
-  /** Update the stored title once the page reports it (post-navigation). */
   retitle(profileId: string, url: string, title: string): void {
-    if (!title) return;
-    const entries = this.load(profileId);
-    const entry = entries.find((candidate) => candidate.url === url);
-    if (entry && entry.title !== title) {
-      entry.title = title;
-      this.scheduleWrite(profileId);
-    }
-  }
-
-  /** Persist the browser-selected favicon once the page reports it. */
-  setFavicon(profileId: string, url: string, faviconUrl: string): void {
-    if (!faviconUrl) return;
     const entry = this.load(profileId).find(
-      (candidate) => candidate.url === url,
+      (item) => item.id === historyIdentity({ kind: "web", url }),
     );
-    if (entry && entry.faviconUrl !== faviconUrl) {
-      entry.faviconUrl = faviconUrl;
-      this.scheduleWrite(profileId);
+    if (entry && title && entry.title !== title) {
+      entry.title = title;
+      this.changed(profileId);
     }
   }
-
-  /**
-   * Chrome-style frecency: matches on URL or title, ranked by visit count
-   * weighted with recency. The renderer composes the final suggestion rows
-   * (search / go-to-URL first row) — this returns history matches only.
-   */
+  setFavicon(profileId: string, url: string, faviconUrl: string): void {
+    const entry = this.load(profileId).find(
+      (item) => item.id === historyIdentity({ kind: "web", url }),
+    );
+    if (entry && faviconUrl && entry.faviconUrl !== faviconUrl) {
+      entry.faviconUrl = faviconUrl;
+      this.changed(profileId);
+    }
+  }
+  query({
+    profileId,
+    query = "",
+    offset = 0,
+    limit = 100,
+  }: HistoryQuery & { profileId: string }): HistoryPage {
+    const words = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
+    const entries = this.load(profileId)
+      .filter((entry) => {
+        const target =
+          entry.target.kind === "web"
+            ? entry.target.url
+            : entry.target.resource;
+        const haystack =
+          `${entry.title} ${target} ${entry.projectName ?? ""} ${entry.target.kind}`.toLocaleLowerCase();
+        return words.every((word) => haystack.includes(word));
+      })
+      .sort((a, b) => b.lastVisitAt - a.lastVisitAt);
+    return {
+      entries: entries.slice(
+        Math.max(0, offset),
+        Math.max(0, offset) + Math.min(200, Math.max(1, limit)),
+      ),
+      total: entries.length,
+    };
+  }
+  remove({ profileId, id }: { profileId: string; id: string }): void {
+    this.cache.set(
+      profileId,
+      this.load(profileId).filter((entry) => entry.id !== id),
+    );
+    this.changed(profileId);
+  }
+  clear(profileId: string): void {
+    this.cache.set(profileId, []);
+    this.changed(profileId);
+  }
+  private web(profileId: string) {
+    return this.load(profileId).flatMap((entry) =>
+      entry.target.kind === "web" ? [{ ...entry, url: entry.target.url }] : [],
+    );
+  }
   suggest(profileId: string, query: string, limit = 5): HistorySuggestion[] {
     const needle = query.trim().toLowerCase();
     if (!needle) return [];
-    const now = Date.now();
-    return this.load(profileId)
-      .filter(
-        (entry) =>
-          entry.url.toLowerCase().includes(needle) ||
-          entry.title.toLowerCase().includes(needle),
-      )
-      .map((entry) => {
-        const ageDays = (now - entry.lastVisitAt) / 86_400_000;
-        const recency = ageDays < 1 ? 3 : ageDays < 7 ? 2 : 1;
-        // Prefix matches on the bare host are what people re-type most.
-        const bare = entry.url.replace(/^https?:\/\/(www\.)?/, "");
-        const prefixBoost = bare.startsWith(needle) ? 10 : 0;
-        return { entry, score: entry.visitCount * recency + prefixBoost };
-      })
+    return this.web(profileId)
+      .filter((e) => `${e.url} ${e.title}`.toLowerCase().includes(needle))
+      .map((entry) => ({
+        entry,
+        score:
+          entry.visitCount /
+            (1 + (Date.now() - entry.lastVisitAt) / 86_400_000) +
+          (entry.url.replace(/^https?:\/\/(www\.)?/, "").startsWith(needle)
+            ? 10
+            : 0),
+      }))
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
       .map(({ entry }) => ({
@@ -148,49 +236,32 @@ export class BrowserHistoryStore {
         faviconUrl: entry.faviconUrl,
       }));
   }
-
-  /** Most recently visited pages, newest first. */
-  recent(profileId: string, limit: number): HistorySuggestion[] {
-    return [...this.load(profileId)]
-      .sort((a, b) => b.lastVisitAt - a.lastVisitAt)
-      .slice(0, limit)
-      .map((entry) => ({
-        url: entry.url,
-        title: entry.title,
-        faviconUrl: entry.faviconUrl,
-      }));
-  }
-
-  /** Best URL whose bare form starts with the input (inline autocomplete). */
   inlineMatch(profileId: string, query: string): string | null {
     const needle = query.trim().toLowerCase();
     if (!needle) return null;
-    const matches = this.load(profileId)
-      .map((entry) => ({
-        entry,
-        bare: entry.url.replace(/^https?:\/\/(www\.)?/, ""),
-      }))
-      .filter(({ bare }) => bare.toLowerCase().startsWith(needle))
-      .sort((a, b) => b.entry.visitCount - a.entry.visitCount);
-    return matches[0]?.bare ?? null;
+    return (
+      this.web(profileId)
+        .map((entry) => ({
+          entry,
+          bare: entry.url.replace(/^https?:\/\/(www\.)?/, ""),
+        }))
+        .filter(({ bare }) => bare.toLowerCase().startsWith(needle))
+        .sort((a, b) => b.entry.visitCount - a.entry.visitCount)[0]?.bare ??
+      null
+    );
   }
-
   releaseProfile(profileId: string): void {
     clearTimeout(this.writes.get(profileId));
     this.writes.delete(profileId);
     this.cache.delete(profileId);
   }
-
   dispose(): void {
     for (const [profileId, timer] of this.writes) {
       clearTimeout(timer);
-      const entries = this.cache.get(profileId);
-      if (!entries) continue;
       try {
-        fs.mkdirSync(path.dirname(this.file(profileId)), { recursive: true });
-        fs.writeFileSync(this.file(profileId), JSON.stringify(entries));
+        this.flush(profileId);
       } catch {
-        // Best effort on shutdown.
+        /* Best effort on quit. */
       }
     }
     this.writes.clear();

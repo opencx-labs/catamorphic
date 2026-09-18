@@ -30,15 +30,21 @@ creation, access-group entitlement, ACL change or privilege elevation). macOS
 may prompt the user to authorize access. Success writes exactly 16 derived-key
 bytes into main's child-process pipe. It refuses a terminal stdout. Exit 2 means
 user cancellation, 3 missing key, 4 denied/unavailable, 64 invalid invocation.
+On a Keychain read failure, stderr contains only `keychain-status:<OSStatus>`.
+Main accepts only that numeric diagnostic and discards all other process output.
+Device authentication does not prove the source Keychain item is readable. A
+Keychain integrity/authorization failure stays retryable and never marks import
+complete. Never repair, replace or change ACLs on another browser's key.
 `--version` is safe to run without accessing Keychain. Never run the real import
 command in a terminal or log its output.
 
 The Chromium v10 algorithm is specified by the upstream source:
 https://chromium.googlesource.com/chromium/src/+/38c29b6535f88af0bbe843e0416390018d965da6/components/os_crypt/sync/os_crypt_mac.mm
-Main uses read-only SQLite (including live WAL data), supports local and account
-login stores, and decrypts only recognized v10 records. Existing destination
-accounts win. Unknown encryption formats are reported as failures and never
-silently treated as plaintext. No password export or temporary database is made.
+Main reads verified, owner-only SQLite snapshots (including committed WAL data),
+supports local and account login stores, and decrypts only recognized v10 records.
+Snapshots are removed after the read. Existing destination accounts win. Unknown
+encryption formats are counted internally and never treated as plaintext. No
+password export, decrypted credential or encryption key is written to a temp file.
 
 ## Browser coverage and Owl investigation
 
@@ -69,6 +75,16 @@ TypeScript tests exercise the checked-in prebuild's version/invalid invocation,
 SQLite fixtures, decryption, duplicate handling, cancellation and platform gates.
 Real Keychain prompt UX must also be smoke-tested with a Developer ID signed
 release; synthetic tests do not claim to verify the user's installed browsers.
+
+### Developer-profile check: 2026-09-18
+
+The user authenticated personal and OpenCX Chrome import attempts. The helper's
+device-owner authentication succeeded, but macOS rejected the shared Chrome Safe
+Storage read with OSStatus -25293 and an integrity-check denial. The user verified
+the same refusal in Apple's Keychain Access. No source keys, ACLs or browser data
+were changed. This machine cannot currently validate real Chrome password/session
+transfer. Bookmarks and history can be imported independently through the shared
+category selection; synthetic cookie/decryption tests remain separate evidence.
 
 ### Signed release smoke
 

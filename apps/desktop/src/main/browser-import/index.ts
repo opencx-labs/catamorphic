@@ -18,66 +18,74 @@ export type {
 } from "./types.js";
 
 /** All browsers we know how to import from, in UI display order. */
-export const BROWSER_IMPORTERS: BrowserImporter[] = [
-  chromiumImporter({
-    id: "chrome",
-    keychainService: "Chrome Safe Storage",
-    keychainAccount: "Chrome",
-    label: "Google Chrome",
-    darwinDir: "Library/Application Support/Google/Chrome",
-    linuxDir: ".config/google-chrome",
-    win32Dir: "AppData/Local/Google/Chrome/User Data",
-  }),
-  chromiumImporter({
-    id: "edge",
-    keychainService: "Microsoft Edge Safe Storage",
-    keychainAccount: "Microsoft Edge",
-    label: "Microsoft Edge",
-    darwinDir: "Library/Application Support/Microsoft Edge",
-    linuxDir: ".config/microsoft-edge",
-    win32Dir: "AppData/Local/Microsoft/Edge/User Data",
-  }),
-  chromiumImporter({
-    id: "brave",
-    keychainService: "Brave Safe Storage",
-    keychainAccount: "Brave",
-    label: "Brave",
-    darwinDir: "Library/Application Support/BraveSoftware/Brave-Browser",
-    linuxDir: ".config/BraveSoftware/Brave-Browser",
-    win32Dir: "AppData/Local/BraveSoftware/Brave-Browser/User Data",
-  }),
-  chromiumImporter({
-    id: "arc",
-    keychainService: "Arc Safe Storage",
-    keychainAccount: "Arc",
-    label: "Arc",
-    darwinDir: "Library/Application Support/Arc/User Data",
-  }),
-  chromiumImporter({
-    id: "aside",
-    label: "Aside",
-    darwinDir: "Library/Application Support/Aside",
-  }),
-  chromiumImporter({
-    id: "chromium",
-    keychainService: "Chromium Safe Storage",
-    keychainAccount: "Chromium",
-    label: "Chromium",
-    darwinDir: "Library/Application Support/Chromium",
-    linuxDir: ".config/chromium",
-    win32Dir: "AppData/Local/Chromium/User Data",
-  }),
-  chromiumImporter({
-    id: "opera",
-    label: "Opera",
-    darwinDir: "Library/Application Support/com.operasoftware.Opera",
-    linuxDir: ".config/opera",
-    win32Dir: "AppData/Roaming/Opera Software/Opera Stable",
-    keychainService: "Opera Safe Storage",
-    keychainAccount: "Opera",
-  }),
-  firefoxImporter(),
-];
+export const BROWSER_IMPORTERS: BrowserImporter[] =
+  process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1" &&
+  process.env.CATAMORPHIC_E2E_BROWSER_IMPORT_DIR
+    ? [
+        firefoxImporter({
+          baseDirOverride: process.env.CATAMORPHIC_E2E_BROWSER_IMPORT_DIR,
+        }),
+      ]
+    : [
+        chromiumImporter({
+          id: "chrome",
+          keychainService: "Chrome Safe Storage",
+          keychainAccount: "Chrome",
+          label: "Google Chrome",
+          darwinDir: "Library/Application Support/Google/Chrome",
+          linuxDir: ".config/google-chrome",
+          win32Dir: "AppData/Local/Google/Chrome/User Data",
+        }),
+        chromiumImporter({
+          id: "edge",
+          keychainService: "Microsoft Edge Safe Storage",
+          keychainAccount: "Microsoft Edge",
+          label: "Microsoft Edge",
+          darwinDir: "Library/Application Support/Microsoft Edge",
+          linuxDir: ".config/microsoft-edge",
+          win32Dir: "AppData/Local/Microsoft/Edge/User Data",
+        }),
+        chromiumImporter({
+          id: "brave",
+          keychainService: "Brave Safe Storage",
+          keychainAccount: "Brave",
+          label: "Brave",
+          darwinDir: "Library/Application Support/BraveSoftware/Brave-Browser",
+          linuxDir: ".config/BraveSoftware/Brave-Browser",
+          win32Dir: "AppData/Local/BraveSoftware/Brave-Browser/User Data",
+        }),
+        chromiumImporter({
+          id: "arc",
+          keychainService: "Arc Safe Storage",
+          keychainAccount: "Arc",
+          label: "Arc",
+          darwinDir: "Library/Application Support/Arc/User Data",
+        }),
+        chromiumImporter({
+          id: "aside",
+          label: "Aside",
+          darwinDir: "Library/Application Support/Aside",
+        }),
+        chromiumImporter({
+          id: "chromium",
+          keychainService: "Chromium Safe Storage",
+          keychainAccount: "Chromium",
+          label: "Chromium",
+          darwinDir: "Library/Application Support/Chromium",
+          linuxDir: ".config/chromium",
+          win32Dir: "AppData/Local/Chromium/User Data",
+        }),
+        chromiumImporter({
+          id: "opera",
+          label: "Opera",
+          darwinDir: "Library/Application Support/com.operasoftware.Opera",
+          linuxDir: ".config/opera",
+          win32Dir: "AppData/Roaming/Opera Software/Opera Stable",
+          keychainService: "Opera Safe Storage",
+          keychainAccount: "Opera",
+        }),
+        firefoxImporter(),
+      ];
 
 /**
  * Detect installed browsers and their profiles. Browsers that are not

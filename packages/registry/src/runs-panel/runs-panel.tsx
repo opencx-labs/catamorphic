@@ -1,4 +1,6 @@
-"use client";
+import { PendingButton } from "@catamorphic/ui";
+
+("use client");
 
 import {
   useCancelRun,
@@ -379,15 +381,17 @@ export function RunsPanel({
           <h3 className="text-xs font-semibold uppercase tracking-wider text-fg-muted">
             Runs
           </h3>
-          <button
+          <PendingButton
+            pending={trigger.isPending}
+            pendingLabel="Starting…"
             type="button"
             onClick={startRun}
             disabled={trigger.isPending || !environment}
             data-disabled-reason="Choose an environment, or wait for the run to start"
             className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-50"
           >
-            {trigger.isPending ? "Starting..." : "Run"}
-          </button>
+            Run
+          </PendingButton>
         </header>
         {compatibleEnvironments.length > 1 ? (
           <div className="border-b border-border px-3 py-2">

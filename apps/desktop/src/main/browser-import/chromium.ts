@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type {
+  BrowserCookieSource,
   BrowserImporter,
   BrowserPasswordSource,
   ImportableBrowser,
@@ -110,9 +111,14 @@ function profilesFromScan(
 }
 
 function hasProfileData(directory: string): boolean {
-  return ["Bookmarks", "Login Data", "Login Data For Account"].some((file) =>
-    fs.existsSync(path.join(directory, file)),
-  );
+  return [
+    "Bookmarks",
+    "Login Data",
+    "Login Data For Account",
+    "History",
+    "Cookies",
+    "Network/Cookies",
+  ].some((file) => fs.existsSync(path.join(directory, file)));
 }
 
 function profileDirectory(baseDir: string, profileId: string): string | null {
@@ -240,6 +246,38 @@ export function chromiumImporter(
       : null;
   };
 
+  const dataFile = (profileId: string, names: string[]): string | null => {
+    const baseDir = resolveBaseDir(options);
+    const directory = baseDir && profileDirectory(baseDir, profileId);
+    if (!directory) return null;
+    for (const name of names) {
+      const file = path.join(directory, name);
+      try {
+        if (
+          fs.lstatSync(file).isFile() &&
+          fs.realpathSync(file).startsWith(`${directory}${path.sep}`)
+        )
+          return file;
+      } catch {
+        /* Browser may not have created this store. */
+      }
+    }
+    return null;
+  };
+  const historyFile = (profileId: string) => dataFile(profileId, ["History"]);
+  const cookieSource = (profileId: string): BrowserCookieSource | null => {
+    const file = dataFile(profileId, ["Network/Cookies", "Cookies"]);
+    if (!file || !options.keychainService || !options.keychainAccount)
+      return null;
+    return {
+      file,
+      format: "chromium",
+      keychain: {
+        keychainService: options.keychainService,
+        keychainAccount: options.keychainAccount,
+      },
+    };
+  };
   return {
     id: options.id,
     label: options.label,
@@ -262,6 +300,8 @@ export function chromiumImporter(
         id,
         name,
         bookmarkCount: readBookmarks(id).bookmarks.length,
+        hasHistory: historyFile(id) !== null,
+        hasSessions: cookieSource(id) !== null,
         ...(options.keychainService
           ? { hasPasswords: passwordSource(id) !== null }
           : {}),
@@ -270,11 +310,12 @@ export function chromiumImporter(
         id: options.id,
         label: options.label,
         profiles,
-        ...(options.keychainService ? { supportsPasswordImport: true } : {}),
       };
     },
 
     readBookmarks,
     passwordSource,
+    historyFile,
+    cookieSource,
   };
 }

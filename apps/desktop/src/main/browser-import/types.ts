@@ -1,5 +1,5 @@
 /**
- * Neutral shapes for importing profiles + bookmarks from other browsers.
+ * Neutral shapes for importing browser profile data.
  * Pure data layer: no Electron, no app-store types — the IPC/UI layer maps
  * these onto the app's own `Profile` / `ProjectBookmarks` shapes.
  */
@@ -9,7 +9,6 @@ export interface ImportableBrowser {
   id: string; // "chrome" | "edge" | "brave" | "arc" | "aside" | "chromium"
   label: string; // "Google Chrome"
   profiles: ImportableProfile[];
-  supportsPasswordImport?: boolean;
 }
 
 /** One profile inside a detected browser. */
@@ -18,6 +17,8 @@ export interface ImportableProfile {
   name: string; // human name from the browser's Local State, e.g. "Work"
   bookmarkCount: number; // total bookmarks found (0 if none)
   hasPasswords?: boolean;
+  hasHistory?: boolean;
+  hasSessions?: boolean;
 }
 
 /** A bookmark read from another browser with its full folder ancestry. */
@@ -44,10 +45,27 @@ export interface BrowserImporter {
   detect(): ImportableBrowser | null;
   readBookmarks(profileId: string): ImportedBookmarks;
   passwordSource?(profileId: string): BrowserPasswordSource | null;
+  historyFile?(profileId: string): string | null;
+  cookieSource?(profileId: string): BrowserCookieSource | null;
 }
 
-export interface BrowserPasswordSource {
-  files: string[];
+export interface BrowserEncryptionKey {
   keychainService: string;
   keychainAccount: string;
+}
+
+export interface BrowserPasswordSource extends BrowserEncryptionKey {
+  files: string[];
+}
+
+export interface ImportedHistoryEntry {
+  url: string;
+  title: string;
+  lastVisitAt: number;
+  visitCount: number;
+}
+export interface BrowserCookieSource {
+  file: string;
+  format: "chromium" | "firefox";
+  keychain?: BrowserEncryptionKey;
 }

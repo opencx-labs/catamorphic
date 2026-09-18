@@ -330,7 +330,7 @@ describe("remote projects (ADR 0055)", () => {
   });
 
   it("connects from a pasted link and materializes the scoped tree", async () => {
-    // The empty state offers connecting to a server beside "New project".
+    // The empty state offers connecting to a server beside "Create or import project".
     await runWait(`return !!$('[data-testid="empty-connect-remote"]');`, {
       timeoutMs: 60_000,
       label: "empty-state connect button",

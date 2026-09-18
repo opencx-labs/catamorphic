@@ -1,0 +1,173 @@
+/* Desktop form controls. Electron 43 supports base-select (Chromium 150+).
+   Keep semantic HTML and native keyboard/form behavior, but render every
+   picker in the app's top layer, never the operating system's menu. */
+select:not([multiple]),
+select:not([multiple])::picker(select) {
+  appearance: base-select;
+}
+
+select:not([multiple]) {
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+select::picker-icon {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+  margin-inline-end: 3px;
+  color: var(--color-fg-muted);
+  transition: rotate 150ms var(--ease-standard);
+}
+
+select:open::picker-icon {
+  rotate: 180deg;
+}
+
+select::picker(select) {
+  min-width: anchor-size(width);
+  max-width: calc(100vw - 24px);
+  max-height: min(360px, 60dvh);
+  margin-block: 4px;
+  padding: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-overlay);
+  color: var(--color-fg);
+  font: 13px var(--font-sans);
+  box-shadow: 0 12px 32px #0003;
+  overflow: auto;
+  overscroll-behavior: contain;
+  opacity: 0;
+  translate: 0 -4px;
+  transition:
+    opacity 150ms var(--ease-standard),
+    translate 150ms var(--ease-standard),
+    display 150ms allow-discrete,
+    overlay 150ms allow-discrete;
+}
+
+select:open::picker(select) {
+  opacity: 1;
+  translate: 0 0;
+}
+
+@starting-style {
+  select:open::picker(select) {
+    opacity: 0;
+    translate: 0 -4px;
+  }
+}
+
+select option {
+  min-height: 32px;
+  gap: 12px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--color-fg-muted);
+  background: transparent;
+  cursor: pointer;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  transition:
+    color 100ms var(--ease-standard),
+    background-color 100ms var(--ease-standard);
+}
+
+select option:is(:hover, :focus-visible) {
+  outline: none;
+  color: var(--color-fg);
+  background: var(--color-bg-raised);
+}
+
+select option:checked {
+  color: var(--color-fg);
+  font-weight: 500;
+}
+
+select option::checkmark {
+  order: 1;
+  margin-inline-start: auto;
+  color: var(--color-accent);
+}
+
+select optgroup > legend {
+  padding: 8px;
+  color: var(--color-fg-faint);
+  font-size: 11px;
+}
+
+select:disabled,
+select option:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+input[type="checkbox"] {
+  appearance: none;
+  display: inline-grid;
+  place-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  margin: 0;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  background: var(--color-bg-inset);
+  vertical-align: middle;
+  cursor: pointer;
+  transition:
+    background-color 150ms var(--ease-standard),
+    border-color 150ms var(--ease-standard);
+}
+
+input[type="checkbox"]:hover:not(:disabled) {
+  border-color: var(--color-fg-muted);
+}
+
+input[type="checkbox"]:is(:checked, :indeterminate) {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+input[type="checkbox"]::before {
+  content: "";
+  width: 9px;
+  height: 9px;
+  background: var(--color-accent-fg);
+  clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+  opacity: 0;
+  scale: 0.6;
+  transition:
+    opacity 150ms var(--ease-standard),
+    scale 150ms var(--ease-standard);
+}
+
+input[type="checkbox"]:indeterminate::before {
+  clip-path: inset(40% 0 round 1px);
+}
+
+input[type="checkbox"]:is(:checked, :indeterminate)::before {
+  opacity: 1;
+  scale: 1;
+}
+
+input[type="checkbox"]:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  select::picker(select),
+  select::picker-icon,
+  select option,
+  input[type="checkbox"],
+  input[type="checkbox"]::before {
+    transition: none;
+  }
+}
