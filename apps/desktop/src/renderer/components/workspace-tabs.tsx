@@ -737,11 +737,7 @@ function TabStrip({
               <CloseButton
                 hint={active}
                 label={`Close ${tab.label ?? tab.name}`}
-                className={
-                  active
-                    ? ""
-                    : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-                }
+                className={active ? "" : "row-reveal"}
                 onClick={() => onClose(key)}
               />
             </div>

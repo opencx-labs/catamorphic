@@ -349,12 +349,19 @@ export function SettingsScreen({
           const requestedTop = navigationScrollTop.current;
           if (requestedTop === root.scrollTop) return;
           navigationScrollTop.current = null;
+          // The final category is current as soon as it is fully in view:
+          // it may be too short to ever reach the top edge, and a smooth
+          // wheel scroll settles a few fractional pixels short of the end.
           const lastSection = sections.at(-1);
+          const lastElement = lastSection
+            ? root.querySelector(`#settings-${lastSection.id}`)
+            : null;
           if (
             lastSection &&
+            lastElement &&
             root.scrollTop > 0 &&
-            // Fractional scroll positions (macOS) can leave a pixel or two.
-            root.scrollHeight - root.clientHeight - root.scrollTop <= 2
+            lastElement.getBoundingClientRect().bottom <=
+              root.getBoundingClientRect().bottom + 2
           ) {
             setSelected(lastSection.id);
             return;

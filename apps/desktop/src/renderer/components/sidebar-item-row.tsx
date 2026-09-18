@@ -547,9 +547,7 @@ export function SidebarItemRow<
                 setOpen((value) => !value);
               }}
               className={`grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg mr-1 ${
-                open
-                  ? ""
-                  : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                open ? "" : "row-reveal"
               }`}
               aria-label={`More actions for ${label}`}
               aria-haspopup="menu"

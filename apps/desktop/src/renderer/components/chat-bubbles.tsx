@@ -206,7 +206,7 @@ function Bubble({
         <button
           type="button"
           onClick={() => onClose(entry.localId)}
-          className="absolute -left-1 -top-1 grid size-4 cursor-pointer place-items-center rounded-full border border-border bg-bg-overlay text-fg-faint opacity-0 transition-opacity duration-150 hover:text-fg group-hover:opacity-100"
+          className="row-reveal absolute -left-1 -top-1 grid size-4 cursor-pointer place-items-center rounded-full border border-border bg-bg-overlay text-fg-faint hover:text-fg"
           aria-label={`Close ${label}`}
         >
           <X className="size-2.5" />

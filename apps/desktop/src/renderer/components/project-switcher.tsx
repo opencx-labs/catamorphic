@@ -159,7 +159,7 @@ export function ProjectSwitcher({
                         <button
                           type="button"
                           aria-label={`Open ${project.name} in another window`}
-                          className="grid size-7 shrink-0 place-items-center rounded text-fg-faint opacity-0 group-hover:opacity-100 focus:opacity-100 hover:bg-bg-raised hover:text-fg"
+                          className="row-reveal grid size-7 shrink-0 place-items-center rounded text-fg-faint hover:bg-bg-raised hover:text-fg"
                           onClick={() => {
                             onOpenWindow(project.id);
                             setOpen(false);

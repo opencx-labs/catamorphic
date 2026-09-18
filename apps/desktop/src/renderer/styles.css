@@ -873,6 +873,26 @@ kbd {
   height: 8px;
 }
 
+/* Controls that belong to a hovered row (overflow dots, close, open-in-window)
+   share one reveal: hidden until the row is hovered or holds keyboard focus,
+   fading either way. Mouse focus alone never reveals them, so a clicked row
+   does not keep its controls lit after the pointer leaves. */
+.row-reveal {
+  opacity: 0;
+  transition: opacity 150ms var(--ease-standard);
+}
+.group:hover .row-reveal,
+.group:has(:focus-visible) .row-reveal,
+.row-reveal:focus-visible,
+.row-reveal[aria-expanded="true"] {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .row-reveal {
+    transition: none;
+  }
+}
+
 /* Every control in a sidebar wears its ring inside its own rounded box, so
    neighbours and the panel's edges never cut it. */
 [data-sidebar-section] button:focus-visible:not([hidden]),

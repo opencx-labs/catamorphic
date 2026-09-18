@@ -349,6 +349,11 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   has no room for one and opens the same menu on right-click only. Keyboard
   focus rings sit inside the row (negative outline offset, above siblings) so
   stacked rows never cover or clip them.
+- **Hover controls share one reveal.** Overflow dots, close and open-in-window
+  buttons on rows, tabs and bubbles use the `row-reveal` class: hidden until the
+  row is hovered or holds keyboard focus, fading in and out over 150ms. Mouse
+  focus alone never reveals them, so a clicked row does not keep its controls
+  lit after the pointer leaves. No component ships its own opacity toggle.
 - **Popovers grow, never jump.** Hover inspectors measure their content and
   transition height and position, so a section that loads after the popover
   opens expands it smoothly. A popover that shifts its layout on load is a

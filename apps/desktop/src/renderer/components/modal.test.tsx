@@ -63,7 +63,7 @@ function mountControlledModal(opener: HTMLElement) {
 
 describe("Modal focus containment", () => {
   it("does not reset focused controls when a parent rerenders", () => {
-    const { container, render } = mountModal(() => {});
+    const { render } = mountModal(() => {});
     const first = document.body.querySelector<HTMLButtonElement>("button");
     first?.focus();
 
@@ -73,7 +73,7 @@ describe("Modal focus containment", () => {
   });
 
   it("wraps Shift+Tab from the initially focused panel to the last control", () => {
-    const { container } = mountModal(() => {});
+    mountModal(() => {});
     const panel = document.body.querySelector<HTMLElement>('[role="dialog"]');
     const controls =
       document.body.querySelectorAll<HTMLButtonElement>("button");
