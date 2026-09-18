@@ -167,6 +167,7 @@ it("keeps checkbox rows and neighboring controls stable while changing and reset
       if (JSON.stringify(next) === JSON.stringify(before)) break;
       before = next;
     }
+    const rowsBefore = await rows();
     await app.screenshot(`/tmp/settings-checkbox-before-${width}.png`);
     await app.eval(
       `document.querySelector('[aria-label="Reset Framed content to inherited"]').click()`,
@@ -175,12 +176,18 @@ it("keeps checkbox rows and neighboring controls stable while changing and reset
       `!document.querySelector('[aria-label="Reset Framed content to inherited"]') && !document.querySelector('[name="contentFrame"]').disabled`,
     );
     await app.screenshot(`/tmp/settings-checkbox-reset-${width}.png`);
-    expect(await geometry(), await rows()).toEqual(before);
+    expect(
+      await geometry(),
+      `before ${rowsBefore}\nafter ${await rows()}`,
+    ).toEqual(before);
     await app.eval(`document.querySelector('[name="contentFrame"]').click()`);
     await app.waitFor(
       `!!document.querySelector('[aria-label="Reset Framed content to inherited"]') && !document.querySelector('[name="contentFrame"]').disabled`,
     );
-    expect(await geometry(), await rows()).toEqual(before);
+    expect(
+      await geometry(),
+      `before ${rowsBefore}\nafter ${await rows()}`,
+    ).toEqual(before);
   }
 });
 
