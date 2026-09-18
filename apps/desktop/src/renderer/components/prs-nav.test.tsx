@@ -23,6 +23,10 @@ vi.mock("../lib/desktop-api.js", () => ({
 }));
 it("opens a PR review directly without fetching or expanding its files", async () => {
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+  vi.mocked(desktopApi.getPrefs).mockResolvedValue({
+    ...DEFAULT_PREFS,
+    githubCliEnabled: true,
+  });
   vi.mocked(desktopApi.prList).mockResolvedValue([
     {
       number: 3,
@@ -97,13 +101,42 @@ it("opens connection settings without starting the separate GitHub flow", async 
     );
     expect(desktopApi.githubConnectStart).not.toHaveBeenCalled();
     // Signing in happens outside the app, so returning to the window re-checks.
+    const requests = vi.mocked(desktopApi.prList).mock.calls.length;
     vi.mocked(desktopApi.prList).mockResolvedValue([]);
     await act(async () => {
       window.dispatchEvent(new Event("focus"));
     });
     expect(desktopApi.prList).toHaveBeenLastCalledWith("existing-project");
+    expect(vi.mocked(desktopApi.prList).mock.calls.length).toBeGreaterThan(
+      requests,
+    );
     // Empty copy belongs to the section chrome; the connect card is gone.
     expect(node.textContent).not.toContain("GitHub not connected");
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+it("never asks the main process while the GitHub CLI connection is off", async () => {
+  Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+  vi.mocked(desktopApi.getPrefs).mockResolvedValue({
+    ...DEFAULT_PREFS,
+    githubCliEnabled: false,
+  });
+  vi.mocked(desktopApi.prList).mockClear();
+  const node = document.createElement("div");
+  const root = createRoot(node);
+  try {
+    await act(async () =>
+      root.render(
+        <PrsNav projectId="p" onOpenDiff={() => {}} onOpenUrl={() => {}} />,
+      ),
+    );
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(desktopApi.prList).not.toHaveBeenCalled();
+    expect(node.textContent).toContain("Connect the GitHub CLI");
   } finally {
     await act(async () => root.unmount());
   }

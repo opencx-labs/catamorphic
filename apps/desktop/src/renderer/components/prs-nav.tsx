@@ -75,6 +75,14 @@ export function PrsNav({
     setPrs(null);
     setError(null);
     let revision = 0;
+    // The connection is off: the answer is known without asking the main
+    // process, which would log a refusal for every window focus.
+    if (!prefs.githubCliEnabled) {
+      setError("[github-cli-disabled] GitHub CLI is not connected.");
+      return () => {
+        cancelled = true;
+      };
+    }
     const load = () => {
       const request = ++revision;
       void desktopApi
@@ -95,9 +103,7 @@ export function PrsNav({
         });
     };
     load();
-    // A disabled GitHub CLI connection fails every request the same way, so
-    // wait for the preference to change instead of polling the refusal.
-    if (!visible || !prefs.githubCliEnabled)
+    if (!visible)
       return () => {
         cancelled = true;
       };
