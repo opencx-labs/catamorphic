@@ -129,6 +129,8 @@ How the three connect (setting up / troubleshooting, read in this order):
 
 ## Skills
 
+- `.agents/skills/announcement-video/SKILL.md`: real-app product films, capture, motion, and website video integration
+
 - `skills/setup-catamorphic-server/SKILL.md` — the public adaptive entry for stock-server setup and embedding Catamorphic in an existing host
 - `.agents/skills/` — canonical repository-internal skills, following the
   [Agent Skills](https://agentskills.io) layout. `.cursor/skills` is a

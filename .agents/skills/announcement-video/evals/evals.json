@@ -1,0 +1,23 @@
+{
+  "skill_name": "announcement-video",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Prepare a timed brief for a 24-second silent Work desktop hero film using the real app. Show a project, a document, and a useful app. Planning only: do not claim any inspection or rendering has happened.",
+      "expectations": [
+        "Actual UI and safe demo data verification remain pending.",
+        "Calm opening, connected motion, restrained captions.",
+        "Editable source, playable MP4, poster, and embedded-size checks."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Revise a dark desktop film: its opening is rushed and a floating window covers the document. Preserve the accepted duration, silent soundtrack, palette, and outro.",
+      "expectations": [
+        "Scoped pacing and collision corrections.",
+        "Review complete motion paths at normal speed and embedded size.",
+        "Leave validation pending until performed."
+      ]
+    }
+  ]
+}
