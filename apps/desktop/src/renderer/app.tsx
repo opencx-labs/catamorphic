@@ -1825,6 +1825,10 @@ export function App({
     setSearchRequest({ mode: "history", nonce: crypto.randomUUID() });
     setPaletteOpen(true);
   };
+  const settingsSearch = () => {
+    setSearchRequest({ mode: "settings", nonce: crypto.randomUUID() });
+    setPaletteOpen(true);
+  };
 
   const openLinkedSurfaceRef = useRef(openLinkedSurface);
   openLinkedSurfaceRef.current = openLinkedSurface;
@@ -3439,7 +3443,7 @@ export function App({
     "search-content": () => focusSearch("search-content", "content"),
     "search-diff": () => focusSearch("search-diff"),
     "search-changes": () => focusSearch("search-changes"),
-    "search-settings": () => focusSearch("search-settings"),
+    "search-settings": settingsSearch,
     "browser-focus-address": () => runBrowserCommand("focusAddress"),
     "browser-reload": () => runBrowserCommand("reload"),
     "browser-reload-hard": () => runBrowserCommand("reloadIgnoringCache"),
@@ -3573,9 +3577,7 @@ export function App({
               Boolean(
                 document.activeElement?.closest("form[data-pr-comment]"),
               ))) &&
-          (!["search-diff", "search-changes", "search-settings"].includes(
-            candidate,
-          ) ||
+          (!["search-diff", "search-changes"].includes(candidate) ||
             (guestId === undefined &&
               Boolean(
                 findSearchInput(candidate) ||
@@ -5407,7 +5409,7 @@ export function App({
           </>
         }
         footer={
-          <footer className="flex h-12 shrink-0 items-center gap-1 px-2">
+          <footer className="flex h-12 shrink-0 items-center gap-1 px-3">
             {profilesData && activeProfile && (
               <ProfileBar
                 data={profilesData}
@@ -5653,7 +5655,7 @@ export function App({
                       <SettingsScreen
                         destination={tab.destination}
                         projectId={projectId}
-                        onClose={() => closeTab(tabKey(tab))}
+                        onSearch={settingsSearch}
                         onAddAgent={() => setWizardModalOpen(true)}
                         onConfigureAgent={openConfigureAgent}
                         onManageConnectors={() => setConnectorsModalOpen(true)}
@@ -5674,7 +5676,6 @@ export function App({
                         profileId={activeProfile?.id}
                         onSearch={historySearch}
                         onOpen={openHistory}
-                        onClose={() => closeTab(tabKey(tab))}
                       />
                     ) : tab.kind === "usage" ? (
                       <Suspense fallback={<div className="flex-1 bg-bg" />}>
@@ -6218,7 +6219,7 @@ export function App({
         ) : activeTab?.kind === "settings" ? (
           <SettingsScreen
             destination={activeTab.destination}
-            onClose={() => closeTab(tabKey(activeTab))}
+            onSearch={settingsSearch}
             onAddAgent={() => setWizardModalOpen(true)}
             onConfigureAgent={openConfigureAgent}
             onManageConnectors={() => setConnectorsModalOpen(true)}
@@ -6228,7 +6229,6 @@ export function App({
             profileId={activeProfile?.id}
             onSearch={historySearch}
             onOpen={openHistory}
-            onClose={() => closeTab(tabKey(activeTab))}
           />
         ) : activeTab?.kind === "profile-settings" && profilesData ? (
           <ProfileSettingsScreen

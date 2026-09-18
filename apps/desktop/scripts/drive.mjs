@@ -145,6 +145,26 @@ switch (cmd) {
     console.log("pressed", args[0]);
     break;
   }
+  case "wheel": {
+    // wheel <selector> [deltaY]: a real mouse-wheel tick over the element,
+    // the way a trackpad or mouse scrolls it (synthetic WheelEvents don't).
+    const box = await evalJs(`(() => {
+      const el = document.querySelector(${JSON.stringify(args[0])});
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    })()`);
+    if (!box) throw new Error(`not found: ${args[0]}`);
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseWheel",
+      x: box.x,
+      y: box.y,
+      deltaX: 0,
+      deltaY: Number(args[1] ?? 120),
+    });
+    console.log("wheeled", args[0]);
+    break;
+  }
   case "eval":
     console.log(JSON.stringify(await evalJs(args.join(" ")), null, 2));
     break;

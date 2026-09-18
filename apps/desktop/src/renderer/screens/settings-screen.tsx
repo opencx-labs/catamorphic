@@ -34,10 +34,10 @@ import {
   isValidFontStack,
 } from "../../shared/theme-fonts.js";
 import { TOKEN_LABELS } from "../../shared/theme-tokens.js";
-import { ActionSearchInput } from "../components/action-search-input.js";
 import { BrowserImport } from "../components/browser-import.js";
 import { DefaultBrowserButton } from "../components/default-browser.js";
 import { PendingButton } from "../components/pending-button.js";
+import { ShortcutHint } from "../components/shortcut-hint.js";
 import {
   type AgentHarness,
   type AgentsData,
@@ -61,20 +61,20 @@ import { useAppPreferences } from "../lib/use-app-preferences.js";
 export function SettingsScreen({
   projectId,
   destination,
-  onClose,
+  onSearch,
   onAddAgent,
   onConfigureAgent,
   onManageConnectors,
 }: {
   projectId?: string;
   destination?: SettingsDestination;
-  onClose: () => void;
+  /** Opens the palette's settings scope: the one search surface (ADR 0123). */
+  onSearch: () => void;
   onAddAgent: () => void;
   /** Open the configure-agent modal (ADR 0056) for one roster agent. */
   onConfigureAgent: (agentId: string) => void;
   onManageConnectors: () => void;
 }) {
-  const [query, setQuery] = useState("");
   const [selected, setSelected] = useState("agents");
   const scrollRef = useRef<HTMLDivElement>(null);
   const navigationFrame = useRef(0);
@@ -92,7 +92,6 @@ export function SettingsScreen({
     const entry = SETTINGS_BY_ID.get(destination.id);
     const root = scrollRef.current;
     if (!entry || !root) return;
-    setQuery("");
     setSelected(entry.category);
     let highlighted: HTMLElement | null = null;
     let frame = 0;
@@ -165,12 +164,18 @@ export function SettingsScreen({
       id: "agents",
       label: "Agents",
       keywords: "models authentication accounts sign in",
-      content: (
-        <AgentsSection
-          onAddAgent={onAddAgent}
-          onConfigureAgent={onConfigureAgent}
-        />
+      action: (
+        <button
+          type="button"
+          onClick={onAddAgent}
+          data-testid="settings-add-agent"
+          className="flex h-7 cursor-pointer items-center gap-1 rounded-md px-2 text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+        >
+          <Plus className="size-3" />
+          Add agent
+        </button>
       ),
+      content: <AgentsSection onConfigureAgent={onConfigureAgent} />,
     },
     {
       id: "connections",
@@ -197,7 +202,7 @@ export function SettingsScreen({
         "layout sidebar tabs header address bookmarks links preview floating border frame default browser http https",
       content: (
         <>
-          <section className="mt-4 rounded-lg border border-border bg-bg-raised/30 p-4">
+          <section className="settings-card mt-4">
             <h2 className="text-sm font-semibold text-fg">Default browser</h2>
             <p className="mt-1 text-xs leading-5 text-fg-muted">
               Open links from other apps in Work.
@@ -254,17 +259,10 @@ export function SettingsScreen({
       content: <ImportSection />,
     },
   ];
-  const words = query.toLowerCase().trim().split(/\s+/);
-  const visible = sections.filter((section) =>
-    words.every((word) =>
-      `${section.label} ${section.keywords}`.toLowerCase().includes(word),
-    ),
-  );
   const navigateTo = (id: string) => {
     cancelAnimationFrame(navigationFrame.current);
     navigationMotion.current?.cancel();
     navigationScrollTop.current = null;
-    setQuery("");
     setSelected(id);
     navigationFrame.current = requestAnimationFrame(() => {
       const root = scrollRef.current;
@@ -315,111 +313,95 @@ export function SettingsScreen({
             Make this workspace your own.
           </p>
         </div>
-        <div className="relative order-3 w-full @xl/settings:order-none @xl/settings:w-64">
-          <Search className="pointer-events-none absolute top-2 left-2.5 size-4 text-fg-muted" />
-          <ActionSearchInput
-            action="search-settings"
+        <ShortcutHint label="Search settings">
+          <button
+            type="button"
             aria-label="Search settings"
-            type="search"
-            value={query}
-            onChange={(event) => {
-              cancelAnimationFrame(navigationFrame.current);
-              navigationMotion.current?.cancel();
-              navigationScrollTop.current = null;
-              setQuery(event.target.value);
-              scrollRef.current?.scrollTo({ top: 0 });
-            }}
-            placeholder="Search settings…"
-            className="field h-8 w-full rounded-lg pr-3 pl-8 text-sm"
-          />
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="grid size-8 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-overlay hover:text-fg"
-          aria-label="Close settings"
-        >
-          <X className="size-4" />
-        </button>
+            data-sidebar-search="search-settings"
+            onClick={onSearch}
+            className="grid size-8 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+          >
+            <Search className="size-4" />
+          </button>
+        </ShortcutHint>
       </header>
       <ConfigurationErrors projectId={projectId} />
-      <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col @2xl/settings:flex-row">
-        <label className="flex shrink-0 items-center gap-3 px-6 pb-4 text-sm text-fg-muted @2xl/settings:hidden">
-          Category
-          <select
-            aria-label="Settings category"
-            value={selected}
-            onChange={(event) => navigateTo(event.target.value)}
-            className="field h-8 min-w-0 flex-1 rounded-lg px-2 text-fg"
+      <label className="mx-auto flex w-full max-w-5xl shrink-0 items-center gap-3 px-6 pb-4 text-sm text-fg-muted @2xl/settings:hidden">
+        Category
+        <select
+          aria-label="Settings category"
+          value={selected}
+          onChange={(event) => navigateTo(event.target.value)}
+          className="field h-8 min-w-0 flex-1 rounded-lg px-2 text-fg"
+        >
+          {sections.map((section) => (
+            <option key={section.id} value={section.id}>
+              {section.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div
+        ref={scrollRef}
+        data-settings-scroll
+        onScroll={() => {
+          const root = scrollRef.current;
+          if (!root) return;
+          const requestedTop = navigationScrollTop.current;
+          if (requestedTop === root.scrollTop) return;
+          navigationScrollTop.current = null;
+          const lastSection = sections.at(-1);
+          if (
+            lastSection &&
+            root.scrollTop > 0 &&
+            root.scrollHeight - root.clientHeight - root.scrollTop <= 1
+          ) {
+            setSelected(lastSection.id);
+            return;
+          }
+          const top = root.getBoundingClientRect().top;
+          const current = [...sections].reverse().find((section) => {
+            const element = root.querySelector(`#settings-${section.id}`);
+            return element && element.getBoundingClientRect().top <= top + 24;
+          });
+          if (current) setSelected(current.id);
+        }}
+        className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain"
+      >
+        <div className="mx-auto flex w-full max-w-5xl items-start">
+          <nav
+            aria-label="Settings categories"
+            className="sticky top-0 hidden w-48 shrink-0 flex-col gap-1 px-6 pr-3 pb-3 @2xl/settings:flex"
           >
             {sections.map((section) => (
-              <option key={section.id} value={section.id}>
+              <button
+                key={section.id}
+                type="button"
+                aria-current={selected === section.id ? "location" : undefined}
+                onClick={() => navigateTo(section.id)}
+                className={`shrink-0 cursor-pointer whitespace-nowrap rounded-lg px-3 py-2 text-left text-sm transition-colors duration-150 ${selected === section.id ? "bg-bg-overlay font-medium text-fg" : "text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"}`}
+              >
                 {section.label}
-              </option>
+              </button>
             ))}
-          </select>
-        </label>
-        <nav
-          aria-label="Settings categories"
-          className="hidden w-48 shrink-0 flex-col gap-1 overflow-y-auto px-6 pr-3 pb-3 @2xl/settings:flex"
-        >
-          {sections.map((section) => (
-            <button
-              key={section.id}
-              type="button"
-              aria-current={
-                !query && selected === section.id ? "location" : undefined
-              }
-              onClick={() => navigateTo(section.id)}
-              className={`shrink-0 cursor-pointer whitespace-nowrap rounded-lg px-3 py-2 text-left text-sm transition-colors duration-150 ${!query && selected === section.id ? "bg-bg-overlay font-medium text-fg" : "text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"}`}
-            >
-              {section.label}
-            </button>
-          ))}
-        </nav>
-        <div
-          ref={scrollRef}
-          data-settings-scroll
-          onScroll={() => {
-            const root = scrollRef.current;
-            if (!root || query) return;
-            const requestedTop = navigationScrollTop.current;
-            if (requestedTop === root.scrollTop) return;
-            navigationScrollTop.current = null;
-            const lastSection = sections.at(-1);
-            if (
-              lastSection &&
-              root.scrollTop > 0 &&
-              root.scrollHeight - root.clientHeight - root.scrollTop <= 1
-            ) {
-              setSelected(lastSection.id);
-              return;
-            }
-            const top = root.getBoundingClientRect().top;
-            const current = [...sections].reverse().find((section) => {
-              const element = root.querySelector(`#settings-${section.id}`);
-              return element && element.getBoundingClientRect().top <= top + 24;
-            });
-            if (current) setSelected(current.id);
-          }}
-          className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-10"
-        >
-          {visible.length === 0 && (
-            <p role="status" className="py-8 text-sm text-fg-muted">
-              No settings match “{query}”. Try a category such as appearance,
-              macros or shortcuts.
-            </p>
-          )}
-          {sections.map((section) => (
-            <div
-              key={section.id}
-              id={`settings-${section.id}`}
-              hidden={!visible.includes(section)}
-              className="settings-category mb-8 max-w-2xl scroll-mt-2"
-            >
-              {section.content}
-            </div>
-          ))}
+          </nav>
+          <div className="min-w-0 flex-1 px-6 pb-10">
+            {sections.map((section) => (
+              <div
+                key={section.id}
+                id={`settings-${section.id}`}
+                className="settings-category mb-10 max-w-2xl scroll-mt-2"
+              >
+                <div className="mb-3 flex h-7 items-center justify-between gap-3">
+                  <h2 className="text-sm font-semibold text-fg">
+                    {section.label}
+                  </h2>
+                  {"action" in section ? section.action : null}
+                </div>
+                {section.content}
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>
@@ -445,10 +427,8 @@ interface AgentLoginUi {
  * in, and removes the ones that exist.
  */
 function AgentsSection({
-  onAddAgent,
   onConfigureAgent,
 }: {
-  onAddAgent: () => void;
   onConfigureAgent: (agentId: string) => void;
 }) {
   const [data, setData] = useState<AgentsData | null>(null);
@@ -527,19 +507,7 @@ function AgentsSection({
 
   return (
     <section>
-      <div className="mb-1 flex items-center justify-between">
-        <h2 className="text-sm font-semibold">Agents</h2>
-        <button
-          type="button"
-          onClick={onAddAgent}
-          data-testid="settings-add-agent"
-          className="flex cursor-pointer items-center gap-1 text-xs text-fg-muted hover:text-fg"
-        >
-          <Plus className="size-3" />
-          Add agent
-        </button>
-      </div>
-      <p className="mb-3 text-xs text-fg-muted">
+      <p className="mb-3 text-xs leading-5 text-fg-muted">
         Agents belong to the current profile. Add one with the setup wizard; set
         the default here and switch per chat from the command palette.
       </p>
@@ -723,42 +691,46 @@ function ConnectorsSection({ onManage }: { onManage: () => void }) {
     return desktopApi.onConnectionsChanged(setConnections);
   }, []);
 
+  const githubStatusText = prefs.githubCliEnabled
+    ? githubStatus?.login
+      ? `Connected as ${githubStatus.login}`
+      : "Connected"
+    : "Not connected";
+  const connectorsStatusText =
+    connections.length === 0
+      ? "None installed"
+      : `${connections.length} installed`;
   return (
-    <section className="mt-8">
-      <div
-        className="mb-8 rounded-lg border border-border bg-bg-raised p-4"
+    <>
+      <section
+        className="settings-card mt-8"
+        data-setting-id="github-cli"
         data-testid="github-cli-connection"
       >
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold">GitHub CLI</h2>
-            <p className="mt-1 text-xs text-fg-muted">
-              Optional connection for pull requests, reviews, and repository
-              access.
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold text-fg">GitHub CLI</h2>
+            <p className="mt-1 text-xs leading-5 text-fg-muted">
+              Pull requests and reviews through the account you already use with
+              GitHub CLI.
             </p>
           </div>
-          <span className="text-xs text-fg-muted">
-            {prefs.githubCliEnabled ? "Enabled" : "Not connected"}
+          <span className="shrink-0 pt-0.5 text-xs text-fg-muted">
+            {githubStatusText}
           </span>
         </div>
-        <p className="mt-3 text-xs text-fg-muted">
-          Uses your existing GitHub CLI account. Disconnecting here keeps you
-          signed in to GitHub CLI.
-        </p>
-        {githubStatus?.login && (
-          <p className="mt-2 text-xs">Verified account: {githubStatus.login}</p>
-        )}
         {(githubStatus?.error || preferenceError) && (
           <p role="alert" className="mt-2 text-xs text-danger">
             {githubStatus?.error || preferenceError}
           </p>
         )}
-        <div className="mt-3 flex gap-3">
+        <div className="mt-3 flex items-center gap-2">
           <button
             type="button"
             disabled={checkingGithub}
+            data-setting-control
             onClick={() => void checkGithub(!prefs.githubCliEnabled)}
-            className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-bg-overlay disabled:opacity-50"
+            className="flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border px-3 text-[13px] text-fg transition-colors duration-150 hover:bg-bg-overlay disabled:cursor-not-allowed disabled:opacity-50"
           >
             {checkingGithub
               ? "Checking…"
@@ -771,36 +743,40 @@ function ConnectorsSection({ onManage }: { onManage: () => void }) {
               type="button"
               disabled={checkingGithub}
               onClick={() => void update({ githubCliEnabled: false })}
-              className="rounded-md px-3 py-1.5 text-xs text-fg-muted hover:bg-bg-overlay"
+              className="flex h-8 cursor-pointer items-center rounded-md px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
             >
               Disconnect
             </button>
           )}
         </div>
-      </div>
-      <h2 className="mb-1 text-sm font-semibold">Connectors</h2>
-      <p className="mb-3 text-xs text-fg-muted">
-        Tools your agents can use — MCP servers and Claude Code plugins.
-        Installed connectors work with every agent; assign them per agent when
-        editing it.
-      </p>
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={onManage}
-          className="flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border px-3 text-[13px] text-fg hover:bg-bg-overlay"
-          data-testid="manage-connectors"
-        >
-          <Plug className="size-3.5" />
-          Manage connectors
-        </button>
-        <span className="text-xs text-fg-faint">
-          {connections.length === 0
-            ? "None installed yet"
-            : `${connections.length} connection${connections.length === 1 ? "" : "s"}`}
-        </span>
-      </div>
-    </section>
+      </section>
+      <section className="settings-card mt-4" data-setting-id="connectors">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold text-fg">Connectors</h2>
+            <p className="mt-1 text-xs leading-5 text-fg-muted">
+              MCP servers and Claude Code plugins every agent can use. Assign
+              them per agent when editing it.
+            </p>
+          </div>
+          <span className="shrink-0 pt-0.5 text-xs text-fg-muted">
+            {connectorsStatusText}
+          </span>
+        </div>
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onManage}
+            data-setting-control
+            className="flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border px-3 text-[13px] text-fg transition-colors duration-150 hover:bg-bg-overlay"
+            data-testid="manage-connectors"
+          >
+            <Plug className="size-3.5" />
+            Manage connectors
+          </button>
+        </div>
+      </section>
+    </>
   );
 }
 
@@ -1455,6 +1431,7 @@ function ThemeSection({
   return (
     <section className="mt-8" data-setting-id="theme.selection">
       <div className="mb-3 flex items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold">Theme</h2>
         <label className="flex items-center gap-2 text-xs text-fg-muted">
           Apply to
           <select
@@ -1498,25 +1475,22 @@ function ThemeSection({
           {saveError}
         </p>
       )}
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-semibold">Theme</h2>
-        {overridden && (
-          <button
-            type="button"
-            onClick={() =>
-              void saveTheme({
-                fonts: config.fonts,
-                ...(config.selection ? { selection: config.selection } : {}),
-                overrides: {},
-              })
-            }
-            className="flex cursor-pointer items-center gap-1 text-xs text-fg-muted hover:text-fg"
-          >
-            <RotateCcw className="size-3" />
-            Clear color edits
-          </button>
-        )}
-      </div>
+      {overridden && (
+        <button
+          type="button"
+          onClick={() =>
+            void saveTheme({
+              fonts: config.fonts,
+              ...(config.selection ? { selection: config.selection } : {}),
+              overrides: {},
+            })
+          }
+          className="mb-3 flex cursor-pointer items-center gap-1 text-xs text-fg-muted hover:text-fg"
+        >
+          <RotateCcw className="size-3" />
+          Clear color edits
+        </button>
+      )}
 
       <button
         type="button"

@@ -280,6 +280,36 @@ that friction is intentional.
   in the bottom bubble strip (see the design log for collapse behavior).
 - Empty states are quiet: one sentence of `--color-fg-muted` + one action.
 
+## Page surfaces
+
+Settings, History, and any other full-tab page share one shape. The recurring
+mistakes these rules prevent: a scrollbar floating mid-window, a search field
+that duplicates the palette, an X that duplicates the tab strip, and blocks of
+the same page styled three different ways.
+
+- **Pages are tabs, so the tab strip closes them.** No close button inside a
+  page header. Cmd+W and the tab's own close control are the only way out.
+  Dialogs, menus, and floating surfaces keep their own dismiss because they are
+  not tabs.
+- **Search is a header icon button that opens the palette in that page's
+  scope** (`settings`, `history`, or a section scope), never an inline filter
+  field on the page (ADR 0123: one search surface). The page keeps its full
+  content while the palette does the finding.
+- **The scroll container spans the full pane width.** Whatever scrolls fills the
+  content area edge to edge so the scrollbar sits at the pane's edge; centered
+  `max-w-*` content lives *inside* the scroller, never around it. Sticky rails
+  such as a category nav are positioned inside the same scroller.
+- **One heading per category, one card shape per block.** A category starts
+  with a `text-sm font-semibold` heading row (optional action at the far
+  right), then `.settings-card` blocks: 16px padding, a heading row with the
+  block's status text at the far edge, one description sentence in
+  `text-xs leading-5 text-fg-muted`, then a control row of 32px buttons. Cards
+  are 16px apart, categories 40px apart. Never mix a card and a bare text block
+  in the same category.
+- **Deep links land on exactly one card.** Every palette destination resolves
+  to a `data-setting-id` on a single block; category-wide outlines mean the
+  catalog id is too coarse.
+
 ## Registry component rules
 
 - **Hosts own workspace chrome.** Registry components may expose local controls
@@ -531,6 +561,19 @@ vertical sequence of optional browser setup actions followed by project actions.
 Default-browser status comes from the OS, shared with Settings (ADR 0144).
 Async actions use the shared size-stable PendingButton with short label fades;
 modal status space is reserved before loading so the action row stays in place.
+
+### 2026-09-18: Page surfaces and sidebar scrolling
+
+Settings follows the page-surface rules above: no in-page close, the search
+button opens the palette's settings scope, the scroller spans the pane with a
+sticky category nav inside it, every category has a heading, and GitHub CLI and
+Connectors are separate `settings-card` blocks with their own catalog ids
+(`github-cli`, `connectors`) so a deep link outlines one card. The PRs sidebar's
+disconnected state is one title, one sentence, one button, and it stops polling
+while the GitHub CLI connection is off. Virtualized trees only contain
+overscroll while they can actually scroll, and bookmark lists scroll inside the
+tree rather than inside a wrapper, so wheel input reaches the sidebar. The
+profile avatar centers under the project icon and the name shares its x.
 
 ## Work identity (2026-09-18)
 

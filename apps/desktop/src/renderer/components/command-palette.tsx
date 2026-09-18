@@ -329,7 +329,7 @@ const LIST_MAX_HEIGHT = 350;
  * input pops the chip (cmdk convention).
  */
 export type PaletteSearchRequest = { nonce: string } & (
-  | { mode: "files" | "content" | "history" }
+  | { mode: "files" | "content" | "history" | "settings" }
   | { mode: "section"; label: string; load: () => Promise<PaletteItem[]> }
 );
 

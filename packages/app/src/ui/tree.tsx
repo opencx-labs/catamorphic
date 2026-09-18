@@ -270,7 +270,11 @@ export function Tree<T extends TreeItem>({
         className={className}
         style={{
           overflow: "auto",
-          overscrollBehavior: "contain",
+          // A tree that fits its rows must not trap the wheel: containment
+          // on a scroller with nothing to scroll blocks the surrounding
+          // sidebar section from scrolling at all.
+          overscrollBehavior:
+            actualHeight < tree.rows.length * rowHeight ? "contain" : "auto",
           height: actualHeight,
           ...style,
         }}

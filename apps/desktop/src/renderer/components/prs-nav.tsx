@@ -81,7 +81,9 @@ export function PrsNav({
         });
     };
     load();
-    if (!visible)
+    // A disabled GitHub CLI connection fails every request the same way, so
+    // wait for the preference to change instead of polling the refusal.
+    if (!visible || !prefs.githubCliEnabled)
       return () => {
         cancelled = true;
       };
@@ -133,45 +135,43 @@ export function PrsNav({
         kind: "navigate",
         run: (mode) => openReview(pr, mode),
       }));
-  if (
-    error?.includes("[github-cli-required]") ||
-    error?.includes("[github-cli-disabled]")
-  )
+  const signedOut = error?.includes("[github-cli-required]") ?? false;
+  if (signedOut || error?.includes("[github-cli-disabled]")) {
+    // The sidebar re-checks on window focus and whenever the connection
+    // preference changes, so this state needs exactly one action.
+    const things = company ? "proposals" : "pull requests";
     return (
       <div
-        className="flex flex-col gap-2 px-2 py-1 text-xs"
+        className="flex flex-col gap-1.5 px-2 py-1"
         data-testid="prs-connect-github"
       >
-        <p className="text-fg-muted">
-          Choose the optional GitHub CLI connection in Settings to see pull
-          requests.
+        <p className="text-xs font-medium text-fg">GitHub not connected</p>
+        <p className="text-xs text-fg-muted">
+          {signedOut
+            ? `Sign in to the GitHub CLI to review ${things} here.`
+            : `Connect the GitHub CLI to review ${things} here.`}
         </p>
         <button
           type="button"
-          className="text-left text-accent"
           onClick={() =>
             onOpenDiff({
               kind: "settings",
               name: "settings",
               label: "Settings",
               destination: {
-                id: "connections",
+                id: "github-cli",
                 requestId: crypto.randomUUID(),
               },
             })
           }
+          className="mt-1 flex h-7 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-border text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
         >
-          Open connection settings
-        </button>
-        <button
-          type="button"
-          className="text-left text-accent"
-          onClick={() => setRefresh((value) => value + 1)}
-        >
-          Retry after signing in
+          <GitPullRequest className="size-3.5" />
+          {signedOut ? "Manage connection" : "Connect GitHub"}
         </button>
       </div>
     );
+  }
   if (error)
     return (
       <div className="px-2 py-1 text-xs">

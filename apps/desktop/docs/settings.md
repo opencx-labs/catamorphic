@@ -78,10 +78,13 @@ Tests: `settings-store.test.ts`, `config-file.test.ts`,
 ## Palette destinations
 
 The shared catalog supplies ordinary palette matches and the `settings` + Space
-scope. Destinations carry a stable catalog id and a new request id, so opening an
-already-mounted Settings surface reveals the control again. Navigation clears
-filters, expands advanced colors when needed, waits for async controls, scrolls,
-highlights and focuses the target. A floating chat minimizes so it cannot obscure
+scope; the Settings page's search button and the `search-settings` action open
+that same scope, and the page itself never filters. Destinations carry a stable
+catalog id and a new request id, so opening an already-mounted Settings surface
+reveals the control again. Every id resolves to one block: the Connections
+category exposes `github-cli` and `connectors` rather than a category-wide
+target. Navigation expands advanced colors when needed, waits for async
+controls, scrolls, highlights and focuses the target. A floating chat minimizes so it cannot obscure
 the control. Rows identify the inspected scope even when navigation passes its
 section header. Navigation never changes a preference itself.
 

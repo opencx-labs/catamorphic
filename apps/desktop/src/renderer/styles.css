@@ -1010,11 +1010,19 @@ kbd {
   }
 }
 
-.settings-category > section:first-child {
+/* The category heading row comes first; the block right after it sits
+   flush under the heading instead of carrying its own section gap. */
+.settings-category > :nth-child(2) {
   margin-top: 0;
 }
-.settings-category[hidden] {
-  display: none;
+/* One card shape for every block on a page surface such as Settings:
+   panel padding, a heading row with its status at the far edge, one
+   description sentence, then a control row. Deep links outline one card. */
+.settings-card {
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-bg-raised) 30%, transparent);
 }
 
 /* Bare icon tabs. Both sidebars share the same quiet chrome and motion. */
@@ -1195,12 +1203,6 @@ kbd {
    content's existing toolbar row so controls never cover its actions. */
 [data-floating-surface] :is([data-settings] > header) {
   padding-right: 156px;
-}
-[data-floating-surface]
-  [data-settings]
-  > header
-  > button[aria-label="Close settings"] {
-  display: none;
 }
 
 [data-floating-surface] [data-browser-toolbar],

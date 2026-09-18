@@ -31,13 +31,11 @@ export function HistoryScreen({
   active = true,
   onSearch,
   onOpen,
-  onClose,
 }: {
   profileId?: string;
   active?: boolean;
   onSearch: () => void;
   onOpen: (entry: HistoryEntry, mode: OpenMode) => Promise<void>;
-  onClose: () => void;
 }) {
   const runtime = useWorkspace();
   const [offset, setOffset] = useState(0);
@@ -118,16 +116,6 @@ export function HistoryScreen({
             className="grid size-7 place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:opacity-40"
           >
             <Trash2 className="size-3.5" />
-          </button>
-        </ShortcutHint>
-        <ShortcutHint label="Close history">
-          <button
-            type="button"
-            aria-label="Close history"
-            onClick={onClose}
-            className="grid size-7 place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-          >
-            <X className="size-4" />
           </button>
         </ShortcutHint>
       </header>

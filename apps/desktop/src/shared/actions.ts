@@ -74,7 +74,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "search-settings",
     label: "Search settings",
-    description: "focus the settings search",
+    description: "search settings in the palette",
     defaultBinding: "",
     keywords: ["settings", "search"],
   },

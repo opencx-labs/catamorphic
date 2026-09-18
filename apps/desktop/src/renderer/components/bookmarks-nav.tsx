@@ -370,6 +370,9 @@ export function BookmarksNav({
               ? "Pinned folders"
               : "Project bookmarks"
         }
+        // Long lists scroll inside the tree itself; a scrolling wrapper
+        // around a virtualized tree gives two competing scrollbars.
+        height={pinned ? undefined : 256}
         defaultExpanded={false}
         renderItem={(item, tree) =>
           item.bookmark ? (
@@ -475,9 +478,8 @@ export function BookmarksNav({
               event.preventDefault();
               event.stopPropagation();
             }}
-            className="max-h-64 overflow-y-auto overscroll-contain"
           >
-            <h3 className="sticky top-0 bg-bg px-2 py-2 text-xs font-medium text-fg-muted">
+            <h3 className="px-2 py-2 text-xs font-medium text-fg-muted">
               Saved bookmarks
             </h3>
             <ul role="list" className="flex flex-col gap-0.5">
@@ -488,10 +490,7 @@ export function BookmarksNav({
       <h3 className="px-2 pt-1 text-xs font-medium text-fg-muted">
         Project bookmarks
       </h3>
-      <ul
-        role="list"
-        className="max-h-64 overflow-y-auto flex flex-col gap-0.5"
-      >
+      <ul role="list" className="flex flex-col gap-0.5">
         {data && renderTree(data.project, false)}
       </ul>
       <div className="flex items-center gap-1 px-1">

@@ -2,6 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
+import { DEFAULT_PREFS } from "../../shared/app-prefs.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { PrsNav } from "./prs-nav.js";
 
@@ -61,6 +62,10 @@ it("opens a PR review directly without fetching or expanding its files", async (
 
 it("opens connection settings without starting the separate GitHub flow", async () => {
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+  vi.mocked(desktopApi.getPrefs).mockResolvedValue({
+    ...DEFAULT_PREFS,
+    githubCliEnabled: true,
+  });
   vi.mocked(desktopApi.prList).mockRejectedValue(
     new Error("[github-cli-required] Sign in with gh auth login"),
   );
@@ -77,26 +82,25 @@ it("opens connection settings without starting the separate GitHub flow", async 
         />,
       ),
     );
-    expect(node.textContent).toContain(
-      "Choose the optional GitHub CLI connection in Settings",
-    );
+    expect(node.textContent).toContain("GitHub not connected");
+    expect(node.textContent).toContain("Sign in to the GitHub CLI");
     expect(node.textContent).not.toContain("GithubNotConnectedError");
+    expect(node.querySelectorAll("button")).toHaveLength(1);
     await act(async () =>
       node.querySelector<HTMLButtonElement>("button")?.click(),
     );
     expect(open).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "settings",
-        destination: expect.objectContaining({ id: "connections" }),
+        destination: expect.objectContaining({ id: "github-cli" }),
       }),
     );
     expect(desktopApi.githubConnectStart).not.toHaveBeenCalled();
+    // Signing in happens outside the app, so returning to the window re-checks.
     vi.mocked(desktopApi.prList).mockResolvedValue([]);
-    await act(async () =>
-      [...node.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent === "Retry after signing in")
-        ?.click(),
-    );
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
     expect(desktopApi.prList).toHaveBeenLastCalledWith("existing-project");
     expect(node.textContent).toContain("No open pull requests.");
   } finally {
