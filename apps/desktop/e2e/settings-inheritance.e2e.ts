@@ -150,7 +150,7 @@ it("keeps checkbox rows and neighboring controls stable while changing and reset
     );
     const geometry = () =>
       app.eval<number[]>(
-        `(()=>{const row=document.querySelector('[data-setting="contentFrame"]');const r=row.getBoundingClientRect();const control=row.querySelector('input').getBoundingClientRect();return [r.height,r.right-control.right,control.y-r.y,row.lastElementChild.getBoundingClientRect().width,document.querySelector('[data-setting="pinnedBookmarks"]').getBoundingClientRect().top-r.top]})()`,
+        `(()=>{const row=document.querySelector('[data-setting="contentFrame"]');const r=row.getBoundingClientRect();const control=row.querySelector('input').getBoundingClientRect();return [r.height,r.right-control.right,control.y-r.y,row.lastElementChild.getBoundingClientRect().width,document.querySelector('[data-setting="contentPadding"]').getBoundingClientRect().top-r.top]})()`,
       );
     // Names every row between the two anchors with its height, so a
     // mismatch says which neighbour moved instead of only that one did.
@@ -158,6 +158,9 @@ it("keeps checkbox rows and neighboring controls stable while changing and reset
       app.eval<string>(
         `JSON.stringify([...document.querySelectorAll('[data-setting]')].map(row => [row.dataset.setting, Math.round(row.getBoundingClientRect().height), row.querySelector('p')?.textContent?.trim().slice(0, 60)]))`,
       );
+    // The fifth reading is the gap to the next row: the Reset control must
+    // not push it. Rows further away wrap differently per platform font at
+    // this width and are not what this test guards.
     // Neighbouring rows finish loading their status lines asynchronously;
     // measure once two readings a beat apart agree.
     let before = await geometry();
