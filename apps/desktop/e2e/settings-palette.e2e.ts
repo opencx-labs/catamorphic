@@ -103,10 +103,7 @@ it("settings Space scopes search and reuses Settings for advanced colors", async
   ).toBe("Appearance");
   await app.screenshot("/tmp/palette-settings-destination.png");
 });
-it("clears shortcut filters and supports repeated destinations and leaving the mode", async () => {
-  await app.eval(
-    `(()=>{${setReactValueJs};setReactValue(document.querySelector('[aria-label="Search keyboard shortcuts"]'),'no-match-at-all')})()`,
-  );
+it("supports repeated destinations and leaving the mode", async () => {
   await open();
   await type("settings");
   await run(`key('Tab')`);
@@ -117,11 +114,6 @@ it("clears shortcut filters and supports repeated destinations and leaving the m
   await wait(`return rows()[0]?.textContent.includes('New tab shortcut')`);
   await run(`key('Enter')`);
   await destination("shortcut.new-tab");
-  expect(
-    await app.eval(
-      `document.querySelector('[aria-label="Search keyboard shortcuts"]').value`,
-    ),
-  ).toBe("");
   await open();
   await type("tab frame");
   await wait(`return rows()[0]?.textContent.includes('Tab frame')`);

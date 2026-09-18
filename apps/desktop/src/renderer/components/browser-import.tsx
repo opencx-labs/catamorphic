@@ -343,7 +343,7 @@ export function BrowserImport({ profileId }: { profileId: string }) {
     }
   }, [profileId]);
   return (
-    <section className="mt-4 rounded-lg border border-border bg-bg-raised/30 p-4">
+    <section className="settings-card mt-4">
       <h2 className="flex items-center gap-2 text-sm font-semibold text-fg">
         <Download className="size-4 text-fg-muted" />
         Import browser data

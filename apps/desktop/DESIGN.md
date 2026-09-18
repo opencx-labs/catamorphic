@@ -300,12 +300,15 @@ the same page styled three different ways.
   `max-w-*` content lives *inside* the scroller, never around it. Sticky rails
   such as a category nav are positioned inside the same scroller.
 - **One heading per category, one card shape per block.** A category starts
-  with a `text-sm font-semibold` heading row (optional action at the far
+  with a `text-base font-semibold` heading row (optional action at the far
   right), then `.settings-card` blocks: 16px padding, a heading row with the
   block's status text at the far edge, one description sentence in
   `text-xs leading-5 text-fg-muted`, then a control row of 32px buttons. Cards
   are 16px apart, categories 40px apart. Never mix a card and a bare text block
-  in the same category.
+  in the same category, and never nest a bordered card inside a card: rows
+  inside a card are plain hover rows, and pickers are the only bordered
+  children. A list on a page is not filtered in place; the palette scope finds
+  its rows and deep-links to them.
 - **Deep links land on exactly one card.** Every palette destination resolves
   to a `data-setting-id` on a single block; category-wide outlines mean the
   catalog id is too coarse.

@@ -12,7 +12,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ACTION_LABELS, KEYBINDING_ACTIONS } from "../../shared/actions.js";
 import { bindingFromEvent, parseBinding } from "../../shared/keybindings.js";
 import {
@@ -244,7 +244,7 @@ export function SettingsScreen({
       id: "shortcuts",
       label: "Keyboard shortcuts",
       keywords: "keys bindings hotkeys",
-      content: <ShortcutsSection destination={destination} />,
+      content: <ShortcutsSection />,
     },
     {
       id: "notifications",
@@ -317,7 +317,6 @@ export function SettingsScreen({
           <button
             type="button"
             aria-label="Search settings"
-            data-sidebar-search="search-settings"
             onClick={onSearch}
             className="grid size-8 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
           >
@@ -393,7 +392,7 @@ export function SettingsScreen({
                 className="settings-category mb-10 max-w-2xl scroll-mt-2"
               >
                 <div className="mb-3 flex h-7 items-center justify-between gap-3">
-                  <h2 className="text-sm font-semibold text-fg">
+                  <h2 className="text-base font-semibold text-fg">
                     {section.label}
                   </h2>
                   {"action" in section ? section.action : null}
@@ -506,7 +505,7 @@ function AgentsSection({
   };
 
   return (
-    <section>
+    <section className="settings-card" data-setting-id="agents">
       <p className="mb-3 text-xs leading-5 text-fg-muted">
         Agents belong to the current profile. Add one with the setup wizard; set
         the default here and switch per chat from the command palette.
@@ -539,7 +538,7 @@ function AgentsSection({
             return (
               <div
                 key={agent.id}
-                className="group rounded-lg border border-border bg-bg-raised/40 px-3 py-2"
+                className="group rounded-md px-2 py-2 transition-colors duration-150 hover:bg-bg-overlay/60"
               >
                 <div className="flex items-center gap-1">
                   <span className="min-w-0 flex-1 truncate text-[13px]">
@@ -794,7 +793,7 @@ function NotificationsSection() {
   return (
     <LayoutSection
       keys={["notificationSounds", "desktopNotifications"]}
-      title="Notifications"
+      title="Agent activity"
     />
   );
 }
@@ -803,11 +802,10 @@ function TerminalSection() {
   const { appearance, source, loading, error, reload } =
     useTerminalAppearance();
   return (
-    <section className="mt-8 flex flex-col gap-3">
-      <LayoutSection
-        keys={["codeTheme", "terminalAppearance"]}
-        title="Code and terminal"
-      />
+    <LayoutSection
+      keys={["codeTheme", "terminalAppearance"]}
+      title="Code and terminal"
+    >
       {source === "ghostty" && (
         <>
           <p className="text-xs text-fg-muted" aria-live="polite">
@@ -840,7 +838,7 @@ function TerminalSection() {
         shell and its startup files. Your prompt, aliases and shell tools keep
         their existing configuration.
       </p>
-    </section>
+    </LayoutSection>
   );
 }
 
@@ -848,10 +846,13 @@ function LayoutSection({
   projectId,
   keys = WORKSPACE_SETTING_KEYS,
   title = "Workspace layout",
+  children,
 }: {
   projectId?: string;
   keys?: SettingKey[];
   title?: string;
+  /** Extra rows that belong to the same card, after the settings. */
+  children?: ReactNode;
 }) {
   const [scope, setScope] = useState<SettingsScope>("profile");
   const [snapshot, setSnapshot] = useState<SettingsSnapshot | null>(null);
@@ -900,7 +901,7 @@ function LayoutSection({
   };
   return (
     <section
-      className="mt-8 flex flex-col gap-3"
+      className="settings-card mt-4 flex flex-col gap-3"
       data-settings-layout={title === "Workspace layout" ? "" : undefined}
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1059,6 +1060,7 @@ function LayoutSection({
             </div>
           );
         })}
+      {children}
     </section>
   );
 }
@@ -1127,7 +1129,7 @@ function MacrosSection() {
   return (
     <section
       data-setting-id="terminalMacros"
-      className="mt-8 flex flex-col gap-3"
+      className="settings-card mt-4 flex flex-col gap-3"
     >
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -1429,7 +1431,7 @@ function ThemeSection({
   const systemSelected = theme.selection === "system";
 
   return (
-    <section className="mt-8" data-setting-id="theme.selection">
+    <section className="settings-card mt-4" data-setting-id="theme.selection">
       <div className="mb-3 flex items-center justify-between gap-3">
         <h2 className="text-sm font-semibold">Theme</h2>
         <label className="flex items-center gap-2 text-xs text-fg-muted">
@@ -1758,9 +1760,19 @@ function SidebarSection() {
   }, []);
 
   return (
-    <section data-setting-id="sidebar" className="mt-8">
-      <h2 className="mb-1 text-sm font-semibold">Sidebar</h2>
-      <p className="text-xs text-fg-muted">
+    <section data-setting-id="sidebar" className="settings-card mt-4">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold">Sidebar</h2>
+        <button
+          type="button"
+          onClick={() => void desktopApi.sidebarConfigReset()}
+          className="flex cursor-pointer items-center gap-1 text-xs text-fg-muted hover:text-fg"
+        >
+          <RotateCcw className="size-3" />
+          Reset to default
+        </button>
+      </div>
+      <p className="mt-1 text-xs leading-5 text-fg-muted">
         The left sidebar's sections and items are defined in a JavaScript file.
         Edit it directly, or ask the assistant to change it for you (&ldquo;hide
         the workflows section&rdquo;, &ldquo;add a Docs section&rdquo;). Changes
@@ -1769,14 +1781,6 @@ function SidebarSection() {
       <p className="mt-2 text-xs text-fg-faint">
         <span className="break-all font-mono">{file}</span>
       </p>
-      <button
-        type="button"
-        onClick={() => void desktopApi.sidebarConfigReset()}
-        className="mt-3 flex cursor-pointer items-center gap-1 text-xs text-fg-muted hover:text-fg"
-      >
-        <RotateCcw className="size-3" />
-        Reset sidebar to default
-      </button>
     </section>
   );
 }
@@ -1786,16 +1790,8 @@ function SidebarSection() {
  * recording. Saves apply immediately (no Save button) — the main process
  * rewrites keybindings.json, which broadcasts back to every window.
  */
-function ShortcutsSection({
-  destination,
-}: {
-  destination?: SettingsDestination;
-}) {
+function ShortcutsSection() {
   const [prefs, setPrefs] = useState<AppPrefs | null>(null);
-  const [filter, setFilter] = useState("");
-  useEffect(() => {
-    if (destination?.id.startsWith("shortcut.")) setFilter("");
-  }, [destination]);
   useEffect(() => {
     void desktopApi.getPrefs().then(setPrefs);
     return desktopApi.onPrefsChanged(setPrefs);
@@ -1805,11 +1801,7 @@ function ShortcutsSection({
   const [file, setFile] = useState<string>("");
   const [notice, setNotice] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
-  const actions = KEYBINDING_ACTIONS.filter((action) =>
-    `${ACTION_LABELS[action]} ${bindings[action]}`
-      .toLowerCase()
-      .includes(filter.toLowerCase().trim()),
-  );
+  const actions = KEYBINDING_ACTIONS;
   useListMotion(listRef, actions.join(","));
 
   useEffect(() => {
@@ -1867,9 +1859,9 @@ function ShortcutsSection({
   );
 
   return (
-    <section className="mt-8">
+    <section className="settings-card mt-4">
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-semibold">Keyboard shortcuts</h2>
+        <h2 className="text-sm font-semibold">Bindings</h2>
         {!isDefault && (
           <button
             type="button"
@@ -1885,27 +1877,11 @@ function ShortcutsSection({
           </button>
         )}
       </div>
-      <input
-        aria-label="Search keyboard shortcuts"
-        value={filter}
-        onChange={(event) => setFilter(event.target.value)}
-        placeholder="Find a shortcut…"
-        className="field mb-3 h-8 w-full rounded-md px-3 text-sm"
-      />
       <div
         ref={listRef}
         data-shortcut-results
         className="relative flex flex-col gap-1.5 overflow-clip"
       >
-        {actions.length === 0 && (
-          <p
-            role="status"
-            data-item-id="empty"
-            className="py-6 text-center text-sm text-fg-muted"
-          >
-            No shortcuts match your search.
-          </p>
-        )}
         {actions.map((action) => (
           <div
             key={action}
