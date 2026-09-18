@@ -1,7 +1,8 @@
 import type { ProjectSummary } from "@catamorphic/react/types";
-import { Check, Star, Trash2, X } from "lucide-react";
+import { Check, Star, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { BrowserImport } from "../components/browser-import";
+import { Modal } from "../components/modal";
 import { PasswordManager } from "../components/password-manager";
 import { PendingButton } from "../components/pending-button";
 import {
@@ -42,11 +43,7 @@ export function ProfileSettingsScreen({
         <p className="mt-2 text-sm text-fg-muted">
           This profile may have been removed in another window.
         </p>
-        <button
-          type="button"
-          onClick={onClose}
-          className="mt-4 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg"
-        >
+        <button type="button" onClick={onClose} className="button-primary mt-4">
           Close
         </button>
       </div>
@@ -128,22 +125,12 @@ function ProfileSettingsForm({
       data-testid="profile-settings-screen"
     >
       <div className="mx-auto w-full max-w-2xl px-6 py-4">
-        <header className="mb-6 flex items-center justify-between">
-          <div>
-            <h1 className="text-base font-semibold">Profile settings</h1>
-            <p className="mt-0.5 text-xs text-fg-muted">
-              Manage this profile's identity, projects, passwords, and browser
-              data.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-            aria-label="Close profile settings"
-          >
-            <X className="size-4" />
-          </button>
+        <header className="mb-6">
+          <h1 className="text-base font-semibold">Profile settings</h1>
+          <p className="mt-0.5 text-xs text-fg-muted">
+            Manage this profile's identity, projects, passwords, and browser
+            data.
+          </p>
         </header>
 
         <section className="space-y-4 rounded-lg border border-border bg-bg-raised/30 p-4">
@@ -162,7 +149,7 @@ function ProfileSettingsForm({
                 disabled={!name.trim() || name.trim() === profile.name}
                 data-disabled-reason="Enter a different profile name"
                 onClick={() => void update({ name: name.trim() })}
-                className="h-8 rounded-md bg-accent px-3 text-xs font-medium text-accent-fg"
+                className="button-primary"
               >
                 Save
               </PendingButton>
@@ -226,7 +213,7 @@ function ProfileSettingsForm({
               disabled={isDefault}
               data-disabled-reason="This is already the default profile"
               onClick={() => void desktopApi.profilesSetDefault(profile.id)}
-              className="flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border px-2.5 text-xs text-fg disabled:cursor-default disabled:opacity-60"
+              className="button-secondary"
             >
               <Star
                 className={`size-3.5 ${isDefault ? "fill-current text-accent" : ""}`}
@@ -246,36 +233,16 @@ function ProfileSettingsForm({
             Projects are moved to the default profile. Browser and agent data
             scoped to this profile may no longer be available.
           </p>
-          {!confirmDelete ? (
-            <button
-              type="button"
-              disabled={!canDelete}
-              data-disabled-reason="Keep at least one profile and switch away before deleting this one"
-              onClick={() => setConfirmDelete(true)}
-              className="mt-3 flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-danger/40 px-2.5 text-xs text-danger disabled:cursor-default disabled:opacity-50"
-            >
-              <Trash2 className="size-3.5" />
-              Delete profile
-            </button>
-          ) : (
-            <div className="mt-3 flex items-center gap-2">
-              <PendingButton
-                pending={deleting}
-                pendingLabel="Deleting…"
-                onClick={() => void remove()}
-                className="h-8 rounded-md bg-danger px-3 text-xs font-medium text-white"
-              >
-                Confirm delete
-              </PendingButton>
-              <button
-                type="button"
-                onClick={() => setConfirmDelete(false)}
-                className="h-8 rounded-md px-2.5 text-xs text-fg-muted hover:bg-bg-overlay"
-              >
-                Cancel
-              </button>
-            </div>
-          )}
+          <button
+            type="button"
+            disabled={!canDelete}
+            data-disabled-reason="Keep at least one profile and switch away before deleting this one"
+            onClick={() => setConfirmDelete(true)}
+            className="button-danger mt-3"
+          >
+            <Trash2 className="size-3.5" />
+            Delete profile
+          </button>
           {!canDelete && (
             <p className="mt-2 text-[11px] text-fg-faint">
               {data.profiles.length <= 1
@@ -284,6 +251,38 @@ function ProfileSettingsForm({
             </p>
           )}
         </section>
+        <Modal
+          open={confirmDelete}
+          onClose={() => setConfirmDelete(false)}
+          width={440}
+        >
+          <div className="px-5 pt-5">
+            <h2 className="text-sm font-semibold text-fg">
+              Delete {profile.name}?
+            </h2>
+            <p className="mt-2 text-[13px] leading-relaxed text-fg-muted">
+              Projects are moved to the default profile. Browser and agent data
+              scoped to this profile may no longer be available.
+            </p>
+          </div>
+          <footer className="mt-4 flex items-center justify-end gap-2 border-t border-border px-5 py-3.5">
+            <button
+              type="button"
+              onClick={() => setConfirmDelete(false)}
+              className="button-ghost"
+            >
+              Cancel
+            </button>
+            <PendingButton
+              pending={deleting}
+              pendingLabel="Deleting…"
+              onClick={() => void remove()}
+              className="button-danger"
+            >
+              Delete profile
+            </PendingButton>
+          </footer>
+        </Modal>
         {error && (
           <p
             className="mt-3 rounded-md bg-danger/10 px-3 py-2 text-xs text-danger"

@@ -1,5 +1,22 @@
 import type { ResourcePreview } from "@catamorphic/react";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+
+// Electron prefixes every rejected invoke with "Error invoking remote method
+// '<channel>': Error: ". The renderer shows messages to people and matches
+// their `[tag]` prefixes, so the wrapper strips the transport noise once here.
+const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> =>
+  ipcRenderer.invoke(channel, ...args).catch((cause: unknown) => {
+    if (!(cause instanceof Error)) throw cause;
+    const error = new Error(
+      cause.message.replace(
+        /^Error invoking remote method '[^']+': (?:Error: )?/,
+        "",
+      ),
+    );
+    error.name = cause.name;
+    throw error;
+  }) as Promise<T>;
+
 import type { AgentCommandsResult } from "../shared/agent-commands.js";
 import type {
   BookmarkMove,
@@ -32,22 +49,22 @@ export interface ServerInfo {
 
 const api = {
   defaultBrowserState: (): Promise<DefaultBrowserState> =>
-    ipcRenderer.invoke("catamorphic:default-browser-state"),
+    invoke("catamorphic:default-browser-state"),
   defaultBrowserRequest: (): Promise<DefaultBrowserState> =>
-    ipcRenderer.invoke("catamorphic:default-browser-request"),
+    invoke("catamorphic:default-browser-request"),
   browserTakePendingUrls: (): Promise<string[]> =>
-    ipcRenderer.invoke("catamorphic:browser-take-pending-urls"),
+    invoke("catamorphic:browser-take-pending-urls"),
   onPendingBrowserUrls: (listener: () => void): (() => void) => {
     ipcRenderer.on("catamorphic:pending-browser-urls", listener);
     return () =>
       ipcRenderer.removeListener("catamorphic:pending-browser-urls", listener);
   },
   workspaceInitial: (): Promise<string | undefined> =>
-    ipcRenderer.invoke("catamorphic:workspace-initial"),
+    invoke("catamorphic:workspace-initial"),
   dockDraftGet: (localId: string): Promise<ChatDraft | null> =>
-    ipcRenderer.invoke("catamorphic:dock-draft-get", localId),
+    invoke("catamorphic:dock-draft-get", localId),
   dockDraftSet: (localId: string, draft: ChatDraft): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:dock-draft-set", localId, draft),
+    invoke("catamorphic:dock-draft-set", localId, draft),
   onDockDraft: (listener: (update: ChatDraftUpdate) => void): (() => void) => {
     const handler = (
       _event: Electron.IpcRendererEvent,
@@ -57,35 +74,36 @@ const api = {
     return () => ipcRenderer.removeListener("catamorphic:dock-draft", handler);
   },
   workspaceClaim: (projectId: string): Promise<boolean> =>
-    ipcRenderer.invoke("catamorphic:workspace-claim", projectId),
+    invoke("catamorphic:workspace-claim", projectId),
   workspaceNavigate: (input: WorkspaceNavigation): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:workspace-navigate", input),
+    invoke("catamorphic:workspace-navigate", input),
   workspaceActive: (projectId: string): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:workspace-active", projectId),
+    invoke("catamorphic:workspace-active", projectId),
   dockPublish: (data: DockData): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:dock-publish", data),
+    invoke("catamorphic:dock-publish", data),
   dockRemove: (projectId: string, localId: string): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:dock-remove", projectId, localId),
+    invoke("catamorphic:dock-remove", projectId, localId),
   dockSnapshot: (): Promise<DockSnapshot> =>
-    ipcRenderer.invoke("catamorphic:dock-snapshot"),
+    invoke("catamorphic:dock-snapshot"),
   dockCommand: (command: DockCommand): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:dock-command", command),
+    invoke("catamorphic:dock-command", command),
   dockActivate: (localId?: string): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:dock-activate", localId),
-  dockNewChat: (): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:dock-new-chat"),
+    invoke("catamorphic:dock-activate", localId),
+  dockNewChat: (): Promise<void> => invoke("catamorphic:dock-new-chat"),
   dockAction: (
     localId: string,
     action: "close" | "minimize" | "send",
     message?: string,
   ): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:dock-action", localId, action, message),
+    invoke("catamorphic:dock-action", localId, action, message),
   dockDrag: (input: DockDrag): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:dock-drag", input),
+    invoke("catamorphic:dock-drag", input),
   dockResize: (size: DockSize): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:dock-resize", size),
+    invoke("catamorphic:dock-resize", size),
   dockIgnoreMouse: (ignore: boolean): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:dock-ignore-mouse", ignore),
+    invoke("catamorphic:dock-ignore-mouse", ignore),
+  dockDetach: (detached: boolean): Promise<void> =>
+    invoke("catamorphic:dock-detach", detached),
   onDockSnapshot: (
     listener: (snapshot: DockSnapshot) => void,
   ): (() => void) => {
@@ -108,16 +126,12 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:workspace-event", handler);
   },
-  getServerState: (): Promise<ServerInfo> =>
-    ipcRenderer.invoke("catamorphic:server-state"),
+  getServerState: (): Promise<ServerInfo> => invoke("catamorphic:server-state"),
   updateState: (): Promise<DesktopUpdateState> =>
-    ipcRenderer.invoke("catamorphic:update-state"),
-  updateCheck: (): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:update-check"),
-  updateDownload: (): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:update-download"),
-  updateInstall: (): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:update-install"),
+    invoke("catamorphic:update-state"),
+  updateCheck: (): Promise<void> => invoke("catamorphic:update-check"),
+  updateDownload: (): Promise<void> => invoke("catamorphic:update-download"),
+  updateInstall: (): Promise<void> => invoke("catamorphic:update-install"),
   onUpdateStateChanged: (
     listener: (state: DesktopUpdateState) => void,
   ): (() => void) => {
@@ -142,76 +156,66 @@ const api = {
   },
 
   filePreview: (input: FilePreviewInput): Promise<ResourcePreview> =>
-    ipcRenderer.invoke("catamorphic:file-preview", input),
+    invoke("catamorphic:file-preview", input),
 
   composerFileSave: (input: {
     projectId: string;
     name: string;
     bytes: Uint8Array;
   }): Promise<{ path: string; name: string }> =>
-    ipcRenderer.invoke("catamorphic:composer-file-save", input),
+    invoke("catamorphic:composer-file-save", input),
 
   // --- window ↔ profile ---
-  windowProfile: (): Promise<string> =>
-    ipcRenderer.invoke("catamorphic:window-profile"),
+  windowProfile: (): Promise<string> => invoke("catamorphic:window-profile"),
   windowSetProfile: (profileId: string): Promise<string> =>
-    ipcRenderer.invoke("catamorphic:window-set-profile", profileId),
+    invoke("catamorphic:window-set-profile", profileId),
   openProfileWindow: (profileId: string): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:open-profile-window", profileId),
+    invoke("catamorphic:open-profile-window", profileId),
 
   // --- per-profile agents ---
-  agentsList: (): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:agents-list"),
+  agentsList: (): Promise<unknown> => invoke("catamorphic:agents-list"),
   agentsCreate: (input: unknown): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:agents-create", input),
+    invoke("catamorphic:agents-create", input),
   agentsUpdate: (id: string, patch: unknown): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:agents-update", id, patch),
+    invoke("catamorphic:agents-update", id, patch),
   agentsRemove: (id: string): Promise<boolean> =>
-    ipcRenderer.invoke("catamorphic:agents-remove", id),
+    invoke("catamorphic:agents-remove", id),
   agentsSetDefault: (id: string): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:agents-set-default", id),
+    invoke("catamorphic:agents-set-default", id),
   agentsSetProjectDefault: (
     projectId: string,
     agentId: string | null,
   ): Promise<void> =>
-    ipcRenderer.invoke(
-      "catamorphic:agents-set-project-default",
-      projectId,
-      agentId,
-    ),
+    invoke("catamorphic:agents-set-project-default", projectId, agentId),
   projectAgentsSetDefault: (
     projectId: string,
     slug: string | null,
   ): Promise<void> =>
-    ipcRenderer.invoke(
-      "catamorphic:project-agents-set-default",
-      projectId,
-      slug,
-    ),
+    invoke("catamorphic:project-agents-set-default", projectId, slug),
   agentModels: (id: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:agent-models", id),
+    invoke("catamorphic:agent-models", id),
   projectAgentsList: (projectId: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:project-agents-list", projectId),
+    invoke("catamorphic:project-agents-list", projectId),
   projectAgentApprove: (
     projectId: string,
     slug: string,
   ): Promise<{ ok: boolean; error?: string }> =>
-    ipcRenderer.invoke("catamorphic:project-agent-approve", projectId, slug),
+    invoke("catamorphic:project-agent-approve", projectId, slug),
   agentSetupStatus: (): Promise<{ claudeCode: boolean; codex: boolean }> =>
-    ipcRenderer.invoke("catamorphic:agent-setup-status"),
+    invoke("catamorphic:agent-setup-status"),
   agentLogin: (
     id: string,
   ): Promise<{ started: boolean; command?: string; error?: string }> =>
-    ipcRenderer.invoke("catamorphic:agent-login", id),
+    invoke("catamorphic:agent-login", id),
   agentLoginStatus: (id: string): Promise<boolean> =>
-    ipcRenderer.invoke("catamorphic:agent-login-status", id),
+    invoke("catamorphic:agent-login-status", id),
   /** Fresh commands for the selected harness and session checkout. */
   agentCommands: (input: {
     projectId: string;
     agentId: string;
     sessionId?: string;
   }): Promise<AgentCommandsResult> =>
-    ipcRenderer.invoke("catamorphic:agent-commands", input),
+    invoke("catamorphic:agent-commands", input),
   /**
    * Proactive auth probe: what is knowably wrong before a send, plus
    * main's verdict on whether a one-click re-login flow exists.
@@ -219,10 +223,10 @@ const api = {
   agentAuthHealth: (
     id: string,
   ): Promise<{ health: "ok" | "expired" | "missing"; reauth: boolean }> =>
-    ipcRenderer.invoke("catamorphic:agent-auth-health", id),
+    invoke("catamorphic:agent-auth-health", id),
   /** Whole-machine transcript scan for the usage page (ADR 0057). */
   usageSummary: (days: number): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:usage-summary", days),
+    invoke("catamorphic:usage-summary", days),
   /** Fired on OS wake — sessions may have expired; re-probe. */
   onAgentAuthMaybeChanged: (listener: () => void): (() => void) => {
     const handler = () => listener();
@@ -253,51 +257,42 @@ const api = {
 
   // --- profile MCP connections + connectors ---
   connectionsList: (): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:connections-list"),
+    invoke("catamorphic:connections-list"),
   connectionsCreate: (input: unknown): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:connections-create", input),
+    invoke("catamorphic:connections-create", input),
   connectionsUpdate: (id: string, patch: unknown): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:connections-update", id, patch),
+    invoke("catamorphic:connections-update", id, patch),
   connectionsRemove: (id: string): Promise<boolean> =>
-    ipcRenderer.invoke("catamorphic:connections-remove", id),
+    invoke("catamorphic:connections-remove", id),
   projectWorkflowTools: (projectId: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:project-workflow-tools", projectId),
+    invoke("catamorphic:project-workflow-tools", projectId),
   connectionsSetPolicy: (id: string, policy: unknown): Promise<boolean> =>
-    ipcRenderer.invoke("catamorphic:connections-set-policy", id, policy),
+    invoke("catamorphic:connections-set-policy", id, policy),
   connectionsProbe: (id: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:connections-probe", id),
+    invoke("catamorphic:connections-probe", id),
   connectionsAuthorize: (id: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:connections-authorize", id),
+    invoke("catamorphic:connections-authorize", id),
   connectorsSearch: (query: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:connectors-search", query),
+    invoke("catamorphic:connectors-search", query),
   connectorsSearchPlugins: (query: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:connectors-search-plugins", query),
+    invoke("catamorphic:connectors-search-plugins", query),
   connectorsSearchRegistry: (query: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:connectors-search-registry", query),
-  connectorsList: (): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:connectors-list"),
+    invoke("catamorphic:connectors-search-registry", query),
+  connectorsList: (): Promise<unknown> => invoke("catamorphic:connectors-list"),
   connectorsInstallRegistry: (
     registryName: string,
     secrets: Record<string, string>,
   ): Promise<unknown> =>
-    ipcRenderer.invoke(
-      "catamorphic:connectors-install-registry",
-      registryName,
-      secrets,
-    ),
+    invoke("catamorphic:connectors-install-registry", registryName, secrets),
   connectorsInstallPlugin: (
     marketplace: string,
     pluginName: string,
   ): Promise<unknown> =>
-    ipcRenderer.invoke(
-      "catamorphic:connectors-install-plugin",
-      marketplace,
-      pluginName,
-    ),
+    invoke("catamorphic:connectors-install-plugin", marketplace, pluginName),
   connectorsCodexComputerUse: (): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:connectors-codex-computer-use"),
+    invoke("catamorphic:connectors-codex-computer-use"),
   connectorsRemove: (name: string): Promise<boolean> =>
-    ipcRenderer.invoke("catamorphic:connectors-remove", name),
+    invoke("catamorphic:connectors-remove", name),
   onConnectionsChanged: (listener: (data: unknown) => void): (() => void) => {
     const handler = (_event: unknown, data: unknown) => listener(data);
     ipcRenderer.on("catamorphic:connections-changed", handler);
@@ -305,9 +300,9 @@ const api = {
       ipcRenderer.removeListener("catamorphic:connections-changed", handler);
   },
   workspaceStateGet: (projectId: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:workspace-state-get", projectId),
+    invoke("catamorphic:workspace-state-get", projectId),
   workspaceStateSet: (projectId: string, snapshot: unknown): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:workspace-state-set", projectId, snapshot),
+    invoke("catamorphic:workspace-state-set", projectId, snapshot),
   onGitChanged: (listener: (data: unknown) => void): (() => void) => {
     const handler = (_event: unknown, data: unknown) => listener(data);
     ipcRenderer.on("catamorphic:git-changed", handler);
@@ -316,33 +311,26 @@ const api = {
 
   // --- MCP Apps (embedded views for connection tools) ---
   mcpAppsUiTools: (): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:mcp-apps-ui-tools"),
+    invoke("catamorphic:mcp-apps-ui-tools"),
   mcpAppsView: (toolKey: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:mcp-apps-view", toolKey),
+    invoke("catamorphic:mcp-apps-view", toolKey),
   mcpAppsCall: (
     viewToolKey: string,
     toolName: string,
     args: Record<string, unknown>,
   ): Promise<unknown> =>
-    ipcRenderer.invoke(
-      "catamorphic:mcp-apps-call",
-      viewToolKey,
-      toolName,
-      args,
-    ),
+    invoke("catamorphic:mcp-apps-call", viewToolKey, toolName, args),
 
   // --- OpenRouter catalog (searchable model selector, best-free default) ---
   openrouterModels: (): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:openrouter-models"),
+    invoke("catamorphic:openrouter-models"),
 
   // --- import from other browsers ---
-  historyQuery: (input: unknown) =>
-    ipcRenderer.invoke("catamorphic:history-query", input),
+  historyQuery: (input: unknown) => invoke("catamorphic:history-query", input),
   historyRecord: (input: unknown) =>
-    ipcRenderer.invoke("catamorphic:history-record", input),
-  historyRemove: (id: string) =>
-    ipcRenderer.invoke("catamorphic:history-remove", id),
-  historyClear: () => ipcRenderer.invoke("catamorphic:history-clear"),
+    invoke("catamorphic:history-record", input),
+  historyRemove: (id: string) => invoke("catamorphic:history-remove", id),
+  historyClear: () => invoke("catamorphic:history-clear"),
   onHistoryChanged: (listener: () => void) => {
     const handler = () => listener();
     ipcRenderer.on("catamorphic:history-changed", handler);
@@ -350,53 +338,51 @@ const api = {
       ipcRenderer.removeListener("catamorphic:history-changed", handler);
   },
   browserImportList: (): Promise<unknown[]> =>
-    ipcRenderer.invoke("catamorphic:browser-import-list"),
+    invoke("catamorphic:browser-import-list"),
   browserImportRun: (input: unknown): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:browser-import-run", input),
+    invoke("catamorphic:browser-import-run", input),
   browserImportPasswords: (input: { profileId: string }): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:browser-import-passwords", input),
+    invoke("catamorphic:browser-import-passwords", input),
 
   devWindow: (action: string, width?: number, height?: number) =>
-    ipcRenderer.invoke("catamorphic:dev-window", action, width, height),
+    invoke("catamorphic:dev-window", action, width, height),
   defaultProjectsDir: (): Promise<string> =>
-    ipcRenderer.invoke("catamorphic:default-projects-dir"),
+    invoke("catamorphic:default-projects-dir"),
   pickFolder: (opts?: {
     title?: string;
     defaultPath?: string;
-  }): Promise<string | null> =>
-    ipcRenderer.invoke("catamorphic:pick-folder", opts),
+  }): Promise<string | null> => invoke("catamorphic:pick-folder", opts),
   createProject: (input: {
     name: string;
     rootPath: string;
     importExisting?: boolean;
   }): Promise<{ id: string; name: string }> =>
-    ipcRenderer.invoke("catamorphic:project-create", input),
+    invoke("catamorphic:project-create", input),
   createDefaultProject: (): Promise<{ id: string; name: string }> =>
-    ipcRenderer.invoke("catamorphic:project-create-default"),
+    invoke("catamorphic:project-create-default"),
   deleteProject: (input: {
     projectId: string;
     trashFolder?: boolean;
-  }): Promise<void> => ipcRenderer.invoke("catamorphic:project-delete", input),
+  }): Promise<void> => invoke("catamorphic:project-delete", input),
   projectRoot: (projectId: string): Promise<string | null> =>
-    ipcRenderer.invoke("catamorphic:project-root", projectId),
+    invoke("catamorphic:project-root", projectId),
   revealFolder: (folderPath: string): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:reveal-folder", folderPath),
+    invoke("catamorphic:reveal-folder", folderPath),
   editorFileRead: (input: { filePath: string }): Promise<{ content: string }> =>
-    ipcRenderer.invoke("catamorphic:editor-file-read", input),
+    invoke("catamorphic:editor-file-read", input),
   projectLocalFiles: (projectId: string): Promise<Array<{ path: string }>> =>
-    ipcRenderer.invoke("catamorphic:project-local-files", projectId),
+    invoke("catamorphic:project-local-files", projectId),
   editorFileWrite: (input: {
     filePath: string;
     content: string;
     expectedContent: string;
-  }): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:editor-file-write", input),
+  }): Promise<void> => invoke("catamorphic:editor-file-write", input),
   projectOpenFile: (projectId: string, filePath: string): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:project-open-file", projectId, filePath),
+    invoke("catamorphic:project-open-file", projectId, filePath),
   authorizationStatus: (): Promise<{
     label: string;
     expiresAt: number;
-  } | null> => ipcRenderer.invoke("catamorphic:authorization-status"),
+  } | null> => invoke("catamorphic:authorization-status"),
   onAuthorizationChanged: (listener: () => void): (() => void) => {
     const handler = () => listener();
     ipcRenderer.on("catamorphic:authorization-changed", handler);
@@ -404,25 +390,25 @@ const api = {
       ipcRenderer.removeListener("catamorphic:authorization-changed", handler);
   },
   authorizationCancel: (): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:authorization-cancel"),
+    invoke("catamorphic:authorization-cancel"),
   authorizationContinueBrowser: (): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:authorization-continue-browser"),
+    invoke("catamorphic:authorization-continue-browser"),
   githubConnectStart: (): Promise<{
     userCode: string;
     verificationUri: string;
-  }> => ipcRenderer.invoke("catamorphic:github-connect-start"),
+  }> => invoke("catamorphic:github-connect-start"),
   githubConnectCancel: (): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:github-connect-cancel"),
+    invoke("catamorphic:github-connect-cancel"),
   githubDisconnect: (): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:github-disconnect"),
+    invoke("catamorphic:github-disconnect"),
   githubManageRepos: (): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:github-manage-repos"),
+    invoke("catamorphic:github-manage-repos"),
   githubImport: (input: {
     fullName: string;
     name?: string;
     rootPath: string;
   }): Promise<{ id: string; name: string }> =>
-    ipcRenderer.invoke("catamorphic:github-import", input),
+    invoke("catamorphic:github-import", input),
   onGithubConnected: (listener: (result: unknown) => void): (() => void) => {
     const handler = (_event: unknown, result: unknown) => listener(result);
     ipcRenderer.on("catamorphic:github-connected", handler);
@@ -431,86 +417,74 @@ const api = {
   },
   // Continue on mobile (QR pairing).
   mobilePairingStart: (context?: unknown): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:mobile-pairing-start", context),
+    invoke("catamorphic:mobile-pairing-start", context),
   sessionIsIncognito: (sessionId: string): Promise<boolean> =>
-    ipcRenderer.invoke("catamorphic:session-is-incognito", sessionId),
+    invoke("catamorphic:session-is-incognito", sessionId),
   sessionSetIncognito: (
     sessionId: string,
     incognito: boolean,
   ): Promise<unknown> =>
-    ipcRenderer.invoke(
-      "catamorphic:session-set-incognito",
-      sessionId,
-      incognito,
-    ),
+    invoke("catamorphic:session-set-incognito", sessionId, incognito),
   projectAllowIncognito: (projectId: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:project-allow-incognito", projectId),
+    invoke("catamorphic:project-allow-incognito", projectId),
   projectStartingActions: (projectId: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:project-starting-actions", projectId),
+    invoke("catamorphic:project-starting-actions", projectId),
   sessionMoveEligibility: (
     projectId: string,
     sessionId: string,
   ): Promise<unknown> =>
-    ipcRenderer.invoke(
-      "catamorphic:session-move-eligibility",
-      projectId,
-      sessionId,
-    ),
+    invoke("catamorphic:session-move-eligibility", projectId, sessionId),
   sessionMoveToServer: (
     projectId: string,
     sessionId: string,
   ): Promise<unknown> =>
-    ipcRenderer.invoke(
-      "catamorphic:session-move-to-server",
-      projectId,
-      sessionId,
-    ),
+    invoke("catamorphic:session-move-to-server", projectId, sessionId),
   mobilePairingDevices: (): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:mobile-pairing-devices"),
+    invoke("catamorphic:mobile-pairing-devices"),
   mobilePairingRevoke: (deviceId: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:mobile-pairing-revoke", deviceId),
+    invoke("catamorphic:mobile-pairing-revoke", deviceId),
   // Remote projects (ADR 0055).
   remoteParseLink: (link: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:remote-parse-link", link),
+    invoke("catamorphic:remote-parse-link", link),
   remoteConnect: (input: unknown): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:remote-connect", input),
+    invoke("catamorphic:remote-connect", input),
   remoteEnableLocalExecution: (input: {
     projectId: string;
     environment: string;
-  }) => ipcRenderer.invoke("catamorphic:remote-enable-local-execution", input),
+  }) => invoke("catamorphic:remote-enable-local-execution", input),
   remoteAuthority: (projectId: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:remote-authority", projectId),
+    invoke("catamorphic:remote-authority", projectId),
   remoteStatus: (projectId: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:remote-status", projectId),
+    invoke("catamorphic:remote-status", projectId),
   remoteSync: (projectId: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:remote-sync", projectId),
+    invoke("catamorphic:remote-sync", projectId),
   remoteShip: (input: {
     projectId: string;
     paths: string[];
     resolveConflicts?: string[];
-  }): Promise<unknown> => ipcRenderer.invoke("catamorphic:remote-ship", input),
+  }): Promise<unknown> => invoke("catamorphic:remote-ship", input),
   remoteHistory: (input: unknown): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:remote-history", input),
+    invoke("catamorphic:remote-history", input),
   remoteReadVersion: (input: unknown): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:remote-read-version", input),
+    invoke("catamorphic:remote-read-version", input),
   remotePublish: (input: unknown): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:remote-publish", input),
+    invoke("catamorphic:remote-publish", input),
   remotePropose: (input: unknown): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:remote-propose", input),
+    invoke("catamorphic:remote-propose", input),
   remoteReconnect: (projectId: string): Promise<{ ok: true }> =>
-    ipcRenderer.invoke("catamorphic:remote-reconnect", projectId),
+    invoke("catamorphic:remote-reconnect", projectId),
   remoteMembers: (projectId: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:remote-members", projectId),
+    invoke("catamorphic:remote-members", projectId),
   remoteAdmissionDecide: (input: unknown): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:remote-admission-decide", input),
+    invoke("catamorphic:remote-admission-decide", input),
   remoteMemberSetRoles: (input: unknown): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:remote-member-set-roles", input),
+    invoke("catamorphic:remote-member-set-roles", input),
   remoteMemberInvite: (input: unknown): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:remote-member-invite", input),
+    invoke("catamorphic:remote-member-invite", input),
   remoteDisconnect: (projectId: string): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:remote-disconnect", projectId),
+    invoke("catamorphic:remote-disconnect", projectId),
   remoteTakePendingLink: (): Promise<string | null> =>
-    ipcRenderer.invoke("catamorphic:remote-take-pending-link"),
+    invoke("catamorphic:remote-take-pending-link"),
   onConnectLink: (listener: (link: string) => void): (() => void) => {
     const handler = (_event: unknown, link: string) => listener(link);
     ipcRenderer.on("catamorphic:connect-link", handler);
@@ -518,13 +492,13 @@ const api = {
       ipcRenderer.removeListener("catamorphic:connect-link", handler);
   },
   getKeybindings: (): Promise<Record<string, string>> =>
-    ipcRenderer.invoke("catamorphic:keybindings-get"),
+    invoke("catamorphic:keybindings-get"),
   setKeybindings: (
     bindings: Record<string, string>,
   ): Promise<Record<string, string>> =>
-    ipcRenderer.invoke("catamorphic:keybindings-set", bindings),
+    invoke("catamorphic:keybindings-set", bindings),
   keybindingsFile: (): Promise<string> =>
-    ipcRenderer.invoke("catamorphic:keybindings-file"),
+    invoke("catamorphic:keybindings-file"),
   onKeybindingsChanged: (
     listener: (bindings: Record<string, string>) => void,
   ): (() => void) => {
@@ -536,27 +510,26 @@ const api = {
   },
   // --- per-profile app preferences (notifications) ---
   getSettings: (input: unknown = {}): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:settings-get", input),
+    invoke("catamorphic:settings-get", input),
   setSettings: (input: unknown): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:settings-set", input),
-  getPrefs: (): Promise<unknown> => ipcRenderer.invoke("catamorphic:prefs-get"),
+    invoke("catamorphic:settings-set", input),
+  getPrefs: (): Promise<unknown> => invoke("catamorphic:prefs-get"),
   setPrefs: (patch: unknown): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:prefs-set", patch),
+    invoke("catamorphic:prefs-set", patch),
   onPrefsChanged: (listener: (prefs: unknown) => void): (() => void) => {
     const handler = (_event: unknown, prefs: unknown) => listener(prefs);
     ipcRenderer.on("catamorphic:prefs-changed", handler);
     return () =>
       ipcRenderer.removeListener("catamorphic:prefs-changed", handler);
   },
-  windowFocus: (): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:window-focus"),
+  windowFocus: (): Promise<void> => invoke("catamorphic:window-focus"),
   windowSetControlsVisible: (visible: boolean): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:window-controls-visible", visible),
+    invoke("catamorphic:window-controls-visible", visible),
   windowSetSidebarEdgeEnabled: (
     enabled: boolean,
     width?: number,
   ): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:sidebar-edge-enabled", enabled, width),
+    invoke("catamorphic:sidebar-edge-enabled", enabled, width),
   onSidebarPointerZone: (
     listener: (zone: "edge" | "inside" | "outside") => void,
   ): (() => void) => {
@@ -568,19 +541,18 @@ const api = {
   },
 
   getTheme: (projectId?: string, scope?: SettingsScope): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:theme-get", projectId, scope),
+    invoke("catamorphic:theme-get", projectId, scope),
   setTheme: (
     config: unknown,
     projectId?: string,
     scope?: SettingsScope,
   ): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:theme-set", config, projectId, scope),
+    invoke("catamorphic:theme-set", config, projectId, scope),
   themeConfig: (projectId?: string, scope?: SettingsScope) =>
-    ipcRenderer.invoke("catamorphic:theme-config", projectId, scope),
-  themePresets: (): Promise<unknown[]> =>
-    ipcRenderer.invoke("catamorphic:theme-presets"),
+    invoke("catamorphic:theme-config", projectId, scope),
+  themePresets: (): Promise<unknown[]> => invoke("catamorphic:theme-presets"),
   themeFile: (projectId?: string, scope?: SettingsScope): Promise<string> =>
-    ipcRenderer.invoke("catamorphic:theme-file", projectId, scope),
+    invoke("catamorphic:theme-file", projectId, scope),
   onThemeChanged: (listener: (theme: unknown) => void): (() => void) => {
     const handler = (_event: unknown, theme: unknown) => listener(theme);
     ipcRenderer.on("catamorphic:theme-changed", handler);
@@ -602,34 +574,31 @@ const api = {
 
   // --- browser tabs ---
   webviewPreloadPath: (): Promise<string> =>
-    ipcRenderer.invoke("catamorphic:webview-preload"),
+    invoke("catamorphic:webview-preload"),
   browserPrepareProfile: (profileId: string): Promise<string> =>
-    ipcRenderer.invoke("catamorphic:browser-prepare-profile", profileId),
+    invoke("catamorphic:browser-prepare-profile", profileId),
   browserRecordHistory: (input: {
     profileId: string;
     url: string;
     title: string;
-  }): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:browser-history-record", input),
+  }): Promise<void> => invoke("catamorphic:browser-history-record", input),
   browserRetitleHistory: (input: {
     profileId: string;
     url: string;
     title: string;
-  }): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:browser-history-retitle", input),
+  }): Promise<void> => invoke("catamorphic:browser-history-retitle", input),
   browserSetHistoryFavicon: (input: {
     profileId: string;
     url: string;
     faviconUrl: string;
-  }): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:browser-history-favicon", input),
+  }): Promise<void> => invoke("catamorphic:browser-history-favicon", input),
   browserSuggest: (input: {
     profileId: string;
     query: string;
   }): Promise<{
     matches: { url: string; title: string }[];
     inline: string | null;
-  }> => ipcRenderer.invoke("catamorphic:browser-suggest", input),
+  }> => invoke("catamorphic:browser-suggest", input),
   onBrowserOpenUrl: (
     listener: (url: string, mode?: OpenMode) => void,
   ): (() => void) => {
@@ -709,31 +678,31 @@ const api = {
       );
   },
   browserCredentialAccept: (input: unknown): Promise<boolean> =>
-    ipcRenderer.invoke("catamorphic:browser-credential-accept", input),
+    invoke("catamorphic:browser-credential-accept", input),
   browserCredentialDismiss: (input: unknown): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:browser-credential-dismiss", input),
+    invoke("catamorphic:browser-credential-dismiss", input),
   browserCredentialFill: (input: unknown): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:browser-credential-fill", input),
+    invoke("catamorphic:browser-credential-fill", input),
 
   // --- terminal tabs (PTY sessions live in main; see main/terminal.ts) ---
   terminalGhosttyAppearance: () =>
-    ipcRenderer.invoke("catamorphic:terminal-ghostty-appearance"),
+    invoke("catamorphic:terminal-ghostty-appearance"),
   terminalCreate: (input: {
     projectId?: string;
     cols?: number;
     rows?: number;
   }): Promise<{ sessionId: string; cwd: string }> =>
-    ipcRenderer.invoke("catamorphic:terminal-create", input),
+    invoke("catamorphic:terminal-create", input),
   terminalWrite: (sessionId: string, data: string): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:terminal-write", sessionId, data),
+    invoke("catamorphic:terminal-write", sessionId, data),
   terminalResize: (
     sessionId: string,
     cols: number,
     rows: number,
   ): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:terminal-resize", sessionId, cols, rows),
+    invoke("catamorphic:terminal-resize", sessionId, cols, rows),
   terminalKill: (sessionId: string): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:terminal-kill", sessionId),
+    invoke("catamorphic:terminal-kill", sessionId),
   onTerminalData: (
     listener: (payload: { sessionId: string; data: string }) => void,
   ): (() => void) => {
@@ -748,11 +717,11 @@ const api = {
   terminalBuffer: (
     sessionId: string,
   ): Promise<{ buffer: string; running: boolean } | null> =>
-    ipcRenderer.invoke("catamorphic:terminal-buffer", sessionId),
+    invoke("catamorphic:terminal-buffer", sessionId),
   terminalRestoreBuffer: (
     sessionId: string,
   ): Promise<{ buffer: string } | null> =>
-    ipcRenderer.invoke("catamorphic:terminal-restore-buffer", sessionId),
+    invoke("catamorphic:terminal-restore-buffer", sessionId),
   onTerminalBusy: (
     listener: (payload: { sessionId: string; busy: boolean }) => void,
   ): (() => void) => {
@@ -798,29 +767,23 @@ const api = {
     ipcRenderer.send("catamorphic:bridge-takeover", { key }),
 
   // --- profiles ---
-  profilesList: (): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:profiles-list"),
+  profilesList: (): Promise<unknown> => invoke("catamorphic:profiles-list"),
   profilesCreate: (name: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:profiles-create", name),
+    invoke("catamorphic:profiles-create", name),
   profilesUpdate: (
     id: string,
     patch: { name?: string; color?: string; defaultProjectId?: string },
-  ): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:profiles-update", id, patch),
+  ): Promise<unknown> => invoke("catamorphic:profiles-update", id, patch),
   profilesSetDefault: (id: string): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:profiles-set-default", id),
+    invoke("catamorphic:profiles-set-default", id),
   profilesRemove: (id: string): Promise<boolean> =>
-    ipcRenderer.invoke("catamorphic:profiles-remove", id),
+    invoke("catamorphic:profiles-remove", id),
   profilesClaimProject: (profileId: string, projectId: string): Promise<void> =>
-    ipcRenderer.invoke(
-      "catamorphic:profiles-claim-project",
-      profileId,
-      projectId,
-    ),
+    invoke("catamorphic:profiles-claim-project", profileId, projectId),
   profilesForProject: (projectId: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:profiles-for-project", projectId),
+    invoke("catamorphic:profiles-for-project", projectId),
   profilesReleaseProject: (projectId: string): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:profiles-release-project", projectId),
+    invoke("catamorphic:profiles-release-project", projectId),
   onProfilesChanged: (listener: (data: unknown) => void): (() => void) => {
     const handler = (_event: unknown, data: unknown) => listener(data);
     ipcRenderer.on("catamorphic:profiles-changed", handler);
@@ -832,29 +795,28 @@ const api = {
   vaultList: (input: {
     profileId: string;
     origin?: string;
-  }): Promise<unknown[]> => ipcRenderer.invoke("catamorphic:vault-list", input),
+  }): Promise<unknown[]> => invoke("catamorphic:vault-list", input),
   vaultReveal: (input: { profileId: string; id: string }): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:vault-reveal", input),
+    invoke("catamorphic:vault-reveal", input),
   vaultSave: (input: {
     profileId: string;
     origin: string;
     username: string;
     password: string;
-  }): Promise<unknown> => ipcRenderer.invoke("catamorphic:vault-save", input),
+  }): Promise<unknown> => invoke("catamorphic:vault-save", input),
   vaultUpdate: (input: {
     profileId: string;
     id: string;
     origin: string;
     username: string;
     password?: string;
-  }): Promise<unknown> => ipcRenderer.invoke("catamorphic:vault-update", input),
+  }): Promise<unknown> => invoke("catamorphic:vault-update", input),
   vaultRemove: (input: { profileId: string; id: string }): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:vault-remove", input),
+    invoke("catamorphic:vault-remove", input),
   vaultCopyPassword: (input: {
     profileId: string;
     id: string;
-  }): Promise<boolean> =>
-    ipcRenderer.invoke("catamorphic:vault-copy-password", input),
+  }): Promise<boolean> => invoke("catamorphic:vault-copy-password", input),
   onVaultChanged: (listener: (profileId: string) => void): (() => void) => {
     const handler = (_event: unknown, payload: { profileId: string }) =>
       listener(payload.profileId);
@@ -863,16 +825,15 @@ const api = {
       ipcRenderer.removeListener("catamorphic:vault-changed", handler);
   },
   deviceAuthAvailable: (): Promise<boolean> =>
-    ipcRenderer.invoke("catamorphic:device-auth-available"),
+    invoke("catamorphic:device-auth-available"),
 
   // --- bookmarks ---
   githubCliStatus: (): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:github-cli-status"),
+    invoke("catamorphic:github-cli-status"),
   bookmarksGet: (input: {
     projectId: string;
     profileId: string;
-  }): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:bookmarks-get", input),
+  }): Promise<unknown> => invoke("catamorphic:bookmarks-get", input),
   bookmarksAdd: (input: {
     projectId: string;
     profileId: string;
@@ -880,19 +841,17 @@ const api = {
     url: string;
     folderId?: string;
     faviconUrl?: string;
-  }): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:bookmarks-add", input),
+  }): Promise<unknown> => invoke("catamorphic:bookmarks-add", input),
   bookmarksPlace: (input: BookmarkPlacement): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:bookmarks-place", input),
+    invoke("catamorphic:bookmarks-place", input),
   bookmarksMove: (input: BookmarkMove): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:bookmarks-move", input),
+    invoke("catamorphic:bookmarks-move", input),
   bookmarksAddFolder: (input: {
     projectId: string;
     profileId: string;
     label: string;
     parentId?: string;
-  }): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:bookmarks-add-folder", input),
+  }): Promise<unknown> => invoke("catamorphic:bookmarks-add-folder", input),
   bookmarksUpdate: (input: {
     projectId: string;
     profileId: string;
@@ -900,43 +859,38 @@ const api = {
     label?: string;
     url?: string;
     folderId?: string | null;
-  }): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:bookmarks-update", input),
+  }): Promise<void> => invoke("catamorphic:bookmarks-update", input),
   bookmarksRemove: (input: {
     projectId: string;
     profileId: string;
     id: string;
-  }): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:bookmarks-remove", input),
+  }): Promise<void> => invoke("catamorphic:bookmarks-remove", input),
   bookmarksPin: (input: {
     projectId: string;
     profileId: string;
     id: string;
-  }): Promise<void> => ipcRenderer.invoke("catamorphic:bookmarks-pin", input),
+  }): Promise<void> => invoke("catamorphic:bookmarks-pin", input),
   bookmarksUnpin: (input: {
     projectId: string;
     profileId: string;
     id: string;
-  }): Promise<void> => ipcRenderer.invoke("catamorphic:bookmarks-unpin", input),
+  }): Promise<void> => invoke("catamorphic:bookmarks-unpin", input),
   bookmarksRemoveLibrary: (input: {
     projectId: string;
     profileId: string;
     id: string;
-  }): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:bookmarks-remove-library", input),
+  }): Promise<void> => invoke("catamorphic:bookmarks-remove-library", input),
   bookmarksRemovePinned: (input: {
     projectId: string;
     profileId: string;
     id: string;
-  }): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:bookmarks-remove-pinned", input),
+  }): Promise<void> => invoke("catamorphic:bookmarks-remove-pinned", input),
   bookmarksRename: (input: {
     projectId: string;
     profileId: string;
     id: string;
     label: string;
-  }): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:bookmarks-rename", input),
+  }): Promise<void> => invoke("catamorphic:bookmarks-rename", input),
   onBookmarksChanged: (listener: (data: unknown) => void): (() => void) => {
     const handler = (_event: unknown, data: unknown) => listener(data);
     ipcRenderer.on("catamorphic:bookmarks-changed", handler);
@@ -946,52 +900,51 @@ const api = {
 
   // --- git + pull requests (dev surfaces) ---
   gitRecord: (input: GitRecordInput): Promise<string> =>
-    ipcRenderer.invoke("catamorphic:git-record", input),
+    invoke("catamorphic:git-record", input),
   gitOverview: (
     projectId: string,
     paths?: string[],
     sessionId?: string,
   ): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:git-overview", projectId, paths, sessionId),
+    invoke("catamorphic:git-overview", projectId, paths, sessionId),
   sessionCheckouts: (projectId: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:session-checkouts", projectId),
+    invoke("catamorphic:session-checkouts", projectId),
   sessionUseProjectFolder: (input: { projectId: string; sessionId: string }) =>
-    ipcRenderer.invoke("catamorphic:session-use-project-folder", input),
+    invoke("catamorphic:session-use-project-folder", input),
   gitUntrackedDirectory: (input: {
     projectId: string;
     worktreePath: string;
     directory: string;
-  }) => ipcRenderer.invoke("catamorphic:git-untracked-directory", input),
+  }) => invoke("catamorphic:git-untracked-directory", input),
   gitFileDiff: (input: GitDiffInput) =>
-    ipcRenderer.invoke("catamorphic:git-file-diff", input),
-  cancelFileSearch: () => ipcRenderer.invoke("catamorphic:file-search-cancel"),
+    invoke("catamorphic:git-file-diff", input),
+  cancelFileSearch: () => invoke("catamorphic:file-search-cancel"),
   fileSearch: (input: FileSearchInput) =>
-    ipcRenderer.invoke("catamorphic:file-search", input),
+    invoke("catamorphic:file-search", input),
   prComment: (input: PrCommentInput): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:pr-comment", input),
+    invoke("catamorphic:pr-comment", input),
   prDecision: (input: PrDecisionInput): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:pr-decision", input),
+    invoke("catamorphic:pr-decision", input),
   prDetails: (projectId: string, number: number): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:pr-details", projectId, number),
+    invoke("catamorphic:pr-details", projectId, number),
   prReview: (projectId: string, number: number): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:pr-review", projectId, number),
+    invoke("catamorphic:pr-review", projectId, number),
   prList: (projectId: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:pr-list", projectId),
+    invoke("catamorphic:pr-list", projectId),
   prFiles: (projectId: string, number: number): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:pr-files", projectId, number),
+    invoke("catamorphic:pr-files", projectId, number),
 
   sidebarSourceRequest: (input: SidebarSourceRequest): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:sidebar-source-request", input),
+    invoke("catamorphic:sidebar-source-request", input),
   sidebarSourceCancel: (id: string): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:sidebar-source-cancel", id),
+    invoke("catamorphic:sidebar-source-cancel", id),
   sidebarSourceSubscribe: (input: {
     projectId: string;
     sectionId: string;
     leaseId: string;
-  }): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:sidebar-source-subscribe", input),
+  }): Promise<void> => invoke("catamorphic:sidebar-source-subscribe", input),
   sidebarSourceUnsubscribe: (id: string): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:sidebar-source-unsubscribe", id),
+    invoke("catamorphic:sidebar-source-unsubscribe", id),
   onSidebarSourceChanged: (
     listener: (event: { leaseId: string; error?: string }) => void,
   ) => {
@@ -1005,13 +958,13 @@ const api = {
   },
   // --- sidebar config ---
   sidebarConfigGet: (projectId?: string): Promise<unknown> =>
-    ipcRenderer.invoke("catamorphic:sidebar-config-get", projectId),
+    invoke("catamorphic:sidebar-config-get", projectId),
   sidebarConfigFile: (): Promise<string> =>
-    ipcRenderer.invoke("catamorphic:sidebar-config-file"),
+    invoke("catamorphic:sidebar-config-file"),
   sidebarConfigSource: (): Promise<string> =>
-    ipcRenderer.invoke("catamorphic:sidebar-config-source"),
+    invoke("catamorphic:sidebar-config-source"),
   sidebarConfigReset: (): Promise<void> =>
-    ipcRenderer.invoke("catamorphic:sidebar-config-reset"),
+    invoke("catamorphic:sidebar-config-reset"),
   // The changed event carries no config: the resolved layers depend on the
   // renderer's active project, so the renderer refetches on the signal.
   onSidebarConfigChanged: (listener: () => void): (() => void) => {

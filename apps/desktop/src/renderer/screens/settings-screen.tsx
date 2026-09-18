@@ -35,7 +35,9 @@ import {
 } from "../../shared/theme-fonts.js";
 import { TOKEN_LABELS } from "../../shared/theme-tokens.js";
 import { BrowserImport } from "../components/browser-import.js";
+import { Collapsible } from "../components/collapsible.js";
 import { DefaultBrowserButton } from "../components/default-browser.js";
+import { Modal } from "../components/modal.js";
 import { PendingButton } from "../components/pending-button.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
 import {
@@ -170,7 +172,7 @@ export function SettingsScreen({
           type="button"
           onClick={onAddAgent}
           data-testid="settings-add-agent"
-          className="flex h-7 cursor-pointer items-center gap-1 rounded-md px-2 text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+          className="button-primary button-sm"
         >
           <Plus className="size-3" />
           Add agent
@@ -1076,11 +1078,18 @@ function LayoutSection({
 
 function MacrosSection() {
   const [prefs, setPrefs] = useState<AppPrefs | null>(null);
+  // The draft outlives the dialog so its fields hold through the exit.
   const [draft, setDraft] = useState<TerminalMacro | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [recording, setRecording] = useState(false);
   const bindings = useKeybindings();
+  const closeEditor = () => {
+    setEditorOpen(false);
+    setRecording(false);
+    setError("");
+  };
   useEffect(() => {
     void desktopApi.getPrefs().then(setPrefs);
     return desktopApi.onPrefsChanged(setPrefs);
@@ -1127,7 +1136,7 @@ function MacrosSection() {
     setError("");
     try {
       setPrefs(await desktopApi.setPrefs({ terminalMacros: next }));
-      setDraft(null);
+      setEditorOpen(false);
       setRecording(false);
     } catch {
       setError("Could not save your macros. Please try again.");
@@ -1175,10 +1184,11 @@ function MacrosSection() {
               command: "",
               shortcut: "",
             });
+            setEditorOpen(true);
             setError("");
             setRecording(false);
           }}
-          className="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-sm hover:bg-bg-overlay disabled:cursor-default disabled:opacity-50"
+          className="button-primary button-sm"
         >
           <Plus className="size-3.5" />
           Add macro
@@ -1188,7 +1198,7 @@ function MacrosSection() {
         Save commands you use often. Run a macro from the command palette, or
         assign a shortcut to toggle its floating terminal.
       </p>
-      {!macros.length && !draft && (
+      {!macros.length && (
         <div className="flex items-start gap-3 rounded-xl bg-bg-inset/60 p-4">
           <TerminalSquare className="mt-0.5 size-5 shrink-0 text-fg-muted" />
           <div>
@@ -1222,6 +1232,7 @@ function MacrosSection() {
             disabled={saving}
             onClick={() => {
               setDraft(macro);
+              setEditorOpen(true);
               setError("");
               setRecording(false);
             }}
@@ -1242,112 +1253,122 @@ function MacrosSection() {
           </button>
         </div>
       ))}
-      {draft && (
-        <form
-          data-macro-editor
-          className="flex min-w-0 flex-col gap-3 rounded-xl bg-bg-inset/60 p-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!draft.name.trim() || !draft.command.trim()) return;
-            void save([
-              ...macros.filter((macro) => macro.id !== draft.id),
-              draft,
-            ]);
-          }}
-        >
-          <label className="flex flex-col gap-1.5 text-sm">
-            Name
-            <input
-              name="macroName"
-              required
-              value={draft.name}
-              onChange={(event) =>
-                setDraft(
-                  (current) =>
-                    current && { ...current, name: event.target.value },
-                )
-              }
-              placeholder="My terminal tool"
-              className="field h-8 rounded-md px-2"
-            />
-          </label>
-          <label className="flex flex-col gap-1.5 text-sm">
-            Command
-            <textarea
-              name="macroCommand"
-              required
-              rows={3}
-              value={draft.command}
-              onChange={(event) =>
-                setDraft(
-                  (current) =>
-                    current && { ...current, command: event.target.value },
-                )
-              }
-              placeholder="Enter a shell command"
-              className="field min-h-20 resize-y rounded-md px-2 py-2 font-mono text-sm"
-            />
-          </label>
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="mr-auto">Shortcut</span>
-            <button
-              type="button"
-              aria-label="Record macro shortcut"
-              aria-pressed={recording}
-              onBlur={() => setRecording(false)}
-              onClick={() => setRecording(!recording)}
-              className="field h-8 cursor-pointer rounded-md px-3"
-            >
-              {recording
-                ? "Press keys…"
-                : formatBinding(draft.shortcut) || "Record shortcut"}
-            </button>
-            {draft.shortcut && (
+      <Modal open={editorOpen} onClose={closeEditor} width={480}>
+        {draft && (
+          <form
+            data-macro-editor
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!draft.name.trim() || !draft.command.trim()) return;
+              void save([
+                ...macros.filter((macro) => macro.id !== draft.id),
+                draft,
+              ]);
+            }}
+          >
+            <div className="flex min-w-0 flex-col gap-3 px-5 pt-5">
+              <h2 className="text-sm font-semibold text-fg">
+                {macros.some((macro) => macro.id === draft.id)
+                  ? "Edit macro"
+                  : "Add macro"}
+              </h2>
+              <label className="flex flex-col gap-1.5 text-sm">
+                Name
+                <input
+                  name="macroName"
+                  required
+                  value={draft.name}
+                  onChange={(event) =>
+                    setDraft(
+                      (current) =>
+                        current && { ...current, name: event.target.value },
+                    )
+                  }
+                  placeholder="My terminal tool"
+                  className="field h-8 rounded-md px-2"
+                />
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm">
+                Command
+                <textarea
+                  name="macroCommand"
+                  required
+                  rows={3}
+                  value={draft.command}
+                  onChange={(event) =>
+                    setDraft(
+                      (current) =>
+                        current && { ...current, command: event.target.value },
+                    )
+                  }
+                  placeholder="Enter a shell command"
+                  className="field min-h-20 resize-y rounded-md px-2 py-2 font-mono text-sm"
+                />
+              </label>
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="mr-auto">Shortcut</span>
+                <button
+                  type="button"
+                  aria-label="Record macro shortcut"
+                  aria-pressed={recording}
+                  data-keyboard-capture={recording || undefined}
+                  onBlur={() => setRecording(false)}
+                  onClick={() => setRecording(!recording)}
+                  className="field h-8 cursor-pointer rounded-md px-3"
+                >
+                  {recording
+                    ? "Press keys…"
+                    : formatBinding(draft.shortcut) || "Record shortcut"}
+                </button>
+                {draft.shortcut && (
+                  <button
+                    type="button"
+                    onClick={() => setDraft({ ...draft, shortcut: "" })}
+                    className="text-xs text-fg-muted hover:text-fg"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              <p className="text-xs text-fg-muted">
+                Runs in the current project folder using your shell setup.
+                Saving does not run the command. Reopening a running macro keeps
+                the same terminal.
+              </p>
+              {error && editorOpen && (
+                <p role="alert" className="text-sm text-danger">
+                  {error}
+                </p>
+              )}
+            </div>
+            <footer className="mt-5 flex justify-end gap-2 border-t border-border px-5 py-3.5">
               <button
                 type="button"
-                onClick={() => setDraft({ ...draft, shortcut: "" })}
-                className="text-xs text-fg-muted hover:text-fg"
+                disabled={saving}
+                onClick={closeEditor}
+                className="button-ghost"
               >
-                Clear
+                Cancel
               </button>
-            )}
-          </div>
-          <p className="text-xs text-fg-muted">
-            Runs in the current project folder using your shell setup. Saving
-            does not run the command. Reopening a running macro keeps the same
-            terminal.
-          </p>
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => {
-                setDraft(null);
-                setRecording(false);
-                setError("");
-              }}
-              className="h-8 cursor-pointer rounded-md px-3 text-sm hover:bg-bg-overlay disabled:cursor-default disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <PendingButton
-              pending={saving}
-              pendingLabel="Saving…"
-              type="submit"
-              disabled={
-                saving ||
-                recording ||
-                !draft.name.trim() ||
-                !draft.command.trim()
-              }
-              className="h-8 cursor-pointer rounded-md bg-accent px-3 text-sm font-medium text-accent-fg disabled:cursor-default disabled:opacity-50"
-            >
-              Save macro
-            </PendingButton>
-          </div>
-        </form>
-      )}
-      {error && (
+              <PendingButton
+                pending={saving}
+                pendingLabel="Saving…"
+                type="submit"
+                disabled={
+                  saving ||
+                  recording ||
+                  !draft.name.trim() ||
+                  !draft.command.trim()
+                }
+                className="button-primary"
+              >
+                Save macro
+              </PendingButton>
+            </footer>
+          </form>
+        )}
+      </Modal>
+      {error && !editorOpen && (
         <p role="alert" className="text-sm text-danger">
           {error}
         </p>
@@ -1627,7 +1648,7 @@ function ThemeSection({
         {editing ? "Hide colors" : "Edit colors…"}
       </button>
 
-      {editing && (
+      <Collapsible open={editing}>
         <div className="mt-2 flex flex-col gap-1">
           {(Object.keys(TOKEN_LABELS) as ThemeToken[]).map((token) => (
             <div
@@ -1667,7 +1688,7 @@ function ThemeSection({
             </div>
           ))}
         </div>
-      )}
+      </Collapsible>
 
       <div className="mt-4 flex flex-col gap-2">
         <div className="flex items-center justify-between">

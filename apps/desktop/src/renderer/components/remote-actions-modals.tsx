@@ -162,7 +162,7 @@ export function RemotePublishModal({
               pending={pending}
               pendingLabel="Publishing…"
               data-testid="publish-submit"
-              className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              className="button-primary"
             >
               Create link
             </PendingButton>
@@ -317,7 +317,7 @@ export function RemoteProposeModal({
                 onOpenProposal({ number: result.pullRequest.number, title });
                 onClose();
               }}
-              className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg hover:opacity-90"
+              className="button-primary"
             >
               View proposal
             </button>
@@ -330,7 +330,7 @@ export function RemoteProposeModal({
               disabled={!title.trim() || selected.length === 0}
               data-disabled-reason="Enter a title and select at least one file"
               data-testid="propose-submit"
-              className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              className="button-primary"
             >
               Propose
             </PendingButton>

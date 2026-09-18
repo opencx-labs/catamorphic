@@ -336,7 +336,7 @@ export function ProjectModal({
                 disabled={!canSubmit}
                 data-disabled-reason="Complete the project name and location first"
                 data-testid="project-submit"
-                className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                className="button-primary"
               >
                 {mode === "create"
                   ? "Create project"
@@ -464,11 +464,7 @@ export function GithubRepositoryAccessTray({ onDone }: { onDone: () => void }) {
             Save the repository selection in the GitHub tab, then return here.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onDone}
-          className="h-8 shrink-0 cursor-pointer rounded-md bg-accent px-3 text-xs font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90"
-        >
+        <button type="button" onClick={onDone} className="button-primary">
           Done
         </button>
       </div>
@@ -532,7 +528,7 @@ function GithubPanel({
           disabled={authPending}
           data-disabled-reason="Wait for sign-in to finish"
           data-testid="github-connect"
-          className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
+          className="button-primary"
         >
           Connect GitHub
         </PendingButton>

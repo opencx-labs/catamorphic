@@ -327,7 +327,7 @@ export function EditorScreen({
                     .projectOpenFile(projectId, filePath)
                     .catch(() => undefined);
                 }}
-                className="mt-4 inline-flex h-8 cursor-pointer items-center gap-2 rounded-md bg-accent px-3 text-xs font-medium text-accent-fg hover:opacity-90"
+                className="button-primary mt-4"
               >
                 <ExternalLink className="size-3.5" />
                 Open document

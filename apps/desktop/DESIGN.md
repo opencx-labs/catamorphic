@@ -158,6 +158,13 @@ Low-chroma so run states don't scream: `--color-success`, `--color-warning`,
   hover-only hints are supplementary. Reserve space for asynchronous reasons so
   later actions do not shift. `data-action-state` exposes the shared button state
   for host styling without duplicating its logic.
+- **One button vocabulary.** A rectangular action takes a role class from
+  `styles.css` instead of a private recipe: `button-primary` (accent) for the
+  action a surface asks for, including every "Add" and "Save"; `button-secondary`
+  for peers; `button-ghost` for Cancel and dismissals; `button-danger` for
+  destructive confirms. `button-sm` is the only size modifier (card and category
+  headers); utilities may add width or margin, never colors. Icon-only send
+  buttons and pills are the sanctioned exceptions, counted in `design-lint`.
 - **Every icon-only button gets a `ShortcutHint` tooltip.** A button whose
   meaning isn't carried by visible text must be wrapped in
   `<ShortcutHint label="…">` (plus `shortcut` when one exists) — never the
@@ -326,6 +333,14 @@ the same page styled three different ways.
   border, inset, or rounding. "Framed content" is an opt-in workspace setting
   that insets the workspace as a rounded, bordered window; the padding and
   radius settings are that frame's dimensions.
+- **Forms and confirmations open in dialogs.** Adding or editing a record
+  (a password, a macro, a connection challenge) and confirming a destructive
+  action (delete a profile or a password) open the shared `Modal`, centered
+  in the window with its entrance and exit motion. A page never grows a form
+  or a confirm strip in place: that shifts everything below it with no
+  motion. Disclosures that reveal existing content in place (theme color
+  overrides) use `Collapsible`. Keep the dialog's subject in state through
+  its exit so the content does not vanish mid-fade.
 - **Deep links land on exactly one card.** Every palette destination resolves
   to a `data-setting-id` on a single block; category-wide outlines mean the
   catalog id is too coarse.
@@ -502,7 +517,10 @@ existing queued consent UI; cancellation withdraws the request. See
 
 Project switching changes visibility without disposing work. A profile can
 share its dock across projects, detach it above native windows, and place it
-on either edge. Project colors remain scoped to their chats and workspace.
+on either edge. Detaching is a session action: right-click the collapsed
+bubble or the arrows to float the dock in its own window or return it, and
+closing that window returns it. The `dockDetached` setting is only the state a
+launch starts in; no dock interaction rewrites it. Project colors remain scoped to their chats and workspace.
 Cross-project resource navigation uses a subtle accent tint and honors reduced
 motion. See [ADR 0121](../../docs/decisions/0121-project-workspaces-and-shared-chat-dock.md)
 and the [workspace interactions](docs/workspace-interactions.md) contract.
@@ -663,6 +681,18 @@ while the GitHub CLI connection is off. Virtualized trees only contain
 overscroll while they can actually scroll, and bookmark lists scroll inside the
 tree rather than inside a wrapper, so wheel input reaches the sidebar. The
 profile avatar centers under the project icon and the name shares its x.
+
+### 2026-09-19: Dialogs for forms, one button vocabulary, session-only detach
+
+Every create/edit form and destructive confirm in Settings and Profile settings
+opens the shared `Modal` instead of expanding inline; the theme color list is a
+`Collapsible`. Rectangular actions take `button-primary`/`-secondary`/`-ghost`/
+`-danger` from `styles.css`, so every "Add" in Settings carries the accent and
+no confirm paints solid red with white text. A tooltip cancels on any press or
+right-click of its anchor so it cannot surface over a context menu. Detaching
+the dock is a session action from the bubble's or arrows' context menu; the
+`dockDetached` preference is the launch default only and closing the detached
+window never rewrites it.
 
 ## Work identity (2026-09-18)
 

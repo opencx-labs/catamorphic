@@ -907,6 +907,8 @@ export interface CatamorphicDesktopApi {
   dockDrag: (input: DockDrag) => Promise<void>;
   dockResize: (size: DockSize) => Promise<void>;
   dockIgnoreMouse: (ignore: boolean) => Promise<void>;
+  /** Session-only; the `dockDetached` preference stays the launch default. */
+  dockDetach: (detached: boolean) => Promise<void>;
   onDockSnapshot: (listener: (snapshot: DockSnapshot) => void) => () => void;
   onWorkspaceEvent: (listener: (event: WorkspaceEvent) => void) => () => void;
   windowProfile: () => Promise<string>;

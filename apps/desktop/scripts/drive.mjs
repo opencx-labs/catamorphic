@@ -14,13 +14,20 @@
 //   window setSize <w> <h>     - resize the window
 //
 // Default test viewport: run `window maximize` before screenshotting.
+// CDP_TARGET=surface=dock drives the detached dock window instead.
 
 const PORT = process.env.CDP_PORT ?? "9333";
 
 const targets = await fetch(`http://127.0.0.1:${PORT}/json`).then((r) =>
   r.json(),
 );
-const page = targets.find((t) => t.type === "page");
+// CDP_TARGET narrows to the page whose URL contains it (e.g. "surface=dock");
+// "main" picks the workspace window, which carries no surface parameter.
+const wanted = process.env.CDP_TARGET;
+const matches = (url) =>
+  !wanted ||
+  (wanted === "main" ? !url.includes("surface=") : url.includes(wanted));
+const page = targets.find((t) => t.type === "page" && matches(String(t.url)));
 if (!page) throw new Error("no page target — is the app running with CDP?");
 const ws = new WebSocket(page.webSocketDebuggerUrl);
 await new Promise((resolve, reject) => {

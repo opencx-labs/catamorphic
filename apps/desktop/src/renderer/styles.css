@@ -1234,6 +1234,81 @@ kbd {
   background: color-mix(in srgb, var(--color-bg-raised) 30%, transparent);
 }
 
+/* One button vocabulary. A rectangular action picks a role instead of a
+   private accent or border recipe: primary for the action a surface asks
+   for (every "Add" and "Save"), secondary for peers, ghost for Cancel, danger
+   for destructive confirms. Size is the only modifier; utilities may still
+   add width or margin. */
+@layer components {
+  .button-primary,
+  .button-secondary,
+  .button-ghost,
+  .button-danger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 12px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+    flex-shrink: 0;
+    cursor: pointer;
+    transition:
+      background-color 150ms var(--ease-standard),
+      border-color 150ms var(--ease-standard),
+      color 150ms var(--ease-standard),
+      opacity 150ms var(--ease-standard);
+  }
+  .button-primary {
+    background: var(--color-accent);
+    color: var(--color-accent-fg);
+  }
+  .button-primary:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+  .button-secondary {
+    border-color: var(--color-border);
+    color: var(--color-fg);
+  }
+  .button-secondary:hover:not(:disabled) {
+    background: var(--color-bg-overlay);
+    border-color: var(--color-border-strong);
+  }
+  .button-ghost {
+    color: var(--color-fg-muted);
+    font-weight: 400;
+  }
+  .button-ghost:hover:not(:disabled) {
+    background: var(--color-bg-overlay);
+    color: var(--color-fg);
+  }
+  .button-danger {
+    border-color: color-mix(in srgb, var(--color-danger) 40%, transparent);
+    background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+    color: var(--color-danger);
+  }
+  .button-danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-danger) 20%, transparent);
+  }
+  .button-primary:disabled,
+  .button-secondary:disabled,
+  .button-ghost:disabled,
+  .button-danger:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .button-sm {
+    height: 28px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
+}
+
 /* Bare icon tabs. Both sidebars share the same quiet chrome and motion. */
 .tabbed-sidebar {
   position: relative;

@@ -940,6 +940,10 @@ nothing animates on load.
 
 ## Overlays
 
+- Forms that add or edit a record and confirmations of destructive actions
+  open in a \`Dialog\`, centered with its entrance and exit motion. Never grow
+  a form or a confirm strip inline: it shifts everything below it with no
+  motion. Reveal existing content in place with \`Collapsible\`.
 - Dialogs, popovers and tooltips come from the kit and render at the
   document body. A \`position: fixed\` element inside a transformed or
   filtered ancestor positions itself relative to that ancestor: never place

@@ -6453,14 +6453,14 @@ export function App({
           <div className="mt-5 flex justify-end gap-2">
             <button
               type="button"
-              className="rounded-md border border-border px-3 py-1.5 text-xs"
+              className="button-ghost"
               onClick={() => setClosingWorkflow(null)}
             >
               Keep editing
             </button>
             <button
               type="button"
-              className="rounded-md bg-danger px-3 py-1.5 text-xs text-white"
+              className="button-danger"
               onClick={() => {
                 if (closingWorkflow)
                   closeTab(closingWorkflow, { discardDraft: true });
@@ -6632,7 +6632,7 @@ function EmptyState({
                 pendingLabel="Starting…"
                 onClick={() => void start()}
                 data-testid="empty-start-agent"
-                className="inline-flex h-9 w-full cursor-pointer items-center justify-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                className="button-primary h-9 w-full"
               >
                 <span className="inline-flex items-center gap-2">
                   <Sparkles className="size-3.5" />

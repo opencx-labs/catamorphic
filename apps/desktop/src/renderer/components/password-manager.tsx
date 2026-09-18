@@ -13,6 +13,7 @@ import {
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { desktopApi, type SavedCredential } from "../lib/desktop-api.js";
 import { useListMotion } from "../lib/list-motion.js";
+import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
 import { ShortcutHint } from "./shortcut-hint.js";
 
@@ -91,9 +92,15 @@ export function PasswordManager({ profileId }: { profileId: string }) {
     id: string;
     password: string;
   } | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  // The delete dialog keeps its subject through the exit animation.
+  const [deleteTarget, setDeleteTarget] = useState<SavedCredential | null>(
+    null,
+  );
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Errors raised by the open dialog's own action, shown inside it.
+  const [dialogError, setDialogError] = useState<string | null>(null);
   const instanceId = useId();
   const searchId = `${instanceId}-password-search`;
   const searchSummaryId = `${instanceId}-password-search-summary`;
@@ -101,6 +108,7 @@ export function PasswordManager({ profileId }: { profileId: string }) {
   const usernameId = `${instanceId}-password-username`;
   const passwordId = `${instanceId}-password-value`;
   const editHintId = `${instanceId}-password-edit-hint`;
+  const editorTitleId = `${instanceId}-password-editor-title`;
   const editorOriginRef = useRef<HTMLInputElement>(null);
   const editorTriggerRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -117,7 +125,7 @@ export function PasswordManager({ profileId }: { profileId: string }) {
     setDraft(EMPTY_DRAFT);
     setEditorOpen(false);
     setRevealed(null);
-    setConfirmDelete(null);
+    setConfirmDelete(false);
     setQuery("");
     setLoading(true);
     desktopApi
@@ -187,9 +195,10 @@ export function PasswordManager({ profileId }: { profileId: string }) {
   ) => {
     editorTriggerRef.current = trigger;
     setDraft(nextDraft);
+    setDialogError(null);
     setEditorOpen(true);
     setRevealed(null);
-    setConfirmDelete(null);
+    setConfirmDelete(false);
   };
 
   const closeEditor = () => {
@@ -200,12 +209,16 @@ export function PasswordManager({ profileId }: { profileId: string }) {
   const updateQuery = (value: string) => {
     setQuery(value);
     setRevealed(null);
-    setConfirmDelete(null);
+    setConfirmDelete(false);
   };
 
+  const canSave =
+    Boolean(draft.origin.trim()) &&
+    (Boolean(draft.id) || Boolean(draft.password));
   const save = async () => {
+    if (!canSave) return;
     setSaving(true);
-    setError(null);
+    setDialogError(null);
     try {
       if (draft.id) {
         await desktopApi.vaultUpdate({
@@ -226,7 +239,7 @@ export function PasswordManager({ profileId }: { profileId: string }) {
       await reload();
       closeEditor();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setDialogError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setSaving(false);
     }
@@ -273,14 +286,14 @@ export function PasswordManager({ profileId }: { profileId: string }) {
   };
 
   const remove = async (credential: SavedCredential) => {
-    setError(null);
+    setDialogError(null);
     try {
       await desktopApi.vaultRemove({ profileId, id: credential.id });
-      setConfirmDelete(null);
+      setConfirmDelete(false);
       if (revealed?.id === credential.id) setRevealed(null);
       await reload();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setDialogError(cause instanceof Error ? cause.message : String(cause));
     }
   };
 
@@ -300,7 +313,7 @@ export function PasswordManager({ profileId }: { profileId: string }) {
           onClick={(event) =>
             openEditor({ ...EMPTY_DRAFT }, event.currentTarget)
           }
-          className="flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-md bg-accent px-2.5 text-xs font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90"
+          className="button-primary button-sm"
         >
           <Plus className="size-3.5" /> Add password
         </button>
@@ -349,29 +362,27 @@ export function PasswordManager({ profileId }: { profileId: string }) {
         {filtering && <span>Press Esc to clear</span>}
       </div>
 
-      <div
-        className={`grid transition-[grid-template-rows,opacity,margin-top] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:duration-100 ${
-          editorOpen
-            ? "mt-3 grid-rows-[1fr] opacity-100"
-            : "pointer-events-none mt-0 grid-rows-[0fr] opacity-0"
-        }`}
-        aria-hidden={!editorOpen}
-        inert={!editorOpen ? true : undefined}
-        onTransitionEnd={(event) => {
-          if (event.target === event.currentTarget && !editorOpen) {
-            setDraft(EMPTY_DRAFT);
-          }
-        }}
+      <Modal
+        open={editorOpen}
+        onClose={closeEditor}
+        width={440}
+        labelledBy={editorTitleId}
       >
-        <div className="min-h-0 overflow-hidden">
-          <div
-            className="space-y-2 rounded-md border border-border bg-bg p-3"
-            data-testid="password-editor"
-          >
-            <p className="text-xs font-medium text-fg">
+        <form
+          data-testid="password-editor"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void save();
+          }}
+        >
+          <div className="px-5 pt-5">
+            <h2 id={editorTitleId} className="text-sm font-semibold text-fg">
               {draft.id ? "Edit password" : "Add password"}
+            </h2>
+            <p className="mt-1 text-xs leading-relaxed text-fg-muted">
+              Saved in this profile and encrypted by your device.
             </p>
-            <div className="grid gap-2 sm:grid-cols-2">
+            <div className="mt-4 space-y-3">
               <label className="block" htmlFor={originId}>
                 <span className="mb-1 block text-[11px] text-fg-muted">
                   Website address
@@ -403,58 +414,59 @@ export function PasswordManager({ profileId }: { profileId: string }) {
                   className="field h-8 w-full rounded-md px-2.5 text-[13px]"
                 />
               </label>
-            </div>
-            <label className="block" htmlFor={passwordId}>
-              <span className="mb-1 block text-[11px] text-fg-muted">
-                {draft.id ? "New password" : "Password"}
-              </span>
-              <input
-                id={passwordId}
-                data-testid="password-value"
-                type="password"
-                value={draft.password}
-                onChange={(event) =>
-                  setDraft({ ...draft, password: event.target.value })
-                }
-                autoComplete="new-password"
-                aria-describedby={draft.id ? editHintId : undefined}
-                className="field h-8 w-full rounded-md px-2.5 font-mono text-[13px]"
-              />
-              {draft.id && (
-                <span
-                  id={editHintId}
-                  className="mt-1 block text-[11px] text-fg-faint"
-                >
-                  Leave this blank to keep the current password.
+              <label className="block" htmlFor={passwordId}>
+                <span className="mb-1 block text-[11px] text-fg-muted">
+                  {draft.id ? "New password" : "Password"}
                 </span>
-              )}
-            </label>
-            <div className="flex gap-2 pt-1">
-              <PendingButton
-                pending={saving}
-                pendingLabel="Saving…"
-                data-disabled-reason="Complete the required credential fields"
-                disabled={
-                  !draft.origin.trim() ||
-                  (!draft.id && !draft.password) ||
-                  saving
-                }
-                onClick={() => void save()}
-                className="h-8 rounded-md bg-accent px-3 text-xs font-medium text-accent-fg"
-              >
-                {draft.id ? "Save changes" : "Save password"}
-              </PendingButton>
-              <button
-                type="button"
-                onClick={closeEditor}
-                className="h-8 rounded-md px-2.5 text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-              >
-                Cancel
-              </button>
+                <input
+                  id={passwordId}
+                  data-testid="password-value"
+                  type="password"
+                  value={draft.password}
+                  onChange={(event) =>
+                    setDraft({ ...draft, password: event.target.value })
+                  }
+                  autoComplete="new-password"
+                  aria-describedby={draft.id ? editHintId : undefined}
+                  className="field h-8 w-full rounded-md px-2.5 font-mono text-[13px]"
+                />
+                {draft.id && (
+                  <span
+                    id={editHintId}
+                    className="mt-1 block text-[11px] text-fg-faint"
+                  >
+                    Leave this blank to keep the current password.
+                  </span>
+                )}
+              </label>
             </div>
+            {dialogError && (
+              <p className="mt-3 text-xs text-danger" role="alert">
+                {dialogError}
+              </p>
+            )}
           </div>
-        </div>
-      </div>
+          <footer className="mt-5 flex justify-end gap-2 border-t border-border px-5 py-3.5">
+            <button
+              type="button"
+              onClick={closeEditor}
+              className="button-ghost"
+            >
+              Cancel
+            </button>
+            <PendingButton
+              type="submit"
+              pending={saving}
+              pendingLabel="Saving…"
+              data-disabled-reason="Complete the required credential fields"
+              disabled={!canSave || saving}
+              className="button-primary"
+            >
+              {draft.id ? "Save changes" : "Save password"}
+            </PendingButton>
+          </footer>
+        </form>
+      </Modal>
 
       <div
         ref={listRef}
@@ -555,7 +567,9 @@ export function PasswordManager({ profileId }: { profileId: string }) {
                     <button
                       type="button"
                       onClick={() => {
-                        setConfirmDelete(credential.id);
+                        setDeleteTarget(credential);
+                        setDialogError(null);
+                        setConfirmDelete(true);
                         if (revealed?.id === credential.id) setRevealed(null);
                       }}
                       aria-label={`Delete password for ${displayHost(credential.origin)}`}
@@ -571,43 +585,48 @@ export function PasswordManager({ profileId }: { profileId: string }) {
                   revealed?.id === credential.id ? revealed.password : null
                 }
               />
-              <div
-                className={`grid transition-[grid-template-rows,opacity,margin-top] duration-150 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:duration-100 ${
-                  confirmDelete === credential.id
-                    ? "mt-2 grid-rows-[1fr] opacity-100"
-                    : "pointer-events-none mt-0 grid-rows-[0fr] opacity-0"
-                }`}
-                aria-hidden={confirmDelete !== credential.id}
-                inert={confirmDelete !== credential.id ? true : undefined}
-              >
-                <div className="min-h-0 overflow-hidden">
-                  <div className="flex items-center justify-between gap-3 rounded-md bg-danger/10 px-2.5 py-2">
-                    <p className="text-xs text-danger">
-                      Delete the password for {displayHost(credential.origin)}?
-                    </p>
-                    <div className="flex gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => void remove(credential)}
-                        className="h-7 rounded-md bg-danger px-2.5 text-xs font-medium text-white transition-opacity duration-150 hover:opacity-90"
-                      >
-                        Delete password
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setConfirmDelete(null)}
-                        className="h-7 rounded-md px-2 text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
             </div>
           ))
         )}
       </div>
+      <Modal
+        open={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        width={420}
+      >
+        <div className="px-5 pt-5">
+          <h2 className="text-sm font-semibold text-fg">
+            Delete the password for{" "}
+            {displayHost(deleteTarget?.origin ?? "this website")}?
+          </h2>
+          <p className="mt-2 text-[13px] leading-relaxed text-fg-muted">
+            {deleteTarget?.username
+              ? `The login for ${deleteTarget.username} is removed from this profile.`
+              : "The saved login is removed from this profile."}
+          </p>
+          {dialogError && (
+            <p className="mt-3 text-xs text-danger" role="alert">
+              {dialogError}
+            </p>
+          )}
+        </div>
+        <footer className="mt-4 flex justify-end gap-2 border-t border-border px-5 py-3.5">
+          <button
+            type="button"
+            onClick={() => setConfirmDelete(false)}
+            className="button-ghost"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => deleteTarget && void remove(deleteTarget)}
+            className="button-danger"
+          >
+            Delete password
+          </button>
+        </footer>
+      </Modal>
       {error && (
         <p className="mt-2 text-xs text-danger" role="alert">
           {error}

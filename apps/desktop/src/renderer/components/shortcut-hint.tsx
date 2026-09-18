@@ -75,7 +75,9 @@ export function ShortcutHint({
     if (
       anchorRef.current?.querySelector(
         "[disabled][data-disabled-reason], [aria-disabled=true][data-disabled-reason]",
-      )
+      ) ||
+      // A context menu owns the pointer; no hint opens beside it.
+      document.querySelector("[data-sidebar-menu]")
     )
       return;
     clearTimeout(timerRef.current);
@@ -165,7 +167,11 @@ export function ShortcutHint({
       onKeyDownCapture={(event) => {
         if (event.key === "Escape") hide();
       }}
-      // Clicking the wrapped control usually changes state; drop the hint.
+      // Pressing the wrapped control usually changes state or opens a menu;
+      // drop the hint and cancel a pending one so it cannot appear over a
+      // context menu that opened before the delay elapsed.
+      onPointerDownCapture={hide}
+      onContextMenuCapture={hide}
       onClickCapture={hide}
     >
       {children}

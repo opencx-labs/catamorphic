@@ -1119,7 +1119,7 @@ export function BrowserScreen({
                   recoveriesRef.current = 0;
                   remountWebview();
                 }}
-                className="mt-4 inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md bg-accent px-3 text-[12px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90"
+                className="button-primary button-sm mt-4"
               >
                 <RotateCw className="size-3" />
                 Try again

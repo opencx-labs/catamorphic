@@ -403,7 +403,7 @@ describe("floating surfaces", () => {
     await click("Record macro shortcut");
     await key("p", { metaKey: true });
     await app.waitFor(
-      "document.querySelector('#settings-macros [role=alert]')?.textContent.includes('Already used')",
+      "document.querySelector('[data-macro-editor] [role=alert]')?.textContent.includes('Already used')",
     );
     await app.press("Escape");
     await run("$('[data-macro-editor]').requestSubmit()");

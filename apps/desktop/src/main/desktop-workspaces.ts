@@ -39,6 +39,10 @@ export class DesktopWorkspaces {
     { x: number; left: number; side: "left" | "right" }
   >();
   private quitting = false;
+  // Detaching is a session choice; the `dockDetached` preference is only
+  // the state a fresh launch starts in. Closing the detached window or
+  // picking "Return dock to the window" never rewrites that default.
+  private readonly detachOverrides = new Map<string, boolean>();
   private readonly drafts = new Map<string, ChatDraft>();
   private readonly initialProjects = new Map<number, string>();
 
@@ -64,9 +68,16 @@ export class DesktopWorkspaces {
       this.lastWindows.set(profileId, window);
       this.broadcast(profileId);
     });
-    options.config.onPrefsChanged((profileId) => {
+    options.config.onPrefsChanged((profileId, prefs) => {
+      // A changed default wins over the session choice made before it.
+      if (this.detachOverrides.get(profileId) === prefs.dockDetached)
+        this.detachOverrides.delete(profileId);
       this.syncFloating(profileId);
       this.broadcast(profileId);
+    });
+    ipcMain.handle("catamorphic:dock-detach", (event, detached: boolean) => {
+      const profileId = options.windows.profileFor(event.sender);
+      this.setDetached(profileId, detached === true);
     });
     ipcMain.handle("catamorphic:workspace-initial", (event) =>
       this.initialProjects.get(event.sender.id),
@@ -254,8 +265,7 @@ export class DesktopWorkspaces {
         const profileId = options.windows.profileFor(event.sender);
         const floating = this.floating.get(profileId);
         const target =
-          floating &&
-          options.config.forProfile(profileId).prefs.load().dockDetached
+          floating && this.detached(profileId)
             ? floating.webContents
             : event.sender;
         target.send("catamorphic:workspace-event", {
@@ -443,12 +453,7 @@ export class DesktopWorkspaces {
       ? this.options.windows.profileFor(focused.webContents)
       : [...this.lastWindows.keys()].at(-1);
     const dock = profileId ? this.floating.get(profileId) : undefined;
-    if (
-      dock &&
-      profileId &&
-      this.options.config.forProfile(profileId).prefs.load().dockDetached
-    )
-      return dock.webContents;
+    if (dock && profileId && this.detached(profileId)) return dock.webContents;
     return (profileId ? this.lastWindows.get(profileId) : undefined)
       ?.webContents;
   }
@@ -532,7 +537,7 @@ export class DesktopWorkspaces {
         currentWindow?.webContents.id ?? sender.id,
       ),
       activeChatId: this.activeChats.get(profileId),
-      detached: prefs.dockDetached,
+      detached: this.detached(profileId),
       multiProject: prefs.dockMultiProject,
       side: prefs.dockSide,
       placement: prefs.dockPlacement,
@@ -547,10 +552,27 @@ export class DesktopWorkspaces {
       );
   }
 
+  private detached(profileId: string): boolean {
+    return (
+      this.detachOverrides.get(profileId) ??
+      this.options.config.forProfile(profileId).prefs.load().dockDetached
+    );
+  }
+
+  private setDetached(profileId: string, detached: boolean) {
+    const preferred = this.options.config
+      .forProfile(profileId)
+      .prefs.load().dockDetached;
+    if (detached === preferred) this.detachOverrides.delete(profileId);
+    else this.detachOverrides.set(profileId, detached);
+    this.syncFloating(profileId);
+    this.broadcast(profileId);
+  }
+
   private syncFloating(profileId: string) {
     const prefs = this.options.config.forProfile(profileId).prefs.load();
     const existing = this.floating.get(profileId);
-    if (!prefs.dockDetached) {
+    if (!this.detached(profileId)) {
       existing?.hide();
       return;
     }
@@ -596,11 +618,10 @@ export class DesktopWorkspaces {
       window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     window.on("close", (event) => {
       if (this.quitting) return;
+      // Closing returns the dock to the window for this session only, so a
+      // restart (or a killed dev instance) comes back with the chosen default.
       event.preventDefault();
-      this.options.config
-        .forProfile(profileId)
-        .prefs.save({ dockDetached: false });
-      window.hide();
+      this.setDetached(profileId, false);
     });
   }
 }

@@ -113,7 +113,7 @@ function PermissionCard({
         <button
           type="button"
           onClick={() => resolve({ decision: "allow" })}
-          className="h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90"
+          className="button-primary"
           data-testid="tool-permission-allow"
         >
           Allow once

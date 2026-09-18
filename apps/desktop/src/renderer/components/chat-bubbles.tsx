@@ -8,6 +8,7 @@ import {
 import {
   type CSSProperties,
   type DOMAttributes,
+  type MouseEvent,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -267,12 +268,19 @@ export function ChatBubbles({
   onCollapse,
 }: ChatBubblesProps) {
   const keybindings = useKeybindings();
-  // Right-click on the collapsed bubble: the one place to move the dock
-  // between the window and its own always-on-top window.
+  // Right-click on the collapsed bubble or the arrows: moves the dock
+  // between the window and its own always-on-top window for this session.
   const [dockMenuAt, setDockMenuAt] = useState<{ x: number; y: number } | null>(
     null,
   );
   const [dockMenuOpen, setDockMenuOpen] = useState(false);
+  const openDockMenu = onToggleDetached
+    ? (event: MouseEvent<HTMLElement>) => {
+        event.preventDefault();
+        setDockMenuAt({ x: event.clientX, y: event.clientY });
+        setDockMenuOpen(true);
+      }
+    : undefined;
   useEffect(() => {
     if (!dockMenuOpen) return;
     const dismiss = (event: Event) => {
@@ -467,6 +475,7 @@ export function ChatBubbles({
           setCollapseOverride(true);
           onCollapse?.();
         }}
+        onContextMenu={openDockMenu}
         className="grid size-9 touch-none cursor-grab place-items-center rounded-full text-fg-faint transition-colors duration-150 hover:text-fg active:cursor-grabbing"
         aria-label="Collapse chat bubbles"
         aria-description="Drag to place open chats left, center or right. Arrow keys move them."
@@ -583,15 +592,7 @@ export function ChatBubbles({
             type="button"
             {...dragHandlers}
             onClick={() => setCollapseOverride(false)}
-            onContextMenu={
-              onToggleDetached
-                ? (event) => {
-                    event.preventDefault();
-                    setDockMenuAt({ x: event.clientX, y: event.clientY });
-                    setDockMenuOpen(true);
-                  }
-                : undefined
-            }
+            onContextMenu={openDockMenu}
             className={`relative grid touch-none cursor-grab active:cursor-grabbing place-items-center overflow-visible rounded-full border border-border bg-bg-overlay text-fg-muted transition-[max-width,opacity,background-color,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] hover:border-border-strong hover:text-fg ${
               collapsed
                 ? "size-9 max-w-9 opacity-100"

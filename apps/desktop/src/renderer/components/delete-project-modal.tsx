@@ -106,11 +106,7 @@ export function DeleteProjectModal({
       </div>
 
       <footer className="mt-4 flex items-center justify-end gap-2 border-t border-border px-5 py-3.5">
-        <button
-          type="button"
-          onClick={onClose}
-          className="h-8 cursor-pointer rounded-md px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-        >
+        <button type="button" onClick={onClose} className="button-ghost">
           Cancel
         </button>
         <PendingButton
@@ -121,7 +117,7 @@ export function DeleteProjectModal({
           data-disabled-reason="Checking project membership"
           pendingLabel={remoteMember ? "Removing…" : "Deleting…"}
           data-testid="delete-confirm"
-          className="h-8 cursor-pointer rounded-md border border-danger/40 bg-danger/10 px-3 text-[13px] font-medium text-danger transition-colors duration-150 hover:bg-danger/20 disabled:cursor-not-allowed disabled:opacity-50"
+          className="button-danger"
         >
           {remoteMember !== false
             ? "Remove from this device"

@@ -84,18 +84,14 @@ export function CreateSubsessionDialog({
           {error ? <p className="mt-3 text-xs text-danger">{error}</p> : null}
         </div>
         <footer className="mt-5 flex justify-end gap-2 border-t border-border px-5 py-3.5">
-          <button
-            type="button"
-            onClick={onClose}
-            className="h-8 rounded-md px-3 text-[13px] text-fg-muted hover:bg-bg-overlay hover:text-fg"
-          >
+          <button type="button" onClick={onClose} className="button-ghost">
             Cancel
           </button>
           <PendingButton
             type="submit"
             pending={pending}
             pendingLabel="Starting…"
-            className="h-8 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg disabled:opacity-50"
+            className="button-primary"
           >
             Start subsession
           </PendingButton>
@@ -184,11 +180,7 @@ export function ArchiveSessionDialog({
         {error ? <p className="mt-3 text-xs text-danger">{error}</p> : null}
       </div>
       <footer className="mt-4 flex justify-end gap-2 border-t border-border px-5 py-3.5">
-        <button
-          type="button"
-          onClick={onClose}
-          className="h-8 rounded-md px-3 text-[13px] text-fg-muted hover:bg-bg-overlay hover:text-fg"
-        >
+        <button type="button" onClick={onClose} className="button-ghost">
           Cancel
         </button>
         <PendingButton

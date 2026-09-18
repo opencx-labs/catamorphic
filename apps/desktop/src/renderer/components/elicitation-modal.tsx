@@ -112,7 +112,7 @@ function UrlElicitation({
             onOpenUrl(request.url);
             onResolve({ action: "accept" });
           }}
-          className="flex h-8 cursor-pointer items-center gap-1.5 rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg"
+          className="button-primary"
         >
           <ExternalLink className="size-3.5" />
           Open to continue
@@ -195,7 +195,7 @@ function FormElicitation({
           pendingLabel="Submitting…"
           disabled={missingRequired}
           data-disabled-reason="Complete the required fields first"
-          className="h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
+          className="button-primary"
         >
           Continue
         </PendingButton>

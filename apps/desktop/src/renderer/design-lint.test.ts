@@ -50,6 +50,18 @@ describe("design lint", () => {
       );
     expect(literal).toEqual([]);
   });
+  it("rectangular actions use a button role, never a private accent recipe", () => {
+    // Debt: the remaining accent recipes are icon-only send buttons and two
+    // pills; lower this when you convert one to `button-primary`.
+    expect(
+      count(/className="[^"]*\bbg-accent\s[^"]*\b(px-|text-accent-fg)/g).length,
+    ).toBeLessThanOrEqual(4);
+  });
+  it("destructive confirms use the danger role, never solid red with white text", () => {
+    expect(count(/className="[^"]*\bbg-danger\b[^"]*\btext-white\b/g)).toEqual(
+      [],
+    );
+  });
   it("private loading copy only shrinks", () => {
     // Debt: screens that still print their own "Loading…" instead of the
     // shared status language. Lower this when you remove one.

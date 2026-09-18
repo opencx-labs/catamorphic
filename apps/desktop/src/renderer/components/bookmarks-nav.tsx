@@ -882,7 +882,7 @@ function BookmarkForm({
         <PendingButton
           type="submit"
           pending={pending}
-          className="h-8 cursor-pointer rounded-md bg-accent px-3 text-sm text-accent-fg disabled:opacity-50"
+          className="button-primary"
         >
           Save
         </PendingButton>

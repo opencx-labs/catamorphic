@@ -170,13 +170,7 @@ export function RemoteConnectModal({
       setError(
         /fetch failed|Failed to fetch|ECONNREFUSED/.test(message)
           ? "Could not reach the company server. Check your connection and try joining again."
-          : message
-              .replace(
-                /^Error invoking remote method '[^']+': (?:Error: )?/,
-                "",
-              )
-              .replace("[github-required]", "")
-              .trim(),
+          : message.replace("[github-required]", "").trim(),
       );
     } finally {
       setAuthInProgress(false);
@@ -350,7 +344,7 @@ export function RemoteConnectModal({
                   : "Paste a valid project link and choose a folder"
               }
               data-testid="remote-connect-submit"
-              className="h-8 cursor-pointer rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              className="button-primary"
             >
               Join project
             </PendingButton>

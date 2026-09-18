@@ -257,14 +257,14 @@ export function HistoryScreen({
               disabled={clearing}
               data-disabled-reason="Wait for history to finish clearing"
               onClick={() => setConfirmClear(false)}
-              className="h-8 rounded-md border border-border px-3 text-xs text-fg-muted hover:bg-bg-overlay"
+              className="button-ghost"
             >
               Cancel
             </button>
             <PendingButton
               pending={clearing}
               onClick={() => void clear()}
-              className="h-8 rounded-md bg-danger px-3 text-xs text-white"
+              className="button-danger"
             >
               Clear history
             </PendingButton>

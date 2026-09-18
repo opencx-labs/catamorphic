@@ -40,14 +40,7 @@ export function AuthorizationInspector() {
       await action();
       await attempt.refetch();
     } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message.replace(
-              /^Error invoking remote method '[^']+': (?:Error: )?/,
-              "",
-            )
-          : String(cause),
-      );
+      setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setPending(false);
     }

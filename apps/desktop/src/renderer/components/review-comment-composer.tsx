@@ -123,7 +123,7 @@ export function ReviewCommentComposer({
           <button
             type="submit"
             disabled={sending || !body.trim()}
-            className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg disabled:opacity-40"
+            className="button-primary button-sm"
           >
             {sending ? "Posting…" : reply ? "Reply" : "Comment"}
           </button>

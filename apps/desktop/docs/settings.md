@@ -94,6 +94,10 @@ selection replaces inherited color overrides; individual token and font edits
 remain sparse. Theme edits use the shared configuration file validation and
 last-valid-value caches. The dock preferences are profile choices:
 `dockMultiProject`, `dockDetached`, `dockSide`, and `dockPlacement`.
+`dockDetached` is the launch default only: right-clicking the collapsed bubble
+or the arrows floats the dock in its own window or returns it for the current
+session, and closing the detached window returns it the same way. Those actions
+never rewrite the preference, so a restart comes back with the chosen default.
 `dockPlacement` chooses `left`, `center` (default) or `right` for open chats and
 their bubble strip; `dockSide` chooses the bottom corner the collapsed bubble
 rests in. Dragging the collapsed bubble changes the corner; dragging the

@@ -139,7 +139,7 @@ export function UpdateBanner({
               <button
                 type="button"
                 onClick={() => void desktopApi.updateDownload()}
-                className="cursor-pointer rounded-md bg-accent px-2.5 py-1.5 text-xs font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90"
+                className="button-primary button-sm"
               >
                 Download update
               </button>
@@ -158,7 +158,7 @@ export function UpdateBanner({
                     onClick={() => void desktopApi.updateInstall()}
                     disabled={hasActiveWork}
                     data-disabled-reason="Finish active agents and terminals before restarting"
-                    className="cursor-pointer rounded-md bg-accent px-2.5 py-1.5 text-xs font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="button-primary button-sm"
                   >
                     Restart to update
                   </button>

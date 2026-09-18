@@ -219,7 +219,19 @@ it("keeps an unsent draft when detached and reattached, and supports either edge
   await dock.waitFor(
     `!!document.querySelector('[data-floating-chat]:not([inert])')`,
   );
-  await dock.eval(
+  // Closing the detached window returns the dock for this session only:
+  // the launch default stays what Settings chose.
+  await dock.eval(`window.close()`);
+  await app.waitFor(
+    `!!document.querySelector('[data-floating-chat]:not([inert]) [data-composer-input]')`,
+    { label: "dock back in the window after closing it" },
+  );
+  expect(
+    await app.eval<boolean>(
+      `window.catamorphicDesktop.getPrefs().then((prefs) => prefs.dockDetached)`,
+    ),
+  ).toBe(true);
+  await app.eval(
     `window.catamorphicDesktop.setPrefs({dockSide:'right',dockDetached:false,dockPlacement:'right'})`,
   );
   await app.waitFor(
@@ -228,6 +240,23 @@ it("keeps an unsent draft when detached and reattached, and supports either edge
   await app.waitFor(
     `document.querySelector('[data-floating-chat]:not([inert]) [data-composer-input]')?.innerText === 'Keep this draft'`,
     { label: "draft after reattaching" },
+  );
+  // A one-off detach from the dock menu floats it without touching the default.
+  await app.eval(`window.catamorphicDesktop.dockDetach(true)`);
+  dock = await app.connectToFrame("surface=dock");
+  await dock.waitFor(
+    `document.querySelector('[data-floating-chat]:not([inert]) [data-composer-input]')?.innerText === 'Keep this draft'`,
+    { label: "one-off detach keeps the draft" },
+  );
+  expect(
+    await app.eval<boolean>(
+      `window.catamorphicDesktop.getPrefs().then((prefs) => prefs.dockDetached)`,
+    ),
+  ).toBe(false);
+  await dock.eval(`window.catamorphicDesktop.dockDetach(false)`);
+  await app.waitFor(
+    `document.querySelector('[data-floating-chat]:not([inert]) [data-composer-input]')?.innerText === 'Keep this draft'`,
+    { label: "draft after the one-off return" },
   );
 });
 

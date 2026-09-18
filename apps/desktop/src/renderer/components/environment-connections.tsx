@@ -6,7 +6,8 @@ import {
 } from "@catamorphic/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { KeyRound, Loader2, RefreshCw } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useRef, useState } from "react";
+import { Modal } from "./modal.js";
 
 export function EnvironmentConnections({
   projectId,
@@ -110,6 +111,12 @@ function EnvironmentConnectionRow({
     void finish(formValues);
   };
   const challenge = authorization?.challenge;
+  // The dialog keeps its fields through the exit animation.
+  const formChallenge = useRef<Extract<
+    AuthorizationChallenge,
+    { kind: "form" }
+  > | null>(null);
+  if (challenge?.kind === "form") formChallenge.current = challenge;
   const personal = binding.memberConnection;
   const service = binding.serviceConnection;
   return (
@@ -154,33 +161,55 @@ function EnvironmentConnectionRow({
           .
         </div>
       )}
-      {challenge?.kind === "form" && (
-        <form onSubmit={submit} className="mt-2 space-y-2">
-          {challenge.fields.map((field) => (
-            <label key={field.name} className="block">
-              <span className="mb-1 block text-fg-muted">{field.label}</span>
-              <input
-                type={field.secret ? "password" : "text"}
-                required={field.required}
-                value={formValues[field.name] ?? ""}
-                onChange={(event) =>
-                  setFormValues((current) => ({
-                    ...current,
-                    [field.name]: event.target.value,
-                  }))
-                }
-                className="h-8 w-full rounded-md border border-border bg-bg-inset px-2"
-              />
-            </label>
-          ))}
-          <button
-            type="submit"
-            className="cursor-pointer rounded-md bg-accent-subtle px-2 py-1.5 font-medium text-accent"
-          >
-            Save
-          </button>
+      <Modal
+        open={challenge?.kind === "form"}
+        onClose={() => setAuthorization(null)}
+        width={420}
+      >
+        <form onSubmit={submit}>
+          <div className="px-5 pt-5">
+            <h2 className="text-sm font-semibold text-fg">
+              Connect {binding.alias}
+            </h2>
+            <p className="mt-1 text-xs leading-relaxed text-fg-muted">
+              {binding.providerKind} asks for these details.
+            </p>
+            <div className="mt-4 space-y-3 text-xs">
+              {formChallenge.current?.fields.map((field) => (
+                <label key={field.name} className="block">
+                  <span className="mb-1 block text-fg-muted">
+                    {field.label}
+                  </span>
+                  <input
+                    type={field.secret ? "password" : "text"}
+                    required={field.required}
+                    value={formValues[field.name] ?? ""}
+                    onChange={(event) =>
+                      setFormValues((current) => ({
+                        ...current,
+                        [field.name]: event.target.value,
+                      }))
+                    }
+                    className="field h-8 w-full rounded-md px-2.5 text-[13px]"
+                  />
+                </label>
+              ))}
+            </div>
+          </div>
+          <footer className="mt-5 flex justify-end gap-2 border-t border-border px-5 py-3.5">
+            <button
+              type="button"
+              onClick={() => setAuthorization(null)}
+              className="button-ghost"
+            >
+              Cancel
+            </button>
+            <button type="submit" className="button-primary">
+              Save
+            </button>
+          </footer>
         </form>
-      )}
+      </Modal>
       {(authorize.error || complete.error) && (
         <p className="mt-2 text-danger">
           {(authorize.error ?? complete.error)?.message}

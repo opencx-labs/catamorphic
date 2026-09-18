@@ -175,7 +175,7 @@ export function RemoteNav({
             data-disabled-reason="Select files to upload, or wait for the server action to finish"
             onClick={() => void run("ship")}
             data-testid="remote-ship"
-            className="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md bg-accent text-xs font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="button-primary button-sm flex-1"
           >
             <span className="inline-flex items-center gap-1.5">
               <Upload className="size-3.5" />

@@ -615,7 +615,7 @@ export function DockHost({
             dragTarget={dragTarget}
             detached={snapshot.detached}
             onToggleDetached={() => {
-              void desktopApi.setPrefs({ dockDetached: !snapshot.detached });
+              void desktopApi.dockDetach(!snapshot.detached);
             }}
             placement={snapshot.placement}
             dragHandlers={dragHandlersFor("side")}

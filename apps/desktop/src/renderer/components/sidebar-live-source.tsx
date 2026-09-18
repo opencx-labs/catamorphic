@@ -25,10 +25,7 @@ import {
 import { SidebarItemRow } from "./sidebar-item-row.js";
 
 function sourceError(cause: unknown): Error {
-  const message = cause instanceof Error ? cause.message : String(cause);
-  return new Error(
-    message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, ""),
-  );
+  return cause instanceof Error ? cause : new Error(String(cause));
 }
 
 /** One collection owns cache, cancellation, subscriptions and paged branches. */

@@ -40,6 +40,8 @@ export function Modal({
         panelRef.current?.querySelector("select:open")
       )
         return;
+      // A control recording a shortcut owns every key while it is armed.
+      if (panelRef.current?.querySelector("[data-keyboard-capture]")) return;
       if (event.key === "Escape") {
         // Claim the key so the expanded chat's window listener ignores it.
         event.preventDefault();
