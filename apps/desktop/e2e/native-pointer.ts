@@ -8,6 +8,17 @@ export async function moveNativePointer(point: { x: number; y: number }) {
   assertIsolatedDesktopTestHost();
   const coordinates = [Math.round(point.x), Math.round(point.y)].map(String);
   if (process.platform === "linux") {
+    const { stdout } = await promisify(execFile)(
+      "xdotool",
+      ["getmouselocation", "--shell"],
+      { timeout: 10_000 },
+    );
+    // --sync waits for an actual move, and hangs when already at the target.
+    if (
+      /^X=(\d+)$/m.exec(stdout)?.[1] === coordinates[0] &&
+      /^Y=(\d+)$/m.exec(stdout)?.[1] === coordinates[1]
+    )
+      return;
     await promisify(execFile)(
       "xdotool",
       ["mousemove", "--sync", ...coordinates],

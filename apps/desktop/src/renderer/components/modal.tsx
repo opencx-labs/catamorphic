@@ -29,6 +29,14 @@ export function Modal({
         : null;
     panelRef.current?.focus({ preventScroll: true });
     const onKeyDown = (event: KeyboardEvent) => {
+      // The app-styled select owns Escape/Tab while its top-layer picker is
+      // open. Dismiss that picker before dismissing or cycling this dialog.
+      if (
+        typeof CSS !== "undefined" &&
+        CSS.supports?.("selector(select:open)") &&
+        panelRef.current?.querySelector("select:open")
+      )
+        return;
       if (event.key === "Escape") {
         // Claim the key so the expanded chat's window listener ignores it.
         event.preventDefault();

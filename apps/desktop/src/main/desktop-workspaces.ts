@@ -5,12 +5,14 @@ import {
   screen,
   type WebContents,
 } from "electron";
+import { z } from "zod";
 import type {
   ChatDraft,
   DockCommand,
   DockData,
   DockSnapshot,
   WorkspaceEvent,
+  WorkspaceNavigation,
 } from "../shared/desktop-workspace.js";
 import {
   type DockDrag,
@@ -106,12 +108,23 @@ export class DesktopWorkspaces {
         return true;
       },
     );
-    ipcMain.handle(
-      "catamorphic:workspace-navigate",
-      (event, projectId: string, newWindow: boolean) => {
-        this.navigate({ sender: event.sender, projectId, newWindow });
-      },
-    );
+    ipcMain.handle("catamorphic:workspace-navigate", (event, raw: unknown) => {
+      const input = z
+        .object({
+          projectId: z.string(),
+          newWindow: z.boolean().optional(),
+          surface: z
+            .object({
+              url: z.string().max(8192),
+              title: z.string().max(4096),
+              mode: z.enum(["replace", "tab", "side", "floating"]),
+              nonce: z.string().max(128),
+            })
+            .optional(),
+        })
+        .parse(raw);
+      this.navigate({ ...input, sender: event.sender });
+    });
     ipcMain.handle(
       "catamorphic:workspace-active",
       (event, projectId: string) => {
@@ -446,11 +459,7 @@ export class DesktopWorkspaces {
     );
   }
 
-  private navigate(input: {
-    sender: WebContents;
-    projectId: string;
-    newWindow: boolean;
-  }) {
+  private navigate(input: WorkspaceNavigation & { sender: WebContents }) {
     const profileId = this.options.windows.profileFor(input.sender);
     if (this.options.profileForProject(input.projectId) !== profileId) return;
     const owner = this.owner(input.projectId);
@@ -469,6 +478,7 @@ export class DesktopWorkspaces {
       target.webContents.send("catamorphic:workspace-event", {
         kind: "navigate",
         projectId: input.projectId,
+        surface: input.surface,
       } satisfies WorkspaceEvent);
     if (target.webContents.isLoading())
       target.webContents.once("did-finish-load", send);

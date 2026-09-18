@@ -28,6 +28,11 @@ protocols:
   - name: Catamorphic connect link
     schemes:
       - catamorphic
+  - name: Web links
+    role: Viewer
+    schemes:
+      - http
+      - https
 publish:
   provider: generic
   url: https://raw.githubusercontent.com/opencx-labs/homebrew-tap/main/updates

@@ -13,7 +13,9 @@ import {
 import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
 import { useQueryClient } from "@tanstack/react-query";
 import {
+  Check,
   Columns2,
+  Download,
   FolderPlus,
   Link2,
   MessageSquare,
@@ -43,6 +45,11 @@ import {
   parseChatBookmarkUrl,
 } from "../shared/bookmark-target.js";
 import {
+  type HistoryEntry,
+  type HistoryVisit,
+  historyIdentity,
+} from "../shared/history.js";
+import {
   type OpenMode as CommitMode,
   type OpenModifiers,
   openModeFromEvent,
@@ -66,6 +73,7 @@ import {
   AgentPointers,
 } from "./components/agent-pointers.js";
 import { AgentWizard } from "./components/agent-wizard.js";
+import { BrowserImportDialog } from "./components/browser-import.js";
 import type { ChatDockEntry, ChatSurface } from "./components/chat-dock.js";
 import { ChatRegistration } from "./components/chat-registration.js";
 import {
@@ -74,6 +82,7 @@ import {
 } from "./components/command-palette.js";
 import { ConfigureAgentModal } from "./components/configure-agent-modal.js";
 import { ConnectorsModal } from "./components/connectors-modal.js";
+import { DefaultBrowserButton } from "./components/default-browser.js";
 import { DeleteProjectModal } from "./components/delete-project-modal.js";
 import {
   ElicitationModal,
@@ -136,6 +145,7 @@ import {
 } from "./lib/desktop-api.js";
 import { readEditorSelection } from "./lib/editor-selection.js";
 import { useFloatingMotion } from "./lib/floating-motion.js";
+import { historyDestination } from "./lib/history.js";
 import {
   formatBinding,
   matchesBinding,
@@ -181,6 +191,7 @@ import {
   type BrowserPageState,
   BrowserScreen,
 } from "./screens/browser-screen.js";
+import { HistoryScreen } from "./screens/history-screen.js";
 import { McpAppScreen } from "./screens/mcp-app-screen.js";
 import { ProfileSettingsScreen } from "./screens/profile-settings-screen.js";
 import { RunScreen } from "./screens/run-screen.js";
@@ -1785,8 +1796,63 @@ export function App({
       openSurface(key, intent);
     return key;
   };
+  const openHistory = async (entry: HistoryEntry, mode: CommitMode) => {
+    if (entry.target.kind === "web") {
+      await openUrl(entry.target.url, mode);
+      return;
+    }
+    const ownerId = entry.target.projectId;
+    if (!projects.some((project) => project.id === ownerId))
+      throw new Error("This project's history is no longer available.");
+    if (ownerId === projectId) {
+      await openLinkedSurface(historyDestination(entry), {
+        mode,
+        label: entry.title,
+      });
+      return;
+    }
+    await desktopApi.workspaceNavigate({
+      projectId: ownerId,
+      surface: {
+        url: historyDestination(entry),
+        title: entry.title,
+        mode,
+        nonce: crypto.randomUUID(),
+      },
+    });
+  };
+  const historySearch = () => {
+    setSearchRequest({ mode: "history", nonce: crypto.randomUUID() });
+    setPaletteOpen(true);
+  };
+
   const openLinkedSurfaceRef = useRef(openLinkedSurface);
   openLinkedSurfaceRef.current = openLinkedSurface;
+  const consumedNavigation = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const navigation = runtime.navigation;
+    if (
+      !navigation ||
+      !workspaceReady ||
+      !runtime.visible ||
+      consumedNavigation.current === navigation.nonce
+    )
+      return;
+    consumedNavigation.current = navigation.nonce;
+    void openLinkedSurfaceRef
+      .current(navigation.url, {
+        mode: navigation.mode,
+        label: navigation.title,
+      })
+      .catch((cause: unknown) =>
+        setLinkError(
+          cause instanceof Error
+            ? cause.message
+            : "Could not reopen this item.",
+        ),
+      );
+  }, [runtime.navigation, runtime.visible, workspaceReady]);
+
   const openMessageLink = (
     value: string,
     entry: ChatDockEntry,
@@ -1855,6 +1921,24 @@ export function App({
   // target=_blank / window.open from any page in this window → new tab.
   const openBrowserTabRef = useRef(openBrowserTab);
   openBrowserTabRef.current = openBrowserTab;
+  useEffect(() => {
+    const take = () => {
+      if (
+        !runtime.visible ||
+        !activeProfile?.id ||
+        (projectId && !workspaceReady)
+      )
+        return;
+      void desktopApi
+        .browserTakePendingUrls()
+        .then((urls) => {
+          for (const url of urls) openBrowserTabRef.current(url);
+        })
+        .catch(() => {});
+    };
+    take();
+    return desktopApi.onPendingBrowserUrls(take);
+  }, [runtime.visible, activeProfile?.id, projectId, workspaceReady]);
   useEffect(() => {
     return desktopApi.onBrowserOpenUrl(
       (url, mode) =>
@@ -2385,7 +2469,7 @@ export function App({
           message.content,
           () => {
             void desktopApi.windowFocus();
-            void desktopApi.workspaceNavigate(projectId);
+            void desktopApi.workspaceNavigate({ projectId });
             const existing = workspaceRef.current.chats.find(
               (candidate) => candidate.sessionId === session.id,
             );
@@ -3605,7 +3689,7 @@ export function App({
   );
 
   const selectProject = (id: string) => {
-    void desktopApi.workspaceNavigate(id);
+    void desktopApi.workspaceNavigate({ projectId: id });
     // Remembered per profile: a relaunch lands in the last project.
     void desktopApi.setPrefs({ lastProjectId: id });
   };
@@ -4229,7 +4313,9 @@ export function App({
         }
         case "requestConnection": {
           if (projectIdRef.current)
-            void desktopApi.workspaceNavigate(projectIdRef.current);
+            void desktopApi.workspaceNavigate({
+              projectId: projectIdRef.current,
+            });
           // Main sends this to ONE window (focused, else first) — no
           // renderer-side focus guard, so an unfocused single window
           // still shows the modal instead of silently declining.
@@ -4336,6 +4422,102 @@ export function App({
   const activeTab = presentedTabs.find(
     (tab) => tabKey(tab) === workspace.activeTabKey,
   );
+
+  const lastHistoryVisit = useRef<HistoryVisit | null>(null);
+  useEffect(() => {
+    if (!runtime.visible || !projectId || !workspaceReady) {
+      lastHistoryVisit.current = null;
+      return;
+    }
+    const key =
+      workspace.floatingKey ??
+      (focusedChat?.mode === "partial"
+        ? chatTabKey(focusedChat.localId)
+        : workspace.activeTabKey);
+    const tab = workspace.tabs.find((item) => tabKey(item) === key);
+    const editor = workspace.editors.find(
+      (item) => editorTabKey(item.localId) === key,
+    );
+    const chat = workspace.chats.find(
+      (item) => chatTabKey(item.localId) === key,
+    );
+    const browser = workspace.browsers.find(
+      (item) => browserTabKey(item.localId) === key,
+    );
+    const browserUrl = browser?.url || browser?.initialUrl;
+    const fileSurface = browserUrl?.startsWith("file://")
+      ? parseSurfaceLink(browserUrl)
+      : null;
+    const projectName = projects.find((item) => item.id === projectId)?.name;
+    const visit: HistoryVisit | null =
+      fileSurface?.kind === "file"
+        ? {
+            target: { kind: "file", projectId, resource: fileSurface.path },
+            title: browser?.title || fileNameFromPath(fileSurface.path),
+            projectName,
+          }
+        : editor?.filePath
+          ? {
+              target: { kind: "file", projectId, resource: editor.filePath },
+              title: fileNameFromPath(editor.filePath),
+              projectName,
+            }
+          : chat?.sessionId && !chat.incognito
+            ? {
+                target: { kind: "chat", projectId, resource: chat.sessionId },
+                title: sessionsById.get(chat.sessionId)?.title ?? "Chat",
+                projectName,
+              }
+            : tab && ["app", "workflow", "run", "artifact"].includes(tab.kind)
+              ? tab.kind === "app" ||
+                tab.kind === "workflow" ||
+                tab.kind === "run" ||
+                tab.kind === "artifact"
+                ? {
+                    target: { kind: tab.kind, projectId, resource: tab.name },
+                    title:
+                      (tab.kind === "app"
+                        ? appMetadata.get(tab.name)?.title
+                        : null) ??
+                      tab.label ??
+                      tab.name,
+                    projectName,
+                  }
+                : null
+              : null;
+    if (!visit) {
+      lastHistoryVisit.current = null;
+      return;
+    }
+    const previous = lastHistoryVisit.current;
+    const revisit =
+      !previous ||
+      historyIdentity(previous.target) !== historyIdentity(visit.target);
+    if (
+      !revisit &&
+      previous?.title === visit.title &&
+      previous.projectName === visit.projectName
+    )
+      return;
+    lastHistoryVisit.current = visit;
+    if (visit.target.kind === "chat") {
+      void desktopApi
+        .sessionIsIncognito(visit.target.resource)
+        .then((incognito) => {
+          if (!incognito) return desktopApi.historyRecord({ visit, revisit });
+        })
+        .catch(() => {});
+    } else void desktopApi.historyRecord({ visit, revisit }).catch(() => {});
+  }, [
+    runtime.visible,
+    projectId,
+    workspaceReady,
+    workspace,
+    focusedChat,
+    projects,
+    sessionsById,
+    appMetadata,
+  ]);
 
   const chatLabels = Object.fromEntries(
     workspace.chats.map((chat, index) => {
@@ -4703,6 +4885,15 @@ export function App({
     onOpenUrl: openUrl,
     onOpenTab: openTab,
     onOpenSession: openSession,
+    onOpenHistory: (entry: HistoryEntry, mode: CommitMode) => {
+      void openHistory(entry, mode).catch((cause: unknown) =>
+        setLinkError(
+          cause instanceof Error
+            ? cause.message
+            : "Could not reopen this item.",
+        ),
+      );
+    },
     onSelectProject: selectProject,
     onSwitchProfile: switchProfile,
     onSendToAgent: sendToAgent,
@@ -5200,7 +5391,10 @@ export function App({
                 activeProjectId={projectId}
                 onSelect={selectProject}
                 onOpenWindow={(id) => {
-                  void desktopApi.workspaceNavigate(id, true);
+                  void desktopApi.workspaceNavigate({
+                    projectId: id,
+                    newWindow: true,
+                  });
                 }}
                 onNewProject={() => setProjectModalOpen(true)}
                 onConnectRemote={() =>
@@ -5472,6 +5666,14 @@ export function App({
                         }
                         data={profilesData}
                         projects={allProjects}
+                        onClose={() => closeTab(tabKey(tab))}
+                      />
+                    ) : tab.kind === "history" ? (
+                      <HistoryScreen
+                        active={Boolean(viewSlots[tabKey(tab)])}
+                        profileId={activeProfile?.id}
+                        onSearch={historySearch}
+                        onOpen={openHistory}
                         onClose={() => closeTab(tabKey(tab))}
                       />
                     ) : tab.kind === "usage" ? (
@@ -6021,6 +6223,13 @@ export function App({
             onConfigureAgent={openConfigureAgent}
             onManageConnectors={() => setConnectorsModalOpen(true)}
           />
+        ) : activeTab?.kind === "history" ? (
+          <HistoryScreen
+            profileId={activeProfile?.id}
+            onSearch={historySearch}
+            onOpen={openHistory}
+            onClose={() => closeTab(tabKey(activeTab))}
+          />
         ) : activeTab?.kind === "profile-settings" && profilesData ? (
           <ProfileSettingsScreen
             profileId={activeTab.name}
@@ -6075,6 +6284,7 @@ export function App({
           </div>
         ) : (
           <EmptyState
+            key={activeProfile?.id}
             loading={projectsLoading}
             loadError={projectsLoadError}
             retrying={projectsFetching}
@@ -6082,6 +6292,8 @@ export function App({
             onNewProject={() => setProjectModalOpen(true)}
             onConnectRemote={() => setRemoteConnect({ open: true, link: null })}
             onStartWithAgent={startWithAgent}
+            profileId={activeProfile?.id}
+            importCompleted={Boolean(activeProfile?.browserImportCompletedAt)}
           />
         )}
       </main>
@@ -6300,6 +6512,8 @@ export function App({
 }
 
 function EmptyState({
+  profileId,
+  importCompleted,
   loading,
   loadError,
   retrying,
@@ -6308,6 +6522,8 @@ function EmptyState({
   onConnectRemote,
   onStartWithAgent,
 }: {
+  profileId?: string;
+  importCompleted: boolean;
   loading: boolean;
   loadError: boolean;
   retrying: boolean;
@@ -6316,6 +6532,9 @@ function EmptyState({
   onConnectRemote: () => void;
   onStartWithAgent: () => Promise<void>;
 }) {
+  const [importOpen, setImportOpen] = useState(false);
+  const [justImported, setJustImported] = useState(false);
+  const imported = importCompleted || justImported;
   const [startingAgent, setStartingAgent] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -6332,8 +6551,8 @@ function EmptyState({
   };
 
   return (
-    <div className="grid flex-1 place-items-center">
-      <div className="max-w-sm text-center">
+    <div className="grid min-h-0 flex-1 place-items-center overflow-y-auto px-6 py-8">
+      <div className="w-full max-w-xs text-left">
         {loadError ? (
           <div role="alert" data-testid="project-load-error">
             <h1 className="text-sm font-medium text-fg">
@@ -6355,17 +6574,45 @@ function EmptyState({
           <p className="animate-pulse text-sm text-fg-muted">Loading…</p>
         ) : (
           <>
-            <p className="text-sm text-fg-muted">
-              Start with an agent, create a project, or connect to a server.
+            <h1 className="text-xl font-semibold text-fg">
+              Make yourself at home
+            </h1>
+            <p className="mt-2 text-[13px] leading-5 text-fg-muted">
+              Bring your browser with you, then choose where to start.
             </p>
-            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+            <div className="mt-5 flex flex-col gap-2">
+              <PendingButton
+                pending={false}
+                type="button"
+                disabled={!profileId || startingAgent}
+                data-disabled-reason={
+                  !profileId ? "Loading this profile" : "Starting the agent"
+                }
+                done={imported}
+                doneLabel={
+                  <span className="inline-flex items-center gap-2">
+                    <Check className="size-3.5 text-success" />
+                    Browser import complete
+                  </span>
+                }
+                onClick={() => setImportOpen(true)}
+                data-testid="onboarding-browser-import"
+                className="browser-setup-action"
+              >
+                <span className="inline-flex items-center gap-2">
+                  <Download className="size-3.5" />
+                  Import from a browser
+                </span>
+              </PendingButton>
+              <DefaultBrowserButton />
+              <div className="my-2 border-t border-border" />
               <PendingButton
                 type="button"
                 pending={startingAgent}
                 pendingLabel="Starting…"
                 onClick={() => void start()}
                 data-testid="empty-start-agent"
-                className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex h-9 w-full cursor-pointer items-center justify-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <span className="inline-flex items-center gap-2">
                   <Sparkles className="size-3.5" />
@@ -6377,10 +6624,10 @@ function EmptyState({
                 onClick={onNewProject}
                 disabled={startingAgent}
                 data-disabled-reason="Starting the agent"
-                className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border border-border px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex h-9 w-full cursor-pointer items-center justify-center gap-2 rounded-md border border-border px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <FolderPlus className="size-3.5" />
-                New project
+                Create or import project
               </button>
               <button
                 type="button"
@@ -6388,13 +6635,21 @@ function EmptyState({
                 disabled={startingAgent}
                 data-disabled-reason="Starting the agent"
                 data-testid="empty-connect-remote"
-                className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-md border border-border px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex h-9 w-full cursor-pointer items-center justify-center gap-2 rounded-md border border-border px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Link2 className="size-3.5" />
                 Connect to a server
               </button>
             </div>
             {error && <p className="mt-3 text-[12px] text-danger">{error}</p>}
+            {profileId && (
+              <BrowserImportDialog
+                open={importOpen}
+                profileId={profileId}
+                onClose={() => setImportOpen(false)}
+                onComplete={() => setJustImported(true)}
+              />
+            )}
           </>
         )}
       </div>

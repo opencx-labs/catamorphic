@@ -253,7 +253,7 @@ describe("tabbed sidebars", () => {
     // Navigate the live workspace before checking persisted sidebar state.
     // lastProjectId is only a fallback; changing it does not switch this window.
     await app.eval(
-      `window.catamorphicDesktop.workspaceNavigate(${JSON.stringify(project.id)})`,
+      `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(project.id)}})`,
     );
     await app.waitFor(
       `document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]')?.textContent.includes('Customize sidebar')`,
@@ -269,7 +269,7 @@ describe("tabbed sidebars", () => {
       ),
     ).toBe(true);
     await app.eval(
-      `window.catamorphicDesktop.workspaceNavigate(${JSON.stringify(projectId)})`,
+      `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(projectId)}})`,
     );
     await app.waitFor(
       `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"]')`,

@@ -1,9 +1,14 @@
 import type { CollectionPage } from "@catamorphic/app";
 import { shareEvent } from "@catamorphic/app";
 import type { ResourcePreview } from "@catamorphic/react";
+import type { ImportableBrowser } from "../../main/browser-import/types.js";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
 import type { AppPrefs } from "../../shared/app-prefs.js";
 import type { BookmarkPlacement } from "../../shared/bookmark-target.js";
+import type {
+  BrowserImportRequest,
+  BrowserImportResult,
+} from "../../shared/browser-import.js";
 import type {
   ChatDraft,
   ChatDraftUpdate,
@@ -11,6 +16,7 @@ import type {
   DockData,
   DockSnapshot,
   WorkspaceEvent,
+  WorkspaceNavigation,
 } from "../../shared/desktop-workspace.js";
 import type { DockDrag, DockSize } from "../../shared/dock-position.js";
 import type { FilePreviewInput } from "../../shared/file-preview.js";
@@ -18,6 +24,11 @@ import type {
   FileSearchInput,
   FileSearchResult,
 } from "../../shared/file-search.js";
+import type {
+  HistoryPage,
+  HistoryQuery,
+  HistoryVisit,
+} from "../../shared/history.js";
 import type { OpenMode } from "../../shared/open-mode.js";
 import type {
   PrComment,
@@ -409,46 +420,14 @@ export interface OpenRouterCatalog {
   bestFreeModelId: string | null;
 }
 
-export interface PasswordImportSupport {
-  available: boolean;
-  reason: string | null;
-}
-
-export interface NativePasswordImportResult {
-  imported: number;
-  existing: number;
-  invalid: number;
-  failed: number;
-  cancelled: boolean;
-}
-
-export interface ImportableProfile {
-  id: string;
-  name: string;
-  bookmarkCount: number;
-  hasPasswords?: boolean;
-}
-
-export interface ImportableBrowser {
-  id: string;
-  label: string;
-  profiles: ImportableProfile[];
-  supportsPasswordImport?: boolean;
-}
-
-export interface BrowserImportRequest {
-  browserId: string;
-  imports: Array<{
-    sourceProfileId: string;
-    sourceProfileName: string;
-    target: "current" | "new-profile";
-  }>;
-}
-
-export interface BrowserImportResult {
-  bookmarksImported: number;
-  profilesCreated: string[];
-}
+export type {
+  ImportableBrowser,
+  ImportableProfile,
+} from "../../main/browser-import/types.js";
+export type {
+  BrowserImportRequest,
+  BrowserImportResult,
+} from "../../shared/browser-import.js";
 
 // --- Remote projects (ADR 0055) ---
 export interface ConnectLink {
@@ -547,6 +526,7 @@ export type GithubConnectResult =
   | null;
 
 export interface Profile {
+  browserImportCompletedAt?: number;
   id: string;
   name: string;
   color: string;
@@ -908,7 +888,7 @@ export interface CatamorphicDesktopApi {
   dockDraftSet: (localId: string, draft: ChatDraft) => Promise<void>;
   onDockDraft: (listener: (update: ChatDraftUpdate) => void) => () => void;
   workspaceClaim: (projectId: string) => Promise<boolean>;
-  workspaceNavigate: (projectId: string, newWindow?: boolean) => Promise<void>;
+  workspaceNavigate: (input: WorkspaceNavigation) => Promise<void>;
   workspaceActive: (projectId: string) => Promise<void>;
   dockPublish: (data: DockData) => Promise<void>;
   dockRemove: (projectId: string, localId: string) => Promise<void>;
@@ -1038,16 +1018,27 @@ export interface CatamorphicDesktopApi {
   ) => Promise<Record<string, unknown>>;
 
   openrouterModels: () => Promise<OpenRouterCatalog>;
-  browserImportSupport: () => Promise<PasswordImportSupport>;
-  browserImportNativePasswords: (input: {
-    browserId: string;
-    profileId: string;
-  }) => Promise<NativePasswordImportResult>;
+  historyQuery: (query: HistoryQuery) => Promise<HistoryPage>;
+  historyRecord: (input: {
+    visit: HistoryVisit;
+    revisit: boolean;
+  }) => Promise<void>;
+  historyRemove: (id: string) => Promise<void>;
+  historyClear: () => Promise<void>;
+  onHistoryChanged: (listener: () => void) => () => void;
+  defaultBrowserState: () => Promise<
+    import("../../shared/default-browser.js").DefaultBrowserState
+  >;
+  defaultBrowserRequest: () => Promise<
+    import("../../shared/default-browser.js").DefaultBrowserState
+  >;
+  browserTakePendingUrls: () => Promise<string[]>;
+  onPendingBrowserUrls: (listener: () => void) => () => void;
   browserImportList: () => Promise<ImportableBrowser[]>;
   browserImportRun: (
     input: BrowserImportRequest,
   ) => Promise<BrowserImportResult>;
-  browserImportPasswords: () => Promise<{
+  browserImportPasswords: (input: { profileId: string }) => Promise<{
     imported: number;
     cancelled: boolean;
   }>;
@@ -1163,10 +1154,6 @@ export interface CatamorphicDesktopApi {
     url: string;
     faviconUrl: string;
   }) => Promise<void>;
-  browserRecentHistory: (input: {
-    profileId: string;
-    limit?: number;
-  }) => Promise<{ url: string; title: string; faviconUrl?: string }[]>;
   browserSuggest: (input: {
     profileId: string;
     query: string;

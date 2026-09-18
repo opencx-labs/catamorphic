@@ -267,36 +267,6 @@
   text-decoration: line-through;
   text-decoration-color: var(--color-fg-faint);
 }
-.cat-mdedit .ProseMirror input[type="checkbox"] {
-  appearance: none;
-  width: 14px;
-  height: 14px;
-  border: 1px solid var(--color-border-strong);
-  border-radius: 4px;
-  background: var(--color-bg-inset);
-  margin: 0;
-  cursor: pointer;
-  display: inline-grid;
-  place-content: center;
-  transition:
-    background 150ms var(--ease-standard),
-    border-color 150ms var(--ease-standard);
-}
-.cat-mdedit .ProseMirror input[type="checkbox"]:hover {
-  border-color: var(--color-fg-faint);
-}
-.cat-mdedit .ProseMirror input[type="checkbox"]:checked {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
-}
-.cat-mdedit .ProseMirror input[type="checkbox"]:checked::before {
-  content: "";
-  width: 8px;
-  height: 8px;
-  background: var(--color-accent-fg);
-  clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
-}
-
 /* --- Syntax highlighting on the status-token palette — low chroma so code
        reads calmly on the inset well. Tokens flip with the theme; the one
        non-token color (types, amber) gets an explicit light override. --- */

@@ -12,6 +12,15 @@ verification entry points. Choose the current contract for the work:
 - [Settings inheritance](../../../apps/desktop/docs/settings.md)
 - [Chat delivery and embedding](../../../apps/desktop/docs/chat-state.md)
 - [Performance measurement](../../../apps/desktop/docs/performance.md)
+- [Stable action buttons and loading layouts](../../../apps/desktop/DESIGN.md#buttons)
+- [Dropdowns and checkboxes](../../../apps/desktop/DESIGN.md#dropdowns-and-checkboxes)
+
+For desktop forms, use semantic selects and checkbox inputs styled by the single
+host [form-controls.css](../../../apps/desktop/src/renderer/form-controls.css).
+No OS-native dropdown menus, browser-default checkboxes, per-feature replacements,
+or copied control styles. Chromium's `base-select` supplies accessible keyboard
+behavior while the host supplies the menu surface and paired motion. Check nested
+Escape, focus restoration, reduced motion and narrow layouts with computer use.
 
 Use the existing transition, opening and settings primitives named there. Keep
 native handles, dirty-buffer prompts and animation scheduling in desktop; headless

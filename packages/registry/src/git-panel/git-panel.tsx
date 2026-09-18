@@ -1,4 +1,6 @@
-"use client";
+import { PendingButton } from "@catamorphic/ui";
+
+("use client");
 
 import {
   useDeployProject,
@@ -84,14 +86,16 @@ export function GitPanel({ projectId, modifiedFiles }: GitPanelProps) {
 
         <div className="ml-auto flex items-center gap-2">
           {isDirty ? (
-            <button
+            <PendingButton
+              pending={deploy.isPending}
+              pendingLabel="Deploying…"
               type="button"
               onClick={handleDeploy}
               disabled={deploy.isPending}
               className="text-xs px-2 py-1 rounded bg-accent text-accent-fg hover:opacity-90 disabled:opacity-50 cursor-pointer"
             >
-              {deploy.isPending ? "Deploying…" : "Deploy"}
-            </button>
+              Deploy
+            </PendingButton>
           ) : null}
         </div>
       </div>

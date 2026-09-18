@@ -17,8 +17,8 @@ async function send(scenario: string) {
 }
 beforeAll(async () => {
   app = await launchApp();
-  await wait("return !!button('New project');");
-  await run("button('New project').click();");
+  await wait("return !!button('Create or import project');");
+  await run("button('Create or import project').click();");
   await wait("return !!$('[data-testid=project-name-input]');");
   await run(
     "setReactValue($('[data-testid=project-name-input]'), 'Session workflows');",

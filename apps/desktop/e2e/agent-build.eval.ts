@@ -108,11 +108,13 @@ describeIf("agent build eval (real model)", () => {
     let frame: FrameHandle | undefined;
     try {
       // --- 1. Create a project ---
-      await runWait(`return !!byText('button', 'New project');`, {
+      await runWait(`return !!byText('button', 'Create or import project');`, {
         timeoutMs: 60_000,
-        label: "empty-state New project button",
+        label: "empty-state Create or import project button",
       });
-      await run(`byText('button', 'New project').click(); return true;`);
+      await run(
+        `byText('button', 'Create or import project').click(); return true;`,
+      );
       await runWait(`return !!$('[data-testid="project-name-input"]');`);
       await run(`
           setReactValue($('[data-testid="project-name-input"]'), '${PROJECT_NAME}');

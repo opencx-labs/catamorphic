@@ -2,6 +2,7 @@ import { Bot, KeyRound, ShieldAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { desktopApi, type ProjectAgentInfo } from "../lib/desktop-api.js";
 import { Modal } from "./modal.js";
+import { PendingButton } from "./pending-button.js";
 
 const KIND_LABELS: Record<string, string> = {
   "claude-code": "Claude Code",
@@ -134,7 +135,9 @@ export function ProjectAgentConsentDialog({
           )}
 
           <div className="flex items-center gap-2">
-            <button
+            <PendingButton
+              pending={busy}
+              pendingLabel="Approving…"
               type="button"
               data-testid="project-agent-approve"
               onClick={() => void approve()}
@@ -142,8 +145,8 @@ export function ProjectAgentConsentDialog({
               data-disabled-reason="Wait for the current action to finish"
               className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg hover:opacity-90 disabled:opacity-50"
             >
-              {busy ? "Approving…" : "Approve and use"}
-            </button>
+              Approve and use
+            </PendingButton>
             <button
               type="button"
               onClick={onClose}

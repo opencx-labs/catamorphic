@@ -35,6 +35,8 @@ import {
 } from "../../shared/theme-fonts.js";
 import { TOKEN_LABELS } from "../../shared/theme-tokens.js";
 import { ActionSearchInput } from "../components/action-search-input.js";
+import { BrowserImport } from "../components/browser-import.js";
+import { DefaultBrowserButton } from "../components/default-browser.js";
 import { PendingButton } from "../components/pending-button.js";
 import {
   type AgentHarness,
@@ -42,7 +44,6 @@ import {
   type AppPrefs,
   type ConnectionInfo,
   desktopApi,
-  type ImportableBrowser,
   type ThemePreset,
   type ThemeToken,
 } from "../lib/desktop-api.js";
@@ -193,9 +194,16 @@ export function SettingsScreen({
       id: "workspace",
       label: "Workspace",
       keywords:
-        "layout sidebar tabs header address bookmarks links preview floating border frame",
+        "layout sidebar tabs header address bookmarks links preview floating border frame default browser http https",
       content: (
         <>
+          <section className="mt-4 rounded-lg border border-border bg-bg-raised/30 p-4">
+            <h2 className="text-sm font-semibold text-fg">Default browser</h2>
+            <p className="mt-1 text-xs leading-5 text-fg-muted">
+              Open links from other apps in Catamorphic.
+            </p>
+            <DefaultBrowserButton className="mt-3 max-w-xs" />
+          </section>
           <LayoutSection projectId={projectId} />
           <LayoutSection
             keys={[
@@ -1335,7 +1343,9 @@ function MacrosSection() {
             >
               Cancel
             </button>
-            <button
+            <PendingButton
+              pending={saving}
+              pendingLabel="Saving…"
               type="submit"
               disabled={
                 saving ||
@@ -1345,8 +1355,8 @@ function MacrosSection() {
               }
               className="h-8 cursor-pointer rounded-md bg-accent px-3 text-sm font-medium text-accent-fg disabled:cursor-default disabled:opacity-50"
             >
-              {saving ? "Saving…" : "Save macro"}
-            </button>
+              Save macro
+            </PendingButton>
           </div>
         </form>
       )}
@@ -1755,178 +1765,12 @@ function toHex6(color: string): string {
   return long ? `#${long}` : "#000000";
 }
 
-interface ImportSelection {
-  checked: boolean;
-  target: "current" | "new-profile";
-}
-
-/**
- * Import bookmarks (and optionally whole profiles) from other browsers on
- * this machine. Designed to grow: each detected browser lists its source
- * profiles, and every profile picks its own target.
- */
 function ImportSection() {
-  const [browsers, setBrowsers] = useState<ImportableBrowser[] | null>(null);
-  const [selected, setSelected] = useState<Record<string, ImportSelection>>({});
-  const [importing, setImporting] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
+  const [profileId, setProfileId] = useState<string | null>(null);
   useEffect(() => {
-    void desktopApi.browserImportList().then(setBrowsers);
+    void desktopApi.windowProfile().then(setProfileId);
   }, []);
-
-  const keyOf = (browserId: string, profileId: string) =>
-    `${browserId}\0${profileId}`;
-
-  const anySelected =
-    browsers?.some((browser) =>
-      browser.profiles.some(
-        (profile) => selected[keyOf(browser.id, profile.id)]?.checked,
-      ),
-    ) ?? false;
-
-  const run = async () => {
-    if (!browsers) return;
-    setImporting(true);
-    setError(null);
-    setResult(null);
-    try {
-      let bookmarks = 0;
-      let profilesCreated = 0;
-      for (const browser of browsers) {
-        const imports = browser.profiles
-          .filter((profile) => selected[keyOf(browser.id, profile.id)]?.checked)
-          .map((profile) => ({
-            sourceProfileId: profile.id,
-            sourceProfileName: profile.name,
-            target:
-              selected[keyOf(browser.id, profile.id)]?.target ?? "current",
-          }));
-        if (imports.length === 0) continue;
-        const outcome = await desktopApi.browserImportRun({
-          browserId: browser.id,
-          imports,
-        });
-        bookmarks += outcome.bookmarksImported;
-        profilesCreated += outcome.profilesCreated.length;
-      }
-      setResult(
-        `Imported ${bookmarks} bookmark${bookmarks === 1 ? "" : "s"}${
-          profilesCreated > 0
-            ? ` and created ${profilesCreated} profile${profilesCreated === 1 ? "" : "s"}`
-            : ""
-        }.`,
-      );
-      setSelected({});
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setImporting(false);
-    }
-  };
-
-  return (
-    <section className="mt-8">
-      <h2 className="mb-1 text-sm font-semibold">Import from browser</h2>
-      <p className="mb-3 text-xs text-fg-muted">
-        Bring bookmarks over from another browser on this Mac.
-      </p>
-
-      {!browsers ? (
-        <p className="animate-pulse text-sm text-fg-muted">
-          Looking for browsers…
-        </p>
-      ) : browsers.length === 0 ? (
-        <p className="text-xs text-fg-faint">No other browsers detected.</p>
-      ) : (
-        <div className="flex flex-col gap-3">
-          {browsers.map((browser) => (
-            <div key={browser.id}>
-              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-fg-faint">
-                {browser.label}
-              </p>
-              <div className="flex flex-col gap-1.5">
-                {browser.profiles.map((profile) => {
-                  const key = keyOf(browser.id, profile.id);
-                  const sel = selected[key] ?? {
-                    checked: false,
-                    target: "current" as const,
-                  };
-                  return (
-                    <div
-                      key={profile.id}
-                      className="flex min-h-9 flex-wrap items-center gap-2.5 rounded-lg border border-border bg-bg-raised/40 px-3 py-2"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={sel.checked}
-                        onChange={(event) =>
-                          setSelected((prev) => ({
-                            ...prev,
-                            [key]: { ...sel, checked: event.target.checked },
-                          }))
-                        }
-                        aria-label={`Import ${profile.name} from ${browser.label}`}
-                        className="size-3.5 shrink-0 cursor-pointer accent-[var(--color-accent)]"
-                      />
-                      <span className="min-w-0 flex-1 truncate text-[13px]">
-                        {profile.name}
-                      </span>
-                      <span className="shrink-0 text-[11px] text-fg-faint">
-                        {profile.bookmarkCount} bookmark
-                        {profile.bookmarkCount === 1 ? "" : "s"}
-                      </span>
-                      <select
-                        value={sel.target}
-                        onChange={(event) =>
-                          setSelected((prev) => ({
-                            ...prev,
-                            [key]: {
-                              ...sel,
-                              target: event.target.value as
-                                | "current"
-                                | "new-profile",
-                            },
-                          }))
-                        }
-                        disabled={!sel.checked}
-                        aria-label={`Import target for ${profile.name}`}
-                        className="field h-6 shrink-0 px-1 text-[11px] text-fg disabled:opacity-50"
-                      >
-                        <option value="current">Into current profile</option>
-                        <option value="new-profile">As new profile</option>
-                      </select>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-
-          {error && <p className="text-xs text-danger">{error}</p>}
-          {result && !error && <p className="text-xs text-success">{result}</p>}
-
-          <PendingButton
-            type="button"
-            pending={importing}
-            pendingLabel="Importing…"
-            disabled={!anySelected}
-            data-disabled-reason="Select bookmarks to import"
-            onClick={() => void run()}
-            className="h-8 w-fit cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Import
-          </PendingButton>
-        </div>
-      )}
-
-      <p className="mt-2 text-xs text-fg-faint">
-        Only bookmarks are imported. They go into Saved bookmarks with their
-        folders preserved. Pin favorites separately.
-      </p>
-    </section>
-  );
+  return profileId ? <BrowserImport profileId={profileId} /> : null;
 }
 
 /**

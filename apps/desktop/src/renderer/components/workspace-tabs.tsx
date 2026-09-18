@@ -1,3 +1,4 @@
+import { Clock } from "lucide-react";
 import { tabKey, type WorkspaceTab } from "../lib/workspace-types.js";
 import { useSidebarContent } from "./sidebar-contribution.js";
 import { SidebarItemRow } from "./sidebar-item-row.js";
@@ -120,6 +121,7 @@ const TAB_ICONS = {
   browser: Globe,
   settings: SettingsIcon,
   "profile-settings": UserCog,
+  history: Clock,
   usage: ChartColumn,
   palette: Search,
   "agent-setup": Bot,

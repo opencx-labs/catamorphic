@@ -15,8 +15,8 @@ const run = <T>(body: string) =>
 beforeAll(async () => {
   app = await launchApp();
   await app.waitFor(`!![...document.querySelectorAll('button')].find(
-    el => el.textContent.trim() === 'New project')`);
-  await run(`byText('button', 'New project').click();`);
+    el => el.textContent.trim() === 'Create or import project')`);
+  await run(`byText('button', 'Create or import project').click();`);
   await app.waitFor(
     `!!document.querySelector('[data-testid="project-name-input"]')`,
   );
@@ -73,7 +73,7 @@ it("scrolls Settings to the last section without moving the workspace chrome", a
   await app.waitFor(
     `(() => {
     const panel = document.querySelector('[data-settings-scroll]');
-    const footer = panel.querySelector('#settings-import section > p:last-child');
+    const footer = panel.querySelector('#settings-import [data-testid="settings-browser-import"]');
     const rect = footer.getBoundingClientRect();
     const bounds = panel.getBoundingClientRect();
     return panel.scrollTop > 0 && rect.top >= bounds.top && rect.bottom <= bounds.bottom;
@@ -85,8 +85,8 @@ it("scrolls Settings to the last section without moving the workspace chrome", a
       `document.querySelector('[aria-label="Settings category"]').value`,
     ),
   ).toBe("import");
-  // With no importable browsers (for example on Linux CI), the last action
-  // precedes the Import section. Scrolling to the end can move past it.
+  // Both import actions remain available before browser detection. Keep the
+  // final action reachable at this short window height.
   const deltaY = await run<number>(`
     const panel = $('[data-settings-scroll]');
     const button = [...panel.querySelectorAll('button')].filter(el => el.getClientRects().length > 0).at(-1);

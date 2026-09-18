@@ -45,7 +45,7 @@ it("keeps browser and terminal resources alive when the same window switches pro
     "A file belonging only to the first project.\n",
   );
   await app.eval(
-    `window.catamorphicDesktop.workspaceNavigate(${JSON.stringify(first)})`,
+    `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(first)}})`,
   );
   await app.waitFor(
     `!!document.querySelector('[data-workspace-visible="true"] [data-workspace-chat-region]')`,
@@ -71,7 +71,7 @@ it("keeps browser and terminal resources alive when the same window switches pro
   );
   second = (await create("Second project")).id;
   await app.eval(
-    `window.catamorphicDesktop.workspaceNavigate(${JSON.stringify(second)})`,
+    `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(second)}})`,
   );
   await app.waitFor(
     `document.querySelector('[data-workspace-visible="true"]')?.dataset.projectRuntime === ${JSON.stringify(second)}`,
@@ -83,7 +83,7 @@ it("keeps browser and terminal resources alive when the same window switches pro
     ),
   ).toBe(true);
   await app.eval(
-    `window.catamorphicDesktop.workspaceNavigate(${JSON.stringify(first)})`,
+    `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(first)}})`,
   );
   await app.waitFor(
     `document.querySelector('[data-workspace-visible="true"]')?.dataset.projectRuntime === ${JSON.stringify(first)}`,
@@ -110,7 +110,7 @@ it("shows a project's chat and theme over another project's workspace and routes
     `(() => { ${setReactValueJs}; const input = document.querySelector('[data-floating-chat]:not([inert]) [data-composer-input]'); setReactValue(input, 'work slowly please'); input.closest('form').requestSubmit(); })()`,
   );
   await app.eval(
-    `window.catamorphicDesktop.workspaceNavigate(${JSON.stringify(second)})`,
+    `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(second)}})`,
   );
   await app.waitFor(
     `document.querySelector('[data-workspace-visible="true"]')?.dataset.projectRuntime === ${JSON.stringify(second)}`,
@@ -236,7 +236,7 @@ it("restores each project's floating chat in single-project mode", async () => {
     `window.catamorphicDesktop.setPrefs({dockMultiProject:false})`,
   );
   await app.eval(
-    `window.catamorphicDesktop.workspaceNavigate(${JSON.stringify(second)})`,
+    `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(second)}})`,
   );
   await app.waitFor(
     `document.querySelector('[data-workspace-visible="true"]')?.dataset.projectRuntime === ${JSON.stringify(second)}`,
@@ -249,7 +249,7 @@ it("restores each project's floating chat in single-project mode", async () => {
     `document.querySelector('[data-floating-chat]:not([inert])').dataset.chatLocalId`,
   );
   await app.eval(
-    `window.catamorphicDesktop.workspaceNavigate(${JSON.stringify(first)})`,
+    `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(first)}})`,
   );
   await app.waitFor(
     `document.querySelector('[data-floating-chat]:not([inert])')?.dataset.chatLocalId === ${JSON.stringify(chatId)}`,
@@ -271,14 +271,14 @@ it("restores each project's floating chat in single-project mode", async () => {
     `!document.querySelector('[data-floating-chat]:not([inert])')`,
   );
   await app.eval(
-    `window.catamorphicDesktop.workspaceNavigate(${JSON.stringify(second)})`,
+    `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(second)}})`,
   );
   await app.waitFor(
     `document.querySelector('[data-floating-chat]:not([inert])')?.dataset.chatLocalId === ${JSON.stringify(secondChat)}`,
     { label: "second project's floating chat restored" },
   );
   await app.eval(
-    `window.catamorphicDesktop.workspaceNavigate(${JSON.stringify(first)})`,
+    `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(first)}})`,
   );
   await app.waitFor(
     `document.querySelector('[data-workspace-visible="true"]')?.dataset.projectRuntime === ${JSON.stringify(first)}`,
@@ -290,7 +290,7 @@ it("opens a different project in its own window without moving the original work
     `window.catamorphicDesktop.createProject(${JSON.stringify({ name: "Third project", rootPath: path.join(app.userDataDir, "third") })})`,
   );
   await app.eval(
-    `window.catamorphicDesktop.workspaceNavigate(${JSON.stringify(third.id)}, true)`,
+    `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(third.id)}, newWindow: true})`,
   );
   const other = await app.connectToFrame(`project=${third.id}`);
   try {

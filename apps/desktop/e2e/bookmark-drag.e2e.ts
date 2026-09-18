@@ -25,9 +25,9 @@ const bookmarks = () =>
 beforeAll(async () => {
   app = await launchApp();
   await app.waitFor(
-    "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='New project')",
+    "[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Create or import project')",
   );
-  await run("button('New project').click()");
+  await run("button('Create or import project').click()");
   await app.waitFor(
     "!!document.querySelector('[data-testid=project-name-input]')",
   );

@@ -63,18 +63,20 @@ let sharedId = "";
 
 describe("agent tool access", () => {
   it("boots, creates a project, an authorized 'fake' connection with a probed roster", async () => {
-    await runWait(`return !!byText('button', 'New project');`, {
+    await runWait(`return !!byText('button', 'Create or import project');`, {
       timeoutMs: 120_000,
       label: "onboarding",
     });
-    await run(`byText('button', 'New project').click(); return true;`);
+    await run(
+      `byText('button', 'Create or import project').click(); return true;`,
+    );
     await runWait(
       `const input = $('[data-testid="project-name-input"]');
        if (!input) return false; setReactValue(input, 'policy-e2e'); return true;`,
       { label: "project name input" },
     );
     await runWait(
-      `const create = byText('button', 'Create');
+      `const create = $('[data-testid="project-submit"]');
        if (!create || create.disabled) return false; create.click(); return true;`,
       { label: "create project" },
     );

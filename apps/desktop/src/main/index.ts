@@ -21,6 +21,10 @@ import { macApplicationMenu } from "./app-menu.js";
 import { registerBrowserSupport } from "./browser.js";
 import { toPublicConnection } from "./connections-store.js";
 import { ConnectorsService } from "./connectors.js";
+import {
+  externalBrowserUrl,
+  registerDefaultBrowser,
+} from "./default-browser.js";
 import { DesktopWorkspaces } from "./desktop-workspaces.js";
 import {
   desktopApplicationName,
@@ -108,8 +112,7 @@ app.on("second-instance", (_event, argv) => {
     window.focus();
   }
   // Windows/Linux deliver a protocol URL as an argv of the second launch.
-  const link = argv.find((arg) => arg.startsWith("catamorphic://"));
-  if (link) deliverConnectLink(link);
+  for (const link of argv) deliverExternalLink(link);
 });
 
 // `catamorphic://connect?…` links (ADR 0055): what an invite hands a member.
@@ -118,8 +121,49 @@ app.on("second-instance", (_event, argv) => {
 if (!e2eDataDir) app.setAsDefaultProtocolClient("catamorphic");
 app.on("open-url", (event, url) => {
   event.preventDefault();
-  deliverConnectLink(url);
+  deliverExternalLink(url);
 });
+const pendingBrowserUrls = process.argv.flatMap((arg) => {
+  const url = externalBrowserUrl(arg);
+  return url ? [url] : [];
+});
+let pendingBrowserWindow: BrowserWindow | null = null;
+function browserLinkWindow(): BrowserWindow | undefined {
+  const windows = BrowserWindow.getAllWindows().filter(
+    (window) => !desktopWorkspaces?.isDock(window),
+  );
+  return windows.find((window) => window.isFocused()) ?? windows[0];
+}
+function deliverExternalLink(raw: string): void {
+  const url = externalBrowserUrl(raw);
+  if (!url) {
+    deliverConnectLink(raw);
+    return;
+  }
+  pendingBrowserUrls.push(url);
+  notifyBrowserLinks();
+}
+function notifyBrowserLinks(): void {
+  if (!pendingBrowserUrls.length) return;
+  if (!pendingBrowserWindow || pendingBrowserWindow.isDestroyed())
+    pendingBrowserWindow = browserLinkWindow() ?? null;
+  const window = pendingBrowserWindow;
+  if (!window) return;
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+  window.webContents.send("catamorphic:pending-browser-urls");
+}
+ipcMain.handle("catamorphic:browser-take-pending-urls", (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  if (!window || event.senderFrame !== event.sender.mainFrame) return [];
+  if (!pendingBrowserWindow || pendingBrowserWindow.isDestroyed())
+    pendingBrowserWindow = browserLinkWindow() ?? null;
+  if (window !== pendingBrowserWindow) return [];
+  pendingBrowserWindow = null;
+  return pendingBrowserUrls.splice(0);
+});
+registerDefaultBrowser();
 let pendingConnectLink: string | null =
   process.argv.find((arg) => arg.startsWith("catamorphic://")) ?? null;
 function deliverConnectLink(url: string): void {
@@ -288,6 +332,7 @@ function createWindow(
   // launch from the link) is delivered once the renderer is up.
   window.webContents.once("did-finish-load", () => {
     if (pendingConnectLink) deliverConnectLink(pendingConnectLink);
+    notifyBrowserLinks();
   });
   window.once("ready-to-show", () => {
     if (dock) window.showInactive();
