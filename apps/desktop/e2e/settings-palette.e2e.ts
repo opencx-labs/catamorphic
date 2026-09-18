@@ -57,17 +57,17 @@ afterAll(async () => {
 });
 it("finds a setting in ordinary search and opens its control", async () => {
   await open();
-  await type("tab frame");
-  await wait(`return rows()[0]?.textContent.includes('Tab frame')`);
+  await type("framed content");
+  await wait(`return rows()[0]?.textContent.includes('Framed content')`);
   await run(`key('Enter')`);
-  await destination("tabFrame");
+  await destination("contentFrame");
   expect(
     await app.eval(
-      `(()=>{const row=document.querySelector('[data-setting-id="tabFrame"]');const a=row.getBoundingClientRect(), text=row.querySelector('label').getBoundingClientRect(), control=row.querySelector('input').getBoundingClientRect();return {left:text.left-a.left,right:a.right-control.right,top:text.top-a.top}})()`,
+      `(()=>{const row=document.querySelector('[data-setting-id="contentFrame"]');const a=row.getBoundingClientRect(), text=row.querySelector('label').getBoundingClientRect(), control=row.querySelector('input').getBoundingClientRect();return {left:text.left-a.left,right:a.right-control.right,top:text.top-a.top}})()`,
     ),
   ).toMatchObject({ left: 8, right: 8 });
   expect(await app.eval(`document.activeElement?.getAttribute('name')`)).toBe(
-    "tabFrame",
+    "contentFrame",
   );
 });
 it("settings Space scopes search and reuses Settings for advanced colors", async () => {
@@ -103,10 +103,7 @@ it("settings Space scopes search and reuses Settings for advanced colors", async
   ).toBe("Appearance");
   await app.screenshot("/tmp/palette-settings-destination.png");
 });
-it("clears shortcut filters and supports repeated destinations and leaving the mode", async () => {
-  await app.eval(
-    `(()=>{${setReactValueJs};setReactValue(document.querySelector('[aria-label="Search keyboard shortcuts"]'),'no-match-at-all')})()`,
-  );
+it("supports repeated destinations and leaving the mode", async () => {
   await open();
   await type("settings");
   await run(`key('Tab')`);
@@ -117,16 +114,11 @@ it("clears shortcut filters and supports repeated destinations and leaving the m
   await wait(`return rows()[0]?.textContent.includes('New tab shortcut')`);
   await run(`key('Enter')`);
   await destination("shortcut.new-tab");
-  expect(
-    await app.eval(
-      `document.querySelector('[aria-label="Search keyboard shortcuts"]').value`,
-    ),
-  ).toBe("");
   await open();
-  await type("tab frame");
-  await wait(`return rows()[0]?.textContent.includes('Tab frame')`);
+  await type("framed content");
+  await wait(`return rows()[0]?.textContent.includes('Framed content')`);
   await run(`key('Enter')`);
-  await destination("tabFrame");
+  await destination("contentFrame");
 });
 it("offers the actual desktop host skill and lets a project agent edit its scoped JSON file", async () => {
   await open();
@@ -144,17 +136,17 @@ it("offers the actual desktop host skill and lets a project agent edit its scope
   await type("agent");
   await run(`key(' ')`);
   await wait(`return input().placeholder==='Message the agent…'`);
-  await type("E2E enable personal tab frame");
+  await type("E2E enable personal framed content");
   await wait(
-    `return rows()[0]?.textContent.includes('Ask agent') && !rows()[0]?.textContent.includes('E2E enable personal tab frame')`,
+    `return rows()[0]?.textContent.includes('Ask agent') && !rows()[0]?.textContent.includes('E2E enable personal framed content')`,
   );
   await run(`key('Enter')`);
   await app.waitFor(
-    `document.body?.innerText.includes('Personal tab frame updated by editing its JSON file.')`,
+    `document.body?.innerText.includes('Personal framed content updated by editing its JSON file.')`,
   );
   expect(
     await app.eval(
-      `window.catamorphicDesktop.getSettings({projectId:${JSON.stringify(projectId)}}).then(s=>({value:s.values.tabFrame,source:s.sources.tabFrame}))`,
+      `window.catamorphicDesktop.getSettings({projectId:${JSON.stringify(projectId)}}).then(s=>({value:s.values.contentFrame,source:s.sources.contentFrame}))`,
     ),
   ).toEqual({ value: true, source: "personal" });
   expect(app.getRendererErrors()).toEqual([]);
@@ -162,31 +154,31 @@ it("offers the actual desktop host skill and lets a project agent edit its scope
 
 it("keeps valid file settings active through invalid edits and reports recovery in the UI", async () => {
   await open();
-  await type("tab frame");
-  await wait(`return rows()[0]?.textContent.includes('Tab frame')`);
+  await type("framed content");
+  await wait(`return rows()[0]?.textContent.includes('Framed content')`);
   await run(`key('Enter')`);
-  await destination("tabFrame");
+  await destination("contentFrame");
   await app.waitFor(
-    `(()=>{const input=document.querySelector('[name="tabFrame"]');const rect=input.getBoundingClientRect();return document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2)===input})()`,
+    `(()=>{const input=document.querySelector('[name="contentFrame"]');const rect=input.getBoundingClientRect();return document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2)===input})()`,
   );
   await app.waitFor(
     `!document.getAnimations().some(animation=>animation.playState==='running')`,
   );
   await app.screenshot("/tmp/settings-files-spacing-dark.png");
-  fs.writeFileSync(personalFile, '{"tabFrame":');
+  fs.writeFileSync(personalFile, '{"contentFrame":');
   await app.waitFor(
     `document.querySelector('[data-config-errors]')?.textContent.includes(${JSON.stringify(personalFile)})`,
   );
   expect(
     await app.eval(
-      `window.catamorphicDesktop.getSettings({projectId:${JSON.stringify(projectId)}}).then(s=>s.values.tabFrame)`,
+      `window.catamorphicDesktop.getSettings({projectId:${JSON.stringify(projectId)}}).then(s=>s.values.contentFrame)`,
     ),
   ).toBe(true);
   fs.writeFileSync(personalFile, "{}");
   await app.waitFor(`!document.querySelector('[data-config-errors]')`);
   expect(
     await app.eval(
-      `window.catamorphicDesktop.getSettings({projectId:${JSON.stringify(projectId)}}).then(s=>s.values.tabFrame)`,
+      `window.catamorphicDesktop.getSettings({projectId:${JSON.stringify(projectId)}}).then(s=>s.values.contentFrame)`,
     ),
   ).toBe(false);
   await app.eval(

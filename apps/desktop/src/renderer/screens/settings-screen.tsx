@@ -12,7 +12,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ACTION_LABELS, KEYBINDING_ACTIONS } from "../../shared/actions.js";
 import { bindingFromEvent, parseBinding } from "../../shared/keybindings.js";
 import {
@@ -34,10 +34,12 @@ import {
   isValidFontStack,
 } from "../../shared/theme-fonts.js";
 import { TOKEN_LABELS } from "../../shared/theme-tokens.js";
-import { ActionSearchInput } from "../components/action-search-input.js";
 import { BrowserImport } from "../components/browser-import.js";
+import { Collapsible } from "../components/collapsible.js";
 import { DefaultBrowserButton } from "../components/default-browser.js";
+import { Modal } from "../components/modal.js";
 import { PendingButton } from "../components/pending-button.js";
+import { ShortcutHint } from "../components/shortcut-hint.js";
 import {
   type AgentHarness,
   type AgentsData,
@@ -55,26 +57,27 @@ import {
   useKeybindings,
 } from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
+import { EASE_STANDARD, motionMs } from "../lib/motion.js";
 import { useTerminalAppearance } from "../lib/terminal-appearance.js";
 import { useAppPreferences } from "../lib/use-app-preferences.js";
 
 export function SettingsScreen({
   projectId,
   destination,
-  onClose,
+  onSearch,
   onAddAgent,
   onConfigureAgent,
   onManageConnectors,
 }: {
   projectId?: string;
   destination?: SettingsDestination;
-  onClose: () => void;
+  /** Opens the palette's settings scope: the one search surface (ADR 0123). */
+  onSearch: () => void;
   onAddAgent: () => void;
   /** Open the configure-agent modal (ADR 0056) for one roster agent. */
   onConfigureAgent: (agentId: string) => void;
   onManageConnectors: () => void;
 }) {
-  const [query, setQuery] = useState("");
   const [selected, setSelected] = useState("agents");
   const scrollRef = useRef<HTMLDivElement>(null);
   const navigationFrame = useRef(0);
@@ -92,7 +95,6 @@ export function SettingsScreen({
     const entry = SETTINGS_BY_ID.get(destination.id);
     const root = scrollRef.current;
     if (!entry || !root) return;
-    setQuery("");
     setSelected(entry.category);
     let highlighted: HTMLElement | null = null;
     let frame = 0;
@@ -165,12 +167,18 @@ export function SettingsScreen({
       id: "agents",
       label: "Agents",
       keywords: "models authentication accounts sign in",
-      content: (
-        <AgentsSection
-          onAddAgent={onAddAgent}
-          onConfigureAgent={onConfigureAgent}
-        />
+      action: (
+        <button
+          type="button"
+          onClick={onAddAgent}
+          data-testid="settings-add-agent"
+          className="button-primary button-sm"
+        >
+          <Plus className="size-3" />
+          Add agent
+        </button>
       ),
+      content: <AgentsSection onConfigureAgent={onConfigureAgent} />,
     },
     {
       id: "connections",
@@ -197,7 +205,7 @@ export function SettingsScreen({
         "layout sidebar tabs header address bookmarks links preview floating border frame default browser http https",
       content: (
         <>
-          <section className="mt-4 rounded-lg border border-border bg-bg-raised/30 p-4">
+          <section className="settings-card mt-4">
             <h2 className="text-sm font-semibold text-fg">Default browser</h2>
             <p className="mt-1 text-xs leading-5 text-fg-muted">
               Open links from other apps in Work.
@@ -210,7 +218,7 @@ export function SettingsScreen({
               "dockMultiProject",
               "dockDetached",
               "dockSide",
-              "dockAlignment",
+              "dockPlacement",
             ]}
             title="Chat dock"
           />
@@ -239,7 +247,7 @@ export function SettingsScreen({
       id: "shortcuts",
       label: "Keyboard shortcuts",
       keywords: "keys bindings hotkeys",
-      content: <ShortcutsSection destination={destination} />,
+      content: <ShortcutsSection />,
     },
     {
       id: "notifications",
@@ -254,17 +262,10 @@ export function SettingsScreen({
       content: <ImportSection />,
     },
   ];
-  const words = query.toLowerCase().trim().split(/\s+/);
-  const visible = sections.filter((section) =>
-    words.every((word) =>
-      `${section.label} ${section.keywords}`.toLowerCase().includes(word),
-    ),
-  );
   const navigateTo = (id: string) => {
     cancelAnimationFrame(navigationFrame.current);
     navigationMotion.current?.cancel();
     navigationScrollTop.current = null;
-    setQuery("");
     setSelected(id);
     navigationFrame.current = requestAnimationFrame(() => {
       const root = scrollRef.current;
@@ -298,7 +299,7 @@ export function SettingsScreen({
           },
           { opacity: 1, transform: "translateY(0)" },
         ],
-        { duration: 200, easing: "cubic-bezier(0.2, 0, 0, 1)" },
+        { duration: motionMs(200), easing: EASE_STANDARD },
       );
     });
   };
@@ -315,111 +316,102 @@ export function SettingsScreen({
             Make this workspace your own.
           </p>
         </div>
-        <div className="relative order-3 w-full @xl/settings:order-none @xl/settings:w-64">
-          <Search className="pointer-events-none absolute top-2 left-2.5 size-4 text-fg-muted" />
-          <ActionSearchInput
-            action="search-settings"
+        <ShortcutHint label="Search settings">
+          <button
+            type="button"
             aria-label="Search settings"
-            type="search"
-            value={query}
-            onChange={(event) => {
-              cancelAnimationFrame(navigationFrame.current);
-              navigationMotion.current?.cancel();
-              navigationScrollTop.current = null;
-              setQuery(event.target.value);
-              scrollRef.current?.scrollTo({ top: 0 });
-            }}
-            placeholder="Search settings…"
-            className="field h-8 w-full rounded-lg pr-3 pl-8 text-sm"
-          />
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="grid size-8 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-overlay hover:text-fg"
-          aria-label="Close settings"
-        >
-          <X className="size-4" />
-        </button>
+            onClick={onSearch}
+            className="grid size-8 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+          >
+            <Search className="size-4" />
+          </button>
+        </ShortcutHint>
       </header>
       <ConfigurationErrors projectId={projectId} />
-      <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col @2xl/settings:flex-row">
-        <label className="flex shrink-0 items-center gap-3 px-6 pb-4 text-sm text-fg-muted @2xl/settings:hidden">
-          Category
-          <select
-            aria-label="Settings category"
-            value={selected}
-            onChange={(event) => navigateTo(event.target.value)}
-            className="field h-8 min-w-0 flex-1 rounded-lg px-2 text-fg"
+      <label className="mx-auto flex w-full max-w-5xl shrink-0 items-center gap-3 px-6 pb-4 text-sm text-fg-muted @2xl/settings:hidden">
+        Category
+        <select
+          aria-label="Settings category"
+          value={selected}
+          onChange={(event) => navigateTo(event.target.value)}
+          className="field h-8 min-w-0 flex-1 rounded-lg px-2 text-fg"
+        >
+          {sections.map((section) => (
+            <option key={section.id} value={section.id}>
+              {section.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div
+        ref={scrollRef}
+        data-settings-scroll
+        onScroll={() => {
+          const root = scrollRef.current;
+          if (!root) return;
+          const requestedTop = navigationScrollTop.current;
+          if (requestedTop === root.scrollTop) return;
+          navigationScrollTop.current = null;
+          // The final category is current as soon as it is fully in view:
+          // it may be too short to ever reach the top edge, and a smooth
+          // wheel scroll settles a few fractional pixels short of the end.
+          const lastSection = sections.at(-1);
+          const lastElement = lastSection
+            ? root.querySelector(`#settings-${lastSection.id}`)
+            : null;
+          if (
+            lastSection &&
+            lastElement &&
+            root.scrollTop > 0 &&
+            lastElement.getBoundingClientRect().bottom <=
+              root.getBoundingClientRect().bottom + 2
+          ) {
+            setSelected(lastSection.id);
+            return;
+          }
+          const top = root.getBoundingClientRect().top;
+          const current = [...sections].reverse().find((section) => {
+            const element = root.querySelector(`#settings-${section.id}`);
+            return element && element.getBoundingClientRect().top <= top + 24;
+          });
+          if (current) setSelected(current.id);
+        }}
+        className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
+      >
+        <div className="mx-auto flex w-full max-w-5xl items-start">
+          <nav
+            aria-label="Settings categories"
+            className="sticky top-0 hidden w-48 shrink-0 flex-col gap-1 px-6 pr-3 pb-3 @2xl/settings:flex"
           >
             {sections.map((section) => (
-              <option key={section.id} value={section.id}>
+              <button
+                key={section.id}
+                type="button"
+                aria-current={selected === section.id ? "location" : undefined}
+                onClick={() => navigateTo(section.id)}
+                className={`shrink-0 cursor-pointer whitespace-nowrap rounded-lg px-3 py-2 text-left text-sm transition-colors duration-150 ${selected === section.id ? "bg-bg-overlay font-medium text-fg" : "text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"}`}
+              >
                 {section.label}
-              </option>
+              </button>
             ))}
-          </select>
-        </label>
-        <nav
-          aria-label="Settings categories"
-          className="hidden w-48 shrink-0 flex-col gap-1 overflow-y-auto px-6 pr-3 pb-3 @2xl/settings:flex"
-        >
-          {sections.map((section) => (
-            <button
-              key={section.id}
-              type="button"
-              aria-current={
-                !query && selected === section.id ? "location" : undefined
-              }
-              onClick={() => navigateTo(section.id)}
-              className={`shrink-0 cursor-pointer whitespace-nowrap rounded-lg px-3 py-2 text-left text-sm transition-colors duration-150 ${!query && selected === section.id ? "bg-bg-overlay font-medium text-fg" : "text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"}`}
-            >
-              {section.label}
-            </button>
-          ))}
-        </nav>
-        <div
-          ref={scrollRef}
-          data-settings-scroll
-          onScroll={() => {
-            const root = scrollRef.current;
-            if (!root || query) return;
-            const requestedTop = navigationScrollTop.current;
-            if (requestedTop === root.scrollTop) return;
-            navigationScrollTop.current = null;
-            const lastSection = sections.at(-1);
-            if (
-              lastSection &&
-              root.scrollTop > 0 &&
-              root.scrollHeight - root.clientHeight - root.scrollTop <= 1
-            ) {
-              setSelected(lastSection.id);
-              return;
-            }
-            const top = root.getBoundingClientRect().top;
-            const current = [...sections].reverse().find((section) => {
-              const element = root.querySelector(`#settings-${section.id}`);
-              return element && element.getBoundingClientRect().top <= top + 24;
-            });
-            if (current) setSelected(current.id);
-          }}
-          className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-10"
-        >
-          {visible.length === 0 && (
-            <p role="status" className="py-8 text-sm text-fg-muted">
-              No settings match “{query}”. Try a category such as appearance,
-              macros or shortcuts.
-            </p>
-          )}
-          {sections.map((section) => (
-            <div
-              key={section.id}
-              id={`settings-${section.id}`}
-              hidden={!visible.includes(section)}
-              className="settings-category mb-8 max-w-2xl scroll-mt-2"
-            >
-              {section.content}
-            </div>
-          ))}
+          </nav>
+          <div className="min-w-0 flex-1 px-6 pb-10">
+            {sections.map((section) => (
+              <div
+                key={section.id}
+                id={`settings-${section.id}`}
+                className="settings-category mb-10 max-w-2xl scroll-mt-2"
+              >
+                <div className="mb-3 flex h-7 items-center justify-between gap-3">
+                  <h2 className="text-base font-semibold text-fg">
+                    {section.label}
+                  </h2>
+                  {"action" in section ? section.action : null}
+                </div>
+                {section.content}
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>
@@ -445,10 +437,8 @@ interface AgentLoginUi {
  * in, and removes the ones that exist.
  */
 function AgentsSection({
-  onAddAgent,
   onConfigureAgent,
 }: {
-  onAddAgent: () => void;
   onConfigureAgent: (agentId: string) => void;
 }) {
   const [data, setData] = useState<AgentsData | null>(null);
@@ -526,20 +516,8 @@ function AgentsSection({
   };
 
   return (
-    <section>
-      <div className="mb-1 flex items-center justify-between">
-        <h2 className="text-sm font-semibold">Agents</h2>
-        <button
-          type="button"
-          onClick={onAddAgent}
-          data-testid="settings-add-agent"
-          className="flex cursor-pointer items-center gap-1 text-xs text-fg-muted hover:text-fg"
-        >
-          <Plus className="size-3" />
-          Add agent
-        </button>
-      </div>
-      <p className="mb-3 text-xs text-fg-muted">
+    <section className="settings-card" data-setting-id="agents">
+      <p className="mb-3 text-xs leading-5 text-fg-muted">
         Agents belong to the current profile. Add one with the setup wizard; set
         the default here and switch per chat from the command palette.
       </p>
@@ -571,7 +549,7 @@ function AgentsSection({
             return (
               <div
                 key={agent.id}
-                className="group rounded-lg border border-border bg-bg-raised/40 px-3 py-2"
+                className="group rounded-md px-2 py-2 transition-colors duration-150 hover:bg-bg-overlay/60"
               >
                 <div className="flex items-center gap-1">
                   <span className="min-w-0 flex-1 truncate text-[13px]">
@@ -581,7 +559,7 @@ function AgentsSection({
                     type="button"
                     onClick={() => void desktopApi.agentsSetDefault(agent.id)}
                     className={`grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg ${
-                      isDefault ? "" : "opacity-0 group-hover:opacity-100"
+                      isDefault ? "" : "row-reveal"
                     }`}
                     aria-label={
                       isDefault
@@ -597,7 +575,7 @@ function AgentsSection({
                   <button
                     type="button"
                     onClick={() => onConfigureAgent(agent.id)}
-                    className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint opacity-0 transition-colors duration-150 hover:text-fg group-hover:opacity-100"
+                    className="row-reveal grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors hover:text-fg"
                     aria-label={`Edit ${agent.name}`}
                     title="Edit"
                   >
@@ -608,7 +586,7 @@ function AgentsSection({
                     onClick={() =>
                       void desktopApi.agentsRemove(agent.id).then(refresh)
                     }
-                    className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint opacity-0 transition-colors duration-150 hover:text-danger group-hover:opacity-100"
+                    className="row-reveal grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors hover:text-danger"
                     aria-label={`Remove ${agent.name}`}
                     title="Remove"
                   >
@@ -723,42 +701,46 @@ function ConnectorsSection({ onManage }: { onManage: () => void }) {
     return desktopApi.onConnectionsChanged(setConnections);
   }, []);
 
+  const githubStatusText = prefs.githubCliEnabled
+    ? githubStatus?.login
+      ? `Connected as ${githubStatus.login}`
+      : "Connected"
+    : "Not connected";
+  const connectorsStatusText =
+    connections.length === 0
+      ? "None installed"
+      : `${connections.length} installed`;
   return (
-    <section className="mt-8">
-      <div
-        className="mb-8 rounded-lg border border-border bg-bg-raised p-4"
+    <>
+      <section
+        className="settings-card mt-8"
+        data-setting-id="github-cli"
         data-testid="github-cli-connection"
       >
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold">GitHub CLI</h2>
-            <p className="mt-1 text-xs text-fg-muted">
-              Optional connection for pull requests, reviews, and repository
-              access.
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold text-fg">GitHub CLI</h2>
+            <p className="mt-1 text-xs leading-5 text-fg-muted">
+              Pull requests and reviews through the account you already use with
+              GitHub CLI.
             </p>
           </div>
-          <span className="text-xs text-fg-muted">
-            {prefs.githubCliEnabled ? "Enabled" : "Not connected"}
+          <span className="shrink-0 pt-0.5 text-xs text-fg-muted">
+            {githubStatusText}
           </span>
         </div>
-        <p className="mt-3 text-xs text-fg-muted">
-          Uses your existing GitHub CLI account. Disconnecting here keeps you
-          signed in to GitHub CLI.
-        </p>
-        {githubStatus?.login && (
-          <p className="mt-2 text-xs">Verified account: {githubStatus.login}</p>
-        )}
         {(githubStatus?.error || preferenceError) && (
           <p role="alert" className="mt-2 text-xs text-danger">
             {githubStatus?.error || preferenceError}
           </p>
         )}
-        <div className="mt-3 flex gap-3">
+        <div className="mt-3 flex items-center gap-2">
           <button
             type="button"
             disabled={checkingGithub}
+            data-setting-control
             onClick={() => void checkGithub(!prefs.githubCliEnabled)}
-            className="rounded-md border border-border px-3 py-1.5 text-xs hover:bg-bg-overlay disabled:opacity-50"
+            className="flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border px-3 text-[13px] text-fg transition-colors duration-150 hover:bg-bg-overlay disabled:cursor-not-allowed disabled:opacity-50"
           >
             {checkingGithub
               ? "Checking…"
@@ -771,36 +753,40 @@ function ConnectorsSection({ onManage }: { onManage: () => void }) {
               type="button"
               disabled={checkingGithub}
               onClick={() => void update({ githubCliEnabled: false })}
-              className="rounded-md px-3 py-1.5 text-xs text-fg-muted hover:bg-bg-overlay"
+              className="flex h-8 cursor-pointer items-center rounded-md px-3 text-[13px] text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
             >
               Disconnect
             </button>
           )}
         </div>
-      </div>
-      <h2 className="mb-1 text-sm font-semibold">Connectors</h2>
-      <p className="mb-3 text-xs text-fg-muted">
-        Tools your agents can use — MCP servers and Claude Code plugins.
-        Installed connectors work with every agent; assign them per agent when
-        editing it.
-      </p>
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={onManage}
-          className="flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border px-3 text-[13px] text-fg hover:bg-bg-overlay"
-          data-testid="manage-connectors"
-        >
-          <Plug className="size-3.5" />
-          Manage connectors
-        </button>
-        <span className="text-xs text-fg-faint">
-          {connections.length === 0
-            ? "None installed yet"
-            : `${connections.length} connection${connections.length === 1 ? "" : "s"}`}
-        </span>
-      </div>
-    </section>
+      </section>
+      <section className="settings-card mt-4" data-setting-id="connectors">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold text-fg">Connectors</h2>
+            <p className="mt-1 text-xs leading-5 text-fg-muted">
+              MCP servers and Claude Code plugins every agent can use. Assign
+              them per agent when editing it.
+            </p>
+          </div>
+          <span className="shrink-0 pt-0.5 text-xs text-fg-muted">
+            {connectorsStatusText}
+          </span>
+        </div>
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onManage}
+            data-setting-control
+            className="flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border px-3 text-[13px] text-fg transition-colors duration-150 hover:bg-bg-overlay"
+            data-testid="manage-connectors"
+          >
+            <Plug className="size-3.5" />
+            Manage connectors
+          </button>
+        </div>
+      </section>
+    </>
   );
 }
 
@@ -818,7 +804,7 @@ function NotificationsSection() {
   return (
     <LayoutSection
       keys={["notificationSounds", "desktopNotifications"]}
-      title="Notifications"
+      title="Agent activity"
     />
   );
 }
@@ -827,11 +813,10 @@ function TerminalSection() {
   const { appearance, source, loading, error, reload } =
     useTerminalAppearance();
   return (
-    <section className="mt-8 flex flex-col gap-3">
-      <LayoutSection
-        keys={["codeTheme", "terminalAppearance"]}
-        title="Code and terminal"
-      />
+    <LayoutSection
+      keys={["codeTheme", "terminalAppearance"]}
+      title="Code and terminal"
+    >
       {source === "ghostty" && (
         <>
           <p className="text-xs text-fg-muted" aria-live="polite">
@@ -864,7 +849,7 @@ function TerminalSection() {
         shell and its startup files. Your prompt, aliases and shell tools keep
         their existing configuration.
       </p>
-    </section>
+    </LayoutSection>
   );
 }
 
@@ -872,10 +857,13 @@ function LayoutSection({
   projectId,
   keys = WORKSPACE_SETTING_KEYS,
   title = "Workspace layout",
+  children,
 }: {
   projectId?: string;
   keys?: SettingKey[];
   title?: string;
+  /** Extra rows that belong to the same card, after the settings. */
+  children?: ReactNode;
 }) {
   const [scope, setScope] = useState<SettingsScope>("profile");
   const [snapshot, setSnapshot] = useState<SettingsSnapshot | null>(null);
@@ -924,7 +912,7 @@ function LayoutSection({
   };
   return (
     <section
-      className="mt-8 flex flex-col gap-3"
+      className="settings-card mt-4 flex flex-col gap-3"
       data-settings-layout={title === "Workspace layout" ? "" : undefined}
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1083,17 +1071,25 @@ function LayoutSection({
             </div>
           );
         })}
+      {children}
     </section>
   );
 }
 
 function MacrosSection() {
   const [prefs, setPrefs] = useState<AppPrefs | null>(null);
+  // The draft outlives the dialog so its fields hold through the exit.
   const [draft, setDraft] = useState<TerminalMacro | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [recording, setRecording] = useState(false);
   const bindings = useKeybindings();
+  const closeEditor = () => {
+    setEditorOpen(false);
+    setRecording(false);
+    setError("");
+  };
   useEffect(() => {
     void desktopApi.getPrefs().then(setPrefs);
     return desktopApi.onPrefsChanged(setPrefs);
@@ -1140,7 +1136,7 @@ function MacrosSection() {
     setError("");
     try {
       setPrefs(await desktopApi.setPrefs({ terminalMacros: next }));
-      setDraft(null);
+      setEditorOpen(false);
       setRecording(false);
     } catch {
       setError("Could not save your macros. Please try again.");
@@ -1151,7 +1147,7 @@ function MacrosSection() {
   return (
     <section
       data-setting-id="terminalMacros"
-      className="mt-8 flex flex-col gap-3"
+      className="settings-card mt-4 flex flex-col gap-3"
     >
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -1188,10 +1184,11 @@ function MacrosSection() {
               command: "",
               shortcut: "",
             });
+            setEditorOpen(true);
             setError("");
             setRecording(false);
           }}
-          className="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-sm hover:bg-bg-overlay disabled:cursor-default disabled:opacity-50"
+          className="button-primary button-sm"
         >
           <Plus className="size-3.5" />
           Add macro
@@ -1201,7 +1198,7 @@ function MacrosSection() {
         Save commands you use often. Run a macro from the command palette, or
         assign a shortcut to toggle its floating terminal.
       </p>
-      {!macros.length && !draft && (
+      {!macros.length && (
         <div className="flex items-start gap-3 rounded-xl bg-bg-inset/60 p-4">
           <TerminalSquare className="mt-0.5 size-5 shrink-0 text-fg-muted" />
           <div>
@@ -1235,6 +1232,7 @@ function MacrosSection() {
             disabled={saving}
             onClick={() => {
               setDraft(macro);
+              setEditorOpen(true);
               setError("");
               setRecording(false);
             }}
@@ -1255,112 +1253,122 @@ function MacrosSection() {
           </button>
         </div>
       ))}
-      {draft && (
-        <form
-          data-macro-editor
-          className="flex min-w-0 flex-col gap-3 rounded-xl bg-bg-inset/60 p-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!draft.name.trim() || !draft.command.trim()) return;
-            void save([
-              ...macros.filter((macro) => macro.id !== draft.id),
-              draft,
-            ]);
-          }}
-        >
-          <label className="flex flex-col gap-1.5 text-sm">
-            Name
-            <input
-              name="macroName"
-              required
-              value={draft.name}
-              onChange={(event) =>
-                setDraft(
-                  (current) =>
-                    current && { ...current, name: event.target.value },
-                )
-              }
-              placeholder="My terminal tool"
-              className="field h-8 rounded-md px-2"
-            />
-          </label>
-          <label className="flex flex-col gap-1.5 text-sm">
-            Command
-            <textarea
-              name="macroCommand"
-              required
-              rows={3}
-              value={draft.command}
-              onChange={(event) =>
-                setDraft(
-                  (current) =>
-                    current && { ...current, command: event.target.value },
-                )
-              }
-              placeholder="Enter a shell command"
-              className="field min-h-20 resize-y rounded-md px-2 py-2 font-mono text-sm"
-            />
-          </label>
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="mr-auto">Shortcut</span>
-            <button
-              type="button"
-              aria-label="Record macro shortcut"
-              aria-pressed={recording}
-              onBlur={() => setRecording(false)}
-              onClick={() => setRecording(!recording)}
-              className="field h-8 cursor-pointer rounded-md px-3"
-            >
-              {recording
-                ? "Press keys…"
-                : formatBinding(draft.shortcut) || "Record shortcut"}
-            </button>
-            {draft.shortcut && (
+      <Modal open={editorOpen} onClose={closeEditor} width={480}>
+        {draft && (
+          <form
+            data-macro-editor
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!draft.name.trim() || !draft.command.trim()) return;
+              void save([
+                ...macros.filter((macro) => macro.id !== draft.id),
+                draft,
+              ]);
+            }}
+          >
+            <div className="flex min-w-0 flex-col gap-3 px-5 pt-5">
+              <h2 className="text-sm font-semibold text-fg">
+                {macros.some((macro) => macro.id === draft.id)
+                  ? "Edit macro"
+                  : "Add macro"}
+              </h2>
+              <label className="flex flex-col gap-1.5 text-sm">
+                Name
+                <input
+                  name="macroName"
+                  required
+                  value={draft.name}
+                  onChange={(event) =>
+                    setDraft(
+                      (current) =>
+                        current && { ...current, name: event.target.value },
+                    )
+                  }
+                  placeholder="My terminal tool"
+                  className="field h-8 rounded-md px-2"
+                />
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm">
+                Command
+                <textarea
+                  name="macroCommand"
+                  required
+                  rows={3}
+                  value={draft.command}
+                  onChange={(event) =>
+                    setDraft(
+                      (current) =>
+                        current && { ...current, command: event.target.value },
+                    )
+                  }
+                  placeholder="Enter a shell command"
+                  className="field min-h-20 resize-y rounded-md px-2 py-2 font-mono text-sm"
+                />
+              </label>
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="mr-auto">Shortcut</span>
+                <button
+                  type="button"
+                  aria-label="Record macro shortcut"
+                  aria-pressed={recording}
+                  data-keyboard-capture={recording || undefined}
+                  onBlur={() => setRecording(false)}
+                  onClick={() => setRecording(!recording)}
+                  className="field h-8 cursor-pointer rounded-md px-3"
+                >
+                  {recording
+                    ? "Press keys…"
+                    : formatBinding(draft.shortcut) || "Record shortcut"}
+                </button>
+                {draft.shortcut && (
+                  <button
+                    type="button"
+                    onClick={() => setDraft({ ...draft, shortcut: "" })}
+                    className="text-xs text-fg-muted hover:text-fg"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              <p className="text-xs text-fg-muted">
+                Runs in the current project folder using your shell setup.
+                Saving does not run the command. Reopening a running macro keeps
+                the same terminal.
+              </p>
+              {error && editorOpen && (
+                <p role="alert" className="text-sm text-danger">
+                  {error}
+                </p>
+              )}
+            </div>
+            <footer className="mt-5 flex justify-end gap-2 border-t border-border px-5 py-3.5">
               <button
                 type="button"
-                onClick={() => setDraft({ ...draft, shortcut: "" })}
-                className="text-xs text-fg-muted hover:text-fg"
+                disabled={saving}
+                onClick={closeEditor}
+                className="button-ghost"
               >
-                Clear
+                Cancel
               </button>
-            )}
-          </div>
-          <p className="text-xs text-fg-muted">
-            Runs in the current project folder using your shell setup. Saving
-            does not run the command. Reopening a running macro keeps the same
-            terminal.
-          </p>
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => {
-                setDraft(null);
-                setRecording(false);
-                setError("");
-              }}
-              className="h-8 cursor-pointer rounded-md px-3 text-sm hover:bg-bg-overlay disabled:cursor-default disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <PendingButton
-              pending={saving}
-              pendingLabel="Saving…"
-              type="submit"
-              disabled={
-                saving ||
-                recording ||
-                !draft.name.trim() ||
-                !draft.command.trim()
-              }
-              className="h-8 cursor-pointer rounded-md bg-accent px-3 text-sm font-medium text-accent-fg disabled:cursor-default disabled:opacity-50"
-            >
-              Save macro
-            </PendingButton>
-          </div>
-        </form>
-      )}
-      {error && (
+              <PendingButton
+                pending={saving}
+                pendingLabel="Saving…"
+                type="submit"
+                disabled={
+                  saving ||
+                  recording ||
+                  !draft.name.trim() ||
+                  !draft.command.trim()
+                }
+                className="button-primary"
+              >
+                Save macro
+              </PendingButton>
+            </footer>
+          </form>
+        )}
+      </Modal>
+      {error && !editorOpen && (
         <p role="alert" className="text-sm text-danger">
           {error}
         </p>
@@ -1453,8 +1461,9 @@ function ThemeSection({
   const systemSelected = theme.selection === "system";
 
   return (
-    <section className="mt-8" data-setting-id="theme.selection">
+    <section className="settings-card mt-4" data-setting-id="theme.selection">
       <div className="mb-3 flex items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold">Theme</h2>
         <label className="flex items-center gap-2 text-xs text-fg-muted">
           Apply to
           <select
@@ -1498,25 +1507,22 @@ function ThemeSection({
           {saveError}
         </p>
       )}
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-semibold">Theme</h2>
-        {overridden && (
-          <button
-            type="button"
-            onClick={() =>
-              void saveTheme({
-                fonts: config.fonts,
-                ...(config.selection ? { selection: config.selection } : {}),
-                overrides: {},
-              })
-            }
-            className="flex cursor-pointer items-center gap-1 text-xs text-fg-muted hover:text-fg"
-          >
-            <RotateCcw className="size-3" />
-            Clear color edits
-          </button>
-        )}
-      </div>
+      {overridden && (
+        <button
+          type="button"
+          onClick={() =>
+            void saveTheme({
+              fonts: config.fonts,
+              ...(config.selection ? { selection: config.selection } : {}),
+              overrides: {},
+            })
+          }
+          className="mb-3 flex cursor-pointer items-center gap-1 text-xs text-fg-muted hover:text-fg"
+        >
+          <RotateCcw className="size-3" />
+          Clear color edits
+        </button>
+      )}
 
       <button
         type="button"
@@ -1642,7 +1648,7 @@ function ThemeSection({
         {editing ? "Hide colors" : "Edit colors…"}
       </button>
 
-      {editing && (
+      <Collapsible open={editing}>
         <div className="mt-2 flex flex-col gap-1">
           {(Object.keys(TOKEN_LABELS) as ThemeToken[]).map((token) => (
             <div
@@ -1682,7 +1688,7 @@ function ThemeSection({
             </div>
           ))}
         </div>
-      )}
+      </Collapsible>
 
       <div className="mt-4 flex flex-col gap-2">
         <div className="flex items-center justify-between">
@@ -1784,9 +1790,19 @@ function SidebarSection() {
   }, []);
 
   return (
-    <section data-setting-id="sidebar" className="mt-8">
-      <h2 className="mb-1 text-sm font-semibold">Sidebar</h2>
-      <p className="text-xs text-fg-muted">
+    <section data-setting-id="sidebar" className="settings-card mt-4">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold">Sidebar</h2>
+        <button
+          type="button"
+          onClick={() => void desktopApi.sidebarConfigReset()}
+          className="flex cursor-pointer items-center gap-1 text-xs text-fg-muted hover:text-fg"
+        >
+          <RotateCcw className="size-3" />
+          Reset to default
+        </button>
+      </div>
+      <p className="mt-1 text-xs leading-5 text-fg-muted">
         The left sidebar's sections and items are defined in a JavaScript file.
         Edit it directly, or ask the assistant to change it for you (&ldquo;hide
         the workflows section&rdquo;, &ldquo;add a Docs section&rdquo;). Changes
@@ -1795,14 +1811,6 @@ function SidebarSection() {
       <p className="mt-2 text-xs text-fg-faint">
         <span className="break-all font-mono">{file}</span>
       </p>
-      <button
-        type="button"
-        onClick={() => void desktopApi.sidebarConfigReset()}
-        className="mt-3 flex cursor-pointer items-center gap-1 text-xs text-fg-muted hover:text-fg"
-      >
-        <RotateCcw className="size-3" />
-        Reset sidebar to default
-      </button>
     </section>
   );
 }
@@ -1812,16 +1820,8 @@ function SidebarSection() {
  * recording. Saves apply immediately (no Save button) — the main process
  * rewrites keybindings.json, which broadcasts back to every window.
  */
-function ShortcutsSection({
-  destination,
-}: {
-  destination?: SettingsDestination;
-}) {
+function ShortcutsSection() {
   const [prefs, setPrefs] = useState<AppPrefs | null>(null);
-  const [filter, setFilter] = useState("");
-  useEffect(() => {
-    if (destination?.id.startsWith("shortcut.")) setFilter("");
-  }, [destination]);
   useEffect(() => {
     void desktopApi.getPrefs().then(setPrefs);
     return desktopApi.onPrefsChanged(setPrefs);
@@ -1831,11 +1831,7 @@ function ShortcutsSection({
   const [file, setFile] = useState<string>("");
   const [notice, setNotice] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
-  const actions = KEYBINDING_ACTIONS.filter((action) =>
-    `${ACTION_LABELS[action]} ${bindings[action]}`
-      .toLowerCase()
-      .includes(filter.toLowerCase().trim()),
-  );
+  const actions = KEYBINDING_ACTIONS;
   useListMotion(listRef, actions.join(","));
 
   useEffect(() => {
@@ -1893,9 +1889,9 @@ function ShortcutsSection({
   );
 
   return (
-    <section className="mt-8">
+    <section className="settings-card mt-4">
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm font-semibold">Keyboard shortcuts</h2>
+        <h2 className="text-sm font-semibold">Bindings</h2>
         {!isDefault && (
           <button
             type="button"
@@ -1911,27 +1907,11 @@ function ShortcutsSection({
           </button>
         )}
       </div>
-      <input
-        aria-label="Search keyboard shortcuts"
-        value={filter}
-        onChange={(event) => setFilter(event.target.value)}
-        placeholder="Find a shortcut…"
-        className="field mb-3 h-8 w-full rounded-md px-3 text-sm"
-      />
       <div
         ref={listRef}
         data-shortcut-results
         className="relative flex flex-col gap-1.5 overflow-clip"
       >
-        {actions.length === 0 && (
-          <p
-            role="status"
-            data-item-id="empty"
-            className="py-6 text-center text-sm text-fg-muted"
-          >
-            No shortcuts match your search.
-          </p>
-        )}
         {actions.map((action) => (
           <div
             key={action}

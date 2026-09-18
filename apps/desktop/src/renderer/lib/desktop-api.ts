@@ -4,7 +4,10 @@ import type { ResourcePreview } from "@catamorphic/react";
 import type { ImportableBrowser } from "../../main/browser-import/types.js";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
 import type { AppPrefs } from "../../shared/app-prefs.js";
-import type { BookmarkPlacement } from "../../shared/bookmark-target.js";
+import type {
+  BookmarkMove,
+  BookmarkPlacement,
+} from "../../shared/bookmark-target.js";
 import type {
   BrowserImportRequest,
   BrowserImportResult,
@@ -18,7 +21,11 @@ import type {
   WorkspaceEvent,
   WorkspaceNavigation,
 } from "../../shared/desktop-workspace.js";
-import type { DockDrag, DockSize } from "../../shared/dock-position.js";
+import type {
+  DockDrag,
+  DockRegion,
+  DockSize,
+} from "../../shared/dock-position.js";
 import type { FilePreviewInput } from "../../shared/file-preview.js";
 import type {
   FileSearchInput,
@@ -903,6 +910,15 @@ export interface CatamorphicDesktopApi {
   ) => Promise<void>;
   dockDrag: (input: DockDrag) => Promise<void>;
   dockResize: (size: DockSize) => Promise<void>;
+  dockIgnoreMouse: (ignore: boolean) => Promise<void>;
+  /** Session-only; the `dockDetached` preference stays the launch default. */
+  dockDetach: (detached: boolean) => Promise<void>;
+  /** Native context menu for the detached dock window; resolves the action. */
+  dockMenu: (
+    entries: Array<{ label: string; action: string; danger?: boolean }>,
+  ) => Promise<string | null>;
+  /** The workspace window reports where its chat region sits; null clears. */
+  dockRegion: (region: DockRegion | null) => Promise<void>;
   onDockSnapshot: (listener: (snapshot: DockSnapshot) => void) => () => void;
   onWorkspaceEvent: (listener: (event: WorkspaceEvent) => void) => () => void;
   windowProfile: () => Promise<string>;
@@ -1262,6 +1278,7 @@ export interface CatamorphicDesktopApi {
     faviconUrl?: string;
   }) => Promise<Bookmark>;
   bookmarksPlace: (input: BookmarkPlacement) => Promise<Bookmark>;
+  bookmarksMove: (input: BookmarkMove) => Promise<void>;
   bookmarksAddFolder: (input: {
     projectId: string;
     profileId: string;

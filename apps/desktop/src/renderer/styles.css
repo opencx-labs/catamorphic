@@ -80,14 +80,26 @@
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
 }
 
-/* Framing is a profile preference, independent of palette and tab placement.
+/* A lurking chat (floating, working behind the tab the user focused) is a
+   peek, not a workspace: no scrollbars and no message navigation. */
+[data-lurking] * {
+  scrollbar-width: none;
+}
+[data-lurking] button[aria-label="Scroll to latest message"],
+[data-lurking] button[aria-label="Jump to your previous message"] {
+  display: none;
+}
+
+/* Framed content is a preference, off by default: content sits flush with
+   the sidebars and draws no border. Turning it on insets the workspace as a
+   rounded window with a 1px border. Independent of palette and tab placement.
    The sidebar's selection/hover surfaces remain neutral and token-driven. */
 @layer components {
   :where([data-theme="light"]) .tabbed-sidebar {
     --color-bg-overlay: var(--color-bg-raised);
   }
 
-  .workspace-surface[data-tab-layout="top"][data-tab-frame="on"] {
+  .workspace-surface[data-content-frame="on"] {
     box-shadow: inset 0 0 0 1px var(--color-border);
   }
 
@@ -122,6 +134,28 @@ body,
      whole page scrollable behind a terminal tab. */
   overflow: hidden;
   overscroll-behavior: none;
+}
+
+/* Reduced motion is honoured everywhere at once: every transition and
+   keyframe collapses to an instant change (a hair above zero so
+   animationend and transitionend still fire for the code that unmounts on
+   them), and nothing loops. Script-driven motion reads the same preference
+   through lib/motion.ts. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: this override must beat every specific animation and transition rule in the app. */
+    animation-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: same override. */
+    animation-iteration-count: 1 !important;
+    /* biome-ignore lint/complexity/noImportantStyles: same override. */
+    transition-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: same override. */
+    transition-delay: 0s !important;
+    /* biome-ignore lint/complexity/noImportantStyles: same override. */
+    scroll-behavior: auto !important;
+  }
 }
 
 body {
@@ -603,6 +637,35 @@ kbd {
 .animate-fade-out {
   animation: fade-out 200ms cubic-bezier(0.2, 0, 0, 1) forwards;
 }
+/* Modal panels scale and fade together on the way in and out; the backdrop
+   fades on its own. Out holds its last frame until the backdrop's fade-out
+   unmounts both. */
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+@keyframes modal-out {
+  from {
+    opacity: 1;
+    scale: 1;
+  }
+  to {
+    opacity: 0;
+    scale: 0.96;
+  }
+}
+.animate-modal-in {
+  animation: modal-in 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+.animate-modal-out {
+  animation: modal-out 160ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
 
 @keyframes session-row-in {
   from {
@@ -843,12 +906,158 @@ kbd {
   overflow: hidden;
 }
 
+/* The one loading placeholder for sidebar sections: still bars at row
+   height, no shimmer. The section header's spinner carries the motion. */
+.sidebar-skeleton {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 0;
+}
+.sidebar-skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 8px;
+}
+.sidebar-skeleton-icon,
+.sidebar-skeleton-bar {
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-fg) 7%, transparent);
+}
+.sidebar-skeleton-icon {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+.sidebar-skeleton-bar {
+  height: 8px;
+}
+
+/* Controls that belong to a hovered row (overflow dots, close, open-in-window)
+   share one reveal: hidden until the row is hovered or holds keyboard focus,
+   fading either way. Mouse focus alone never reveals them, so a clicked row
+   does not keep its controls lit after the pointer leaves. */
+.row-reveal {
+  opacity: 0;
+  transition: opacity 150ms var(--ease-standard);
+}
+.group:hover .row-reveal,
+.group:has(:focus-visible) .row-reveal,
+.row-reveal:focus-visible,
+.row-reveal[aria-expanded="true"] {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .row-reveal {
+    transition: none;
+  }
+}
+
+/* Every control in a sidebar wears its ring inside its own rounded box, so
+   neighbours and the panel's edges never cut it. */
+[data-sidebar-section] button:focus-visible:not([hidden]),
+[data-sidebar-section] a:focus-visible:not([hidden]) {
+  outline-offset: -2px;
+}
+
+/* A sidebar row or tile is one rounded box. When keyboard focus lands on
+   the control inside it, the ring is drawn on that box with its radius and
+   over its border; the inner control never draws its own square ring. */
+[data-sidebar-item-id]:has(:focus-visible) {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -1px;
+}
+/* Outranks the global ring rule's :not() specificity. */
+[data-sidebar-item-id] :focus-visible:not([hidden]) {
+  outline: none;
+}
+
+/* A focused row wears its ring inside its own box and above its siblings:
+   rows are absolutely stacked, so an outside ring was covered top and
+   bottom by the neighbours and clipped left and right by the tree. */
+[role="tree"] [role="treeitem"]:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-md);
+  z-index: 1;
+}
+
+/* Expanding or collapsing a branch moves the rows below it and resizes the
+   tree with the same 200ms standard curve the section collapsible uses. */
+[role="tree"] {
+  transition: height 200ms var(--ease-standard);
+}
+[role="tree"] [role="treeitem"] {
+  transition: top 200ms var(--ease-standard);
+}
+[role="tree"][data-dragging] [role="treeitem"] {
+  transition: none;
+}
+/* Drop cues ease in and out alike. */
+[role="tree"] [role="treeitem"] > *,
+[data-drop-zone] > li {
+  transition-property: box-shadow, background-color, color;
+  transition-duration: 150ms;
+  transition-timing-function: var(--ease-standard);
+}
+@media (prefers-reduced-motion: reduce) {
+  [role="tree"],
+  [role="tree"] [role="treeitem"],
+  [role="tree"] [role="treeitem"] > *,
+  [data-drop-zone] > li {
+    transition: none;
+  }
+}
+
+/* The one drop presentation for every tree: an accent insertion line
+   between rows and an accent outline on the row (or tree) that will
+   become the parent. */
+[data-tree-drop-line] {
+  height: 2px;
+  background: var(--color-accent);
+  border-radius: 1px;
+  z-index: 1;
+  animation: fade-in 120ms var(--ease-standard);
+}
+[data-tree-drop-line]::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+[role="treeitem"][data-drop="inside"] > * {
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+/* Tiles in a grid mark their slot on the side the drop will land. */
+[data-drop-zone] > [data-drop="before"] {
+  box-shadow: -2px 0 0 var(--color-accent);
+}
+[data-drop-zone] > [data-drop="after"] {
+  box-shadow: 2px 0 0 var(--color-accent);
+}
+[role="tree"][data-drop-root="inside"],
+[data-drop-zone][data-drop="inside"] {
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
 .sidebar-empty-state {
   padding: 8px;
   text-align: center;
   text-wrap: balance;
   font-size: 12px;
   line-height: 1.5;
+  color: var(--color-fg-faint);
+}
+.sidebar-empty-state[role="alert"] {
   color: var(--color-fg-muted);
 }
 
@@ -1010,11 +1219,94 @@ kbd {
   }
 }
 
-.settings-category > section:first-child {
+/* The category heading row comes first; the block right after it sits
+   flush under the heading instead of carrying its own section gap. */
+.settings-category > :nth-child(2) {
   margin-top: 0;
 }
-.settings-category[hidden] {
-  display: none;
+/* One card shape for every block on a page surface such as Settings:
+   panel padding, a heading row with its status at the far edge, one
+   description sentence, then a control row. Deep links outline one card. */
+.settings-card {
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-bg-raised) 30%, transparent);
+}
+
+/* One button vocabulary. A rectangular action picks a role instead of a
+   private accent or border recipe: primary for the action a surface asks
+   for (every "Add" and "Save"), secondary for peers, ghost for Cancel, danger
+   for destructive confirms. Size is the only modifier; utilities may still
+   add width or margin. */
+@layer components {
+  .button-primary,
+  .button-secondary,
+  .button-ghost,
+  .button-danger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 12px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+    flex-shrink: 0;
+    cursor: pointer;
+    transition:
+      background-color 150ms var(--ease-standard),
+      border-color 150ms var(--ease-standard),
+      color 150ms var(--ease-standard),
+      opacity 150ms var(--ease-standard);
+  }
+  .button-primary {
+    background: var(--color-accent);
+    color: var(--color-accent-fg);
+  }
+  .button-primary:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+  .button-secondary {
+    border-color: var(--color-border);
+    color: var(--color-fg);
+  }
+  .button-secondary:hover:not(:disabled) {
+    background: var(--color-bg-overlay);
+    border-color: var(--color-border-strong);
+  }
+  .button-ghost {
+    color: var(--color-fg-muted);
+    font-weight: 400;
+  }
+  .button-ghost:hover:not(:disabled) {
+    background: var(--color-bg-overlay);
+    color: var(--color-fg);
+  }
+  .button-danger {
+    border-color: color-mix(in srgb, var(--color-danger) 40%, transparent);
+    background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+    color: var(--color-danger);
+  }
+  .button-danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-danger) 20%, transparent);
+  }
+  .button-primary:disabled,
+  .button-secondary:disabled,
+  .button-ghost:disabled,
+  .button-danger:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .button-sm {
+    height: 28px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
 }
 
 /* Bare icon tabs. Both sidebars share the same quiet chrome and motion. */
@@ -1076,6 +1368,9 @@ kbd {
   position: absolute;
   inset: 0;
   overflow-y: auto;
+  /* Reserve the scrollbar's column so expanding a long section never
+     narrows every other section by a scrollbar width. */
+  scrollbar-gutter: stable;
   padding: 0 8px;
   opacity: 1;
   translate: 0;
@@ -1195,12 +1490,6 @@ kbd {
    content's existing toolbar row so controls never cover its actions. */
 [data-floating-surface] :is([data-settings] > header) {
   padding-right: 156px;
-}
-[data-floating-surface]
-  [data-settings]
-  > header
-  > button[aria-label="Close settings"] {
-  display: none;
 }
 
 [data-floating-surface] [data-browser-toolbar],
@@ -1331,10 +1620,10 @@ kbd {
 [data-dock-host] [data-floating-chat] {
   max-width: min(100%, 52rem);
 }
-[data-dock-side="left"][data-dock-alignment="edge"] [data-floating-chat] {
+[data-dock-placement="left"] [data-floating-chat] {
   align-self: flex-start;
 }
-[data-dock-side="right"][data-dock-alignment="edge"] [data-floating-chat] {
+[data-dock-placement="right"] [data-floating-chat] {
   align-self: flex-end;
 }
 

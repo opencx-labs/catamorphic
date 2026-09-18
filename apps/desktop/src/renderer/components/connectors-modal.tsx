@@ -781,7 +781,7 @@ export function ConnectorsModal({
                           onClick={() =>
                             void installRegistry(row.entry.name, secretValues)
                           }
-                          className="h-7 w-fit cursor-pointer rounded-md bg-accent px-3 text-xs font-medium text-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
+                          className="button-primary button-sm w-fit"
                         >
                           Install with these values
                         </PendingButton>

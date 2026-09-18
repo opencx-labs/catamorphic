@@ -1,13 +1,23 @@
-import { ChevronsRight, MessageSquare, Plus, X } from "lucide-react";
+import {
+  ChevronsLeft,
+  ChevronsRight,
+  MessageSquare,
+  Plus,
+  X,
+} from "lucide-react";
 import {
   type CSSProperties,
   type DOMAttributes,
+  type MouseEvent,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
 import type { ChatSessionMenuEntry } from "../lib/chat-session-actions.js";
+import { desktopApi } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
+import { EASE_STANDARD, motionMs } from "../lib/motion.js";
 import type { ChatDockEntry } from "./chat-dock";
 import { ChatGlyph } from "./chat-icon";
 import { type ChatSignals, SignalBadge, SignalGlyph } from "./chat-signals";
@@ -20,8 +30,19 @@ const BUBBLE_HINT_DELAY_MS = 100;
 
 export interface ChatBubblesProps {
   dragLeft?: number | null;
-  alignment?: "edge" | "center";
+  /** Where the expanded strip and open chats sit. */
+  placement?: "left" | "center" | "right";
+  /** Drag surface of the collapsed bubble: picks its corner. */
   dragHandlers?: DOMAttributes<HTMLButtonElement>;
+  /** Drag surface of the expanded strip's arrows: picks the placement. */
+  placementDragHandlers?: DOMAttributes<HTMLButtonElement>;
+  /** The resting spot the current drag would choose; null when not dragging. */
+  dragTarget?: "left" | "center" | "right" | null;
+  /** Whether the dock lives in its own window; the bubble menu flips it. */
+  detached?: boolean;
+  /** The detached window is too small for in-page menus; use native ones. */
+  nativeMenus?: boolean;
+  onToggleDetached?: () => void;
   newChatProjectName?: string;
   side?: "left" | "right";
   themes?: Record<string, CSSProperties>;
@@ -84,6 +105,7 @@ function Bubble({
   onToggle,
   onClose,
   menu,
+  nativeMenus = false,
   onMenuAction,
   onExited,
   theme,
@@ -100,6 +122,7 @@ function Bubble({
   onToggle: (localId: string) => void;
   onClose: (localId: string) => void;
   menu?: ChatSessionMenuEntry[];
+  nativeMenus?: boolean;
   onMenuAction: (localId: string, action: ChatSessionMenuEntry) => void;
   onExited: (localId: string) => void;
 }) {
@@ -162,6 +185,15 @@ function Bubble({
             menu && menu.length > 0
               ? (event) => {
                   event.preventDefault();
+                  if (nativeMenus) {
+                    void desktopApi.dockMenu(menu).then((action) => {
+                      const picked = menu.find(
+                        (entry) => entry.action === action,
+                      );
+                      if (picked) onMenuAction(entry.localId, picked);
+                    });
+                    return;
+                  }
                   setMenuAt({ x: event.clientX, y: event.clientY });
                   setMenuOpen(true);
                 }
@@ -193,7 +225,7 @@ function Bubble({
         <button
           type="button"
           onClick={() => onClose(entry.localId)}
-          className="absolute -left-1 -top-1 grid size-4 cursor-pointer place-items-center rounded-full border border-border bg-bg-overlay text-fg-faint opacity-0 transition-opacity duration-150 hover:text-fg group-hover:opacity-100"
+          className="row-reveal absolute -left-1 -top-1 grid size-4 cursor-pointer place-items-center rounded-full border border-border bg-bg-overlay text-fg-faint hover:text-fg"
           aria-label={`Close ${label}`}
         >
           <X className="size-2.5" />
@@ -223,8 +255,13 @@ function Bubble({
  */
 export function ChatBubbles({
   dragLeft = null,
-  alignment = "edge",
+  placement = "center",
   dragHandlers,
+  placementDragHandlers,
+  dragTarget = null,
+  detached = false,
+  nativeMenus = false,
+  onToggleDetached,
   newChatProjectName,
   side = "right",
   themes,
@@ -246,6 +283,56 @@ export function ChatBubbles({
   onCollapse,
 }: ChatBubblesProps) {
   const keybindings = useKeybindings();
+  // Right-click on the collapsed bubble or the arrows: moves the dock
+  // between the window and its own always-on-top window for this session.
+  const [dockMenuAt, setDockMenuAt] = useState<{ x: number; y: number } | null>(
+    null,
+  );
+  const [dockMenuOpen, setDockMenuOpen] = useState(false);
+  const dockMenuEntries = [
+    {
+      label: detached
+        ? "Return dock to the window"
+        : "Float dock in its own window",
+      action: "detach",
+    },
+  ];
+  const openDockMenu = onToggleDetached
+    ? (event: MouseEvent<HTMLElement>) => {
+        event.preventDefault();
+        if (nativeMenus) {
+          void desktopApi.dockMenu(dockMenuEntries).then((action) => {
+            if (action === "detach") onToggleDetached();
+          });
+          return;
+        }
+        setDockMenuAt({ x: event.clientX, y: event.clientY });
+        setDockMenuOpen(true);
+      }
+    : undefined;
+  useEffect(() => {
+    if (!dockMenuOpen) return;
+    const dismiss = (event: Event) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest("[data-sidebar-menu]")
+      )
+        return;
+      setDockMenuOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setDockMenuOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", dismiss);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", dismiss);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [dockMenuOpen]);
   // User override: true = collapsed, false = expanded, null = follow
   // autoCollapse. Re-arms (back to null) whenever autoCollapse turns on, so
   // focusing a chat tab folds the strip again even after a manual expand.
@@ -256,6 +343,17 @@ export function ChatBubbles({
   if (prevAutoRef.current !== autoCollapse) {
     prevAutoRef.current = autoCollapse;
     setCollapseOverride(null);
+  }
+  // A chat opening (Cmd+N, the sidebar, a palette action) releases a manual
+  // collapse: the strip belongs with the open chat, otherwise a closed bubble
+  // would sit beside a visible chat. Auto-collapse behind a tab still applies.
+  const openLocalId = entries.find(
+    (entry) => entry.mode === "partial" && entry.localId === activeLocalId,
+  )?.localId;
+  const prevOpenRef = useRef(openLocalId);
+  if (prevOpenRef.current !== openLocalId) {
+    prevOpenRef.current = openLocalId;
+    if (openLocalId && collapseOverride === true) setCollapseOverride(null);
   }
   const collapsed = collapseOverride ?? autoCollapse;
 
@@ -351,27 +449,122 @@ export function ChatBubbles({
     ),
   };
 
+  // The rail rests at a corner (collapsed) or at its placement (expanded),
+  // anchored by its own edge so growing or shrinking never moves that edge.
+  // Moving between resting spots is a FLIP slide: measure, switch anchors,
+  // animate the difference. Nothing else in the rail transitions position.
+  const railRef = useRef<HTMLDivElement>(null);
+  const railWidthRef = useRef(0);
+  useEffect(() => {
+    const rail = railRef.current;
+    if (!rail || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      railWidthRef.current = rail.getBoundingClientRect().width;
+    });
+    observer.observe(rail);
+    return () => observer.disconnect();
+  }, []);
+  const spot = collapsed ? side : placement;
+  const lastRect = useRef<DOMRect | null>(null);
+  const lastSpot = useRef(spot);
+  useLayoutEffect(() => {
+    const rail = railRef.current;
+    if (!rail) return;
+    const previous = lastRect.current;
+    const rect = rail.getBoundingClientRect();
+    lastRect.current = rect;
+    if (lastSpot.current === spot || dragLeft !== null) {
+      lastSpot.current = spot;
+      return;
+    }
+    lastSpot.current = spot;
+    if (
+      !previous ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    )
+      return;
+    // Compare the edge that anchors the new spot so a width change during
+    // the same commit does not read as travel.
+    const delta =
+      spot === "right"
+        ? previous.right - rect.right
+        : spot === "left"
+          ? previous.left - rect.left
+          : (previous.left + previous.right - rect.left - rect.right) / 2;
+    if (Math.abs(delta) < 1) return;
+    rail.animate(
+      [{ transform: `translateX(${delta}px)` }, { transform: "translateX(0)" }],
+      { duration: motionMs(200), easing: EASE_STANDARD, composite: "add" },
+    );
+  }, [spot, dragLeft]);
+  const spotClass =
+    spot === "left"
+      ? "left-8"
+      : spot === "right"
+        ? "right-8"
+        : "left-1/2 -translate-x-1/2";
+  // The arrows point at the corner the strip collapses into and sit on that
+  // side of the strip. They are also the handle that moves open chats.
+  const Arrows = side === "left" ? ChevronsLeft : ChevronsRight;
+  const arrows = (
+    <button
+      type="button"
+      {...placementDragHandlers}
+      onClick={() => {
+        setCollapseOverride(true);
+        onCollapse?.();
+      }}
+      onContextMenu={openDockMenu}
+      className="grid size-9 touch-none cursor-grab place-items-center rounded-full text-fg-faint transition-colors duration-150 hover:text-fg active:cursor-grabbing"
+      aria-label="Collapse chat bubbles"
+      aria-description="Drag to place open chats left, center or right. Arrow keys move them."
+      aria-keyshortcuts="ArrowLeft ArrowRight"
+      data-dock-arrows={side}
+    >
+      <Arrows className="size-4" />
+    </button>
+  );
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex justify-center pb-3">
-      {/* The pill slides between centered (expanded) and right-docked
-          (collapsed) via left+transform, both animatable. */}
+      {/* Resting spots the drag can choose. The one under the pointer glows. */}
+      {dragTarget !== null &&
+        (collapsed
+          ? (["left", "right"] as const)
+          : (["left", "center", "right"] as const)
+        ).map((target) => (
+          <span
+            key={target}
+            aria-hidden="true"
+            data-dock-target={target}
+            data-active={target === dragTarget || undefined}
+            className={`pointer-events-none absolute bottom-3 h-11 rounded-full border transition-[opacity,box-shadow,border-color,background-color] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+              target === "left"
+                ? "left-8"
+                : target === "right"
+                  ? "right-8"
+                  : "left-1/2 -translate-x-1/2"
+            } ${
+              target === dragTarget
+                ? "border-accent/70 bg-accent/10 opacity-100 shadow-[0_0_0_1px_var(--color-accent),0_0_18px_color-mix(in_srgb,var(--color-accent)_45%,transparent)]"
+                : "border-dashed border-border-strong/60 bg-bg-raised/40 opacity-70"
+            }`}
+            style={{
+              width: collapsed ? 44 : Math.max(44, railWidthRef.current),
+            }}
+          />
+        ))}
       <div
+        ref={railRef}
         data-dock-rail
         data-dock-collapsed={collapsed}
         data-dock-dragging={dragLeft !== null || undefined}
         style={
-          dragLeft === null ? undefined : { left: dragLeft, translate: "0" }
+          dragLeft === null
+            ? undefined
+            : { left: dragLeft, right: "auto", translate: "0" }
         }
-        className={`pointer-events-auto absolute bottom-3 flex items-center rounded-full border border-border bg-bg-raised shadow-2xl ${dragLeft === null ? "transition-[left,translate,padding] duration-200" : "transition-none"} ease-[cubic-bezier(0.2,0,0,1)] ${
-          collapsed
-            ? side === "left"
-              ? "left-8 p-1"
-              : "left-full -translate-x-[calc(100%+32px)] p-1"
-            : alignment === "center"
-              ? "left-1/2 -translate-x-1/2 gap-1.5 p-1.5"
-              : side === "left"
-                ? "left-8 gap-1.5 p-1.5"
-                : "left-full -translate-x-[calc(100%+32px)] gap-1.5 p-1.5"
+        className={`pointer-events-auto absolute bottom-3 flex items-center rounded-full border border-border bg-bg-raised shadow-2xl transition-[padding] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${spotClass} ${
+          collapsed ? "p-1" : "gap-1.5 p-1.5"
         }`}
       >
         {/* Expanded strip content folds its width away when collapsed. */}
@@ -385,6 +578,7 @@ export function ChatBubbles({
           aria-hidden={collapsed}
           inert={collapsed ? true : undefined}
         >
+          {side === "left" && arrows}
           {display.entries.map((entry) => (
             <Bubble
               theme={themes?.[entry.localId]}
@@ -400,6 +594,7 @@ export function ChatBubbles({
               onToggle={onToggle}
               onClose={onClose}
               menu={menus[entry.localId]}
+              nativeMenus={nativeMenus}
               onMenuAction={onMenuAction}
               onExited={removeExited}
             />
@@ -423,60 +618,55 @@ export function ChatBubbles({
               <Plus className="size-4" />
             </button>
           </ShortcutHint>
-          <ShortcutHint label="Collapse chat bubbles" side="top">
-            <button
-              type="button"
-              onClick={() => {
-                setCollapseOverride(true);
-                onCollapse?.();
-              }}
-              className="grid size-9 cursor-pointer place-items-center rounded-full text-fg-faint transition-colors duration-150 hover:text-fg"
-              aria-label="Collapse chat bubbles"
-            >
-              <ChevronsRight className="size-4" />
-            </button>
-          </ShortcutHint>
+          {side === "right" && arrows}
         </div>
 
         {/* Collapsed single bubble; carries aggregate indicators. */}
-        <ShortcutHint
-          label="Expand chat bubbles"
-          side="top"
-          delay={BUBBLE_HINT_DELAY_MS}
+        <button
+          type="button"
+          {...dragHandlers}
+          onClick={() => setCollapseOverride(false)}
+          onContextMenu={openDockMenu}
+          className={`relative grid touch-none cursor-grab active:cursor-grabbing place-items-center overflow-visible rounded-full border border-border bg-bg-overlay text-fg-muted transition-[max-width,opacity,background-color,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] hover:border-border-strong hover:text-fg ${
+            collapsed
+              ? "size-9 max-w-9 opacity-100"
+              : "pointer-events-none size-9 max-w-0 border-0 opacity-0"
+          }`}
+          aria-label="Expand chat bubbles"
+          aria-description="Drag to either bottom corner. Arrow keys move left or right."
+          aria-keyshortcuts="ArrowLeft ArrowRight"
+          aria-hidden={!collapsed}
+          inert={!collapsed ? true : undefined}
         >
-          <button
-            type="button"
-            {...dragHandlers}
-            onClick={() => setCollapseOverride(false)}
-            className={`relative grid touch-none cursor-grab active:cursor-grabbing place-items-center overflow-visible rounded-full border border-border bg-bg-overlay text-fg-muted transition-[max-width,opacity,background-color,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] hover:border-border-strong hover:text-fg ${
-              collapsed
-                ? "size-9 max-w-9 opacity-100"
-                : "pointer-events-none size-9 max-w-0 border-0 opacity-0"
-            }`}
-            aria-label="Expand chat bubbles"
-            aria-description="Drag to either bottom corner. Arrow keys move left or right."
-            aria-keyshortcuts="ArrowLeft ArrowRight"
-            aria-hidden={!collapsed}
-            inert={!collapsed ? true : undefined}
+          <SignalGlyph
+            working={aggregate.working}
+            awaitingInput={aggregate.awaitingInput}
+            className="size-4"
           >
-            <SignalGlyph
-              working={aggregate.working}
-              awaitingInput={aggregate.awaitingInput}
-              className="size-4"
-            >
-              <MessageSquare className="size-4" />
-            </SignalGlyph>
-            {stripEntries.length > 1 && (
-              <span className="absolute -bottom-0.5 -right-0.5 grid min-w-4 place-items-center rounded-full border border-border bg-bg-raised px-0.5 text-[9px] font-semibold leading-4 text-fg-muted">
-                {stripEntries.length}
-              </span>
-            )}
-            <span className="absolute -right-0.5 -top-0.5">
-              <SignalBadge signals={aggregate} size="md" />
+            <MessageSquare className="size-4" />
+          </SignalGlyph>
+          {stripEntries.length > 1 && (
+            <span className="absolute -bottom-0.5 -right-0.5 grid min-w-4 place-items-center rounded-full border border-border bg-bg-raised px-0.5 text-[9px] font-semibold leading-4 text-fg-muted">
+              {stripEntries.length}
             </span>
-          </button>
-        </ShortcutHint>
+          )}
+          <span className="absolute -right-0.5 -top-0.5">
+            <SignalBadge signals={aggregate} size="md" />
+          </span>
+        </button>
       </div>
+      {dockMenuAt && onToggleDetached && (
+        <MenuPortal
+          open={dockMenuOpen}
+          position={dockMenuAt}
+          entries={dockMenuEntries}
+          onPick={() => {
+            setDockMenuOpen(false);
+            onToggleDetached();
+          }}
+          onExited={() => setDockMenuAt(null)}
+        />
+      )}
     </div>
   );
 }

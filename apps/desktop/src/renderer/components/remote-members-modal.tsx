@@ -191,7 +191,7 @@ export function RemoteMembersModal({
                 onClick={() => void invite()}
                 disabled={!inviteRole}
                 data-disabled-reason="Choose a role for the invitation"
-                className="flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-xs font-semibold text-accent-fg disabled:opacity-50"
+                className="button-primary"
               >
                 <MailPlus className="size-3.5" />
                 Invite

@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronRight,
   GitBranch,
+  LoaderCircle,
   PanelRight,
   Plus,
   Search,
@@ -48,7 +49,7 @@ import { AnimatedTitle } from "./animated-title.js";
 import { AppGlyph } from "./app-icon.js";
 import { BookmarksNav } from "./bookmarks-nav.js";
 import { ChatGlyph } from "./chat-icon.js";
-import { SignalBadge } from "./chat-signals.js";
+import { SignalBadge, SignalGlyph } from "./chat-signals.js";
 import { Collapsible } from "./collapsible.js";
 import type { PaletteItem, PaletteSearchRequest } from "./command-palette.js";
 import { FilesNav } from "./files-nav.js";
@@ -60,6 +61,7 @@ import {
   projectSidebarItems,
   type SidebarContentState,
   SidebarContribution,
+  type SidebarStatus,
   sidebarItemPresentation,
   useSidebarContent,
   useSidebarContribution,
@@ -72,6 +74,7 @@ import {
   type SessionCommand,
   SidebarSessionInspector,
 } from "./sidebar-session-inspector.js";
+import { SidebarStatusBody } from "./sidebar-status.js";
 import { SidebarTree } from "./sidebar-tree.js";
 import { SidebarActivity, SidebarNote } from "./sidebar-widgets.js";
 import { SiteFavicon } from "./site-favicon.js";
@@ -179,8 +182,7 @@ export function ConfiguredSection({
     onOpenFile,
     onSessionAction,
   });
-  const [contentState, setContentState] =
-    useState<SidebarContentState>("loading");
+  const [status, setStatus] = useState<SidebarStatus>({ state: "loading" });
   const [itemCounts, setItemCounts] = useState<ReadonlyMap<string, number>>(
     new Map(),
   );
@@ -194,15 +196,21 @@ export function ConfiguredSection({
       return next;
     });
   }, []);
+  // A ready section whose every projected list is empty is empty: hidden
+  // overrides and filters can remove all rows after the source reported.
+  const contentState: SidebarContentState =
+    status.state === "ready" &&
+    itemCounts.size &&
+    ![...itemCounts.values()].some(Boolean)
+      ? "empty"
+      : status.state;
   useEffect(() => {
-    report(
-      contentState === "ready" &&
-        itemCounts.size &&
-        ![...itemCounts.values()].some(Boolean)
-        ? "empty"
-        : contentState,
-    );
-  }, [report, contentState, itemCounts]);
+    report(contentState);
+  }, [report, contentState]);
+  const resolvedStatus = useMemo(
+    () => ({ ...status, state: contentState }),
+    [status, contentState],
+  );
   const refreshers = useRef(new Set<() => unknown>());
   const registerRefresh = useCallback((refresh: () => unknown) => {
     refreshers.current.add(refresh);
@@ -329,7 +337,7 @@ export function ConfiguredSection({
                   compact
                   surface={surface}
                   collections={collections}
-                  onContentState={setContentState}
+                  onContentState={(state) => setStatus({ state })}
                   height={section.height}
                   visible={visible && expanded}
                 />
@@ -551,7 +559,7 @@ export function ConfiguredSection({
   })();
   const hasBody = Boolean(body);
   useEffect(() => {
-    if (!hasBody) setContentState("unavailable");
+    if (!hasBody) setStatus({ state: "unavailable" });
   }, [hasBody]);
   if (!body) return null;
   return (
@@ -561,7 +569,8 @@ export function ConfiguredSection({
         surface,
         visible,
         relevant,
-        report: setContentState,
+        status: resolvedStatus,
+        report: setStatus,
         reportItems,
         open: onOpenUrl,
         commands,
@@ -718,6 +727,17 @@ function SidebarSection({
 }) {
   const contribution = useSidebarContribution();
   const headerActions = contribution?.section.headerActions;
+  const status = contribution?.status;
+  // The header spins only while a read is in flight, never for a section
+  // that is merely waiting to be shown.
+  // A first load shows the skeleton; the header spins only while rows on
+  // screen are being refreshed, so nothing loops while a section waits.
+  const loading = status?.state === "loading" && !status.idle;
+  const refreshing = Boolean(status?.refreshing);
+  const busy = loading || refreshing;
+  const refresh = contribution?.commands?.has("refresh")
+    ? () => contribution?.command?.("refresh")
+    : undefined;
   const actionState = useItemActions();
   const [open, setOpen] = useState(defaultOpen);
   const [visited, setVisited] = useState(defaultOpen);
@@ -730,7 +750,13 @@ function SidebarSection({
       ? (keepMounted || visited || open) && children(open)
       : children;
   return (
-    <section className="sidebar-section pb-2">
+    <section
+      className="sidebar-section pb-2"
+      data-sidebar-section={contribution?.section.id}
+      aria-busy={busy || undefined}
+    >
+      {/* Title, then the section's actions, then the disclosure chevron at
+          the far right. Nothing in a header appears only on hover. */}
       <div className="flex items-center">
         <button
           type="button"
@@ -738,16 +764,24 @@ function SidebarSection({
             setVisited(true);
             setOpen((value) => !value);
           }}
-          className="flex h-7 min-w-0 flex-1 cursor-pointer items-center justify-between gap-2 rounded-md px-2 text-xs font-medium text-fg-muted hover:text-fg"
+          className="flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 text-xs font-medium text-fg-muted hover:text-fg"
           aria-expanded={open}
         >
           <span className="truncate">{title}</span>
-          <ChevronRight
-            className={`size-3 shrink-0 transition-transform duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
-              open ? "rotate-90" : ""
-            }`}
-          />
         </button>
+        {refreshing && (
+          <span
+            role="status"
+            aria-label={`Refreshing ${title}`}
+            className="grid size-7 shrink-0 place-items-center text-fg-muted"
+          >
+            <LoaderCircle
+              aria-hidden="true"
+              data-loading-for={contribution?.section.id}
+              className="size-3 animate-spin motion-reduce:animate-none"
+            />
+          </span>
+        )}
         {headerActions === undefined
           ? action
           : headerActions.map((entry) => (
@@ -786,6 +820,22 @@ function SidebarSection({
                 </button>
               </ShortcutHint>
             ))}
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-hidden="true"
+          onClick={() => {
+            setVisited(true);
+            setOpen((value) => !value);
+          }}
+          className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted hover:text-fg"
+        >
+          <ChevronRight
+            className={`size-3 transition-transform duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+              open ? "rotate-90" : ""
+            }`}
+          />
+        </button>
       </div>
       {actionState.error && (
         <p role="alert" className="sidebar-empty-state">
@@ -797,6 +847,11 @@ function SidebarSection({
           <SidebarContribution
             value={{ ...contribution, visible: contribution.visible && open }}
           >
+            <SidebarStatusBody
+              status={contribution.status}
+              empty={contribution.section.empty}
+              retry={contribution.status.retry ?? refresh}
+            />
             {content}
           </SidebarContribution>
         ) : (
@@ -822,24 +877,21 @@ function WorkflowsNav({
   const query = useWorkflows(projectId);
   useSidebarRefresh(query.refetch);
   const items = (query.data ?? []).map((item) => ({ ...item, id: item.name }));
-  useSidebarContent(
-    query.isError
+  useSidebarContent({
+    state: query.isError
       ? "error"
       : query.isLoading
         ? "loading"
         : items.length
           ? "ready"
           : "empty",
-  );
-  if (query.isError)
-    return (
-      <p role="alert" className="sidebar-empty-state">
-        Could not load workflows.{" "}
-        <button type="button" onClick={() => void query.refetch()}>
-          Retry
-        </button>
-      </p>
-    );
+    refreshing: query.isFetching && !query.isLoading,
+    idle: !query.isFetching,
+    error: query.isError ? "Could not load workflows." : undefined,
+    retry: query.refetch,
+    empty: "No workflows yet.",
+  });
+  if (query.isError) return null;
   return (
     <SidebarTree
       items={items}
@@ -877,24 +929,21 @@ function AppsNav({
   const query = useApps(projectId);
   useSidebarRefresh(query.refetch);
   const items = (query.data ?? []).map((item) => ({ ...item, id: item.name }));
-  useSidebarContent(
-    query.isError
+  useSidebarContent({
+    state: query.isError
       ? "error"
       : query.isLoading
         ? "loading"
         : items.length
           ? "ready"
           : "empty",
-  );
-  if (query.isError)
-    return (
-      <p role="alert" className="sidebar-empty-state">
-        Could not load apps.{" "}
-        <button type="button" onClick={() => void query.refetch()}>
-          Retry
-        </button>
-      </p>
-    );
+    refreshing: query.isFetching && !query.isLoading,
+    idle: !query.isFetching,
+    error: query.isError ? "Could not load apps." : undefined,
+    retry: query.refetch,
+    empty: "No apps yet.",
+  });
+  if (query.isError) return null;
   return (
     <SidebarTree
       items={items}
@@ -952,15 +1001,21 @@ function SessionsNav({
     (id) =>
       !sidebarItemPresentation({ section: contribution?.section, id }).hide,
   ).length;
-  useSidebarContent(
-    contentStatus === "error"
-      ? "error"
-      : contentStatus === "idle" || contentStatus === "loading"
-        ? "loading"
-        : count
-          ? "ready"
-          : "empty",
-  );
+  useSidebarContent({
+    state:
+      contentStatus === "error"
+        ? "error"
+        : contentStatus === "idle" || contentStatus === "loading"
+          ? "loading"
+          : count
+            ? "ready"
+            : "empty",
+    refreshing: root.fetching && contentIds.length > 0,
+    idle: !root.fetching,
+    error: root.error,
+    retry: collection.load,
+    empty: "No chats yet.",
+  });
   useSidebarItemCount(count);
   const checkoutQuery = useQuery({
     queryKey: ["desktop", "session-checkouts", projectId],
@@ -987,6 +1042,7 @@ function SessionsNav({
   );
   return (
     <CollectionTree
+      renderStatus={() => null}
       collection={collection}
       motionClasses={{
         enter: "animate-session-row-in",
@@ -1057,11 +1113,13 @@ function SessionsNav({
                 hasChildren ? { open: expanded, onToggle: toggle } : undefined
               }
               icon={
-                <ChatGlyph
-                  icon={session.icon}
-                  fork={Boolean(session.parentSessionId)}
-                  className="size-3.5 shrink-0"
-                />
+                <SignalGlyph working={session.running} className="size-3.5">
+                  <ChatGlyph
+                    icon={session.icon}
+                    fork={Boolean(session.parentSessionId)}
+                    className="size-3.5 shrink-0"
+                  />
+                </SignalGlyph>
               }
               active={session.id === activeSessionId}
               labelContent={
@@ -1115,19 +1173,24 @@ function SessionsNav({
               }
               end={
                 <>
-                  {(session.attentionRequired ||
+                  {/* The same signals as the chat's workspace tab. */}
+                  {(session.running ||
+                    session.attentionRequired ||
                     unreadSessionIds.has(session.id)) && (
                     <span
                       data-testid={
                         session.attentionRequired
                           ? "session-attention"
-                          : "session-unread"
+                          : session.running
+                            ? "session-working"
+                            : "session-unread"
                       }
                       className="grid size-3 shrink-0 place-items-center"
                       aria-hidden="true"
                     >
                       <SignalBadge
                         signals={{
+                          working: session.running,
                           attention: session.attentionRequired,
                           unread: unreadSessionIds.has(session.id),
                         }}

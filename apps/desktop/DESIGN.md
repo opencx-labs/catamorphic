@@ -158,6 +158,13 @@ Low-chroma so run states don't scream: `--color-success`, `--color-warning`,
   hover-only hints are supplementary. Reserve space for asynchronous reasons so
   later actions do not shift. `data-action-state` exposes the shared button state
   for host styling without duplicating its logic.
+- **One button vocabulary.** A rectangular action takes a role class from
+  `styles.css` instead of a private recipe: `button-primary` (accent) for the
+  action a surface asks for, including every "Add" and "Save"; `button-secondary`
+  for peers; `button-ghost` for Cancel and dismissals; `button-danger` for
+  destructive confirms. `button-sm` is the only size modifier (card and category
+  headers); utilities may add width or margin, never colors. Icon-only send
+  buttons and pills are the sanctioned exceptions, counted in `design-lint`.
 - **Every icon-only button gets a `ShortcutHint` tooltip.** A button whose
   meaning isn't carried by visible text must be wrapped in
   `<ShortcutHint label="…">` (plus `shortcut` when one exists) — never the
@@ -197,6 +204,12 @@ the desktop shell, including its registry components and document task lists.
 - Sidebar rows are 28px tall; workspace tab rows are 32px; sidebar width
   260px; right panel 380px.
 - Borders over shadows: `1px solid var(--color-border)`.
+- **One border, one ring, one radius.** A control, row, tile, card or popover
+  is one rounded box: its focus ring is drawn on that box with that box's
+  radius (inside it when neighbours could cover it), never on an unrounded
+  child inside it, and never in addition to the box's own border. Nested
+  bordered boxes, square rings inside rounded ones, and a ring beside a border
+  are defects; check every new surface with keyboard focus before shipping.
 
 ## Motion contract
 
@@ -207,6 +220,12 @@ same change. If a new animation fails the suite, the default assumption is
 the animation is wrong, not the test.
 
 ### The rules
+
+0. **Reduced motion is universal.** `styles.css` collapses every transition
+   and keyframe to an instant change under `prefers-reduced-motion: reduce`
+   (a hair above zero so `animationend`/`transitionend` still fire) and
+   nothing loops. Script-driven motion takes its duration from
+   `lib/motion.ts` (`motionMs`), never a literal.
 
 1. **One easing.** All motion uses `--ease-standard`
    (`cubic-bezier(0.2, 0, 0, 1)`). No `ease-in-out`, no springs, no bounces.
@@ -229,7 +248,7 @@ the animation is wrong, not the test.
 6. **Transitions only on state changes** — hover, focus, expand/collapse,
    enter/exit. Never on load, never ambient.
 
-Tab frame previews transition the workspace margins and corner radius over
+Framed content previews transition the workspace margins and corner radius over
 200 ms with the standard easing. Reduced motion applies the frame immediately.
 
 ### Current motion inventory
@@ -240,6 +259,7 @@ Tab frame previews transition the workspace margins and corner radius over
 | `bubble-in` / `bubble-out` | 200ms | each other |
 | `tab-in` / `tab-out` | 200ms / 180ms | each other (exit snappier) |
 | `fade-in` / `fade-out` (modal section swap; agent-control overlay) | 200ms | each other (exact mirror; `fade-out` holds its final frame for removal on animationend) |
+| `modal-in` / `modal-out` (dialog panel: opacity + scale 0.96↔1) | 200ms in, 160ms out | the backdrop's `fade-in`/`fade-out`; `modal-out` holds its final frame until the backdrop unmounts both |
 | `pairing-qr-in` (QR readiness reveal) | 200ms | — (one-shot content-ready signal inside a fixed stage) |
 | `profile-veil-in` / `profile-veil-out` (in-place profile switch) | 200ms | each other (exact mirror) |
 | `question-in` (ask_user panel) | 260ms | — |
@@ -278,7 +298,108 @@ that friction is intentional.
   40px. No dead space above tabs.
 - Workspace tabs host workflows, apps, and chats alike; minimized chats live
   in the bottom bubble strip (see the design log for collapse behavior).
-- Empty states are quiet: one sentence of `--color-fg-muted` + one action.
+- Empty states are quiet: one sentence of `--color-fg-faint` + one action. Errors stay `--color-fg-muted`.
+
+## Page surfaces
+
+Settings, History, and any other full-tab page share one shape. The recurring
+mistakes these rules prevent: a scrollbar floating mid-window, a search field
+that duplicates the palette, an X that duplicates the tab strip, and blocks of
+the same page styled three different ways.
+
+- **Pages are tabs, so the tab strip closes them.** No close button inside a
+  page header. Cmd+W and the tab's own close control are the only way out.
+  Dialogs, menus, and floating surfaces keep their own dismiss because they are
+  not tabs.
+- **Search is a header icon button that opens the palette in that page's
+  scope** (`settings`, `history`, or a section scope), never an inline filter
+  field on the page (ADR 0123: one search surface). The page keeps its full
+  content while the palette does the finding.
+- **The scroll container spans the full pane width.** Whatever scrolls fills the
+  content area edge to edge so the scrollbar sits at the pane's edge; centered
+  `max-w-*` content lives *inside* the scroller, never around it. Sticky rails
+  such as a category nav are positioned inside the same scroller.
+- **One heading per category, one card shape per block.** A category starts
+  with a `text-base font-semibold` heading row (optional action at the far
+  right), then `.settings-card` blocks: 16px padding, a heading row with the
+  block's status text at the far edge, one description sentence in
+  `text-xs leading-5 text-fg-muted`, then a control row of 32px buttons. Cards
+  are 16px apart, categories 40px apart. Never mix a card and a bare text block
+  in the same category, and never nest a bordered card inside a card: rows
+  inside a card are plain hover rows, and pickers are the only bordered
+  children. A list on a page is not filtered in place; the palette scope finds
+  its rows and deep-links to them.
+- **No frame by default.** Content sits flush with the sidebars with no
+  border, inset, or rounding. "Framed content" is an opt-in workspace setting
+  that insets the workspace as a rounded, bordered window; the padding and
+  radius settings are that frame's dimensions.
+- **Forms and confirmations open in dialogs.** Adding or editing a record
+  (a password, a macro, a connection challenge) and confirming a destructive
+  action (delete a profile or a password) open the shared `Modal`, centered
+  in the window with its entrance and exit motion. A page never grows a form
+  or a confirm strip in place: that shifts everything below it with no
+  motion. Disclosures that reveal existing content in place (theme color
+  overrides) use `Collapsible`. Keep the dialog's subject in state through
+  its exit so the content does not vanish mid-fade.
+- **Deep links land on exactly one card.** Every palette destination resolves
+  to a `data-setting-id` on a single block; category-wide outlines mean the
+  catalog id is too coarse.
+
+## Sidebar sections
+
+Every section, built in or user defined, is the same kind of thing: a source of
+rows inside shared chrome. The chrome owns status; sections own rows.
+
+- **One status language.** A section reports `{state, refreshing, error, retry,
+  empty}` and renders rows only. The section header shows a small spinner while
+  loading or refreshing and a hover-revealed Refresh button otherwise; the body
+  shows three still skeleton rows before the first result, one muted sentence
+  when empty (`section.empty` in `sidebar.js` replaces it), and the error with
+  Retry when a read fails. Rows stay on screen during a refresh; collapsing and
+  re-expanding never discards what was already loaded.
+- **No private loading text.** "Loading…", spinners, skeletons, empty copy and
+  error paragraphs inside a section component are defects.
+- **One drag-and-drop model.** The shared `Tree` owns pointer math, the accent
+  insertion line between rows and the accent outline on the row (or tree) that
+  becomes the parent. A section only declares what a row offers when dragged and
+  what a target accepts, through the same `move`/`drop` contract custom sources
+  export; built-in sections implement that contract over their stores. Rows with
+  children are the only "inside" targets. No section owns drop zones, drop-zone
+  classes or payload formats of its own; `data-bookmark-drop`-style private
+  attributes are defects.
+- **Rows and tiles.** A row's overflow menu button appears on hover; a tile
+  has no room for one and opens the same menu on right-click only. Keyboard
+  focus rings sit inside the row (negative outline offset, above siblings) so
+  stacked rows never cover or clip them.
+- **Groups inside a section are subsections.** `SidebarSubsection` is the only
+  way to label a sub-list: the same quiet label row every section uses, with
+  the section chevron and collapsible motion when `collapsible`. A section whose
+  title already names its content leaves its main groups unlabelled; Bookmarks
+  labels only "This project".
+- **Hover controls share one reveal.** Overflow dots, close and open-in-window
+  buttons on rows, tabs and bubbles use the `row-reveal` class: hidden until the
+  row is hovered or holds keyboard focus, fading in and out over 150ms. Mouse
+  focus alone never reveals them, so a clicked row does not keep its controls
+  lit after the pointer leaves. No component ships its own opacity toggle.
+- **Overlays render at the body.** Modals, popovers, hover inspectors and
+  tooltips portal to `document.body` and carry the theme of the scope they
+  opened from (`useTheme` + `themeStyle`). A `position: fixed` element inside
+  a transformed, translated or filtered ancestor (the sidebar tab panel, a
+  floating surface) positions itself relative to that ancestor: never mount a
+  fixed panel inside pane content.
+- **Tooltips always hide.** A hint closes on the anchor's leave event and on
+  any pointer movement elsewhere, a drag or scroll start, or the pointer
+  leaving the window; one of those always fires even when the anchor
+  re-renders or turns inert under the pointer.
+- **Popovers grow, never jump.** Hover inspectors measure their content and
+  transition height and position, so a section that loads after the popover
+  opens expands it smoothly. A popover that shifts its layout on load is a
+  defect.
+- **Primitives, not presets.** Anything a built-in section can do, a `sidebar.js`
+  section can do with the same fields: `empty`, `headerActions`, `itemDefaults`,
+  `itemOverrides`, `height`, `rowHeight`, and a source that exports `load`,
+  `subscribe`, `action`, `move`, `drop`. A sidebar an agent writes looks like a
+  built-in one without extra effort, and cannot break the chrome.
 
 ## Registry component rules
 
@@ -396,7 +517,10 @@ existing queued consent UI; cancellation withdraws the request. See
 
 Project switching changes visibility without disposing work. A profile can
 share its dock across projects, detach it above native windows, and place it
-on either edge. Project colors remain scoped to their chats and workspace.
+on either edge. Detaching is a session action: right-click the collapsed
+bubble or the arrows to float the dock in its own window or return it, and
+closing that window returns it. The `dockDetached` setting is only the state a
+launch starts in; no dock interaction rewrites it. Project colors remain scoped to their chats and workspace.
 Cross-project resource navigation uses a subtle accent tint and honors reduced
 motion. See [ADR 0121](../../docs/decisions/0121-project-workspaces-and-shared-chat-dock.md)
 and the [workspace interactions](docs/workspace-interactions.md) contract.
@@ -450,10 +574,14 @@ current theme on every guest load while theme switches preserve the guest's stat
 
 ## Dock placement and draft runtime controls (2026-09-11)
 
-ADR 0127 adds centered or edge-aligned expansion without changing the collapsed
-corner. The bubble itself is draggable; dragging never expands it or stores an
-absolute resting position. Use restrained settling motion and honor reduced
-motion. New and established chats share editable runtime controls; draft choices
+ADR 0127 adds placement without absolute positions. Open chats and their
+bubble strip sit left, centered (default) or right (`dockPlacement`); the
+collapsed bubble rests in a bottom corner (`dockSide`). There is no separate
+handle: dragging the collapsed bubble picks its corner, and dragging the
+expanded strip's arrows picks the placement. The arrows point at the corner
+the strip collapses into and sit on that side of the strip. Dragging never
+expands the dock or stores coordinates; release snaps with settling motion
+that honors reduced motion. New and established chats share editable runtime controls; draft choices
 apply only to that conversation. Explain unavailable controls beside the control.
 
 Markdown hover previews use the app's rendered reading typography. Composer
@@ -531,6 +659,50 @@ vertical sequence of optional browser setup actions followed by project actions.
 Default-browser status comes from the OS, shared with Settings (ADR 0144).
 Async actions use the shared size-stable PendingButton with short label fades;
 modal status space is reserved before loading so the action row stays in place.
+
+### 2026-09-18: Uniform sidebar sections
+
+[ADR 0147](../../docs/decisions/0147-uniform-sidebar-sections.md): one status
+language drawn by the section chrome and one drag-and-drop model in the shared
+tree, both available to custom sections through the source contract
+(`move`, `drop`, `section.empty`). Bookmarks became an ordinary section over
+its store; chat rows carry the tab's signals; section headers end with the
+chevron; the tab panel reserves its scrollbar gutter.
+
+### 2026-09-18: Page surfaces and sidebar scrolling
+
+Settings follows the page-surface rules above: no in-page close, the search
+button opens the palette's settings scope, the scroller spans the pane with a
+sticky category nav inside it, every category has a heading, and GitHub CLI and
+Connectors are separate `settings-card` blocks with their own catalog ids
+(`github-cli`, `connectors`) so a deep link outlines one card. The PRs sidebar's
+disconnected state is one title, one sentence, one button, and it stops polling
+while the GitHub CLI connection is off. Virtualized trees only contain
+overscroll while they can actually scroll, and bookmark lists scroll inside the
+tree rather than inside a wrapper, so wheel input reaches the sidebar. The
+profile avatar centers under the project icon and the name shares its x.
+
+### 2026-09-19: Dialogs for forms, one button vocabulary, session-only detach
+
+Every create/edit form and destructive confirm in Settings and Profile settings
+opens the shared `Modal` instead of expanding inline; the theme color list is a
+`Collapsible`. Rectangular actions take `button-primary`/`-secondary`/`-ghost`/
+`-danger` from `styles.css`, so every "Add" in Settings carries the accent and
+no confirm paints solid red with white text. A tooltip cancels on any press or
+right-click of its anchor so it cannot surface over a context menu. Detaching
+the dock is a session action from the bubble's or arrows' context menu; the
+`dockDetached` preference is the launch default only and closing the detached
+window never rewrites it. The detached window is a 124px strip, so its
+context menus are native (`desktopApi.dockMenu`) and it draws no resting-spot
+hints while dragging: the window itself moves, so hints inside it would
+travel with the pointer. The bubble and the arrows carry no tooltips. A staged
+minimize holds its exit pose until the entry reports "min", so dock-in never
+replays between the two poses. Three more detached behaviours: the workspace
+window reports its chat region (`dockRegion`) and the dock rests inside it
+whenever a Work window is in front, so it never covers a sidebar; when the
+window loses OS focus while the agent works, the chat lurks the same way it
+does behind a tab. Seeing the screen behind the dock is the agent's job
+through computer use, not a composer control.
 
 ## Work identity (2026-09-18)
 

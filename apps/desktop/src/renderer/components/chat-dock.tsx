@@ -42,6 +42,7 @@ import type {
   ChatSurface,
   McpAppRef,
 } from "../../shared/chat.js";
+import { modifiersForMode } from "../../shared/open-mode.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
 import {
   type AgentInfo,
@@ -465,6 +466,7 @@ function ChatDockContent({
   splitResizing = false,
   bubbleClearance,
   backdropTab = false,
+  nativeWindow = false,
   defaultAgentId,
   paletteTargeted,
   surfaces = [],
@@ -1007,6 +1009,24 @@ function ChatDockContent({
   const [dockHovered, setDockHovered] = useState(false);
   // Starts true: the dock claims focus when it opens.
   const [dockEngaged, setDockEngaged] = useState(true);
+  // The detached window has no tab behind it; the rest of the screen plays
+  // that role. Clicking into another app blurs the window, which lurks the
+  // chat while the agent works; clicking the dock brings it back.
+  const [windowFocused, setWindowFocused] = useState(() =>
+    typeof document === "undefined" ? true : document.hasFocus(),
+  );
+  useEffect(() => {
+    if (!nativeWindow) return;
+    const onFocus = () => setWindowFocused(true);
+    const onBlur = () => setWindowFocused(false);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, [nativeWindow]);
+  const nativeBackdrop = nativeWindow && !windowFocused;
   // Deferred focus may run much later in a hidden/throttled window. Explicit
   // input and external focus changes after it was scheduled own focus. Only
   // this dock's known autofocus calls are excluded from that authority.
@@ -1287,7 +1307,7 @@ function ChatDockContent({
     const pending = entryRef.current.pendingMessage;
     if (!pending || pendingSentRef.current) return;
     pendingSentRef.current = true;
-    void sendRef.current(pending);
+    void sendRef.current(pending.text, pending.attachments);
     onEntryChangeRef.current({
       ...entryRef.current,
       pendingMessage: undefined,
@@ -1322,14 +1342,22 @@ function ChatDockContent({
     setMinimizing(true);
   };
 
+  // The mode flip travels through the entry owner and lands a frame or
+  // more later. Clearing `minimizing` before it lands would count the chat
+  // as expanded again and replay dock-in between the two poses, so the
+  // flag holds until the entry reports "min".
   const finishMinimize = () => {
     if (!minimizingRef.current) return;
-    minimizingRef.current = false;
-    setMinimizing(false);
-    onEntryChangeRef.current({ ...entryRef.current, mode: "min" });
+    if (entryRef.current.mode !== "min")
+      onEntryChangeRef.current({ ...entryRef.current, mode: "min" });
   };
   const finishMinimizeRef = useRef(finishMinimize);
   finishMinimizeRef.current = finishMinimize;
+  useEffect(() => {
+    if (entry.mode !== "min" || !minimizingRef.current) return;
+    minimizingRef.current = false;
+    setMinimizing(false);
+  }, [entry.mode]);
 
   // An untouched chat has nothing worth keeping — dismissing it (Escape
   // or the minimize button) closes it instead of parking an empty bubble.
@@ -1926,11 +1954,11 @@ function ChatDockContent({
   const lurking =
     entry.mode === "partial" &&
     expanded &&
-    backdropTab &&
+    (backdropTab || nativeBackdrop) &&
     chat.isWorking &&
     !questions &&
     !dockHovered &&
-    !dockEngaged &&
+    (!dockEngaged || nativeBackdrop) &&
     !dropActive;
   return (
     <div
@@ -2052,6 +2080,8 @@ function ChatDockContent({
             className={`min-w-0 flex-1 overflow-hidden text-xs font-semibold ${presentsAsTab ? "invisible" : ""}`}
             aria-hidden={presentsAsTab}
           >
+            {/* Icon on the left, centered against the two text lines; the
+              project sits under the title, never under the icon. */}
             <span className="flex min-w-0 items-center gap-2">
               <span className="grid size-6 shrink-0 place-items-center rounded-full border border-border-strong bg-bg-overlay">
                 {chat.session?.icon ? (
@@ -2060,23 +2090,27 @@ function ChatDockContent({
                   <Bot className="size-3.5" />
                 )}
               </span>
-              <span className="truncate">{title}</span>
-              {isIncognito && (
-                <span
-                  className="flex shrink-0 items-center gap-1 rounded-full border border-border-strong bg-bg-inset px-1.5 py-0.5 text-[10px] font-medium text-fg-muted"
-                  title="Incognito: stays on this machine, never synced to a linked server"
-                  data-testid="chat-incognito-badge"
-                >
-                  <Ghost className="size-3" />
-                  Incognito
+              <span className="flex min-w-0 flex-col leading-tight">
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="truncate">{title}</span>
+                  {isIncognito && (
+                    <span
+                      className="flex shrink-0 items-center gap-1 rounded-full border border-border-strong bg-bg-inset px-1.5 py-0.5 text-[10px] font-medium text-fg-muted"
+                      title="Incognito: stays on this machine, never synced to a linked server"
+                      data-testid="chat-incognito-badge"
+                    >
+                      <Ghost className="size-3" />
+                      Incognito
+                    </span>
+                  )}
                 </span>
-              )}
-            </span>
-            {projectName && (
-              <span className="max-w-40 truncate text-[10px] font-normal text-fg-faint">
-                {projectName}
+                {projectName && (
+                  <span className="max-w-40 truncate text-[10px] font-normal text-fg-faint">
+                    {projectName}
+                  </span>
+                )}
               </span>
-            )}
+            </span>
           </header>
           {/* Agent progress sits immediately left of the chat control bar;
           both stay above timeline content scrolled beneath them. */}
@@ -2856,6 +2890,12 @@ function ChatDockContent({
                   onOpenTab={
                     onOpenSurface
                       ? (key, mode) => onOpenSurface(key, mode)
+                      : undefined
+                  }
+                  onOpenPath={
+                    onFileClick
+                      ? (path, mode) =>
+                          onFileClick(path, modifiersForMode(mode))
                       : undefined
                   }
                   maxPills={MAX_ATTACHMENTS}

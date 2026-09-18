@@ -143,7 +143,7 @@ export function ProjectAgentConsentDialog({
               onClick={() => void approve()}
               disabled={busy}
               data-disabled-reason="Wait for the current action to finish"
-              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg hover:opacity-90 disabled:opacity-50"
+              className="button-primary"
             >
               Approve and use
             </PendingButton>

@@ -185,10 +185,14 @@ it("lists a seven-day reminder before archive, preserves it on cancel, and cance
   };
   await archive();
   expect(
-    await run("return document.querySelector('[role=dialog]').textContent;"),
+    await run(
+      "return document.querySelector('[data-testid=archive-session-confirm]').closest('[role=dialog]').textContent;",
+    ),
   ).toContain("sessionlongreminder");
   expect(
-    await run("return document.querySelector('[role=dialog]').textContent;"),
+    await run(
+      "return document.querySelector('[data-testid=archive-session-confirm]').closest('[role=dialog]').textContent;",
+    ),
   ).toContain("Next:");
   await run("button('Cancel').click();");
   await wait(

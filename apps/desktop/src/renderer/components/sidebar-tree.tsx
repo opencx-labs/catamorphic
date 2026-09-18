@@ -1,5 +1,6 @@
 import {
   Tree,
+  type TreeDragAndDrop,
   type TreeItem,
   type TreeRenderContext,
 } from "@catamorphic/app/ui";
@@ -22,6 +23,7 @@ export function SidebarTree<T extends TreeItem>({
   height,
   rowHeight,
   loadChildren,
+  dragAndDrop,
 }: {
   items: readonly T[];
   label: string;
@@ -30,6 +32,8 @@ export function SidebarTree<T extends TreeItem>({
   height?: number;
   rowHeight?: number;
   loadChildren?: (id: string) => void;
+  /** The shared drag-and-drop model; group rows never drag or accept. */
+  dragAndDrop?: TreeDragAndDrop<T>;
   renderItem: (item: T, context: TreeRenderContext) => ReactNode;
 }) {
   const contribution = useSidebarContribution();
@@ -81,6 +85,26 @@ export function SidebarTree<T extends TreeItem>({
       height={section?.height ?? height}
       rowHeight={section?.rowHeight ?? rowHeight}
       loadChildren={loadChildren}
+      dragAndDrop={
+        dragAndDrop
+          ? {
+              drag: (entry) =>
+                entry.item ? (dragAndDrop.drag?.(entry.item) ?? null) : null,
+              accept: (types, target) =>
+                target.item && !target.item.item
+                  ? false
+                  : dragAndDrop.accept(types, {
+                      item: target.item?.item ?? null,
+                      position: target.position,
+                    }),
+              onDrop: (transfer, target) =>
+                dragAndDrop.onDrop(transfer, {
+                  item: target.item?.item ?? null,
+                  position: target.position,
+                }),
+            }
+          : undefined
+      }
       renderItem={(entry, context) =>
         entry.item ? (
           renderItem(entry.item, context)

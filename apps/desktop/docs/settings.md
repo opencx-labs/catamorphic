@@ -13,7 +13,7 @@ For project-overridable settings, lowest to highest priority:
 3. Shared project: `<project>/.catamorphic/settings.json`.
 4. Personal project: `profiles/<id>/settings-projects/<projectId>.json`.
 
-Layout, tab frame, bookmarks presentation and link defaults support all three
+Layout, framed content, bookmarks presentation and link defaults support all three
 editable scopes. Notifications, terminal appearance and terminal macros are
 profile choices. `SETTINGS` is the executable scope allowlist. A shared project
 file is ordinary committed project configuration; a personal override never enters
@@ -32,7 +32,7 @@ by a project override. Reset that project override to follow the profile again.
 Rows reserve space for Reset and source text across inherited and custom states,
 so toggles and resets do not reflow nearby controls. Content padding and corner
 radius preview with the standard 200 ms transition; reduced motion applies them
-immediately. Tab frame independently controls the border.
+immediately. Framed content independently controls the inset window and its border.
 Scope selectors wrap below headings when space is tight, and option controls
 shrink within their rows so both sidebars can remain open without horizontal scroll.
 
@@ -78,10 +78,13 @@ Tests: `settings-store.test.ts`, `config-file.test.ts`,
 ## Palette destinations
 
 The shared catalog supplies ordinary palette matches and the `settings` + Space
-scope. Destinations carry a stable catalog id and a new request id, so opening an
-already-mounted Settings surface reveals the control again. Navigation clears
-filters, expands advanced colors when needed, waits for async controls, scrolls,
-highlights and focuses the target. A floating chat minimizes so it cannot obscure
+scope; the Settings page's search button and the `search-settings` action open
+that same scope, and the page itself never filters. Destinations carry a stable
+catalog id and a new request id, so opening an already-mounted Settings surface
+reveals the control again. Every id resolves to one block: the Connections
+category exposes `github-cli` and `connectors` rather than a category-wide
+target. Navigation expands advanced colors when needed, waits for async
+controls, scrolls, highlights and focuses the target. A floating chat minimizes so it cannot obscure
 the control. Rows identify the inspected scope even when navigation passes its
 section header. Navigation never changes a preference itself.
 
@@ -90,13 +93,27 @@ as workspace settings. Missing selections, colors and fonts inherit. Choosing a
 selection replaces inherited color overrides; individual token and font edits
 remain sparse. Theme edits use the shared configuration file validation and
 last-valid-value caches. The dock preferences are profile choices:
-`dockMultiProject`, `dockDetached`, `dockSide`, and `dockAlignment`.
-The last chooses `edge` (default) or `center` for expanded chats and bubbles;
-`dockSide` always determines the collapsed bottom corner.
+`dockMultiProject`, `dockDetached`, `dockSide`, and `dockPlacement`.
+`dockDetached` is the launch default only: right-clicking the collapsed bubble
+or the arrows floats the dock in its own window or returns it for the current
+session, and closing the detached window returns it the same way. Those actions
+never rewrite the preference, so a restart comes back with the chosen default.
+In the detached window those menus are native, and dragging shows no resting
+spots because the window itself moves. While a Work window is in front the
+detached dock rests inside that window's chat region, between the sidebars;
+when another app is in front it uses the display's work area. Clicking into
+another app while the agent works lurks the chat until the dock is focused
+again.
+`dockPlacement` chooses `left`, `center` (default) or `right` for open chats and
+their bubble strip; `dockSide` chooses the bottom corner the collapsed bubble
+rests in. Dragging the collapsed bubble changes the corner; dragging the
+arrows of an expanded strip changes the placement.
 
 ## Workspace frame
 
-Workspace settings expose `sidebarDividers` (default false), `contentPadding`
-(default 6px) and `contentRadius` (default 14px). Dimensions accept 0 through 48px,
-including square corners and no inset. They support profile, shared project and
+Content sits flush with the sidebars by default. `contentFrame` (default false)
+insets the workspace as a rounded window with a 1px border; `contentPadding`
+(default 6px) and `contentRadius` (default 14px) are that frame's dimensions and
+apply only while it is on. Dimensions accept 0 through 48px. Together with
+`sidebarDividers` (default false) they support profile, shared project and
 personal overrides, appear in settings search and apply live in every tab layout.

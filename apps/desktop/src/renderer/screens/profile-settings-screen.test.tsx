@@ -162,7 +162,11 @@ describe("ProfileSettingsScreen", () => {
       button.textContent?.includes("Add password"),
     );
     await act(async () => add?.click());
-    const editor = container.querySelector('[data-testid="password-editor"]');
+    // Forms open in dialogs at the body, never inline in the page.
+    const editor = document.querySelector('[data-testid="password-editor"]');
+    expect(
+      container.querySelector('[data-testid="password-editor"]'),
+    ).toBeNull();
     expect(editor).not.toBeNull();
     expect(
       editor?.querySelector('[data-testid="password-origin"]'),
@@ -173,9 +177,8 @@ describe("ProfileSettingsScreen", () => {
     expect(
       editor?.querySelector('[data-testid="password-value"]'),
     ).not.toBeNull();
-    expect(
-      editor?.parentElement?.parentElement?.getAttribute("aria-hidden"),
-    ).toBe("false");
+    const dialogRoot = editor?.closest("[role=dialog]")?.parentElement;
+    expect(dialogRoot?.getAttribute("aria-hidden")).toBe("false");
     expect(desktopApi.vaultList).toHaveBeenCalledWith({
       profileId: profile.id,
     });
@@ -183,9 +186,7 @@ describe("ProfileSettingsScreen", () => {
       (button) => button.textContent === "Cancel",
     );
     await act(async () => cancel?.click());
-    expect(
-      editor?.parentElement?.parentElement?.getAttribute("aria-hidden"),
-    ).toBe("true");
+    expect(dialogRoot?.getAttribute("aria-hidden")).toBe("true");
     expect(document.activeElement).toBe(add);
   });
 
@@ -296,7 +297,8 @@ describe("ProfileSettingsScreen", () => {
       '[aria-label="Delete password for accounts.example.com"]',
     );
     await act(async () => deleteButton?.click());
-    expect(container.textContent).toContain(
+    expect(container.textContent).not.toContain("Delete the password for");
+    expect(document.body.textContent).toContain(
       "Delete the password for accounts.example.com?",
     );
   });

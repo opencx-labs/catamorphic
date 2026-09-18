@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   ipcMain,
+  Menu,
   screen,
   type WebContents,
 } from "electron";
@@ -16,6 +17,7 @@ import type {
 } from "../shared/desktop-workspace.js";
 import {
   type DockDrag,
+  type DockRegion,
   type DockSize,
   dockPosition,
 } from "../shared/dock-position.js";
@@ -39,6 +41,13 @@ export class DesktopWorkspaces {
     { x: number; left: number; side: "left" | "right" }
   >();
   private quitting = false;
+  // Detaching is a session choice; the `dockDetached` preference is only
+  // the state a fresh launch starts in. Closing the detached window or
+  // picking "Return dock to the window" never rewrites that default.
+  private readonly detachOverrides = new Map<string, boolean>();
+  // Chat regions reported by workspace windows (by webContents id). While
+  // one of them is in front, the detached dock rests inside its region.
+  private readonly dockRegions = new Map<number, DockRegion>();
   private readonly drafts = new Map<string, ChatDraft>();
   private readonly initialProjects = new Map<number, string>();
 
@@ -63,10 +72,74 @@ export class DesktopWorkspaces {
       this.lastWindows.delete(profileId);
       this.lastWindows.set(profileId, window);
       this.broadcast(profileId);
+      // A workspace came to the front: the dock moves into its chat region.
+      this.syncFloating(profileId);
     });
-    options.config.onPrefsChanged((profileId) => {
+    app.on("browser-window-blur", () => {
+      // Focus settles a tick later; when it left the app, the dock returns
+      // to the display's work area.
+      setTimeout(() => {
+        if (BrowserWindow.getFocusedWindow()) return;
+        for (const profileId of this.floating.keys())
+          this.syncFloating(profileId);
+      }, 0);
+    });
+    options.config.onPrefsChanged((profileId, prefs) => {
+      // A changed default wins over the session choice made before it.
+      if (this.detachOverrides.get(profileId) === prefs.dockDetached)
+        this.detachOverrides.delete(profileId);
       this.syncFloating(profileId);
       this.broadcast(profileId);
+    });
+    // The detached window is a strip 124px tall: an in-page menu would be
+    // clamped inside it, so its context menus are native and resolve with
+    // the picked action.
+    ipcMain.handle(
+      "catamorphic:dock-menu",
+      (
+        event,
+        entries: Array<{ label: string; action: string; danger?: boolean }>,
+      ) => {
+        const profileId = options.windows.profileFor(event.sender);
+        const window = this.floating.get(profileId);
+        if (!window || window.webContents !== event.sender) return null;
+        return new Promise<string | null>((resolve) => {
+          let picked: string | null = null;
+          Menu.buildFromTemplate(
+            entries.map((entry) => ({
+              label: entry.label,
+              click: () => {
+                picked = entry.action;
+              },
+            })),
+          ).popup({
+            // At the cursor: window-relative coordinates land off target on
+            // the transparent strip, and a right-click puts the cursor here.
+            window,
+            // Closing fires before click on some platforms; settle after both.
+            callback: () => setTimeout(() => resolve(picked), 0),
+          });
+        });
+      },
+    );
+    ipcMain.handle(
+      "catamorphic:dock-region",
+      (event, region: DockRegion | null) => {
+        if (
+          region &&
+          [region.left, region.top, region.width, region.height].some(
+            (value) => !Number.isFinite(value),
+          )
+        )
+          return;
+        if (region) this.dockRegions.set(event.sender.id, region);
+        else this.dockRegions.delete(event.sender.id);
+        this.syncFloating(options.windows.profileFor(event.sender));
+      },
+    );
+    ipcMain.handle("catamorphic:dock-detach", (event, detached: boolean) => {
+      const profileId = options.windows.profileFor(event.sender);
+      this.setDetached(profileId, detached === true);
     });
     ipcMain.handle("catamorphic:workspace-initial", (event) =>
       this.initialProjects.get(event.sender.id),
@@ -254,8 +327,7 @@ export class DesktopWorkspaces {
         const profileId = options.windows.profileFor(event.sender);
         const floating = this.floating.get(profileId);
         const target =
-          floating &&
-          options.config.forProfile(profileId).prefs.load().dockDetached
+          floating && this.detached(profileId)
             ? floating.webContents
             : event.sender;
         target.send("catamorphic:workspace-event", {
@@ -264,6 +336,18 @@ export class DesktopWorkspaces {
           action,
           message,
         } satisfies WorkspaceEvent);
+      },
+    );
+    // The detached dock carries transparent headroom above its strip so
+    // hints can open above bubbles. The renderer reports whether the pointer
+    // is over content; over empty space the window lets clicks through.
+    ipcMain.handle(
+      "catamorphic:dock-ignore-mouse",
+      (event, ignore: boolean) => {
+        const profileId = options.windows.profileFor(event.sender);
+        const window = this.floating.get(profileId);
+        if (!window || window.webContents !== event.sender) return;
+        window.setIgnoreMouseEvents(ignore === true, { forward: true });
       },
     );
     ipcMain.handle("catamorphic:dock-resize", (event, size: DockSize) => {
@@ -276,7 +360,7 @@ export class DesktopWorkspaces {
         !Number.isFinite(size.width)
       )
         return;
-      const area = screen.getDisplayMatching(window.getBounds()).workArea;
+      const area = this.dockArea(profileId, window);
       const nextHeight = Math.max(
         64,
         Math.min(Math.round(size.height), area.height),
@@ -294,8 +378,11 @@ export class DesktopWorkspaces {
           area,
           width: nextWidth,
           height: nextHeight,
-          side: prefs.dockSide,
-          centered: prefs.dockAlignment === "center" && size.expanded,
+          side:
+            size.expanded && prefs.dockPlacement !== "center"
+              ? prefs.dockPlacement
+              : prefs.dockSide,
+          centered: prefs.dockPlacement === "center" && size.expanded,
         }),
       });
     });
@@ -320,7 +407,7 @@ export class DesktopWorkspaces {
       }
       const drag = this.dockDrags.get(profileId);
       if (!drag) return;
-      const area = screen.getDisplayMatching(bounds).workArea;
+      const area = this.dockArea(profileId, window);
       if (input.phase === "move") {
         window.setPosition(
           Math.round(
@@ -337,22 +424,35 @@ export class DesktopWorkspaces {
         return;
       }
       if (input.phase !== "end" && input.phase !== "cancel") return;
+      // Collapsed drags pick a corner; expanded drags pick where open chats
+      // sit: left, center or right thirds of the display.
+      const expanded = this.dockExpanded.get(profileId) === true;
+      const current = prefs.load();
       const side =
         input.phase === "cancel"
           ? drag.side
           : input.screenX < area.x + area.width / 2
             ? "left"
             : "right";
+      const placement =
+        input.phase === "cancel"
+          ? current.dockPlacement
+          : input.screenX < area.x + area.width / 3
+            ? "left"
+            : input.screenX > area.x + (area.width * 2) / 3
+              ? "right"
+              : "center";
       const position = dockPosition({
         area,
         ...bounds,
-        side,
-        centered:
-          prefs.load().dockAlignment === "center" &&
-          this.dockExpanded.get(profileId) === true,
+        side: expanded && placement !== "center" ? placement : side,
+        centered: expanded && placement === "center",
       });
       try {
-        if (prefs.load().dockSide !== side) prefs.save({ dockSide: side });
+        if (expanded) {
+          if (current.dockPlacement !== placement)
+            prefs.save({ dockPlacement: placement });
+        } else if (current.dockSide !== side) prefs.save({ dockSide: side });
       } finally {
         this.dockDrags.delete(profileId);
         window.setPosition(position.x, position.y, !input.reducedMotion);
@@ -415,12 +515,7 @@ export class DesktopWorkspaces {
       ? this.options.windows.profileFor(focused.webContents)
       : [...this.lastWindows.keys()].at(-1);
     const dock = profileId ? this.floating.get(profileId) : undefined;
-    if (
-      dock &&
-      profileId &&
-      this.options.config.forProfile(profileId).prefs.load().dockDetached
-    )
-      return dock.webContents;
+    if (dock && profileId && this.detached(profileId)) return dock.webContents;
     return (profileId ? this.lastWindows.get(profileId) : undefined)
       ?.webContents;
   }
@@ -429,7 +524,9 @@ export class DesktopWorkspaces {
     const profileId = this.options.windows.profileFor(window.webContents);
     if (dock) return;
     this.lastWindows.set(profileId, window);
+    const contentsId = window.webContents.id;
     window.on("closed", () => {
+      this.dockRegions.delete(contentsId);
       for (const [projectId, owner] of this.owners)
         if (owner.isDestroyed()) this.owners.delete(projectId);
       for (const [localId, chat] of this.chats)
@@ -504,10 +601,10 @@ export class DesktopWorkspaces {
         currentWindow?.webContents.id ?? sender.id,
       ),
       activeChatId: this.activeChats.get(profileId),
-      detached: prefs.dockDetached,
+      detached: this.detached(profileId),
       multiProject: prefs.dockMultiProject,
       side: prefs.dockSide,
-      alignment: prefs.dockAlignment,
+      placement: prefs.dockPlacement,
     };
   }
 
@@ -519,23 +616,66 @@ export class DesktopWorkspaces {
       );
   }
 
+  /**
+   * Where the dock rests: the focused workspace window's chat region when
+   * one of this profile's windows is in front, else the display's work area.
+   */
+  private dockArea(profileId: string, dock: BrowserWindow) {
+    const focused = BrowserWindow.getFocusedWindow();
+    if (focused && focused !== dock && !focused.isDestroyed()) {
+      const region = this.dockRegions.get(focused.webContents.id);
+      if (
+        region &&
+        this.options.windows.profileFor(focused.webContents) === profileId
+      ) {
+        const content = focused.getContentBounds();
+        return {
+          x: Math.round(content.x + region.left),
+          y: Math.round(content.y + region.top),
+          width: Math.round(region.width),
+          height: Math.round(region.height),
+        };
+      }
+    }
+    return screen.getDisplayMatching(dock.getBounds()).workArea;
+  }
+
+  private detached(profileId: string): boolean {
+    return (
+      this.detachOverrides.get(profileId) ??
+      this.options.config.forProfile(profileId).prefs.load().dockDetached
+    );
+  }
+
+  private setDetached(profileId: string, detached: boolean) {
+    const preferred = this.options.config
+      .forProfile(profileId)
+      .prefs.load().dockDetached;
+    if (detached === preferred) this.detachOverrides.delete(profileId);
+    else this.detachOverrides.set(profileId, detached);
+    this.syncFloating(profileId);
+    this.broadcast(profileId);
+  }
+
   private syncFloating(profileId: string) {
     const prefs = this.options.config.forProfile(profileId).prefs.load();
     const existing = this.floating.get(profileId);
-    if (!prefs.dockDetached) {
+    if (!this.detached(profileId)) {
       existing?.hide();
       return;
     }
     if (existing && !existing.isDestroyed()) {
-      const area = screen.getDisplayMatching(existing.getBounds()).workArea;
+      const area = this.dockArea(profileId, existing);
       const bounds = existing.getBounds();
+      const expanded = this.dockExpanded.get(profileId) === true;
       const position = dockPosition({
         area,
         ...bounds,
-        side: prefs.dockSide,
-        centered:
-          prefs.dockAlignment === "center" &&
-          this.dockExpanded.get(profileId) === true,
+        side:
+          expanded && prefs.dockPlacement !== "center"
+            ? prefs.dockPlacement
+            : prefs.dockSide,
+        centered: expanded && prefs.dockPlacement === "center",
       });
       if (
         !this.dockDrags.has(profileId) &&
@@ -556,21 +696,25 @@ export class DesktopWorkspaces {
         prefs.dockSide === "left"
           ? area.x + 12
           : area.x + area.width - width - 12,
-      y: area.y + area.height - 88,
+      y: area.y + area.height - 136,
       width,
-      height: 76,
+      height: 124,
     });
     this.floating.set(profileId, window);
     window.setAlwaysOnTop(true, "floating");
+    // The dock follows every Space. Not `visibleOnFullScreen`: Electron
+    // implements that by turning the whole process into a UIElement app,
+    // which drops Work from the Dock and the app switcher.
     if (process.platform !== "win32")
-      window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      window.setVisibleOnAllWorkspaces(true, {
+        skipTransformProcessType: true,
+      });
     window.on("close", (event) => {
       if (this.quitting) return;
+      // Closing returns the dock to the window for this session only, so a
+      // restart (or a killed dev instance) comes back with the chosen default.
       event.preventDefault();
-      this.options.config
-        .forProfile(profileId)
-        .prefs.save({ dockDetached: false });
-      window.hide();
+      this.setDetached(profileId, false);
     });
   }
 }

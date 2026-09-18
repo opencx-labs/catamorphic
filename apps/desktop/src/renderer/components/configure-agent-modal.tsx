@@ -839,7 +839,7 @@ function ProfileAgentBody({
             effectiveAuth === "api-key" && !hasSavedKey && !apiKey.trim()
           }
           data-testid="agent-save"
-          className="h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg disabled:cursor-not-allowed disabled:opacity-50"
+          className="button-primary"
         >
           Save
         </PendingButton>
@@ -968,7 +968,7 @@ function ProjectAgentBody({
             pending={approving}
             pendingLabel="Approving…"
             onClick={() => void approve()}
-            className="h-8 cursor-pointer rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg"
+            className="button-primary"
           >
             {agent.consent === "stale" ? "Approve changes" : "Approve"}
           </PendingButton>

@@ -30,19 +30,19 @@ export const SETTINGS = {
     valid: boolean,
   },
   dockSide: {
-    label: "Dock position",
+    label: "Collapsed bubble corner",
     description: "Drag the collapsed bubble to switch bottom corners.",
     scopes: profileScope,
     valid: oneOf("left", "right"),
     options: { left: "Left", right: "Right" },
   },
-  dockAlignment: {
-    label: "Expanded dock position",
+  dockPlacement: {
+    label: "Open chat position",
     description:
-      "Keep open chats and bubbles at the edge or centered in the workspace.",
+      "Where open chats and their bubbles sit. Drag the arrows button to move them.",
     scopes: profileScope,
-    valid: oneOf("edge", "center"),
-    options: { edge: "At the edge", center: "Centered" },
+    valid: oneOf("left", "center", "right"),
+    options: { left: "Left", center: "Centered", right: "Right" },
   },
   sidebarDividers: {
     label: "Sidebar dividers",
@@ -50,9 +50,16 @@ export const SETTINGS = {
     scopes: projectScopes,
     valid: boolean,
   },
+  contentFrame: {
+    label: "Framed content",
+    description:
+      "Inset the workspace as a rounded, bordered window. Padding and corner radius apply while it is on.",
+    scopes: projectScopes,
+    valid: boolean,
+  },
   contentPadding: {
-    label: "Content padding",
-    description: "Space around the main workspace in pixels.",
+    label: "Frame padding",
+    description: "Space around the framed workspace in pixels.",
     scopes: projectScopes,
     range: { min: 0, max: 48, step: 1 },
     valid: (value: unknown) =>
@@ -62,9 +69,9 @@ export const SETTINGS = {
       value <= 48,
   },
   contentRadius: {
-    label: "Content corner radius",
+    label: "Frame corner radius",
     description:
-      "Round the main workspace corners in pixels. Use 0 for square corners.",
+      "Round the framed workspace corners in pixels. Use 0 for square corners.",
     scopes: projectScopes,
     range: { min: 0, max: 48, step: 1 },
     valid: (value: unknown) =>
@@ -91,12 +98,6 @@ export const SETTINGS = {
     scopes: projectScopes,
     valid: oneOf("top", "sidebar"),
     options: { top: "Above content", sidebar: "In sidebar" },
-  },
-  tabFrame: {
-    label: "Tab frame",
-    scopes: projectScopes,
-    valid: boolean,
-    description: "Add a rounded, inset border around tab content.",
   },
   pinnedBookmarks: {
     label: "Pinned bookmarks",

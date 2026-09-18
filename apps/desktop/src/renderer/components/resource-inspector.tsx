@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { themeStyle, useTheme } from "../lib/theme.js";
 
 export const RESOURCE_INSPECTOR_DELAY_MS = 400;
 const CLOSE_GRACE_MS = 120;
@@ -28,13 +29,36 @@ export function computeInspectorPosition({
   height,
   viewportWidth,
   viewportHeight,
+  placement = "side",
 }: {
   anchor: InspectorAnchor;
   width: number;
   height: number;
   viewportWidth: number;
   viewportHeight: number;
+  /**
+   * "side" flips left/right of the anchor. "above" stacks over it (below
+   * when there is no room), left-aligned, so a wide panel never lands on
+   * the anchor's own controls such as a pill's remove button.
+   */
+  placement?: "side" | "above";
 }): { side: "left" | "right"; left: number; top: number } {
+  if (placement === "above") {
+    const fitsAbove = anchor.top - GAP - height >= VIEWPORT_MARGIN;
+    return {
+      side: "right",
+      left: Math.max(
+        VIEWPORT_MARGIN,
+        Math.min(anchor.left, viewportWidth - width - VIEWPORT_MARGIN),
+      ),
+      top: fitsAbove
+        ? anchor.top - GAP - height
+        : Math.min(
+            anchor.bottom + GAP,
+            viewportHeight - height - VIEWPORT_MARGIN,
+          ),
+    };
+  }
   const fitsRight =
     anchor.right + GAP + width <= viewportWidth - VIEWPORT_MARGIN;
   const side: "left" | "right" = fitsRight ? "right" : "left";
@@ -82,10 +106,13 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
   onOpen,
   disabled = false,
   testId,
+  placement = "side",
 }: {
   label: string;
   disabled?: boolean;
   testId?: string;
+  /** Where the panel sits relative to its trigger; see computeInspectorPosition. */
+  placement?: "side" | "above";
   children: (props: ResourceInspectorTriggerProps<T>) => ReactNode;
   content: ReactNode | ((dismiss: () => void) => ReactNode);
   delayMs?: number;
@@ -308,6 +335,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
           id={id}
           label={label}
           anchor={anchor}
+          placement={placement}
           open={open}
           onEnter={() => {
             panelInterested.current = true;
@@ -340,6 +368,7 @@ export function InspectorPortal({
   id,
   label,
   anchor,
+  placement = "side",
   open,
   onEnter,
   onLeave,
@@ -350,6 +379,7 @@ export function InspectorPortal({
   id: string;
   label: string;
   anchor: InspectorAnchor;
+  placement?: "side" | "above";
   open: boolean;
   onEnter: () => void;
   onLeave: () => void;
@@ -357,6 +387,42 @@ export function InspectorPortal({
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  // Portaled to the body, the panel keeps the theme of the scope it opened in.
+  const theme = useTheme();
+  // The panel's height follows its content through a transition, so async
+  // sections that arrive after the popover opens grow it instead of
+  // snapping it. The first measurement lands before paint, untransitioned.
+  const [height, setHeight] = useState<number | null>(null);
+  const [settled, setSettled] = useState(false);
+  useLayoutEffect(() => {
+    const node = content.current;
+    const panel = ref.current;
+    if (!node || !panel) return;
+    // Border-box height: content plus the panel's own padding and border,
+    // so the measured height never leaves a sliver that scrolls.
+    const chrome = () => {
+      const style = getComputedStyle(panel);
+      return (
+        Number.parseFloat(style.paddingTop) +
+        Number.parseFloat(style.paddingBottom) +
+        Number.parseFloat(style.borderTopWidth) +
+        Number.parseFloat(style.borderBottomWidth)
+      );
+    };
+    const measure = () => setHeight(node.offsetHeight + chrome());
+    measure();
+    const frame = requestAnimationFrame(() => setSettled(true));
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(measure);
+    observer?.observe(node);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer?.disconnect();
+    };
+  }, []);
   const [position, setPosition] = useState<{
     left: number;
     top: number;
@@ -373,6 +439,7 @@ export function InspectorPortal({
       setPosition(
         computeInspectorPosition({
           anchor,
+          placement,
           width: panel.offsetWidth,
           height: panel.offsetHeight,
           viewportWidth: window.innerWidth,
@@ -391,7 +458,7 @@ export function InspectorPortal({
       observer?.disconnect();
       window.removeEventListener("resize", updatePosition);
     };
-  }, [anchor]);
+  }, [anchor, placement]);
 
   useEffect(() => {
     if (open) return;
@@ -414,7 +481,14 @@ export function InspectorPortal({
       data-open={open || undefined}
       aria-hidden={!open}
       inert={!open}
-      style={{ left: position.left, top: position.top }}
+      data-theme={theme?.appearance}
+      style={{
+        ...themeStyle(theme),
+        left: position.left,
+        top: position.top,
+        height: height ?? undefined,
+      }}
+      data-settled={settled || undefined}
       onPointerEnter={onEnter}
       onPointerLeave={onLeave}
       onFocusCapture={onEnter}
@@ -435,9 +509,9 @@ export function InspectorPortal({
         )
           onExited();
       }}
-      className={`fixed z-[130] max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] w-80 overflow-y-auto overscroll-contain rounded-lg border border-border bg-bg-overlay p-3 shadow-2xl [scrollbar-gutter:stable] ${open ? `animate-inspector-in-${position.side}` : `pointer-events-none opacity-0 animate-inspector-out-${position.side}`}`}
+      className={`fixed z-[130] max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] w-80 overflow-y-auto overscroll-contain rounded-lg border border-border bg-bg-overlay p-3 shadow-2xl [scrollbar-gutter:stable] ${settled ? "transition-[height,top] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none" : ""} ${open ? `animate-inspector-in-${position.side}` : `pointer-events-none opacity-0 animate-inspector-out-${position.side}`}`}
     >
-      {children}
+      <div ref={content}>{children}</div>
     </div>,
     document.body,
   );

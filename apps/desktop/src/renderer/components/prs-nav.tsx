@@ -36,24 +36,43 @@ export function PrsNav({
   const [prs, setPrs] = useState<PullRequestSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
-  const [company, setCompany] = useState(false);
+  // null until the remote status answers: company projects list proposals
+  // through their server and need no GitHub CLI connection.
+  const [company, setCompany] = useState<boolean | null>(null);
   useEffect(() => {
     let cancelled = false;
+    setCompany(null);
     void desktopApi
       .remoteStatus(projectId)
       .then((status) => {
         if (!cancelled) setCompany(Boolean(status));
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) setCompany(false);
+      });
     return () => {
       cancelled = true;
     };
   }, [projectId]);
   useSidebarRefresh(() => setRefresh((value) => value + 1));
-  const isEmpty = !error && prs !== null && prs.length === 0;
-  useSidebarContent(
-    error ? "error" : prs === null ? "loading" : isEmpty ? "empty" : "ready",
-  );
+  const signedOut = error?.includes("[github-cli-required]") ?? false;
+  const disconnected =
+    signedOut || (error?.includes("[github-cli-disabled]") ?? false);
+  useSidebarContent({
+    // Not connected is content (the connect card), not a failed read.
+    state: disconnected
+      ? "ready"
+      : error
+        ? "error"
+        : prs === null
+          ? "loading"
+          : prs.length === 0
+            ? "empty"
+            : "ready",
+    error: disconnected ? undefined : (error ?? undefined),
+    retry: () => setRefresh((value) => value + 1),
+    empty: company ? "No proposals awaiting review." : "No open pull requests.",
+  });
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reconnect and Retry invalidate remote data
   useEffect(() => {
@@ -61,6 +80,19 @@ export function PrsNav({
     setPrs(null);
     setError(null);
     let revision = 0;
+    // Wait for the remote status; a company project never needs the CLI.
+    if (company === null)
+      return () => {
+        cancelled = true;
+      };
+    // The connection is off: the answer is known without asking the main
+    // process, which would log a refusal for every window focus.
+    if (!company && !prefs.githubCliEnabled) {
+      setError("[github-cli-disabled] GitHub CLI is not connected.");
+      return () => {
+        cancelled = true;
+      };
+    }
     const load = () => {
       const request = ++revision;
       void desktopApi
@@ -98,7 +130,7 @@ export function PrsNav({
       window.removeEventListener("focus", load);
       unsubscribe();
     };
-  }, [projectId, refresh, prefs.githubCliEnabled, visible]);
+  }, [projectId, refresh, prefs.githubCliEnabled, visible, company]);
 
   const inScope = (items: PullRequestSummary[]) =>
     items.filter(
@@ -133,68 +165,43 @@ export function PrsNav({
         kind: "navigate",
         run: (mode) => openReview(pr, mode),
       }));
-  if (
-    error?.includes("[github-cli-required]") ||
-    error?.includes("[github-cli-disabled]")
-  )
+  if (disconnected) {
+    // The sidebar re-checks on window focus and whenever the connection
+    // preference changes, so this state needs exactly one action.
+    const things = company ? "proposals" : "pull requests";
     return (
       <div
-        className="flex flex-col gap-2 px-2 py-1 text-xs"
+        className="flex flex-col gap-1.5 px-2 py-1"
         data-testid="prs-connect-github"
       >
-        <p className="text-fg-muted">
-          Choose the optional GitHub CLI connection in Settings to see pull
-          requests.
+        <p className="text-xs font-medium text-fg">GitHub not connected</p>
+        <p className="text-xs text-fg-muted">
+          {signedOut
+            ? `Sign in to the GitHub CLI to review ${things} here.`
+            : `Connect the GitHub CLI to review ${things} here.`}
         </p>
         <button
           type="button"
-          className="text-left text-accent"
           onClick={() =>
             onOpenDiff({
               kind: "settings",
               name: "settings",
               label: "Settings",
               destination: {
-                id: "connections",
+                id: "github-cli",
                 requestId: crypto.randomUUID(),
               },
             })
           }
+          className="mt-1 flex h-7 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-border text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
         >
-          Open connection settings
-        </button>
-        <button
-          type="button"
-          className="text-left text-accent"
-          onClick={() => setRefresh((value) => value + 1)}
-        >
-          Retry after signing in
+          <GitPullRequest className="size-3.5" />
+          {signedOut ? "Manage connection" : "Connect GitHub"}
         </button>
       </div>
-    );
-  if (error)
-    return (
-      <div className="px-2 py-1 text-xs">
-        <p role="alert" className="break-words text-danger">
-          {error}
-        </p>
-        <button
-          type="button"
-          className="mt-2 text-accent"
-          onClick={() => setRefresh((value) => value + 1)}
-        >
-          Retry
-        </button>
-      </div>
-    );
-  if (!prs) return null;
-  if (prs.length === 0) {
-    return (
-      <p className="sidebar-empty-state">
-        {company ? "No proposals awaiting review." : "No open pull requests."}
-      </p>
     );
   }
+  if (error || !prs || prs.length === 0) return null;
   return (
     <div className="flex flex-col gap-2">
       {preferencesError && (

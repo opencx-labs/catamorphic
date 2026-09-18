@@ -11,13 +11,18 @@ import {
   ChevronRight,
   CircleDot,
   Columns2,
+  Command,
   Cpu,
+  Diff,
   FileCode,
+  FileSearch,
   Gauge,
   Ghost,
+  GitCompare,
   Globe,
   History,
   LayoutGrid,
+  Link,
   Link2,
   type LucideIcon,
   Maximize2,
@@ -25,19 +30,22 @@ import {
   MessageSquarePlus,
   Minimize2,
   PanelLeft,
+  PanelRight,
   Plug,
+  Plus,
   RefreshCw,
   Search,
+  Send,
   Settings2,
   Settings as SettingsIcon,
   Smartphone,
   Sparkles,
   SquareTerminal,
   Star,
+  TextSearch,
   UserRound,
   Workflow as WorkflowIcon,
   X,
-  Zap,
 } from "lucide-react";
 import {
   Fragment,
@@ -113,9 +121,28 @@ import type { WorkspaceTab } from "./workspace-tabs.js";
 /**
  * Icons stay renderer-side (the shared registry is plain data usable by
  * the main process). Unknown ids — e.g. future plugin actions — fall back
- * to Zap.
+ * to the command glyph.
  */
 const ACTION_ICONS: Partial<Record<ActionId, LucideIcon>> = {
+  "open-settings": SettingsIcon,
+  "open-floating-settings": SettingsIcon,
+  "search-files": FileSearch,
+  "search-content": TextSearch,
+  "search-diff": Diff,
+  "search-changes": GitCompare,
+  "search-settings": Search,
+  "new-tab": Plus,
+  "command-palette": Command,
+  "submit-pr-comment": Send,
+  "toggle-floating-terminal": SquareTerminal,
+  "new-floating-browser": Globe,
+  "dismiss-floating": X,
+  "floating-to-tab": Maximize2,
+  "floating-to-split": Columns2,
+  "browser-focus-address": Link,
+  "browser-reload": RefreshCw,
+  "browser-reload-hard": RefreshCw,
+  "toggle-right-sidebar": PanelRight,
   "check-for-updates": RefreshCw,
   "session-status": CircleDot,
   "continue-on-mobile": Smartphone,
@@ -329,7 +356,7 @@ const LIST_MAX_HEIGHT = 350;
  * input pops the chip (cmdk convention).
  */
 export type PaletteSearchRequest = { nonce: string } & (
-  | { mode: "files" | "content" | "history" }
+  | { mode: "files" | "content" | "history" | "settings" }
   | { mode: "section"; label: string; load: () => Promise<PaletteItem[]> }
 );
 
@@ -1049,7 +1076,7 @@ export function CommandPalette({
       const targetPicker = PICKER_ACTIONS[action.id];
       return {
         id: `action:${action.id}`,
-        icon: ACTION_ICONS[action.id] ?? Zap,
+        icon: ACTION_ICONS[action.id] ?? Command,
         label: action.label,
         keywords: [...action.keywords],
         shortcut:

@@ -96,6 +96,8 @@ export interface ComposerInputProps {
   onAnimationEnd?: (event: AnimationEvent<HTMLDivElement>) => void;
   /** Tab pills open their tab on click. */
   onOpenTab?: (key: string, mode: OpenMode) => void;
+  /** Clicking a path pill opens that file (in the owning workspace). */
+  onOpenPath?: (path: string, mode: OpenMode) => void;
   /** Server-side cap, mirrored: inserts past it are dropped. */
   maxPills?: number;
 }
@@ -198,6 +200,7 @@ export const ComposerInput = forwardRef<
     onPaste,
     onAnimationEnd,
     onOpenTab,
+    onOpenPath,
     maxPills = 32,
   },
   ref,
@@ -580,7 +583,14 @@ export const ComposerInput = forwardRef<
                     const key = pill.attachment.source.key;
                     return (mode: OpenMode) => onOpenTab(key, mode);
                   })()
-                : undefined
+                : onOpenPath &&
+                    pill.attachment.kind === "text" &&
+                    pill.attachment.source.type === "path"
+                  ? (() => {
+                      const path = pill.attachment.source.path;
+                      return (mode: OpenMode) => onOpenPath(path, mode);
+                    })()
+                  : undefined
             }
             testId="composer-pill"
           />,

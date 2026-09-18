@@ -13,12 +13,15 @@ const roots: Root[] = [];
 afterEach(() => {
   act(() => {
     for (const root of roots.splice(0)) root.unmount();
+    for (const node of document.body.querySelectorAll("body > div"))
+      node.remove();
   });
   for (const container of containers.splice(0)) container.remove();
 });
 
 function mountModal(onClose: () => void) {
   const container = document.createElement("div");
+  document.body.appendChild(container);
   document.body.append(container);
   containers.push(container);
   const root = createRoot(container);
@@ -60,8 +63,8 @@ function mountControlledModal(opener: HTMLElement) {
 
 describe("Modal focus containment", () => {
   it("does not reset focused controls when a parent rerenders", () => {
-    const { container, render } = mountModal(() => {});
-    const first = container.querySelector<HTMLButtonElement>("button");
+    const { render } = mountModal(() => {});
+    const first = document.body.querySelector<HTMLButtonElement>("button");
     first?.focus();
 
     render(1);
@@ -70,9 +73,10 @@ describe("Modal focus containment", () => {
   });
 
   it("wraps Shift+Tab from the initially focused panel to the last control", () => {
-    const { container } = mountModal(() => {});
-    const panel = container.querySelector<HTMLElement>('[role="dialog"]');
-    const controls = container.querySelectorAll<HTMLButtonElement>("button");
+    mountModal(() => {});
+    const panel = document.body.querySelector<HTMLElement>('[role="dialog"]');
+    const controls =
+      document.body.querySelectorAll<HTMLButtonElement>("button");
     expect(document.activeElement).toBe(panel);
 
     act(() => {
@@ -119,9 +123,9 @@ it("does not mount closed contents and removes them after the exit animation", (
   render(false);
   expect(container.childElementCount).toBe(0);
   render(true);
-  expect(container.querySelector(".animate-spin")).not.toBeNull();
+  expect(document.body.querySelector(".animate-spin")).not.toBeNull();
   render(false);
-  const exit = container.querySelector(".animate-fade-out");
+  const exit = document.body.querySelector(".animate-fade-out");
   expect(exit).not.toBeNull();
   act(() => {
     const event = new Event("webkitAnimationEnd", { bubbles: true });

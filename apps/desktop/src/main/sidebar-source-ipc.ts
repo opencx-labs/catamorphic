@@ -17,17 +17,33 @@ const identity = z.object({
 const requestSchema = identity
   .extend({
     requestId: z.string().min(1),
-    method: z.enum(["load", "action"]),
+    method: z.enum(["load", "action", "move", "drop"]),
     parentId: z.string().nullable().optional(),
     cursor: z.string().optional(),
     itemId: z.string().optional(),
     action: z.string().optional(),
+    beforeId: z.string().optional(),
+    payload: z
+      .object({
+        kind: z.string().min(1),
+        label: z.string(),
+        url: z.string().optional(),
+      })
+      .optional(),
   })
   .refine(
     (request) =>
       request.method !== "action" ||
       (request.itemId !== undefined && Boolean(request.action)),
     "Source actions require an item id and action name.",
+  )
+  .refine(
+    (request) => request.method !== "move" || Boolean(request.itemId),
+    "Moving a row requires its item id.",
+  )
+  .refine(
+    (request) => request.method !== "drop" || request.payload !== undefined,
+    "Dropping into a source requires a payload.",
   );
 /** Only the desktop renderer can select sources from its owning profile's layout. */
 export function registerSidebarSources(deps: {
@@ -143,8 +159,13 @@ export function registerSidebarSources(deps: {
         const result = await runtime.request({ ...input, requestId: key });
         if (request.cancelled || event.sender.isDestroyed())
           throw new Error("Sidebar request cancelled.");
+        // The page carries what the module can do so the tree knows which
+        // drags to accept before any drop happens.
         return input.method === "load"
-          ? sanitizeSidebarSourcePage(result)
+          ? {
+              ...sanitizeSidebarSourcePage(result),
+              capabilities: runtime.capabilities,
+            }
           : null;
       } finally {
         requests.delete(key);

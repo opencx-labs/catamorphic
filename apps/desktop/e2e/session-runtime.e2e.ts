@@ -280,7 +280,7 @@ it("uses themed harness marks in new-chat status", async () => {
 it("centers expanded chats on request and drags the collapsed bubble between bottom corners", async () => {
   await run(`const { agents } = await window.catamorphicDesktop.agentsList();
     await window.catamorphicDesktop.agentsSetDefault(agents.find(agent => agent.name === 'Fake Agent').id);
-    await window.catamorphicDesktop.setPrefs({dockSide:'right',dockAlignment:'center'});
+    await window.catamorphicDesktop.setPrefs({dockSide:'right',dockPlacement:'center'});
     window.dispatchEvent(new KeyboardEvent('keydown', {key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}));`);
   await wait(`return !!dock();`);
   await wait(
@@ -293,7 +293,7 @@ it("centers expanded chats on request and drags the collapsed bubble between bot
       `${process.env.CATAMORPHIC_INSPECTOR_SCREENSHOT}-dock-center.png`,
     );
   await run(
-    `await window.catamorphicDesktop.setPrefs({dockAlignment:'edge'});`,
+    `await window.catamorphicDesktop.setPrefs({dockPlacement:'right'});`,
   );
   await wait(
     `const host=$('[data-dock-host]').getBoundingClientRect(), chat=dock().getBoundingClientRect(); return host.right-chat.right < 40;`,
@@ -374,10 +374,14 @@ it("centers expanded chats on request and drags the collapsed bubble between bot
     features: [{ name: "prefers-reduced-motion", value: "reduce" }],
   });
   expect(
-    await run(
-      `return getComputedStyle($('[data-dock-rail]')).transitionDuration;`,
+    Number.parseFloat(
+      String(
+        await run(
+          `return getComputedStyle($('[data-dock-rail]')).transitionDuration;`,
+        ),
+      ),
     ),
-  ).toBe("0s");
+  ).toBeLessThanOrEqual(0.001);
   await app.cdp("Emulation.setEmulatedMedia", { features: [] });
   await run(`$('[aria-label="Expand chat bubbles"]').click();`);
   await wait(`return $('[data-dock-rail]')?.dataset.dockCollapsed==='false';`);
@@ -388,6 +392,6 @@ it("centers expanded chats on request and drags the collapsed bubble between bot
   await wait(`return $('[data-dock-host]')?.dataset.dockSide==='left';`);
   await app.reload();
   await wait(
-    `return $('[data-dock-host]')?.dataset.dockSide==='left' && $('[data-dock-host]')?.dataset.dockAlignment==='edge';`,
+    `return $('[data-dock-host]')?.dataset.dockSide==='left' && $('[data-dock-host]')?.dataset.dockPlacement==='right';`,
   );
 });

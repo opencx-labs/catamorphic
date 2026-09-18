@@ -4,6 +4,18 @@ export interface DockSize {
   expanded: boolean;
 }
 
+/**
+ * The workspace's chat region, relative to its window's content area. While
+ * a workspace window is in front, the detached dock rests inside this
+ * region instead of the display's work area so it never covers sidebars.
+ */
+export interface DockRegion {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
 export interface DockDrag {
   phase: "start" | "move" | "end" | "cancel";
   screenX: number;

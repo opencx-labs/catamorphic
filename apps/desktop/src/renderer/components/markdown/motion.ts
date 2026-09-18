@@ -8,7 +8,9 @@
  * class toggling is reserved for elements WE own (the drag handle, overlays).
  */
 
-export const EASE_STANDARD = "cubic-bezier(0.2, 0, 0, 1)";
+import { EASE_STANDARD, motionMs } from "../../lib/motion.js";
+
+export { EASE_STANDARD };
 
 const BLOCK_SELECTOR = "h1,h2,h3,h4,h5,h6,blockquote,ul,ol,li,pre,table,hr";
 
@@ -22,7 +24,7 @@ export function enterAnimation(el: HTMLElement) {
       { opacity: 0.3, transform: "translateY(4px) scale(0.99)" },
       { opacity: 1, transform: "none" },
     ],
-    { duration: 180, easing: EASE_STANDARD },
+    { duration: motionMs(180), easing: EASE_STANDARD },
   );
 }
 
@@ -82,7 +84,7 @@ export function installDropFlip(pmRoot: HTMLElement): () => void {
           if (Math.abs(dy) > 2) {
             el.animate(
               [{ transform: `translateY(${dy}px)` }, { transform: "none" }],
-              { duration: 220, easing: EASE_STANDARD },
+              { duration: motionMs(220), easing: EASE_STANDARD },
             );
           }
         }

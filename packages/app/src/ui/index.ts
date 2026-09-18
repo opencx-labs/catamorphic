@@ -14,6 +14,7 @@ export { Button } from "./button.js";
 export { Calendar, type CalendarProps } from "./calendar.js";
 export { Card } from "./card.js";
 export { Checkbox } from "./checkbox.js";
+export { Collapsible } from "./collapsible.js";
 export {
   CollectionItemView,
   type ItemAction,
@@ -50,6 +51,7 @@ export {
 export { Field, type FieldContextValue, useFieldContext } from "./field.js";
 export { Input } from "./input.js";
 export { KeyValueList, KeyValueRow } from "./key-value.js";
+export { Popover } from "./popover.js";
 export { ScrollHint } from "./scroll-hint.js";
 export { Select } from "./select.js";
 export { Skeleton } from "./skeleton.js";
@@ -60,7 +62,12 @@ export { Textarea } from "./textarea.js";
 export { Tooltip } from "./tooltip.js";
 export {
   CollectionTree,
+  dropPositionFor,
   Tree,
+  type TreeDragAndDrop,
+  type TreeDragSpec,
+  type TreeDropPosition,
+  type TreeDropTarget,
   type TreeItem,
   type TreeRenderContext,
   useCollection,

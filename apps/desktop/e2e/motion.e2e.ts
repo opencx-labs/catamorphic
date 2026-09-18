@@ -208,6 +208,54 @@ describe("design-system bounds (static sweep)", () => {
     }
   });
 
+  it("reduced motion collapses every animation and transition", async () => {
+    await app.cdp("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+    });
+    try {
+      // A transition that started before the preference flipped keeps its
+      // duration; wait for those to finish so only motion started under
+      // reduce is measured.
+      await app.waitFor(
+        `document.getAnimations().every((animation) => (Number(animation.effect?.getTiming().duration) || 0) <= 1)`,
+        { label: "pre-switch motion settled", timeoutMs: 5000 },
+      );
+      const longest = await run<number>(`
+        return Math.max(0, ...allStyleRules()
+          .filter((rule) => rule.selectorText)
+          .map((rule) => Math.max(
+            toMs(getComputedStyle(document.body).animationDuration) || 0,
+            0,
+          )));
+      `);
+      expect(longest).toBeLessThanOrEqual(1);
+      const running = await run<{ duration: number; target: string }[]>(`
+        document.body.offsetHeight;
+        return document.getAnimations().map((animation) => {
+          const target = animation.effect?.target;
+          return {
+            duration: Number(animation.effect?.getTiming().duration) || 0,
+            target: target
+              ? target.tagName.toLowerCase() +
+                (target.className && typeof target.className === 'string'
+                  ? '.' + target.className.trim().split(/\\s+/).join('.')
+                  : '') +
+                ' [' + (animation.animationName ?? animation.id ?? 'script') + ']'
+              : 'detached',
+          };
+        });
+      `);
+      for (const { duration, target } of running)
+        expect(duration, target).toBeLessThanOrEqual(1);
+      const rail = await run<number>(
+        `const el = document.querySelector('[data-dock-rail]') ?? document.body; return parseFloat(getComputedStyle(el).transitionDuration) * 1000;`,
+      );
+      expect(rail).toBeLessThanOrEqual(1);
+    } finally {
+      await app.cdp("Emulation.setEmulatedMedia", { features: [] });
+    }
+  });
+
   it("transition duration utilities stay within bounds", async () => {
     const durations = await run<{ selector: string; ms: number }[]>(`
       return allStyleRules()
@@ -457,6 +505,48 @@ describe("animate-before-unmount", () => {
       `samples: ${JSON.stringify(samples)}`,
     ).toBe(true);
     expect(samples.at(-1)?.gone).toBe(true);
+  });
+
+  it("minimizing a floating chat never replays dock-in between the two poses", async () => {
+    await run(`$('button[aria-label="New chat"]').click(); return true;`);
+    await runWait(
+      `const dock = visibleDock();
+       return !!dock && getComputedStyle(dock).opacity === '1';`,
+      { label: "dock fully visible" },
+    );
+    // A draft makes Escape minimize instead of close. The mode flip travels
+    // through the entry owner, so the exit pose must hold until it lands.
+    await run(`
+      const input = visibleDock().querySelector('[data-composer-input]');
+      input.focus();
+      document.execCommand('insertText', false, 'Keep this draft');
+      return true;
+    `);
+    await runWait(
+      `return visibleDock().querySelector('[data-composer-input]').innerText.includes('Keep this draft');`,
+      { label: "draft typed" },
+    );
+    const classes = await run<string[]>(`
+      const dock = visibleDock();
+      pressKey('Escape');
+      return new Promise((resolve) => {
+        const seen = [];
+        const started = performance.now();
+        const tick = () => {
+          const cls = [...dock.classList].filter((c) => c.startsWith('animate-')).join(' ');
+          if (seen.at(-1) !== cls) seen.push(cls);
+          if (performance.now() - started > 1200 || (dock.inert && !cls)) resolve(seen);
+          else requestAnimationFrame(tick);
+        };
+        tick();
+      });
+    `);
+    const exitAt = classes.indexOf("animate-dock-out");
+    expect(exitAt, `classes: ${JSON.stringify(classes)}`).toBeGreaterThan(-1);
+    expect(
+      classes.slice(exitAt + 1),
+      `classes: ${JSON.stringify(classes)}`,
+    ).not.toContain("animate-dock-in");
   });
 
   it("closing a workspace tab plays tab-out before removal", async () => {

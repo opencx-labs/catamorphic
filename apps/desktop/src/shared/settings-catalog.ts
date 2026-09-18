@@ -49,7 +49,9 @@ export const SETTINGS_CATALOG: readonly SettingsEntry[] = [
         ...(key === "tabPlacement"
           ? ["chrome", "horizontal", "vertical", "sidebar"]
           : []),
-        ...(key === "tabFrame" ? ["border", "rounded", "inset"] : []),
+        ...(key === "contentFrame"
+          ? ["border", "rounded", "inset", "window", "frame"]
+          : []),
       ],
     };
   }),
@@ -109,18 +111,16 @@ export const SETTINGS_CATALOG: readonly SettingsEntry[] = [
     ],
   },
   {
-    id: "connections",
-    label: "Connections",
+    id: "github-cli",
+    label: "GitHub CLI",
     category: "connections",
-    keywords: [
-      "connector",
-      "mcp",
-      "plugins",
-      "tools",
-      "accounts",
-      "github",
-      "cli",
-    ],
+    keywords: ["github", "cli", "gh", "pull requests", "reviews", "account"],
+  },
+  {
+    id: "connectors",
+    label: "Connectors",
+    category: "connections",
+    keywords: ["connector", "mcp", "plugins", "tools", "servers"],
   },
   {
     id: "import",

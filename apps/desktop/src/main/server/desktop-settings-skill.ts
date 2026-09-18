@@ -64,8 +64,9 @@ ${SETTING_KEYS.map((key) => {
   return `| ${key} | ${value} | ${definition.scopes.join(", ")} | ${JSON.stringify(normalizePrefs({})[key])} |`;
 }).join("\n")}
 
-Example: {"tabPlacement":"top","tabFrame":false} chooses regular top tabs with
-no inset frame. headerPlacement applies to the sidebar tab layout. Terminal
+Example: {"tabPlacement":"top","contentFrame":false} chooses regular top tabs
+with content flush against the sidebars; contentFrame true insets it as a
+rounded, bordered window sized by contentPadding and contentRadius. headerPlacement applies to the sidebar tab layout. Terminal
 appearance changes apply to newly opened terminals.
 
 terminalMacros is a replacement array. Preserve unrelated entries. Each macro has

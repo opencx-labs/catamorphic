@@ -296,7 +296,7 @@ function createWindow(
   const saved = windowState.load();
   const window = new BrowserWindow({
     width: dock ? 780 : saved.width,
-    height: dock ? 64 : saved.height,
+    height: dock ? 124 : saved.height,
     ...(saved.x !== undefined && saved.y !== undefined
       ? { x: saved.x, y: saved.y }
       : {}),
@@ -307,7 +307,14 @@ function createWindow(
     resizable: !dock,
     skipTaskbar: dock,
     title: "Work",
-    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+    // The detached dock is a bare transparent surface: no traffic lights,
+    // no OS shadow or rounded frame around it.
+    ...(dock
+      ? { hasShadow: false, roundedCorners: false }
+      : {
+          titleBarStyle:
+            process.platform === "darwin" ? "hiddenInset" : "default",
+        }),
     // Pre-paint background from the profile's theme so open doesn't flash;
     // stay hidden until the renderer has actually painted a frame.
     show: false,

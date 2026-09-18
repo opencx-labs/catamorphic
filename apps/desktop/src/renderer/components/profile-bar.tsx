@@ -203,7 +203,7 @@ export function ProfileBar({
             {...inspectorProps}
             type="button"
             onClick={() => setOpen((value) => !value)}
-            className={`flex h-8 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-[13px] transition-colors duration-150 ${
+            className={`flex h-8 w-full min-w-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[13px] transition-colors duration-150 ${
               open
                 ? "bg-bg-overlay text-fg"
                 : "text-fg-muted hover:bg-bg-overlay hover:text-fg"
@@ -214,7 +214,7 @@ export function ProfileBar({
             aria-expanded={open}
           >
             <span
-              className="grid size-6 shrink-0 place-items-center rounded-full font-medium ring-1 ring-fg/10"
+              className="grid size-5 shrink-0 place-items-center rounded-full text-xs font-medium ring-1 ring-fg/10"
               style={{
                 color: active.color,
                 backgroundColor: `color-mix(in srgb, ${active.color} 12%, var(--color-bg-raised))`,

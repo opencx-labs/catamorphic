@@ -44,6 +44,7 @@ import {
   chatBookmarkUrl,
   parseChatBookmarkUrl,
 } from "../shared/bookmark-target.js";
+import type { PendingChatMessage } from "../shared/chat.js";
 import {
   type HistoryEntry,
   type HistoryVisit,
@@ -1825,6 +1826,10 @@ export function App({
     setSearchRequest({ mode: "history", nonce: crypto.randomUUID() });
     setPaletteOpen(true);
   };
+  const settingsSearch = () => {
+    setSearchRequest({ mode: "settings", nonce: crypto.randomUUID() });
+    setPaletteOpen(true);
+  };
 
   const openLinkedSurfaceRef = useRef(openLinkedSurface);
   openLinkedSurfaceRef.current = openLinkedSurface;
@@ -2230,14 +2235,14 @@ export function App({
   // Palette "Send to agent": a new chat born with its first message
   // attached; ChatDock auto-sends it on mount.
   const sendToAgent = (
-    message: string,
+    message: string | PendingChatMessage,
     mode: "float" | "tab",
     agentId?: string,
   ) => {
     if (!requireAgents()) return;
     const entry: ChatDockEntry = {
       ...newChatEntry(mode === "tab" ? "tab" : "partial"),
-      pendingMessage: message,
+      pendingMessage: typeof message === "string" ? { text: message } : message,
       ...(agentId ? { agentId } : {}),
     };
     updateWorkspace((ws) => {
@@ -3439,7 +3444,7 @@ export function App({
     "search-content": () => focusSearch("search-content", "content"),
     "search-diff": () => focusSearch("search-diff"),
     "search-changes": () => focusSearch("search-changes"),
-    "search-settings": () => focusSearch("search-settings"),
+    "search-settings": settingsSearch,
     "browser-focus-address": () => runBrowserCommand("focusAddress"),
     "browser-reload": () => runBrowserCommand("reload"),
     "browser-reload-hard": () => runBrowserCommand("reloadIgnoringCache"),
@@ -3573,9 +3578,7 @@ export function App({
               Boolean(
                 document.activeElement?.closest("form[data-pr-comment]"),
               ))) &&
-          (!["search-diff", "search-changes", "search-settings"].includes(
-            candidate,
-          ) ||
+          (!["search-diff", "search-changes"].includes(candidate) ||
             (guestId === undefined &&
               Boolean(
                 findSearchInput(candidate) ||
@@ -4998,13 +5001,32 @@ export function App({
             : resolved.layer === "project-local" && projectId
               ? `${profileFile.slice(0, profileFile.lastIndexOf("/"))}/sidebar-projects/${projectId}.js`
               : profileFile;
+        // The user sees one sentence and two pills. The file path and the
+        // layout contract are agent context, never prose in the message. A
+        // path pill carries only its reference, so the contract and the
+        // current layout travel as a pasted block the harness fences.
         const localId = sendToAgent(
-          [
-            `Help me customize my ${side} sidebar. Walk me through the available tabs and widgets, then make the changes I ask for.`,
-            `The live sidebar configuration file on this machine is ${JSON.stringify(file)}. Read it first, or create it from the current layout below if it does not exist. Edits apply live.`,
-            "The file exports module.exports = { left: [...], right: [...] }. Each tab has a stable id, title, Lucide icon and sections. Each section has a stable id and type (bookmarks, tabs, workflows, apps, chats, files, remote, git, prs, activity, note, custom or app). Preserve existing ids and the other sidebar. Profile selection and Settings are fixed in the left footer. A single tab hides its icon strip. Do not commit these local settings.",
-            `Current layout: ${JSON.stringify(resolved.config)}`,
-          ].join("\n\n"),
+          {
+            text: `Help me customize my ${side} sidebar. Walk me through the available tabs and widgets, then make the changes I ask for.`,
+            attachments: [
+              {
+                kind: "text",
+                name: file.slice(file.lastIndexOf("/") + 1),
+                source: { type: "path", path: file },
+                text: file,
+              },
+              {
+                kind: "text",
+                name: "Sidebar layout",
+                source: { type: "paste" },
+                text: [
+                  `The live sidebar configuration file on this machine is ${JSON.stringify(file)}. Read it first, or create it from the current layout below if it does not exist. Edits apply live.`,
+                  "The file exports module.exports = { left: [...], right: [...] }. Each tab has a stable id, title, Lucide icon and sections. Each section has a stable id and type (bookmarks, tabs, workflows, apps, chats, files, remote, git, prs, activity, note, custom or app). Preserve existing ids and the other sidebar. Profile selection and Settings are fixed in the left footer. A single tab hides its icon strip. Do not commit these local settings.",
+                  `Current layout: ${JSON.stringify(resolved.config)}`,
+                ].join("\n\n"),
+              },
+            ],
+          },
           "float",
         );
         if (localId) sidebarCustomizationChat.current = { projectId, localId };
@@ -5407,7 +5429,7 @@ export function App({
           </>
         }
         footer={
-          <footer className="flex h-12 shrink-0 items-center gap-1 px-2">
+          <footer className="flex h-12 shrink-0 items-center gap-1 px-3">
             {profilesData && activeProfile && (
               <ProfileBar
                 data={profilesData}
@@ -5465,10 +5487,10 @@ export function App({
         data-workspace-content
         data-tab-layout={tabsInSidebar ? "sidebar" : "top"}
         data-header-placement={headerInSidebar ? "sidebar" : "top"}
-        data-tab-frame={prefs?.tabFrame ? "on" : "off"}
+        data-content-frame={prefs?.contentFrame ? "on" : "off"}
         style={{
-          margin: prefs?.contentPadding ?? 6,
-          borderRadius: prefs?.contentRadius ?? 14,
+          margin: prefs?.contentFrame ? prefs.contentPadding : 0,
+          borderRadius: prefs?.contentFrame ? prefs.contentRadius : 0,
         }}
         className={`workspace-surface relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${tabsInSidebar ? "bg-sidebar" : "bg-bg"}`}
       >
@@ -5653,7 +5675,7 @@ export function App({
                       <SettingsScreen
                         destination={tab.destination}
                         projectId={projectId}
-                        onClose={() => closeTab(tabKey(tab))}
+                        onSearch={settingsSearch}
                         onAddAgent={() => setWizardModalOpen(true)}
                         onConfigureAgent={openConfigureAgent}
                         onManageConnectors={() => setConnectorsModalOpen(true)}
@@ -5674,7 +5696,6 @@ export function App({
                         profileId={activeProfile?.id}
                         onSearch={historySearch}
                         onOpen={openHistory}
-                        onClose={() => closeTab(tabKey(tab))}
                       />
                     ) : tab.kind === "usage" ? (
                       <Suspense fallback={<div className="flex-1 bg-bg" />}>
@@ -6218,7 +6239,7 @@ export function App({
         ) : activeTab?.kind === "settings" ? (
           <SettingsScreen
             destination={activeTab.destination}
-            onClose={() => closeTab(tabKey(activeTab))}
+            onSearch={settingsSearch}
             onAddAgent={() => setWizardModalOpen(true)}
             onConfigureAgent={openConfigureAgent}
             onManageConnectors={() => setConnectorsModalOpen(true)}
@@ -6228,7 +6249,6 @@ export function App({
             profileId={activeProfile?.id}
             onSearch={historySearch}
             onOpen={openHistory}
-            onClose={() => closeTab(tabKey(activeTab))}
           />
         ) : activeTab?.kind === "profile-settings" && profilesData ? (
           <ProfileSettingsScreen
@@ -6433,14 +6453,14 @@ export function App({
           <div className="mt-5 flex justify-end gap-2">
             <button
               type="button"
-              className="rounded-md border border-border px-3 py-1.5 text-xs"
+              className="button-ghost"
               onClick={() => setClosingWorkflow(null)}
             >
               Keep editing
             </button>
             <button
               type="button"
-              className="rounded-md bg-danger px-3 py-1.5 text-xs text-white"
+              className="button-danger"
               onClick={() => {
                 if (closingWorkflow)
                   closeTab(closingWorkflow, { discardDraft: true });
@@ -6612,7 +6632,7 @@ function EmptyState({
                 pendingLabel="Starting…"
                 onClick={() => void start()}
                 data-testid="empty-start-agent"
-                className="inline-flex h-9 w-full cursor-pointer items-center justify-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                className="button-primary h-9 w-full"
               >
                 <span className="inline-flex items-center gap-2">
                   <Sparkles className="size-3.5" />

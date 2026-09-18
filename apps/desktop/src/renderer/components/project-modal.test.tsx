@@ -72,6 +72,8 @@ const roots: Root[] = [];
 afterEach(() => {
   act(() => {
     for (const root of roots.splice(0)) root.unmount();
+    for (const node of document.body.querySelectorAll("body > div"))
+      node.remove();
   });
   document.body.replaceChildren();
   desktop.connectedListener = null;
@@ -90,6 +92,7 @@ describe("GithubAuthorizationTray", () => {
     });
     const onCancel = vi.fn();
     const container = document.createElement("div");
+    document.body.appendChild(container);
     document.body.append(container);
     const root = createRoot(container);
     roots.push(root);
@@ -106,22 +109,22 @@ describe("GithubAuthorizationTray", () => {
       );
     });
 
-    const tray = container.querySelector("aside");
+    const tray = document.body.querySelector("aside");
     expect(tray?.getAttribute("aria-modal")).toBeNull();
-    expect(container.textContent).toContain("061F-9C19");
-    const buttons = Array.from(container.querySelectorAll("button"));
+    expect(document.body.textContent).toContain("061F-9C19");
+    const buttons = Array.from(document.body.querySelectorAll("button"));
     await act(async () =>
       container
         .querySelector<HTMLButtonElement>('button[aria-label="Copy code"]')
         ?.click(),
     );
     expect(writeText).toHaveBeenCalledWith("061F-9C19");
-    expect(container.textContent).toContain("Copied");
-    expect(container.textContent).not.toContain("Open GitHub");
+    expect(document.body.textContent).toContain("Copied");
+    expect(document.body.textContent).not.toContain("Open GitHub");
     expect(
-      container.querySelector('button[aria-label="Code copied"]'),
+      document.body.querySelector('button[aria-label="Code copied"]'),
     ).not.toBeNull();
-    const copyStates = container.querySelectorAll(
+    const copyStates = document.body.querySelectorAll(
       'button[aria-label="Code copied"] > span > span',
     );
     expect(copyStates).toHaveLength(2);
@@ -149,11 +152,11 @@ describe("GithubAuthorizationTray", () => {
         </QueryClientProvider>,
       );
     });
-    const githubTab = Array.from(container.querySelectorAll("button")).find(
+    const githubTab = Array.from(document.body.querySelectorAll("button")).find(
       (button) => button.textContent === "GitHub",
     );
     act(() => githubTab?.click());
-    const connect = Array.from(container.querySelectorAll("button")).find(
+    const connect = Array.from(document.body.querySelectorAll("button")).find(
       (button) => button.dataset.testid === "github-connect",
     );
     await act(async () => connect?.click());
@@ -161,7 +164,7 @@ describe("GithubAuthorizationTray", () => {
     expect(
       document.querySelector('[data-testid="github-authorization-tray"]'),
     ).not.toBeNull();
-    expect(container.querySelector('[aria-hidden="true"]')).not.toBeNull();
+    expect(document.body.querySelector('[aria-hidden="true"]')).not.toBeNull();
 
     act(() =>
       desktop.connectedListener?.({ connected: true, login: "octocat" }),
@@ -169,7 +172,7 @@ describe("GithubAuthorizationTray", () => {
     expect(
       document.querySelector('[data-testid="github-authorization-tray"]'),
     ).toBeNull();
-    expect(container.querySelector('[aria-hidden="false"]')).not.toBeNull();
+    expect(document.body.querySelector('[aria-hidden="false"]')).not.toBeNull();
   });
 
   it("explains missing grants and steps aside while repository access changes", async () => {
@@ -201,11 +204,11 @@ describe("GithubAuthorizationTray", () => {
       );
     });
     act(() => {
-      Array.from(container.querySelectorAll("button"))
+      Array.from(document.body.querySelectorAll("button"))
         .find((button) => button.textContent === "GitHub")
         ?.click();
     });
-    const input = container.querySelector<HTMLInputElement>(
+    const input = document.body.querySelector<HTMLInputElement>(
       '[data-testid="github-repo-search"]',
     );
     act(() => {
@@ -216,9 +219,11 @@ describe("GithubAuthorizationTray", () => {
       setter?.call(input, "missing");
       input?.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    expect(container.textContent).toContain("No granted repositories match.");
+    expect(document.body.textContent).toContain(
+      "No granted repositories match.",
+    );
     act(() => {
-      Array.from(container.querySelectorAll("button"))
+      Array.from(document.body.querySelectorAll("button"))
         .find((button) => button.textContent === "Manage repository access")
         ?.click();
     });
@@ -226,7 +231,7 @@ describe("GithubAuthorizationTray", () => {
     expect(
       document.querySelector('[data-testid="github-repository-access-tray"]'),
     ).not.toBeNull();
-    expect(container.querySelector('[aria-hidden="true"]')).not.toBeNull();
+    expect(document.body.querySelector('[aria-hidden="true"]')).not.toBeNull();
   });
 });
 
@@ -265,19 +270,19 @@ it("locks an import while pending and leaves the selection available for retry",
     ),
   );
   const button = (text: string) =>
-    Array.from(container.querySelectorAll("button")).find((element) =>
+    Array.from(document.body.querySelectorAll("button")).find((element) =>
       element.textContent?.includes(text),
     );
   await act(async () => button("GitHub")?.click());
   await act(async () => button("owner/demo")?.click());
-  const submit = container.querySelector<HTMLButtonElement>(
+  const submit = document.body.querySelector<HTMLButtonElement>(
     '[data-testid="project-submit"]',
   );
   expect(submit?.disabled).toBe(false);
   await act(async () => submit?.click());
   expect(desktop.githubImport).toHaveBeenCalledOnce();
-  expect(container.querySelector("fieldset")?.disabled).toBe(true);
-  expect(container.querySelector("form")?.getAttribute("aria-busy")).toBe(
+  expect(document.body.querySelector("fieldset")?.disabled).toBe(true);
+  expect(document.body.querySelector("form")?.getAttribute("aria-busy")).toBe(
     "true",
   );
   await act(async () => {
@@ -288,10 +293,10 @@ it("locks an import while pending and leaves the selection available for retry",
   });
   expect(onClose).not.toHaveBeenCalled();
   await act(async () => rejectImport(new Error("Unable to clone. Try again.")));
-  expect(container.textContent).toContain("Unable to clone. Try again.");
-  expect(container.querySelector("fieldset")?.disabled).toBe(false);
+  expect(document.body.textContent).toContain("Unable to clone. Try again.");
+  expect(document.body.querySelector("fieldset")?.disabled).toBe(false);
   expect(
-    container.querySelector<HTMLInputElement>(
+    document.body.querySelector<HTMLInputElement>(
       '[data-testid="project-name-input"]',
     )?.value,
   ).toBe("demo");

@@ -77,7 +77,7 @@ beforeAll(async () => {
   );
   fs.writeFileSync(
     path.join(projectRoot, ".catamorphic/sidebar.js"),
-    `module.exports={left:[{id:'live',title:'Sources',icon:'ListTodo',sections:[{id:'todos',type:'custom',title:'My todos',source:{type:'custom',module:'.catamorphic/todos.ts'},height:180},{id:'http',type:'custom',title:'Service',source:{type:'custom',module:'.catamorphic/http.ts'},height:120}]},{id:'other',title:'Other',icon:'Folder',sections:[{id:'files',type:'files'}]}],right:[]};`,
+    `module.exports={left:[{id:'live',title:'Sources',icon:'ListTodo',sections:[{id:'todos',type:'custom',title:'My todos',source:{type:'custom',module:'.catamorphic/todos.ts'},height:180},{id:'http',type:'custom',title:'Service',source:{type:'custom',module:'.catamorphic/http.ts'},height:120,headerActions:[{label:'Refresh Service',action:'refresh',icon:'RefreshCw'}]}]},{id:'other',title:'Other',icon:'Folder',sections:[{id:'files',type:'files'}]}],right:[]};`,
   );
   await app.reload();
   await app.waitFor(
@@ -99,11 +99,9 @@ it("loads file and HTTP rows in native animated trees", async () => {
       `!!document.querySelector('[data-sidebar-source="todos"] [role="tree"]')`,
     ),
   ).toBe(true);
-  expect(
-    await app.eval(
-      `document.querySelector('[data-sidebar-source="todos"]')?.getAttribute('aria-busy')`,
-    ),
-  ).toBe("false");
+  await app.waitFor(
+    `document.querySelector('[data-sidebar-source="todos"]')?.getAttribute('aria-busy')==='false'`,
+  );
 });
 it("writes a todo with visible busy feedback and follows external atomic edits", async () => {
   await click('[data-sidebar-source="todos"] [aria-label="Complete"]');
@@ -171,7 +169,7 @@ it("retains HTTP rows during refresh, reports failure, and retries without reope
   fail = false;
   version = 3;
   delay = 50;
-  await click('[data-sidebar-source="http"] [role="alert"] button');
+  await click('[data-sidebar-section="http"] [role="alert"] button');
   await app.waitFor(
     `document.body.innerText.includes('Service item 3') && !document.querySelector('[data-sidebar-source="http"] [role="alert"]')`,
   );

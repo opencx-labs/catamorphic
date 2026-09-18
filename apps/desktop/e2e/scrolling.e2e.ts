@@ -64,22 +64,36 @@ it("scrolls Settings to the last section without moving the workspace chrome", a
     const rect = panel.getBoundingClientRect();
     return { x: rect.right - 30, y: rect.top + 100 };
   `);
-  await app.cdp("Input.dispatchMouseEvent", {
-    type: "mouseWheel",
-    ...point,
-    deltaX: 0,
-    deltaY: 10000,
-  });
-  await app.waitFor(
-    `(() => {
+  // Sections keep loading (agents, connectors, presets) after the first
+  // wheel, which can grow the page under a single tick; keep wheeling until
+  // the last card is in view, the way a person would.
+  const atEnd = `(() => {
     const panel = document.querySelector('[data-settings-scroll]');
     const footer = panel.querySelector('#settings-import [data-testid="settings-browser-import"]');
     const rect = footer.getBoundingClientRect();
     const bounds = panel.getBoundingClientRect();
-    return panel.scrollTop > 0 && rect.top >= bounds.top && rect.bottom <= bounds.bottom;
-  })()`,
-    { label: "last Settings section reachable by wheel" },
-  );
+    return panel.scrollTop > 0 && rect.bottom <= bounds.bottom + 1 && rect.bottom > bounds.top;
+  })()`;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await app.cdp("Input.dispatchMouseEvent", {
+      type: "mouseWheel",
+      ...point,
+      deltaX: 0,
+      deltaY: 10000,
+    });
+    await app.eval("new Promise((resolve) => setTimeout(resolve, 250))");
+    // Stop only at the very end: the category rail follows scroll position
+    // and must land on the last category, not merely show its card.
+    if (
+      await app.eval<boolean>(
+        `(() => { const panel = document.querySelector('[data-settings-scroll]'); return panel.scrollTop >= panel.scrollHeight - panel.clientHeight - 1; })()`,
+      )
+    )
+      break;
+  }
+  await app.waitFor(atEnd, {
+    label: "last Settings section reachable by wheel",
+  });
   expect(
     await app.eval(
       `document.querySelector('[aria-label="Settings category"]').value`,

@@ -34,6 +34,10 @@ Subsessions defaults to current-chat children, including latent children, and hi
 when empty. This does not promote a child or change archive behavior.
 hideEmpty hides ready-but-empty content, not loading or errors. Parent tabs disappear
 when every section is unavailable. Contextually hidden resources remain searchable.
+Every section shares one status presentation: a header spinner while loading or
+refreshing, placeholder rows before the first result, one muted sentence when empty
+(section.empty replaces it), and the error with Retry. Sections never draw their own
+loading or empty text; rows stay on screen while a refresh runs.
 
 All row presentations accept label, icon (Lucide name), description, badges (strings),
 progress (0 through 1), open (replace|tab|side|floating), preview and hide.
@@ -102,7 +106,7 @@ For a live JSON/file/API list, keep the native sidebar UI and use:
 { id: "todos", type: "custom", title: "My todos",
   source: { type: "custom", module: ".catamorphic/todos.ts" }, height: 280 }
 The module path is project-root-relative (absolute paths also work). Its default
-export is {load, subscribe?, action?}. This runs in a lazy Bun process with full
+export is {load, subscribe?, action?, move?, drop?}. This runs in a lazy Bun process with full
 filesystem, fetch, subprocess and npm access, not inside the static layout VM.
 Use normal TypeScript, not a data-source DSL. Local projects only; remote-connected
 projects retain host-authorized app widgets. No app build or workflow is required.
@@ -148,6 +152,17 @@ export default {
     await rename(temporary,file);
   }
 };
+
+Drag and drop is one model for every section, built in or custom, and needs no UI
+code: export move({projectRoot,itemId,parentId,beforeId}) to let users reorder and
+reparent this source's own rows by dragging (parentId null is the root; beforeId is
+the sibling to land before, absent means last), and export drop({projectRoot,
+parentId,beforeId,payload:{kind,label,url?}}) to accept pages, chats, bookmarks and
+other sections' rows dragged in. Rows with a url can always be dragged out into
+bookmarks or a chat. Both handlers are serialized with actions and invalidate the
+view on success; throw for failures. Rows with hasChildren are the only "inside"
+targets; everything else lands before or after a sibling. The tree draws the
+insertion line and the highlighted parent the same way everywhere.
 
 Initialize todos.json with an array of {id,text,done}. Agent edits and clicks now
 share that file, with no sync script. Module actions use run:<name> in actions,

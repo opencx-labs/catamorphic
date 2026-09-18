@@ -7,13 +7,23 @@ const run = <T>(body: string) =>
   app.eval<T>(
     `(() => { ${setReactValueJs}\n const $ = s => document.querySelector(s); const button = text => [...document.querySelectorAll('button')].find(b => b.textContent.trim() === text); ${body} })()`,
   );
-async function drop(source: string, target: string) {
+/**
+ * Drives the shared tree drag model the way a pointer would: dragstart on
+ * the source, then dragover and drop on the target at a point inside it.
+ * `at` picks the drop slot: the middle of a folder row means inside, the
+ * top edge of a row means before it.
+ */
+async function drop(
+  source: string,
+  target: string,
+  at: "center" | "top" = "center",
+) {
   await app.eval(
     `(()=>{window.__bookmarkDrag=new DataTransfer();document.querySelector(${JSON.stringify(source)}).dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:window.__bookmarkDrag}))})()`,
   );
   await app.waitFor(`!!document.querySelector(${JSON.stringify(target)})`);
   await app.eval(
-    `(()=>{const target=document.querySelector(${JSON.stringify(target)});for(const type of ['dragover','drop'])target.dispatchEvent(new DragEvent(type,{bubbles:true,cancelable:true,dataTransfer:window.__bookmarkDrag}));document.dispatchEvent(new DragEvent('dragend',{bubbles:true}));delete window.__bookmarkDrag})()`,
+    `(()=>{const target=document.querySelector(${JSON.stringify(target)});const r=target.getBoundingClientRect();const init={bubbles:true,cancelable:true,dataTransfer:window.__bookmarkDrag,clientX:r.left+Math.min(24,r.width/2),clientY:${at === "top" ? "r.top+2" : "r.top+r.height/2"}};for(const type of ['dragover','drop'])target.dispatchEvent(new DragEvent(type,init));document.dispatchEvent(new DragEvent('dragend',{bubbles:true}));delete window.__bookmarkDrag})()`,
   );
 }
 const bookmarks = () =>
@@ -68,7 +78,7 @@ describe("drag tabs and chats into bookmarks", () => {
     );
     await drop(
       'aside [data-point-key^="browser:"]',
-      `[data-bookmark-drop="folder:${folderId}"]`,
+      `[data-tree-id="${folderId}"]`,
     );
     await app.waitFor(
       "window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope).then(d=>d.project.bookmarks.length===1)",
@@ -92,7 +102,7 @@ describe("drag tabs and chats into bookmarks", () => {
     const sessionId = await run<string>(
       "return $('aside [data-session-id]').dataset.sessionId",
     );
-    await drop("aside [data-session-id]", '[data-bookmark-drop="pinned"]');
+    await drop("aside [data-session-id]", '[data-drop-zone="pinned"]');
     await app.waitFor(
       "window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope).then(d=>d.pinned.bookmarks.length===1)",
     );
@@ -103,10 +113,10 @@ describe("drag tabs and chats into bookmarks", () => {
       `window.catamorphicDesktop.bookmarksRename({...window.__bookmarkScope,id:${JSON.stringify(pinned.id)},label:'Saved conversation'})`,
     );
     await app.waitFor(
-      "!!document.querySelector('[data-bookmark-drop=pinned] button[aria-label=\"Saved conversation\"]') || [...document.querySelectorAll('[data-bookmark-drop=pinned] button')].some(b=>b.textContent.trim()==='Saved conversation')",
+      "!!document.querySelector('[data-drop-zone=pinned] button[aria-label=\"Saved conversation\"]') || [...document.querySelectorAll('[data-drop-zone=pinned] button')].some(b=>b.textContent.trim()==='Saved conversation')",
     );
     await run(
-      "$('[data-bookmark-drop=pinned] [data-point-key=\"sidebar:Saved conversation\"] button').click()",
+      "$('[data-drop-zone=pinned] [data-point-key=\"sidebar:Saved conversation\"] button').click()",
     );
     await app.waitFor(
       "!!document.querySelector('aside [data-point-key^=\"chat:\"]')",
@@ -118,14 +128,14 @@ describe("drag tabs and chats into bookmarks", () => {
       "!document.querySelector('aside [data-point-key^=\"chat:\"]')",
     );
     await run(
-      "$('[data-bookmark-drop=pinned] [data-point-key=\"sidebar:Saved conversation\"] button').click()",
+      "$('[data-drop-zone=pinned] [data-point-key=\"sidebar:Saved conversation\"] button').click()",
     );
     await app.waitFor(
       "!!document.querySelector('aside [data-point-key^=\"chat:\"]') && document.body.textContent.includes('remember this pinned conversation')",
     );
     await drop(
-      "[data-bookmark-drop=pinned] li[draggable]",
-      `[data-bookmark-drop="folder:${folderId}"]`,
+      "[data-drop-zone=pinned] li[draggable]",
+      `[data-tree-id="${folderId}"]`,
     );
     await app.waitFor(
       "window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope).then(d=>d.pinned.bookmarks.length===0 && d.project.bookmarks.length===2)",
@@ -133,5 +143,26 @@ describe("drag tabs and chats into bookmarks", () => {
     expect(
       (await bookmarks()).project.bookmarks.find((b) => b.id === pinned.id),
     ).toMatchObject({ url: pinned.url, folderId });
+  });
+  it("reorders bookmarks within a section and moves one into a folder by dragging", async () => {
+    const ids = await app.eval<string[]>(
+      `(async()=>{const api=window.catamorphicDesktop;const out=[];for(const name of ['One','Two','Three'])out.push((await api.bookmarksAdd({...window.__bookmarkScope,label:name,url:'https://order.test/'+name})).id);return out})()`,
+    );
+    await app.waitFor(`!!document.querySelector('[data-tree-id="${ids[2]}"]')`);
+    // Three before One: the top edge of One's row is the "before" slot.
+    await drop(
+      `[data-tree-id="${ids[2]}"]`,
+      `[data-tree-id="${ids[0]}"]`,
+      "top",
+    );
+    await app.waitFor(
+      `window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope).then(d=>d.project.bookmarks.filter(b=>!b.folderId).map(b=>b.label).join()==='Three,One,Two')`,
+    );
+    // Two into the Research folder: the middle of a folder row is "inside".
+    await drop(`[data-tree-id="${ids[1]}"]`, `[data-tree-id="${folderId}"]`);
+    await app.waitFor(
+      `window.catamorphicDesktop.bookmarksGet(window.__bookmarkScope).then(d=>d.project.bookmarks.find(b=>b.label==='Two')?.folderId===${JSON.stringify(folderId)})`,
+    );
+    expect(app.getRendererErrors()).toEqual([]);
   });
 });

@@ -315,7 +315,7 @@ export function BrowserImportDialog({
             }
             onClick={() => void run()}
             data-testid="browser-import-start"
-            className="h-8 rounded-md bg-accent px-4 text-[13px] font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:opacity-50"
+            className="button-primary"
           >
             Import
           </PendingButton>
@@ -343,7 +343,7 @@ export function BrowserImport({ profileId }: { profileId: string }) {
     }
   }, [profileId]);
   return (
-    <section className="mt-4 rounded-lg border border-border bg-bg-raised/30 p-4">
+    <section className="settings-card mt-4">
       <h2 className="flex items-center gap-2 text-sm font-semibold text-fg">
         <Download className="size-4 text-fg-muted" />
         Import browser data

@@ -160,6 +160,8 @@ export interface SidebarSectionConfig {
    * list. Defaults to true for workflows, apps, remote, and git sections.
    */
   hideEmpty?: boolean;
+  /** One sentence shown when the section has nothing to list. */
+  empty?: string;
   /** For type "custom": the entries to render. */
   items?: SidebarItem[];
   /** Default click behavior for this section's items. */

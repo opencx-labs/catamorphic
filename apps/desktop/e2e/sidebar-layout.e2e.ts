@@ -38,9 +38,9 @@ describe("configurable browser workspace", () => {
   it("keeps the empty header blank and places collapse inside the sidebar", async () => {
     expect(
       await app.eval(
-        "window.catamorphicDesktop.getPrefs().then(p => ({tabPlacement:p.tabPlacement,tabFrame:p.tabFrame}))",
+        "window.catamorphicDesktop.getPrefs().then(p => ({tabPlacement:p.tabPlacement,contentFrame:p.contentFrame}))",
       ),
-    ).toEqual({ tabPlacement: "top", tabFrame: false });
+    ).toEqual({ tabPlacement: "top", contentFrame: false });
     await app.eval(
       "window.catamorphicDesktop.setPrefs({tabPlacement:'sidebar'})",
     );
@@ -167,7 +167,10 @@ describe("configurable browser workspace", () => {
     await run(
       "$('[aria-label=\"Pinned bookmarks\"] button').dispatchEvent(new MouseEvent('mouseout', {bubbles:true}))",
     );
-    await run("$('button[aria-label=\"More actions for Reference\"]').click()");
+    // Tiles have no hover dots; their menu opens on right-click.
+    await run(
+      "const tile=$('[aria-label=\"Pinned bookmarks\"] [data-point-key=\"sidebar:Reference\"] button'); const r=tile.getBoundingClientRect(); tile.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, cancelable:true, clientX:r.x+r.width/2, clientY:r.y+r.height/2}))",
+    );
     await app.waitFor("!!document.querySelector('[data-sidebar-menu]')");
     expect(
       await run(
@@ -183,7 +186,10 @@ describe("configurable browser workspace", () => {
   });
 
   it("removes a folder while keeping its remaining bookmarks", async () => {
-    await run("$('button[aria-label=\"More actions for Reference\"]').click()");
+    // Reference is still a pinned tile here: right-click opens its menu.
+    await run(
+      "const tile=$('[aria-label=\"Pinned bookmarks\"] [data-point-key=\"sidebar:Reference\"] button'); const r=tile.getBoundingClientRect(); tile.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, cancelable:true, clientX:r.x+r.width/2, clientY:r.y+r.height/2}))",
+    );
     await app.waitFor("!!document.querySelector('[data-sidebar-menu]')");
     await run("button('Unpin').click()");
     await app.waitFor(
@@ -327,7 +333,7 @@ describe("configurable browser workspace", () => {
       ),
     ).toEqual(
       await app.eval(
-        "[6, 6, innerWidth - document.querySelector('[data-sidebar=right]').getBoundingClientRect().width - 12, innerHeight - 12]",
+        "[0, 0, innerWidth - document.querySelector('[data-sidebar=right]').getBoundingClientRect().width, innerHeight]",
       ),
     );
     expect(
@@ -363,7 +369,7 @@ describe("configurable browser workspace", () => {
       ),
     ).toEqual(
       await app.eval(
-        "[6, 6, innerWidth - document.querySelector('[data-sidebar=right]').getBoundingClientRect().width - 12, innerHeight - 12]",
+        "[0, 0, innerWidth - document.querySelector('[data-sidebar=right]').getBoundingClientRect().width, innerHeight]",
       ),
     );
     expect(
@@ -424,16 +430,23 @@ describe("configurable browser workspace", () => {
     expect(Math.abs(centers[0] - centers[1])).toBeLessThanOrEqual(1);
   });
 
-  it("opens a customization chat with the live configuration path", async () => {
+  it("opens a customization chat whose visible message is prose plus a config pill", async () => {
     await run("$('button[aria-label=\"Customize sidebar\"]').click()");
     await app.waitFor("!!document.querySelector('[data-composer-input]')");
     await app.waitFor(
-      "document.body.innerText.includes('The live sidebar configuration file on this machine is')",
+      "document.body.innerText.includes('Help me customize my left sidebar')",
     );
-    const file = await app.eval<string>(
-      "window.catamorphicDesktop.sidebarConfigFile()",
-    );
-    expect(await app.eval("document.body.innerText")).toContain(file);
+    await app.waitFor("!!document.querySelector('[data-pill-kind=\"path\"]')");
+    const text = await app.eval<string>("document.body.innerText");
+    // Structured context never appears in the user-visible message.
+    expect(text).not.toContain("Current layout:");
+    expect(text).not.toContain("module.exports");
+    expect(text).not.toContain('"sections"');
+    expect(
+      await app.eval(
+        "document.querySelector('[data-pill-kind=\"path\"]').textContent",
+      ),
+    ).toContain("sidebar.js");
   });
 });
 

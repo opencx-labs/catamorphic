@@ -47,7 +47,7 @@ immediately. Empty sidebar text is horizontally centered.
 
 ## Sidebar defaults
 
-New profiles use top tabs and no inset tab frame. A single sidebar tab hides its
+New profiles use top tabs and no framed content. A single sidebar tab hides its
 strip. Left sidebar profile/settings controls remain sticky at the bottom.
 The right sidebar toggle stays at the workspace header's right edge, including
 before a project is open and while the left sidebar is collapsed.

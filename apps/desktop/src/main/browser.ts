@@ -16,7 +16,10 @@ import {
 } from "electron";
 import { z } from "zod";
 import { KEYBINDING_ACTIONS, type Keybindings } from "../shared/actions.js";
-import type { BookmarkPlacement } from "../shared/bookmark-target.js";
+import type {
+  BookmarkMove,
+  BookmarkPlacement,
+} from "../shared/bookmark-target.js";
 import { browserImportRequestSchema } from "../shared/browser-import.js";
 import { historyVisitSchema } from "../shared/history.js";
 import { matchesShortcut } from "../shared/keybindings.js";
@@ -867,6 +870,13 @@ export function registerBrowserSupport(
       const bookmark = bookmarks.place(input);
       bookmarksChanged(input.projectId, input.profileId);
       return bookmark;
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:bookmarks-move",
+    (_event, input: BookmarkMove) => {
+      bookmarks.move(input);
+      bookmarksChanged(input.projectId, input.profileId);
     },
   );
   ipcMain.handle(

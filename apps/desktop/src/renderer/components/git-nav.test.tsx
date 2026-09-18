@@ -113,6 +113,7 @@ it("keeps failures and clean multi-worktree sections visible", async () => {
             surface: { kind: "none" },
             visible: true,
             relevant: true,
+            status: { state: "loading" },
             report: empty,
             open: () => {},
           }}
@@ -121,16 +122,22 @@ it("keeps failures and clean multi-worktree sections visible", async () => {
         </SidebarContribution>,
       ),
     );
-    expect(empty).toHaveBeenLastCalledWith("ready");
+    expect(empty).toHaveBeenLastCalledWith(
+      expect.objectContaining({ state: "ready" }),
+    );
     expect(node.querySelectorAll("[data-worktree-path]")).toHaveLength(2);
     vi.mocked(desktopApi.gitOverview).mockRejectedValue(
       new Error("Checkout unavailable"),
     );
     await act(async () => window.dispatchEvent(new Event("focus")));
-    expect(node.querySelector('[role="alert"]')?.textContent).toContain(
-      "Checkout unavailable",
+    // The section chrome shows the failure; the rows stay on screen.
+    expect(empty).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        state: "error",
+        error: "Checkout unavailable",
+      }),
     );
-    expect(empty).toHaveBeenLastCalledWith("error");
+    expect(node.querySelectorAll("[data-worktree-path]")).toHaveLength(2);
   } finally {
     await act(async () => root.unmount());
   }

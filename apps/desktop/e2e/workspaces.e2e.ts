@@ -175,7 +175,7 @@ it("keeps an unsent draft when detached and reattached, and supports either edge
     );
   await toggleNative();
   await dock.waitFor(
-    `innerHeight <= 80 && innerWidth < 350 && !document.querySelector('[data-floating-chat]:not([inert])')`,
+    `innerHeight <= 130 && innerWidth < 350 && !document.querySelector('[data-floating-chat]:not([inert])')`,
     {
       label: "native dock shrinks to its bubbles",
     },
@@ -188,10 +188,20 @@ it("keeps an unsent draft when detached and reattached, and supports either edge
     },
   );
   await dock.eval(
-    `window.catamorphicDesktop.setPrefs({dockAlignment:'center'})`,
+    `window.catamorphicDesktop.setPrefs({dockPlacement:'center'})`,
+  );
+  // The workspace window is in front, so the dock rests inside its chat
+  // region (between the sidebars) rather than the display's work area.
+  const region = await app.eval<{
+    left: number;
+    right: number;
+    bottom: number;
+  }>(
+    `(() => { const r = document.querySelector('[data-workspace-chat-region]').getBoundingClientRect(); return { left: screenX + r.left, right: screenX + r.right, bottom: screenY + (outerHeight - innerHeight) + r.bottom }; })()`,
   );
   await dock.waitFor(
-    `Math.abs(screenX + outerWidth / 2 - screen.availLeft - screen.availWidth / 2) < 3`,
+    `Math.abs(screenX + outerWidth / 2 - ${(region.left + region.right) / 2}) < 3 && Math.abs(screenY + outerHeight + 12 - ${region.bottom}) < 3`,
+    { label: "dock centered in the workspace chat region" },
   );
   await dock.eval(
     `document.querySelector('[aria-label="Collapse chat bubbles"]').click()`,
@@ -207,20 +217,33 @@ it("keeps an unsent draft when detached and reattached, and supports either edge
     await api.dockDrag({phase:'end',screenX:screen.availLeft+screen.availWidth-60,reducedMotion:true});
   })()`);
   await dock.waitFor(
-    `document.querySelector('[data-dock-host]')?.dataset.dockSide === 'right' && Math.abs(screenX + outerWidth + 12 - screen.availLeft - screen.availWidth) < 3 && Math.abs(screenY + outerHeight + 12 - screen.availTop - screen.availHeight) < 3`,
+    `document.querySelector('[data-dock-host]')?.dataset.dockSide === 'right' && Math.abs(screenX + outerWidth + 12 - ${region.right}) < 3 && Math.abs(screenY + outerHeight + 12 - ${region.bottom}) < 3`,
+    { label: "collapsed dock in the region's bottom-right corner" },
   );
   await dock.eval(
     `document.querySelector('[aria-label="Expand chat bubbles"]').click()`,
   );
   await dock.waitFor(
-    `Math.abs(screenX + outerWidth / 2 - screen.availLeft - screen.availWidth / 2) < 3`,
+    `Math.abs(screenX + outerWidth / 2 - ${(region.left + region.right) / 2}) < 3`,
   );
   await toggleNative();
   await dock.waitFor(
     `!!document.querySelector('[data-floating-chat]:not([inert])')`,
   );
-  await dock.eval(
-    `window.catamorphicDesktop.setPrefs({dockSide:'right',dockDetached:false,dockAlignment:'edge'})`,
+  // Closing the detached window returns the dock for this session only:
+  // the launch default stays what Settings chose.
+  await dock.eval(`window.close()`);
+  await app.waitFor(
+    `!!document.querySelector('[data-floating-chat]:not([inert]) [data-composer-input]')`,
+    { label: "dock back in the window after closing it" },
+  );
+  expect(
+    await app.eval<boolean>(
+      `window.catamorphicDesktop.getPrefs().then((prefs) => prefs.dockDetached)`,
+    ),
+  ).toBe(true);
+  await app.eval(
+    `window.catamorphicDesktop.setPrefs({dockSide:'right',dockDetached:false,dockPlacement:'right'})`,
   );
   await app.waitFor(
     `document.querySelector('[data-dock-side]')?.dataset.dockSide === 'right'`,
@@ -228,6 +251,23 @@ it("keeps an unsent draft when detached and reattached, and supports either edge
   await app.waitFor(
     `document.querySelector('[data-floating-chat]:not([inert]) [data-composer-input]')?.innerText === 'Keep this draft'`,
     { label: "draft after reattaching" },
+  );
+  // A one-off detach from the dock menu floats it without touching the default.
+  await app.eval(`window.catamorphicDesktop.dockDetach(true)`);
+  dock = await app.connectToFrame("surface=dock");
+  await dock.waitFor(
+    `document.querySelector('[data-floating-chat]:not([inert]) [data-composer-input]')?.innerText === 'Keep this draft'`,
+    { label: "one-off detach keeps the draft" },
+  );
+  expect(
+    await app.eval<boolean>(
+      `window.catamorphicDesktop.getPrefs().then((prefs) => prefs.dockDetached)`,
+    ),
+  ).toBe(false);
+  await dock.eval(`window.catamorphicDesktop.dockDetach(false)`);
+  await app.waitFor(
+    `document.querySelector('[data-floating-chat]:not([inert]) [data-composer-input]')?.innerText === 'Keep this draft'`,
+    { label: "draft after the one-off return" },
   );
 });
 

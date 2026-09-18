@@ -1,4 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { themeStyle, useTheme } from "../lib/theme.js";
 
 export function Modal({
   open,
@@ -13,6 +15,7 @@ export function Modal({
   width?: number;
   labelledBy?: string;
 }) {
+  const theme = useTheme();
   const [mounted, setMounted] = useState(open);
   useEffect(() => {
     if (open) setMounted(true);
@@ -37,6 +40,8 @@ export function Modal({
         panelRef.current?.querySelector("select:open")
       )
         return;
+      // A control recording a shortcut owns every key while it is armed.
+      if (panelRef.current?.querySelector("[data-keyboard-capture]")) return;
       if (event.key === "Escape") {
         // Claim the key so the expanded chat's window listener ignores it.
         event.preventDefault();
@@ -84,8 +89,12 @@ export function Modal({
   }, [open, mounted]);
 
   if (!mounted) return null;
-  return (
+  // Rendered at the body: a "fixed" panel inside a sidebar or a transformed
+  // pane would otherwise position itself relative to that pane.
+  return createPortal(
     <div
+      data-theme={theme?.appearance}
+      style={themeStyle(theme)}
       className={`fixed inset-0 z-[100] grid place-items-center transition-opacity duration-150 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:duration-0 ${
         open
           ? "pointer-events-auto animate-fade-in"
@@ -116,12 +125,13 @@ export function Modal({
         aria-labelledby={labelledBy}
         tabIndex={-1}
         style={{ width, maxWidth: "calc(100vw - 48px)" }}
-        className={`relative max-h-[calc(100dvh-48px)] overflow-y-auto overscroll-contain rounded-xl border border-border bg-bg-raised shadow-2xl outline-none transition-transform duration-150 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transform-none motion-reduce:duration-0 ${
-          open ? "scale-100" : "scale-95"
+        className={`relative max-h-[calc(100dvh-48px)] overflow-y-auto overscroll-contain rounded-xl border border-border bg-bg-raised shadow-2xl outline-none motion-reduce:animate-none ${
+          open ? "animate-modal-in" : "animate-modal-out"
         }`}
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

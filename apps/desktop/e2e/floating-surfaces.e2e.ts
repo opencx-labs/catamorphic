@@ -386,12 +386,12 @@ describe("floating surfaces", () => {
     );
     expect(await app.eval(`!!${floating}`)).toBe(false);
   });
-  it("edits profile macros in searchable Settings without executing on save", async () => {
+  it("edits profile macros in Settings without executing on save", async () => {
     await run(
-      "setReactValue($('input[aria-label=\"Search settings\"]'),'macros')",
+      "[...document.querySelectorAll('nav[aria-label=\"Settings categories\"] button')].find(b=>b.textContent==='Macros').click()",
     );
     await app.waitFor(
-      "!document.querySelector('#settings-macros').hidden && document.querySelector('#settings-appearance').hidden",
+      "document.querySelector('nav[aria-label=\"Settings categories\"] [aria-current=\"location\"]')?.textContent==='Macros'",
     );
     const sessions = await app.eval<number>("window.__terminalIds.length");
     await run(
@@ -403,7 +403,7 @@ describe("floating surfaces", () => {
     await click("Record macro shortcut");
     await key("p", { metaKey: true });
     await app.waitFor(
-      "document.querySelector('#settings-macros [role=alert]')?.textContent.includes('Already used')",
+      "document.querySelector('[data-macro-editor] [role=alert]')?.textContent.includes('Already used')",
     );
     await app.press("Escape");
     await run("$('[data-macro-editor]').requestSubmit()");
@@ -411,16 +411,16 @@ describe("floating surfaces", () => {
       "window.catamorphicDesktop.getPrefs().then(p=>p.terminalMacros.some(m=>m.name==='Working directory'))",
     );
     expect(await app.eval("window.__terminalIds.length")).toBe(sessions);
-    await run(
-      "setReactValue($('input[aria-label=\"Search settings\"]'),'nothing matches this')",
-    );
+    // The settings search button opens the palette's settings scope instead
+    // of filtering the page (ADR 0123: one search surface).
+    await click("Search settings");
     await app.waitFor(
-      "document.querySelector('[data-settings-scroll] [role=status]')?.textContent.includes('No settings match')",
+      "[...document.querySelectorAll('textarea[aria-label=\"Search commands, pages, and more\"]')].some(el=>el.placeholder==='Search settings…')",
     );
-    await run(
-      "[...document.querySelectorAll('nav[aria-label=\"Settings categories\"] button')].find(b=>b.textContent==='Macros').click()",
+    await app.press("Escape");
+    await app.waitFor(
+      "![...document.querySelectorAll('textarea[aria-label=\"Search commands, pages, and more\"]')].some(el=>el.placeholder==='Search settings…' && el.getBoundingClientRect().width>0)",
     );
-    await app.waitFor("!document.querySelector('#settings-macros').hidden");
     await app.waitFor(
       "!!document.querySelector('button[aria-label=\"Delete macro Working directory\"]')",
     );

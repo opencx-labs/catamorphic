@@ -38,7 +38,7 @@ it("animates category navigation while preserving the forms and settling at the 
     top: number;
   }>(`
     const root = $('[data-settings-scroll]');
-    const input = $('[aria-label="Search keyboard shortcuts"]');
+    const input = $('[aria-label="Theme scope"]');
     root.scrollTop = 0;
     const original = root.animate;
     return new Promise(resolve => {
@@ -50,7 +50,7 @@ it("animates category navigation while preserving the forms and settling at the 
         animation.finished.then(() => resolve({
           duration: timing.duration, easing: timing.easing, start,
           end: getComputedStyle(root).transform,
-          preserved: input === $('[aria-label="Search keyboard shortcuts"]'),
+          preserved: input === $('[aria-label="Theme scope"]'),
           top: $('#settings-shortcuts').getBoundingClientRect().top - root.getBoundingClientRect().top,
         }));
         return animation;
@@ -64,32 +64,6 @@ it("animates category navigation while preserving the forms and settling at the 
   expect(motion.end).toBe("none");
   expect(motion.preserved).toBe(true);
   expect(Math.abs(motion.top)).toBeLessThan(12);
-});
-
-it("moves filtered shortcut rows, preserves search focus, and recovers from no results", async () => {
-  await run(`$('[aria-label="Search keyboard shortcuts"]').focus();`);
-  await app.waitFor(
-    `document.activeElement?.getAttribute('aria-label') === 'Search keyboard shortcuts'`,
-  );
-  await app.insertText("floating");
-  await app.waitFor(`(() => {
-    const rows = [...document.querySelectorAll('[data-shortcut-results] [data-item-id]')];
-    return rows.length > 1 && rows.every(row => row.textContent.toLowerCase().includes('floating')) &&
-      rows.some(row => row.style.transition.includes('200ms'));
-  })()`);
-  expect(
-    await app.eval(`document.activeElement?.getAttribute('aria-label')`),
-  ).toBe("Search keyboard shortcuts");
-  await app.insertText(" no matching shortcut");
-  await app.waitFor(
-    `document.querySelector('[data-shortcut-results] [role=status]')?.textContent.includes('No shortcuts match')`,
-  );
-  await run(`setReactValue($('[aria-label="Search keyboard shortcuts"]'), '')`);
-  await app.waitFor(`document.querySelectorAll('[data-shortcut-results] [data-item-id]').length > 20 &&
-    !document.querySelector('[data-shortcut-results] [role=status]')`);
-  expect(
-    await app.eval(`document.activeElement?.getAttribute('aria-label')`),
-  ).toBe("Search keyboard shortcuts");
 });
 
 it("honors reduced motion and the last rapid category choice, including the compact selector", async () => {
@@ -112,12 +86,9 @@ it("honors reduced motion and the last rapid category choice, including the comp
     await app.waitFor(
       `document.querySelector('[aria-label="Settings category"]').value === 'shortcuts'`,
     );
-    await run(
-      `setReactValue($('[aria-label="Search keyboard shortcuts"]'), 'floating')`,
-    );
     await app.waitFor(`(() => {
       const rows = [...document.querySelectorAll('[data-shortcut-results] [data-item-id]')];
-      return rows.length > 1 && rows.every(row => row.textContent.toLowerCase().includes('floating') &&
+      return rows.length > 20 && rows.every(row =>
         !row.style.transform && !row.style.opacity && !row.style.transition);
     })()`);
     expect(

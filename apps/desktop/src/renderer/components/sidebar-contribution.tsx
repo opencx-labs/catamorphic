@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useId,
+  useRef,
 } from "react";
 import type { OpenMode } from "../../shared/open-mode.js";
 import type {
@@ -18,12 +19,32 @@ export type SidebarContentState =
   | "ready"
   | "error"
   | "unavailable";
+/**
+ * What a section reports; the section chrome draws every status the same way.
+ * Sections render rows and nothing else: no loading text, no empty copy, no
+ * error paragraphs of their own.
+ */
+export interface SidebarStatus {
+  state: SidebarContentState;
+  /** Rows are on screen while a newer read is in flight. */
+  refreshing?: boolean;
+  /**
+   * Nothing is in flight: the first read waits until the section is shown.
+   * The chrome keeps the skeleton but never spins for an idle section.
+   */
+  idle?: boolean;
+  error?: string;
+  retry?: () => unknown;
+  /** Default empty sentence; the section config's `empty` wins. */
+  empty?: string;
+}
 export interface SidebarContributionContext {
   section: SidebarSectionConfig;
   surface: SidebarSurface;
   visible: boolean;
   relevant: boolean;
-  report: (state: SidebarContentState) => void;
+  status: SidebarStatus;
+  report: (status: SidebarStatus) => void;
   reportItems?: (id: string, count: number | null) => void;
   open: (url: string, mode: OpenMode) => void;
   command?: (action: string) => void | Promise<void>;
@@ -43,11 +64,22 @@ export function SidebarContribution({
 export function useSidebarContribution() {
   return useContext(Context);
 }
-export function useSidebarContent(state: SidebarContentState) {
+export function useSidebarContent(input: SidebarContentState | SidebarStatus) {
   const report = useContext(Context)?.report;
+  const status = typeof input === "string" ? { state: input } : input;
+  const retry = useRef(status.retry);
+  retry.current = status.retry;
+  const { state, refreshing = false, idle = false, error, empty } = status;
   useEffect(() => {
-    report?.(state);
-  }, [report, state]);
+    report?.({
+      state,
+      refreshing,
+      idle,
+      error,
+      empty,
+      retry: () => retry.current?.(),
+    });
+  }, [report, state, refreshing, idle, error, empty]);
 }
 
 export function sidebarItemPresentation({

@@ -779,7 +779,7 @@ workspace's UI standards, when present.
 `,
   ".catamorphic/skills/designing-apps/SKILL.md": `---
 name: designing-apps
-description: How apps should look and feel in this workspace — the @catamorphic/app/ui component kit, host theme tokens, the three data states, and the layout and motion doctrine. Use when building or styling app UI.
+description: How apps should look and feel in this workspace — the @catamorphic/app/ui component kit, host theme tokens, the three data states, and the layout, motion, border, scrolling, overlay and drag-and-drop doctrine. Use when building or styling app UI.
 ---
 
 # Designing Apps
@@ -815,7 +815,10 @@ import { Button, Card, DataTable, useAsync } from "@catamorphic/app/ui";
 | \`ErrorState\` | \`code\`, \`message\`, \`onRetry\` | Failure state; \`code\` maps via the exported \`ERROR_STATE_COPY\` (extend it for project codes). |
 | \`KeyValueRow\` / \`KeyValueList\` | \`label\`, children | Label/value lines that truncate correctly in narrow columns. |
 | \`Dialog\` | \`open\`, \`onClose\`, \`title\`, \`description\`, \`footer\`, \`closeOnOverlayClick\` | Modal with focus trap/restore, Esc, and the host's enter/exit motion. |
-| \`Tooltip\` | \`label\`, \`delay\` | Hover/focus hint (~500ms delay — never instant). |
+| \`Tooltip\` | \`label\`, \`delay\` | Hover/focus hint (~500ms delay — never instant). Portaled; hides on any pointer movement away. Never use the native \`title\` attribute. |
+| \`Popover\` | \`anchorRef\`, \`open\`, \`onClose\`, \`align\` | Anchored panel: portaled, flips to fit, closes on outside pointerdown and Esc, grows smoothly when its content loads late. Never hand-roll a floating panel. |
+| \`Collapsible\` | \`open\` | Structural show/hide that slides neighbours (grid rows 0fr↔1fr); closed content stays mounted but inert. Never animate \`height\` by hand. |
+| \`Tree\` / \`CollectionTree\` | \`items\`/\`collection\`, \`renderItem\`, \`height\`, \`rowHeight\`, \`selectedId\`, \`dragAndDrop\` | Virtualized tree with keyboard navigation, lazy children and the one drag-and-drop model (see below). \`CollectionItemView\` is the standard row. |
 | \`DataTable\` | \`columns\` (\`key\`/\`header\`/\`align\`/\`width\`/\`sortable\`/\`render\`), \`rows\`, \`rowKey\`, \`loading\`, \`empty\`, \`truncated\`, \`maxHeight\` | The table: sticky header, client-side sorting, host-density rows, skeleton/empty/truncated states built in. Plain \`Table\`/\`TableRow\`/… also exported for hand-rolled cases. |
 | \`DatePicker\` / \`DateRangePicker\` | \`value\` (ISO \`YYYY-MM-DD\` / \`{from,to}\`), \`onChange\`, \`placeholder\` | Date entry — popover calendar, keyboard-navigable, date-only local strings (JSON-safe). |
 | \`Calendar\` | \`mode\`, \`value\`, \`onSelect\` | The bare month grid when you need it inline. |
@@ -828,7 +831,11 @@ import { Button, Card, DataTable, useAsync } from "@catamorphic/app/ui";
 Every screen that loads data has exactly three states, and the kit covers
 all of them: \`Skeleton\` (or \`DataTable loading\`) while loading,
 \`ErrorState\` with retry on failure, \`EmptyState\` when the result is
-empty. Wire them with \`useAsync\`:
+empty. Wire them with \`useAsync\`. Never write your own "Loading…" text,
+spinner or empty sentence: a \`Spinner\` means a read is in flight right
+now (never a placeholder for "not loaded yet"), rows stay on screen while
+a refresh runs, and empty copy is one faint sentence plus at most one
+action.
 
 \`\`\`typescript
 import { DataTable, ErrorState, useAsync } from "@catamorphic/app/ui";
@@ -894,6 +901,78 @@ Everything rides the host's tokens — \`--cat-motion-fast/base/slow\` and
 the one easing \`--ease-standard\`; never hardcode a duration or curve.
 Exits mirror enters, slightly quicker. Nothing loops, nothing bounces,
 nothing animates on load.
+
+## Surfaces, borders and focus
+
+- **One border, one ring, one radius.** A control, row, tile, card or popover
+  is one rounded box. Its focus ring is drawn on that box with that box's
+  radius (inside it when neighbours could cover it), never on an unrounded
+  child inside it, and never in addition to the box's own border. Nested
+  bordered cards, square rings inside rounded controls, and a ring beside a
+  border are defects. The kit already does this for every component; keep
+  custom surfaces to one bordered box.
+- Rows inside a \`Card\` are plain hover rows, not more cards; pickers are
+  the only bordered children.
+- Check every new surface with keyboard focus (Tab through it) before
+  calling it done.
+
+## Scrolling
+
+- The element that scrolls fills its pane edge to edge so the scrollbar sits
+  at the pane's edge; centered or max-width content lives *inside* the
+  scroller, never around it.
+- Every scroller reserves its gutter (\`scrollbar-gutter: stable\`, which the
+  kit's \`DataTable\`, \`Dialog\` and \`ScrollHint\` already do) so content
+  never shifts when a scrollbar appears.
+- Never put a scrolling list inside another scroller: \`Tree\` and
+  \`CollectionTree\` scroll themselves; give them a \`height\` instead of
+  wrapping them. Containing overscroll on something that cannot scroll traps
+  the wheel; the kit's tree contains it only while it can scroll.
+
+## Hover controls and tooltips
+
+- Controls that belong to a hovered row (overflow dots, close, open) are
+  hidden until the row is hovered or holds keyboard focus, fade in and out on
+  \`--cat-motion-fast\`, and never stay lit after a mouse click. Use
+  \`:hover\` and \`:has(:focus-visible)\` on the row, never \`:focus-within\`.
+- Tiles too small for hover controls open the same menu on right-click.
+- Every icon-only control gets a \`Tooltip\`; never the native \`title\`.
+
+## Overlays
+
+- Forms that add or edit a record and confirmations of destructive actions
+  open in a \`Dialog\`, centered with its entrance and exit motion. Never grow
+  a form or a confirm strip inline: it shifts everything below it with no
+  motion. Reveal existing content in place with \`Collapsible\`.
+- Dialogs, popovers and tooltips come from the kit and render at the
+  document body. A \`position: fixed\` element inside a transformed or
+  filtered ancestor positions itself relative to that ancestor: never place
+  a fixed panel inside app content.
+- A popover or hover card that shows more once data arrives grows with a
+  transition; it never shifts layout on load. \`Popover\` does this for you.
+- Modals scale and fade in and out together; the exit holds its last frame
+  until the backdrop is gone (\`Dialog\` does this). Nothing inside an
+  embedded app draws its own close X for the app itself; the host owns
+  that chrome.
+
+## Drag and drop
+
+- One model, in \`Tree\`/\`CollectionTree\` via \`dragAndDrop = { drag,
+  accept, onDrop }\`: the tree owns pointer math, the accent insertion line
+  between rows and the accent outline on the row (or tree) that becomes the
+  parent. Rows with children are the only "inside" targets; everything else
+  lands before or after a sibling.
+- Declare what a row offers when dragged and what a target accepts; never
+  write drop-zone markup, payload formats or highlight classes of your own.
+  Keep a drop cue visible while dragging so the user knows where release
+  lands.
+
+## Reduced motion
+
+- The kit collapses every transition and keyframe to an instant change
+  under \`prefers-reduced-motion: reduce\` and nothing loops. Script-driven
+  motion (\`element.animate\`) must read the same media query and use a 0
+  duration when it matches.
 
 ## Do-nots
 

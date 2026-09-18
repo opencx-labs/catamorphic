@@ -70,25 +70,21 @@ export function FilesNav({
     );
     return result;
   }, [query.data, contentOnly]);
-  useSidebarContent(
-    query.isError
+  useSidebarContent({
+    state: query.isError
       ? "error"
       : query.isLoading
         ? "loading"
         : items.length
           ? "ready"
           : "empty",
-  );
-  if (query.isError)
-    return (
-      <p role="alert" className="sidebar-empty-state">
-        Could not load files.{" "}
-        <button type="button" onClick={() => void refetch()}>
-          Retry
-        </button>
-      </p>
-    );
-  if (query.isLoading) return <p className="sidebar-empty-state">Loading…</p>;
+    refreshing: query.isFetching && !query.isLoading,
+    idle: !query.isFetching,
+    error: query.isError ? "Could not load files." : undefined,
+    retry: () => refetch(),
+    empty: "No files yet.",
+  });
+  if (query.isError || query.isLoading) return null;
   return (
     <div data-testid="files-nav">
       <SidebarTree

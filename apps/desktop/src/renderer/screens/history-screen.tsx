@@ -31,13 +31,11 @@ export function HistoryScreen({
   active = true,
   onSearch,
   onOpen,
-  onClose,
 }: {
   profileId?: string;
   active?: boolean;
   onSearch: () => void;
   onOpen: (entry: HistoryEntry, mode: OpenMode) => Promise<void>;
-  onClose: () => void;
 }) {
   const runtime = useWorkspace();
   const [offset, setOffset] = useState(0);
@@ -120,16 +118,6 @@ export function HistoryScreen({
             <Trash2 className="size-3.5" />
           </button>
         </ShortcutHint>
-        <ShortcutHint label="Close history">
-          <button
-            type="button"
-            aria-label="Close history"
-            onClick={onClose}
-            className="grid size-7 place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-          >
-            <X className="size-4" />
-          </button>
-        </ShortcutHint>
       </header>
       <div className="min-h-0 flex-1 overflow-auto px-4 pb-6">
         <div ref={list} className="mx-auto max-w-3xl">
@@ -185,7 +173,7 @@ export function HistoryScreen({
                       type="button"
                       aria-label={`Remove ${entry.title} from history`}
                       onClick={() => void remove(entry.id)}
-                      className="mr-1 grid size-7 shrink-0 place-items-center rounded-md text-fg-muted opacity-0 transition-opacity duration-150 hover:bg-bg-raised group-hover:opacity-100 group-focus-within:opacity-100"
+                      className="row-reveal mr-1 grid size-7 shrink-0 place-items-center rounded-md text-fg-muted hover:bg-bg-raised"
                     >
                       <X className="size-3.5" />
                     </button>
@@ -269,14 +257,14 @@ export function HistoryScreen({
               disabled={clearing}
               data-disabled-reason="Wait for history to finish clearing"
               onClick={() => setConfirmClear(false)}
-              className="h-8 rounded-md border border-border px-3 text-xs text-fg-muted hover:bg-bg-overlay"
+              className="button-ghost"
             >
               Cancel
             </button>
             <PendingButton
               pending={clearing}
               onClick={() => void clear()}
-              className="h-8 rounded-md bg-danger px-3 text-xs text-white"
+              className="button-danger"
             >
               Clear history
             </PendingButton>

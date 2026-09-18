@@ -75,7 +75,7 @@ export interface DockSnapshot {
   detached: boolean;
   multiProject: boolean;
   side: "left" | "right";
-  alignment: "edge" | "center";
+  placement: "left" | "center" | "right";
 }
 export interface WorkspaceNavigation {
   projectId: string;

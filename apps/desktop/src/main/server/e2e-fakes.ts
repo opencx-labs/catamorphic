@@ -1221,7 +1221,7 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
       return;
     }
 
-    if (message.trim() === "E2E enable personal tab frame") {
+    if (message.trim() === "E2E enable personal framed content") {
       const context = this.settingsContext?.(session.projectId);
       const file = context?.files?.preferences.personal;
       if (!file || context.access !== "native")
@@ -1230,10 +1230,10 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
         ? JSON.parse(fs.readFileSync(file, "utf8"))
         : {};
       fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, JSON.stringify({ ...raw, tabFrame: true }));
+      fs.writeFileSync(file, JSON.stringify({ ...raw, contentFrame: true }));
       yield {
         type: "text",
-        content: "Personal tab frame updated by editing its JSON file.",
+        content: "Personal framed content updated by editing its JSON file.",
       };
       yield { type: "done" };
       return;

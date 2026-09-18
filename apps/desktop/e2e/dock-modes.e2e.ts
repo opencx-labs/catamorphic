@@ -224,6 +224,53 @@ describe("dock modes", () => {
     );
   }, 60_000);
 
+  it("in its own window, lurks when the window blurs while the agent works", async () => {
+    await app.eval(`window.catamorphicDesktop.dockDetach(true)`);
+    const dock = await app.connectToFrame("surface=dock");
+    const dockHelpers = `${helpers}`;
+    const dockRun = <T = unknown>(body: string) =>
+      dock.eval<T>(`(() => { ${dockHelpers}\n${body} })()`);
+    const dockWait = <T = unknown>(
+      body: string,
+      opts?: { timeoutMs?: number; label?: string },
+    ) => dock.waitFor<T>(`(() => { ${dockHelpers}\n${body} })()`, opts);
+    await dockWait(`return !!composer();`, {
+      label: "chat in the dock window",
+    });
+    // The rest of the screen is the backdrop: a blurred window lurks while
+    // the agent works, and comes back when the window is focused again.
+    await dockRun(`window.dispatchEvent(new Event('focus')); return true;`);
+    await dockRun(
+      `setComposer('terminal: sleep 15 && echo blur-done'); send(); return true;`,
+    );
+    await dockWait(
+      `return dockH() > 400 && !frontDock().hasAttribute('data-lurking');`,
+      {
+        label: "expanded while the window is focused",
+      },
+    );
+    await dockRun(
+      `unhoverDock(); window.dispatchEvent(new Event('blur')); return true;`,
+    );
+    await dockWait(
+      `return frontDock().hasAttribute('data-lurking') && dockH() < 220;`,
+      { label: "lurks after the window blurred", timeoutMs: 10_000 },
+    );
+    await dockRun(`window.dispatchEvent(new Event('focus')); return true;`);
+    await dockWait(
+      `return !frontDock().hasAttribute('data-lurking') && dockH() > 400;`,
+      { label: "expanded when the window is focused again" },
+    );
+    // Let this turn end before the next test starts its own timed command,
+    // so the two do not queue behind each other.
+    await dockWait(
+      `return !frontDock().querySelector('[data-testid="session-inspector-trigger"]')?.getAttribute('aria-label')?.includes(', Working,');`,
+      { label: "turn finished", timeoutMs: 40_000 },
+    );
+    await app.eval(`window.catamorphicDesktop.dockDetach(false)`);
+    await runWait(`return !!composer();`, { label: "chat back in the window" });
+  }, 120_000);
+
   it("lurks while the agent works: shrinks on focus-out, expands on hover, expands when done", async () => {
     await run(
       // Keep the turn alive through the animated focus and hover assertions.

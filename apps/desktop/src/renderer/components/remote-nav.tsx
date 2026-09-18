@@ -82,19 +82,13 @@ export function RemoteNav({
   }, [projectId, refresh, visible]);
 
   const isEmpty = loaded && !error && status === null;
-  useSidebarContent(
-    error ? "error" : !loaded ? "loading" : isEmpty ? "empty" : "ready",
-  );
+  useSidebarContent({
+    state: error ? "error" : !loaded ? "loading" : isEmpty ? "empty" : "ready",
+    error,
+    retry: refresh,
+  });
 
-  if (!status)
-    return error ? (
-      <p role="alert" className="sidebar-empty-state">
-        {error}{" "}
-        <button type="button" onClick={() => void refresh()}>
-          Retry
-        </button>
-      </p>
-    ) : null;
+  if (!status) return null;
 
   const run = async (verb: "sync" | "ship") => {
     setBusy(verb);
@@ -181,7 +175,7 @@ export function RemoteNav({
             data-disabled-reason="Select files to upload, or wait for the server action to finish"
             onClick={() => void run("ship")}
             data-testid="remote-ship"
-            className="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md bg-accent text-xs font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="button-primary button-sm flex-1"
           >
             <span className="inline-flex items-center gap-1.5">
               <Upload className="size-3.5" />

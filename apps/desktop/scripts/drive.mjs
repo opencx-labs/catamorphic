@@ -14,13 +14,20 @@
 //   window setSize <w> <h>     - resize the window
 //
 // Default test viewport: run `window maximize` before screenshotting.
+// CDP_TARGET=surface=dock drives the detached dock window instead.
 
 const PORT = process.env.CDP_PORT ?? "9333";
 
 const targets = await fetch(`http://127.0.0.1:${PORT}/json`).then((r) =>
   r.json(),
 );
-const page = targets.find((t) => t.type === "page");
+// CDP_TARGET narrows to the page whose URL contains it (e.g. "surface=dock");
+// "main" picks the workspace window, which carries no surface parameter.
+const wanted = process.env.CDP_TARGET;
+const matches = (url) =>
+  !wanted ||
+  (wanted === "main" ? !url.includes("surface=") : url.includes(wanted));
+const page = targets.find((t) => t.type === "page" && matches(String(t.url)));
 if (!page) throw new Error("no page target — is the app running with CDP?");
 const ws = new WebSocket(page.webSocketDebuggerUrl);
 await new Promise((resolve, reject) => {
@@ -143,6 +150,76 @@ switch (cmd) {
     await send("Input.dispatchKeyEvent", { type: "keyDown", ...k });
     await send("Input.dispatchKeyEvent", { type: "keyUp", ...k });
     console.log("pressed", args[0]);
+    break;
+  }
+  case "wheel": {
+    // wheel <selector> [deltaY]: a real mouse-wheel tick over the element,
+    // the way a trackpad or mouse scrolls it (synthetic WheelEvents don't).
+    const box = await evalJs(`(() => {
+      const el = document.querySelector(${JSON.stringify(args[0])});
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    })()`);
+    if (!box) throw new Error(`not found: ${args[0]}`);
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseWheel",
+      x: box.x,
+      y: box.y,
+      deltaX: 0,
+      deltaY: Number(args[1] ?? 120),
+    });
+    console.log("wheeled", args[0]);
+    break;
+  }
+  case "drag": {
+    // drag <selector> <dx> [dy]: press on the element, move in steps, release.
+    const box = await evalJs(`(() => {
+      const el = document.querySelector(${JSON.stringify(args[0])});
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    })()`);
+    if (!box) throw new Error(`not found: ${args[0]}`);
+    const dx = Number(args[1] ?? 0);
+    const dy = Number(args[2] ?? 0);
+    await send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: box.x,
+      y: box.y,
+      button: "left",
+      clickCount: 1,
+    });
+    for (let step = 1; step <= 8; step += 1) {
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: box.x + (dx * step) / 8,
+        y: box.y + (dy * step) / 8,
+        button: "left",
+        buttons: 1,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 16));
+    }
+    if (args[3]) {
+      // drag <selector> <dx> <dy> <shot.png>: capture mid-drag, then release.
+      const shot = await send("Page.captureScreenshot", { format: "png" });
+      const fs = await import("node:fs");
+      fs.writeFileSync(args[3], Buffer.from(shot.data, "base64"));
+      console.log(
+        "mid-drag",
+        await evalJs(
+          `JSON.stringify({targets:[...document.querySelectorAll("[data-dock-target]")].map(t=>t.dataset.dockTarget+(t.dataset.active?"*":"")),dragging:document.querySelector("[data-dock-rail]")?.dataset.dockDragging})`,
+        ),
+      );
+    }
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: box.x + dx,
+      y: box.y + dy,
+      button: "left",
+      clickCount: 1,
+    });
+    console.log("dragged", args[0], dx, dy);
     break;
   }
   case "eval":

@@ -225,6 +225,9 @@ it("gives AI file references pills and web links inline cards, resolving project
       `return front().querySelector('[data-response-link="app"]')?.textContent;`,
     ),
   ).toContain("App");
+  // Previews open above their trigger now, where the runner's own pointer
+  // may rest; park it so only focus and synthetic hover keep them open.
+  await app.movePointer({ x: 1, y: 1 });
   await run(`front().querySelector('a[href="file:linked-notes.md"]').focus();`);
   await wait(
     `return preview()?.querySelector('h1')?.textContent === 'Linked notes';`,

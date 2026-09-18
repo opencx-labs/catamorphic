@@ -25,7 +25,7 @@ describe("PrefsStore", () => {
     expect(store().value.load()).toMatchObject({
       tabPlacement: "top",
       headerPlacement: "top",
-      tabFrame: false,
+      contentFrame: false,
     });
   });
 

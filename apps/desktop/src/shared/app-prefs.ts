@@ -23,8 +23,10 @@ export type CodeTheme = (typeof CODE_THEMES)[number];
 export interface AppPrefs {
   dockMultiProject: boolean;
   dockDetached: boolean;
+  /** Where the collapsed bubble rests: a bottom corner. */
   dockSide: "left" | "right";
-  dockAlignment: "edge" | "center";
+  /** Where open chats and their bubble strip sit while expanded. */
+  dockPlacement: "left" | "center" | "right";
   /** Soft chime when an agent finishes or asks a question. */
   notificationSounds: boolean;
   /** OS notification for the same events while the app is unfocused. */
@@ -35,8 +37,12 @@ export interface AppPrefs {
   tabPlacement: "top" | "sidebar";
   tabAlignment: "start" | "center";
   headerPlacement: "top" | "sidebar";
-  /** Optional rounded, inset frame around workspace tab content. */
-  tabFrame: boolean;
+  /**
+   * Framed content insets the workspace as a rounded, bordered window;
+   * padding and radius are that frame's dimensions and only apply when
+   * it is on. Off by default: content sits flush with the sidebars.
+   */
+  contentFrame: boolean;
   sidebarDividers: boolean;
   contentPadding: number;
   contentRadius: number;
@@ -65,14 +71,14 @@ export const DEFAULT_PREFS: AppPrefs = {
   dockMultiProject: false,
   dockDetached: false,
   dockSide: "right",
-  dockAlignment: "edge",
+  dockPlacement: "center",
   notificationSounds: true,
   desktopNotifications: true,
   sidebarOpen: true,
   tabPlacement: "top",
   tabAlignment: "start",
   headerPlacement: "top",
-  tabFrame: false,
+  contentFrame: false,
   sidebarDividers: false,
   contentPadding: 6,
   contentRadius: 14,
@@ -120,7 +126,10 @@ export function normalizePrefs(raw: unknown): AppPrefs {
     dockMultiProject: record.dockMultiProject === true,
     dockDetached: record.dockDetached === true,
     dockSide: record.dockSide === "left" ? "left" : "right",
-    dockAlignment: record.dockAlignment === "center" ? "center" : "edge",
+    dockPlacement:
+      record.dockPlacement === "left" || record.dockPlacement === "right"
+        ? record.dockPlacement
+        : "center",
     notificationSounds:
       typeof record.notificationSounds === "boolean"
         ? record.notificationSounds
@@ -140,10 +149,7 @@ export function normalizePrefs(raw: unknown): AppPrefs {
     tabPlacement: record.tabPlacement === "sidebar" ? "sidebar" : "top",
     tabAlignment: record.tabAlignment === "center" ? "center" : "start",
     headerPlacement: record.headerPlacement === "sidebar" ? "sidebar" : "top",
-    tabFrame:
-      typeof record.tabFrame === "boolean"
-        ? record.tabFrame
-        : DEFAULT_PREFS.tabFrame,
+    contentFrame: record.contentFrame === true,
     sidebarDividers: record.sidebarDividers === true,
     contentPadding: dimension(record.contentPadding, 6, 48),
     contentRadius: dimension(record.contentRadius, 14, 48),
