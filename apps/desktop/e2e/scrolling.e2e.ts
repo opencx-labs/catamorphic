@@ -82,7 +82,14 @@ it("scrolls Settings to the last section without moving the workspace chrome", a
       deltaY: 10000,
     });
     await app.eval("new Promise((resolve) => setTimeout(resolve, 250))");
-    if (await app.eval<boolean>(atEnd)) break;
+    // Stop only at the very end: the category rail follows scroll position
+    // and must land on the last category, not merely show its card.
+    if (
+      await app.eval<boolean>(
+        `(() => { const panel = document.querySelector('[data-settings-scroll]'); return panel.scrollTop >= panel.scrollHeight - panel.clientHeight - 1; })()`,
+      )
+    )
+      break;
   }
   await app.waitFor(atEnd, {
     label: "last Settings section reachable by wheel",
