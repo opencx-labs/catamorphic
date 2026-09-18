@@ -1,4 +1,10 @@
-import { ChevronsRight, MessageSquare, Plus, X } from "lucide-react";
+import {
+  ChevronsLeft,
+  ChevronsRight,
+  MessageSquare,
+  Plus,
+  X,
+} from "lucide-react";
 import {
   type CSSProperties,
   type DOMAttributes,
@@ -20,8 +26,12 @@ const BUBBLE_HINT_DELAY_MS = 100;
 
 export interface ChatBubblesProps {
   dragLeft?: number | null;
-  alignment?: "edge" | "center";
+  /** Where the expanded strip and open chats sit. */
+  placement?: "left" | "center" | "right";
+  /** Drag surface of the collapsed bubble: picks its corner. */
   dragHandlers?: DOMAttributes<HTMLButtonElement>;
+  /** Drag surface of the expanded strip's arrows: picks the placement. */
+  placementDragHandlers?: DOMAttributes<HTMLButtonElement>;
   newChatProjectName?: string;
   side?: "left" | "right";
   themes?: Record<string, CSSProperties>;
@@ -223,8 +233,9 @@ function Bubble({
  */
 export function ChatBubbles({
   dragLeft = null,
-  alignment = "edge",
+  placement = "center",
   dragHandlers,
+  placementDragHandlers,
   newChatProjectName,
   side = "right",
   themes,
@@ -351,6 +362,28 @@ export function ChatBubbles({
     ),
   };
 
+  // The arrows point at the corner the strip collapses into and sit on that
+  // side of the strip. They are also the handle that moves open chats.
+  const Arrows = side === "left" ? ChevronsLeft : ChevronsRight;
+  const arrows = (
+    <ShortcutHint label="Collapse chat bubbles" side="top">
+      <button
+        type="button"
+        {...placementDragHandlers}
+        onClick={() => {
+          setCollapseOverride(true);
+          onCollapse?.();
+        }}
+        className="grid size-9 touch-none cursor-grab place-items-center rounded-full text-fg-faint transition-colors duration-150 hover:text-fg active:cursor-grabbing"
+        aria-label="Collapse chat bubbles"
+        aria-description="Drag to place open chats left, center or right. Arrow keys move them."
+        aria-keyshortcuts="ArrowLeft ArrowRight"
+        data-dock-arrows={side}
+      >
+        <Arrows className="size-4" />
+      </button>
+    </ShortcutHint>
+  );
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex justify-center pb-3">
       {/* The pill slides between centered (expanded) and right-docked
@@ -367,9 +400,9 @@ export function ChatBubbles({
             ? side === "left"
               ? "left-8 p-1"
               : "left-full -translate-x-[calc(100%+32px)] p-1"
-            : alignment === "center"
+            : placement === "center"
               ? "left-1/2 -translate-x-1/2 gap-1.5 p-1.5"
-              : side === "left"
+              : placement === "left"
                 ? "left-8 gap-1.5 p-1.5"
                 : "left-full -translate-x-[calc(100%+32px)] gap-1.5 p-1.5"
         }`}
@@ -385,6 +418,7 @@ export function ChatBubbles({
           aria-hidden={collapsed}
           inert={collapsed ? true : undefined}
         >
+          {side === "left" && arrows}
           {display.entries.map((entry) => (
             <Bubble
               theme={themes?.[entry.localId]}
@@ -423,19 +457,7 @@ export function ChatBubbles({
               <Plus className="size-4" />
             </button>
           </ShortcutHint>
-          <ShortcutHint label="Collapse chat bubbles" side="top">
-            <button
-              type="button"
-              onClick={() => {
-                setCollapseOverride(true);
-                onCollapse?.();
-              }}
-              className="grid size-9 cursor-pointer place-items-center rounded-full text-fg-faint transition-colors duration-150 hover:text-fg"
-              aria-label="Collapse chat bubbles"
-            >
-              <ChevronsRight className="size-4" />
-            </button>
-          </ShortcutHint>
+          {side === "right" && arrows}
         </div>
 
         {/* Collapsed single bubble; carries aggregate indicators. */}

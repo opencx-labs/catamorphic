@@ -75,24 +75,24 @@ it("normalizes the independent dock settings without changing notification defau
       dockMultiProject: true,
       dockDetached: false,
       dockSide: "left",
-      dockAlignment: "center",
+      dockPlacement: "center",
     }),
   ).toMatchObject({
     dockMultiProject: true,
     dockDetached: false,
     dockSide: "left",
-    dockAlignment: "center",
+    dockPlacement: "center",
     notificationSounds: true,
   });
   expect(
     normalizePrefs({
       dockSide: "invalid",
       dockDetached: "true",
-      dockAlignment: "invalid",
+      dockPlacement: "invalid",
     }),
   ).toMatchObject({
     dockSide: "right",
     dockDetached: false,
-    dockAlignment: "edge",
+    dockPlacement: "center",
   });
 });

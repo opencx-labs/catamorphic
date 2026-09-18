@@ -72,8 +72,8 @@ export function dropPositionFor({
 }): TreeDropPosition {
   const ratio = (clientY - rect.top) / Math.max(1, rect.height);
   if (allowInside) {
-    if (ratio < 0.25) return "before";
-    if (ratio > 0.75) return "after";
+    if (ratio < 0.2) return "before";
+    if (ratio > 0.8) return "after";
     return "inside";
   }
   return ratio < 0.5 ? "before" : "after";

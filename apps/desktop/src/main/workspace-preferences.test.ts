@@ -174,15 +174,16 @@ describe("bookmark drops", () => {
     const first = store.place({ ...target, folderId: folder.id });
     store.place({ ...target, pinned: true });
     expect(store.forProject("project").bookmarks).toHaveLength(0);
+    // Placement numbers the entry among its new siblings.
     expect(store.pinned("profile").bookmarks).toEqual([
-      { id: first.id, label: "Docs", url: target.url },
+      { id: first.id, label: "Docs", url: target.url, position: 0 },
     ]);
     store.place({ ...target, folderId: folder.id });
     store.place({ ...target, folderId: folder.id });
     const restored = new BookmarksStore(file);
     expect(restored.pinned("profile").bookmarks).toHaveLength(0);
     expect(restored.forProject("project").bookmarks).toEqual([
-      { ...first, folderId: folder.id },
+      { ...first, folderId: folder.id, position: 0 },
     ]);
   });
   it("does not lose a bookmark when its drop folder has been removed", () => {

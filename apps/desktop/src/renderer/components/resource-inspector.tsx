@@ -357,6 +357,28 @@ export function InspectorPortal({
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  // The panel's height follows its content through a transition, so async
+  // sections that arrive after the popover opens grow it instead of
+  // snapping it. The first measurement lands before paint, untransitioned.
+  const [height, setHeight] = useState<number | null>(null);
+  const [settled, setSettled] = useState(false);
+  useLayoutEffect(() => {
+    const node = content.current;
+    if (!node) return;
+    const measure = () => setHeight(node.offsetHeight);
+    measure();
+    const frame = requestAnimationFrame(() => setSettled(true));
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(measure);
+    observer?.observe(node);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer?.disconnect();
+    };
+  }, []);
   const [position, setPosition] = useState<{
     left: number;
     top: number;
@@ -414,7 +436,13 @@ export function InspectorPortal({
       data-open={open || undefined}
       aria-hidden={!open}
       inert={!open}
-      style={{ left: position.left, top: position.top }}
+      style={{
+        left: position.left,
+        top: position.top,
+        // Padding (12px each side) is outside the measured content.
+        height: height === null ? undefined : height + 24,
+      }}
+      data-settled={settled || undefined}
       onPointerEnter={onEnter}
       onPointerLeave={onLeave}
       onFocusCapture={onEnter}
@@ -435,9 +463,9 @@ export function InspectorPortal({
         )
           onExited();
       }}
-      className={`fixed z-[130] max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] w-80 overflow-y-auto overscroll-contain rounded-lg border border-border bg-bg-overlay p-3 shadow-2xl [scrollbar-gutter:stable] ${open ? `animate-inspector-in-${position.side}` : `pointer-events-none opacity-0 animate-inspector-out-${position.side}`}`}
+      className={`fixed z-[130] max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] w-80 overflow-y-auto overscroll-contain rounded-lg border border-border bg-bg-overlay p-3 shadow-2xl [scrollbar-gutter:stable] ${settled ? "transition-[height,top] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none" : ""} ${open ? `animate-inspector-in-${position.side}` : `pointer-events-none opacity-0 animate-inspector-out-${position.side}`}`}
     >
-      {children}
+      <div ref={content}>{children}</div>
     </div>,
     document.body,
   );

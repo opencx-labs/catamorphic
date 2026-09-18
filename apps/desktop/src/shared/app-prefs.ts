@@ -23,8 +23,10 @@ export type CodeTheme = (typeof CODE_THEMES)[number];
 export interface AppPrefs {
   dockMultiProject: boolean;
   dockDetached: boolean;
+  /** Where the collapsed bubble rests: a bottom corner. */
   dockSide: "left" | "right";
-  dockAlignment: "edge" | "center";
+  /** Where open chats and their bubble strip sit while expanded. */
+  dockPlacement: "left" | "center" | "right";
   /** Soft chime when an agent finishes or asks a question. */
   notificationSounds: boolean;
   /** OS notification for the same events while the app is unfocused. */
@@ -69,7 +71,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   dockMultiProject: false,
   dockDetached: false,
   dockSide: "right",
-  dockAlignment: "edge",
+  dockPlacement: "center",
   notificationSounds: true,
   desktopNotifications: true,
   sidebarOpen: true,
@@ -124,7 +126,10 @@ export function normalizePrefs(raw: unknown): AppPrefs {
     dockMultiProject: record.dockMultiProject === true,
     dockDetached: record.dockDetached === true,
     dockSide: record.dockSide === "left" ? "left" : "right",
-    dockAlignment: record.dockAlignment === "center" ? "center" : "edge",
+    dockPlacement:
+      record.dockPlacement === "left" || record.dockPlacement === "right"
+        ? record.dockPlacement
+        : "center",
     notificationSounds:
       typeof record.notificationSounds === "boolean"
         ? record.notificationSounds

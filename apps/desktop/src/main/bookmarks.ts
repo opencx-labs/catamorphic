@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { orderedSiblings } from "../shared/bookmark-order.js";
 import type {
   BookmarkMove,
   BookmarkPlacement,
@@ -20,6 +21,8 @@ export interface Bookmark {
   folderId?: string;
   /** Last observed page favicon. Imported entries may not have one yet. */
   faviconUrl?: string;
+  /** Order among all siblings (folders and bookmarks) under the same parent. */
+  position?: number;
 }
 
 export interface BookmarkFolder {
@@ -27,6 +30,8 @@ export interface BookmarkFolder {
   label: string;
   /** Parent folder id within the same scope, or undefined for root. */
   parentId?: string;
+  /** Order among all siblings (folders and bookmarks) under the same parent. */
+  position?: number;
 }
 
 export interface ProjectBookmarks {
@@ -49,15 +54,42 @@ interface SerializedBookmarksFile {
 
 const EMPTY: ProjectBookmarks = { folders: [], bookmarks: [] };
 
-/** Insert before the sibling with `beforeId`, or append when it is absent. */
-function insertBefore<T extends { id: string }>(
-  list: T[],
-  entry: T,
+/**
+ * Put `id` before `beforeId` (or last) among the siblings of `parentId`, then
+ * number every sibling in display order and keep both arrays sorted so
+ * readers that walk them see the same order.
+ */
+function placeAmongSiblings(
+  scope: ProjectBookmarks,
+  id: string,
+  parentId: string | undefined,
   beforeId: string | undefined,
 ): void {
-  const index = beforeId ? list.findIndex((item) => item.id === beforeId) : -1;
-  if (index < 0) list.push(entry);
-  else list.splice(index, 0, entry);
+  const kind = scope.folders.some((folder) => folder.id === id)
+    ? ("folder" as const)
+    : ("bookmark" as const);
+  const siblings = orderedSiblings(scope, parentId).filter(
+    (sibling) => sibling.id !== id,
+  );
+  const index = beforeId
+    ? siblings.findIndex((sibling) => sibling.id === beforeId)
+    : -1;
+  const order =
+    index < 0
+      ? [...siblings, { id, kind }]
+      : [...siblings.slice(0, index), { id, kind }, ...siblings.slice(index)];
+  order.forEach((sibling, position) => {
+    const entry =
+      sibling.kind === "folder"
+        ? scope.folders.find((folder) => folder.id === sibling.id)
+        : scope.bookmarks.find((bookmark) => bookmark.id === sibling.id);
+    if (entry) entry.position = position;
+  });
+  const byPosition = (a: { position?: number }, b: { position?: number }) =>
+    (a.position ?? Number.MAX_SAFE_INTEGER) -
+    (b.position ?? Number.MAX_SAFE_INTEGER);
+  scope.folders.sort(byPosition);
+  scope.bookmarks.sort(byPosition);
 }
 
 export class BookmarksStore {
@@ -122,6 +154,7 @@ export class BookmarksStore {
       url: input.url,
       folderId: input.folderId,
       faviconUrl: input.faviconUrl,
+      position: orderedSiblings(scope, input.folderId).length,
     };
     scope.bookmarks.push(bookmark);
     this.save();
@@ -139,6 +172,7 @@ export class BookmarksStore {
       id: randomUUID(),
       label: label.trim() || "New folder",
       parentId,
+      position: orderedSiblings(scope, parentId).length,
     };
     scope.folders.push(folder);
     this.save();
@@ -182,16 +216,16 @@ export class BookmarksStore {
     favorites.bookmarks = favorites.bookmarks.filter(
       (entry) => entry.url !== url,
     );
-    insertBefore(destination.bookmarks, bookmark, beforeId);
+    destination.bookmarks.push(bookmark);
+    placeAmongSiblings(destination, bookmark.id, folderId, beforeId);
     this.save();
     return bookmark;
   }
 
   /**
    * One drag model for every bookmark scope: a bookmark or folder lands
-   * before a sibling (or last) inside a folder or at the root. Folders
-   * list before bookmarks, so a bookmark dropped before a folder lands
-   * first among the bookmarks of that parent.
+   * before any sibling (folder or bookmark), or last, inside a folder or at
+   * the root. Siblings share one order regardless of kind.
    */
   move({ projectId, profileId, scope, id, folderId, beforeId }: BookmarkMove) {
     const target =
@@ -217,26 +251,13 @@ export class BookmarksStore {
           throw new Error("A folder cannot be moved inside itself.");
         cursor = target.folders.find((entry) => entry.id === cursor)?.parentId;
       }
-      target.folders = target.folders.filter((entry) => entry.id !== id);
-      insertBefore(
-        target.folders,
-        { ...folder, ...(parentId ? { parentId } : { parentId: undefined }) },
-        beforeId,
-      );
-      this.save();
-      return;
+      folder.parentId = parentId;
+    } else {
+      const bookmark = target.bookmarks.find((entry) => entry.id === id);
+      if (!bookmark) throw new Error("This bookmark no longer exists.");
+      bookmark.folderId = parentId;
     }
-    const bookmark = target.bookmarks.find((entry) => entry.id === id);
-    if (!bookmark) throw new Error("This bookmark no longer exists.");
-    target.bookmarks = target.bookmarks.filter((entry) => entry.id !== id);
-    insertBefore(
-      target.bookmarks,
-      {
-        ...bookmark,
-        ...(parentId ? { folderId: parentId } : { folderId: undefined }),
-      },
-      beforeId,
-    );
+    placeAmongSiblings(target, id, parentId, beforeId);
     this.save();
   }
 

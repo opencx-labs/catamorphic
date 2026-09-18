@@ -7,6 +7,7 @@ import {
 } from "@catamorphic/app/ui";
 import { FolderPlus, MessageSquare, Plus } from "lucide-react";
 import { type DragEvent as ReactDragEvent, useEffect, useState } from "react";
+import { orderedSiblings, siblingRanks } from "../../shared/bookmark-order.js";
 import { parseChatBookmarkUrl } from "../../shared/bookmark-target.js";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { readBookmarkDrop } from "../lib/bookmark-drag.js";
@@ -232,37 +233,22 @@ export function BookmarksNav({
     return acceptsExternal(scope) && types.includes(TAB_DRAG_TYPE);
   };
   /** Folder and sibling for a target: inside a folder, or beside a row. */
-  const slotFor = (
-    scope: Scope,
-    target: TreeDropTarget<Entry>,
-    kind: "item" | "folder",
-  ) => {
+  const slotFor = (scope: Scope, target: TreeDropTarget<Entry>) => {
     if (!target.item) return { folderId: undefined, beforeId: undefined };
     if (target.position === "inside")
       return { folderId: target.item.id, beforeId: undefined };
     const folderId = target.item.parentId ?? undefined;
     if (target.position === "before")
-      return {
-        folderId,
-        beforeId:
-          (kind === "folder") === target.item.hasChildren
-            ? target.item.id
-            : undefined,
-      };
-    // After: before the next sibling of the same kind in that folder.
+      return { folderId, beforeId: target.item.id };
+    // After: before whatever follows the target among all its siblings.
     const lists = scopeData(scope);
-    const siblings = target.item.hasChildren
-      ? (lists?.folders ?? [])
-          .filter((folder) => (folder.parentId ?? undefined) === folderId)
-          .map((folder) => folder.id)
-      : (lists?.bookmarks ?? [])
-          .filter((bookmark) => (bookmark.folderId ?? undefined) === folderId)
-          .map((bookmark) => bookmark.id);
+    const siblings = lists
+      ? orderedSiblings(lists, folderId).map((sibling) => sibling.id)
+      : [];
     const index = siblings.indexOf(target.item.id);
-    const sameKind = (kind === "folder") === target.item.hasChildren;
     return {
       folderId,
-      beforeId: sameKind && index >= 0 ? siblings[index + 1] : undefined,
+      beforeId: index >= 0 ? siblings[index + 1] : undefined,
     };
   };
   const dropInto = (
@@ -274,7 +260,7 @@ export function BookmarksNav({
       ? readSidebarItemDrag(transfer)
       : null;
     if (own) {
-      const slot = slotFor(scope, target, own.kind);
+      const slot = slotFor(scope, target);
       perform(
         desktopApi.bookmarksMove({
           projectId,
@@ -292,7 +278,7 @@ export function BookmarksNav({
       setError("Open a page or send a chat message before pinning it.");
       return;
     }
-    const slot = slotFor(scope, target, "item");
+    const slot = slotFor(scope, target);
     perform(
       desktopApi
         .bookmarksPlace({
@@ -590,6 +576,10 @@ export function BookmarksNav({
           bookmark,
         })),
     ];
+    // The tree lists each parent's children in the order it meets them, so
+    // one global sort by sibling rank orders every level at once.
+    const ranks = siblingRanks(scope);
+    items.sort((a, b) => (ranks.get(a.id) ?? 0) - (ranks.get(b.id) ?? 0));
     return (
       <SidebarTree
         items={items}

@@ -30,19 +30,19 @@ export const SETTINGS = {
     valid: boolean,
   },
   dockSide: {
-    label: "Dock position",
+    label: "Collapsed bubble corner",
     description: "Drag the collapsed bubble to switch bottom corners.",
     scopes: profileScope,
     valid: oneOf("left", "right"),
     options: { left: "Left", right: "Right" },
   },
-  dockAlignment: {
-    label: "Expanded dock position",
+  dockPlacement: {
+    label: "Open chat position",
     description:
-      "Keep open chats and bubbles at the edge or centered in the workspace.",
+      "Where open chats and their bubbles sit. Drag the arrows button to move them.",
     scopes: profileScope,
-    valid: oneOf("edge", "center"),
-    options: { edge: "At the edge", center: "Centered" },
+    valid: oneOf("left", "center", "right"),
+    options: { left: "Left", center: "Centered", right: "Right" },
   },
   sidebarDividers: {
     label: "Sidebar dividers",

@@ -515,10 +515,14 @@ current theme on every guest load while theme switches preserve the guest's stat
 
 ## Dock placement and draft runtime controls (2026-09-11)
 
-ADR 0127 adds centered or edge-aligned expansion without changing the collapsed
-corner. The bubble itself is draggable; dragging never expands it or stores an
-absolute resting position. Use restrained settling motion and honor reduced
-motion. New and established chats share editable runtime controls; draft choices
+ADR 0127 adds placement without absolute positions. Open chats and their
+bubble strip sit left, centered (default) or right (`dockPlacement`); the
+collapsed bubble rests in a bottom corner (`dockSide`). There is no separate
+handle: dragging the collapsed bubble picks its corner, and dragging the
+expanded strip's arrows picks the placement. The arrows point at the corner
+the strip collapses into and sit on that side of the strip. Dragging never
+expands the dock or stores coordinates; release snaps with settling motion
+that honors reduced motion. New and established chats share editable runtime controls; draft choices
 apply only to that conversation. Explain unavailable controls beside the control.
 
 Markdown hover previews use the app's rendered reading typography. Composer

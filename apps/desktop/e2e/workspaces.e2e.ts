@@ -188,7 +188,7 @@ it("keeps an unsent draft when detached and reattached, and supports either edge
     },
   );
   await dock.eval(
-    `window.catamorphicDesktop.setPrefs({dockAlignment:'center'})`,
+    `window.catamorphicDesktop.setPrefs({dockPlacement:'center'})`,
   );
   await dock.waitFor(
     `Math.abs(screenX + outerWidth / 2 - screen.availLeft - screen.availWidth / 2) < 3`,
@@ -220,7 +220,7 @@ it("keeps an unsent draft when detached and reattached, and supports either edge
     `!!document.querySelector('[data-floating-chat]:not([inert])')`,
   );
   await dock.eval(
-    `window.catamorphicDesktop.setPrefs({dockSide:'right',dockDetached:false,dockAlignment:'edge'})`,
+    `window.catamorphicDesktop.setPrefs({dockSide:'right',dockDetached:false,dockPlacement:'right'})`,
   );
   await app.waitFor(
     `document.querySelector('[data-dock-side]')?.dataset.dockSide === 'right'`,

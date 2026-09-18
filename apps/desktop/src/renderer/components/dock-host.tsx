@@ -1,4 +1,3 @@
-import { GripVertical } from "lucide-react";
 import {
   type CSSProperties,
   type PointerEvent,
@@ -33,7 +32,7 @@ const EMPTY: DockSnapshot = {
   detached: false,
   multiProject: false,
   side: "right",
-  alignment: "edge",
+  placement: "center",
 };
 
 /** One presentation vocabulary, mounted in a workspace or in the native dock. */
@@ -291,6 +290,19 @@ export function DockHost({
       );
     });
   };
+  const savePlacement = (placement: "left" | "center" | "right") => {
+    const revision = ++positionRevision.current;
+    const previous = snapshot.placement;
+    setSnapshot((state) => ({ ...state, placement }));
+    setPositionError(null);
+    void desktopApi.setPrefs({ dockPlacement: placement }).catch(() => {
+      if (positionRevision.current !== revision) return;
+      setSnapshot((state) => ({ ...state, placement: previous }));
+      setPositionError(
+        "Could not save the dock position. Try dragging it again.",
+      );
+    });
+  };
   const nativeDrag = (
     phase: "start" | "move" | "end" | "cancel",
     screenX: number,
@@ -313,7 +325,12 @@ export function DockHost({
     dragStart.current = null;
     setDragLeft(null);
   };
-  const dragHandlers = {
+  /**
+   * Dragging the collapsed bubble picks its corner; dragging the arrows of
+   * an expanded strip picks where open chats sit (left, center, right).
+   * Release snaps; a short press without movement is still a click.
+   */
+  const dragHandlersFor = (intent: "side" | "placement") => ({
     onPointerDown: (event: PointerEvent<HTMLButtonElement>) => {
       if (event.button !== 0) return;
       const host = event.currentTarget
@@ -353,8 +370,21 @@ export function DockHost({
       suppressClick.current = start.moved;
       if (detachedWindow)
         nativeDrag(start.moved ? "end" : "cancel", event.screenX);
-      else if (start.moved)
-        saveSide(event.clientX < start.middle ? "left" : "right");
+      else if (start.moved) {
+        const host = event.currentTarget
+          .closest("[data-dock-host]")
+          ?.getBoundingClientRect();
+        if (intent === "side" || !host)
+          saveSide(event.clientX < start.middle ? "left" : "right");
+        else
+          savePlacement(
+            event.clientX < host.left + host.width / 3
+              ? "left"
+              : event.clientX > host.left + (host.width * 2) / 3
+                ? "right"
+                : "center",
+          );
+      }
       setDragLeft(null);
       event.currentTarget.releasePointerCapture(event.pointerId);
     },
@@ -375,16 +405,32 @@ export function DockHost({
       }
       if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
       event.preventDefault();
-      saveSide(event.key === "ArrowLeft" ? "left" : "right");
+      if (intent === "side") {
+        saveSide(event.key === "ArrowLeft" ? "left" : "right");
+        return;
+      }
+      const order = ["left", "center", "right"] as const;
+      const index = order.indexOf(snapshot.placement);
+      const next =
+        order[
+          Math.max(
+            0,
+            Math.min(
+              order.length - 1,
+              index + (event.key === "ArrowLeft" ? -1 : 1),
+            ),
+          )
+        ];
+      if (next && next !== snapshot.placement) savePlacement(next);
     },
-  };
+  });
   showing.current = new Set();
   return (
     <div
       data-dock-host
       data-dock-native={detachedWindow || undefined}
       data-dock-side={snapshot.side}
-      data-dock-alignment={snapshot.alignment}
+      data-dock-placement={snapshot.placement}
       className={`pointer-events-none absolute ${detachedWindow ? "inset-0" : ""}`}
       style={{ ...themeStyle(currentTheme), ...(detachedWindow ? {} : region) }}
     >
@@ -519,8 +565,9 @@ export function DockHost({
               if (chat) invoke(chat, { kind: "menu", entry });
             }}
             dragLeft={dragLeft}
-            alignment={snapshot.alignment}
-            dragHandlers={dragHandlers}
+            placement={snapshot.placement}
+            dragHandlers={dragHandlersFor("side")}
+            placementDragHandlers={dragHandlersFor("placement")}
             newChatProjectName={
               snapshot.chats.find((chat) => chat.projectId === currentProjectId)
                 ?.projectName
@@ -562,18 +609,6 @@ export function DockHost({
                 actions.current.get(active.entry.localId)?.minimize?.();
             }}
           />
-          {!collapsed && (
-            <ShortcutHint label="Drag dock to either edge">
-              <button
-                type="button"
-                aria-label="Move chat dock"
-                className={`pointer-events-auto absolute bottom-5 z-50 grid size-6 cursor-grab place-items-center rounded text-fg-faint hover:text-fg ${snapshot.side === "left" ? "left-0" : "right-0"}`}
-                {...dragHandlers}
-              >
-                <GripVertical className="size-3.5" />
-              </button>
-            </ShortcutHint>
-          )}
           {positionError && (
             <p
               role="alert"

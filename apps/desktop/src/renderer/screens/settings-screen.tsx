@@ -215,7 +215,7 @@ export function SettingsScreen({
               "dockMultiProject",
               "dockDetached",
               "dockSide",
-              "dockAlignment",
+              "dockPlacement",
             ]}
             title="Chat dock"
           />

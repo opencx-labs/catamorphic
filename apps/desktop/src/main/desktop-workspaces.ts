@@ -294,8 +294,11 @@ export class DesktopWorkspaces {
           area,
           width: nextWidth,
           height: nextHeight,
-          side: prefs.dockSide,
-          centered: prefs.dockAlignment === "center" && size.expanded,
+          side:
+            size.expanded && prefs.dockPlacement !== "center"
+              ? prefs.dockPlacement
+              : prefs.dockSide,
+          centered: prefs.dockPlacement === "center" && size.expanded,
         }),
       });
     });
@@ -337,22 +340,35 @@ export class DesktopWorkspaces {
         return;
       }
       if (input.phase !== "end" && input.phase !== "cancel") return;
+      // Collapsed drags pick a corner; expanded drags pick where open chats
+      // sit: left, center or right thirds of the display.
+      const expanded = this.dockExpanded.get(profileId) === true;
+      const current = prefs.load();
       const side =
         input.phase === "cancel"
           ? drag.side
           : input.screenX < area.x + area.width / 2
             ? "left"
             : "right";
+      const placement =
+        input.phase === "cancel"
+          ? current.dockPlacement
+          : input.screenX < area.x + area.width / 3
+            ? "left"
+            : input.screenX > area.x + (area.width * 2) / 3
+              ? "right"
+              : "center";
       const position = dockPosition({
         area,
         ...bounds,
-        side,
-        centered:
-          prefs.load().dockAlignment === "center" &&
-          this.dockExpanded.get(profileId) === true,
+        side: expanded && placement !== "center" ? placement : side,
+        centered: expanded && placement === "center",
       });
       try {
-        if (prefs.load().dockSide !== side) prefs.save({ dockSide: side });
+        if (expanded) {
+          if (current.dockPlacement !== placement)
+            prefs.save({ dockPlacement: placement });
+        } else if (current.dockSide !== side) prefs.save({ dockSide: side });
       } finally {
         this.dockDrags.delete(profileId);
         window.setPosition(position.x, position.y, !input.reducedMotion);
@@ -507,7 +523,7 @@ export class DesktopWorkspaces {
       detached: prefs.dockDetached,
       multiProject: prefs.dockMultiProject,
       side: prefs.dockSide,
-      alignment: prefs.dockAlignment,
+      placement: prefs.dockPlacement,
     };
   }
 
@@ -529,13 +545,15 @@ export class DesktopWorkspaces {
     if (existing && !existing.isDestroyed()) {
       const area = screen.getDisplayMatching(existing.getBounds()).workArea;
       const bounds = existing.getBounds();
+      const expanded = this.dockExpanded.get(profileId) === true;
       const position = dockPosition({
         area,
         ...bounds,
-        side: prefs.dockSide,
-        centered:
-          prefs.dockAlignment === "center" &&
-          this.dockExpanded.get(profileId) === true,
+        side:
+          expanded && prefs.dockPlacement !== "center"
+            ? prefs.dockPlacement
+            : prefs.dockSide,
+        centered: expanded && prefs.dockPlacement === "center",
       });
       if (
         !this.dockDrags.has(profileId) &&

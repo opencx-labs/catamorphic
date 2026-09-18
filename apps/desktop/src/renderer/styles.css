@@ -873,6 +873,33 @@ kbd {
   height: 8px;
 }
 
+/* Expanding or collapsing a branch moves the rows below it and resizes the
+   tree with the same 200ms standard curve the section collapsible uses. */
+[role="tree"] {
+  transition: height 200ms var(--ease-standard);
+}
+[role="tree"] [role="treeitem"] {
+  transition: top 200ms var(--ease-standard);
+}
+[role="tree"][data-dragging] [role="treeitem"] {
+  transition: none;
+}
+/* Drop cues ease in and out alike. */
+[role="tree"] [role="treeitem"] > *,
+[data-drop-zone] > li {
+  transition-property: box-shadow, background-color, color;
+  transition-duration: 150ms;
+  transition-timing-function: var(--ease-standard);
+}
+@media (prefers-reduced-motion: reduce) {
+  [role="tree"],
+  [role="tree"] [role="treeitem"],
+  [role="tree"] [role="treeitem"] > *,
+  [data-drop-zone] > li {
+    transition: none;
+  }
+}
+
 /* The one drop presentation for every tree: an accent insertion line
    between rows and an accent outline on the row (or tree) that will
    become the parent. */
@@ -881,6 +908,7 @@ kbd {
   background: var(--color-accent);
   border-radius: 1px;
   z-index: 1;
+  animation: fade-in 120ms var(--ease-standard);
 }
 [data-tree-drop-line]::before {
   content: "";
@@ -1404,10 +1432,10 @@ kbd {
 [data-dock-host] [data-floating-chat] {
   max-width: min(100%, 52rem);
 }
-[data-dock-side="left"][data-dock-alignment="edge"] [data-floating-chat] {
+[data-dock-placement="left"] [data-floating-chat] {
   align-self: flex-start;
 }
-[data-dock-side="right"][data-dock-alignment="edge"] [data-floating-chat] {
+[data-dock-placement="right"] [data-floating-chat] {
   align-self: flex-end;
 }
 

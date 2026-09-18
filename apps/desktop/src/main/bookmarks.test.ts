@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { orderedSiblings } from "../shared/bookmark-order.js";
 import { BookmarksStore } from "./bookmarks.js";
 
 const dirs: string[] = [];
@@ -28,81 +29,72 @@ describe("BookmarksStore", () => {
     const c = value.addBookmark("p", { label: "C", url: "https://c.test" });
     const folder = value.addFolder("p", "Docs");
     const nested = value.addFolder("p", "Deep", folder.id);
+    const order = (parentId?: string) =>
+      orderedSiblings(value.forProject("p"), parentId).map((s) => s.id);
+    const move = (id: string, folderId?: string | null, beforeId?: string) =>
+      value.move({
+        projectId: "p",
+        profileId: "x",
+        scope: "project",
+        id,
+        folderId,
+        beforeId,
+      });
     // C before A at the root.
-    value.move({
-      projectId: "p",
-      profileId: "x",
-      scope: "project",
-      id: c.id,
-      beforeId: a.id,
-    });
-    expect(value.forProject("p").bookmarks.map((entry) => entry.label)).toEqual(
-      ["C", "A", "B"],
-    );
-    // B into the folder, then A before it inside the folder.
+    move(c.id, null, a.id);
+    expect(order()).toEqual([c.id, a.id, b.id, folder.id]);
+    // B into the folder (last), then A before it inside the folder.
+    move(b.id, folder.id);
+    move(a.id, folder.id, b.id);
+    expect(order(folder.id)).toEqual([nested.id, a.id, b.id]);
+    expect(order()).toEqual([c.id, folder.id]);
+    // A back to the root, appended.
+    move(a.id, null);
+    expect(order()).toEqual([c.id, folder.id, a.id]);
+    expect(order(folder.id)).toEqual([nested.id, b.id]);
+    // Folders reparent but never into their own subtree.
+    move(nested.id, null);
+    expect(
+      value.forProject("p").folders.find((entry) => entry.id === nested.id)
+        ?.parentId,
+    ).toBeUndefined();
+    expect(() => move(folder.id, nested.id)).not.toThrow();
+    expect(() => move(nested.id, folder.id)).toThrow(/inside itself/);
+  });
+
+  it("orders folders and bookmarks in one sequence per parent", () => {
+    const { value } = store();
+    const a = value.addBookmark("p", { label: "A", url: "https://a.test" });
+    const folder = value.addFolder("p", "Docs");
+    const b = value.addBookmark("p", { label: "B", url: "https://b.test" });
+    const order = () =>
+      orderedSiblings(value.forProject("p"), undefined).map((s) => s.id);
+    expect(order()).toEqual([a.id, folder.id, b.id]);
+    // A bookmark above a folder, and a folder in the middle.
     value.move({
       projectId: "p",
       profileId: "x",
       scope: "project",
       id: b.id,
-      folderId: folder.id,
+      beforeId: folder.id,
     });
+    expect(order()).toEqual([a.id, b.id, folder.id]);
     value.move({
       projectId: "p",
       profileId: "x",
       scope: "project",
-      id: a.id,
-      folderId: folder.id,
+      id: folder.id,
       beforeId: b.id,
     });
-    expect(
-      value
-        .forProject("p")
-        .bookmarks.filter((entry) => entry.folderId === folder.id)
-        .map((entry) => entry.label),
-    ).toEqual(["A", "B"]);
-    // A back to the root, appended.
+    expect(order()).toEqual([a.id, folder.id, b.id]);
     value.move({
       projectId: "p",
       profileId: "x",
       scope: "project",
-      id: a.id,
-      folderId: null,
+      id: folder.id,
+      beforeId: a.id,
     });
-    expect(value.forProject("p").bookmarks.map((entry) => entry.label)).toEqual(
-      ["C", "B", "A"],
-    );
-    // Folders reparent but never into their own subtree.
-    value.move({
-      projectId: "p",
-      profileId: "x",
-      scope: "project",
-      id: nested.id,
-      folderId: null,
-    });
-    expect(
-      value.forProject("p").folders.find((entry) => entry.id === nested.id)
-        ?.parentId,
-    ).toBeUndefined();
-    expect(() =>
-      value.move({
-        projectId: "p",
-        profileId: "x",
-        scope: "project",
-        id: folder.id,
-        folderId: nested.id,
-        beforeId: undefined,
-      }),
-    ).not.toThrow();
-    expect(() =>
-      value.move({
-        projectId: "p",
-        profileId: "x",
-        scope: "project",
-        id: nested.id,
-        folderId: folder.id,
-      }),
-    ).toThrow(/inside itself/);
+    expect(order()).toEqual([folder.id, a.id, b.id]);
   });
 
   it("places a dropped tab before a sibling", () => {

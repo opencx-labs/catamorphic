@@ -93,9 +93,11 @@ as workspace settings. Missing selections, colors and fonts inherit. Choosing a
 selection replaces inherited color overrides; individual token and font edits
 remain sparse. Theme edits use the shared configuration file validation and
 last-valid-value caches. The dock preferences are profile choices:
-`dockMultiProject`, `dockDetached`, `dockSide`, and `dockAlignment`.
-The last chooses `edge` (default) or `center` for expanded chats and bubbles;
-`dockSide` always determines the collapsed bottom corner.
+`dockMultiProject`, `dockDetached`, `dockSide`, and `dockPlacement`.
+`dockPlacement` chooses `left`, `center` (default) or `right` for open chats and
+their bubble strip; `dockSide` chooses the bottom corner the collapsed bubble
+rests in. Dragging the collapsed bubble changes the corner; dragging the
+arrows of an expanded strip changes the placement.
 
 ## Workspace frame
 

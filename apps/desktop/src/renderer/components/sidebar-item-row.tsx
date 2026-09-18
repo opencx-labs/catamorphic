@@ -532,7 +532,7 @@ export function SidebarItemRow<
               </ShortcutHint>
             );
           })}
-          {resolvedMenu.length > 0 && (
+          {resolvedMenu.length > 0 && presentation !== "tile" && (
             <button
               ref={buttonRef}
               type="button"
@@ -546,7 +546,7 @@ export function SidebarItemRow<
                 setMenuKind("overflow");
                 setOpen((value) => !value);
               }}
-              className={`grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg ${presentation === "tile" ? "absolute right-0 top-0 bg-bg-raised" : "mr-1"} ${
+              className={`grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg mr-1 ${
                 open
                   ? ""
                   : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
