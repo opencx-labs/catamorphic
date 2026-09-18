@@ -44,6 +44,7 @@ import {
   chatBookmarkUrl,
   parseChatBookmarkUrl,
 } from "../shared/bookmark-target.js";
+import type { PendingChatMessage } from "../shared/chat.js";
 import {
   type HistoryEntry,
   type HistoryVisit,
@@ -2234,14 +2235,14 @@ export function App({
   // Palette "Send to agent": a new chat born with its first message
   // attached; ChatDock auto-sends it on mount.
   const sendToAgent = (
-    message: string,
+    message: string | PendingChatMessage,
     mode: "float" | "tab",
     agentId?: string,
   ) => {
     if (!requireAgents()) return;
     const entry: ChatDockEntry = {
       ...newChatEntry(mode === "tab" ? "tab" : "partial"),
-      pendingMessage: message,
+      pendingMessage: typeof message === "string" ? { text: message } : message,
       ...(agentId ? { agentId } : {}),
     };
     updateWorkspace((ws) => {
@@ -5000,13 +5001,32 @@ export function App({
             : resolved.layer === "project-local" && projectId
               ? `${profileFile.slice(0, profileFile.lastIndexOf("/"))}/sidebar-projects/${projectId}.js`
               : profileFile;
+        // The user sees one sentence and two pills. The file path and the
+        // layout contract are agent context, never prose in the message. A
+        // path pill carries only its reference, so the contract and the
+        // current layout travel as a pasted block the harness fences.
         const localId = sendToAgent(
-          [
-            `Help me customize my ${side} sidebar. Walk me through the available tabs and widgets, then make the changes I ask for.`,
-            `The live sidebar configuration file on this machine is ${JSON.stringify(file)}. Read it first, or create it from the current layout below if it does not exist. Edits apply live.`,
-            "The file exports module.exports = { left: [...], right: [...] }. Each tab has a stable id, title, Lucide icon and sections. Each section has a stable id and type (bookmarks, tabs, workflows, apps, chats, files, remote, git, prs, activity, note, custom or app). Preserve existing ids and the other sidebar. Profile selection and Settings are fixed in the left footer. A single tab hides its icon strip. Do not commit these local settings.",
-            `Current layout: ${JSON.stringify(resolved.config)}`,
-          ].join("\n\n"),
+          {
+            text: `Help me customize my ${side} sidebar. Walk me through the available tabs and widgets, then make the changes I ask for.`,
+            attachments: [
+              {
+                kind: "text",
+                name: file.slice(file.lastIndexOf("/") + 1),
+                source: { type: "path", path: file },
+                text: file,
+              },
+              {
+                kind: "text",
+                name: "Sidebar layout",
+                source: { type: "paste" },
+                text: [
+                  `The live sidebar configuration file on this machine is ${JSON.stringify(file)}. Read it first, or create it from the current layout below if it does not exist. Edits apply live.`,
+                  "The file exports module.exports = { left: [...], right: [...] }. Each tab has a stable id, title, Lucide icon and sections. Each section has a stable id and type (bookmarks, tabs, workflows, apps, chats, files, remote, git, prs, activity, note, custom or app). Preserve existing ids and the other sidebar. Profile selection and Settings are fixed in the left footer. A single tab hides its icon strip. Do not commit these local settings.",
+                  `Current layout: ${JSON.stringify(resolved.config)}`,
+                ].join("\n\n"),
+              },
+            ],
+          },
           "float",
         );
         if (localId) sidebarCustomizationChat.current = { projectId, localId };

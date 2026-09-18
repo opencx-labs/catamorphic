@@ -61,29 +61,34 @@ export function SidebarActivity({
   const states = (workflows.data ?? []).map((workflow) =>
     workflowStates.get(workflow.name),
   );
-  useSidebarContent(
-    sessions.isError ||
+  useSidebarContent({
+    state:
+      sessions.isError ||
       workflows.isError ||
       states.some((state) => state?.error)
-      ? "error"
-      : sessions.isLoading ||
-          workflows.isLoading ||
-          states.some((state) => !state || state.loading)
-        ? "loading"
-        : active.length || states.some((state) => state?.count)
-          ? "ready"
-          : "empty",
-  );
+        ? "error"
+        : sessions.isLoading ||
+            workflows.isLoading ||
+            states.some((state) => !state || state.loading)
+          ? "loading"
+          : active.length || states.some((state) => state?.count)
+            ? "ready"
+            : "empty",
+    error: sessions.isError
+      ? "Could not load activity."
+      : workflows.isError
+        ? "Could not load workflows."
+        : states.some((state) => state?.error)
+          ? "Could not load workflow activity."
+          : undefined,
+    retry: () => {
+      void sessions.refetch();
+      void workflows.refetch();
+    },
+    empty: "No agents need attention.",
+  });
   return (
     <div className="text-xs">
-      {sessions.isError && (
-        <p role="alert" className="sidebar-empty-state">
-          Could not load activity.{" "}
-          <button type="button" onClick={() => void sessions.refetch()}>
-            Retry
-          </button>
-        </p>
-      )}
       <SidebarTree
         items={active}
         label="Agent activity"
@@ -100,9 +105,6 @@ export function SidebarActivity({
           />
         )}
       />
-      {!sessions.isLoading && !sessions.isError && !active.length && (
-        <p className="sidebar-empty-state">No agents need attention.</p>
-      )}
       {(workflows.data ?? []).map((workflow) => (
         <WorkflowActivity
           key={workflow.name}

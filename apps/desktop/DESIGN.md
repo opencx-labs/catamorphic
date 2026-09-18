@@ -229,7 +229,7 @@ the animation is wrong, not the test.
 6. **Transitions only on state changes** — hover, focus, expand/collapse,
    enter/exit. Never on load, never ambient.
 
-Tab frame previews transition the workspace margins and corner radius over
+Framed content previews transition the workspace margins and corner radius over
 200 ms with the standard easing. Reduced motion applies the frame immediately.
 
 ### Current motion inventory
@@ -316,6 +316,21 @@ the same page styled three different ways.
 - **Deep links land on exactly one card.** Every palette destination resolves
   to a `data-setting-id` on a single block; category-wide outlines mean the
   catalog id is too coarse.
+
+## Sidebar sections
+
+Every section, built in or user defined, is the same kind of thing: a source of
+rows inside shared chrome. The chrome owns status; sections own rows.
+
+- **One status language.** A section reports `{state, refreshing, error, retry,
+  empty}` and renders rows only. The section header shows a small spinner while
+  loading or refreshing and a hover-revealed Refresh button otherwise; the body
+  shows three still skeleton rows before the first result, one muted sentence
+  when empty (`section.empty` in `sidebar.js` replaces it), and the error with
+  Retry when a read fails. Rows stay on screen during a refresh; collapsing and
+  re-expanding never discards what was already loaded.
+- **No private loading text.** "Loading…", spinners, skeletons, empty copy and
+  error paragraphs inside a section component are defects.
 
 ## Registry component rules
 

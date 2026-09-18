@@ -559,6 +559,8 @@ function sanitizeTabs({
                 typeof section.hideEmpty === "boolean"
                   ? section.hideEmpty
                   : undefined,
+              empty:
+                typeof section.empty === "string" ? section.empty : undefined,
               items: sanitizeItems(section.items),
               open: asOpenMode(section.open),
               menu: sanitizeMenu(section.menu),

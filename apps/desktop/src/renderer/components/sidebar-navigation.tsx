@@ -5,8 +5,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronRight,
   GitBranch,
+  LoaderCircle,
   PanelRight,
   Plus,
+  RefreshCw,
   Search,
 } from "lucide-react";
 import {
@@ -60,6 +62,7 @@ import {
   projectSidebarItems,
   type SidebarContentState,
   SidebarContribution,
+  type SidebarStatus,
   sidebarItemPresentation,
   useSidebarContent,
   useSidebarContribution,
@@ -72,6 +75,7 @@ import {
   type SessionCommand,
   SidebarSessionInspector,
 } from "./sidebar-session-inspector.js";
+import { SidebarStatusBody } from "./sidebar-status.js";
 import { SidebarTree } from "./sidebar-tree.js";
 import { SidebarActivity, SidebarNote } from "./sidebar-widgets.js";
 import { SiteFavicon } from "./site-favicon.js";
@@ -179,8 +183,7 @@ export function ConfiguredSection({
     onOpenFile,
     onSessionAction,
   });
-  const [contentState, setContentState] =
-    useState<SidebarContentState>("loading");
+  const [status, setStatus] = useState<SidebarStatus>({ state: "loading" });
   const [itemCounts, setItemCounts] = useState<ReadonlyMap<string, number>>(
     new Map(),
   );
@@ -194,15 +197,21 @@ export function ConfiguredSection({
       return next;
     });
   }, []);
+  // A ready section whose every projected list is empty is empty: hidden
+  // overrides and filters can remove all rows after the source reported.
+  const contentState: SidebarContentState =
+    status.state === "ready" &&
+    itemCounts.size &&
+    ![...itemCounts.values()].some(Boolean)
+      ? "empty"
+      : status.state;
   useEffect(() => {
-    report(
-      contentState === "ready" &&
-        itemCounts.size &&
-        ![...itemCounts.values()].some(Boolean)
-        ? "empty"
-        : contentState,
-    );
-  }, [report, contentState, itemCounts]);
+    report(contentState);
+  }, [report, contentState]);
+  const resolvedStatus = useMemo(
+    () => ({ ...status, state: contentState }),
+    [status, contentState],
+  );
   const refreshers = useRef(new Set<() => unknown>());
   const registerRefresh = useCallback((refresh: () => unknown) => {
     refreshers.current.add(refresh);
@@ -329,7 +338,7 @@ export function ConfiguredSection({
                   compact
                   surface={surface}
                   collections={collections}
-                  onContentState={setContentState}
+                  onContentState={(state) => setStatus({ state })}
                   height={section.height}
                   visible={visible && expanded}
                 />
@@ -551,7 +560,7 @@ export function ConfiguredSection({
   })();
   const hasBody = Boolean(body);
   useEffect(() => {
-    if (!hasBody) setContentState("unavailable");
+    if (!hasBody) setStatus({ state: "unavailable" });
   }, [hasBody]);
   if (!body) return null;
   return (
@@ -561,7 +570,8 @@ export function ConfiguredSection({
         surface,
         visible,
         relevant,
-        report: setContentState,
+        status: resolvedStatus,
+        report: setStatus,
         reportItems,
         open: onOpenUrl,
         commands,
@@ -718,6 +728,12 @@ function SidebarSection({
 }) {
   const contribution = useSidebarContribution();
   const headerActions = contribution?.section.headerActions;
+  const status = contribution?.status;
+  const busy = status?.state === "loading" || Boolean(status?.refreshing);
+  const canRefresh = Boolean(contribution?.commands?.has("refresh"));
+  const refresh = canRefresh
+    ? () => contribution?.command?.("refresh")
+    : undefined;
   const actionState = useItemActions();
   const [open, setOpen] = useState(defaultOpen);
   const [visited, setVisited] = useState(defaultOpen);
@@ -730,8 +746,12 @@ function SidebarSection({
       ? (keepMounted || visited || open) && children(open)
       : children;
   return (
-    <section className="sidebar-section pb-2">
-      <div className="flex items-center">
+    <section
+      className="sidebar-section pb-2"
+      data-sidebar-section={contribution?.section.id}
+      aria-busy={busy || undefined}
+    >
+      <div className="group flex items-center">
         <button
           type="button"
           onClick={() => {
@@ -748,6 +768,29 @@ function SidebarSection({
             }`}
           />
         </button>
+        {busy ? (
+          <span
+            role="status"
+            aria-label={`Loading ${title}`}
+            className="grid size-7 shrink-0 place-items-center text-fg-muted"
+          >
+            <LoaderCircle
+              aria-hidden="true"
+              className="size-3 animate-spin motion-reduce:animate-none"
+            />
+          </span>
+        ) : refresh ? (
+          <ShortcutHint label={`Refresh ${title}`}>
+            <button
+              type="button"
+              aria-label={`Refresh ${title}`}
+              onClick={() => void refresh()}
+              className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted opacity-0 transition-opacity duration-150 hover:bg-bg-overlay hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+            >
+              <RefreshCw className="size-3" />
+            </button>
+          </ShortcutHint>
+        ) : null}
         {headerActions === undefined
           ? action
           : headerActions.map((entry) => (
@@ -797,6 +840,11 @@ function SidebarSection({
           <SidebarContribution
             value={{ ...contribution, visible: contribution.visible && open }}
           >
+            <SidebarStatusBody
+              status={contribution.status}
+              empty={contribution.section.empty}
+              retry={contribution.status.retry ?? refresh}
+            />
             {content}
           </SidebarContribution>
         ) : (
@@ -822,24 +870,20 @@ function WorkflowsNav({
   const query = useWorkflows(projectId);
   useSidebarRefresh(query.refetch);
   const items = (query.data ?? []).map((item) => ({ ...item, id: item.name }));
-  useSidebarContent(
-    query.isError
+  useSidebarContent({
+    state: query.isError
       ? "error"
       : query.isLoading
         ? "loading"
         : items.length
           ? "ready"
           : "empty",
-  );
-  if (query.isError)
-    return (
-      <p role="alert" className="sidebar-empty-state">
-        Could not load workflows.{" "}
-        <button type="button" onClick={() => void query.refetch()}>
-          Retry
-        </button>
-      </p>
-    );
+    refreshing: query.isFetching && !query.isLoading,
+    error: query.isError ? "Could not load workflows." : undefined,
+    retry: query.refetch,
+    empty: "No workflows yet.",
+  });
+  if (query.isError) return null;
   return (
     <SidebarTree
       items={items}
@@ -877,24 +921,20 @@ function AppsNav({
   const query = useApps(projectId);
   useSidebarRefresh(query.refetch);
   const items = (query.data ?? []).map((item) => ({ ...item, id: item.name }));
-  useSidebarContent(
-    query.isError
+  useSidebarContent({
+    state: query.isError
       ? "error"
       : query.isLoading
         ? "loading"
         : items.length
           ? "ready"
           : "empty",
-  );
-  if (query.isError)
-    return (
-      <p role="alert" className="sidebar-empty-state">
-        Could not load apps.{" "}
-        <button type="button" onClick={() => void query.refetch()}>
-          Retry
-        </button>
-      </p>
-    );
+    refreshing: query.isFetching && !query.isLoading,
+    error: query.isError ? "Could not load apps." : undefined,
+    retry: query.refetch,
+    empty: "No apps yet.",
+  });
+  if (query.isError) return null;
   return (
     <SidebarTree
       items={items}
@@ -952,15 +992,20 @@ function SessionsNav({
     (id) =>
       !sidebarItemPresentation({ section: contribution?.section, id }).hide,
   ).length;
-  useSidebarContent(
-    contentStatus === "error"
-      ? "error"
-      : contentStatus === "idle" || contentStatus === "loading"
-        ? "loading"
-        : count
-          ? "ready"
-          : "empty",
-  );
+  useSidebarContent({
+    state:
+      contentStatus === "error"
+        ? "error"
+        : contentStatus === "idle" || contentStatus === "loading"
+          ? "loading"
+          : count
+            ? "ready"
+            : "empty",
+    refreshing: root.fetching && contentIds.length > 0,
+    error: root.error,
+    retry: collection.load,
+    empty: "No chats yet.",
+  });
   useSidebarItemCount(count);
   const checkoutQuery = useQuery({
     queryKey: ["desktop", "session-checkouts", projectId],
@@ -987,6 +1032,7 @@ function SessionsNav({
   );
   return (
     <CollectionTree
+      renderStatus={() => null}
       collection={collection}
       motionClasses={{
         enter: "animate-session-row-in",

@@ -119,9 +119,10 @@ export function BookmarksNav({
         ).length
       : 0,
   );
-  useSidebarContent(
-    error ? "error" : data === null ? "loading" : isEmpty ? "empty" : "ready",
-  );
+  useSidebarContent({
+    state: data === null ? "loading" : isEmpty ? "empty" : "ready",
+    empty: "No bookmarks yet.",
+  });
   useEffect(() => {
     let cancelled = false;
     setEdit(null);

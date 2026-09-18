@@ -34,6 +34,10 @@ Subsessions defaults to current-chat children, including latent children, and hi
 when empty. This does not promote a child or change archive behavior.
 hideEmpty hides ready-but-empty content, not loading or errors. Parent tabs disappear
 when every section is unavailable. Contextually hidden resources remain searchable.
+Every section shares one status presentation: a header spinner while loading or
+refreshing, placeholder rows before the first result, one muted sentence when empty
+(section.empty replaces it), and the error with Retry. Sections never draw their own
+loading or empty text; rows stay on screen while a refresh runs.
 
 All row presentations accept label, icon (Lucide name), description, badges (strings),
 progress (0 through 1), open (replace|tab|side|floating), preview and hide.

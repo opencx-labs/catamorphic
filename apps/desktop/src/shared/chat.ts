@@ -1,4 +1,15 @@
+import type { AgentChatTextAttachment } from "@catamorphic/react";
 import type { OpenMode, OpenModifiers } from "./open-mode.js";
+
+/**
+ * A first message sent on the user's behalf. The text is what the user
+ * sees; structured context for the agent travels as attachments (pills),
+ * never as prose in the visible message.
+ */
+export interface PendingChatMessage {
+  text: string;
+  attachments?: AgentChatTextAttachment[];
+}
 
 export interface ChatSignals {
   working?: boolean;
@@ -87,7 +98,7 @@ export interface ChatDockEntry {
    */
   parentLocalId?: string;
   /** Auto-sent as the first message on mount (palette "Send to agent"). */
-  pendingMessage?: string;
+  pendingMessage?: PendingChatMessage;
   /**
    * Agent picked for this chat before its session exists (palette "Switch
    * agent" on a fresh chat). Once a session is live, the session row owns

@@ -102,7 +102,8 @@ it("opens connection settings without starting the separate GitHub flow", async 
       window.dispatchEvent(new Event("focus"));
     });
     expect(desktopApi.prList).toHaveBeenLastCalledWith("existing-project");
-    expect(node.textContent).toContain("No open pull requests.");
+    // Empty copy belongs to the section chrome; the connect card is gone.
+    expect(node.textContent).not.toContain("GitHub not connected");
   } finally {
     await act(async () => root.unmount());
   }

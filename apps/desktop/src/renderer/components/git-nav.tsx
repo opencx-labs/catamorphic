@@ -133,8 +133,15 @@ export function GitNav({
     };
   }, [projectId, visible]);
   const [error, setError] = useState<string | null>(null);
+  const [fetching, setFetching] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
   useSidebarRefresh(() => setRefreshVersion((value) => value + 1));
+  // Only another project starts from nothing. Collapsing and re-expanding
+  // keeps the last overview on screen while a fresh read runs behind it.
+  useEffect(() => {
+    setOverview(null);
+    setError(null);
+  }, [projectId]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: explicit section refresh restarts its scoped read.
   useEffect(() => {
     if (!visible) return;
@@ -143,14 +150,13 @@ export function GitNav({
     let queued = false;
     let timer: number | undefined;
     let delay = REFRESH_MS;
-    setOverview(null);
-    setError(null);
     const load = async () => {
       if (running) {
         queued = true;
         return;
       }
       running = true;
+      setFetching(true);
       window.clearTimeout(timer);
       const started = performance.now();
       try {
@@ -173,6 +179,7 @@ export function GitNav({
           );
       } finally {
         running = false;
+        if (!cancelled) setFetching(false);
         if (queued && !cancelled) {
           queued = false;
           void load();
@@ -270,16 +277,20 @@ export function GitNav({
     overview?.available !== false &&
     !hasContent &&
     (overview?.worktrees.length ?? 0) <= 1;
-  useSidebarContent(
-    error
+  useSidebarContent({
+    state: error
       ? "error"
       : overview === null
         ? "loading"
         : isEmpty
           ? "empty"
           : "ready",
-  );
-  if (!overview && !error) return null;
+    refreshing: overview !== null && fetching,
+    error: error ?? undefined,
+    retry: () => setRefreshVersion((value) => value + 1),
+    empty: "No changes.",
+  });
+  if (!overview || isEmpty) return null;
   if (overview?.available === false)
     return <p className="sidebar-empty-state">Install git to see changes.</p>;
   return (

@@ -171,7 +171,7 @@ it("retains HTTP rows during refresh, reports failure, and retries without reope
   fail = false;
   version = 3;
   delay = 50;
-  await click('[data-sidebar-source="http"] [role="alert"] button');
+  await click('[data-sidebar-section="http"] [role="alert"] button');
   await app.waitFor(
     `document.body.innerText.includes('Service item 3') && !document.querySelector('[data-sidebar-source="http"] [role="alert"]')`,
   );

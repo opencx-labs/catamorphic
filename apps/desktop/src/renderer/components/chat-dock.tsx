@@ -1287,7 +1287,7 @@ function ChatDockContent({
     const pending = entryRef.current.pendingMessage;
     if (!pending || pendingSentRef.current) return;
     pendingSentRef.current = true;
-    void sendRef.current(pending);
+    void sendRef.current(pending.text, pending.attachments);
     onEntryChangeRef.current({
       ...entryRef.current,
       pendingMessage: undefined,

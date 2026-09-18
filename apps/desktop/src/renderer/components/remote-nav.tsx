@@ -82,19 +82,13 @@ export function RemoteNav({
   }, [projectId, refresh, visible]);
 
   const isEmpty = loaded && !error && status === null;
-  useSidebarContent(
-    error ? "error" : !loaded ? "loading" : isEmpty ? "empty" : "ready",
-  );
+  useSidebarContent({
+    state: error ? "error" : !loaded ? "loading" : isEmpty ? "empty" : "ready",
+    error,
+    retry: refresh,
+  });
 
-  if (!status)
-    return error ? (
-      <p role="alert" className="sidebar-empty-state">
-        {error}{" "}
-        <button type="button" onClick={() => void refresh()}>
-          Retry
-        </button>
-      </p>
-    ) : null;
+  if (!status) return null;
 
   const run = async (verb: "sync" | "ship") => {
     setBusy(verb);

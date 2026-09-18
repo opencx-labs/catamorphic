@@ -50,10 +50,24 @@ export function PrsNav({
     };
   }, [projectId]);
   useSidebarRefresh(() => setRefresh((value) => value + 1));
-  const isEmpty = !error && prs !== null && prs.length === 0;
-  useSidebarContent(
-    error ? "error" : prs === null ? "loading" : isEmpty ? "empty" : "ready",
-  );
+  const signedOut = error?.includes("[github-cli-required]") ?? false;
+  const disconnected =
+    signedOut || (error?.includes("[github-cli-disabled]") ?? false);
+  useSidebarContent({
+    // Not connected is content (the connect card), not a failed read.
+    state: disconnected
+      ? "ready"
+      : error
+        ? "error"
+        : prs === null
+          ? "loading"
+          : prs.length === 0
+            ? "empty"
+            : "ready",
+    error: disconnected ? undefined : (error ?? undefined),
+    retry: () => setRefresh((value) => value + 1),
+    empty: company ? "No proposals awaiting review." : "No open pull requests.",
+  });
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reconnect and Retry invalidate remote data
   useEffect(() => {
@@ -135,8 +149,7 @@ export function PrsNav({
         kind: "navigate",
         run: (mode) => openReview(pr, mode),
       }));
-  const signedOut = error?.includes("[github-cli-required]") ?? false;
-  if (signedOut || error?.includes("[github-cli-disabled]")) {
+  if (disconnected) {
     // The sidebar re-checks on window focus and whenever the connection
     // preference changes, so this state needs exactly one action.
     const things = company ? "proposals" : "pull requests";
@@ -172,29 +185,7 @@ export function PrsNav({
       </div>
     );
   }
-  if (error)
-    return (
-      <div className="px-2 py-1 text-xs">
-        <p role="alert" className="break-words text-danger">
-          {error}
-        </p>
-        <button
-          type="button"
-          className="mt-2 text-accent"
-          onClick={() => setRefresh((value) => value + 1)}
-        >
-          Retry
-        </button>
-      </div>
-    );
-  if (!prs) return null;
-  if (prs.length === 0) {
-    return (
-      <p className="sidebar-empty-state">
-        {company ? "No proposals awaiting review." : "No open pull requests."}
-      </p>
-    );
-  }
+  if (error || !prs || prs.length === 0) return null;
   return (
     <div className="flex flex-col gap-2">
       {preferencesError && (
