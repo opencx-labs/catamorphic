@@ -124,6 +124,11 @@ beforeAll(async () => {
   );
   await wait("return !$('[data-testid=project-submit]').disabled;");
   await run("$('[data-testid=project-submit]').click();");
+  // The fixture stands in for a connected GitHub; the section only asks
+  // for pull requests while the connection preference is on.
+  await app.eval(
+    "window.catamorphicDesktop.setPrefs({ githubCliEnabled: true })",
+  );
   await wait(
     "return !!$('[data-sidebar=right] [role=tab][aria-label=\"Proposals\"]');",
   );

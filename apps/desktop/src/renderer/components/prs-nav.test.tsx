@@ -141,3 +141,45 @@ it("never asks the main process while the GitHub CLI connection is off", async (
     await act(async () => root.unmount());
   }
 });
+
+it("lists a company project's proposals with the GitHub CLI connection off", async () => {
+  Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+  vi.mocked(desktopApi.getPrefs).mockResolvedValue({
+    ...DEFAULT_PREFS,
+    githubCliEnabled: false,
+  });
+  vi.mocked(desktopApi.remoteStatus).mockResolvedValueOnce({
+    capabilities: {},
+  } as never);
+  vi.mocked(desktopApi.prList).mockClear();
+  vi.mocked(desktopApi.prList).mockResolvedValue([
+    {
+      number: 7,
+      title: "Proposal",
+      url: "https://example.test/pr/7",
+      author: "member",
+      head: "feature",
+      base: "main",
+      draft: false,
+      updatedAt: "1",
+    },
+  ]);
+  const node = document.createElement("div");
+  const root = createRoot(node);
+  try {
+    await act(async () =>
+      root.render(
+        <PrsNav
+          projectId="remote"
+          onOpenDiff={() => {}}
+          onOpenUrl={() => {}}
+        />,
+      ),
+    );
+    expect(desktopApi.prList).toHaveBeenCalledWith("remote");
+    expect(node.textContent).toContain("Proposal");
+    expect(node.textContent).not.toContain("GitHub not connected");
+  } finally {
+    await act(async () => root.unmount());
+  }
+});

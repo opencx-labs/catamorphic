@@ -36,15 +36,20 @@ export function PrsNav({
   const [prs, setPrs] = useState<PullRequestSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
-  const [company, setCompany] = useState(false);
+  // null until the remote status answers: company projects list proposals
+  // through their server and need no GitHub CLI connection.
+  const [company, setCompany] = useState<boolean | null>(null);
   useEffect(() => {
     let cancelled = false;
+    setCompany(null);
     void desktopApi
       .remoteStatus(projectId)
       .then((status) => {
         if (!cancelled) setCompany(Boolean(status));
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!cancelled) setCompany(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -75,9 +80,14 @@ export function PrsNav({
     setPrs(null);
     setError(null);
     let revision = 0;
+    // Wait for the remote status; a company project never needs the CLI.
+    if (company === null)
+      return () => {
+        cancelled = true;
+      };
     // The connection is off: the answer is known without asking the main
     // process, which would log a refusal for every window focus.
-    if (!prefs.githubCliEnabled) {
+    if (!company && !prefs.githubCliEnabled) {
       setError("[github-cli-disabled] GitHub CLI is not connected.");
       return () => {
         cancelled = true;
@@ -120,7 +130,7 @@ export function PrsNav({
       window.removeEventListener("focus", load);
       unsubscribe();
     };
-  }, [projectId, refresh, prefs.githubCliEnabled, visible]);
+  }, [projectId, refresh, prefs.githubCliEnabled, visible, company]);
 
   const inScope = (items: PullRequestSummary[]) =>
     items.filter(
