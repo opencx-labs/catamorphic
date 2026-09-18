@@ -132,6 +132,32 @@ export function DockHost({
       window.removeEventListener("resize", measure);
     };
   }, [activeProjectId, detachedWindow]);
+  // While the dock floats in its own window, this workspace tells the main
+  // process where its chat region sits so the dock can rest inside it
+  // whenever this window is in front.
+  useEffect(() => {
+    if (detachedWindow) return;
+    const reported =
+      snapshot.detached &&
+      typeof region.left === "number" &&
+      typeof region.top === "number" &&
+      typeof region.width === "number" &&
+      typeof region.height === "number"
+        ? {
+            left: region.left,
+            top: region.top,
+            width: region.width,
+            height: region.height,
+          }
+        : null;
+    void desktopApi.dockRegion(reported);
+  }, [detachedWindow, snapshot.detached, region]);
+  useEffect(() => {
+    if (detachedWindow) return;
+    return () => {
+      void desktopApi.dockRegion(null);
+    };
+  }, [detachedWindow]);
   useEffect(
     () =>
       desktopApi.onWorkspaceEvent((event) => {
@@ -530,6 +556,7 @@ export function DockHost({
                 tabActive={isTab && chat.tabActive}
                 bubbleClearance={collapsed ? "corner" : "strip"}
                 backdropTab={!detachedWindow && chat.backdropTab}
+                nativeWindow={detachedWindow}
                 onEntryChange={(next) => {
                   invoke(chat, {
                     kind: "entry",

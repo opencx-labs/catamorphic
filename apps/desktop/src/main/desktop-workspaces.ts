@@ -1,9 +1,11 @@
 import {
   app,
   BrowserWindow,
+  desktopCapturer,
   ipcMain,
   Menu,
   screen,
+  systemPreferences,
   type WebContents,
 } from "electron";
 import { z } from "zod";
@@ -17,6 +19,8 @@ import type {
 } from "../shared/desktop-workspace.js";
 import {
   type DockDrag,
+  type DockRegion,
+  type DockScreenCapture,
   type DockSize,
   dockPosition,
 } from "../shared/dock-position.js";
@@ -44,6 +48,9 @@ export class DesktopWorkspaces {
   // the state a fresh launch starts in. Closing the detached window or
   // picking "Return dock to the window" never rewrites that default.
   private readonly detachOverrides = new Map<string, boolean>();
+  // Chat regions reported by workspace windows (by webContents id). While
+  // one of them is in front, the detached dock rests inside its region.
+  private readonly dockRegions = new Map<number, DockRegion>();
   private readonly drafts = new Map<string, ChatDraft>();
   private readonly initialProjects = new Map<number, string>();
 
@@ -68,6 +75,17 @@ export class DesktopWorkspaces {
       this.lastWindows.delete(profileId);
       this.lastWindows.set(profileId, window);
       this.broadcast(profileId);
+      // A workspace came to the front: the dock moves into its chat region.
+      this.syncFloating(profileId);
+    });
+    app.on("browser-window-blur", () => {
+      // Focus settles a tick later; when it left the app, the dock returns
+      // to the display's work area.
+      setTimeout(() => {
+        if (BrowserWindow.getFocusedWindow()) return;
+        for (const profileId of this.floating.keys())
+          this.syncFloating(profileId);
+      }, 0);
     });
     options.config.onPrefsChanged((profileId, prefs) => {
       // A changed default wins over the session choice made before it.
@@ -107,6 +125,59 @@ export class DesktopWorkspaces {
         });
       },
     );
+    ipcMain.handle(
+      "catamorphic:dock-region",
+      (event, region: DockRegion | null) => {
+        if (
+          region &&
+          [region.left, region.top, region.width, region.height].some(
+            (value) => !Number.isFinite(value),
+          )
+        )
+          return;
+        if (region) this.dockRegions.set(event.sender.id, region);
+        else this.dockRegions.delete(event.sender.id);
+        this.syncFloating(options.windows.profileFor(event.sender));
+      },
+    );
+    // The display behind the detached dock, for a composer attachment. The
+    // dock's own window opts out of capture for the duration.
+    ipcMain.handle("catamorphic:dock-capture-screen", async (event) => {
+      const profileId = options.windows.profileFor(event.sender);
+      const window = this.floating.get(profileId);
+      if (!window || window.webContents !== event.sender)
+        throw new Error("Only the detached dock can capture the screen.");
+      if (process.platform === "darwin") {
+        const status = systemPreferences.getMediaAccessStatus("screen");
+        if (status === "denied" || status === "restricted")
+          throw new Error(
+            "[screen-recording-denied] Allow Work to record the screen in System Settings > Privacy & Security > Screen Recording, then try again.",
+          );
+      }
+      const display = screen.getDisplayMatching(window.getBounds());
+      window.setContentProtection(true);
+      try {
+        const sources = await desktopCapturer.getSources({
+          types: ["screen"],
+          thumbnailSize: {
+            width: Math.round(display.size.width * display.scaleFactor),
+            height: Math.round(display.size.height * display.scaleFactor),
+          },
+        });
+        const source =
+          sources.find((entry) => entry.display_id === String(display.id)) ??
+          sources[0];
+        if (!source) throw new Error("There is no display to capture.");
+        const size = source.thumbnail.getSize();
+        return {
+          pngBase64: source.thumbnail.toPNG().toString("base64"),
+          width: size.width,
+          height: size.height,
+        } satisfies DockScreenCapture;
+      } finally {
+        if (!window.isDestroyed()) window.setContentProtection(false);
+      }
+    });
     ipcMain.handle("catamorphic:dock-detach", (event, detached: boolean) => {
       const profileId = options.windows.profileFor(event.sender);
       this.setDetached(profileId, detached === true);
@@ -330,7 +401,7 @@ export class DesktopWorkspaces {
         !Number.isFinite(size.width)
       )
         return;
-      const area = screen.getDisplayMatching(window.getBounds()).workArea;
+      const area = this.dockArea(profileId, window);
       const nextHeight = Math.max(
         64,
         Math.min(Math.round(size.height), area.height),
@@ -377,7 +448,7 @@ export class DesktopWorkspaces {
       }
       const drag = this.dockDrags.get(profileId);
       if (!drag) return;
-      const area = screen.getDisplayMatching(bounds).workArea;
+      const area = this.dockArea(profileId, window);
       if (input.phase === "move") {
         window.setPosition(
           Math.round(
@@ -494,7 +565,9 @@ export class DesktopWorkspaces {
     const profileId = this.options.windows.profileFor(window.webContents);
     if (dock) return;
     this.lastWindows.set(profileId, window);
+    const contentsId = window.webContents.id;
     window.on("closed", () => {
+      this.dockRegions.delete(contentsId);
       for (const [projectId, owner] of this.owners)
         if (owner.isDestroyed()) this.owners.delete(projectId);
       for (const [localId, chat] of this.chats)
@@ -584,6 +657,30 @@ export class DesktopWorkspaces {
       );
   }
 
+  /**
+   * Where the dock rests: the focused workspace window's chat region when
+   * one of this profile's windows is in front, else the display's work area.
+   */
+  private dockArea(profileId: string, dock: BrowserWindow) {
+    const focused = BrowserWindow.getFocusedWindow();
+    if (focused && focused !== dock && !focused.isDestroyed()) {
+      const region = this.dockRegions.get(focused.webContents.id);
+      if (
+        region &&
+        this.options.windows.profileFor(focused.webContents) === profileId
+      ) {
+        const content = focused.getContentBounds();
+        return {
+          x: Math.round(content.x + region.left),
+          y: Math.round(content.y + region.top),
+          width: Math.round(region.width),
+          height: Math.round(region.height),
+        };
+      }
+    }
+    return screen.getDisplayMatching(dock.getBounds()).workArea;
+  }
+
   private detached(profileId: string): boolean {
     return (
       this.detachOverrides.get(profileId) ??
@@ -609,7 +706,7 @@ export class DesktopWorkspaces {
       return;
     }
     if (existing && !existing.isDestroyed()) {
-      const area = screen.getDisplayMatching(existing.getBounds()).workArea;
+      const area = this.dockArea(profileId, existing);
       const bounds = existing.getBounds();
       const expanded = this.dockExpanded.get(profileId) === true;
       const position = dockPosition({

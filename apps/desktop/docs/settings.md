@@ -99,7 +99,12 @@ or the arrows floats the dock in its own window or returns it for the current
 session, and closing the detached window returns it the same way. Those actions
 never rewrite the preference, so a restart comes back with the chosen default.
 In the detached window those menus are native, and dragging shows no resting
-spots because the window itself moves.
+spots because the window itself moves. While a Work window is in front the
+detached dock rests inside that window's chat region, between the sidebars;
+when another app is in front it uses the display's work area. Clicking into
+another app while the agent works lurks the chat until the dock is focused
+again. Its composer can attach what is on screen behind it as an image;
+macOS asks for Screen Recording permission the first time.
 `dockPlacement` chooses `left`, `center` (default) or `right` for open chats and
 their bubble strip; `dockSide` chooses the bottom corner the collapsed bubble
 rests in. Dragging the collapsed bubble changes the corner; dragging the

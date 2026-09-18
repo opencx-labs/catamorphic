@@ -190,8 +190,18 @@ it("keeps an unsent draft when detached and reattached, and supports either edge
   await dock.eval(
     `window.catamorphicDesktop.setPrefs({dockPlacement:'center'})`,
   );
+  // The workspace window is in front, so the dock rests inside its chat
+  // region (between the sidebars) rather than the display's work area.
+  const region = await app.eval<{
+    left: number;
+    right: number;
+    bottom: number;
+  }>(
+    `(() => { const r = document.querySelector('[data-workspace-chat-region]').getBoundingClientRect(); return { left: screenX + r.left, right: screenX + r.right, bottom: screenY + (outerHeight - innerHeight) + r.bottom }; })()`,
+  );
   await dock.waitFor(
-    `Math.abs(screenX + outerWidth / 2 - screen.availLeft - screen.availWidth / 2) < 3`,
+    `Math.abs(screenX + outerWidth / 2 - ${(region.left + region.right) / 2}) < 3 && Math.abs(screenY + outerHeight + 12 - ${region.bottom}) < 3`,
+    { label: "dock centered in the workspace chat region" },
   );
   await dock.eval(
     `document.querySelector('[aria-label="Collapse chat bubbles"]').click()`,
@@ -207,13 +217,14 @@ it("keeps an unsent draft when detached and reattached, and supports either edge
     await api.dockDrag({phase:'end',screenX:screen.availLeft+screen.availWidth-60,reducedMotion:true});
   })()`);
   await dock.waitFor(
-    `document.querySelector('[data-dock-host]')?.dataset.dockSide === 'right' && Math.abs(screenX + outerWidth + 12 - screen.availLeft - screen.availWidth) < 3 && Math.abs(screenY + outerHeight + 12 - screen.availTop - screen.availHeight) < 3`,
+    `document.querySelector('[data-dock-host]')?.dataset.dockSide === 'right' && Math.abs(screenX + outerWidth + 12 - ${region.right}) < 3 && Math.abs(screenY + outerHeight + 12 - ${region.bottom}) < 3`,
+    { label: "collapsed dock in the region's bottom-right corner" },
   );
   await dock.eval(
     `document.querySelector('[aria-label="Expand chat bubbles"]').click()`,
   );
   await dock.waitFor(
-    `Math.abs(screenX + outerWidth / 2 - screen.availLeft - screen.availWidth / 2) < 3`,
+    `Math.abs(screenX + outerWidth / 2 - ${(region.left + region.right) / 2}) < 3`,
   );
   await toggleNative();
   await dock.waitFor(

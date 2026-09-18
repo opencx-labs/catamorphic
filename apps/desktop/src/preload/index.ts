@@ -32,7 +32,12 @@ import type {
   WorkspaceEvent,
   WorkspaceNavigation,
 } from "../shared/desktop-workspace.js";
-import type { DockDrag, DockSize } from "../shared/dock-position.js";
+import type {
+  DockDrag,
+  DockRegion,
+  DockScreenCapture,
+  DockSize,
+} from "../shared/dock-position.js";
 import type { FilePreviewInput } from "../shared/file-preview.js";
 import type { FileSearchInput } from "../shared/file-search.js";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
@@ -107,6 +112,10 @@ const api = {
   dockMenu: (
     entries: Array<{ label: string; action: string; danger?: boolean }>,
   ): Promise<string | null> => invoke("catamorphic:dock-menu", entries),
+  dockRegion: (region: DockRegion | null): Promise<void> =>
+    invoke("catamorphic:dock-region", region),
+  dockCaptureScreen: (): Promise<DockScreenCapture> =>
+    invoke("catamorphic:dock-capture-screen"),
   onDockSnapshot: (
     listener: (snapshot: DockSnapshot) => void,
   ): (() => void) => {

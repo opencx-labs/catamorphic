@@ -152,7 +152,15 @@ it("keeps checkbox rows and neighboring controls stable while changing and reset
       app.eval<number[]>(
         `(()=>{const row=document.querySelector('[data-setting="contentFrame"]');const r=row.getBoundingClientRect();const control=row.querySelector('input').getBoundingClientRect();return [r.height,r.right-control.right,control.y-r.y,row.lastElementChild.getBoundingClientRect().width,document.querySelector('[data-setting="pinnedBookmarks"]').getBoundingClientRect().top-r.top]})()`,
       );
-    const before = await geometry();
+    // Neighbouring rows finish loading their status lines asynchronously;
+    // measure once two readings a beat apart agree.
+    let before = await geometry();
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      await app.eval("new Promise((resolve) => setTimeout(resolve, 250))");
+      const next = await geometry();
+      if (JSON.stringify(next) === JSON.stringify(before)) break;
+      before = next;
+    }
     await app.screenshot(`/tmp/settings-checkbox-before-${width}.png`);
     await app.eval(
       `document.querySelector('[aria-label="Reset Framed content to inherited"]').click()`,

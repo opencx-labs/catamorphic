@@ -19,6 +19,7 @@ import {
   Globe,
   Maximize2,
   Minus,
+  Monitor,
   Paperclip,
   PictureInPicture2,
   Radio,
@@ -465,6 +466,7 @@ function ChatDockContent({
   splitResizing = false,
   bubbleClearance,
   backdropTab = false,
+  nativeWindow = false,
   defaultAgentId,
   paletteTargeted,
   surfaces = [],
@@ -1007,6 +1009,47 @@ function ChatDockContent({
   const [dockHovered, setDockHovered] = useState(false);
   // Starts true: the dock claims focus when it opens.
   const [dockEngaged, setDockEngaged] = useState(true);
+  // The detached window has no tab behind it; the rest of the screen plays
+  // that role. Clicking into another app blurs the window, which lurks the
+  // chat while the agent works; clicking the dock brings it back.
+  const [windowFocused, setWindowFocused] = useState(() =>
+    typeof document === "undefined" ? true : document.hasFocus(),
+  );
+  useEffect(() => {
+    if (!nativeWindow) return;
+    const onFocus = () => setWindowFocused(true);
+    const onBlur = () => setWindowFocused(false);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, [nativeWindow]);
+  const nativeBackdrop = nativeWindow && !windowFocused;
+  const [capturingScreen, setCapturingScreen] = useState(false);
+  const attachScreen = async () => {
+    if (capturingScreen) return;
+    setCapturingScreen(true);
+    setTransferError(undefined);
+    try {
+      const capture = await desktopApi.dockCaptureScreen();
+      const bytes = Uint8Array.from(atob(capture.pngBase64), (char) =>
+        char.charCodeAt(0),
+      );
+      addFilesRef.current([
+        new File([bytes], "Screen.png", { type: "image/png" }),
+      ]);
+    } catch (error) {
+      setTransferError(
+        error instanceof Error
+          ? error.message
+          : "Could not capture the screen.",
+      );
+    } finally {
+      setCapturingScreen(false);
+    }
+  };
   // Deferred focus may run much later in a hidden/throttled window. Explicit
   // input and external focus changes after it was scheduled own focus. Only
   // this dock's known autofocus calls are excluded from that authority.
@@ -1934,11 +1977,11 @@ function ChatDockContent({
   const lurking =
     entry.mode === "partial" &&
     expanded &&
-    backdropTab &&
+    (backdropTab || nativeBackdrop) &&
     chat.isWorking &&
     !questions &&
     !dockHovered &&
-    !dockEngaged &&
+    (!dockEngaged || nativeBackdrop) &&
     !dropActive;
   return (
     <div
@@ -2812,6 +2855,23 @@ function ChatDockContent({
                     event.target.value = "";
                   }}
                 />
+                {nativeWindow && (
+                  /* The detached dock floats over other apps: one click
+                    attaches what is behind it, minus the dock itself. */
+                  <ShortcutHint label="Attach what's on screen">
+                    <button
+                      type="button"
+                      onClick={() => void attachScreen()}
+                      disabled={capturingScreen}
+                      data-disabled-reason="Capturing the screen"
+                      className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-default disabled:opacity-50"
+                      aria-label="Attach what's on screen"
+                      data-testid="attach-screen"
+                    >
+                      <Monitor className="size-4" />
+                    </button>
+                  </ShortcutHint>
+                )}
                 {/* Prose and pills in one flow: pastes, selections, links,
                   tabs, images and documents sit inline where they were
                   dropped, enter with pill-in and leave with pill-out. */}

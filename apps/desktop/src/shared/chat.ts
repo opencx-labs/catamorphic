@@ -146,6 +146,8 @@ export interface ChatDockProps {
    * activity so the tab stays readable, and expands on hover/focus.
    */
   backdropTab?: boolean;
+  /** Mounted in the detached dock window: OS blur counts as a backdrop. */
+  nativeWindow?: boolean;
   /** Profile-default agent for lazily created sessions. */
   defaultAgentId?: string;
   /**

@@ -214,9 +214,12 @@ describe("design-system bounds (static sweep)", () => {
     });
     try {
       // A transition that started before the preference flipped keeps its
-      // duration; let those finish so only motion started under reduce is
-      // measured.
-      await app.eval("new Promise((resolve) => setTimeout(resolve, 350))");
+      // duration; wait for those to finish so only motion started under
+      // reduce is measured.
+      await app.waitFor(
+        `document.getAnimations().every((animation) => (Number(animation.effect?.getTiming().duration) || 0) <= 1)`,
+        { label: "pre-switch motion settled", timeoutMs: 5000 },
+      );
       const longest = await run<number>(`
         return Math.max(0, ...allStyleRules()
           .filter((rule) => rule.selectorText)
