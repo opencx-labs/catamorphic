@@ -1114,6 +1114,9 @@ kbd {
   position: absolute;
   inset: 0;
   overflow-y: auto;
+  /* Reserve the scrollbar's column so expanding a long section never
+     narrows every other section by a scrollbar width. */
+  scrollbar-gutter: stable;
   padding: 0 8px;
   opacity: 1;
   translate: 0;

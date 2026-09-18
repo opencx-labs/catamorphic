@@ -8,7 +8,6 @@ import {
   LoaderCircle,
   PanelRight,
   Plus,
-  RefreshCw,
   Search,
 } from "lucide-react";
 import {
@@ -50,7 +49,7 @@ import { AnimatedTitle } from "./animated-title.js";
 import { AppGlyph } from "./app-icon.js";
 import { BookmarksNav } from "./bookmarks-nav.js";
 import { ChatGlyph } from "./chat-icon.js";
-import { SignalBadge } from "./chat-signals.js";
+import { SignalBadge, SignalGlyph } from "./chat-signals.js";
 import { Collapsible } from "./collapsible.js";
 import type { PaletteItem, PaletteSearchRequest } from "./command-palette.js";
 import { FilesNav } from "./files-nav.js";
@@ -730,8 +729,7 @@ function SidebarSection({
   const headerActions = contribution?.section.headerActions;
   const status = contribution?.status;
   const busy = status?.state === "loading" || Boolean(status?.refreshing);
-  const canRefresh = Boolean(contribution?.commands?.has("refresh"));
-  const refresh = canRefresh
+  const refresh = contribution?.commands?.has("refresh")
     ? () => contribution?.command?.("refresh")
     : undefined;
   const actionState = useItemActions();
@@ -751,24 +749,21 @@ function SidebarSection({
       data-sidebar-section={contribution?.section.id}
       aria-busy={busy || undefined}
     >
-      <div className="group flex items-center">
+      {/* Title, then the section's actions, then the disclosure chevron at
+          the far right. Nothing in a header appears only on hover. */}
+      <div className="flex items-center">
         <button
           type="button"
           onClick={() => {
             setVisited(true);
             setOpen((value) => !value);
           }}
-          className="flex h-7 min-w-0 flex-1 cursor-pointer items-center justify-between gap-2 rounded-md px-2 text-xs font-medium text-fg-muted hover:text-fg"
+          className="flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 text-xs font-medium text-fg-muted hover:text-fg"
           aria-expanded={open}
         >
           <span className="truncate">{title}</span>
-          <ChevronRight
-            className={`size-3 shrink-0 transition-transform duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
-              open ? "rotate-90" : ""
-            }`}
-          />
         </button>
-        {busy ? (
+        {busy && (
           <span
             role="status"
             aria-label={`Loading ${title}`}
@@ -779,18 +774,7 @@ function SidebarSection({
               className="size-3 animate-spin motion-reduce:animate-none"
             />
           </span>
-        ) : refresh ? (
-          <ShortcutHint label={`Refresh ${title}`}>
-            <button
-              type="button"
-              aria-label={`Refresh ${title}`}
-              onClick={() => void refresh()}
-              className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted opacity-0 transition-opacity duration-150 hover:bg-bg-overlay hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
-            >
-              <RefreshCw className="size-3" />
-            </button>
-          </ShortcutHint>
-        ) : null}
+        )}
         {headerActions === undefined
           ? action
           : headerActions.map((entry) => (
@@ -829,6 +813,22 @@ function SidebarSection({
                 </button>
               </ShortcutHint>
             ))}
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-hidden="true"
+          onClick={() => {
+            setVisited(true);
+            setOpen((value) => !value);
+          }}
+          className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted hover:text-fg"
+        >
+          <ChevronRight
+            className={`size-3 transition-transform duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+              open ? "rotate-90" : ""
+            }`}
+          />
+        </button>
       </div>
       {actionState.error && (
         <p role="alert" className="sidebar-empty-state">
@@ -1103,11 +1103,13 @@ function SessionsNav({
                 hasChildren ? { open: expanded, onToggle: toggle } : undefined
               }
               icon={
-                <ChatGlyph
-                  icon={session.icon}
-                  fork={Boolean(session.parentSessionId)}
-                  className="size-3.5 shrink-0"
-                />
+                <SignalGlyph working={session.running} className="size-3.5">
+                  <ChatGlyph
+                    icon={session.icon}
+                    fork={Boolean(session.parentSessionId)}
+                    className="size-3.5 shrink-0"
+                  />
+                </SignalGlyph>
               }
               active={session.id === activeSessionId}
               labelContent={
@@ -1161,19 +1163,24 @@ function SessionsNav({
               }
               end={
                 <>
-                  {(session.attentionRequired ||
+                  {/* The same signals as the chat's workspace tab. */}
+                  {(session.running ||
+                    session.attentionRequired ||
                     unreadSessionIds.has(session.id)) && (
                     <span
                       data-testid={
                         session.attentionRequired
                           ? "session-attention"
-                          : "session-unread"
+                          : session.running
+                            ? "session-working"
+                            : "session-unread"
                       }
                       className="grid size-3 shrink-0 place-items-center"
                       aria-hidden="true"
                     >
                       <SignalBadge
                         signals={{
+                          working: session.running,
                           attention: session.attentionRequired,
                           unread: unreadSessionIds.has(session.id),
                         }}

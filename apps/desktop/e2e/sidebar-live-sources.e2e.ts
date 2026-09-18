@@ -77,7 +77,7 @@ beforeAll(async () => {
   );
   fs.writeFileSync(
     path.join(projectRoot, ".catamorphic/sidebar.js"),
-    `module.exports={left:[{id:'live',title:'Sources',icon:'ListTodo',sections:[{id:'todos',type:'custom',title:'My todos',source:{type:'custom',module:'.catamorphic/todos.ts'},height:180},{id:'http',type:'custom',title:'Service',source:{type:'custom',module:'.catamorphic/http.ts'},height:120}]},{id:'other',title:'Other',icon:'Folder',sections:[{id:'files',type:'files'}]}],right:[]};`,
+    `module.exports={left:[{id:'live',title:'Sources',icon:'ListTodo',sections:[{id:'todos',type:'custom',title:'My todos',source:{type:'custom',module:'.catamorphic/todos.ts'},height:180},{id:'http',type:'custom',title:'Service',source:{type:'custom',module:'.catamorphic/http.ts'},height:120,headerActions:[{label:'Refresh Service',action:'refresh',icon:'RefreshCw'}]}]},{id:'other',title:'Other',icon:'Folder',sections:[{id:'files',type:'files'}]}],right:[]};`,
   );
   await app.reload();
   await app.waitFor(
