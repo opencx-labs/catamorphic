@@ -203,7 +203,10 @@ export function DockHost({
       void desktopApi.dockResize({
         width: expanded || dialogOpen ? 780 : railWidth,
         height: expanded || dialogOpen ? 560 : 76 + DOCK_HEADROOM,
-        expanded: !collapsed,
+        // Collapsing the strip with a chat open plays the chat's exit first;
+        // the window keeps the open placement until that chat has minimized,
+        // then moves to the collapsed corner with the bubble.
+        expanded: !collapsed || Boolean(expanded),
       });
   }, [detachedWindow, expanded, dialogOpen, railWidth, collapsed]);
   // Over the headroom (or any empty space) the window lets clicks through.

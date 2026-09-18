@@ -261,9 +261,15 @@ describe("dock modes", () => {
       `return !frontDock().hasAttribute('data-lurking') && dockH() > 400;`,
       { label: "expanded when the window is focused again" },
     );
+    // Let this turn end before the next test starts its own timed command,
+    // so the two do not queue behind each other.
+    await dockWait(
+      `return !frontDock().querySelector('[data-testid="session-inspector-trigger"]')?.getAttribute('aria-label')?.includes(', Working,');`,
+      { label: "turn finished", timeoutMs: 40_000 },
+    );
     await app.eval(`window.catamorphicDesktop.dockDetach(false)`);
     await runWait(`return !!composer();`, { label: "chat back in the window" });
-  }, 90_000);
+  }, 120_000);
 
   it("lurks while the agent works: shrinks on focus-out, expands on hover, expands when done", async () => {
     await run(
