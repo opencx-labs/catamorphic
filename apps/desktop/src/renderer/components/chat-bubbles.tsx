@@ -344,6 +344,17 @@ export function ChatBubbles({
     prevAutoRef.current = autoCollapse;
     setCollapseOverride(null);
   }
+  // A chat opening (Cmd+N, the sidebar, a palette action) releases a manual
+  // collapse: the strip belongs with the open chat, otherwise a closed bubble
+  // would sit beside a visible chat. Auto-collapse behind a tab still applies.
+  const openLocalId = entries.find(
+    (entry) => entry.mode === "partial" && entry.localId === activeLocalId,
+  )?.localId;
+  const prevOpenRef = useRef(openLocalId);
+  if (prevOpenRef.current !== openLocalId) {
+    prevOpenRef.current = openLocalId;
+    if (openLocalId && collapseOverride === true) setCollapseOverride(null);
+  }
   const collapsed = collapseOverride ?? autoCollapse;
 
   // Tab-mode chats live in the tab bar; only docked/minimized chats get a
