@@ -614,8 +614,13 @@ export class DesktopWorkspaces {
     });
     this.floating.set(profileId, window);
     window.setAlwaysOnTop(true, "floating");
+    // The dock follows every Space. Not `visibleOnFullScreen`: Electron
+    // implements that by turning the whole process into a UIElement app,
+    // which drops Work from the Dock and the app switcher.
     if (process.platform !== "win32")
-      window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      window.setVisibleOnAllWorkspaces(true, {
+        skipTransformProcessType: true,
+      });
     window.on("close", (event) => {
       if (this.quitting) return;
       // Closing returns the dock to the window for this session only, so a
