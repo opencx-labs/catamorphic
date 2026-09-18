@@ -115,10 +115,10 @@ app.on("second-instance", (_event, argv) => {
   for (const link of argv) deliverExternalLink(link);
 });
 
-// `catamorphic://connect?…` links (ADR 0055): what an invite hands a member.
+// `work://connect?…` links (ADR 0055): what an invite hands a member.
 // Registered as the protocol's handler; macOS delivers via open-url, other
 // platforms via argv (first launch here, later launches via second-instance).
-if (!e2eDataDir) app.setAsDefaultProtocolClient("catamorphic");
+if (!e2eDataDir) app.setAsDefaultProtocolClient("work");
 app.on("open-url", (event, url) => {
   event.preventDefault();
   deliverExternalLink(url);
@@ -165,9 +165,9 @@ ipcMain.handle("catamorphic:browser-take-pending-urls", (event) => {
 });
 registerDefaultBrowser();
 let pendingConnectLink: string | null =
-  process.argv.find((arg) => arg.startsWith("catamorphic://")) ?? null;
+  process.argv.find((arg) => arg.startsWith("work://")) ?? null;
 function deliverConnectLink(url: string): void {
-  if (!url.startsWith("catamorphic://connect")) return;
+  if (!url.startsWith("work://connect")) return;
   // Pull, not push: the link stays pending until the renderer TAKES it
   // (`remote-take-pending-link`), so a link arriving before <App> mounts
   // its listener (cold launch, server still booting) is not lost. The push
@@ -306,7 +306,7 @@ function createWindow(
     transparent: dock,
     resizable: !dock,
     skipTaskbar: dock,
-    title: "Catamorphic",
+    title: "Work",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     // Pre-paint background from the profile's theme so open doesn't flash;
     // stay hidden until the renderer has actually painted a frame.
@@ -499,6 +499,9 @@ function applyMenuForFocusedWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  if (!app.isPackaged && process.platform === "darwin") {
+    app.dock?.setIcon(path.join(import.meta.dirname, "../../build/icon.png"));
+  }
   // GitHub's Linux runner has no Secret Service. Electron's in-memory key
   // keeps safeStorage-backed flows realistic inside isolated throwaway E2E
   // profiles without weakening normal desktop profiles.
@@ -728,7 +731,7 @@ app.whenReady().then(async () => {
     const message = error instanceof Error ? error.message : String(error);
     console.error("[desktop] embedded server failed to start:", error);
     dialog.showErrorBox(
-      "Catamorphic failed to start",
+      "Work failed to start",
       `The embedded server could not boot.\n\n${message}`,
     );
     window.close();

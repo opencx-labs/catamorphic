@@ -1595,7 +1595,7 @@ export function registerIpcHandlers(
     );
   }
 
-  // Where new projects go by default: ~/Catamorphic/<name>. Always a real,
+  // Where new projects go by default: ~/Work/<name>. Always a real,
   // user-visible folder — project data never hides in app data. E2E runs
   // keep projects inside the throwaway userData dir instead of the home.
   ipcMain.handle("catamorphic:default-projects-dir", defaultProjectsDir);

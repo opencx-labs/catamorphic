@@ -1,6 +1,6 @@
 /**
  * A connect link (ADR 0055): what an invite hands a member.
- *   catamorphic://connect?server=<api base>&project=<id>&name=<display>
+ *   work://connect?server=<api base>&project=<id>&name=<display>
  */
 export interface ConnectLink {
   serverUrl: string;
@@ -29,8 +29,7 @@ export function parseConnectLink(raw: string): ConnectLink | null {
   } catch {
     return null;
   }
-  if (url.protocol !== "catamorphic:" || url.hostname !== "connect")
-    return null;
+  if (url.protocol !== "work:" || url.hostname !== "connect") return null;
   const serverUrl = url.searchParams.get("server")?.trim();
   const remoteProjectId = url.searchParams.get("project")?.trim();
   if (!serverUrl || !remoteProjectId || url.searchParams.has("token"))

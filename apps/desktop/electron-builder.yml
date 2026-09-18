@@ -1,5 +1,5 @@
-appId: dev.catamorphic.desktop
-productName: Catamorphic
+appId: software.work.desktop
+productName: Work
 copyright: Copyright © 2026 The Catamorphic Authors
 artifactName: "${productName}-${version}-${arch}.${ext}"
 directories:
@@ -25,9 +25,9 @@ extraResources:
   - from: ../../NOTICE
     to: NOTICE.txt
 protocols:
-  - name: Catamorphic connect link
+  - name: Work connect link
     schemes:
-      - catamorphic
+      - work
   - name: Web links
     role: Viewer
     schemes:
@@ -62,7 +62,7 @@ mac:
   entitlementsInherit: build/entitlements.mac.inherit.plist
   notarize: true
   extendInfo:
-    NSLocalNetworkUsageDescription: Catamorphic uses your local network so your phone can continue this workspace.
+    NSLocalNetworkUsageDescription: Work uses your local network so your phone can continue this workspace.
   target:
     - target: dmg
       arch:
@@ -71,7 +71,7 @@ mac:
       arch:
         - arm64
 dmg:
-  title: "Catamorphic ${version}"
+  title: "Work ${version}"
   iconSize: 128
   window:
     width: 540

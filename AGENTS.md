@@ -3,7 +3,7 @@
 ## Project Overview
 
 Catamorphic is an open-source, local-first framework for **agentic work
-environments**, plus a desktop app (`apps/desktop`) that is both the
+environments**, plus the Work desktop app (`apps/desktop`) that is both the
 framework's reference implementation and a polished daily-use product. A
 *project* is a folder, optionally already a Git repository, that can hold any kind of work: docs, notes, data,
 code, automations (workflows), and apps (ADR 0043). The framework's
@@ -114,14 +114,14 @@ Internal packages:
 
 Apps:
 
-- `apps/desktop` — the Catamorphic desktop app (Electron), the in-repo reference host: it embeds the server in-process (`src/main/server/boot.ts`) and consumes the same hooks as any embedder. It is also a **dev shell** (ADR 0045): Claude Code fidelity (CLAUDE.md/`.claude` honored), worktrees, Monaco diff tabs, sidebar Changes/PRs, ghostty/PTY terminals with OSC 133, embedded browser, command palette. See `apps/desktop/AGENTS.md` and `apps/desktop/DESIGN.md`. Catamorphic itself remains embed-only.
+- `apps/desktop` — the Work desktop app (Electron), the in-repo reference host: it embeds the server in-process (`src/main/server/boot.ts`) and consumes the same hooks as any embedder. It is also a **dev shell** (ADR 0045): Claude Code fidelity (CLAUDE.md/`.claude` honored), worktrees, Monaco diff tabs, sidebar Changes/PRs, ghostty/PTY terminals with OSC 133, embedded browser, command palette. See `apps/desktop/AGENTS.md` and `apps/desktop/DESIGN.md`. Catamorphic itself remains embed-only.
 - `apps/pwa` — the mobile PWA (ADR 0058): phone-sized client of any Catamorphic server — projects → sessions → chat (queue/send-now nudge, interrupt, agent questions, tool-permission cards), OAuth server connections, and local profiles. Reaches a server through a credential-free invite, direct host sign-in, or desktop QR pairing (ADR 0060). See `apps/pwa/AGENTS.md`.
 - `apps/server` — the stock self-hostable server (ADR 0059): `docker run`-able, zero external services (PGlite + bare git origins + local-process execution), Better Auth with built-in local auth and optional OAuth/OIDC providers, agent-driven machine-local provisioning, credential-free project invitations, unique-per-install mDNS hostname for LAN reach, and `DATABASE_URL` opt-in for real Postgres. Microsandbox is selectable for isolated remote development with per-agent limits and managed workspace budgets (ADR 0100). **Single-tenant only** (ADR 0047). See `apps/server/AGENTS.md`.
 
 How the three connect (setting up / troubleshooting, read in this order):
 
 1. **Auth is always a bearer token resolved per request** (ADR 0055): desktop = fixed local identity on loopback; stock server = OAuth authorization code with S256 PKCE, refresh tokens, and membership-derived scope; desktop-LAN = device tokens from QR pairing (hashes in `<userData>/mobile-pairing.json`).
-2. **Invites are credential-free locators**: `catamorphic://connect?server=<api base incl. /api>&project=…&invitation=…`. The desktop or PWA discovers the server's OAuth endpoints, signs in, and redeems admission. The desktop then creates a synced local project (ADR 0044/0055).
+2. **Invites are credential-free locators**: `work://connect?server=<api base incl. /api>&project=…&invitation=…`. The desktop or PWA discovers the server's OAuth endpoints, signs in, and redeems admission. The desktop then creates a synced local project (ADR 0044/0055).
 3. **QR pairing** (ADR 0060, palette → "Continue on mobile"): the desktop's LAN listener serves the built `apps/pwa/dist` at its root, exchanges a single-use 2-minute code for a device token, and proxies `/api/*` to the loopback embedded server (bearer required). The claim also hands the phone the profile's remote-project links + mirror map, and the focused chat's project/session (deep-link). The QR ships the **built** PWA — rebuild `apps/pwa` after UI changes.
 4. **Scoped members address agents as `project:<projectId>:<slug>`** — a bare session create is builder/root-only; the PWA derives the id from `GET /me`.
 5. **Sessions mirror to the linked remote** (ADR 0061): after every settled turn on a remote-linked project the desktop pushes the transcript to `PUT …/agent/sessions/:id/mirror`; the server's copy is continuable there (history-seeded re-anchor), and a `409 diverged` means the server owns the fork — the desktop stops pushing and stamps its copy with a `mirror_fork` marker clients use to lock the stale copy and link the live one. When the focused project has a remote, the pairing QR defaults to the REMOTE origin with a `session` deep-link.

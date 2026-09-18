@@ -66,7 +66,7 @@ describe("configurable browser workspace", () => {
       "return [...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map(e => e.dataset.pointKey)",
     );
     await run(
-      "button('Catamorphic Light').click(); setReactValue($('select[name=tabPlacement]'), 'sidebar')",
+      "button('Work Light').click(); setReactValue($('select[name=tabPlacement]'), 'sidebar')",
     );
     await app.waitFor(
       "document.documentElement.dataset.theme === 'light' && !!document.querySelector('aside [data-tab-orientation=vertical]')",

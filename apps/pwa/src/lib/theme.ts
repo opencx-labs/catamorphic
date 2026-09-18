@@ -6,7 +6,7 @@ import type { PwaConnection } from "./store.js";
  * only: same tokens, same presets, same resolution — change both together.
  * A project opts into a pwa look by committing
  * `.catamorphic/theme.json` ({ "preset": "...", "overrides": {...} });
- * without one the app stays on Catamorphic Dark. No theme UI on mobile.
+ * without one the app stays on Work Dark. No theme UI on mobile.
  */
 export const THEME_TOKENS = [
   "bg",
@@ -50,7 +50,7 @@ interface ThemePreset {
 const THEME_PRESETS: ThemePreset[] = [
   {
     id: "dark",
-    label: "Catamorphic Dark",
+    label: "Work Dark",
     colors: {
       bg: "#0a0a0b",
       "bg-raised": "#101012",
@@ -73,7 +73,7 @@ const THEME_PRESETS: ThemePreset[] = [
   },
   {
     id: "light",
-    label: "Catamorphic Light",
+    label: "Work Light",
     colors: {
       bg: "#f7f7f5",
       "bg-raised": "#ffffff",

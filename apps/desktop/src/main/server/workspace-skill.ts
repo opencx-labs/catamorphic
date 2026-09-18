@@ -1,7 +1,7 @@
 /** Replaceable desktop doctrine. Mechanics live in the existing host services. */
 export const DESKTOP_WORKSPACE_SKILL = `---
 name: desktop-workspace
-description: Work with the user's browser, terminals, chats, worktrees, connections and shared project state in Catamorphic. Load for desktop interaction or session coordination.
+description: Work with the user's browser, terminals, chats, worktrees, connections and shared project state in Work. Load for desktop interaction or session coordination.
 ---
 
 # Desktop workspace

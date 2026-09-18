@@ -83,7 +83,7 @@ export function InstallPromotion({ enabled }: { enabled: boolean }) {
   return (
     <aside
       className={`fixed inset-x-3 top-[calc(env(safe-area-inset-top)+4rem)] z-50 mx-auto flex max-w-sm items-start gap-3 rounded-2xl border border-border-strong bg-bg-raised/95 p-3 shadow-2xl backdrop-blur-xl ${closing ? "animate-install-prompt-out" : "animate-install-prompt-in"}`}
-      aria-label="Install Catamorphic"
+      aria-label="Install Work"
       data-testid="install-prompt"
       onAnimationEnd={(event) => {
         if (closing && event.currentTarget === event.target) {
@@ -99,10 +99,10 @@ export function InstallPromotion({ enabled }: { enabled: boolean }) {
         )}
       </span>
       <div className="min-w-0 flex-1">
-        <h2 className="text-[14px] font-semibold">Install Catamorphic</h2>
+        <h2 className="text-[14px] font-semibold">Install Work</h2>
         <p className="mt-0.5 text-xs leading-5 text-fg-muted">
           {availableKind === "native"
-            ? "Keep Catamorphic one tap away and use it without browser chrome."
+            ? "Keep Work one tap away and use it without browser chrome."
             : "On iPhone or iPad, open this page in Safari, tap Share, then Add to Home Screen."}
         </p>
         {availableKind === "native" && (

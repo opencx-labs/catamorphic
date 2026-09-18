@@ -9,10 +9,10 @@ export function desktopDataDirFromEnvironment(
 export function desktopApplicationName(input: {
   isPackaged: boolean;
   isolatedDataDir?: string;
-}): "Catamorphic" | "Catamorphic Development" {
+}): "Work" | "Work Development" {
   return !input.isPackaged || input.isolatedDataDir
-    ? "Catamorphic Development"
-    : "Catamorphic";
+    ? "Work Development"
+    : "Work";
 }
 
 export function defaultDesktopProjectsDir(input: {
@@ -20,5 +20,5 @@ export function defaultDesktopProjectsDir(input: {
   homeDir: string;
 }): string {
   const isolatedDataDir = desktopDataDirFromEnvironment(input.env);
-  return path.join(isolatedDataDir ?? input.homeDir, "Catamorphic");
+  return path.join(isolatedDataDir ?? input.homeDir, "Work");
 }

@@ -1,6 +1,6 @@
 ---
 name: desktop-interactions
-description: Change Catamorphic desktop resource opening, workspace tabs and floating surfaces, scoped settings, or chat composer integration. Use for interaction state and native Electron verification; reusable chat mechanics stay in the headless React package.
+description: Change Work desktop resource opening, workspace tabs and floating surfaces, scoped settings, or chat composer integration. Use for interaction state and native Electron verification; reusable chat mechanics stay in the headless React package.
 ---
 
 # Desktop interactions

@@ -210,16 +210,16 @@ function updateContent(
     case "checking":
       return {
         title: "Checking for updates",
-        description: `You are using Catamorphic ${state.currentVersion} on the ${channel} channel.`,
+        description: `You are using Work ${state.currentVersion} on the ${channel} channel.`,
       };
     case "available":
       return {
-        title: `Catamorphic ${state.version ?? "update"} is available`,
+        title: `Work ${state.version ?? "update"} is available`,
         description: "Download it now and restart whenever your work is ready.",
       };
     case "downloading":
       return {
-        title: `Downloading Catamorphic ${state.version ?? "update"}`,
+        title: `Downloading Work ${state.version ?? "update"}`,
         description: "You can keep working while the update downloads.",
       };
     case "downloaded":
@@ -229,17 +229,17 @@ function updateContent(
           state.message ??
           (hasActiveWork
             ? "Finish active agents and terminals before restarting."
-            : `Restart to install Catamorphic ${state.version ?? "the update"}.`),
+            : `Restart to install Work ${state.version ?? "the update"}.`),
       };
     case "installing":
       return {
         title: "Preparing to restart",
         description:
-          "macOS is preparing the update. Catamorphic will restart when it is ready.",
+          "macOS is preparing the update. Work will restart when it is ready.",
       };
     case "up-to-date":
       return {
-        title: "Catamorphic is up to date",
+        title: "Work is up to date",
         description: `Version ${state.currentVersion} is the newest ${channel} update.`,
       };
     case "error":
@@ -251,7 +251,7 @@ function updateContent(
       return {
         title: "Updates are unavailable here",
         description:
-          state.message ?? "Install Catamorphic to receive desktop updates.",
+          state.message ?? "Install Work to receive desktop updates.",
       };
     case "idle":
       return null;

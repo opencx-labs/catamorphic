@@ -135,7 +135,7 @@ export async function authorizeRemoteServer(options: {
         token_endpoint_auth_method: "none",
         grant_types: ["authorization_code", "refresh_token"],
         response_types: ["code"],
-        client_name: "Catamorphic desktop",
+        client_name: "Work desktop",
       }),
     });
     if (!registration.ok) {
@@ -266,7 +266,7 @@ async function openLoopbackCallback({
       "cache-control": "no-store",
     });
     response.end(
-      "<!doctype html><meta charset=utf-8><title>Return to Catamorphic</title><p>Return to Catamorphic to finish connecting.</p>",
+      "<!doctype html><meta charset=utf-8><title>Return to Work</title><p>Return to Work to finish connecting.</p>",
     );
     resolveResult?.({
       ...(url.searchParams.get("code")

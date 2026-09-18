@@ -54,9 +54,9 @@ or change the Homebrew tap.
 Install the DMG from the workflow artifact on a clean Apple silicon Mac user
 account. Verify:
 
-- Gatekeeper opens Catamorphic without an override.
-- Applications shows the Catamorphic icon and bundle identity.
-- A `catamorphic://connect` invitation opens the installed app.
+- Gatekeeper opens Work without an override.
+- Applications shows the Work icon and bundle identity.
+- A `work://connect` invitation opens the installed app.
 - A local project can be created, reopened, and edited.
 - Claude Code and Codex each perform their one-time verified component
   download, start successfully, and start again from the cached component
@@ -106,19 +106,19 @@ tests, and repeat the clean-account first-use checks above.
 
 | Channel | Version | Homebrew cask | Update feed |
 | --- | --- | --- | --- |
-| Stable | `x.y.z` | `opencx-labs/tap/catamorphic` | `latest-mac.yml` |
-| Preview | `x.y.z-alpha.n` | `opencx-labs/tap/catamorphic@alpha` | `alpha-mac.yml` |
+| Stable | `x.y.z` | `opencx-labs/tap/work` | `latest-mac.yml` |
+| Preview | `x.y.z-alpha.n` | `opencx-labs/tap/work@alpha` | `alpha-mac.yml` |
 
 Installed builds default to Stable for stable versions and Preview for alpha
 versions. The persisted machine-wide choice is available under **Help > Update
 Channel**. Switching channels never installs an older version. The app checks
 the selected feed shortly after launch, every six hours, and after wake. It
 asks before downloading and again before restarting, and never restarts while
-an agent or terminal is active. DMG users can still install a newer Catamorphic
+an agent or terminal is active. DMG users can still install a newer Work
 app over the existing copy in Applications.
 
 Before a packaged version first opens an existing PGlite database, it creates
-a copy under `data/migration-backups` in the Catamorphic application-support
+a copy under `data/migration-backups` in the Work application-support
 directory. Startup fails rather than migrating without a backup. The app keeps
 the two newest pre-migration copies and records success only after the
 embedded server has started.

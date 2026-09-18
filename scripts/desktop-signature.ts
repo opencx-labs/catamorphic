@@ -35,7 +35,7 @@ export function verifyDesktopSignature({
   run("lipo", [helperPath, "-verify_arch", "arm64", "x86_64"]);
   // --version never accesses Keychain and is the only helper invocation here.
   const protocol = run(helperPath, ["--version"]);
-  if (protocol !== "catamorphic-browser-keychain 1")
+  if (protocol !== "work-browser-keychain 1")
     throw new Error("Browser import helper has an unsupported protocol");
   return { teamId, protocol, architectures: ["arm64", "x86_64"] };
 }
@@ -44,7 +44,7 @@ if (import.meta.main) {
   const [appPath, ...extra] = process.argv.slice(2);
   if (!appPath || extra.length)
     throw new Error(
-      "Usage: bun scripts/desktop-signature.ts <signed Catamorphic.app>",
+      "Usage: bun scripts/desktop-signature.ts <signed Work.app>",
     );
   console.log(JSON.stringify(verifyDesktopSignature({ appPath }), null, 2));
 }

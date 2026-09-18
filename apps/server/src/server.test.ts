@@ -362,7 +362,7 @@ describe("stock server", () => {
     const invite = response.json();
     memberInvitationId = invite.id;
     expect(invite.connectLinks[0]).toContain(
-      "catamorphic://connect?server=http%3A%2F%2Fcatamorphic.local%3A4700%2Fapi",
+      "work://connect?server=http%3A%2F%2Fcatamorphic.local%3A4700%2Fapi",
     );
     expect(invite.connectLinks[0]).toContain(`project=${projectId}`);
     expect(invite.connectLinks[0]).toContain(`invitation=${invite.id}`);

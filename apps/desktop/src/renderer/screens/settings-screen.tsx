@@ -200,7 +200,7 @@ export function SettingsScreen({
           <section className="mt-4 rounded-lg border border-border bg-bg-raised/30 p-4">
             <h2 className="text-sm font-semibold text-fg">Default browser</h2>
             <p className="mt-1 text-xs leading-5 text-fg-muted">
-              Open links from other apps in Catamorphic.
+              Open links from other apps in Work.
             </p>
             <DefaultBrowserButton className="mt-3 max-w-xs" />
           </section>
@@ -1551,7 +1551,7 @@ function ThemeSection({
           <span className="block text-[11px] text-fg-faint">
             {systemSelected
               ? `Following your device · ${theme.appearance === "dark" ? "Dark" : "Light"}`
-              : "Uses Catamorphic Light or Dark automatically"}
+              : "Uses Work Light or Dark automatically"}
           </span>
         </span>
       </button>

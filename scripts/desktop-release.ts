@@ -55,32 +55,30 @@ export function renderHomebrewCask(input: {
     );
   }
 
-  const token =
-    input.channel === "stable" ? "catamorphic" : "catamorphic@alpha";
-  const conflictingToken =
-    input.channel === "stable" ? "catamorphic@alpha" : "catamorphic";
+  const token = input.channel === "stable" ? "work" : "work@alpha";
+  const conflictingToken = input.channel === "stable" ? "work@alpha" : "work";
 
   return `cask "${token}" do
   version "${input.version}"
   sha256 "${input.sha256}"
 
-  url "https://github.com/opencx-labs/catamorphic/releases/download/desktop-v#{version}/Catamorphic-#{version}-arm64.dmg"
-  name "Catamorphic"
+  url "https://github.com/opencx-labs/catamorphic/releases/download/desktop-v#{version}/Work-#{version}-arm64.dmg"
+  name "Work"
   desc "Local-first workspace for projects, agents, workflows, and apps"
-  homepage "https://github.com/opencx-labs/catamorphic"
+  homepage "https://work.software"
 
   auto_updates true
   conflicts_with cask: "${conflictingToken}"
   depends_on arch: :arm64
   depends_on macos: :monterey
 
-  app "Catamorphic.app"
+  app "Work.app"
 
   zap trash: [
-    "~/Library/Application Support/Catamorphic",
-    "~/Library/Logs/Catamorphic",
-    "~/Library/Preferences/dev.catamorphic.desktop.plist",
-    "~/Library/Saved Application State/dev.catamorphic.desktop.savedState",
+    "~/Library/Application Support/Work",
+    "~/Library/Logs/Work",
+    "~/Library/Preferences/software.work.desktop.plist",
+    "~/Library/Saved Application State/software.work.desktop.savedState",
   ]
 end
 `;
@@ -99,7 +97,7 @@ export function rewriteDesktopUpdateMetadata(input: {
   const metadataName = desktopUpdateMetadataName(input.version);
   let content = input.content;
   for (const extension of ["dmg", "zip"] as const) {
-    const artifact = `Catamorphic-${input.version}-arm64.${extension}`;
+    const artifact = `Work-${input.version}-arm64.${extension}`;
     if (!content.includes(artifact)) {
       throw new Error(`${metadataName} does not reference ${artifact}`);
     }

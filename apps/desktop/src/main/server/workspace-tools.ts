@@ -529,7 +529,7 @@ export function buildWorkspaceToolkit(
     {
       name: "use_worktree",
       description:
-        "Assign this session to an existing Git worktree created by Catamorphic or another harness. The path must belong to this project's Git repository.",
+        "Assign this session to an existing Git worktree created by Work or another harness. The path must belong to this project's Git repository.",
       parameters: {
         path: z
           .string()

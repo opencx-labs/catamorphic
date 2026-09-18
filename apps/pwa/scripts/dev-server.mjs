@@ -467,7 +467,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "127.0.0.1", () => {
-  const link = `catamorphic://connect?server=${encodeURIComponent(`http://127.0.0.1:${PORT}/api`)}&project=${PROJECT.id}&name=${encodeURIComponent(PROJECT.name)}`;
+  const link = `work://connect?server=${encodeURIComponent(`http://127.0.0.1:${PORT}/api`)}&project=${PROJECT.id}&name=${encodeURIComponent(PROJECT.name)}`;
   console.log(`Fake Catamorphic server on http://127.0.0.1:${PORT}/api`);
   console.log(`Connect link:\n${link}`);
 });

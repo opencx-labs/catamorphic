@@ -144,7 +144,7 @@ describe("stock admission routes", () => {
 
     expect(response.statusCode).toBe(201);
     expect(response.json().connectLinks[0]).toBe(
-      "catamorphic://connect?server=https%3A%2F%2Fbrain.acme.dev%2Fapi&project=project-1&invitation=invite-1&name=Company+Brain",
+      "work://connect?server=https%3A%2F%2Fbrain.acme.dev%2Fapi&project=project-1&invitation=invite-1&name=Company+Brain",
     );
     expect(response.json().connectLinks[0]).not.toContain("token=");
     expect(response.json().webLinks[0]).toBe(

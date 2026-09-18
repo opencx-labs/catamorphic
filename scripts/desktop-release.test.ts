@@ -56,20 +56,20 @@ describe("renderHomebrewCask", () => {
       channel: "preview",
     });
 
-    expect(cask).toContain('cask "catamorphic@alpha"');
+    expect(cask).toContain('cask "work@alpha"');
     expect(cask).toContain('version "0.1.0-alpha.1"');
     expect(cask).toContain(`sha256 "${"a".repeat(64)}"`);
     expect(cask).toContain(
-      "releases/download/desktop-v#{version}/Catamorphic-#{version}-arm64.dmg",
+      "releases/download/desktop-v#{version}/Work-#{version}-arm64.dmg",
     );
     expect(cask).toContain("depends_on arch: :arm64");
     expect(cask).toContain("depends_on macos: :monterey");
     expect(cask).toContain(
-      'homepage "https://github.com/opencx-labs/catamorphic"\n\n  auto_updates true\n  conflicts_with cask: "catamorphic"\n  depends_on arch: :arm64',
+      'homepage "https://work.software"\n\n  auto_updates true\n  conflicts_with cask: "work"\n  depends_on arch: :arm64',
     );
     expect(cask).toContain("auto_updates true");
-    expect(cask).toContain('conflicts_with cask: "catamorphic"');
-    expect(cask).toContain('app "Catamorphic.app"');
+    expect(cask).toContain('conflicts_with cask: "work"');
+    expect(cask).toContain('app "Work.app"');
   });
 
   it("can point both stable and preview casks at a stable release", () => {
@@ -84,9 +84,9 @@ describe("renderHomebrewCask", () => {
       channel: "preview",
     });
 
-    expect(stable).toContain('cask "catamorphic"');
-    expect(stable).toContain('conflicts_with cask: "catamorphic@alpha"');
-    expect(preview).toContain('cask "catamorphic@alpha"');
+    expect(stable).toContain('cask "work"');
+    expect(stable).toContain('conflicts_with cask: "work@alpha"');
+    expect(preview).toContain('cask "work@alpha"');
   });
 
   it("rejects an invalid checksum", () => {
@@ -107,14 +107,14 @@ describe("desktop update metadata", () => {
 
     const metadata = rewriteDesktopUpdateMetadata({
       version,
-      content: `version: ${version}\nfiles:\n  - url: Catamorphic-${version}-arm64.zip\n    sha512: zip-sha\npath: Catamorphic-${version}-arm64.dmg\nsha512: dmg-sha\n`,
+      content: `version: ${version}\nfiles:\n  - url: Work-${version}-arm64.zip\n    sha512: zip-sha\npath: Work-${version}-arm64.dmg\nsha512: dmg-sha\n`,
     });
 
     expect(metadata).toContain(
-      `releases/download/desktop-v${version}/Catamorphic-${version}-arm64.zip`,
+      `releases/download/desktop-v${version}/Work-${version}-arm64.zip`,
     );
     expect(metadata).toContain(
-      `releases/download/desktop-v${version}/Catamorphic-${version}-arm64.dmg`,
+      `releases/download/desktop-v${version}/Work-${version}-arm64.dmg`,
     );
     expect(metadata).toContain("sha512: zip-sha");
     expect(metadata).toContain("sha512: dmg-sha");
@@ -130,8 +130,8 @@ describe("desktop update metadata", () => {
     expect(() =>
       rewriteDesktopUpdateMetadata({
         version: "0.1.0-alpha.2",
-        content: "path: Catamorphic-0.1.0-alpha.2-arm64.dmg\n",
+        content: "path: Work-0.1.0-alpha.2-arm64.dmg\n",
       }),
-    ).toThrow("does not reference Catamorphic-0.1.0-alpha.2-arm64.zip");
+    ).toThrow("does not reference Work-0.1.0-alpha.2-arm64.zip");
   });
 });

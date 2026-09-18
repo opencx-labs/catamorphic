@@ -1,4 +1,4 @@
-// Catamorphic sidebars. Edit and save to update both sides live.
+// Work sidebars. Edit and save to update both sides live.
 // Ask the assistant to add tabs, move widgets, or build an app widget.
 // Each side is an ordered list of tabs: { id, title, icon, sections }.
 // Tabs use bare Lucide icons. Titles are accessible labels and tooltips.

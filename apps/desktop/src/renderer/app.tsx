@@ -6559,7 +6559,7 @@ function EmptyState({
               Could not load your projects
             </h1>
             <p className="mt-2 text-sm text-fg-muted">
-              Try again. If the problem continues, quit and reopen Catamorphic.
+              Try again. If the problem continues, quit and reopen Work.
             </p>
             <PendingButton
               type="button"

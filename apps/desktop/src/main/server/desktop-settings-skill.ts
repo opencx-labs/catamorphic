@@ -12,7 +12,7 @@ import { THEME_PRESETS } from "../theme.js";
 export const DESKTOP_SETTINGS_SKILL = `---
 name: configuring-catamorphic-desktop
 title: Configure desktop settings
-description: Edit Catamorphic desktop configuration files to customize theme, fonts, shortcuts, sidebar sections, tabs, notifications or terminal macros, including project overrides and reset.
+description: Edit Work desktop configuration files to customize theme, fonts, shortcuts, sidebar sections, tabs, notifications or terminal macros, including project overrides and reset.
 ---
 
 # Configure the desktop

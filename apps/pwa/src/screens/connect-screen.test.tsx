@@ -75,11 +75,11 @@ describe("ConnectScreen", () => {
     expect(
       links.find((link) => link.textContent?.includes("Get the desktop app"))
         ?.href,
-    ).toBe("https://catamorphic.ai/desktop/");
+    ).toBe("https://work.software/desktop/");
     expect(
       links.find((link) => link.textContent?.includes("Connect with MCP"))
         ?.href,
-    ).toBe("https://catamorphic.ai/agents/");
+    ).toBe("https://work.software/brain/");
   });
 
   it("announces an invalid locator after submission", () => {

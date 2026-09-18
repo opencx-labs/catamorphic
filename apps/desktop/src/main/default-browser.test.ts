@@ -75,7 +75,7 @@ describe("default browser", () => {
     for (const value of [
       "javascript:alert(1)",
       "file:///etc/passwd",
-      "catamorphic://connect",
+      "work://connect",
       "https://user:password@example.com",
       "--inspect=1234",
       "/some/file",

@@ -42,7 +42,7 @@ beforeAll(async () => {
   );
   fs.writeFileSync(
     path.join(pairingDist, "manifest.webmanifest"),
-    JSON.stringify({ name: "Catamorphic", start_url: "/" }),
+    JSON.stringify({ name: "Work", start_url: "/" }),
   );
   app = await launchApp({
     // Motion verification must not block on the host's macOS local-network

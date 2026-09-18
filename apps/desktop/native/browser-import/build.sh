@@ -10,7 +10,7 @@ for arch in arm64 x86_64; do
 done
 mkdir -p bin
 xcrun lipo -create "$task_tmp/arm64" "$task_tmp/x86_64" -output bin/browser-keychain
-codesign --force --sign - --identifier dev.catamorphic.browser-keychain bin/browser-keychain
+codesign --force --sign - --identifier software.work.browser-keychain bin/browser-keychain
 python3 - <<'META'
 import hashlib,json,pathlib
 p=pathlib.Path('.')

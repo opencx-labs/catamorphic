@@ -1,6 +1,6 @@
 # 0085: Desktop Stable and Preview release channels
 
-- **Status:** Accepted
+- **Status:** Accepted; application identity and cask naming superseded by [0146](0146-work-application-identity.md)
 - **Date:** 2026-09-02
 
 ## Context

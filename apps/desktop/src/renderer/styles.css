@@ -3,7 +3,7 @@
 @import "./form-controls.css";
 
 /*
- * Catamorphic Desktop design tokens. See DESIGN.md for the rules.
+ * Work Desktop design tokens. See DESIGN.md for the rules.
  * Before profile config loads, :root follows the operating system. The
  * resolved profile theme is then applied as inline tokens by ThemeProvider.
  */
@@ -29,7 +29,7 @@
   --color-fg-muted: light-dark(#555b65, #9a9aa3);
   --color-fg-faint: light-dark(#59616b, #5c5c66);
 
-  /* Accent: Catamorphic orange */
+  /* Accent: Work orange */
   --color-accent: light-dark(#d63c0c, #f95225);
   --color-accent-fg: light-dark(#ffffff, #1a0a05);
 

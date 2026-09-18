@@ -5,8 +5,8 @@ const BASE =
   "server=https%3A%2F%2Fbrain.acme.dev%2Fapi&project=p-1&name=Acme%20Brain";
 
 describe("parseConnectLink", () => {
-  it("parses the catamorphic:// scheme", () => {
-    const link = parseConnectLink(`catamorphic://connect?${BASE}`);
+  it("parses the work:// scheme", () => {
+    const link = parseConnectLink(`work://connect?${BASE}`);
     expect(link).toEqual({
       serverUrl: "https://brain.acme.dev/api",
       remoteProjectId: "p-1",
@@ -22,39 +22,35 @@ describe("parseConnectLink", () => {
 
   it("carries an invitation identifier without treating it as a credential", () => {
     const link = parseConnectLink(
-      `catamorphic://connect?${BASE}&invitation=invite-123`,
+      `work://connect?${BASE}&invitation=invite-123`,
     );
     expect(link?.invitationId).toBe("invite-123");
   });
 
   it("rejects credential-bearing links, missing fields, bad server schemes, and garbage", () => {
-    expect(parseConnectLink("catamorphic://connect?server=x")).toBeNull();
+    expect(parseConnectLink("work://connect?server=x")).toBeNull();
+    expect(parseConnectLink(`work://connect?${BASE}&token=secret`)).toBeNull();
     expect(
-      parseConnectLink(`catamorphic://connect?${BASE}&token=secret`),
-    ).toBeNull();
-    expect(
-      parseConnectLink("catamorphic://connect?server=ftp%3A%2F%2Fx&project=p"),
+      parseConnectLink("work://connect?server=ftp%3A%2F%2Fx&project=p"),
     ).toBeNull();
     expect(
       parseConnectLink(
-        "catamorphic://connect?server=http%3A%2F%2Fbrain.acme.dev%2Fapi&project=p",
+        "work://connect?server=http%3A%2F%2Fbrain.acme.dev%2Fapi&project=p",
       ),
     ).toBeNull();
     expect(
       parseConnectLink(
-        "catamorphic://connect?server=http%3A%2F%2Flocalhost%3A4700%2Fapi&project=p",
+        "work://connect?server=http%3A%2F%2Flocalhost%3A4700%2Fapi&project=p",
       ),
     ).toMatchObject({ serverUrl: "http://localhost:4700/api" });
     expect(parseConnectLink("not a link")).toBeNull();
   });
 
   it("carries a session deep-link when present", () => {
-    const link = parseConnectLink(
-      `catamorphic://connect?${BASE}&session=abc-123`,
-    );
+    const link = parseConnectLink(`work://connect?${BASE}&session=abc-123`);
     expect(link?.sessionId).toBe("abc-123");
     expect(
-      parseConnectLink(`catamorphic://connect?${BASE}`)?.sessionId,
+      parseConnectLink(`work://connect?${BASE}`)?.sessionId,
     ).toBeUndefined();
   });
 

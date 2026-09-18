@@ -28,7 +28,7 @@ import path from "node:path";
  * the app.
  */
 const ZSHRC_HOOKS = `
-# --- Catamorphic shell integration (OSC 133 semantic prompts) ---
+# --- Work shell integration (OSC 133 semantic prompts) ---
 autoload -Uz add-zsh-hook 2>/dev/null && {
   __catamorphic_preexec() { builtin printf '\\e]133;C\\a'; }
   __catamorphic_precmd() { builtin printf '\\e]133;D;%s\\a' "$?"; }
@@ -73,7 +73,7 @@ ZDOTDIR="\${USER_ZDOTDIR:-$HOME}"
 ${ZSHRC_HOOKS}`;
 
 /**
- * Agent command shims: URLs an agent (or the user) opens from a Catamorphic
+ * Agent command shims: URLs an agent (or the user) opens from a Work
  * terminal land as in-app browser tabs — the chat steps aside exactly as
  * for open_surface — instead of popping the system browser. Anything
  * that isn't purely http(s) URLs falls through to the real /usr/bin/open

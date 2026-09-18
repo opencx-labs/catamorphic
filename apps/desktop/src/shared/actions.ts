@@ -81,7 +81,7 @@ export const BUILTIN_ACTIONS = [
   {
     id: "check-for-updates",
     label: "Check for updates",
-    description: "check for a newer Catamorphic desktop version",
+    description: "check for a newer Work desktop version",
     defaultBinding: null,
     keywords: ["update", "upgrade", "version", "release"],
   },
