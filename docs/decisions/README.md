@@ -157,3 +157,5 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0141](0141-open-plain-folders-without-git.md) | Open plain folders without initializing Git | Accepted |
 
 | [0142](0142-contained-project-workspace.md) | A contained project workspace and local app data | Accepted |
+| [0143](0143-profile-history-and-browser-import.md) | Profile history and shared browser import | Accepted |
+| [0144](0144-desktop-controls-and-default-browser.md) | App-styled controls and default browser | Accepted |

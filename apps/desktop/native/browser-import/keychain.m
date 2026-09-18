@@ -14,7 +14,7 @@ static int authenticateUser(NSString *account) {
   dispatch_semaphore_t done = dispatch_semaphore_create(0);
   __block int result = 4;
   [context evaluatePolicy:LAPolicyDeviceOwnerAuthentication
-    localizedReason:[NSString stringWithFormat:@"Import saved passwords from %@ into Catamorphic", account]
+    localizedReason:[NSString stringWithFormat:@"Import browser data from %@ into Catamorphic", account]
     reply:^(BOOL success, NSError *failure) {
       result = success ? 0 : (failure.code == LAErrorUserCancel || failure.code == LAErrorSystemCancel || failure.code == LAErrorAppCancel ? 2 : 4);
       dispatch_semaphore_signal(done);
@@ -54,6 +54,8 @@ int main(int argc, const char *argv[]) {
     OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &value);
     if (status != errSecSuccess) {
       if (value) CFRelease(value);
+      // Numeric OS status only. Never print attributes, Keychain data or keys.
+      fprintf(stderr, "keychain-status:%d\n", (int)status);
       if (status == errSecUserCanceled) return 2;
       if (status == errSecItemNotFound) return 3;
       return 4;

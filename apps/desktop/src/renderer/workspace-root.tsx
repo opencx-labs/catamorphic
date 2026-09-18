@@ -5,6 +5,7 @@ import {
 } from "@catamorphic/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { WorkspaceNavigation } from "../shared/desktop-workspace.js";
 import { App } from "./app.js";
 import { DockHost } from "./components/dock-host.js";
 import {
@@ -32,7 +33,11 @@ export function WorkspaceRoot() {
     [],
   );
   const [projects, setProjects] = useState<
-    Array<{ key: string; projectId?: string }>
+    Array<{
+      key: string;
+      projectId?: string;
+      navigation?: WorkspaceNavigation["surface"];
+    }>
   >([{ key: "initial" }]);
   const [ready, setReady] = useState(false);
   const [active, setActive] = useState("initial");
@@ -123,18 +128,16 @@ export function WorkspaceRoot() {
             current.current.find((item) => item.projectId === projectId) ??
             current.current.find((item) => !item.projectId);
           const key = known?.key ?? projectId;
-          if (known && !known.projectId)
-            setProjects((items) =>
-              items.map((item) =>
-                item.key === known.key ? { ...item, projectId } : item,
-              ),
-            );
-          if (!known)
-            setProjects((items) =>
-              items.some((item) => item.projectId === projectId)
-                ? items
-                : [...items, { key, projectId }],
-            );
+          setProjects((items) => {
+            const existing = items.find((item) => item.key === key);
+            return existing
+              ? items.map((item) =>
+                  item.key === key
+                    ? { ...item, projectId, navigation: event.surface }
+                    : item,
+                )
+              : [...items, { key, projectId, navigation: event.surface }];
+          });
           setActive((old) => {
             if (old !== key) setTransition((value) => value + 1);
             return key;
@@ -179,6 +182,7 @@ export function WorkspaceRoot() {
           <WorkspaceContext.Provider
             value={{
               visible: project.key === active,
+              navigation: project.navigation,
               projectId: project.projectId,
               attention: project.projectId
                 ? attentionByProject[project.projectId]

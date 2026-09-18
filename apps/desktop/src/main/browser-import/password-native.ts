@@ -2,8 +2,8 @@ import { execFile } from "node:child_process";
 import { createDecipheriv } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
-import { DatabaseSync } from "node:sqlite";
-import type { BrowserPasswordSource } from "./types.js";
+import { readBrowserDatabase } from "./database.js";
+import type { BrowserEncryptionKey, BrowserPasswordSource } from "./types.js";
 
 export interface PasswordImportSupport {
   available: boolean;
@@ -64,7 +64,7 @@ export function readBrowserKey({
   signal,
 }: {
   helperPath: string;
-  source: BrowserPasswordSource;
+  source: BrowserEncryptionKey;
   signal?: AbortSignal;
 }): Promise<Buffer | null> {
   return new Promise((resolve, reject) => {
@@ -78,15 +78,24 @@ export function readBrowserKey({
         signal,
       },
       (error, stdout, stderr) => {
+        const status = /^keychain-status:(-?\d+)\n$/.exec(
+          stderr.toString(),
+        )?.[1];
         stderr.fill(0);
         if (error || stdout.length !== 16) {
           stdout.fill(0);
           if (error?.code === 2) return resolve(null);
+          if (status)
+            console.warn("[browser-import] Keychain OSStatus", status);
           return reject(
             new Error(
               error?.code === 3
-                ? "This browser's encryption key was not found. Export a password CSV from the browser instead."
-                : "Could not unlock this browser's passwords. Allow macOS Keychain access and try again, or import a password CSV.",
+                ? "This browser's encryption key was not found. Open the source browser, then try again."
+                : status === "-25293"
+                  ? "macOS could not unlock this browser's encryption key. Check that its Safe Storage item opens in Keychain Access, then try again."
+                  : error?.killed
+                    ? "Authentication timed out. Try again and complete the macOS prompt."
+                    : "Could not unlock this browser's data. Allow macOS Keychain access and try again.",
             ),
           );
         }
@@ -111,61 +120,54 @@ function readLogins(source: BrowserPasswordSource): {
   let size = 0;
   let rowsRead = 0;
   for (const file of source.files) {
-    // Recheck immediately before open; never follow a linked login database.
-    if (!fs.lstatSync(file).isFile())
-      throw new Error(
-        "The browser profile changed. Scan again before importing.",
-      );
-    const database = new DatabaseSync(file, {
-      readOnly: true,
-      allowExtension: false,
-    });
     try {
-      database.exec("PRAGMA query_only = ON; PRAGMA busy_timeout = 2000;");
-      const rows = database.prepare(
-        "SELECT origin_url, username_value, password_value FROM logins WHERE blacklisted_by_user = 0",
-      );
-      for (const row of rows.iterate()) {
-        if (++rowsRead > 20_000)
-          throw new Error("Password store is too large.");
-        if (
-          typeof row.origin_url !== "string" ||
-          typeof row.username_value !== "string" ||
-          !(row.password_value instanceof Uint8Array)
-        ) {
-          invalid++;
-          continue;
-        }
-        let origin: string;
-        try {
-          const url = new URL(row.origin_url);
-          if (url.protocol !== "https:" && url.protocol !== "http:") {
-            invalid++;
-            continue;
-          }
-          origin = url.origin;
-        } catch {
-          invalid++;
-          continue;
-        }
-        size += row.password_value.length;
-        if (logins.length >= 20_000 || size > 16 * 1024 * 1024) {
-          throw new Error(
-            "This password store is too large for direct import. Export a password CSV instead.",
+      readBrowserDatabase({
+        file,
+        read: (database) => {
+          const rows = database.prepare(
+            "SELECT origin_url, username_value, password_value FROM logins WHERE blacklisted_by_user = 0",
           );
-        }
-        logins.push({
-          origin,
-          username: row.username_value,
-          encrypted: row.password_value,
-        });
-      }
+          for (const row of rows.iterate()) {
+            if (++rowsRead > 20_000)
+              throw new Error("Password store is too large.");
+            if (
+              typeof row.origin_url !== "string" ||
+              typeof row.username_value !== "string" ||
+              !(row.password_value instanceof Uint8Array)
+            ) {
+              invalid++;
+              continue;
+            }
+            let origin: string;
+            try {
+              const url = new URL(row.origin_url);
+              if (url.protocol !== "https:" && url.protocol !== "http:") {
+                invalid++;
+                continue;
+              }
+              origin = url.origin;
+            } catch {
+              invalid++;
+              continue;
+            }
+            size += row.password_value.length;
+            if (logins.length >= 20_000 || size > 16 * 1024 * 1024) {
+              throw new Error(
+                "This password store is too large for direct import. Export a password CSV instead.",
+              );
+            }
+            logins.push({
+              origin,
+              username: row.username_value,
+              encrypted: row.password_value,
+            });
+          }
+        },
+      });
     } catch {
       throw new Error(
         "Could not read the browser's password store. Close that browser and try again, or export a password CSV.",
       );
-    } finally {
-      database.close();
     }
   }
   return { logins, invalid };

@@ -238,7 +238,7 @@ function ProfileSettingsForm({
 
         <PasswordManager profileId={profile.id} />
 
-        <BrowserImport />
+        <BrowserImport profileId={profile.id} />
 
         <section className="mt-4 rounded-lg border border-danger/30 p-4">
           <h2 className="text-sm font-semibold text-fg">Delete profile</h2>

@@ -66,7 +66,7 @@ const pick = async (name: string) => {
 describe("session runtime controls", () => {
   it("edits only the current conversation and preserves the setting on reload", async () => {
     await wait(
-      `const button = $$('button').find(el => el.textContent.includes('New project')); if (!button) return false; button.click(); return true;`,
+      `const button = $$('button').find(el => el.textContent.includes('Create or import project')); if (!button) return false; button.click(); return true;`,
     );
     await wait(`return !!$('[data-testid="project-name-input"]');`);
     await run(

@@ -14,17 +14,24 @@ import {
   type WebContents,
   webContents,
 } from "electron";
+import { z } from "zod";
 import { KEYBINDING_ACTIONS, type Keybindings } from "../shared/actions.js";
 import type { BookmarkPlacement } from "../shared/bookmark-target.js";
+import { browserImportRequestSchema } from "../shared/browser-import.js";
+import { historyVisitSchema } from "../shared/history.js";
 import { matchesShortcut } from "../shared/keybindings.js";
 import { OPEN_ACTIONS } from "../shared/open-mode.js";
 import type { TerminalMacro } from "../shared/terminal-macros.js";
 import { BookmarksStore } from "./bookmarks.js";
-import { BrowserHistoryStore } from "./browser-history.js";
+import { HistoryStore } from "./browser-history.js";
+import {
+  importBrowserCookies,
+  readBrowserCookies,
+} from "./browser-import/cookies.js";
+import { readBrowserHistory } from "./browser-import/history.js";
 import {
   BROWSER_IMPORTERS,
   listImportableBrowsers,
-  readBrowserBookmarks,
 } from "./browser-import/index.js";
 import { parsePasswordCsv } from "./browser-import/password-csv.js";
 import {
@@ -155,7 +162,7 @@ async function doPrepareProfileSession(
 }
 
 export interface BrowserSupport {
-  history: BrowserHistoryStore;
+  history: HistoryStore;
   dispose: () => void;
 }
 
@@ -177,7 +184,7 @@ export function registerBrowserSupport(
   });
   const userData = app.getPath("userData");
   const profilesDir = path.join(userData, "profiles");
-  const history = new BrowserHistoryStore(profilesDir);
+  const history = new HistoryStore(profilesDir);
   const vault = new PasswordVault(profilesDir);
   const unsubscribeRemoved = profiles.onRemoved((profileId) => {
     history.releaseProfile(profileId);
@@ -534,37 +541,86 @@ export function registerBrowserSupport(
     },
   );
 
+  const historyChanged = (profileId: string) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (
+        !window.isDestroyed() &&
+        windows.profileFor(window.webContents) === profileId
+      )
+        window.webContents.send("catamorphic:history-changed");
+    }
+  };
+  ipcMain.handle("catamorphic:history-query", (event, input: unknown) => {
+    const query = z
+      .object({
+        query: z.string().max(4096).optional(),
+        offset: z.number().int().nonnegative().optional(),
+        limit: z.number().int().positive().max(200).optional(),
+      })
+      .parse(input);
+    return history.query({
+      profileId: windows.profileFor(event.sender),
+      ...query,
+    });
+  });
+  ipcMain.handle("catamorphic:history-record", (event, input: unknown) => {
+    const { visit, revisit } = z
+      .object({ visit: historyVisitSchema, revisit: z.boolean() })
+      .parse(input);
+    const profileId = windows.profileFor(event.sender);
+    if (
+      visit.target.kind !== "web" &&
+      !profiles.get(profileId)?.projectIds.includes(visit.target.projectId)
+    )
+      return;
+    history.recordVisit({ profileId, visit, revisit });
+    historyChanged(profileId);
+  });
+  ipcMain.handle("catamorphic:history-remove", (event, id: unknown) => {
+    const profileId = windows.profileFor(event.sender);
+    history.remove({ profileId, id: z.string().parse(id) });
+    historyChanged(profileId);
+  });
+  ipcMain.handle("catamorphic:history-clear", (event) => {
+    const profileId = windows.profileFor(event.sender);
+    history.clear(profileId);
+    historyChanged(profileId);
+  });
+
   ipcMain.handle(
     "catamorphic:browser-history-record",
-    (_event, input: { profileId: string; url: string; title: string }) => {
-      history.record(input.profileId, input.url, input.title);
+    (event, input: { profileId: string; url: string; title: string }) => {
+      history.record(windows.profileFor(event.sender), input.url, input.title);
+      historyChanged(windows.profileFor(event.sender));
     },
   );
 
   ipcMain.handle(
     "catamorphic:browser-history-retitle",
-    (_event, input: { profileId: string; url: string; title: string }) => {
-      history.retitle(input.profileId, input.url, input.title);
+    (event, input: { profileId: string; url: string; title: string }) => {
+      history.retitle(windows.profileFor(event.sender), input.url, input.title);
+      historyChanged(windows.profileFor(event.sender));
     },
   );
   ipcMain.handle(
     "catamorphic:browser-history-favicon",
-    (_event, input: { profileId: string; url: string; faviconUrl: string }) => {
-      history.setFavicon(input.profileId, input.url, input.faviconUrl);
+    (event, input: { profileId: string; url: string; faviconUrl: string }) => {
+      history.setFavicon(
+        windows.profileFor(event.sender),
+        input.url,
+        input.faviconUrl,
+      );
     },
   );
 
   ipcMain.handle(
-    "catamorphic:browser-history-recent",
-    (_event, input: { profileId: string; limit?: number }) =>
-      history.recent(input.profileId, input.limit ?? 150),
-  );
-
-  ipcMain.handle(
     "catamorphic:browser-suggest",
-    (_event, input: { profileId: string; query: string }) => ({
-      matches: history.suggest(input.profileId, input.query),
-      inline: history.inlineMatch(input.profileId, input.query),
+    (event, input: { profileId: string; query: string }) => ({
+      matches: history.suggest(windows.profileFor(event.sender), input.query),
+      inline: history.inlineMatch(
+        windows.profileFor(event.sender),
+        input.query,
+      ),
     }),
   );
 
@@ -950,146 +1006,198 @@ export function registerBrowserSupport(
       );
   const nativeImportSupport = () =>
     passwordImportSupport({ helperPath: passwordHelperPath });
-  let importingNativePasswords = false;
-  ipcMain.handle("catamorphic:browser-import-support", () =>
-    nativeImportSupport(),
-  );
+  const importingProfiles = new Set<string>();
+  ipcMain.handle("catamorphic:browser-import-list", () => {
+    const native = nativeImportSupport().available;
+    return listImportableBrowsers().map((browser) => ({
+      ...browser,
+      profiles: browser.profiles.map((profile) => ({
+        ...profile,
+        hasPasswords: native && Boolean(profile.hasPasswords),
+        hasSessions:
+          Boolean(profile.hasSessions) && (browser.id === "firefox" || native),
+      })),
+    }));
+  });
   ipcMain.handle(
-    "catamorphic:browser-import-native-passwords",
-    async (event, input: unknown) => {
-      const window = BrowserWindow.fromWebContents(event.sender);
-      if (!window || event.senderFrame !== event.sender.mainFrame)
-        throw new Error("Password imports must start in profile settings.");
-      const support = nativeImportSupport();
-      if (!support.available)
-        throw new Error(support.reason ?? "Password import is unavailable.");
-      if (importingNativePasswords)
-        throw new Error("A password import is already running.");
+    "catamorphic:browser-import-run",
+    async (event, raw: unknown) => {
       if (
-        !input ||
-        typeof input !== "object" ||
-        !("browserId" in input) ||
-        !("profileId" in input) ||
-        typeof input.browserId !== "string" ||
-        typeof input.profileId !== "string"
+        !BrowserWindow.fromWebContents(event.sender) ||
+        event.senderFrame !== event.sender.mainFrame
       )
-        throw new Error("Choose a browser profile to import.");
+        throw new Error("Open browser import in Catamorphic.");
+      const input = browserImportRequestSchema.parse(raw);
+      const profileId = input.targetProfileId;
+      if (!profiles.get(profileId))
+        throw new Error("Choose a Catamorphic profile again.");
+      if (importingProfiles.has(profileId))
+        throw new Error("An import is already running.");
       const importer = BROWSER_IMPORTERS.find(
         ({ id }) => id === input.browserId,
       );
-      const detected = importer?.detect();
-      if (!detected?.profiles.some(({ id }) => id === input.profileId))
+      if (
+        !importer
+          ?.detect()
+          ?.profiles.some(({ id }) => id === input.sourceProfileId)
+      )
         throw new Error(
           "The browser profile is no longer available. Scan again.",
         );
-      const source = importer?.passwordSource?.(input.profileId);
-      if (!source)
-        throw new Error(
-          "Direct password import is unavailable for this browser profile. Use a password CSV instead.",
-        );
-      const profileId = windows.profileFor(event.sender);
+      const selected = new Set(input.categories);
+      const passwords =
+        selected.has("passwords") && nativeImportSupport().available
+          ? importer.passwordSource?.(input.sourceProfileId)
+          : null;
+      const cookies = selected.has("sessions")
+        ? importer.cookieSource?.(input.sourceProfileId)
+        : null;
+      const sourceKey =
+        passwords ??
+        (nativeImportSupport().available ? cookies?.keychain : null);
       const controller = new AbortController();
       const abort = () => controller.abort();
       event.sender.once("destroyed", abort);
-      importingNativePasswords = true;
+      importingProfiles.add(profileId);
+      let key: Buffer | null = null;
+      let completed = 0;
       try {
-        const result = await importBrowserPasswords({
-          source,
-          existing: await vault.list(profileId),
-          readKey: () =>
-            readBrowserKey({
-              helperPath: passwordHelperPath,
-              source,
-              signal: controller.signal,
-            }),
-          save: async (credentials) => {
-            if (controller.signal.aborted)
-              throw new Error("Password import was cancelled.");
-            return vault.importMissing({ profileId, credentials });
-          },
-        });
-        if (result.imported) vaultChanged(profileId);
-        return result;
+        if (sourceKey) {
+          key = await readBrowserKey({
+            helperPath: passwordHelperPath,
+            source: sourceKey,
+            signal: controller.signal,
+          });
+          if (!key) return { cancelled: true };
+        }
+        const checkActive = () => {
+          if (controller.signal.aborted || !profiles.get(profileId))
+            throw new Error("Import cancelled.");
+        };
+        checkActive();
+        const attempt = async (operation: () => void | Promise<void>) => {
+          checkActive();
+          try {
+            await operation();
+            completed++;
+          } catch {
+            /* No per-category failure reports or sensitive source data in logs. */
+          }
+        };
+        if (selected.has("bookmarks"))
+          await attempt(() => {
+            bookmarks.importBookmarks(
+              profileId,
+              importer.readBookmarks(input.sourceProfileId),
+            );
+            broadcast("catamorphic:bookmarks-changed", {
+              projectId: null,
+              project: null,
+              profileId,
+              pinned: bookmarks.pinned(profileId),
+              library: bookmarks.library(profileId),
+            });
+          });
+        if (selected.has("history"))
+          await attempt(() => {
+            const file = importer.historyFile?.(input.sourceProfileId);
+            if (!file) throw new Error("History unavailable");
+            history.import({
+              profileId,
+              entries: readBrowserHistory({
+                file,
+                firefox: importer.id === "firefox",
+              }),
+            });
+            historyChanged(profileId);
+          });
+        if (passwords)
+          await attempt(async () => {
+            await importBrowserPasswords({
+              source: passwords,
+              existing: await vault.list(profileId),
+              readKey: async () => (key ? Buffer.from(key) : null),
+              save: async (credentials) => {
+                checkActive();
+                return vault.importMissing({ profileId, credentials });
+              },
+            });
+            vaultChanged(profileId);
+          });
+        if (cookies)
+          await attempt(async () => {
+            await prepareProfileSession(profilesDir, profileId);
+            const jar = session.fromPartition(partitionFor(profileId)).cookies;
+            await importBrowserCookies({
+              cookies: readBrowserCookies({ source: cookies, key }),
+              existing: await jar.get({}),
+              save: async (cookie) => {
+                checkActive();
+                const current = await jar.get({
+                  name: cookie.name,
+                  url: cookie.url,
+                });
+                if (
+                  !current.some(
+                    (entry) =>
+                      entry.domain ===
+                        (cookie.domain ?? new URL(cookie.url).hostname) &&
+                      entry.path === cookie.path,
+                  )
+                )
+                  await jar.set(cookie);
+              },
+            });
+            await jar.flushStore();
+          });
+        checkActive();
+        if (!completed)
+          throw new Error(
+            "Import could not finish. Close the source browser and try again.",
+          );
+        profiles.markBrowserImported(profileId);
+        broadcast("catamorphic:profiles-changed", profiles.list());
+        return { cancelled: false };
+      } catch (error) {
+        return {
+          cancelled: controller.signal.aborted,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Import could not finish. Try again.",
+        };
       } finally {
-        importingNativePasswords = false;
+        key?.fill(0);
+        importingProfiles.delete(profileId);
         if (!event.sender.isDestroyed())
           event.sender.removeListener("destroyed", abort);
       }
     },
   );
 
-  ipcMain.handle("catamorphic:browser-import-list", () =>
-    listImportableBrowsers(),
-  );
-
   ipcMain.handle(
-    "catamorphic:browser-import-run",
-    (
-      event,
-      input: {
-        browserId: string;
-        imports: Array<{
-          sourceProfileId: string;
-          sourceProfileName: string;
-          target: "current" | "new-profile";
-        }>;
-      },
-    ) => {
-      const currentProfileId = windows.profileFor(event.sender);
-      let bookmarksImported = 0;
-      const profilesCreated: string[] = [];
-
-      for (const item of input.imports) {
-        const imported = readBrowserBookmarks(
-          input.browserId,
-          item.sourceProfileId,
-        );
-        let targetProfileId = currentProfileId;
-        if (item.target === "new-profile") {
-          const profile = profiles.create(item.sourceProfileName);
-          profilesCreated.push(profile.id);
-          targetProfileId = profile.id;
-        }
-        bookmarksImported += bookmarks.importBookmarks(
-          targetProfileId,
-          imported,
-        );
-        if (targetProfileId === currentProfileId) {
-          broadcast("catamorphic:bookmarks-changed", {
-            projectId: null,
-            project: null,
-            profileId: targetProfileId,
-            pinned: bookmarks.pinned(targetProfileId),
-            library: bookmarks.library(targetProfileId),
-          });
-        }
-      }
-
-      if (profilesCreated.length > 0) {
-        broadcast("catamorphic:profiles-changed", profiles.list());
-      }
-      return { bookmarksImported, profilesCreated };
+    "catamorphic:browser-import-passwords",
+    async (event, input: unknown) => {
+      const { profileId } = z.object({ profileId: z.string() }).parse(input);
+      if (!profiles.get(profileId)) throw new Error("Choose a profile again.");
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (!window) return { imported: 0, cancelled: true };
+      const picked = await dialog.showOpenDialog(window, {
+        title: "Import passwords from Chrome or Firefox",
+        properties: ["openFile"],
+        filters: [{ name: "Password CSV", extensions: ["csv"] }],
+      });
+      const file = picked.filePaths[0];
+      if (picked.canceled || !file) return { imported: 0, cancelled: true };
+      const imported = parsePasswordCsv(fs.readFileSync(file, "utf-8"));
+      const result = await vault.importMissing({
+        profileId,
+        credentials: imported,
+      });
+      if (result.imported > 0) vaultChanged(profileId);
+      return { imported: result.imported, cancelled: false };
     },
   );
-
-  ipcMain.handle("catamorphic:browser-import-passwords", async (event) => {
-    const window = BrowserWindow.fromWebContents(event.sender);
-    if (!window) return { imported: 0, cancelled: true };
-    const picked = await dialog.showOpenDialog(window, {
-      title: "Import passwords from Chrome or Firefox",
-      properties: ["openFile"],
-      filters: [{ name: "Password CSV", extensions: ["csv"] }],
-    });
-    const file = picked.filePaths[0];
-    if (picked.canceled || !file) return { imported: 0, cancelled: true };
-    const profileId = windows.profileFor(event.sender);
-    const imported = parsePasswordCsv(fs.readFileSync(file, "utf-8"));
-    for (const credential of imported) {
-      await vault.save(profileId, credential);
-    }
-    if (imported.length > 0) vaultChanged(profileId);
-    return { imported: imported.length, cancelled: false };
-  });
 
   return {
     history,

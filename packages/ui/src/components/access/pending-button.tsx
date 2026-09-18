@@ -42,28 +42,33 @@ export function PendingButton({
             : disabledReason
       }
       {...rest}
+      data-action-state={pending ? "pending" : done ? "done" : "idle"}
       disabled={disabled || pending || done}
       aria-busy={pending || undefined}
       className={className}
     >
-      <span className="grid min-w-max shrink-0 place-items-center whitespace-nowrap">
+      <span className="catamorphic-pending-stack grid min-w-max shrink-0 place-items-center whitespace-nowrap">
         <span
-          className={`col-start-1 row-start-1 whitespace-nowrap ${showIdle ? "" : "invisible"}`}
+          aria-hidden={!showIdle}
+          className={`catamorphic-pending-label col-start-1 row-start-1 whitespace-nowrap transition-opacity duration-150 motion-reduce:transition-none ${showIdle ? "opacity-100" : "opacity-0"}`}
         >
           {children}
         </span>
         <span
           aria-hidden={!pending}
-          className={`col-start-1 row-start-1 grid place-items-center whitespace-nowrap ${pending ? "" : "invisible"}`}
+          className={`catamorphic-pending-label col-start-1 row-start-1 grid place-items-center whitespace-nowrap transition-opacity duration-150 motion-reduce:transition-none ${pending ? "opacity-100" : "opacity-0"}`}
         >
           {pendingLabel ?? (
-            <Loader2 className="size-3.5 animate-spin" aria-label="Working…" />
+            <Loader2
+              className={`catamorphic-pending-spinner size-3.5 ${pending ? "animate-spin motion-reduce:animate-none" : ""}`}
+              aria-label="Working…"
+            />
           )}
         </span>
         {doneLabel !== undefined && (
           <span
             aria-hidden={!done}
-            className={`col-start-1 row-start-1 whitespace-nowrap ${done ? "" : "invisible"}`}
+            className={`catamorphic-pending-label col-start-1 row-start-1 whitespace-nowrap transition-opacity duration-150 motion-reduce:transition-none ${done ? "opacity-100" : "opacity-0"}`}
           >
             {doneLabel}
           </span>

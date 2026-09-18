@@ -2,6 +2,55 @@
 /* Tailwind hosts must discover classes in this package's shipped components. */
 @source "./";
 
+/* PendingButton works in hosts with or without Tailwind. All state labels
+   stay in one cell, including hidden labels, to reserve both dimensions. */
+.catamorphic-pending-stack {
+  display: grid;
+  min-width: max-content;
+  flex-shrink: 0;
+  place-items: center;
+  white-space: nowrap;
+}
+
+.catamorphic-pending-label {
+  grid-area: 1 / 1;
+  white-space: nowrap;
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity 150ms ease-out,
+    visibility 150ms;
+}
+
+.catamorphic-pending-label[aria-hidden="true"] {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.catamorphic-pending-spinner {
+  width: 14px;
+  height: 14px;
+}
+
+[aria-busy="true"] .catamorphic-pending-spinner {
+  animation: catamorphic-pending-spin 1s linear infinite;
+}
+
+@keyframes catamorphic-pending-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .catamorphic-pending-label {
+    transition: none;
+  }
+  [aria-busy="true"] .catamorphic-pending-spinner {
+    animation: none;
+  }
+}
+
 /* Agent chat dock */
 .catamorphic-agent-dock {
   --agent-dock-border: var(--color-border, #303030);

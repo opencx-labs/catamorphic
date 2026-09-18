@@ -110,3 +110,19 @@ Use actual discovered names and URL-encode destination characters. Agents must
 link workflow/app deliverables as those concepts. Do not label a TypeScript source
 link as the workflow. Source is an explicitly labeled secondary link when useful.
 Keep links aligned with `parseSurfaceLink`, `open_surface` and URL sanitization.
+
+## Personal history and browser import
+
+History belongs to the desktop profile. It includes web visits and stable project
+surfaces: apps, documents and other files, workflows, chats, runs and artifacts.
+Incognito chats, authorization pages and transient utility screens are excluded.
+Entries reopen through the same resource-opening gestures and route to the
+project's owning window. Search queries the full retained history. Type `history`
+then Space in the palette; the History page's search button opens that same mode.
+
+Onboarding and Settings use the same browser profile import dialog. Users choose
+categories before starting. On success, onboarding shows its import button as
+complete and keeps the existing next actions. Imports preserve existing accounts,
+cookie scope and expiry, source visit dates and bookmark folders. Repeat imports
+merge without duplicates. Unsupported individual items are omitted quietly.
+Whole-operation errors are retryable and cancellation never marks import complete.

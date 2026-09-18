@@ -300,7 +300,6 @@ describe("profile discovery and platform gating", () => {
         readBrowserKey({
           helperPath,
           source: {
-            files: [],
             keychainService: "Test Safe Storage",
             keychainAccount: "Test",
           },

@@ -68,11 +68,13 @@ const until = async (
 
 /** Drive the New-project modal to submission and wait for the workspace. */
 const createProjectViaUi = async (name: string): Promise<void> => {
-  await runWait(`return !!byText('button', 'New project');`, {
+  await runWait(`return !!byText('button', 'Create or import project');`, {
     timeoutMs: 60_000,
-    label: "empty-state New project button",
+    label: "empty-state Create or import project button",
   });
-  await run(`byText('button', 'New project').click(); return true;`);
+  await run(
+    `byText('button', 'Create or import project').click(); return true;`,
+  );
   await runWait(`return !!$('[data-testid="project-name-input"]');`);
   await run(`
     setReactValue($('[data-testid="project-name-input"]'), '${name}');
@@ -353,11 +355,13 @@ describe.each([false, true])(
     });
 
     it("opens the folder in place without adding files or changing history", async () => {
-      await runWait(`return !!byText('button', 'New project');`, {
+      await runWait(`return !!byText('button', 'Create or import project');`, {
         timeoutMs: 60_000,
-        label: "empty-state New project button",
+        label: "empty-state Create or import project button",
       });
-      await run(`byText('button', 'New project').click(); return true;`);
+      await run(
+        `byText('button', 'Create or import project').click(); return true;`,
+      );
       await runWait(`return !!byText('button', 'Import folder');`, {
         label: "project modal with Import mode",
       });

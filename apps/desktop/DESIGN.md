@@ -141,17 +141,53 @@ Low-chroma so run states don't scream: `--color-success`, `--color-warning`,
   ("Cloning…"). Use `done` + `doneLabel` ("Installed") for the state after
   the action — never swap the button for a text span, that reflows the row.
   Never swap a button's child text on `pending ?` directly.
+  Fade the stacked labels over 150 ms, respect reduced motion, and stop hidden
+  spinners. Keep padding, borders, height and surrounding action-row geometry
+  constant. Reserve status space in modals before an action starts, so a loading
+  message cannot move the footer or recenter the dialog. Verify bounding boxes
+  during the real idle-to-pending transition, not only after it settles.
 - Fixed-height button labels never wrap or flex-shrink. The shell's stacked
   label and `@catamorphic/app/ui`'s `.cat-btn-stack` reserve max-content width;
   app-kit buttons are non-shrinking flex items by default. Containers must
   wrap or choose shorter copy instead of crushing a control into two lines.
 - Pending (and done) buttons are disabled (PendingButton enforces this).
+  Completed setup actions read as status rows: explicit completion text, a success
+  check, a quiet filled surface and no interactive outline or hover response.
+  Use the shared `browser-setup-action` treatment for import and default-browser
+  setup. Unavailable actions use muted text and explain their reason visibly;
+  hover-only hints are supplementary. Reserve space for asynchronous reasons so
+  later actions do not shift. `data-action-state` exposes the shared button state
+  for host styling without duplicating its logic.
 - **Every icon-only button gets a `ShortcutHint` tooltip.** A button whose
   meaning isn't carried by visible text must be wrapped in
   `<ShortcutHint label="…">` (plus `shortcut` when one exists) — never the
   native `title` attribute, which times and styles differently. Applies to
   toolbars, pills, chips, strips, bubbles; registry components stay
   presentational and inherit hints from their hosts where applicable.
+
+## Dropdowns and checkboxes
+
+Every desktop dropdown and checkbox must look like Catamorphic, including those
+inside registry components. Never use operating-system select menus or browser
+default checkbox chrome. The single implementation is
+[`form-controls.css`](src/renderer/form-controls.css), imported by the host.
+Use semantic `<select>` / `<option>` and `<input type="checkbox">` with accessible
+labels. Electron 43 supports `appearance: base-select`: its picker renders in
+the app's top layer with native keyboard navigation, typeahead and form behavior.
+Do not add a JavaScript select replacement or per-screen checkbox styling.
+
+Match project/profile menus: overlay surface, hairline border, 10px outer radius,
+6px rows, 13px type, selected accent checkmark and 32px minimum choice rows.
+Open and close use paired 150ms opacity/translation on the standard easing;
+checkbox marks animate opacity/scale over 150ms. Respect reduced motion. Disabled
+controls retain their label and explain why. A picker owns Escape before its
+dialog; selecting a value or dismissing it restores the trigger's focus.
+
+Verify pointer and keyboard selection, nested Escape, disabled/indeterminate
+checkboxes, light/dark themes, long labels, narrow layouts and reduced motion.
+`e2e/browser-import.e2e.ts` covers the shared import controls and onboarding.
+External website and user-app content retain their own UI; this contract governs
+the desktop shell, including its registry components and document task lists.
 
 ## Shape & spacing
 
@@ -479,3 +515,19 @@ Local agents default to full access and edit real profile files. Executable side
 sources use lazy Bun processes and the shared native collection/tree presentation.
 Initial loading, retained rows during refresh, recoverable errors and pending row
 actions remain visible; arrivals use existing list motion. See ADR 0140.
+
+### 2026-09-18: Profile history and shared browser import
+
+One category-selection dialog serves onboarding and Settings. Onboarding returns
+to its original actions and marks import complete. Results stay quiet, without
+skipped-item reports. The History page groups reopenable surfaces by visit date;
+its search control opens the same `history` palette mode. See ADR 0143.
+
+
+### 2026-09-18: Consistent controls and browser setup
+
+Dropdown menus and checkboxes use one app-owned stylesheet. Onboarding is a
+vertical sequence of optional browser setup actions followed by project actions.
+Default-browser status comes from the OS, shared with Settings (ADR 0144).
+Async actions use the shared size-stable PendingButton with short label fades;
+modal status space is reserved before loading so the action row stays in place.

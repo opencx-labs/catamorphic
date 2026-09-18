@@ -52,8 +52,8 @@ beforeAll(async () => {
       CATAMORPHIC_E2E_PICK_FOLDER: root,
     },
   });
-  await wait(`return !!byText('button','New project');`);
-  await run(`byText('button','New project').click();return true;`);
+  await wait(`return !!byText('button','Create or import project');`);
+  await run(`byText('button','Create or import project').click();return true;`);
   await wait(`return !!byText('button','Import folder');`);
   await run(`byText('button','Import folder').click();return true;`);
   await wait(`return !!$('[data-testid="import-folder-picker"]');`);

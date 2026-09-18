@@ -39,4 +39,19 @@ describe("PendingButton layout", () => {
       expect(label.classList.contains("whitespace-nowrap")).toBe(true);
     }
   });
+  it("exposes only the active label and stops the spinner after pending", async () => {
+    for (const pending of [false, true, false]) {
+      await act(async () => {
+        root.render(<PendingButton pending={pending}>Save</PendingButton>);
+      });
+      const button = container.querySelector("button");
+      expect(button?.disabled).toBe(pending);
+      expect(button?.getAttribute("aria-busy")).toBe(pending ? "true" : null);
+      expect(container.querySelectorAll('[aria-hidden="false"]')).toHaveLength(
+        1,
+      );
+      expect(container.querySelector(".animate-spin") !== null).toBe(pending);
+      expect(button?.textContent).toContain("Save");
+    }
+  });
 });

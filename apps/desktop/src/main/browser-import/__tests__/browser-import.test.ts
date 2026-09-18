@@ -93,8 +93,20 @@ describe("chromiumImporter.detect", () => {
     expect(detected?.id).toBe("chrome");
     expect(detected?.label).toBe("Google Chrome");
     expect(detected?.profiles).toEqual([
-      { id: "Default", name: "Work", bookmarkCount: 6 },
-      { id: "Profile 1", name: "Personal", bookmarkCount: 0 },
+      {
+        id: "Default",
+        name: "Work",
+        bookmarkCount: 6,
+        hasHistory: false,
+        hasSessions: false,
+      },
+      {
+        id: "Profile 1",
+        name: "Personal",
+        bookmarkCount: 0,
+        hasHistory: false,
+        hasSessions: false,
+      },
     ]);
   });
 
@@ -113,8 +125,20 @@ describe("chromiumImporter.detect", () => {
     fs.mkdirSync(path.join(base, "GrShaderCache"));
     const detected = makeImporter(base).detect();
     expect(detected?.profiles).toEqual([
-      { id: "Default", name: "Default", bookmarkCount: 1 },
-      { id: "Profile 7", name: "Profile 7", bookmarkCount: 0 },
+      {
+        id: "Default",
+        name: "Default",
+        bookmarkCount: 1,
+        hasHistory: false,
+        hasSessions: false,
+      },
+      {
+        id: "Profile 7",
+        name: "Profile 7",
+        bookmarkCount: 0,
+        hasHistory: false,
+        hasSessions: false,
+      },
     ]);
   });
 
@@ -126,7 +150,13 @@ describe("chromiumImporter.detect", () => {
     });
     const detected = makeImporter(base).detect();
     expect(detected?.profiles).toEqual([
-      { id: "Default", name: "Default", bookmarkCount: 1 },
+      {
+        id: "Default",
+        name: "Default",
+        bookmarkCount: 1,
+        hasHistory: false,
+        hasSessions: false,
+      },
     ]);
   });
 });
@@ -250,6 +280,8 @@ describe("firefoxImporter", () => {
           id: "Profiles/work.default-release",
           name: "Work",
           bookmarkCount: 2,
+          hasHistory: true,
+          hasSessions: false,
         },
       ],
     });

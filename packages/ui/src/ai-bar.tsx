@@ -1,6 +1,7 @@
 import { aiLoadingAtom, codeAtom } from "@catamorphic/react";
 import { useSetAtom } from "jotai";
 import { useCallback, useRef, useState } from "react";
+import { PendingButton } from "./components/access/pending-button.js";
 
 export interface AIBarProps {
   onAIPrompt?: (prompt: string) => Promise<string>;
@@ -65,13 +66,15 @@ export function AIBar({
           onChange={(e) => setPrompt(e.target.value)}
           disabled={loading}
         />
-        <button
+        <PendingButton
+          pending={loading}
+          pendingLabel="…"
           type="submit"
           className="catamorphic-ai-send"
           disabled={loading || !prompt.trim()}
         >
-          {loading ? "..." : "Send"}
-        </button>
+          Send
+        </PendingButton>
       </form>
       {error && (
         <div style={{ color: "#ef4444", fontSize: 12, marginLeft: 8 }}>

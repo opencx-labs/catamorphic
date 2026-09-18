@@ -43,11 +43,11 @@ afterEach(async (context) => {
 describe("workflow authoring", { retry: 0 }, () => {
   it("opens a readable host inspector and can always reach code", async () => {
     await wait(
-      `return !!$$('button').find(el => el.textContent.trim() === 'New project');`,
+      `return !!$$('button').find(el => el.textContent.trim() === 'Create or import project');`,
       "empty workspace",
     );
     await run(
-      `$$('button').find(el => el.textContent.trim() === 'New project').click(); return true;`,
+      `$$('button').find(el => el.textContent.trim() === 'Create or import project').click(); return true;`,
     );
     await wait(
       `return !!$('[data-testid="project-name-input"]');`,
