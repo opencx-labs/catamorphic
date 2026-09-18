@@ -24,7 +24,6 @@ import type {
 import type {
   DockDrag,
   DockRegion,
-  DockScreenCapture,
   DockSize,
 } from "../../shared/dock-position.js";
 import type { FilePreviewInput } from "../../shared/file-preview.js";
@@ -920,8 +919,6 @@ export interface CatamorphicDesktopApi {
   ) => Promise<string | null>;
   /** The workspace window reports where its chat region sits; null clears. */
   dockRegion: (region: DockRegion | null) => Promise<void>;
-  /** Detached dock only: the display behind it, with the dock left out. */
-  dockCaptureScreen: () => Promise<DockScreenCapture>;
   onDockSnapshot: (listener: (snapshot: DockSnapshot) => void) => () => void;
   onWorkspaceEvent: (listener: (event: WorkspaceEvent) => void) => () => void;
   windowProfile: () => Promise<string>;

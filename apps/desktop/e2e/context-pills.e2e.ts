@@ -197,6 +197,9 @@ describe("context pills", () => {
   });
 
   it("hovering a pill previews its content; reference pills show the reference", async () => {
+    // Previews stack above their pill, where the virtual pointer may rest;
+    // park it in a corner so only the synthetic hover keeps them open.
+    await app.movePointer({ x: 1, y: 1 });
     await run(
       `hover(frontDock().querySelector('[data-testid="composer-pill"][data-pill-kind="paste"]')); return true;`,
     );
@@ -291,6 +294,7 @@ describe("context pills", () => {
       `return !!frontDock().querySelector('[data-testid="composer-pill"][data-pill-kind="image"] img');`,
       { label: "image pill" },
     );
+    await app.movePointer({ x: 1, y: 1 });
     await run(
       `hover(frontDock().querySelector('[data-testid="composer-pill"][data-pill-kind="image"]')); return true;`,
     );

@@ -224,7 +224,7 @@ describe("dock modes", () => {
     );
   }, 60_000);
 
-  it("in its own window, lurks when the window blurs while the agent works and attaches the screen", async () => {
+  it("in its own window, lurks when the window blurs while the agent works", async () => {
     await app.eval(`window.catamorphicDesktop.dockDetach(true)`);
     const dock = await app.connectToFrame("surface=dock");
     const dockHelpers = `${helpers}`;
@@ -260,14 +260,6 @@ describe("dock modes", () => {
     await dockWait(
       `return !frontDock().hasAttribute('data-lurking') && dockH() > 400;`,
       { label: "expanded when the window is focused again" },
-    );
-    // One click attaches what is behind the dock as an image pill.
-    await dockRun(
-      `frontDock().querySelector('[data-testid="attach-screen"]').click(); return true;`,
-    );
-    await dockWait(
-      `return $$('[data-floating-chat]:not([inert]) [data-pill-id]').some(p => p.textContent.includes('Screen'));`,
-      { label: "screen attached as a pill", timeoutMs: 20_000 },
     );
     await app.eval(`window.catamorphicDesktop.dockDetach(false)`);
     await runWait(`return !!composer();`, { label: "chat back in the window" });

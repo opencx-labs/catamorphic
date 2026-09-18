@@ -1,11 +1,9 @@
 import {
   app,
   BrowserWindow,
-  desktopCapturer,
   ipcMain,
   Menu,
   screen,
-  systemPreferences,
   type WebContents,
 } from "electron";
 import { z } from "zod";
@@ -20,7 +18,6 @@ import type {
 import {
   type DockDrag,
   type DockRegion,
-  type DockScreenCapture,
   type DockSize,
   dockPosition,
 } from "../shared/dock-position.js";
@@ -140,44 +137,6 @@ export class DesktopWorkspaces {
         this.syncFloating(options.windows.profileFor(event.sender));
       },
     );
-    // The display behind the detached dock, for a composer attachment. The
-    // dock's own window opts out of capture for the duration.
-    ipcMain.handle("catamorphic:dock-capture-screen", async (event) => {
-      const profileId = options.windows.profileFor(event.sender);
-      const window = this.floating.get(profileId);
-      if (!window || window.webContents !== event.sender)
-        throw new Error("Only the detached dock can capture the screen.");
-      if (process.platform === "darwin") {
-        const status = systemPreferences.getMediaAccessStatus("screen");
-        if (status === "denied" || status === "restricted")
-          throw new Error(
-            "[screen-recording-denied] Allow Work to record the screen in System Settings > Privacy & Security > Screen Recording, then try again.",
-          );
-      }
-      const display = screen.getDisplayMatching(window.getBounds());
-      window.setContentProtection(true);
-      try {
-        const sources = await desktopCapturer.getSources({
-          types: ["screen"],
-          thumbnailSize: {
-            width: Math.round(display.size.width * display.scaleFactor),
-            height: Math.round(display.size.height * display.scaleFactor),
-          },
-        });
-        const source =
-          sources.find((entry) => entry.display_id === String(display.id)) ??
-          sources[0];
-        if (!source) throw new Error("There is no display to capture.");
-        const size = source.thumbnail.getSize();
-        return {
-          pngBase64: source.thumbnail.toPNG().toString("base64"),
-          width: size.width,
-          height: size.height,
-        } satisfies DockScreenCapture;
-      } finally {
-        if (!window.isDestroyed()) window.setContentProtection(false);
-      }
-    });
     ipcMain.handle("catamorphic:dock-detach", (event, detached: boolean) => {
       const profileId = options.windows.profileFor(event.sender);
       this.setDetached(profileId, detached === true);

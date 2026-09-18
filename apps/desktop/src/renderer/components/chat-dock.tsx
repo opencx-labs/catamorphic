@@ -19,7 +19,6 @@ import {
   Globe,
   Maximize2,
   Minus,
-  Monitor,
   Paperclip,
   PictureInPicture2,
   Radio,
@@ -43,6 +42,7 @@ import type {
   ChatSurface,
   McpAppRef,
 } from "../../shared/chat.js";
+import { modifiersForMode } from "../../shared/open-mode.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
 import {
   type AgentInfo,
@@ -1027,29 +1027,6 @@ function ChatDockContent({
     };
   }, [nativeWindow]);
   const nativeBackdrop = nativeWindow && !windowFocused;
-  const [capturingScreen, setCapturingScreen] = useState(false);
-  const attachScreen = async () => {
-    if (capturingScreen) return;
-    setCapturingScreen(true);
-    setTransferError(undefined);
-    try {
-      const capture = await desktopApi.dockCaptureScreen();
-      const bytes = Uint8Array.from(atob(capture.pngBase64), (char) =>
-        char.charCodeAt(0),
-      );
-      addFilesRef.current([
-        new File([bytes], "Screen.png", { type: "image/png" }),
-      ]);
-    } catch (error) {
-      setTransferError(
-        error instanceof Error
-          ? error.message
-          : "Could not capture the screen.",
-      );
-    } finally {
-      setCapturingScreen(false);
-    }
-  };
   // Deferred focus may run much later in a hidden/throttled window. Explicit
   // input and external focus changes after it was scheduled own focus. Only
   // this dock's known autofocus calls are excluded from that authority.
@@ -2103,6 +2080,8 @@ function ChatDockContent({
             className={`min-w-0 flex-1 overflow-hidden text-xs font-semibold ${presentsAsTab ? "invisible" : ""}`}
             aria-hidden={presentsAsTab}
           >
+            {/* Icon on the left, centered against the two text lines; the
+              project sits under the title, never under the icon. */}
             <span className="flex min-w-0 items-center gap-2">
               <span className="grid size-6 shrink-0 place-items-center rounded-full border border-border-strong bg-bg-overlay">
                 {chat.session?.icon ? (
@@ -2111,23 +2090,27 @@ function ChatDockContent({
                   <Bot className="size-3.5" />
                 )}
               </span>
-              <span className="truncate">{title}</span>
-              {isIncognito && (
-                <span
-                  className="flex shrink-0 items-center gap-1 rounded-full border border-border-strong bg-bg-inset px-1.5 py-0.5 text-[10px] font-medium text-fg-muted"
-                  title="Incognito: stays on this machine, never synced to a linked server"
-                  data-testid="chat-incognito-badge"
-                >
-                  <Ghost className="size-3" />
-                  Incognito
+              <span className="flex min-w-0 flex-col leading-tight">
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="truncate">{title}</span>
+                  {isIncognito && (
+                    <span
+                      className="flex shrink-0 items-center gap-1 rounded-full border border-border-strong bg-bg-inset px-1.5 py-0.5 text-[10px] font-medium text-fg-muted"
+                      title="Incognito: stays on this machine, never synced to a linked server"
+                      data-testid="chat-incognito-badge"
+                    >
+                      <Ghost className="size-3" />
+                      Incognito
+                    </span>
+                  )}
                 </span>
-              )}
-            </span>
-            {projectName && (
-              <span className="max-w-40 truncate text-[10px] font-normal text-fg-faint">
-                {projectName}
+                {projectName && (
+                  <span className="max-w-40 truncate text-[10px] font-normal text-fg-faint">
+                    {projectName}
+                  </span>
+                )}
               </span>
-            )}
+            </span>
           </header>
           {/* Agent progress sits immediately left of the chat control bar;
           both stay above timeline content scrolled beneath them. */}
@@ -2855,23 +2838,6 @@ function ChatDockContent({
                     event.target.value = "";
                   }}
                 />
-                {nativeWindow && (
-                  /* The detached dock floats over other apps: one click
-                    attaches what is behind it, minus the dock itself. */
-                  <ShortcutHint label="Attach what's on screen">
-                    <button
-                      type="button"
-                      onClick={() => void attachScreen()}
-                      disabled={capturingScreen}
-                      data-disabled-reason="Capturing the screen"
-                      className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-default disabled:opacity-50"
-                      aria-label="Attach what's on screen"
-                      data-testid="attach-screen"
-                    >
-                      <Monitor className="size-4" />
-                    </button>
-                  </ShortcutHint>
-                )}
                 {/* Prose and pills in one flow: pastes, selections, links,
                   tabs, images and documents sit inline where they were
                   dropped, enter with pill-in and leave with pill-out. */}
@@ -2924,6 +2890,12 @@ function ChatDockContent({
                   onOpenTab={
                     onOpenSurface
                       ? (key, mode) => onOpenSurface(key, mode)
+                      : undefined
+                  }
+                  onOpenPath={
+                    onFileClick
+                      ? (path, mode) =>
+                          onFileClick(path, modifiersForMode(mode))
                       : undefined
                   }
                   maxPills={MAX_ATTACHMENTS}

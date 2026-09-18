@@ -701,10 +701,8 @@ replays between the two poses. Three more detached behaviours: the workspace
 window reports its chat region (`dockRegion`) and the dock rests inside it
 whenever a Work window is in front, so it never covers a sidebar; when the
 window loses OS focus while the agent works, the chat lurks the same way it
-does behind a tab; and the composer offers "Attach what's on screen"
-(`dockCaptureScreen`), which captures the display behind the dock with the
-dock itself left out through content protection, as an image pill. The
-capture is one explicit click, never automatic.
+does behind a tab. Seeing the screen behind the dock is the agent's job
+through computer use, not a composer control.
 
 ## Work identity (2026-09-18)
 

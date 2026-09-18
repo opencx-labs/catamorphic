@@ -150,6 +150,7 @@ export function ContextPill({
       testId="pill-preview"
       disabled={exiting}
       pinOnClick={!onOpen}
+      placement="above"
       content={
         view.kind === "text" ? (
           <TextBody view={view} />

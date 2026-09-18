@@ -192,6 +192,31 @@ describe("ResourceInspector", () => {
   });
 });
 
+it("stacks above the anchor when asked, and below only when there is no room", () => {
+  // A pill preview must never land on the pill's own remove button, so it
+  // sits over the pill, left-aligned, instead of beside it.
+  expect(
+    computeInspectorPosition({
+      placement: "above",
+      anchor: { top: 400, right: 260, bottom: 420, left: 200 },
+      width: 320,
+      height: 120,
+      viewportWidth: 800,
+      viewportHeight: 600,
+    }),
+  ).toEqual({ side: "right", left: 200, top: 272 });
+  const cramped = computeInspectorPosition({
+    placement: "above",
+    anchor: { top: 20, right: 260, bottom: 40, left: 200 },
+    width: 320,
+    height: 120,
+    viewportWidth: 800,
+    viewportHeight: 600,
+  });
+  expect(cramped.top).toBe(48);
+  expect(cramped.left).toBe(200);
+});
+
 it("clamps a stale anchor after the viewport shrinks", () => {
   const position = computeInspectorPosition({
     anchor: { left: 1100, right: 1200, top: 900, bottom: 930 },

@@ -16,13 +16,6 @@ export interface DockRegion {
   height: number;
 }
 
-/** A capture of the display behind the detached dock, minus the dock. */
-export interface DockScreenCapture {
-  pngBase64: string;
-  width: number;
-  height: number;
-}
-
 export interface DockDrag {
   phase: "start" | "move" | "end" | "cancel";
   screenX: number;

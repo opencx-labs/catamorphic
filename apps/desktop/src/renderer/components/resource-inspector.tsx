@@ -29,13 +29,36 @@ export function computeInspectorPosition({
   height,
   viewportWidth,
   viewportHeight,
+  placement = "side",
 }: {
   anchor: InspectorAnchor;
   width: number;
   height: number;
   viewportWidth: number;
   viewportHeight: number;
+  /**
+   * "side" flips left/right of the anchor. "above" stacks over it (below
+   * when there is no room), left-aligned, so a wide panel never lands on
+   * the anchor's own controls such as a pill's remove button.
+   */
+  placement?: "side" | "above";
 }): { side: "left" | "right"; left: number; top: number } {
+  if (placement === "above") {
+    const fitsAbove = anchor.top - GAP - height >= VIEWPORT_MARGIN;
+    return {
+      side: "right",
+      left: Math.max(
+        VIEWPORT_MARGIN,
+        Math.min(anchor.left, viewportWidth - width - VIEWPORT_MARGIN),
+      ),
+      top: fitsAbove
+        ? anchor.top - GAP - height
+        : Math.min(
+            anchor.bottom + GAP,
+            viewportHeight - height - VIEWPORT_MARGIN,
+          ),
+    };
+  }
   const fitsRight =
     anchor.right + GAP + width <= viewportWidth - VIEWPORT_MARGIN;
   const side: "left" | "right" = fitsRight ? "right" : "left";
@@ -83,10 +106,13 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
   onOpen,
   disabled = false,
   testId,
+  placement = "side",
 }: {
   label: string;
   disabled?: boolean;
   testId?: string;
+  /** Where the panel sits relative to its trigger; see computeInspectorPosition. */
+  placement?: "side" | "above";
   children: (props: ResourceInspectorTriggerProps<T>) => ReactNode;
   content: ReactNode | ((dismiss: () => void) => ReactNode);
   delayMs?: number;
@@ -309,6 +335,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
           id={id}
           label={label}
           anchor={anchor}
+          placement={placement}
           open={open}
           onEnter={() => {
             panelInterested.current = true;
@@ -341,6 +368,7 @@ export function InspectorPortal({
   id,
   label,
   anchor,
+  placement = "side",
   open,
   onEnter,
   onLeave,
@@ -351,6 +379,7 @@ export function InspectorPortal({
   id: string;
   label: string;
   anchor: InspectorAnchor;
+  placement?: "side" | "above";
   open: boolean;
   onEnter: () => void;
   onLeave: () => void;
@@ -410,6 +439,7 @@ export function InspectorPortal({
       setPosition(
         computeInspectorPosition({
           anchor,
+          placement,
           width: panel.offsetWidth,
           height: panel.offsetHeight,
           viewportWidth: window.innerWidth,
@@ -428,7 +458,7 @@ export function InspectorPortal({
       observer?.disconnect();
       window.removeEventListener("resize", updatePosition);
     };
-  }, [anchor]);
+  }, [anchor, placement]);
 
   useEffect(() => {
     if (open) return;

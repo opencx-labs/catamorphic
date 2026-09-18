@@ -29,3 +29,17 @@ export const OPEN_ACTIONS = [
 export function openModeForAction(action: string): OpenMode | undefined {
   return OPEN_ACTIONS.find((entry) => entry.action === action)?.mode;
 }
+
+/** The modifier set that `openModeFromEvent` reads back as `mode`. */
+export function modifiersForMode(
+  mode: OpenMode,
+  mac = /Mac/.test(navigator.platform),
+): OpenModifiers {
+  const primary = mode === "tab" || mode === "side";
+  return {
+    metaKey: mac && primary,
+    ctrlKey: !mac && primary,
+    shiftKey: mode === "side",
+    altKey: mode === "floating",
+  };
+}

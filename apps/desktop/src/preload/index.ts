@@ -35,7 +35,6 @@ import type {
 import type {
   DockDrag,
   DockRegion,
-  DockScreenCapture,
   DockSize,
 } from "../shared/dock-position.js";
 import type { FilePreviewInput } from "../shared/file-preview.js";
@@ -114,8 +113,6 @@ const api = {
   ): Promise<string | null> => invoke("catamorphic:dock-menu", entries),
   dockRegion: (region: DockRegion | null): Promise<void> =>
     invoke("catamorphic:dock-region", region),
-  dockCaptureScreen: (): Promise<DockScreenCapture> =>
-    invoke("catamorphic:dock-capture-screen"),
   onDockSnapshot: (
     listener: (snapshot: DockSnapshot) => void,
   ): (() => void) => {

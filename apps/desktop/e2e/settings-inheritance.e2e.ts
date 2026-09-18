@@ -152,6 +152,12 @@ it("keeps checkbox rows and neighboring controls stable while changing and reset
       app.eval<number[]>(
         `(()=>{const row=document.querySelector('[data-setting="contentFrame"]');const r=row.getBoundingClientRect();const control=row.querySelector('input').getBoundingClientRect();return [r.height,r.right-control.right,control.y-r.y,row.lastElementChild.getBoundingClientRect().width,document.querySelector('[data-setting="pinnedBookmarks"]').getBoundingClientRect().top-r.top]})()`,
       );
+    // Names every row between the two anchors with its height, so a
+    // mismatch says which neighbour moved instead of only that one did.
+    const rows = () =>
+      app.eval<string>(
+        `JSON.stringify([...document.querySelectorAll('[data-setting]')].map(row => [row.dataset.setting, Math.round(row.getBoundingClientRect().height), row.querySelector('p')?.textContent?.trim().slice(0, 60)]))`,
+      );
     // Neighbouring rows finish loading their status lines asynchronously;
     // measure once two readings a beat apart agree.
     let before = await geometry();
@@ -169,12 +175,12 @@ it("keeps checkbox rows and neighboring controls stable while changing and reset
       `!document.querySelector('[aria-label="Reset Framed content to inherited"]') && !document.querySelector('[name="contentFrame"]').disabled`,
     );
     await app.screenshot(`/tmp/settings-checkbox-reset-${width}.png`);
-    expect(await geometry()).toEqual(before);
+    expect(await geometry(), await rows()).toEqual(before);
     await app.eval(`document.querySelector('[name="contentFrame"]').click()`);
     await app.waitFor(
       `!!document.querySelector('[aria-label="Reset Framed content to inherited"]') && !document.querySelector('[name="contentFrame"]').disabled`,
     );
-    expect(await geometry()).toEqual(before);
+    expect(await geometry(), await rows()).toEqual(before);
   }
 });
 
