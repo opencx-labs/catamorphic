@@ -71,6 +71,7 @@ import { defaultDesktopProjectsDir } from "./development-paths.js";
 import { readEditorFile, writeEditorFile } from "./editor-files.js";
 import { readFilePreview } from "./file-preview.js";
 import { searchProjectFiles } from "./file-search.js";
+import { registerGitOverviewSubscriptions } from "./git-overview-ipc.js";
 import {
   gitFileDiff,
   gitOverview,
@@ -295,6 +296,28 @@ export function registerIpcHandlers(
   mobilePairing?: MobilePairingService,
   incognitoSessions?: IncognitoSessionsStore,
 ): void {
+  registerGitOverviewSubscriptions({
+    resolve: async (input) => {
+      const server = state.current;
+      if (!server) throw new Error("The local server is unavailable.");
+      const root = await server.projectRoots.get(input.projectId);
+      if (!root) throw new Error("The project folder is unavailable.");
+      const paths =
+        input.paths ??
+        (input.sessionId
+          ? [
+              (
+                await server.sessionCheckouts.describe({
+                  projectId: input.projectId,
+                  sessionId: input.sessionId,
+                })
+              ).path,
+            ]
+          : undefined);
+      return { root, paths };
+    },
+  });
+
   const storesFor = (event: Electron.IpcMainInvokeEvent) =>
     profileConfig.forProfile(windows.profileFor(event.sender));
 

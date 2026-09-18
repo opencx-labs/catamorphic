@@ -892,3 +892,11 @@ icon, and most sites declare theirs in markup, so the guess left a globe
 that no visit ever fixed (the real icon only went to history). A page's
 reported icon now reaches bookmarks of that page (scheme, `www.`, trailing
 slash and fragment ignored), and same-site bookmarks that still have none.
+
+### 2026-09-18: Observed Git changes
+
+The Changes section subscribes to the checkout being viewed. Native file events
+trigger debounced Git reads, with a slow reconciliation for missed events. Hidden
+consumers release their watches; returning refreshes immediately. Refresh retains
+existing rows and disclosure state. See [ADR 0149](../../docs/decisions/0149-observed-git-overviews.md)
+and the [measurement report](docs/performance.md#changes-subscriptions).

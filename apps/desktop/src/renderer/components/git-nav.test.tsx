@@ -12,6 +12,20 @@ vi.mock("../lib/desktop-api.js", () => ({
     onPrefsChanged: vi.fn(() => () => {}),
     sessionCheckouts: vi.fn().mockResolvedValue([]),
     gitOverview: vi.fn(),
+    watchGitOverview: vi.fn((input, listener) => {
+      let live = true;
+      void desktopApi
+        .gitOverview(input.projectId)
+        .then((snapshot) => {
+          if (live) listener(snapshot);
+        })
+        .catch((error: Error) => {
+          if (live) listener({ ...overview, error: error.message });
+        });
+      return () => {
+        live = false;
+      };
+    }),
     onGitChanged: vi.fn(() => () => {}),
   },
 }));
@@ -141,4 +155,51 @@ it("keeps failures and clean multi-worktree sections visible", async () => {
   } finally {
     await act(async () => root.unmount());
   }
+});
+
+it("releases hidden subscriptions, ignores late snapshots and retains the list while refreshing", async () => {
+  Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+  const callbacks: Array<(snapshot: GitOverview) => void> = [];
+  const stops: Array<ReturnType<typeof vi.fn>> = [];
+  vi.mocked(desktopApi.watchGitOverview).mockImplementation(
+    (_input, listener) => {
+      callbacks.push(listener);
+      const stop = vi.fn();
+      stops.push(stop);
+      return stop;
+    },
+  );
+  const node = document.createElement("div");
+  const root = createRoot(node);
+  try {
+    await act(async () =>
+      root.render(<GitNav projectId="p" visible onOpenDiff={() => {}} />),
+    );
+    await act(async () => callbacks[0]?.(overview));
+    expect(node.textContent).toContain("same.txt");
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(stops[0]).toHaveBeenCalledOnce();
+    expect(node.textContent).toContain("same.txt");
+    await act(async () =>
+      root.render(
+        <GitNav projectId="p" visible={false} onOpenDiff={() => {}} />,
+      ),
+    );
+    expect(stops[1]).toHaveBeenCalledOnce();
+    await act(async () =>
+      callbacks[1]?.({
+        available: true,
+        worktrees: [],
+        error: "stale failure",
+      }),
+    );
+    expect(node.textContent).not.toContain("stale failure");
+    await act(async () =>
+      root.render(<GitNav projectId="p" visible onOpenDiff={() => {}} />),
+    );
+    expect(callbacks).toHaveLength(3);
+  } finally {
+    await act(async () => root.unmount());
+  }
+  expect(stops[2]).toHaveBeenCalledOnce();
 });

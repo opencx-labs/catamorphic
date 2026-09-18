@@ -165,3 +165,33 @@ it("groups worktrees and opens committed versus local diffs without crossing che
     "Branch change",
   );
 });
+
+it("updates visible Changes promptly after external writes, staging and removal without stealing focus", async () => {
+  const file = path.join(linked, "live-refresh.txt");
+  await run(
+    `setReactValue($('select[aria-label="Changes checkout"]'), ${JSON.stringify(linked)});`,
+  );
+  await wait(`return !!$('[data-worktree-path]');`);
+  const focusedBefore = await app.eval(
+    "document.activeElement?.getAttribute('aria-label')",
+  );
+  await fs.writeFile(file, "External editor change\n");
+  await app.waitFor(
+    `document.querySelector('[data-testid="git-changes"]')?.textContent.includes('live-refresh.txt')`,
+    { timeoutMs: 8_000 },
+  );
+  expect(
+    await app.eval("document.activeElement?.getAttribute('aria-label')"),
+  ).toBe(focusedBefore);
+  await nativeGit(linked, ["add", "live-refresh.txt"]);
+  await app.waitFor(
+    `document.querySelector('[data-worktree-path] [data-change-group="staged"]')?.textContent.includes('live-refresh.txt')`,
+    { timeoutMs: 8_000 },
+  );
+  await nativeGit(linked, ["reset", "HEAD", "--", "live-refresh.txt"]);
+  await fs.rm(file);
+  await app.waitFor(
+    `!document.querySelector('[data-testid="git-changes"]')?.textContent.includes('live-refresh.txt')`,
+    { timeoutMs: 8_000 },
+  );
+});

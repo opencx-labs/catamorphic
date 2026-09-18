@@ -15,7 +15,7 @@ export type { GitDiffMode } from "../shared/git.js";
 
 const execute = promisify(execFile);
 const MAX_DIFF_BYTES = 1_000_000;
-async function git(cwd: string, args: string[]): Promise<string> {
+export async function readGit(cwd: string, args: string[]): Promise<string> {
   return (
     await execute("git", ["--literal-pathspecs", "-C", cwd, ...args], {
       maxBuffer: 16 * 1024 * 1024,
@@ -35,7 +35,7 @@ const optionalGit = async (
   args: string[],
 ): Promise<string | undefined> => {
   try {
-    return (await git(cwd, args)).trim() || undefined;
+    return (await readGit(cwd, args)).trim() || undefined;
   } catch (error) {
     // Git uses 1/128 for absent refs/config. Process, permissions and timeout failures remain errors.
     if (
@@ -53,7 +53,7 @@ type ListedWorktree = Pick<
   "path" | "branch" | "locked" | "prunable"
 > & { bare?: boolean };
 async function worktreeList(root: string): Promise<ListedWorktree[]> {
-  const output = await git(root, ["worktree", "list", "--porcelain", "-z"]);
+  const output = await readGit(root, ["worktree", "list", "--porcelain", "-z"]);
   const trees: ListedWorktree[] = [];
   let current: ListedWorktree | undefined;
   for (const record of output.split("\0")) {
@@ -108,11 +108,17 @@ async function comparisonBase(
   return optionalGit(cwd, ["rev-parse", "--symbolic-full-name", "@{upstream}"]);
 }
 const shortRef = (ref: string) => ref.replace(/^refs\/(heads|remotes)\//, "");
+export type GitComparisonCache = Map<
+  string,
+  { key: string; files: GitChangedFile[] }
+>;
+
 const overviewRequests = new Map<string, Promise<GitOverview>>();
 const overviewQueues = new Map<string, Promise<unknown>>();
 export async function gitOverview(
   rootPath: string,
   paths?: string[],
+  comparisons?: GitComparisonCache,
 ): Promise<GitOverview> {
   const root = await fs.realpath(rootPath).catch(() => path.resolve(rootPath));
   const key = JSON.stringify([root, paths]);
@@ -121,7 +127,7 @@ export async function gitOverview(
   const previous = overviewQueues.get(root) ?? Promise.resolve();
   const request = previous
     .catch(() => {})
-    .then(() => readGitOverview(root, paths));
+    .then(() => readGitOverview(root, paths, comparisons));
   overviewQueues.set(root, request);
   overviewRequests.set(key, request);
   try {
@@ -134,6 +140,7 @@ export async function gitOverview(
 async function readGitOverview(
   rootPath: string,
   paths?: string[],
+  comparisons?: GitComparisonCache,
 ): Promise<GitOverview> {
   let trees: ListedWorktree[];
   try {
@@ -199,18 +206,32 @@ async function readGitOverview(
               if (base) {
                 entry.baseRef = base;
                 entry.baseLabel = shortRef(base);
-                entry.branchChanges = parseNameStatus(
-                  await git(tree.path, [
-                    "diff",
-                    "--no-ext-diff",
-                    "--no-textconv",
-                    "--name-status",
-                    "-M",
-                    "-z",
-                    `${base}...HEAD`,
-                    "--",
-                  ]),
-                );
+                const baseHead = await optionalGit(tree.path, [
+                  "rev-parse",
+                  "--verify",
+                  `${base}^{commit}`,
+                ]);
+                const key = JSON.stringify([head, baseHead]);
+                const cached = comparisons?.get(tree.path);
+                entry.branchChanges =
+                  cached?.key === key
+                    ? cached.files
+                    : parseNameStatus(
+                        await readGit(tree.path, [
+                          "diff",
+                          "--no-ext-diff",
+                          "--no-textconv",
+                          "--name-status",
+                          "-M",
+                          "-z",
+                          `${baseHead}...${head}`,
+                          "--",
+                        ]),
+                      );
+                comparisons?.set(tree.path, {
+                  key,
+                  files: entry.branchChanges,
+                });
               }
             } catch (error) {
               entry.comparisonError = message(error);
@@ -219,6 +240,13 @@ async function readGitOverview(
           }),
       )),
     );
+  }
+  if (comparisons) {
+    const active = new Set(
+      result.filter((tree) => tree.loaded).map((tree) => tree.path),
+    );
+    for (const key of comparisons.keys())
+      if (!active.has(key)) comparisons.delete(key);
   }
   return { available: true, worktrees: result };
 }
@@ -239,7 +267,7 @@ function changeKind(status: string): GitChangedFile["kind"] {
 }
 async function uncommittedChanges(cwd: string): Promise<GitChangedFile[]> {
   const parts = (
-    await git(cwd, [
+    await readGit(cwd, [
       "status",
       "--porcelain=v1",
       "-z",
@@ -308,7 +336,7 @@ export async function gitUntrackedDirectory({
   const relative = directory.replace(/\/$/, "");
   validateFile(relative);
   const paths = (
-    await git(worktreePath, [
+    await readGit(worktreePath, [
       "ls-files",
       "--others",
       "--exclude-standard",
@@ -363,7 +391,7 @@ async function objectContent(
   file: string,
 ): Promise<Content> {
   const index = ref === ":" || ref === ":2";
-  const output = await git(
+  const output = await readGit(
     cwd,
     index
       ? ["ls-files", "--stage", "-z", "--", file]
@@ -386,7 +414,7 @@ async function objectContent(
       mode,
       notice: "Submodule change. Open its checkout to inspect the files.",
     };
-  const size = Number((await git(cwd, ["cat-file", "-s", sha])).trim());
+  const size = Number((await readGit(cwd, ["cat-file", "-s", sha])).trim());
   if (size > MAX_DIFF_BYTES)
     return {
       text: "",
@@ -474,14 +502,14 @@ export async function gitFileDiff(
     if (!head || !input.baseRef?.startsWith("refs/"))
       throw new Error("The comparison branch is no longer available");
     const base = (
-      await git(root, [
+      await readGit(root, [
         "rev-parse",
         "--verify",
         "--end-of-options",
         `${input.baseRef}^{commit}`,
       ])
     ).trim();
-    beforeRef = (await git(root, ["merge-base", base, head])).trim();
+    beforeRef = (await readGit(root, ["merge-base", base, head])).trim();
     afterRef = head;
     beforeLabel = `Base: ${shortRef(input.baseRef)}`;
     afterLabel = "Committed changes";
