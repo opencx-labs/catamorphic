@@ -246,6 +246,7 @@ Framed content previews transition the workspace margins and corner radius over
 | `bubble-in` / `bubble-out` | 200ms | each other |
 | `tab-in` / `tab-out` | 200ms / 180ms | each other (exit snappier) |
 | `fade-in` / `fade-out` (modal section swap; agent-control overlay) | 200ms | each other (exact mirror; `fade-out` holds its final frame for removal on animationend) |
+| `modal-in` / `modal-out` (dialog panel: opacity + scale 0.96↔1) | 200ms in, 160ms out | the backdrop's `fade-in`/`fade-out`; `modal-out` holds its final frame until the backdrop unmounts both |
 | `pairing-qr-in` (QR readiness reveal) | 200ms | — (one-shot content-ready signal inside a fixed stage) |
 | `profile-veil-in` / `profile-veil-out` (in-place profile switch) | 200ms | each other (exact mirror) |
 | `question-in` (ask_user panel) | 260ms | — |
