@@ -309,6 +309,10 @@ the same page styled three different ways.
   inside a card are plain hover rows, and pickers are the only bordered
   children. A list on a page is not filtered in place; the palette scope finds
   its rows and deep-links to them.
+- **No frame by default.** Content sits flush with the sidebars with no
+  border, inset, or rounding. "Framed content" is an opt-in workspace setting
+  that insets the workspace as a rounded, bordered window; the padding and
+  radius settings are that frame's dimensions.
 - **Deep links land on exactly one card.** Every palette destination resolves
   to a `data-setting-id` on a single block; category-wide outlines mean the
   catalog id is too coarse.

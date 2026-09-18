@@ -5467,10 +5467,10 @@ export function App({
         data-workspace-content
         data-tab-layout={tabsInSidebar ? "sidebar" : "top"}
         data-header-placement={headerInSidebar ? "sidebar" : "top"}
-        data-tab-frame={prefs?.tabFrame ? "on" : "off"}
+        data-content-frame={prefs?.contentFrame ? "on" : "off"}
         style={{
-          margin: prefs?.contentPadding ?? 6,
-          borderRadius: prefs?.contentRadius ?? 14,
+          margin: prefs?.contentFrame ? prefs.contentPadding : 0,
+          borderRadius: prefs?.contentFrame ? prefs.contentRadius : 0,
         }}
         className={`workspace-surface relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${tabsInSidebar ? "bg-sidebar" : "bg-bg"}`}
       >

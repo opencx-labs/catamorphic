@@ -99,7 +99,9 @@ The last chooses `edge` (default) or `center` for expanded chats and bubbles;
 
 ## Workspace frame
 
-Workspace settings expose `sidebarDividers` (default false), `contentPadding`
-(default 6px) and `contentRadius` (default 14px). Dimensions accept 0 through 48px,
-including square corners and no inset. They support profile, shared project and
+Content sits flush with the sidebars by default. `contentFrame` (default false)
+insets the workspace as a rounded window with a 1px border; `contentPadding`
+(default 6px) and `contentRadius` (default 14px) are that frame's dimensions and
+apply only while it is on. Dimensions accept 0 through 48px. Together with
+`sidebarDividers` (default false) they support profile, shared project and
 personal overrides, appear in settings search and apply live in every tab layout.

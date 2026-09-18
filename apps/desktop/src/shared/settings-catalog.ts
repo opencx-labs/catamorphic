@@ -49,7 +49,9 @@ export const SETTINGS_CATALOG: readonly SettingsEntry[] = [
         ...(key === "tabPlacement"
           ? ["chrome", "horizontal", "vertical", "sidebar"]
           : []),
-        ...(key === "tabFrame" ? ["border", "rounded", "inset"] : []),
+        ...(key === "contentFrame"
+          ? ["border", "rounded", "inset", "window", "frame"]
+          : []),
       ],
     };
   }),

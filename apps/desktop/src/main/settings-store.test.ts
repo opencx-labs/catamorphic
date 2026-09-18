@@ -32,7 +32,11 @@ it("keeps the last valid project theme and refuses unrelated saves over an inval
     overrides: { accent: "#123456" },
   });
   expect(() =>
-    saveSettings({ files: paths, scope: "project", patch: { tabFrame: true } }),
+    saveSettings({
+      files: paths,
+      scope: "project",
+      patch: { contentFrame: true },
+    }),
   ).toThrow("Invalid theme");
   expect(fs.readFileSync(project, "utf8")).toBe(invalid);
   fs.unlinkSync(project);
@@ -59,17 +63,21 @@ it("inherits per key and resetting restores live inheritance, including explicit
   saveSettings({
     files: paths,
     scope: "profile",
-    patch: { tabFrame: true, tabPlacement: "sidebar" },
+    patch: { contentFrame: true, tabPlacement: "sidebar" },
   });
-  saveSettings({ files: paths, scope: "project", patch: { tabFrame: false } });
+  saveSettings({
+    files: paths,
+    scope: "project",
+    patch: { contentFrame: false },
+  });
   saveSettings({
     files: paths,
     scope: "personal",
     patch: { tabPlacement: "top" },
   });
   expect(loadSettings(paths)).toMatchObject({
-    values: { tabFrame: false, tabPlacement: "top" },
-    sources: { tabFrame: "project", tabPlacement: "personal" },
+    values: { contentFrame: false, tabPlacement: "top" },
+    sources: { contentFrame: "project", tabPlacement: "personal" },
   });
   saveSettings({
     files: paths,
@@ -86,15 +94,19 @@ it("inherits per key and resetting restores live inheritance, including explicit
     patch: { tabPlacement: "top" },
   });
   expect(loadSettings(paths).values.tabPlacement).toBe("top");
-  saveSettings({ files: paths, scope: "project", patch: { tabFrame: null } });
-  expect(loadSettings(paths).values.tabFrame).toBe(true);
+  saveSettings({
+    files: paths,
+    scope: "project",
+    patch: { contentFrame: null },
+  });
+  expect(loadSettings(paths).values.contentFrame).toBe(true);
 });
 it("ordinary state saves never turn inherited defaults into explicit choices", () => {
   const paths = files();
   const store = new PrefsStore(paths.profile);
   store.save({ rightSidebarOpen: false });
   expect(store.read()).toEqual({ rightSidebarOpen: false });
-  expect(loadSettings(paths).sources.tabFrame).toBe("default");
+  expect(loadSettings(paths).sources.contentFrame).toBe("default");
 });
 it("rejects wrong scope and malformed writes without damaging the file", () => {
   const paths = files();
@@ -108,7 +120,11 @@ it("rejects wrong scope and malformed writes without damaging the file", () => {
   fs.writeFileSync(paths.profile, "broken");
   expect(loadSettings(paths).errors).toHaveLength(1);
   expect(() =>
-    saveSettings({ files: paths, scope: "profile", patch: { tabFrame: true } }),
+    saveSettings({
+      files: paths,
+      scope: "profile",
+      patch: { contentFrame: true },
+    }),
   ).toThrow();
   expect(fs.readFileSync(paths.profile, "utf8")).toBe("broken");
 });
@@ -117,23 +133,31 @@ it("invalid initial project values report errors and use defaults; unknown keys 
   fs.writeFileSync(
     paths.project!,
     JSON.stringify({
-      tabFrame: "false",
+      contentFrame: "false",
       rightSidebarOpen: false,
       notificationSounds: false,
     }),
   );
   expect(loadSettings(paths)).toMatchObject({
     values: {
-      tabFrame: false,
+      contentFrame: false,
       rightSidebarOpen: true,
       notificationSounds: true,
     },
-    sources: { tabFrame: "default" },
+    sources: { contentFrame: "default" },
   });
   expect(loadSettings(paths).errors).toHaveLength(1);
   fs.writeFileSync(paths.profile, '{"future":42}');
-  saveSettings({ files: paths, scope: "profile", patch: { tabFrame: true } });
-  saveSettings({ files: paths, scope: "profile", patch: { tabFrame: null } });
+  saveSettings({
+    files: paths,
+    scope: "profile",
+    patch: { contentFrame: true },
+  });
+  saveSettings({
+    files: paths,
+    scope: "profile",
+    patch: { contentFrame: null },
+  });
   expect(JSON.parse(fs.readFileSync(paths.profile, "utf8"))).toEqual({
     future: 42,
   });

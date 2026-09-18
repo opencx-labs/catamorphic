@@ -80,14 +80,16 @@
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
 }
 
-/* Framing is a profile preference, independent of palette and tab placement.
+/* Framed content is a preference, off by default: content sits flush with
+   the sidebars and draws no border. Turning it on insets the workspace as a
+   rounded window with a 1px border. Independent of palette and tab placement.
    The sidebar's selection/hover surfaces remain neutral and token-driven. */
 @layer components {
   :where([data-theme="light"]) .tabbed-sidebar {
     --color-bg-overlay: var(--color-bg-raised);
   }
 
-  .workspace-surface[data-tab-layout="top"][data-tab-frame="on"] {
+  .workspace-surface[data-content-frame="on"] {
     box-shadow: inset 0 0 0 1px var(--color-border);
   }
 

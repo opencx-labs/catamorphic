@@ -28,30 +28,33 @@ it("keeps the last valid scoped override through malformed or invalid external e
   const store = new SettingsStore();
   fs.writeFileSync(
     files.profile,
-    '{"tabPlacement":"sidebar","tabFrame":false}',
+    '{"tabPlacement":"sidebar","contentFrame":false}',
   );
-  fs.writeFileSync(files.personal, '{"tabFrame":true}');
-  expect(store.load(files).values.tabFrame).toBe(true);
-  fs.writeFileSync(files.personal, '{"tabFrame":');
+  fs.writeFileSync(files.personal, '{"contentFrame":true}');
+  expect(store.load(files).values.contentFrame).toBe(true);
+  fs.writeFileSync(files.personal, '{"contentFrame":');
   expect(store.load(files)).toMatchObject({
-    values: { tabFrame: true },
-    sources: { tabFrame: "personal" },
+    values: { contentFrame: true },
+    sources: { contentFrame: "personal" },
   });
   expect(store.load(files).errors[0]).toContain(files.personal);
-  fs.writeFileSync(files.profile, '{"tabPlacement":"top","tabFrame":false}');
+  fs.writeFileSync(
+    files.profile,
+    '{"tabPlacement":"top","contentFrame":false}',
+  );
   expect(store.load(files).values.tabPlacement).toBe("top");
-  fs.writeFileSync(files.personal, '{"tabFrame":"false"}');
-  expect(store.load(files).values.tabFrame).toBe(true);
+  fs.writeFileSync(files.personal, '{"contentFrame":"false"}');
+  expect(store.load(files).values.contentFrame).toBe(true);
   fs.writeFileSync(files.personal, "{}");
   expect(store.load(files)).toMatchObject({
-    values: { tabFrame: false },
-    sources: { tabFrame: "profile" },
+    values: { contentFrame: false },
+    sources: { contentFrame: "profile" },
     errors: [],
   });
-  fs.writeFileSync(files.personal, '{"tabFrame":true}');
-  expect(store.load(files).values.tabFrame).toBe(true);
+  fs.writeFileSync(files.personal, '{"contentFrame":true}');
+  expect(store.load(files).values.contentFrame).toBe(true);
   fs.unlinkSync(files.personal);
-  expect(store.load(files).values.tabFrame).toBe(false);
+  expect(store.load(files).values.contentFrame).toBe(false);
 });
 
 it("theme and shortcut files retain valid values, reject invalid saves, recover and reset", () => {

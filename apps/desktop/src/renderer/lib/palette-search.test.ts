@@ -4,10 +4,10 @@ import { createPaletteIndex, PALETTE_RESULT_LIMIT } from "./palette-search.js";
 
 it("finds individual settings without reading preference values", () => {
   const search = createPaletteIndex(SETTINGS_CATALOG);
-  expect(search("tab frame")[0]?.id).toBe("tabFrame");
+  expect(search("framed content")[0]?.id).toBe("contentFrame");
   expect(search("monospace font")[0]?.id).toBe("theme.fonts.mono");
   expect(search("accent color")[0]?.id).toBe("theme.overrides.accent");
-  expect(search("tbfrm").some((item) => item.id === "tabFrame")).toBe(true);
+  expect(search("frmdc").some((item) => item.id === "contentFrame")).toBe(true);
   expect(new Set(SETTINGS_CATALOG.map((item) => item.id)).size).toBe(
     SETTINGS_CATALOG.length,
   );

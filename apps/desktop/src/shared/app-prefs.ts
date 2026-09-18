@@ -35,8 +35,12 @@ export interface AppPrefs {
   tabPlacement: "top" | "sidebar";
   tabAlignment: "start" | "center";
   headerPlacement: "top" | "sidebar";
-  /** Optional rounded, inset frame around workspace tab content. */
-  tabFrame: boolean;
+  /**
+   * Framed content insets the workspace as a rounded, bordered window;
+   * padding and radius are that frame's dimensions and only apply when
+   * it is on. Off by default: content sits flush with the sidebars.
+   */
+  contentFrame: boolean;
   sidebarDividers: boolean;
   contentPadding: number;
   contentRadius: number;
@@ -72,7 +76,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   tabPlacement: "top",
   tabAlignment: "start",
   headerPlacement: "top",
-  tabFrame: false,
+  contentFrame: false,
   sidebarDividers: false,
   contentPadding: 6,
   contentRadius: 14,
@@ -140,10 +144,7 @@ export function normalizePrefs(raw: unknown): AppPrefs {
     tabPlacement: record.tabPlacement === "sidebar" ? "sidebar" : "top",
     tabAlignment: record.tabAlignment === "center" ? "center" : "start",
     headerPlacement: record.headerPlacement === "sidebar" ? "sidebar" : "top",
-    tabFrame:
-      typeof record.tabFrame === "boolean"
-        ? record.tabFrame
-        : DEFAULT_PREFS.tabFrame,
+    contentFrame: record.contentFrame === true,
     sidebarDividers: record.sidebarDividers === true,
     contentPadding: dimension(record.contentPadding, 6, 48),
     contentRadius: dimension(record.contentRadius, 14, 48),

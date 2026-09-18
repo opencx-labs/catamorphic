@@ -30,69 +30,69 @@ const chooseScope = async (value: string) => {
     `(()=>{const input=document.querySelector('[aria-label="Settings scope"]');input.value=${JSON.stringify(value)};input.dispatchEvent(new Event('change',{bubbles:true}));})()`,
   );
   await app.waitFor(
-    `!!document.querySelector('[name="tabFrame"]') && !document.querySelector('[name="tabFrame"]').disabled`,
+    `!!document.querySelector('[name="contentFrame"]') && !document.querySelector('[name="contentFrame"]').disabled`,
   );
 };
 it("edits and resets profile and personal choices through the real Settings UI", async () => {
   expect(
-    await app.eval(`document.querySelector('[name="tabFrame"]').checked`),
+    await app.eval(`document.querySelector('[name="contentFrame"]').checked`),
   ).toBe(false);
-  await app.eval(`document.querySelector('[name="tabFrame"]').click()`);
+  await app.eval(`document.querySelector('[name="contentFrame"]').click()`);
   await app.waitFor(
-    `!!document.querySelector('[aria-label="Reset Tab frame to inherited"]')`,
+    `!!document.querySelector('[aria-label="Reset Framed content to inherited"]')`,
   );
   await chooseScope("personal");
   await app.waitFor(
-    `document.querySelector('[data-setting="tabFrame"]').textContent.includes('From profile')`,
+    `document.querySelector('[data-setting="contentFrame"]').textContent.includes('From profile')`,
   );
   expect(
-    await app.eval(`document.querySelector('[name="tabFrame"]').checked`),
+    await app.eval(`document.querySelector('[name="contentFrame"]').checked`),
   ).toBe(true);
-  await app.eval(`document.querySelector('[name="tabFrame"]').click()`);
+  await app.eval(`document.querySelector('[name="contentFrame"]').click()`);
   await app.waitFor(
-    `!!document.querySelector('[aria-label="Reset Tab frame to inherited"]')`,
+    `!!document.querySelector('[aria-label="Reset Framed content to inherited"]')`,
   );
   expect(
     await app.eval(
-      `window.catamorphicDesktop.getSettings({projectId:${JSON.stringify(projectId)}}).then(s=>s.sources.tabFrame)`,
+      `window.catamorphicDesktop.getSettings({projectId:${JSON.stringify(projectId)}}).then(s=>s.sources.contentFrame)`,
     ),
   ).toBe("personal");
   await app.screenshot("/tmp/settings-personal-overrides.png");
   await app.eval(
-    `document.querySelector('[aria-label="Reset Tab frame to inherited"]').click()`,
+    `document.querySelector('[aria-label="Reset Framed content to inherited"]').click()`,
   );
   await app.waitFor(
-    `document.querySelector('[name="tabFrame"]').checked && !document.querySelector('[aria-label="Reset Tab frame to inherited"]')`,
+    `document.querySelector('[name="contentFrame"]').checked && !document.querySelector('[aria-label="Reset Framed content to inherited"]')`,
   );
 });
 it("shared file edits apply live, reset inherits them, and reload preserves sources", async () => {
   fs.mkdirSync(`${root}/.catamorphic`, { recursive: true });
   fs.writeFileSync(
     `${root}/.catamorphic/settings.json`,
-    JSON.stringify({ tabFrame: false }),
+    JSON.stringify({ contentFrame: false }),
   );
   await app.waitFor(
-    `!document.querySelector('[name="tabFrame"]').checked && document.querySelector('[data-setting="tabFrame"]').textContent.includes('From project')`,
+    `!document.querySelector('[name="contentFrame"]').checked && document.querySelector('[data-setting="contentFrame"]').textContent.includes('From project')`,
   );
-  await app.eval(`document.querySelector('[name="tabFrame"]').click()`);
+  await app.eval(`document.querySelector('[name="contentFrame"]').click()`);
   await app.waitFor(
-    `!!document.querySelector('[aria-label="Reset Tab frame to inherited"]')`,
+    `!!document.querySelector('[aria-label="Reset Framed content to inherited"]')`,
   );
   await app.eval(
-    `document.querySelector('[aria-label="Reset Tab frame to inherited"]').click()`,
+    `document.querySelector('[aria-label="Reset Framed content to inherited"]').click()`,
   );
-  await app.waitFor(`!document.querySelector('[name="tabFrame"]').checked`);
+  await app.waitFor(`!document.querySelector('[name="contentFrame"]').checked`);
   await chooseScope("project");
   await app.screenshot("/tmp/settings-project-defaults.png");
   await app.eval(
-    `document.querySelector('[aria-label="Reset Tab frame to inherited"]').click()`,
+    `document.querySelector('[aria-label="Reset Framed content to inherited"]').click()`,
   );
-  await app.waitFor(`document.querySelector('[name="tabFrame"]').checked`);
+  await app.waitFor(`document.querySelector('[name="contentFrame"]').checked`);
   await app.reload();
   await app.waitFor(`!!document.querySelector('[data-sidebar="left"]')`);
   expect(
     await app.eval(
-      `window.catamorphicDesktop.getSettings({projectId:${JSON.stringify(projectId)}}).then(s=>({value:s.values.tabFrame,source:s.sources.tabFrame}))`,
+      `window.catamorphicDesktop.getSettings({projectId:${JSON.stringify(projectId)}}).then(s=>({value:s.values.contentFrame,source:s.sources.contentFrame}))`,
     ),
   ).toEqual({ value: true, source: "profile" });
   expect(app.getRendererErrors()).toEqual([]);
@@ -116,10 +116,10 @@ it("keeps inherited controls usable in the compact light settings view", async (
   await app.eval(
     `(()=>{const input=document.querySelector('[aria-label="Settings category"]');input.value='workspace';input.dispatchEvent(new Event('change',{bubbles:true}));})()`,
   );
-  await app.waitFor(`!!document.querySelector('[name="tabFrame"]')`);
+  await app.waitFor(`!!document.querySelector('[name="contentFrame"]')`);
   await chooseScope("personal");
   await app.waitFor(
-    `document.querySelector('[data-setting="tabFrame"]').textContent.includes('From profile')`,
+    `document.querySelector('[data-setting="contentFrame"]').textContent.includes('From profile')`,
   );
   expect(
     await app.eval(
@@ -137,34 +137,34 @@ it("keeps checkbox rows and neighboring controls stable while changing and reset
   );
   for (const width of [720, 900]) {
     await app.eval(
-      `window.catamorphicDesktop.setSettings({projectId:${JSON.stringify(projectId)},scope:'profile',patch:{tabFrame:true}})`,
+      `window.catamorphicDesktop.setSettings({projectId:${JSON.stringify(projectId)},scope:'profile',patch:{contentFrame:true}})`,
     );
     await app.waitFor(
-      `document.querySelector('[data-setting="tabFrame"]').textContent.includes('Custom for profile') && !document.querySelector('[name="tabFrame"]').disabled`,
+      `document.querySelector('[data-setting="contentFrame"]').textContent.includes('Custom for profile') && !document.querySelector('[name="contentFrame"]').disabled`,
     );
     await app.eval(
       `window.catamorphicDesktop.devWindow('setSize',${width},760)`,
     );
     await app.eval(
-      `document.querySelector('[name="tabFrame"]').scrollIntoView({block:'center'})`,
+      `document.querySelector('[name="contentFrame"]').scrollIntoView({block:'center'})`,
     );
     const geometry = () =>
       app.eval<number[]>(
-        `(()=>{const row=document.querySelector('[data-setting="tabFrame"]');const r=row.getBoundingClientRect();const control=row.querySelector('input').getBoundingClientRect();return [r.height,r.right-control.right,control.y-r.y,row.lastElementChild.getBoundingClientRect().width,document.querySelector('[data-setting="pinnedBookmarks"]').getBoundingClientRect().top-r.top]})()`,
+        `(()=>{const row=document.querySelector('[data-setting="contentFrame"]');const r=row.getBoundingClientRect();const control=row.querySelector('input').getBoundingClientRect();return [r.height,r.right-control.right,control.y-r.y,row.lastElementChild.getBoundingClientRect().width,document.querySelector('[data-setting="pinnedBookmarks"]').getBoundingClientRect().top-r.top]})()`,
       );
     const before = await geometry();
     await app.screenshot(`/tmp/settings-checkbox-before-${width}.png`);
     await app.eval(
-      `document.querySelector('[aria-label="Reset Tab frame to inherited"]').click()`,
+      `document.querySelector('[aria-label="Reset Framed content to inherited"]').click()`,
     );
     await app.waitFor(
-      `!document.querySelector('[aria-label="Reset Tab frame to inherited"]') && !document.querySelector('[name="tabFrame"]').disabled`,
+      `!document.querySelector('[aria-label="Reset Framed content to inherited"]') && !document.querySelector('[name="contentFrame"]').disabled`,
     );
     await app.screenshot(`/tmp/settings-checkbox-reset-${width}.png`);
     expect(await geometry()).toEqual(before);
-    await app.eval(`document.querySelector('[name="tabFrame"]').click()`);
+    await app.eval(`document.querySelector('[name="contentFrame"]').click()`);
     await app.waitFor(
-      `!!document.querySelector('[aria-label="Reset Tab frame to inherited"]') && !document.querySelector('[name="tabFrame"]').disabled`,
+      `!!document.querySelector('[aria-label="Reset Framed content to inherited"]') && !document.querySelector('[name="contentFrame"]').disabled`,
     );
     expect(await geometry()).toEqual(before);
   }
