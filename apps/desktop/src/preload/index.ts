@@ -104,6 +104,9 @@ const api = {
     invoke("catamorphic:dock-ignore-mouse", ignore),
   dockDetach: (detached: boolean): Promise<void> =>
     invoke("catamorphic:dock-detach", detached),
+  dockMenu: (
+    entries: Array<{ label: string; action: string; danger?: boolean }>,
+  ): Promise<string | null> => invoke("catamorphic:dock-menu", entries),
   onDockSnapshot: (
     listener: (snapshot: DockSnapshot) => void,
   ): (() => void) => {

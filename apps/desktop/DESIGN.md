@@ -692,7 +692,12 @@ no confirm paints solid red with white text. A tooltip cancels on any press or
 right-click of its anchor so it cannot surface over a context menu. Detaching
 the dock is a session action from the bubble's or arrows' context menu; the
 `dockDetached` preference is the launch default only and closing the detached
-window never rewrites it.
+window never rewrites it. The detached window is a 124px strip, so its
+context menus are native (`desktopApi.dockMenu`) and it draws no resting-spot
+hints while dragging: the window itself moves, so hints inside it would
+travel with the pointer. The bubble and the arrows carry no tooltips. A staged
+minimize holds its exit pose until the entry reports "min", so dock-in never
+replays between the two poses.
 
 ## Work identity (2026-09-18)
 

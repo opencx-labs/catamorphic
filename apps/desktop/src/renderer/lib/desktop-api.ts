@@ -909,6 +909,10 @@ export interface CatamorphicDesktopApi {
   dockIgnoreMouse: (ignore: boolean) => Promise<void>;
   /** Session-only; the `dockDetached` preference stays the launch default. */
   dockDetach: (detached: boolean) => Promise<void>;
+  /** Native context menu for the detached dock window; resolves the action. */
+  dockMenu: (
+    entries: Array<{ label: string; action: string; danger?: boolean }>,
+  ) => Promise<string | null>;
   onDockSnapshot: (listener: (snapshot: DockSnapshot) => void) => () => void;
   onWorkspaceEvent: (listener: (event: WorkspaceEvent) => void) => () => void;
   windowProfile: () => Promise<string>;

@@ -15,6 +15,7 @@ import {
   useState,
 } from "react";
 import type { ChatSessionMenuEntry } from "../lib/chat-session-actions.js";
+import { desktopApi } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
 import { EASE_STANDARD, motionMs } from "../lib/motion.js";
 import type { ChatDockEntry } from "./chat-dock";
@@ -39,6 +40,8 @@ export interface ChatBubblesProps {
   dragTarget?: "left" | "center" | "right" | null;
   /** Whether the dock lives in its own window; the bubble menu flips it. */
   detached?: boolean;
+  /** The detached window is too small for in-page menus; use native ones. */
+  nativeMenus?: boolean;
   onToggleDetached?: () => void;
   newChatProjectName?: string;
   side?: "left" | "right";
@@ -102,6 +105,7 @@ function Bubble({
   onToggle,
   onClose,
   menu,
+  nativeMenus = false,
   onMenuAction,
   onExited,
   theme,
@@ -118,6 +122,7 @@ function Bubble({
   onToggle: (localId: string) => void;
   onClose: (localId: string) => void;
   menu?: ChatSessionMenuEntry[];
+  nativeMenus?: boolean;
   onMenuAction: (localId: string, action: ChatSessionMenuEntry) => void;
   onExited: (localId: string) => void;
 }) {
@@ -180,6 +185,15 @@ function Bubble({
             menu && menu.length > 0
               ? (event) => {
                   event.preventDefault();
+                  if (nativeMenus) {
+                    void desktopApi.dockMenu(menu).then((action) => {
+                      const picked = menu.find(
+                        (entry) => entry.action === action,
+                      );
+                      if (picked) onMenuAction(entry.localId, picked);
+                    });
+                    return;
+                  }
                   setMenuAt({ x: event.clientX, y: event.clientY });
                   setMenuOpen(true);
                 }
@@ -246,6 +260,7 @@ export function ChatBubbles({
   placementDragHandlers,
   dragTarget = null,
   detached = false,
+  nativeMenus = false,
   onToggleDetached,
   newChatProjectName,
   side = "right",
@@ -274,9 +289,23 @@ export function ChatBubbles({
     null,
   );
   const [dockMenuOpen, setDockMenuOpen] = useState(false);
+  const dockMenuEntries = [
+    {
+      label: detached
+        ? "Return dock to the window"
+        : "Float dock in its own window",
+      action: "detach",
+    },
+  ];
   const openDockMenu = onToggleDetached
     ? (event: MouseEvent<HTMLElement>) => {
         event.preventDefault();
+        if (nativeMenus) {
+          void desktopApi.dockMenu(dockMenuEntries).then((action) => {
+            if (action === "detach") onToggleDetached();
+          });
+          return;
+        }
         setDockMenuAt({ x: event.clientX, y: event.clientY });
         setDockMenuOpen(true);
       }
@@ -467,24 +496,22 @@ export function ChatBubbles({
   // side of the strip. They are also the handle that moves open chats.
   const Arrows = side === "left" ? ChevronsLeft : ChevronsRight;
   const arrows = (
-    <ShortcutHint label="Collapse chat bubbles" side="top">
-      <button
-        type="button"
-        {...placementDragHandlers}
-        onClick={() => {
-          setCollapseOverride(true);
-          onCollapse?.();
-        }}
-        onContextMenu={openDockMenu}
-        className="grid size-9 touch-none cursor-grab place-items-center rounded-full text-fg-faint transition-colors duration-150 hover:text-fg active:cursor-grabbing"
-        aria-label="Collapse chat bubbles"
-        aria-description="Drag to place open chats left, center or right. Arrow keys move them."
-        aria-keyshortcuts="ArrowLeft ArrowRight"
-        data-dock-arrows={side}
-      >
-        <Arrows className="size-4" />
-      </button>
-    </ShortcutHint>
+    <button
+      type="button"
+      {...placementDragHandlers}
+      onClick={() => {
+        setCollapseOverride(true);
+        onCollapse?.();
+      }}
+      onContextMenu={openDockMenu}
+      className="grid size-9 touch-none cursor-grab place-items-center rounded-full text-fg-faint transition-colors duration-150 hover:text-fg active:cursor-grabbing"
+      aria-label="Collapse chat bubbles"
+      aria-description="Drag to place open chats left, center or right. Arrow keys move them."
+      aria-keyshortcuts="ArrowLeft ArrowRight"
+      data-dock-arrows={side}
+    >
+      <Arrows className="size-4" />
+    </button>
   );
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex justify-center pb-3">
@@ -556,6 +583,7 @@ export function ChatBubbles({
               onToggle={onToggle}
               onClose={onClose}
               menu={menus[entry.localId]}
+              nativeMenus={nativeMenus}
               onMenuAction={onMenuAction}
               onExited={removeExited}
             />
@@ -583,57 +611,44 @@ export function ChatBubbles({
         </div>
 
         {/* Collapsed single bubble; carries aggregate indicators. */}
-        <ShortcutHint
-          label="Expand chat bubbles"
-          side="top"
-          delay={BUBBLE_HINT_DELAY_MS}
+        <button
+          type="button"
+          {...dragHandlers}
+          onClick={() => setCollapseOverride(false)}
+          onContextMenu={openDockMenu}
+          className={`relative grid touch-none cursor-grab active:cursor-grabbing place-items-center overflow-visible rounded-full border border-border bg-bg-overlay text-fg-muted transition-[max-width,opacity,background-color,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] hover:border-border-strong hover:text-fg ${
+            collapsed
+              ? "size-9 max-w-9 opacity-100"
+              : "pointer-events-none size-9 max-w-0 border-0 opacity-0"
+          }`}
+          aria-label="Expand chat bubbles"
+          aria-description="Drag to either bottom corner. Arrow keys move left or right."
+          aria-keyshortcuts="ArrowLeft ArrowRight"
+          aria-hidden={!collapsed}
+          inert={!collapsed ? true : undefined}
         >
-          <button
-            type="button"
-            {...dragHandlers}
-            onClick={() => setCollapseOverride(false)}
-            onContextMenu={openDockMenu}
-            className={`relative grid touch-none cursor-grab active:cursor-grabbing place-items-center overflow-visible rounded-full border border-border bg-bg-overlay text-fg-muted transition-[max-width,opacity,background-color,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] hover:border-border-strong hover:text-fg ${
-              collapsed
-                ? "size-9 max-w-9 opacity-100"
-                : "pointer-events-none size-9 max-w-0 border-0 opacity-0"
-            }`}
-            aria-label="Expand chat bubbles"
-            aria-description="Drag to either bottom corner. Arrow keys move left or right."
-            aria-keyshortcuts="ArrowLeft ArrowRight"
-            aria-hidden={!collapsed}
-            inert={!collapsed ? true : undefined}
+          <SignalGlyph
+            working={aggregate.working}
+            awaitingInput={aggregate.awaitingInput}
+            className="size-4"
           >
-            <SignalGlyph
-              working={aggregate.working}
-              awaitingInput={aggregate.awaitingInput}
-              className="size-4"
-            >
-              <MessageSquare className="size-4" />
-            </SignalGlyph>
-            {stripEntries.length > 1 && (
-              <span className="absolute -bottom-0.5 -right-0.5 grid min-w-4 place-items-center rounded-full border border-border bg-bg-raised px-0.5 text-[9px] font-semibold leading-4 text-fg-muted">
-                {stripEntries.length}
-              </span>
-            )}
-            <span className="absolute -right-0.5 -top-0.5">
-              <SignalBadge signals={aggregate} size="md" />
+            <MessageSquare className="size-4" />
+          </SignalGlyph>
+          {stripEntries.length > 1 && (
+            <span className="absolute -bottom-0.5 -right-0.5 grid min-w-4 place-items-center rounded-full border border-border bg-bg-raised px-0.5 text-[9px] font-semibold leading-4 text-fg-muted">
+              {stripEntries.length}
             </span>
-          </button>
-        </ShortcutHint>
+          )}
+          <span className="absolute -right-0.5 -top-0.5">
+            <SignalBadge signals={aggregate} size="md" />
+          </span>
+        </button>
       </div>
       {dockMenuAt && onToggleDetached && (
         <MenuPortal
           open={dockMenuOpen}
           position={dockMenuAt}
-          entries={[
-            {
-              label: detached
-                ? "Return dock to the window"
-                : "Float dock in its own window",
-              action: "detach",
-            },
-          ]}
+          entries={dockMenuEntries}
           onPick={() => {
             setDockMenuOpen(false);
             onToggleDetached();

@@ -612,8 +612,11 @@ export function DockHost({
               if (chat) invoke(chat, { kind: "menu", entry });
             }}
             dragLeft={dragLeft}
-            dragTarget={dragTarget}
+            // The detached window moves natively with the drag, so resting
+            // spots drawn inside it would travel with the pointer.
+            dragTarget={detachedWindow ? null : dragTarget}
             detached={snapshot.detached}
+            nativeMenus={detachedWindow}
             onToggleDetached={() => {
               void desktopApi.dockDetach(!snapshot.detached);
             }}

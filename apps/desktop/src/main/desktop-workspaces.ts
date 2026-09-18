@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   ipcMain,
+  Menu,
   screen,
   type WebContents,
 } from "electron";
@@ -75,6 +76,37 @@ export class DesktopWorkspaces {
       this.syncFloating(profileId);
       this.broadcast(profileId);
     });
+    // The detached window is a strip 124px tall: an in-page menu would be
+    // clamped inside it, so its context menus are native and resolve with
+    // the picked action.
+    ipcMain.handle(
+      "catamorphic:dock-menu",
+      (
+        event,
+        entries: Array<{ label: string; action: string; danger?: boolean }>,
+      ) => {
+        const profileId = options.windows.profileFor(event.sender);
+        const window = this.floating.get(profileId);
+        if (!window || window.webContents !== event.sender) return null;
+        return new Promise<string | null>((resolve) => {
+          let picked: string | null = null;
+          Menu.buildFromTemplate(
+            entries.map((entry) => ({
+              label: entry.label,
+              click: () => {
+                picked = entry.action;
+              },
+            })),
+          ).popup({
+            // At the cursor: window-relative coordinates land off target on
+            // the transparent strip, and a right-click puts the cursor here.
+            window,
+            // Closing fires before click on some platforms; settle after both.
+            callback: () => setTimeout(() => resolve(picked), 0),
+          });
+        });
+      },
+    );
     ipcMain.handle("catamorphic:dock-detach", (event, detached: boolean) => {
       const profileId = options.windows.profileFor(event.sender);
       this.setDetached(profileId, detached === true);

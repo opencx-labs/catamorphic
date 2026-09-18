@@ -1322,14 +1322,22 @@ function ChatDockContent({
     setMinimizing(true);
   };
 
+  // The mode flip travels through the entry owner and lands a frame or
+  // more later. Clearing `minimizing` before it lands would count the chat
+  // as expanded again and replay dock-in between the two poses, so the
+  // flag holds until the entry reports "min".
   const finishMinimize = () => {
     if (!minimizingRef.current) return;
-    minimizingRef.current = false;
-    setMinimizing(false);
-    onEntryChangeRef.current({ ...entryRef.current, mode: "min" });
+    if (entryRef.current.mode !== "min")
+      onEntryChangeRef.current({ ...entryRef.current, mode: "min" });
   };
   const finishMinimizeRef = useRef(finishMinimize);
   finishMinimizeRef.current = finishMinimize;
+  useEffect(() => {
+    if (entry.mode !== "min" || !minimizingRef.current) return;
+    minimizingRef.current = false;
+    setMinimizing(false);
+  }, [entry.mode]);
 
   // An untouched chat has nothing worth keeping — dismissing it (Escape
   // or the minimize button) closes it instead of parking an empty bubble.
