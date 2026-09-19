@@ -741,6 +741,15 @@ Only published apps run the published ref. Before this, a freshly built
 preview answered "Workflow not found" for a workflow the agent had just
 written, because calls still resolved the project's initial published commit.
 
+### 2026-09-19: Bubble clicks follow the open modifiers
+
+A dock bubble opens its chat the way every other resource opens: a plain
+click floats it, ⌘-click opens it as a workspace tab, ⌘⇧-click opens it as a
+tab to the side of what you are reading (`openModeFromEvent`, the same
+mapping rows and links use). Before this, bubbles only toggled the floating
+panel, so reaching "chat beside the page" meant floating first and then
+"Open as tab" plus a split.
+
 ### 2026-09-19: Host notices stay out of replies
 
 Local agents load the person's own CLI configuration, which can carry plugin
