@@ -10,6 +10,7 @@
  */
 export { AnimatedList, useAnimatedItems } from "./animated-list.js";
 export { Badge } from "./badge.js";
+export { BarList, type BarListItem } from "./bar-list.js";
 export { Button } from "./button.js";
 export { Calendar, type CalendarProps } from "./calendar.js";
 export { Card } from "./card.js";
@@ -56,6 +57,7 @@ export { ScrollHint } from "./scroll-hint.js";
 export { Select } from "./select.js";
 export { Skeleton } from "./skeleton.js";
 export { Spinner } from "./spinner.js";
+export { Stat } from "./stat.js";
 export { Switch } from "./switch.js";
 export { Tab, TabList, TabPanel, Tabs } from "./tabs.js";
 export { Textarea } from "./textarea.js";

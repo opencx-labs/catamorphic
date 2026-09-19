@@ -203,6 +203,58 @@ export const APP_KIT_CSS = `
   display:flex;justify-content:flex-end;gap:8px;
 }
 
+/* ----------------------------------------------------------------- stat */
+.cat-stat{
+  display:flex;flex-direction:column;gap:2px;min-width:0;
+  padding:12px 16px;
+  background:var(--color-bg-raised);border:1px solid var(--color-border);
+  border-radius:var(--radius-lg);
+}
+.cat-stat-label{
+  font-size:var(--cat-font-size-sm);color:var(--color-fg-muted);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.cat-stat-value{
+  font-size:calc(var(--cat-font-size) * 1.85);font-weight:600;
+  letter-spacing:-0.02em;line-height:1.15;color:var(--color-fg);
+  font-variant-numeric:tabular-nums;
+}
+.cat-stat-detail{font-size:var(--cat-font-size-sm);color:var(--color-fg-faint,var(--color-fg-muted))}
+.cat-stat-detail--success{color:var(--color-success)}
+.cat-stat-detail--warning{color:var(--color-warning)}
+.cat-stat-detail--danger{color:var(--color-danger)}
+.cat-stat-detail--info{color:var(--color-info)}
+
+/* ------------------------------------------------------------- bar list */
+.cat-bars{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;min-width:0}
+.cat-bar{min-width:0}
+.cat-bar-row{
+  display:grid;grid-template-columns:minmax(0,9rem) minmax(0,1fr) auto;
+  align-items:center;gap:10px;min-height:var(--cat-row-h);
+  padding:0 8px;border-radius:var(--radius-md);
+  font:inherit;font-size:var(--cat-font-size);color:var(--color-fg);
+  text-align:left;width:100%;
+}
+.cat-bar-row--button{
+  appearance:none;background:none;border:none;cursor:pointer;
+  transition:background-color var(--cat-motion-fast) var(--ease-standard);
+}
+.cat-bar-row--button:hover{background:var(--color-bg-overlay)}
+.cat-bar-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cat-bar-track{
+  display:block;height:8px;border-radius:999px;overflow:hidden;
+  background:color-mix(in srgb,var(--color-fg) 6%,transparent);
+}
+.cat-bar-fill{
+  display:block;height:100%;border-radius:inherit;
+  background:color-mix(in srgb,var(--color-accent) 70%,var(--color-bg-raised));
+  transition:width var(--cat-motion-base) var(--ease-standard);
+}
+.cat-bar-value{
+  font-size:var(--cat-font-size-sm);color:var(--color-fg-muted);
+  font-variant-numeric:tabular-nums;white-space:nowrap;
+}
+
 /* ----------------------------------------------------------------- tabs */
 .cat-tablist{
   display:flex;gap:16px;border-bottom:1px solid var(--color-border);

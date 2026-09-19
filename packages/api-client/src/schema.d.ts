@@ -12699,6 +12699,10 @@ export interface paths {
                             publishedAt: string | null;
                             /** @enum {string} */
                             icon: "default" | "review" | "dashboard" | "report" | "tracker" | "form" | "calculator";
+                            access: {
+                                /** @enum {string} */
+                                sessions?: "read";
+                            };
                         }[];
                     };
                 };
@@ -12761,6 +12765,10 @@ export interface paths {
                             commitSha: string | null;
                             bundleBytes: number | null;
                             allowedWorkflows: string[] | null;
+                            access: {
+                                /** @enum {string} */
+                                sessions?: "read";
+                            };
                             error: string | null;
                             isActive: boolean;
                             /** Format: date-time */
@@ -12841,6 +12849,10 @@ export interface paths {
                             commitSha: string | null;
                             bundleBytes: number | null;
                             allowedWorkflows: string[] | null;
+                            access: {
+                                /** @enum {string} */
+                                sessions?: "read";
+                            };
                             error: string | null;
                             isActive: boolean;
                             /** Format: date-time */
@@ -12933,6 +12945,10 @@ export interface paths {
                             commitSha: string | null;
                             bundleBytes: number | null;
                             allowedWorkflows: string[] | null;
+                            access: {
+                                /** @enum {string} */
+                                sessions?: "read";
+                            };
                             error: string | null;
                             isActive: boolean;
                             /** Format: date-time */
@@ -13950,6 +13966,10 @@ export interface paths {
                                 commitSha: string | null;
                                 bundleBytes: number | null;
                                 allowedWorkflows: string[] | null;
+                                access: {
+                                    /** @enum {string} */
+                                    sessions?: "read";
+                                };
                                 error: string | null;
                                 isActive: boolean;
                                 /** Format: date-time */
@@ -14275,6 +14295,10 @@ export interface paths {
                                 commitSha: string | null;
                                 bundleBytes: number | null;
                                 allowedWorkflows: string[] | null;
+                                access: {
+                                    /** @enum {string} */
+                                    sessions?: "read";
+                                };
                                 error: string | null;
                                 isActive: boolean;
                                 /** Format: date-time */

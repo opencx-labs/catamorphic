@@ -704,6 +704,19 @@ window loses OS focus while the agent works, the chat lurks the same way it
 does behind a tab. Seeing the screen behind the dock is the agent's job
 through computer use, not a composer control.
 
+### 2026-09-19: Apps that read your chats, and two chart-free dashboard parts
+
+An app declares `catamorphic.access.sessions` in its package and the desktop
+asks once, in place of the app, before a build that reads the profile's chats
+mounts (`AppAccessConsent` in `screens/app-screen.tsx`, approval recorded per
+project and app in `appAccessApprovals`). The card uses the settings-card
+surface and one primary action; there is no "deny" button because closing the
+tab is the refusal. The app kit gained `Stat` (label over a large tabular
+number, optional toned detail) and `BarList` (horizontal bars scaled to the
+largest value, accent at low chroma), so agents can show "how much of each"
+without hand-rolled charts or literal colors; both are documented in the
+`designing-apps` seed. See ADR 0148.
+
 ## Work identity (2026-09-18)
 
 The desktop product is Work, powered by the Catamorphic framework. Its icon is

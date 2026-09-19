@@ -27252,6 +27252,16 @@
                           "form",
                           "calculator"
                         ]
+                      },
+                      "access": {
+                        "type": "object",
+                        "properties": {
+                          "sessions": {
+                            "type": "string",
+                            "enum": ["read"]
+                          }
+                        },
+                        "additionalProperties": false
                       }
                     },
                     "required": [
@@ -27260,7 +27270,8 @@
                       "id",
                       "activeVersionId",
                       "publishedAt",
-                      "icon"
+                      "icon",
+                      "access"
                     ],
                     "additionalProperties": false
                   }
@@ -27357,6 +27368,16 @@
                           "type": "string"
                         }
                       },
+                      "access": {
+                        "type": "object",
+                        "properties": {
+                          "sessions": {
+                            "type": "string",
+                            "enum": ["read"]
+                          }
+                        },
+                        "additionalProperties": false
+                      },
                       "error": {
                         "nullable": true,
                         "type": "string"
@@ -27391,6 +27412,7 @@
                       "commitSha",
                       "bundleBytes",
                       "allowedWorkflows",
+                      "access",
                       "error",
                       "isActive",
                       "createdAt",
@@ -27511,6 +27533,16 @@
                         "type": "string"
                       }
                     },
+                    "access": {
+                      "type": "object",
+                      "properties": {
+                        "sessions": {
+                          "type": "string",
+                          "enum": ["read"]
+                        }
+                      },
+                      "additionalProperties": false
+                    },
                     "error": {
                       "nullable": true,
                       "type": "string"
@@ -27545,6 +27577,7 @@
                     "commitSha",
                     "bundleBytes",
                     "allowedWorkflows",
+                    "access",
                     "error",
                     "isActive",
                     "createdAt",
@@ -27678,6 +27711,16 @@
                         "type": "string"
                       }
                     },
+                    "access": {
+                      "type": "object",
+                      "properties": {
+                        "sessions": {
+                          "type": "string",
+                          "enum": ["read"]
+                        }
+                      },
+                      "additionalProperties": false
+                    },
                     "error": {
                       "nullable": true,
                       "type": "string"
@@ -27712,6 +27755,7 @@
                     "commitSha",
                     "bundleBytes",
                     "allowedWorkflows",
+                    "access",
                     "error",
                     "isActive",
                     "createdAt",
@@ -29967,6 +30011,16 @@
                             "type": "string"
                           }
                         },
+                        "access": {
+                          "type": "object",
+                          "properties": {
+                            "sessions": {
+                              "type": "string",
+                              "enum": ["read"]
+                            }
+                          },
+                          "additionalProperties": false
+                        },
                         "error": {
                           "nullable": true,
                           "type": "string"
@@ -30001,6 +30055,7 @@
                         "commitSha",
                         "bundleBytes",
                         "allowedWorkflows",
+                        "access",
                         "error",
                         "isActive",
                         "createdAt",
@@ -30476,6 +30531,16 @@
                             "type": "string"
                           }
                         },
+                        "access": {
+                          "type": "object",
+                          "properties": {
+                            "sessions": {
+                              "type": "string",
+                              "enum": ["read"]
+                            }
+                          },
+                          "additionalProperties": false
+                        },
                         "error": {
                           "nullable": true,
                           "type": "string"
@@ -30510,6 +30575,7 @@
                         "commitSha",
                         "bundleBytes",
                         "allowedWorkflows",
+                        "access",
                         "error",
                         "isActive",
                         "createdAt",

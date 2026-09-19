@@ -160,6 +160,13 @@ describeIf("AppsService integration", () => {
           private: true,
         }),
         ".catamorphic/apps/ops-dashboard/src/main.tsx": "export {};",
+        // Declares that it reads the viewer's chats (ADR 0148).
+        ".catamorphic/apps/activity/package.json": JSON.stringify({
+          name: "activity",
+          private: true,
+          catamorphic: { access: { sessions: "read" } },
+        }),
+        ".catamorphic/apps/activity/src/main.tsx": "export {};",
       },
     });
     try {
@@ -194,12 +201,22 @@ describeIf("AppsService integration", () => {
     const list = await apps.list({ identity, projectId });
     expect(list).toEqual([
       {
+        name: "activity",
+        id: null,
+        activeVersionId: null,
+        publishedAt: null,
+        icon: "default",
+        title: "activity",
+        access: {},
+      },
+      {
         name: "ops-dashboard",
         id: null,
         activeVersionId: null,
         publishedAt: null,
         icon: "default",
         title: "ops-dashboard",
+        access: {},
       },
     ]);
   });
@@ -230,6 +247,57 @@ describeIf("AppsService integration", () => {
       (entry) => entry.command === "NODE_ENV=production bun run build",
     );
     expect(buildCommand?.cwd).toContain(".catamorphic/apps/ops-dashboard");
+  });
+
+  it("freezes a declared session access into the version and widens the app identity with it (ADR 0148)", async () => {
+    const plain = await apps.build({
+      identity,
+      projectId,
+      appName: "ops-dashboard",
+      kind: "preview",
+    });
+    expect(plain.access).toEqual({});
+    const narrowedPlain = await apps.identityForApp({
+      identity,
+      projectId,
+      appName: "ops-dashboard",
+      channel: "dev",
+    });
+    expect(narrowedPlain.scope).toEqual([
+      { kind: "app", projectId, name: "ops-dashboard", channel: "dev" },
+    ]);
+
+    const activity = await apps.build({
+      identity,
+      projectId,
+      appName: "activity",
+      kind: "preview",
+    });
+    expect(activity.access).toEqual({ sessions: "read" });
+    const list = await apps.list({ identity, projectId });
+    expect(list.find((app) => app.name === "activity")?.access).toEqual({
+      sessions: "read",
+    });
+    const narrowed = await apps.identityForApp({
+      identity,
+      projectId,
+      appName: "activity",
+      channel: "dev",
+    });
+    expect(narrowed.scope).toEqual([
+      { kind: "app", projectId, name: "activity", channel: "dev" },
+      { kind: "sessions", projectId },
+    ]);
+    // The published channel has no active version yet: nothing to widen.
+    const published = await apps.identityForApp({
+      identity,
+      projectId,
+      appName: "activity",
+      channel: "published",
+    });
+    expect(published.scope).toEqual([
+      { kind: "app", projectId, name: "activity", channel: "published" },
+    ]);
   });
 
   it("persists presentation without rebuilding and keeps the default for unknown icons", async () => {
@@ -279,10 +347,11 @@ describeIf("AppsService integration", () => {
       .where("name", "=", "ops-dashboard")
       .execute();
     expect(await apps.presentation(address)).toMatchObject({ icon: "default" });
-    expect((await apps.list({ identity, projectId }))[0]).toMatchObject({
-      title: "Operations",
-      icon: "default",
-    });
+    expect(
+      (await apps.list({ identity, projectId })).find(
+        (app) => app.name === "ops-dashboard",
+      ),
+    ).toMatchObject({ title: "Operations", icon: "default" });
     await apps.updatePresentation({ ...address, icon: "default" });
   });
 
@@ -401,9 +470,11 @@ describeIf("AppsService integration", () => {
     });
     const previews = versions.filter((entry) => entry.kind === "preview");
     expect(previews.length).toBeLessThanOrEqual(3);
-    // Every stored bundle key belongs to a surviving version.
+    // Every stored bundle key of this app belongs to a surviving version.
     const survivingIds = new Set(versions.map((entry) => entry.id));
+    const appId = versions[0]?.appId ?? "";
     for (const key of bundles.objects.keys()) {
+      if (!key.includes(appId)) continue;
       const versionId = key.split("/").at(-2);
       expect(survivingIds.has(versionId ?? "")).toBe(true);
     }

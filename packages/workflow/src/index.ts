@@ -154,6 +154,7 @@ export function trigger<Kind extends TriggerKindName>(
 export const WORKFLOW_PACKAGE_VERSION = "0.0.2";
 
 export type {
+  SessionHistoryMessage,
   SessionHostOperations,
   SessionSnapshot,
 } from "./session-operations.js";

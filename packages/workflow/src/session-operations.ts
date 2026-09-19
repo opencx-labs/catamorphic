@@ -15,6 +15,20 @@ export interface SessionSnapshot {
   stateRevision: number;
   authorityHostId: string;
   authorityRevision: number;
+  /** ISO timestamps: when the conversation started and last changed. */
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
+  /** Agent-chosen conversation icon ("<name>:<color>"); null = default. */
+  icon: string | null;
+}
+/** One transcript message as `history` returns it. */
+export interface SessionHistoryMessage {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  /** ISO timestamp of the message. */
+  createdAt: string;
 }
 /** The authoritative host has accepted delivery, but has not applied this action yet. */
 export interface QueuedSessionAction {
@@ -32,12 +46,10 @@ type Call<Input, Output = unknown> = (
 export interface SessionHostOperations {
   inspect: Call<Target, SessionSnapshot>;
   list: Call<{ limit?: number }, { items: SessionSnapshot[]; total: number }>;
+  /** The newest `limit` messages (default 30, max 100), oldest first. */
   history: Call<
     Target & { limit?: number },
-    {
-      sessionId: string;
-      messages: Array<{ id: string; role: string; content: string }>;
-    }
+    { sessionId: string; messages: SessionHistoryMessage[] }
   >;
   deliver: Call<
     {

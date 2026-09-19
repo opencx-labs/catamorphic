@@ -716,6 +716,66 @@ Never pass secrets to app code, return one from an app-callable workflow, or
 include one in an output. An app that needs a third-party API calls a
 workflow that holds the credential.
 
+## Reading the viewer's chats
+
+Apps reach chat sessions the same way they reach everything: through a
+workflow. Three lines make it work, and the person sees exactly what the
+app asked for.
+
+1. Declare it in the app's \`package.json\`. The declaration is frozen into
+   every built version, so a version built without it never reads chats:
+
+\`\`\`json
+{ "name": "activity", "private": true, "catamorphic": { "access": { "sessions": "read" } } }
+\`\`\`
+
+2. Export a workflow that reads through the host operations and returns
+   plain JSON. \`list\` gives snapshots with \`title\`, \`agentId\`,
+   \`createdAt\`, \`updatedAt\`, \`activity\`, \`workStatus\` and
+   \`running\`; \`history\` gives one session's newest messages with
+   \`role\`, \`content\` and \`createdAt\`:
+
+\`\`\`typescript
+import { defineWorkflow, type BoundaryContext } from "@catamorphic/workflow";
+import type { SessionSnapshot } from "@catamorphic/workflow";
+
+/** @displayname Recent sessions */
+export const recentSessions = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    /** @displayname List the viewer's sessions */
+    defineBoundary({
+      run: (context: BoundaryContext<{ days: number }>) =>
+        context.host["catamorphic.sessions"].list({ limit: 100 }),
+    }),
+    /** @displayname Count per day */
+    defineBoundary({
+      run: (context: BoundaryContext<{ items: SessionSnapshot[] }>) => {
+        const perDay = new Map<string, number>();
+        for (const session of context.input.items) {
+          const day = session.createdAt.slice(0, 10);
+          perDay.set(day, (perDay.get(day) ?? 0) + 1);
+        }
+        return { total: context.input.items.length, perDay: [...perDay] };
+      },
+    }),
+  ],
+}));
+\`\`\`
+
+A host call is a boundary transition: return it, and read its result as the
+next boundary's input, as above. The workflow's output is the last
+boundary's return value.
+
+3. Put it in \`app-api.ts\` and call it from the app with the generated
+   client, then render with \`Stat\`, \`BarList\` and \`DataTable\`.
+
+The workflow runs as the person using the app, so it only ever sees that
+person's own conversations in this project; a published app shown to
+someone else shows them theirs. The host asks the person before opening a
+build that declares this access. Summarize in the workflow (counts per day,
+per agent, per topic) and return what the screen needs, not whole
+transcripts.
+
 ## Forms
 
 A native \`<form>\` submit REALLY NAVIGATES the sandboxed app frame: the
@@ -809,6 +869,8 @@ import { Button, Card, DataTable, useAsync } from "@catamorphic/app/ui";
 | \`Card\` | \`title\`, \`description\`, \`footer\` | THE surface unit — compose screens from Cards on the app background. |
 | \`Tabs\`+\`TabList\`+\`Tab\`+\`TabPanel\` | \`value\`, \`onValueChange\`; \`value\` per tab/panel | Underline tabs with roving keyboard focus. |
 | \`Badge\` | \`variant\` neutral/success/warning/danger/info | 11px low-chroma status label. |
+| \`Stat\` | \`label\`, \`value\`, \`detail\`, \`tone\` | One number that matters, as a tile: muted label over a large value with an optional toned detail line. A row of Stats opens a dashboard. |
+| \`BarList\` | \`items\` (\`key\`/\`label\`/\`value\`/\`display\`), \`format\`, \`max\`, \`onSelect\` | Horizontal bars for "how much of each": per day, per agent, per topic. Scales to the largest value; \`onSelect\` makes rows clickable. The only chart to reach for by default. |
 | \`Spinner\` | \`size\`, \`label\` | Indeterminate progress. |
 | \`Skeleton\` | \`width\`, \`height\` | Loading placeholder with shimmer. |
 | \`EmptyState\` | \`message\`, \`action\` | The quiet empty state: one muted sentence + one action, max. |
