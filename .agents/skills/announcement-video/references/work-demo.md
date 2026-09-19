@@ -110,3 +110,15 @@ replaced the browse → ask → build → use cut on the homepage:
   to light, clashes with the dark website the film sits on.
 - Delete, don't archive, earlier takes' chats: an app that lists sessions
   shows archived ones too, and nine identical rows give the take away.
+- The bookmarks bar is part of the set. A dev profile carries the developer's
+  own imported bookmarks; replace them with a work set before filming
+  (desktop `bookmarks.json`: `pinnedByProfile` tiles and `libraryByProfile`
+  rows, each with a `faviconUrl` so nothing shows a globe). The 2026-09-19
+  film uses pinned Figma, Linear, Notion, Calendar and a list of Shopify,
+  Stripe, Slack, Webflow, Mailchimp, Drive; the original file is kept beside
+  the session scratchpad as `bookmarks.backup.json`.
+- Render at 60 fps: `Page.startScreencast` delivers frames at the display
+  rate, so a 30 fps render throws half of them away and reads as choppy.
+- Collapse the sidebar for the reading beat and bring it back to watch the
+  change land; the dock's New chat button (furthest right of the two) opens a
+  chat while the sidebar is away.
