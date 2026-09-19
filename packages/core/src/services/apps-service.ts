@@ -243,14 +243,17 @@ export class AppsService {
     channel?: "published" | "dev";
     versionId?: string;
   }): Promise<Identity> {
-    const row = await this.db
-      .selectFrom("apps")
-      .innerJoin("projects", "projects.id", "apps.project_id")
-      .where("apps.project_id", "=", args.projectId)
-      .where("apps.name", "=", args.appName)
-      .where("projects.tenant_id", "=", args.identity.tenantId)
-      .select("apps.session_artifact_id")
-      .executeTakeFirst();
+    const [row, executionScope] = await Promise.all([
+      this.db
+        .selectFrom("apps")
+        .innerJoin("projects", "projects.id", "apps.project_id")
+        .where("apps.project_id", "=", args.projectId)
+        .where("apps.name", "=", args.appName)
+        .where("projects.tenant_id", "=", args.identity.tenantId)
+        .select("apps.session_artifact_id")
+        .executeTakeFirst(),
+      this.executionReach(args.identity, args.projectId),
+    ]);
     const ref = {
       kind: "app",
       projectId: args.projectId,
@@ -258,32 +261,27 @@ export class AppsService {
       channel: args.channel,
       versionId: args.versionId,
     } satisfies import("../identity.js").AppRef;
-    const executionScope = await this.executionReach(
-      args.identity,
-      args.projectId,
-    );
     if (row?.session_artifact_id && this.deps.artifacts) {
+      // A session app is its own artifact; a viewer the artifact turns away
+      // gets no scope at all.
       try {
         await this.deps.artifacts.get({
           ...args,
           artifactId: row.session_artifact_id,
         });
-        return this.widenForAccess(
-          {
-            ...args.identity,
-            scope: [{ ...ref, channel: "dev" }],
-            executionScope,
-          },
-          { ...ref, channel: "dev" },
-        );
       } catch {
         return { ...args.identity, scope: [] };
       }
+      return this.widenForAccess({
+        ...args.identity,
+        scope: [{ ...ref, channel: "dev" }],
+        executionScope,
+      });
     }
-    return this.widenForAccess(
-      { ...narrowIdentity(args.identity, ref), executionScope },
-      ref,
-    );
+    return this.widenForAccess({
+      ...narrowIdentity(args.identity, ref),
+      executionScope,
+    });
   }
 
   /**
@@ -318,23 +316,23 @@ export class AppsService {
    * is frozen at build time from the app's package.json, so the bundle a
    * viewer opens and the data it may read come from the same commit.
    */
-  private async widenForAccess(
-    identity: Identity,
-    ref: import("../identity.js").AppRef,
-  ): Promise<Identity> {
-    if (!identity.scope?.length) return identity;
+  private async widenForAccess(identity: Identity): Promise<Identity> {
+    const scope = identity.scope ?? [];
+    const [ref] = scope;
+    if (ref?.kind !== "app") return identity;
     const access = await this.versionAccess(identity, ref);
     if (access.sessions !== "read") return identity;
     return {
       ...identity,
-      scope: [
-        ...identity.scope,
-        { kind: "sessions", projectId: ref.projectId },
-      ],
+      scope: [...scope, { kind: "sessions", projectId: ref.projectId }],
     };
   }
 
-  /** The declared access of the version this ref resolves to. */
+  /**
+   * The declared access of the version this ref resolves to: the same row
+   * `viewState` serves for the ref, so the grant always belongs to the
+   * bundle in front of the viewer (on `dev`, the viewer's own newest build).
+   */
   private async versionAccess(
     identity: Identity,
     ref: import("../identity.js").AppRef,
@@ -351,7 +349,14 @@ export class AppsService {
     query = ref.versionId
       ? query.where("app_versions.id", "=", ref.versionId)
       : ref.channel === "dev"
-        ? query.orderBy("app_versions.ready_at", "desc").limit(1)
+        ? query
+            .where(
+              "app_versions.built_by_external_user_id",
+              "=",
+              identity.externalUserId,
+            )
+            .orderBy("app_versions.created_at", "desc")
+            .limit(1)
         : query.where("app_versions.is_active", "=", true);
     const row = await query.executeTakeFirst();
     return parseAppAccess(row?.access);
@@ -384,20 +389,27 @@ export class AppsService {
       ])
       .execute();
     const byName = new Map(rows.map((row) => [row.name, row]));
-    // The newest ready build's declaration, so a host can ask for consent
-    // before opening a development build that reads the viewer's data.
+    // The declaration of the build this viewer opens on the `dev` channel
+    // (their own newest, as `viewState` picks it), so a host can ask for
+    // consent before opening a development build that reads their data.
     const latest = await this.db
       .selectFrom("app_versions")
       .innerJoin("apps", "apps.id", "app_versions.app_id")
       .where("apps.project_id", "=", args.projectId)
       .where("app_versions.status", "=", "ready")
-      .select(["apps.name", "app_versions.access", "app_versions.ready_at"])
-      .orderBy("app_versions.ready_at", "desc")
+      .where(
+        "app_versions.built_by_external_user_id",
+        "=",
+        args.identity.externalUserId,
+      )
+      .distinctOn("apps.name")
+      .orderBy("apps.name")
+      .orderBy("app_versions.created_at", "desc")
+      .select(["apps.name", "app_versions.access"])
       .execute();
-    const accessByName = new Map<string, AppAccess>();
-    for (const row of latest)
-      if (!accessByName.has(row.name))
-        accessByName.set(row.name, parseAppAccess(row.access));
+    const accessByName = new Map(
+      latest.map((row) => [row.name, parseAppAccess(row.access)]),
+    );
 
     return names.map((name) => {
       const row = byName.get(name);

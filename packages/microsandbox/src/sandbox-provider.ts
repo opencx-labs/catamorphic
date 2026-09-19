@@ -28,8 +28,9 @@ function mapMsbStatus(status: MsbSandboxStatus): SandboxStatus {
       return "creating";
     case "running":
     case "draining":
-    case "paused":
       return "started";
+    // A paused VM is not serving; callers start it, which resumes it.
+    case "paused":
     case "stopped":
       return "stopped";
     case "crashed":
@@ -164,8 +165,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
   async startSandbox(sandboxId: string): Promise<void> {
     const handle = await Sandbox.get(sandboxId);
     if (handle.status === "running") return;
-    const sandbox = await handle.startDetached();
-    this.connections.set(sandboxId, sandbox);
+    this.connections.set(sandboxId, await bringUp(handle));
   }
 
   async stopSandbox(sandboxId: string): Promise<void> {
@@ -298,10 +298,24 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     const sandbox =
       handle.status === "running"
         ? await handle.connect()
-        : await handle.startDetached();
+        : await bringUp(handle);
     this.connections.set(sandboxId, sandbox);
     return sandbox;
   }
+}
+
+/**
+ * A live connection to a sandbox that is not running. A paused VM resumes in
+ * place (restarting one is refused by msb); anything else boots.
+ */
+async function bringUp(
+  handle: Awaited<ReturnType<typeof Sandbox.get>>,
+): Promise<Sandbox> {
+  if (handle.status === "paused") {
+    await handle.resume();
+    return handle.connect();
+  }
+  return handle.startDetached();
 }
 
 function withCredentials(url: string, opts?: GitCloneOpts): string {

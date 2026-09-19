@@ -426,6 +426,7 @@ export class AgentCapabilitiesService {
         identity,
         sessionId: args.sessionId,
         lock: false,
+        intent: "read",
       });
       if (projectId !== args.projectId) throw new AccessDeniedError();
       const session = await this.deps.db

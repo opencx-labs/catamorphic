@@ -97,6 +97,7 @@ export class SessionMailboxesService {
           projectId,
           externalUserId: session.external_user_id,
           agentId: session.agent_id,
+          intent: "change",
         });
         if (
           session.authority_host_id !== input.destination.hostId ||

@@ -1,5 +1,4 @@
 import { buildAppGuestDocument } from "@catamorphic/app";
-import { narrowIdentity } from "@catamorphic/core";
 import type { FastifyInstance } from "fastify";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
@@ -233,16 +232,18 @@ async function callTool(
 
   const apps = await loadPublishedApps(core, identity, projectId);
   const owner = workflowOwners(apps).get(name);
-  if (!owner) {
+  if (!owner || !core.apps) {
     return toolError(`Unknown tool: ${name}`);
   }
-  // Narrowing to the owning app puts MCP callers on the exact authorization
+  // The owning app's identity puts MCP callers on the exact authorization
   // path the in-product iframe uses: the run is re-authorized against the
-  // app's active version's frozen workflow set server-side (ADR 0053).
-  const scoped = narrowIdentity(identity, {
-    kind: "app",
+  // app's active version's frozen workflow set server-side (ADR 0053), it
+  // keeps the caller's execution reach, and it carries the version's
+  // declared session access (ADR 0148).
+  const scoped = await core.apps.identityForApp({
+    identity,
     projectId,
-    name: owner.name,
+    appName: owner.name,
   });
 
   if (args.mode === "start") {

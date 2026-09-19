@@ -724,8 +724,11 @@ because an agent given a stat tile in the inventory still drew its own when
 the rule was implicit.
 
 Two sidebar fixes from filming an agent-authored section: a Lucide alias
-name (`MessageCircleQuestion`) resolves through the package's exports and an
-unknown name falls back to a dot, never text; and hiding an item hides its
+name (`MessageCircleQuestion`) resolves through one shared resolver
+(`lib/lucide-icon.ts`, used by rows, tabs, inline actions and the palette)
+that accepts only members of the icon table, so an unknown name or a
+non-icon export such as `Icon` falls back to a dot, never text and never a
+crash; and hiding an item hides its
 subtree, since hiding only the `.catamorphic` row hoisted the workspace's
 folders into a project files section. Agents also finish an app with the
 host's `build_app` and an `app:<name>` link; a local `bun run build` alone
@@ -736,10 +739,12 @@ identity keeps the viewer's execution reach in the project, so the desktop
 user's apps run on "This Mac" without any grant.
 
 A preview app calls the project as it is on this machine: its workflow calls
-read the dev checkout's HEAD, the same source the preview was compiled from.
-Only published apps run the published ref. Before this, a freshly built
-preview answered "Workflow not found" for a workflow the agent had just
-written, because calls still resolved the project's initial published commit.
+read the dev checkout's working tree, the same files the preview was
+compiled from (a build never commits, and the turn checkpoint lands after
+the agent has already opened the app). Only published apps run the published
+ref. Before this, a freshly built preview answered "Workflow not found" for a
+workflow the agent had just written, because calls still resolved the
+project's initial published commit.
 
 ### 2026-09-19: Bubble clicks follow the open modifiers
 
@@ -767,3 +772,16 @@ the orange W in `build/icon.svg`, shared with Work mobile and work.software.
 Theme presets are Work Dark and Work Light; the existing palette and motion
 contract continue to apply. Packaging, invitations and storage identity follow
 [ADR 0146](../../docs/decisions/0146-work-application-identity.md).
+
+### 2026-09-20: Review fixes on the app-access branch
+
+"Read" means read: the sessions ref an app gains (ADR 0148) lists and reads
+the viewer's chats and can change none of them; every session mutation asks
+for an agent ref, and the session-actions door settles access before it
+records an action. The consent card waits until both the app list and the
+profile's answers are known, so an approved app never flashes the question
+and an unanswered one never runs early. Apps driven over the MCP door take
+the same identity path as the iframe (execution reach and session access
+included). One Lucide resolver serves rows, tabs, inline actions and the
+palette, and it accepts only members of the icon table: an agent writing
+`icon: "Icon"` gets a dot, not a crashed sidebar.

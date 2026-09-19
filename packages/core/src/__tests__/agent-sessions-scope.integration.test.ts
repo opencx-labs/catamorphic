@@ -352,6 +352,21 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     await expect(sessions.list(elsewhere, projectId)).rejects.toThrow(
       AccessDeniedError,
     );
+    // "read" means read: the ref changes nothing, not even the viewer's own.
+    await expect(
+      sessions.deliver(appViewer, projectId, first.id, {
+        content: "hello",
+        author: { kind: "user", externalUserId: appViewer.externalUserId },
+        mode: "next_turn",
+        idempotencyKey: "app-deliver",
+      }),
+    ).rejects.toThrow(AccessDeniedError);
+    await expect(
+      sessions.archive(appViewer, projectId, first.id),
+    ).rejects.toThrow(AccessDeniedError);
+    await expect(
+      sessions.fork(appViewer, projectId, first.id, {}),
+    ).rejects.toThrow(AccessDeniedError);
   });
 
   it("pages hierarchy branches without leaking foreign parents or child counts", async () => {

@@ -581,6 +581,7 @@ export class RunsService {
           projectId: row.project_id,
           externalUserId: args.identity.externalUserId,
           agentId: source.agent_id,
+          intent: "change",
         });
       }
     }
@@ -2050,74 +2051,80 @@ export class RunsService {
     if (!remote) throw new ProductionDeploymentNotFoundError(args.projectId);
 
     // A pinned sha names immutable content, so the parse behind it can be
-    // reused. Without a sha the caller is asking "whatever main is now", which
-    // has to hit the remote to answer.
-    const cached = args.commitSha
-      ? this.recallPreparedSource(
-          preparedSourceKey({ ...args, commitSha: args.commitSha }),
-        )
-      : undefined;
-    return cached ?? this.loadProductionSource({ ...args, remote });
+    // reused without touching the repository at all.
+    if (args.commitSha) {
+      const hit = this.recallPreparedSource(
+        preparedSourceKey({ ...args, commitSha: args.commitSha }),
+      );
+      if (hit) return hit;
+    }
+    const repo = await this.deps.projectManager.openDev(
+      args.identity.tenantId,
+      args.projectId,
+      args.identity.externalUserId,
+    );
+    try {
+      // A preview app build (the `dev` channel) is compiled from the project
+      // as it is on this host, uncommitted edits included, so its calls read
+      // the same working tree; HEAD is recorded as provenance only.
+      if (!args.commitSha && callsPreviewApp(args.identity)) {
+        return await prepareSource({
+          projectId: args.projectId,
+          workflowName: args.workflowName,
+          files: await repo.readAllFiles({ filter: isWorkflowSourceFile }),
+          commitSha: await repo.resolveRef("HEAD").catch(() => null),
+        });
+      }
+      await fetchRemote({
+        dev: repo,
+        remote,
+        tenantId: args.identity.tenantId,
+        projectId: args.projectId,
+        remoteBranch: args.remoteBranch ?? "main",
+      });
+      // Without a sha the caller asks for "whatever main is now": the ref is
+      // resolved first so that an unchanged main is still a cache hit.
+      const commitSha =
+        args.commitSha ??
+        (await repo.resolveRef(PUBLISHED_REF).catch(() => null));
+      if (!commitSha)
+        throw new ProductionDeploymentNotFoundError(args.projectId);
+      const key = preparedSourceKey({ ...args, commitSha });
+      return await (this.recallPreparedSource(key) ??
+        this.rememberPreparedSource(
+          key,
+          repo
+            .readAllFilesAtRef(commitSha, { filter: isWorkflowSourceFile })
+            .then((files) =>
+              prepareSource({
+                projectId: args.projectId,
+                workflowName: args.workflowName,
+                files,
+                commitSha,
+              }),
+            ),
+        ));
+    } finally {
+      await repo.dispose();
+    }
   }
 
   /**
-   * Reads a commit and parses it into an executable source.
+   * Memoises a parsed commit by (tenant, project, workflow, sha).
    *
    * Every durable boundary and every batch item invokes the runtime, and each
    * invocation needs the transformed source. Recomputing it per invocation
    * means a full git fetch plus a whole-project ts-morph parse per step, so a
-   * 10k-item batch parses the project 10k times. Results are memoised by
-   * (tenant, project, workflow, sha) — a sha is immutable, so a hit is always
-   * valid.
+   * 10k-item batch parses the project 10k times. A sha is immutable, so a hit
+   * is always valid.
    *
    * The promise is cached before it settles, so concurrent items on the same
    * commit collapse into one parse instead of stampeding.
    */
-  private loadProductionSource(args: {
-    identity: Identity;
-    projectId: string;
-    workflowName: string;
-    commitSha?: string;
-    remoteBranch?: string;
-    remote: NonNullable<ProjectManager["remoteBackend"]>;
-  }): Promise<PreparedSource> {
-    const load = (async () => {
-      const repo = await this.deps.projectManager.openDev(
-        args.identity.tenantId,
-        args.projectId,
-        args.identity.externalUserId,
-      );
-      try {
-        await fetchRemote({
-          dev: repo,
-          remote: args.remote,
-          tenantId: args.identity.tenantId,
-          projectId: args.projectId,
-          remoteBranch: args.remoteBranch ?? "main",
-        });
-        const commitSha =
-          args.commitSha ??
-          (await repo.resolveRef(sourceRef(args.identity)).catch(() => null));
-        if (!commitSha)
-          throw new ProductionDeploymentNotFoundError(args.projectId);
-        const files = await repo.readAllFilesAtRef(commitSha, {
-          filter: (file) =>
-            file.startsWith(".catamorphic/") &&
-            !file.startsWith(".catamorphic/app-data/"),
-        });
-        return await prepareSource({
-          projectId: args.projectId,
-          workflowName: args.workflowName,
-          files,
-          commitSha,
-        });
-      } finally {
-        await repo.dispose();
-      }
-    })();
-
-    if (!args.commitSha) return load;
-    const key = preparedSourceKey({ ...args, commitSha: args.commitSha });
+  private rememberPreparedSource(
+    key: string,
+    load: Promise<PreparedSource>,
+  ): Promise<PreparedSource> {
     // Each deploy strands its predecessor's entry, so the map is capped and
     // evicted least-recently-used (recallPreparedSource refreshes recency, and
     // Map preserves insertion order). Evicting by insertion alone would purge
@@ -2252,17 +2259,24 @@ export class RunsService {
 
 const PREPARED_SOURCE_CACHE_MAX = 32;
 
-/**
- * Which commit a run reads its workflows from. A preview app build (the
- * `dev` channel) is compiled from the project as it is on this host, so its
- * calls run the same: the dev checkout's HEAD. Everything else runs the
- * published ref, the only source a viewer of a published app ever sees.
- */
-function sourceRef(identity: Identity): string {
-  const preview = identity.scope?.some(
-    (ref) => ref.kind === "app" && ref.channel === "dev",
+/** The source every viewer of a published app runs. */
+const PUBLISHED_REF = "refs/catamorphic/published/main";
+
+/** Files a run's workflows are parsed from; app data is host state, not source. */
+function isWorkflowSourceFile(file: string): boolean {
+  return (
+    file.startsWith(".catamorphic/") &&
+    !file.startsWith(".catamorphic/app-data/")
   );
-  return preview ? "HEAD" : "refs/catamorphic/published/main";
+}
+
+/** Whether a run is an app on its `dev` channel calling in (ADR 0148). */
+function callsPreviewApp(identity: Identity): boolean {
+  return (
+    identity.scope?.some(
+      (ref) => ref.kind === "app" && ref.channel === "dev",
+    ) ?? false
+  );
 }
 
 function preparedSourceKey(args: {

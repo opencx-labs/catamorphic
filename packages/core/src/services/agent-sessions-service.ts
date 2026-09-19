@@ -1151,7 +1151,7 @@ export class AgentSessionsService {
     projectId: string,
     sessionId: string,
   ): Promise<AgentSessionDetail> {
-    await this.requireSession(identity, projectId, sessionId);
+    await this.requireSession(identity, projectId, sessionId, "read");
     // Progress and transcript must describe one database snapshot. Otherwise
     // a settling turn can return an old placeholder with "completed" execution,
     // causing clients to stop polling before they receive the final reply.
@@ -6151,8 +6151,9 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     sessionId: string,
+    intent: "read" | "change" = "change",
   ): Promise<void> {
-    await this.requireSession(identity, projectId, sessionId);
+    await this.requireSession(identity, projectId, sessionId, intent);
   }
 
   /** Promote a latent session and create durable user attention. */
@@ -6394,10 +6395,16 @@ export class AgentSessionsService {
       .executeTakeFirst();
   }
 
+  /**
+   * The session a caller may act on. Every method that changes a session
+   * goes through the default `change` intent; only readers pass `read`, so
+   * an app's sessions ref (ADR 0148) can never reach a mutation by omission.
+   */
   private async requireSession(
     identity: Identity,
     projectId: string,
     sessionId: string,
+    intent: "read" | "change" = "change",
   ): Promise<SessionRow> {
     await this.requireProject(identity, projectId);
     const row = await this.db
@@ -6412,6 +6419,7 @@ export class AgentSessionsService {
       projectId,
       externalUserId: row.external_user_id,
       agentId: row.agent_id,
+      intent,
     });
     return row;
   }

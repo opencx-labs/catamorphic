@@ -30,7 +30,7 @@ export const APP_KIT_CSS = `
 .cat-btn:focus-visible,.cat-tab:focus-visible,.cat-switch:focus-visible,
 .cat-checkbox:focus-visible,.cat-cal-day:focus-visible,.cat-cal-nav:focus-visible,
 .cat-table-sort:focus-visible,.cat-datepicker-trigger:focus-visible,
-.cat-datepicker-clear:focus-visible{
+.cat-datepicker-clear:focus-visible,.cat-bar-row--button:focus-visible{
   outline:2px solid var(--color-accent);outline-offset:1px;
 }
 /* Rows stack: their ring sits inside the row and above its neighbours. */

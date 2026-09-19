@@ -55,6 +55,7 @@ export class AgentRuntimeRequestsService {
         identity: args.identity,
         sessionId: args.request.sessionId,
         lock: true,
+        intent: "change",
       });
       const payload = canonicalRuntimeJson(args.request);
       const existing = await trx
@@ -114,6 +115,7 @@ export class AgentRuntimeRequestsService {
             identity: args.identity,
             sessionId: args.sessionId,
             lock: true,
+            intent: "change",
           });
           setSpanCorrelation({
             span,
@@ -181,6 +183,7 @@ export class AgentRuntimeRequestsService {
         identity: args.identity,
         sessionId: args.sessionId,
         lock: true,
+        intent: "change",
       });
       const expired = await trx
         .updateTable("agent_runtime_requests")
@@ -209,6 +212,7 @@ export class AgentRuntimeRequestsService {
       identity: args.identity,
       sessionId: args.sessionId,
       lock: false,
+      intent: "read",
     });
     const pending = await this.db
       .selectFrom("agent_runtime_requests")

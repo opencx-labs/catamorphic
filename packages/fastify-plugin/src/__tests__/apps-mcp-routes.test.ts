@@ -1,3 +1,4 @@
+import type { Identity } from "@catamorphic/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestApp } from "./test-app.js";
 
@@ -50,6 +51,18 @@ function fakeCore() {
       }),
     },
     apps: {
+      identityForApp: vi.fn(
+        async (args: {
+          identity: Identity;
+          projectId: string;
+          appName: string;
+        }) => ({
+          ...args.identity,
+          scope: [
+            { kind: "app", projectId: args.projectId, name: args.appName },
+          ],
+        }),
+      ),
       list: vi.fn(async () => [
         {
           name: "ops-dashboard",

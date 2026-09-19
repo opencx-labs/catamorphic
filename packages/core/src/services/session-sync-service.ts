@@ -100,6 +100,7 @@ export class SessionSyncService {
           projectId: args.projectId,
           externalUserId: snapshot.external_user_id,
           agentId: snapshot.agent_id,
+          intent: "change",
         });
         const now = new Date();
         const row = await this.db
@@ -293,6 +294,7 @@ export class SessionSyncService {
       projectId: args.projectId,
       externalUserId: row.external_user_id,
       agentId: row.agent_id,
+      intent: "change",
     });
     return mapStatus(row);
   }

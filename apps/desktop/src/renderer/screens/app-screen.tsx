@@ -68,9 +68,23 @@ export function AppScreen({
   const app = apps.data?.find((entry) => entry.name === appName);
   const sourceExists = app !== undefined;
   // An app that reads this profile's chats waits for a one-time answer
-  // before it mounts (ADR 0148). The answer is per project and app.
-  const { prefs, update } = useAppPreferences();
+  // before it mounts (ADR 0148). The answer is per project and app, and it
+  // is only known once the app list and the profile's answers have loaded:
+  // nothing mounts before then, so an unanswered app never runs early and
+  // an answered one never flashes the question.
+  const { prefs, loaded, update } = useAppPreferences();
   const approvalKey = `${projectId}/${appName}`;
+  if (apps.isPending || (app?.access.sessions === "read" && !loaded)) {
+    return (
+      <div
+        className={compact ? "min-w-0" : "flex min-h-0 flex-1 flex-col bg-bg"}
+      >
+        <div className="grid h-60 place-items-center text-sm text-fg-muted">
+          Loading app…
+        </div>
+      </div>
+    );
+  }
   const needsConsent =
     app?.access.sessions === "read" &&
     !prefs.appAccessApprovals.includes(approvalKey);

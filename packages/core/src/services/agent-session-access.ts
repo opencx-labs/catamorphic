@@ -12,19 +12,28 @@ import { AccessDeniedError } from "./artifact-scope.js";
  * The session boundary shared by chat and durable runtime surfaces. Scoped
  * callers can use only their own sessions on the exact project agent covered
  * by their scope. Builders and root identities retain project-wide access.
+ *
+ * `intent` says what the caller is about to do. A sessions ref (an app
+ * version that declared `access.sessions: "read"`, ADR 0148) reads the
+ * viewer's sessions on every agent of the project, and only reads: changing
+ * a session (delivering, interrupting, archiving, forking) takes the agent
+ * ref its chat runs on, which no app-widened identity carries.
  */
 export function assertAgentSessionAccess(args: {
   identity: Identity;
   projectId: string;
   externalUserId: string;
   agentId: string | null;
+  intent: "read" | "change";
 }): void {
   if (isBuilder(args.identity, args.projectId)) return;
   if (args.externalUserId !== args.identity.externalUserId)
     throw new AccessDeniedError();
-  // A sessions ref (an app version that declares reading the viewer's
-  // chats, ADR 0148) covers every agent of the project for that viewer.
-  if (scopeCoversSessions(args.identity, args.projectId)) return;
+  if (
+    args.intent === "read" &&
+    scopeCoversSessions(args.identity, args.projectId)
+  )
+    return;
   if (
     !coveringProjectAgentRef({
       identity: args.identity,

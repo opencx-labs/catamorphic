@@ -16,9 +16,9 @@ import type {
   SidebarTabConfig,
 } from "../../shared/sidebar.js";
 import { matchesSidebarSurface } from "../../shared/sidebar.js";
+import { lucideIcon } from "../lib/lucide-icon.js";
 import { ShortcutHint } from "./shortcut-hint.js";
 import type { SidebarContentState } from "./sidebar-contribution.js";
-import { lucideIcon } from "./sidebar-item-row.js";
 
 interface LayoutState {
   width: number;

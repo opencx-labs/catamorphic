@@ -1,6 +1,5 @@
 import { useAgentSessions, useWorkflows } from "@catamorphic/react";
 import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
-import * as lucide from "lucide-react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -88,6 +87,7 @@ import {
 import { HISTORY_ICONS, historyDetail, useHistory } from "../lib/history.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
+import { lucideIcon } from "../lib/lucide-icon.js";
 import {
   createPaletteIndex,
   PALETTE_RESULT_LIMIT,
@@ -533,12 +533,6 @@ const hostOf = (url: string): string => {
 
 const bareUrl = (url: string): string =>
   url.replace(/^https?:\/\/(www\.)?/, "");
-
-const lucideIcon = (name: string | undefined): LucideIcon => {
-  if (!name) return Globe;
-  const icon = (lucide as unknown as Record<string, LucideIcon>)[name];
-  return icon ?? Globe;
-};
 
 export function CommandPalette({
   variant,
@@ -1282,7 +1276,7 @@ export function CommandPalette({
           const url = item.url;
           items.push({
             id: `custom:${item.label}:${url}`,
-            icon: lucideIcon(item.icon),
+            icon: lucideIcon(item.icon) ?? Globe,
             iconNode: item.icon ? undefined : (
               <SiteFavicon url={url} className="size-4" />
             ),

@@ -19,6 +19,7 @@ import {
   openModeFromEvent,
 } from "../../shared/open-mode.js";
 import type { SidebarMenuEntry, SidebarPreview } from "../lib/desktop-api.js";
+import { lucideIcon } from "../lib/lucide-icon.js";
 import { ShortcutHint } from "./shortcut-hint";
 import {
   sidebarItemPresentation,
@@ -37,25 +38,6 @@ export interface ContextMenuEntry {
   icon?: string;
   url?: string;
   disabledReason?: string;
-}
-
-const SIDEBAR_ICONS = new Map(Object.entries(icons.icons));
-
-/**
- * A Lucide icon by the name an agent wrote in sidebar.js. Canonical names
- * come from the icon table; alias names (`MessageCircleQuestion` for
- * `MessageCircleQuestionMark`, `Icon`-suffixed forms) resolve through the
- * package's named exports. Unknown names resolve to nothing so callers fall
- * back to a dot — a name must never reach the screen as text.
- */
-export function lucideIcon(name?: string): icons.LucideIcon | undefined {
-  if (!name || !/^[A-Z][A-Za-z0-9]*$/.test(name)) return undefined;
-  const direct = SIDEBAR_ICONS.get(name);
-  if (direct) return direct;
-  const exported = (icons as unknown as Record<string, unknown>)[name];
-  return typeof exported === "object" || typeof exported === "function"
-    ? (exported as icons.LucideIcon)
-    : undefined;
 }
 
 export function SidebarIcon({ name }: { name?: string }) {
@@ -516,10 +498,7 @@ export function SidebarItemRow<
             </button>
           </TitleHint>
           {inlineActions.map((entry) => {
-            const Icon =
-              Object.entries(icons.icons).find(
-                ([name]) => name === entry.icon,
-              )?.[1] ?? icons.Circle;
+            const Icon = lucideIcon(entry.icon) ?? icons.Circle;
             return (
               <ShortcutHint
                 key={`${entry.action}:${entry.label}`}

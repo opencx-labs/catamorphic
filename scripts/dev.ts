@@ -118,9 +118,10 @@ if (import.meta.main) {
   const printOnly = options[0] === "--print";
   const rootPath = path.resolve(import.meta.dirname, "..");
   const tempPath = tmpdir();
+  const msbPath = bundledMsbPath(rootPath);
   const planInput = {
     rootPath,
-    ...(bundledMsbPath(rootPath) ? { msbPath: bundledMsbPath(rootPath) } : {}),
+    ...(msbPath ? { msbPath } : {}),
     dataPath: path.join(homedir(), ".catamorphic", "dev"),
     ...(process.env.CATAMORPHIC_DEV_INSTANCE
       ? { instanceOverride: process.env.CATAMORPHIC_DEV_INSTANCE }
