@@ -39,7 +39,8 @@ refreshing, placeholder rows before the first result, one muted sentence when em
 (section.empty replaces it), and the error with Retry. Sections never draw their own
 loading or empty text; rows stay on screen while a refresh runs.
 
-All row presentations accept label, icon (Lucide name), description, badges (strings),
+All row presentations accept label, icon (a Lucide icon name in PascalCase, e.g. Rocket;
+an unknown name shows a dot), description, badges (strings),
 progress (0 through 1), open (replace|tab|side|floating), preview and hide.
 Use section.itemDefaults to customize all rows and itemOverrides keyed by stable
 source item id for individual rows. Session ids are session UUIDs, file ids are

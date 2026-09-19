@@ -704,6 +704,53 @@ window loses OS focus while the agent works, the chat lurks the same way it
 does behind a tab. Seeing the screen behind the dock is the agent's job
 through computer use, not a composer control.
 
+### 2026-09-19: Apps that read your chats, and two chart-free dashboard parts
+
+An app declares `catamorphic.access.sessions` in its package and the desktop
+asks once, in place of the app, before a build that reads the profile's chats
+mounts (`AppAccessConsent` in `screens/app-screen.tsx`, approval recorded per
+project and app in `appAccessApprovals`). The card uses the settings-card
+surface and one primary action; there is no "deny" button because closing the
+tab is the refusal. The app kit gained `Stat` (label over a large tabular
+number, optional toned detail) and `BarList` (horizontal bars scaled to the
+largest value, accent at low chroma), so agents can show "how much of each"
+without hand-rolled charts or literal colors; both are documented in the
+`designing-apps` seed. See ADR 0148.
+
+Apps built by agents now compose the kit before writing CSS: the
+`designing-apps` seed opens its inventory with "reach for the kit before
+CSS" and lists hand-rolled tiles, bars, tables and badges among the do-nots,
+because an agent given a stat tile in the inventory still drew its own when
+the rule was implicit.
+
+Two sidebar fixes from filming an agent-authored section: a Lucide alias
+name (`MessageCircleQuestion`) resolves through the package's exports and an
+unknown name falls back to a dot, never text; and hiding an item hides its
+subtree, since hiding only the `.catamorphic` row hoisted the workspace's
+folders into a project files section. Agents also finish an app with the
+host's `build_app` and an `app:<name>` link; a local `bun run build` alone
+leaves "no successful build yet" on the app's screen.
+
+An app runs its workflows where the person viewing it may: the app-narrowed
+identity keeps the viewer's execution reach in the project, so the desktop
+user's apps run on "This Mac" without any grant.
+
+A preview app calls the project as it is on this machine: its workflow calls
+read the dev checkout's HEAD, the same source the preview was compiled from.
+Only published apps run the published ref. Before this, a freshly built
+preview answered "Workflow not found" for a workflow the agent had just
+written, because calls still resolved the project's initial published commit.
+
+### 2026-09-19: Host notices stay out of replies
+
+Local agents load the person's own CLI configuration, which can carry plugin
+MCP servers the desktop cannot authorize. The harness reports those at
+startup, and the assistant used to relay the notice unprompted ("the Slack
+connector needs authorization") in the middle of an unrelated answer. The
+workspace prompt now names those reports as host notices: connectors are
+managed in Settings, and the assistant mentions one only when the person asks
+about it or asks to use it.
+
 ## Work identity (2026-09-18)
 
 The desktop product is Work, powered by the Catamorphic framework. Its icon is

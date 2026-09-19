@@ -20,7 +20,12 @@ import {
   uploadPluginPayloads,
 } from "@catamorphic/sandbox";
 import type { Kysely, Selectable } from "kysely";
-import { type Identity, identityCovers, narrowIdentity } from "../identity.js";
+import {
+  type ExecutionEnvironmentRef,
+  type Identity,
+  identityCovers,
+  narrowIdentity,
+} from "../identity.js";
 import {
   type AppBundleStore,
   appBundleKey,
@@ -63,6 +68,35 @@ export interface AppSummary {
   publishedAt: string | null;
   icon: AppIconName;
   title: string;
+  /** Host data the newest ready build declares it reads (ADR 0148). */
+  access: AppAccess;
+}
+
+/**
+ * Host data an app version may read beyond its own workflows, declared by
+ * the app in `package.json` under `catamorphic.access` and frozen into each
+ * built version exactly like the callable workflow set. `sessions: "read"`
+ * lets workflows the app calls list and read the viewer's own chats in the
+ * project through the `catamorphic.sessions` host operations.
+ */
+export interface AppAccess {
+  sessions?: "read";
+}
+
+export function parseAppAccess(value: unknown): AppAccess {
+  let parsed: unknown = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return {};
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return {};
+  const access: AppAccess = {};
+  if ((parsed as { sessions?: unknown }).sessions === "read")
+    access.sessions = "read";
+  return access;
 }
 
 export interface AppPresentation {
@@ -81,6 +115,8 @@ export interface AppVersion {
   bundleBytes: number | null;
   /** Workflow names this version may invoke; null until the build succeeds. */
   allowedWorkflows: string[] | null;
+  /** Host data this version reads beyond its workflows (ADR 0148). */
+  access: AppAccess;
   error: string | null;
   isActive: boolean;
   createdAt: string;
@@ -175,6 +211,13 @@ export class AppsService {
       policies: AppPoliciesService;
       maxBundleBytes?: number;
       artifacts?: SessionArtifactsService;
+      /** The project's declared Environments; an app runs where its viewer may. */
+      projectEnvironments?: {
+        list(args: {
+          identity: Identity;
+          projectId: string;
+        }): Promise<{ environments: Readonly<Record<string, unknown>> }>;
+      };
     },
   ) {}
 
@@ -215,18 +258,103 @@ export class AppsService {
       channel: args.channel,
       versionId: args.versionId,
     } satisfies import("../identity.js").AppRef;
+    const executionScope = await this.executionReach(
+      args.identity,
+      args.projectId,
+    );
     if (row?.session_artifact_id && this.deps.artifacts) {
       try {
         await this.deps.artifacts.get({
           ...args,
           artifactId: row.session_artifact_id,
         });
-        return { ...args.identity, scope: [{ ...ref, channel: "dev" }] };
+        return this.widenForAccess(
+          {
+            ...args.identity,
+            scope: [{ ...ref, channel: "dev" }],
+            executionScope,
+          },
+          { ...ref, channel: "dev" },
+        );
       } catch {
         return { ...args.identity, scope: [] };
       }
     }
-    return narrowIdentity(args.identity, ref);
+    return this.widenForAccess(
+      { ...narrowIdentity(args.identity, ref), executionScope },
+      ref,
+    );
+  }
+
+  /**
+   * Where an app-narrowed identity may run its workflows: exactly where the
+   * viewer may. A scoped identity keeps its own refs for this project; the
+   * unbounded host identity (a desktop user in their own project) may use
+   * every Environment the project declares. Without this, narrowing to an
+   * app left no execution reach at all and every call failed with "no
+   * accessible Environment" (ADR 0053 scoped identities need exact refs).
+   */
+  private async executionReach(
+    viewer: Identity,
+    projectId: string,
+  ): Promise<readonly ExecutionEnvironmentRef[] | undefined> {
+    if (viewer.executionScope) {
+      return viewer.executionScope.filter((ref) => ref.projectId === projectId);
+    }
+    if (viewer.scope !== undefined) return undefined;
+    const policy = await this.deps.projectEnvironments
+      ?.list({ identity: viewer, projectId })
+      .catch(() => undefined);
+    if (!policy) return undefined;
+    return Object.keys(policy.environments).map((name) => ({
+      projectId,
+      name,
+    }));
+  }
+
+  /**
+   * An app-narrowed identity gains the caller's own sessions when the
+   * version it runs declares `access.sessions` (ADR 0148). The declaration
+   * is frozen at build time from the app's package.json, so the bundle a
+   * viewer opens and the data it may read come from the same commit.
+   */
+  private async widenForAccess(
+    identity: Identity,
+    ref: import("../identity.js").AppRef,
+  ): Promise<Identity> {
+    if (!identity.scope?.length) return identity;
+    const access = await this.versionAccess(identity, ref);
+    if (access.sessions !== "read") return identity;
+    return {
+      ...identity,
+      scope: [
+        ...identity.scope,
+        { kind: "sessions", projectId: ref.projectId },
+      ],
+    };
+  }
+
+  /** The declared access of the version this ref resolves to. */
+  private async versionAccess(
+    identity: Identity,
+    ref: import("../identity.js").AppRef,
+  ): Promise<AppAccess> {
+    let query = this.db
+      .selectFrom("app_versions")
+      .innerJoin("apps", "apps.id", "app_versions.app_id")
+      .innerJoin("projects", "projects.id", "apps.project_id")
+      .where("apps.project_id", "=", ref.projectId)
+      .where("apps.name", "=", ref.name)
+      .where("projects.tenant_id", "=", identity.tenantId)
+      .where("app_versions.status", "=", "ready")
+      .select("app_versions.access");
+    query = ref.versionId
+      ? query.where("app_versions.id", "=", ref.versionId)
+      : ref.channel === "dev"
+        ? query.orderBy("app_versions.ready_at", "desc").limit(1)
+        : query.where("app_versions.is_active", "=", true);
+    const row = await query.executeTakeFirst();
+    return parseAppAccess(row?.access);
   }
 
   async list(args: {
@@ -256,6 +384,20 @@ export class AppsService {
       ])
       .execute();
     const byName = new Map(rows.map((row) => [row.name, row]));
+    // The newest ready build's declaration, so a host can ask for consent
+    // before opening a development build that reads the viewer's data.
+    const latest = await this.db
+      .selectFrom("app_versions")
+      .innerJoin("apps", "apps.id", "app_versions.app_id")
+      .where("apps.project_id", "=", args.projectId)
+      .where("app_versions.status", "=", "ready")
+      .select(["apps.name", "app_versions.access", "app_versions.ready_at"])
+      .orderBy("app_versions.ready_at", "desc")
+      .execute();
+    const accessByName = new Map<string, AppAccess>();
+    for (const row of latest)
+      if (!accessByName.has(row.name))
+        accessByName.set(row.name, parseAppAccess(row.access));
 
     return names.map((name) => {
       const row = byName.get(name);
@@ -266,6 +408,7 @@ export class AppsService {
         publishedAt: row?.published_at?.toISOString() ?? null,
         icon: resolveAppIcon(row?.icon),
         title: row?.title ?? name,
+        access: accessByName.get(name) ?? {},
       };
     });
   }
@@ -517,6 +660,10 @@ export class AppsService {
               : await this.projectSnapshot(args);
           const { allowedWorkflows, workflowShapes } =
             this.resolveAppContract(files);
+          const access = resolveAppAccess(
+            files,
+            artifact?.name ?? args.appName,
+          );
           const bundle = await (args.kind === "preview"
             ? this.withBuildLock(
                 `${args.projectId}:${args.identity.externalUserId}`,
@@ -571,6 +718,7 @@ export class AppsService {
               // Frozen IO shapes for the callable set, so the MCP tool
               // surface serves real input schemas without a parse.
               workflow_shapes: JSON.stringify(workflowShapes),
+              access: JSON.stringify(access),
               ready_at: new Date(),
             })
             .where("id", "=", version.id)
@@ -1235,6 +1383,7 @@ function mapVersion(
     commitSha: row.commit_sha,
     bundleBytes: row.bundle_bytes === null ? null : Number(row.bundle_bytes),
     allowedWorkflows: parseAllowedWorkflows(row.allowed_workflows),
+    access: parseAppAccess(row.access),
     error: row.error,
     isActive: row.is_active,
     createdAt: row.created_at.toISOString(),
@@ -1269,6 +1418,26 @@ function parseWorkflowShapes(value: unknown): Record<string, AppWorkflowShape> {
     };
   }
   return shapes;
+}
+
+/**
+ * The access an app declares in its package.json (`catamorphic.access`).
+ * Unknown keys and values are ignored: only documented grants freeze.
+ */
+export function resolveAppAccess(
+  files: Record<string, string>,
+  appName: string,
+): AppAccess {
+  const source = files[`${APP_SOURCE_ROOT}/${appName}/package.json`];
+  if (!source) return {};
+  try {
+    const manifest = JSON.parse(source) as {
+      catamorphic?: { access?: unknown };
+    };
+    return parseAppAccess(manifest.catamorphic?.access);
+  } catch {
+    return {};
+  }
 }
 
 function parseAllowedWorkflows(value: unknown): string[] | null {

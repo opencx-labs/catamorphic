@@ -201,7 +201,7 @@ export const appScaffold = ({
   [`.catamorphic/apps/${name}/src/main.tsx`]: APP_MAIN_TSX,
 });
 
-export const APP_PACKAGE_VERSION = "0.0.3";
+export const APP_PACKAGE_VERSION = "0.0.4";
 
 /** Where the seeded project check script lives; owned by the project. */
 export const PROJECT_CHECK_SCRIPT_PATH = ".catamorphic/scripts/check.ts";
@@ -716,6 +716,66 @@ Never pass secrets to app code, return one from an app-callable workflow, or
 include one in an output. An app that needs a third-party API calls a
 workflow that holds the credential.
 
+## Reading the viewer's chats
+
+Apps reach chat sessions the same way they reach everything: through a
+workflow. Three lines make it work, and the person sees exactly what the
+app asked for.
+
+1. Declare it in the app's \`package.json\`. The declaration is frozen into
+   every built version, so a version built without it never reads chats:
+
+\`\`\`json
+{ "name": "activity", "private": true, "catamorphic": { "access": { "sessions": "read" } } }
+\`\`\`
+
+2. Export a workflow that reads through the host operations and returns
+   plain JSON. \`list\` (\`limit\` at most 100) gives snapshots with \`title\`, \`agentId\`,
+   \`createdAt\`, \`updatedAt\`, \`activity\`, \`workStatus\` and
+   \`running\`; \`history\` gives one session's newest messages with
+   \`role\`, \`content\` and \`createdAt\`:
+
+\`\`\`typescript
+import { defineWorkflow, type BoundaryContext } from "@catamorphic/workflow";
+import type { SessionSnapshot } from "@catamorphic/workflow";
+
+/** @displayname Recent sessions */
+export const recentSessions = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    /** @displayname List the viewer's sessions */
+    defineBoundary({
+      run: (context: BoundaryContext<{ days: number }>) =>
+        context.host["catamorphic.sessions"].list({ limit: 100 }),
+    }),
+    /** @displayname Count per day */
+    defineBoundary({
+      run: (context: BoundaryContext<{ items: SessionSnapshot[] }>) => {
+        const perDay = new Map<string, number>();
+        for (const session of context.input.items) {
+          const day = session.createdAt.slice(0, 10);
+          perDay.set(day, (perDay.get(day) ?? 0) + 1);
+        }
+        return { total: context.input.items.length, perDay: [...perDay] };
+      },
+    }),
+  ],
+}));
+\`\`\`
+
+A host call is a boundary transition: return it, and read its result as the
+next boundary's input, as above. The workflow's output is the last
+boundary's return value.
+
+3. Put it in \`app-api.ts\` and call it from the app with the generated
+   client, then render with \`Stat\`, \`BarList\` and \`DataTable\`.
+
+The workflow runs as the person using the app, so it only ever sees that
+person's own conversations in this project; a published app shown to
+someone else shows them theirs. The host asks the person before opening a
+build that declares this access. Summarize in the workflow (counts per day,
+per agent, per topic) and return what the screen needs, not whole
+transcripts.
+
 ## Forms
 
 A native \`<form>\` submit REALLY NAVIGATES the sandboxed app frame: the
@@ -772,6 +832,14 @@ define a workflow and call it through the app contract.
 - Verify with \`bun run build\` in the app directory: it must produce
   \`dist/app.js\` and typecheck clean. Fix contract errors at the source —
   never with \`any\` or \`@ts-ignore\`.
+- A local build is only a check. The app exists for the person once the
+  host has built it: call the host's \`build_app\` tool with the app's
+  directory name (preview by default; \`publish: true\` only when asked).
+  Until then the app's screen says it has no build and the sidebar cannot
+  open it. Finish by opening it for them (\`open_surface\` with
+  \`app:<name>\`) or linking it as \`app:<name>\` in your reply, and say
+  in one line what it shows; the person should not have to ask how to
+  see it.
 - You build and preview; a human publishes.
 
 Before writing app UI, consult the designing-apps skill for this
@@ -798,6 +866,12 @@ import { Button, Card, DataTable, useAsync } from "@catamorphic/app/ui";
 
 ## Component inventory
 
+Reach for the kit before CSS: a number that matters is a \`Stat\`, a
+per-bucket comparison is a \`BarList\`, records are a \`DataTable\`, a
+status is a \`Badge\`, a surface is a \`Card\`. Custom CSS is for layout
+(grid, gap, width); a hand-rolled tile, bar, table or badge looks foreign
+next to the host's own.
+
 | Component | Props (essentials) | Use |
 |---|---|---|
 | \`Button\` | \`variant\` primary/ghost/danger/subtle, \`size\` sm/md, \`loading\`, \`loadingLabel\` | Actions. \`loading\` shows a spinner and disables WITHOUT changing width — use it for every workflow call a button starts. |
@@ -809,6 +883,8 @@ import { Button, Card, DataTable, useAsync } from "@catamorphic/app/ui";
 | \`Card\` | \`title\`, \`description\`, \`footer\` | THE surface unit — compose screens from Cards on the app background. |
 | \`Tabs\`+\`TabList\`+\`Tab\`+\`TabPanel\` | \`value\`, \`onValueChange\`; \`value\` per tab/panel | Underline tabs with roving keyboard focus. |
 | \`Badge\` | \`variant\` neutral/success/warning/danger/info | 11px low-chroma status label. |
+| \`Stat\` | \`label\`, \`value\`, \`detail\`, \`tone\` | One number that matters, as a tile: muted label over a large value with an optional toned detail line. A row of Stats opens a dashboard. |
+| \`BarList\` | \`items\` (\`key\`/\`label\`/\`value\`/\`display\`), \`format\`, \`max\`, \`onSelect\` | Horizontal bars for "how much of each": per day, per agent, per topic. Scales to the largest value; \`onSelect\` makes rows clickable. The only chart to reach for by default. |
 | \`Spinner\` | \`size\`, \`label\` | Indeterminate progress. |
 | \`Skeleton\` | \`width\`, \`height\` | Loading placeholder with shimmer. |
 | \`EmptyState\` | \`message\`, \`action\` | The quiet empty state: one muted sentence + one action, max. |
@@ -981,6 +1057,8 @@ nothing animates on load.
   scripts/styles/fonts anyway).
 - Never hardcode a palette: no hex/rgb literals, every color through a
   \`--color-*\` var.
+- Don't hand-roll what the kit ships (tiles, bars, tables, badges,
+  empty/error states): compose them and keep custom CSS to layout.
 - No decorative motion; don't re-animate what the kit animates.
 - Don't hide scrollbars — visible scrollbars are part of the host's feel.
 `,

@@ -1,4 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
@@ -19,6 +21,31 @@ import {
   terminateDevProcessGroup,
 } from "./dev-runtime.js";
 import { toolRuntime } from "./tool-runtime.js";
+
+/** The msb binary of the microsandbox SDK the workspace depends on. */
+function bundledMsbPath(rootPath: string): string | undefined {
+  const triples: Record<string, string> = {
+    "darwin-arm64": "darwin-arm64",
+    "linux-x64": "linux-x64-gnu",
+    "linux-arm64": "linux-arm64-gnu",
+  };
+  const triple = triples[`${process.platform}-${process.arch}`];
+  if (!triple) return undefined;
+  try {
+    // The platform package sits beside the SDK, not beside the workspace
+    // package that depends on it, so resolve in two hops.
+    const sdk = createRequire(
+      path.join(rootPath, "packages", "microsandbox", "package.json"),
+    ).resolve("microsandbox/package.json");
+    const platform = createRequire(sdk).resolve(
+      `@superradcompany/microsandbox-${triple}/package.json`,
+    );
+    const binary = path.join(path.dirname(platform), "bin", "msb");
+    return existsSync(binary) ? binary : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 const DEV_STARTUP_ATTEMPTS = 3;
 
@@ -93,6 +120,7 @@ if (import.meta.main) {
   const tempPath = tmpdir();
   const planInput = {
     rootPath,
+    ...(bundledMsbPath(rootPath) ? { msbPath: bundledMsbPath(rootPath) } : {}),
     dataPath: path.join(homedir(), ".catamorphic", "dev"),
     ...(process.env.CATAMORPHIC_DEV_INSTANCE
       ? { instanceOverride: process.env.CATAMORPHIC_DEV_INSTANCE }

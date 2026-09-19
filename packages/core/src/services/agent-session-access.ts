@@ -1,5 +1,10 @@
 import type { Identity } from "../identity.js";
-import { type AgentRef, isBuilder, scopeCovers } from "../identity.js";
+import {
+  type AgentRef,
+  isBuilder,
+  scopeCovers,
+  scopeCoversSessions,
+} from "../identity.js";
 import { parseProjectAgentId } from "./agent-definitions-service.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 
@@ -15,8 +20,12 @@ export function assertAgentSessionAccess(args: {
   agentId: string | null;
 }): void {
   if (isBuilder(args.identity, args.projectId)) return;
+  if (args.externalUserId !== args.identity.externalUserId)
+    throw new AccessDeniedError();
+  // A sessions ref (an app version that declares reading the viewer's
+  // chats, ADR 0148) covers every agent of the project for that viewer.
+  if (scopeCoversSessions(args.identity, args.projectId)) return;
   if (
-    args.externalUserId !== args.identity.externalUserId ||
     !coveringProjectAgentRef({
       identity: args.identity,
       projectId: args.projectId,

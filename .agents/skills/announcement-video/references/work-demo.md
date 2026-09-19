@@ -36,3 +36,65 @@ Prefer short, naturally connected prompts over a feature inventory. Keep the ans
 | Setup copy cluttered the website | Keep the removed caption and “About this film” section removed. |
 
 For the current website, the homepage title is `Work`; secondary titles use `Work · Page`. Preserve these and the accepted visual design when replacing media. Deliver the playable film, editable capture/render source, a concise verification record, and the local preview. Website publishing is a separate action requiring existing authorization.
+
+## Driving the desktop from a script (2026-09-19 film)
+
+Lessons from the "shape the app, then have it build a tool" film, which
+replaced the browse → ask → build → use cut on the homepage:
+
+- The desktop can have two page targets: the workspace window and the
+  detached chat dock (`?surface=dock`). Capture and drive the workspace
+  window explicitly (filter the target by URL); return the dock to the window
+  for filming so floating chats render in the captured frame.
+- Real CDP key events go to whatever has focus. After browsing, focus sits in
+  the page's webview and app shortcuts such as Cmd+N do not fire. Click the
+  visible control a person would use (the sidebar's New chat button) instead
+  of relying on shortcuts, and it also reads better on film.
+- Typing a URL into the new-tab palette can select a matching bookmark
+  rather than navigate. Open pages from a project bookmark with a real click
+  when the film needs a specific page.
+- Sidebar rows carry no accessible name beyond their text; find them by text
+  and click their `[data-tree-primary]` child.
+- Seed realistic history through the normal chat before filming: real turns,
+  short prompts, minimized afterwards so the strip shows their bubbles.
+- Keep a `film.mjs` with one command per scene so a failing scene can be
+  rehearsed alone; log markers relative to `start.json` for the edit.
+
+- Rehearse the exact build path once before recording. Three things broke
+  a take that only a full run reveals: the dev database predated a rewritten
+  migration (the app list returned 500 until the column was added), project
+  workspaces install `@catamorphic/*` from the local verdaccio registry (bump
+  and publish the packages or agents build against old kit and types), and
+  seeded skills are written at project creation only (refresh the demo
+  project's `.catamorphic/skills` from `SEED_SKILLS` after changing them).
+- Project themes wrap the workspace (`ProjectTheme` renders a `.size-full`
+  element with `data-theme`); `document.documentElement` keeps the profile
+  theme. Wait on the workspace scope, not the root.
+- Reset between takes: remove the personal `sidebar-projects/<id>.js` and
+  `settings-projects/<id>.json` layers, archive the take's chat, close tabs,
+  delete the agent's `.catamorphic` workspace and its app rows, return the
+  dock to the window (`catamorphicDesktop.dockDetach(false)`).
+- The Work assistant used to repeat the harness's "MCP server needs
+  authorization" notice in replies (user-level CLI plugins leak into local
+  agents); the workspace prompt now tells it those are host notices.
+- Host builds run in microVM sandboxes. A registry on `localhost` is the
+  VM's own loopback there; the desktop's dev plan sets
+  `CATAMORPHIC_SANDBOX_HOST_NETWORK=1` (turbo passes it through) so sandboxes
+  get the `private` and `host` network profiles, the registry listens on all
+  interfaces under bun's runtime (the macOS firewall admits bun, not node),
+  and the demo project's `.catamorphic/bunfig.toml` addresses the registry by
+  the Mac's LAN IP so the lockfile's tarball URLs resolve from both sides.
+- Agents compile apps locally unless told otherwise; the building-apps seed
+  now ends with the host `build_app` call and an `app:<name>` link, because
+  "no successful build yet" is what the person sees otherwise.
+- The desktop and any probe script must run the same msb binary: the SDK's
+  bundled one migrated the shared sandbox database and the developer's older
+  `~/.microsandbox/bin/msb` (which the desktop fell back to) then refused it.
+  The dev plan now passes the SDK's binary as `MSB_PATH`.
+- A project's build sandbox is created once and reused (`project_sandboxes`);
+  a sandbox created before a network or runtime change keeps its old
+  configuration. After changing sandbox settings, forget the project's row
+  and `msb remove` the sandbox so the next build creates a fresh one.
+- Probe scripts must live inside the repo: bun auto-installs the latest SDK
+  for a script outside any project, and that newer binary can migrate a
+  shared database the desktop's version then refuses.

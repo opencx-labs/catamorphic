@@ -40,6 +40,7 @@ Use [references/brief-template.md](references/brief-template.md) to record a com
 - Capture the actual states needed for the film: closed launcher, open widget, floating layout, streaming response, annotation tools, and attachment confirmation when relevant. Choose the states that prove this release's benefit.
 - Inspect referenced videos when supplied. Record what to borrow: composition, depth, pacing, camera path, transitions, and pauses. If a reference cannot be opened, say so and work from the accessible evidence; do not claim to have watched it.
 - Locate the official logo in the brand or website repository (for Work, inspect its website; for Catamorphic, use `site/assets/logo.svg`). Use the exact asset and correct light/dark variant. Do not redraw the wordmark from memory.
+- Rehearse the complete path once, end to end, before recording, with the same data, agents and build services the take will use. Failures that only a full run reveals (a development database behind a rewritten migration, a package registry the build sandbox cannot reach, a runtime binary that no longer matches its database, seeded skills written before the guidance changed) cost a whole take each; fix them in the product or the environment and record the fix in the story reference.
 - Keep tokens, private URLs, customer identities, and sensitive dashboard content out of captures. Use an approved demo state, not blur as a substitute for choosing safe source material.
 
 ## 2. Design a readable action sequence

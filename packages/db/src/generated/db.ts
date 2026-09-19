@@ -194,6 +194,7 @@ export interface AppStorage {
 }
 
 export interface AppVersions {
+  access: Json | null;
   allowed_workflows: Json | null;
   app_id: string;
   built_by_external_user_id: string;

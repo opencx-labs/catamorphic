@@ -41,8 +41,25 @@ export interface ContextMenuEntry {
 
 const SIDEBAR_ICONS = new Map(Object.entries(icons.icons));
 
+/**
+ * A Lucide icon by the name an agent wrote in sidebar.js. Canonical names
+ * come from the icon table; alias names (`MessageCircleQuestion` for
+ * `MessageCircleQuestionMark`, `Icon`-suffixed forms) resolve through the
+ * package's named exports. Unknown names resolve to nothing so callers fall
+ * back to a dot — a name must never reach the screen as text.
+ */
+export function lucideIcon(name?: string): icons.LucideIcon | undefined {
+  if (!name || !/^[A-Z][A-Za-z0-9]*$/.test(name)) return undefined;
+  const direct = SIDEBAR_ICONS.get(name);
+  if (direct) return direct;
+  const exported = (icons as unknown as Record<string, unknown>)[name];
+  return typeof exported === "object" || typeof exported === "function"
+    ? (exported as icons.LucideIcon)
+    : undefined;
+}
+
 export function SidebarIcon({ name }: { name?: string }) {
-  const Icon = SIDEBAR_ICONS.get(name ?? "") ?? icons.Circle;
+  const Icon = lucideIcon(name) ?? icons.Circle;
   return <Icon className="size-3.5 shrink-0" aria-hidden="true" />;
 }
 
@@ -343,7 +360,7 @@ export function SidebarItemRow<
   }, [renaming]);
 
   const IconComponent =
-    typeof icon === "string" ? SIDEBAR_ICONS.get(icon) : undefined;
+    typeof icon === "string" ? (lucideIcon(icon) ?? icons.Circle) : undefined;
 
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: right-click mirrors the row's ⋯ button, which stays keyboard-reachable

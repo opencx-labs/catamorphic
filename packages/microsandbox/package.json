@@ -21,7 +21,7 @@
   "dependencies": {
     "@catamorphic/runtime": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
-    "microsandbox": "^0.6.7"
+    "microsandbox": "0.7.2"
   },
   "devDependencies": {
     "@types/node": "^26.1.1"

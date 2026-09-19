@@ -164,7 +164,8 @@ export type ArtifactRef =
   | AppRef
   | WorkflowRef
   | DocumentRef
-  | AgentRef;
+  | AgentRef
+  | SessionsRef;
 
 /**
  * Builder access to one project (ADR 0055): the whole program surface —
@@ -225,6 +226,19 @@ export interface WorkflowRef {
 }
 
 /**
+ * The caller's own chat sessions in a project, on every agent of it: the
+ * ref an app-narrowed identity gains when the app's built version declares
+ * `catamorphic.access.sessions` (ADR 0148). It never reaches another
+ * user's sessions — `assertAgentSessionAccess` still requires the session
+ * owner to be the caller — and it grants nothing beyond reading and the
+ * session actions a viewer may take on their own conversations.
+ */
+export interface SessionsRef {
+  kind: "sessions";
+  projectId: string;
+}
+
+/**
  * A file or subtree of the project's one path namespace (ADR 0055): a git
  * path (readable at the deployed commit) or a `store/…` path (the project
  * store). `path` ending in `/**` covers the subtree; anything else names one
@@ -281,7 +295,20 @@ export function sameArtifact(a: ArtifactRef, b: ArtifactRef): boolean {
       return a.name === (b as AgentRef).name;
     case "document":
       return a.path === (b as DocumentRef).path;
+    case "sessions":
+      return true;
   }
+}
+
+/** Whether a scoped identity may read its own sessions across the project. */
+export function scopeCoversSessions(
+  identity: Identity,
+  projectId: string,
+): boolean {
+  return (
+    identity.scope !== undefined &&
+    scopeCovers(identity.scope, { kind: "sessions", projectId })
+  );
 }
 
 /** Whether one document ref (an entry of a scope) grants another. */

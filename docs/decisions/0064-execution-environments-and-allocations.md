@@ -64,3 +64,14 @@ heartbeat, leases, and scheduling behind the same contracts.
 
 The greenfield cutover changes public names, APIs, schemas, and committed
 project configuration without compatibility aliases.
+
+## Addendum (2026-09-19): runtimes are shared per binding
+
+An allocation is one workload's capacity lease, not a runtime boundary.
+Deployment runtimes on a static binding are keyed by the binding, so every
+run of the same artifact there reuses one warm sandbox and its supervisor
+(`maxConcurrency` bounds sharing; idle retirement still applies). Keying
+runtimes by allocation booted a fresh sandbox per run, which turned every app
+call on the desktop into a thirty-second wait. Worker-node allocations keep
+allocation-scoped runtimes because their sandboxes live under the
+allocation's lease.

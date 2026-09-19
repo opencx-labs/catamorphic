@@ -59,6 +59,11 @@ export const AppPresentationSchema = z.object({
   icon: z.enum(APP_ICON_NAMES),
 });
 
+/** Host data an app version declares it reads (ADR 0148). */
+export const AppAccessSchema = z.object({
+  sessions: z.literal("read").optional(),
+});
+
 export const AppSummarySchema = z.object({
   name: z.string(),
   title: z.string(),
@@ -66,6 +71,7 @@ export const AppSummarySchema = z.object({
   activeVersionId: z.string().uuid().nullable(),
   publishedAt: z.string().datetime().nullable(),
   icon: z.enum(APP_ICON_NAMES),
+  access: AppAccessSchema,
 });
 
 export const AppVersionSchema = z.object({
@@ -77,6 +83,7 @@ export const AppVersionSchema = z.object({
   commitSha: z.string().nullable(),
   bundleBytes: z.number().nullable(),
   allowedWorkflows: z.array(z.string()).nullable(),
+  access: AppAccessSchema,
   error: z.string().nullable(),
   isActive: z.boolean(),
   createdAt: z.string().datetime(),
