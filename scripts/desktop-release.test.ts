@@ -65,7 +65,7 @@ describe("renderHomebrewCask", () => {
     expect(cask).toContain("depends_on arch: :arm64");
     expect(cask).toContain("depends_on macos: :monterey");
     expect(cask).toContain(
-      'homepage "https://work.software"\n\n  auto_updates true\n  conflicts_with cask: "work"\n  depends_on arch: :arm64',
+      'homepage "https://work.software/"\n\n  auto_updates true\n  conflicts_with cask: "work"\n  depends_on arch: :arm64',
     );
     expect(cask).toContain("auto_updates true");
     expect(cask).toContain('conflicts_with cask: "work"');
