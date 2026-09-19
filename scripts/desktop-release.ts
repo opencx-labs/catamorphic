@@ -65,7 +65,7 @@ export function renderHomebrewCask(input: {
   url "https://github.com/opencx-labs/catamorphic/releases/download/desktop-v#{version}/Work-#{version}-arm64.dmg"
   name "Work"
   desc "Local-first workspace for projects, agents, workflows, and apps"
-  homepage "https://work.software"
+  homepage "https://work.software/"
 
   auto_updates true
   conflicts_with cask: "${conflictingToken}"
