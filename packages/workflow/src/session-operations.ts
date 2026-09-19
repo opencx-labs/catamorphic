@@ -45,6 +45,7 @@ type Call<Input, Output = unknown> = (
 /** Host transitions must be returned from a boundary, never awaited as IO. */
 export interface SessionHostOperations {
   inspect: Call<Target, SessionSnapshot>;
+  /** The caller's newest sessions in this project, `limit` at most 100. */
   list: Call<{ limit?: number }, { items: SessionSnapshot[]; total: number }>;
   /** The newest `limit` messages (default 30, max 100), oldest first. */
   history: Call<

@@ -439,6 +439,10 @@ export class CatamorphicCore {
             policies: this.appPolicies,
             maxBundleBytes: config.maxAppBundleBytes,
             artifacts: this.sessionArtifacts,
+            // Constructed later in this constructor; resolved per call.
+            projectEnvironments: {
+              list: (args) => this.projectEnvironments.list(args),
+            },
           })
         : undefined;
 

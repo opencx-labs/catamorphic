@@ -13,6 +13,7 @@ import { AppPublishStateError, AppsService } from "../services/apps-service.js";
 import { resolveScope } from "../services/artifact-scope.js";
 import { DbSandboxStore } from "../services/db-sandbox-store.js";
 import { DevSandboxService } from "../services/dev-sandbox-service.js";
+import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { SessionArtifactsService } from "../services/session-artifacts-service.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
@@ -188,6 +189,7 @@ describeIf("AppsService integration", () => {
       provider,
       bundleStore: bundles,
       policies: new AppPoliciesService(db),
+      projectEnvironments: new ProjectEnvironmentsService(db, projectManager),
     });
   });
 
@@ -288,6 +290,9 @@ describeIf("AppsService integration", () => {
       { kind: "app", projectId, name: "activity", channel: "dev" },
       { kind: "sessions", projectId },
     ]);
+    // The narrowed identity runs where its viewer may: the unbounded desktop
+    // identity reaches every Environment the project declares.
+    expect(narrowed.executionScope).toEqual([{ projectId, name: "local" }]);
     // The published channel has no active version yet: nothing to widen.
     const published = await apps.identityForApp({
       identity,

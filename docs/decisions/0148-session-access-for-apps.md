@@ -65,6 +65,15 @@ publication is the builder's approval, as it is for the workflow set.
   three lines it takes: declare, export a workflow, call it.
 - Consent is per version content, not per app name: a rebuilt version that
   drops the declaration loses the ref immediately.
+- An app-narrowed identity runs workflows where its viewer may: it keeps the
+  viewer's execution refs for the project, and the unbounded host identity
+  (a desktop user in their own project) reaches every Environment the
+  project declares. Narrowing used to drop execution reach entirely, so
+  every app call failed with "no accessible Environment".
+- Preview builds (`channel: "dev"`) call workflows from the dev checkout's
+  HEAD, the source they were compiled from; published builds call the
+  published ref. A viewer therefore never runs unpublished code, and a
+  builder's preview never answers with a workflow that predates it.
 - The `sessions` ref is read-oriented by intent, but it also covers the
   session actions a viewer may take on their own conversations (archive,
   interrupt). Widening it to other users' sessions or to transcripts of

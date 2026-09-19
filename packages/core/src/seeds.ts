@@ -201,7 +201,7 @@ export const appScaffold = ({
   [`.catamorphic/apps/${name}/src/main.tsx`]: APP_MAIN_TSX,
 });
 
-export const APP_PACKAGE_VERSION = "0.0.3";
+export const APP_PACKAGE_VERSION = "0.0.4";
 
 /** Where the seeded project check script lives; owned by the project. */
 export const PROJECT_CHECK_SCRIPT_PATH = ".catamorphic/scripts/check.ts";
@@ -730,7 +730,7 @@ app asked for.
 \`\`\`
 
 2. Export a workflow that reads through the host operations and returns
-   plain JSON. \`list\` gives snapshots with \`title\`, \`agentId\`,
+   plain JSON. \`list\` (\`limit\` at most 100) gives snapshots with \`title\`, \`agentId\`,
    \`createdAt\`, \`updatedAt\`, \`activity\`, \`workStatus\` and
    \`running\`; \`history\` gives one session's newest messages with
    \`role\`, \`content\` and \`createdAt\`:
@@ -832,6 +832,14 @@ define a workflow and call it through the app contract.
 - Verify with \`bun run build\` in the app directory: it must produce
   \`dist/app.js\` and typecheck clean. Fix contract errors at the source —
   never with \`any\` or \`@ts-ignore\`.
+- A local build is only a check. The app exists for the person once the
+  host has built it: call the host's \`build_app\` tool with the app's
+  directory name (preview by default; \`publish: true\` only when asked).
+  Until then the app's screen says it has no build and the sidebar cannot
+  open it. Finish by opening it for them (\`open_surface\` with
+  \`app:<name>\`) or linking it as \`app:<name>\` in your reply, and say
+  in one line what it shows; the person should not have to ask how to
+  see it.
 - You build and preview; a human publishes.
 
 Before writing app UI, consult the designing-apps skill for this
@@ -857,6 +865,12 @@ import { Button, Card, DataTable, useAsync } from "@catamorphic/app/ui";
 \`\`\`
 
 ## Component inventory
+
+Reach for the kit before CSS: a number that matters is a \`Stat\`, a
+per-bucket comparison is a \`BarList\`, records are a \`DataTable\`, a
+status is a \`Badge\`, a surface is a \`Card\`. Custom CSS is for layout
+(grid, gap, width); a hand-rolled tile, bar, table or badge looks foreign
+next to the host's own.
 
 | Component | Props (essentials) | Use |
 |---|---|---|
@@ -1043,6 +1057,8 @@ nothing animates on load.
   scripts/styles/fonts anyway).
 - Never hardcode a palette: no hex/rgb literals, every color through a
   \`--color-*\` var.
+- Don't hand-roll what the kit ships (tiles, bars, tables, badges,
+  empty/error states): compose them and keep custom CSS to layout.
 - No decorative motion; don't re-animate what the kit animates.
 - Don't hide scrollbars — visible scrollbars are part of the host's feel.
 `,

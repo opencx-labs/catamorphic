@@ -1,4 +1,3 @@
-import * as icons from "lucide-react";
 import { Circle, Plus } from "lucide-react";
 import {
   type ReactNode,
@@ -19,6 +18,7 @@ import type {
 import { matchesSidebarSurface } from "../../shared/sidebar.js";
 import { ShortcutHint } from "./shortcut-hint.js";
 import type { SidebarContentState } from "./sidebar-contribution.js";
+import { lucideIcon } from "./sidebar-item-row.js";
 
 interface LayoutState {
   width: number;
@@ -41,8 +41,7 @@ function readLayout(key: string, side: SidebarSide): LayoutState {
 }
 
 function TabIcon({ name }: { name?: string }) {
-  const Icon =
-    Object.entries(icons.icons).find(([key]) => key === name)?.[1] ?? Circle;
+  const Icon = lucideIcon(name) ?? Circle;
   return <Icon className="size-4" aria-hidden="true" />;
 }
 

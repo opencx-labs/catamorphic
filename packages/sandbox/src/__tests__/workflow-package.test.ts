@@ -11,7 +11,7 @@ describe("workflow package fallback", () => {
     const payload = await loadWorkflowPackagePayload();
 
     expect(payload.packageName).toBe(WORKFLOW_PACKAGE_NAME);
-    expect(payload.version).toBe("0.0.2");
+    expect(payload.version).toBe("0.0.3");
     expect(payload.files["package.json"]).toContain(WORKFLOW_PACKAGE_NAME);
     expect(payload.files["package.json"]).not.toContain('"bun"');
     expect(payload.files["dist/index.js"]).toContain("defineWorkflow");
@@ -27,12 +27,12 @@ describe("workflow package fallback", () => {
     await expect(
       resolveWorkflowPackageFallback({
         packageJson: JSON.stringify({
-          dependencies: { [WORKFLOW_PACKAGE_NAME]: "0.0.2" },
+          dependencies: { [WORKFLOW_PACKAGE_NAME]: "0.0.3" },
         }),
       }),
     ).resolves.toMatchObject({
       packageName: WORKFLOW_PACKAGE_NAME,
-      version: "0.0.2",
+      version: "0.0.3",
     });
 
     await expect(
@@ -48,7 +48,7 @@ describe("workflow package fallback", () => {
     await expect(
       resolveWorkflowPackageFallback({
         packageJson: JSON.stringify({
-          dependencies: { [WORKFLOW_PACKAGE_NAME]: "0.0.2" },
+          dependencies: { [WORKFLOW_PACKAGE_NAME]: "0.0.3" },
         }),
         hasLockfile: true,
       }),
@@ -75,7 +75,7 @@ describe("workflow package fallback", () => {
       packageJson: JSON.stringify({
         name: "customer-project",
         dependencies: {
-          [WORKFLOW_PACKAGE_NAME]: "0.0.2",
+          [WORKFLOW_PACKAGE_NAME]: "0.0.3",
           zod: "^4.0.0",
         },
       }),

@@ -1713,8 +1713,16 @@ export class RunsService {
     if (!provider?.deploymentRuntime) {
       throw new SandboxProviderNotConfiguredError();
     }
+    // Runtimes on a static binding are shared by every run of the same
+    // artifact there: an allocation is one run's capacity lease, and keying
+    // runtimes by it booted a fresh sandbox per call (tens of seconds each
+    // time an app asked a workflow). Worker-node allocations keep their own
+    // runtimes; their sandboxes live under the allocation's lease.
+    const runtimeScope = allocation.workerNodeId
+      ? allocation.id
+      : allocation.bindingId;
     const runtime = new EnvironmentDeploymentRuntimeService(
-      new KyselyDeploymentRuntimeStore(this.db, allocation.id),
+      new KyselyDeploymentRuntimeStore(this.db, runtimeScope),
       {
         provider,
         resources: {
@@ -2089,9 +2097,7 @@ export class RunsService {
         });
         const commitSha =
           args.commitSha ??
-          (await repo
-            .resolveRef("refs/catamorphic/published/main")
-            .catch(() => null));
+          (await repo.resolveRef(sourceRef(args.identity)).catch(() => null));
         if (!commitSha)
           throw new ProductionDeploymentNotFoundError(args.projectId);
         const files = await repo.readAllFilesAtRef(commitSha, {
@@ -2245,6 +2251,19 @@ export class RunsService {
 }
 
 const PREPARED_SOURCE_CACHE_MAX = 32;
+
+/**
+ * Which commit a run reads its workflows from. A preview app build (the
+ * `dev` channel) is compiled from the project as it is on this host, so its
+ * calls run the same: the dev checkout's HEAD. Everything else runs the
+ * published ref, the only source a viewer of a published app ever sees.
+ */
+function sourceRef(identity: Identity): string {
+  const preview = identity.scope?.some(
+    (ref) => ref.kind === "app" && ref.channel === "dev",
+  );
+  return preview ? "HEAD" : "refs/catamorphic/published/main";
+}
 
 function preparedSourceKey(args: {
   identity: Identity;

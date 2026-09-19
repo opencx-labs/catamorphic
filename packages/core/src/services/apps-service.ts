@@ -20,7 +20,12 @@ import {
   uploadPluginPayloads,
 } from "@catamorphic/sandbox";
 import type { Kysely, Selectable } from "kysely";
-import { type Identity, identityCovers, narrowIdentity } from "../identity.js";
+import {
+  type ExecutionEnvironmentRef,
+  type Identity,
+  identityCovers,
+  narrowIdentity,
+} from "../identity.js";
 import {
   type AppBundleStore,
   appBundleKey,
@@ -206,6 +211,13 @@ export class AppsService {
       policies: AppPoliciesService;
       maxBundleBytes?: number;
       artifacts?: SessionArtifactsService;
+      /** The project's declared Environments; an app runs where its viewer may. */
+      projectEnvironments?: {
+        list(args: {
+          identity: Identity;
+          projectId: string;
+        }): Promise<{ environments: Readonly<Record<string, unknown>> }>;
+      };
     },
   ) {}
 
@@ -246,6 +258,10 @@ export class AppsService {
       channel: args.channel,
       versionId: args.versionId,
     } satisfies import("../identity.js").AppRef;
+    const executionScope = await this.executionReach(
+      args.identity,
+      args.projectId,
+    );
     if (row?.session_artifact_id && this.deps.artifacts) {
       try {
         await this.deps.artifacts.get({
@@ -253,14 +269,47 @@ export class AppsService {
           artifactId: row.session_artifact_id,
         });
         return this.widenForAccess(
-          { ...args.identity, scope: [{ ...ref, channel: "dev" }] },
+          {
+            ...args.identity,
+            scope: [{ ...ref, channel: "dev" }],
+            executionScope,
+          },
           { ...ref, channel: "dev" },
         );
       } catch {
         return { ...args.identity, scope: [] };
       }
     }
-    return this.widenForAccess(narrowIdentity(args.identity, ref), ref);
+    return this.widenForAccess(
+      { ...narrowIdentity(args.identity, ref), executionScope },
+      ref,
+    );
+  }
+
+  /**
+   * Where an app-narrowed identity may run its workflows: exactly where the
+   * viewer may. A scoped identity keeps its own refs for this project; the
+   * unbounded host identity (a desktop user in their own project) may use
+   * every Environment the project declares. Without this, narrowing to an
+   * app left no execution reach at all and every call failed with "no
+   * accessible Environment" (ADR 0053 scoped identities need exact refs).
+   */
+  private async executionReach(
+    viewer: Identity,
+    projectId: string,
+  ): Promise<readonly ExecutionEnvironmentRef[] | undefined> {
+    if (viewer.executionScope) {
+      return viewer.executionScope.filter((ref) => ref.projectId === projectId);
+    }
+    if (viewer.scope !== undefined) return undefined;
+    const policy = await this.deps.projectEnvironments
+      ?.list({ identity: viewer, projectId })
+      .catch(() => undefined);
+    if (!policy) return undefined;
+    return Object.keys(policy.environments).map((name) => ({
+      projectId,
+      name,
+    }));
   }
 
   /**

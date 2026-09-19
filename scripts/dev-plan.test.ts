@@ -118,6 +118,7 @@ describe("createDevPlan", () => {
     expect(plan.env).toEqual({
       CATAMORPHIC_DESKTOP_DATA_DIR: "/home/test/.catamorphic/dev/qa/desktop",
       CATAMORPHIC_DESKTOP_CDP_PORT: "9311",
+      CATAMORPHIC_SANDBOX_HOST_NETWORK: "1",
       CATAMORPHIC_DESKTOP_VITE_PORT: "5178",
       CATAMORPHIC_DATA_DIR: "/home/test/.catamorphic/dev/qa/server",
       PORT: "4705",

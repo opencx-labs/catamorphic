@@ -138,6 +138,7 @@ export class WorkspaceContextAgent implements CodingAgentProvider {
       systemPrompt: [
         opts.systemPrompt,
         playbook,
+        HOST_NOTICES_NOTE,
         coordinationPlaybook(this.coordination?.strategy ?? "shared-first"),
         this.skillsNote?.(),
       ]
@@ -275,6 +276,13 @@ export const WORKSPACE_TOOLS_PLAYBOOK = `This chat lives in the desktop workspac
 Present results through open_surface and Markdown links: app:<returnedName>, workflow:<exportName>, file:<path>, or URLs. App/workflow links open results; source links open code. Respect focused/background results and user control. Use update_todo_list when helpful. Saving, publishing and enabling are separate.
 
 New files are local-only by default, including work done with a company brain. For an ordinary new document, use the personalFilesDirectory in the desktop settings context and return a link to its actual local path. Keep the user's explicit folder choice when they supply one; explain if that folder syncs or belongs to shared project source. Updating an existing project file means editing that file's local copy, not publishing it. Do not put private output under .catamorphic/app-data/store/ or shared project source, force-add ignored personal files, or use a worktree as a privacy boundary. Remote execution cannot create a file on the user's device: use an available local execution environment for private file creation, or clearly explain the limitation before writing a shared file. Publish or propose only when the user requests that outcome, include only the intended files, and report whether the result is saved locally, proposed for review, or published. Preparing a proposal does not require the user's GitHub credentials; the company host opens it on their behalf. Use plain language about files and review unless Git details help this user.`;
+
+/**
+ * Native harnesses load the person's own CLI configuration, which can carry
+ * plugin MCP servers the desktop cannot authorize; their startup notices are
+ * not part of the conversation.
+ */
+const HOST_NOTICES_NOTE = `Connectors are managed in Work's Settings. If your harness reports that an MCP server or plugin needs authorization, treat that as a host notice, not a request: never mention it unless the user asks about that connector or asks you to use it.`;
 
 const WORKSPACE_CONTEXT_NOTE = `## The user's workspace
 
