@@ -122,3 +122,18 @@ replaced the browse → ask → build → use cut on the homepage:
 - Collapse the sidebar for the reading beat and bring it back to watch the
   change land; the dock's New chat button (furthest right of the two) opens a
   chat while the sidebar is away.
+- Scenario v3 (2026-09-19, evening): three asks in one chat: sidebar section,
+  then theme (light mode, calmer accent, softer font) with the chat minimized
+  and the dock collapsed so the change lands on a clean window, then the app
+  from the chat opened beside the page with ⌘⇧-click on its bubble (a new
+  desktop behaviour: bubbles follow the open modifiers). No captions; the
+  frame is the 1280x800 window at 1.5x (1920x1200, 60 fps).
+- A minimized chat has no visible inspector trigger; read busyness from every
+  mounted trigger plus spinners on the bubble and the chat row.
+- Run `caffeinate -dims` for the whole session. A pickup recorded while the
+  Mac slept produced 27 minutes of wall time, 235 frames and a dead app
+  runtime, and the markers no longer matched anything.
+- An agent's app may fail on first open for reasons the take cannot show
+  (here: a page size above the host's limit). Warm the app once before the
+  pickup, read the run's error from a database copy, fix the demo project
+  in a commit, and only then record.
