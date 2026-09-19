@@ -98,3 +98,15 @@ replaced the browse → ask → build → use cut on the homepage:
 - Probe scripts must live inside the repo: bun auto-installs the latest SDK
   for a script outside any project, and that newer binary can migrate a
   shared database the desktop's version then refuses.
+- Park the pointer over the page after every sidebar click. A pointer left
+  on a row keeps its tooltip open, and rows that shift under it (a new
+  section pushes the list down) open their tooltip too; a reset done by
+  right-click leaves the row's hover card in the first frames.
+- Wait on a section's title (`/^Launch/`), never on any text: the chat row
+  reads "Add a Launch section…" the moment the prompt is sent. A file's
+  mtime marks its last write, not the first, so it cannot date the landing.
+- Film on the default theme (Work Dark) unless the film is about themes; a
+  dev profile on another preset, or a first ask that switches the project
+  to light, clashes with the dark website the film sits on.
+- Delete, don't archive, earlier takes' chats: an app that lists sessions
+  shows archived ones too, and nine identical rows give the take away.
