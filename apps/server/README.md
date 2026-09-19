@@ -29,6 +29,12 @@ Configure a common public origin and deployment secret before enrollment. See
 the [setup reference](../../skills/setup-catamorphic-server/references/cluster-deployment.md)
 for enrollment, session recovery, and required verification.
 
+## First brain
+
+For the shortest path from nothing to a running brain an MCP client can
+connect to (build, run, provision a project and a person, connect), follow
+[`../../skills/setup-catamorphic-server/references/first-brain.md`](../../skills/setup-catamorphic-server/references/first-brain.md).
+
 ## Authentication setup
 
 Use [`../../skills/setup-catamorphic-server/SKILL.md`](../../skills/setup-catamorphic-server/SKILL.md)
