@@ -137,3 +137,29 @@ replaced the browse → ask → build → use cut on the homepage:
   (here: a page size above the host's limit). Warm the app once before the
   pickup, read the run's error from a database copy, fix the demo project
   in a commit, and only then record.
+- Scroll like a hand, not a wheel: one `mouseWheel` of 160px lands as a
+  jump. A flick is ~40 ticks at 16 ms with an eased, shrinking delta
+  (`flick()` in film.mjs); two flicks of 200 and 280 with a beat between
+  read as a person skimming. Frames arrive at ~55 fps while the page moves.
+- A window driven over CDP stops rendering the moment another window
+  covers it (Chromium backgrounds occluded windows): the screencast delivers
+  nothing, the webview goes blank, synthetic input waits forever. The
+  desktop now passes `disable-backgrounding-occluded-windows` when it runs
+  with a debugging port (main/index.ts), so a take survives the person
+  raising their own browser. Never steal focus with `osascript` to fix
+  this: the person is at the Mac.
+- Re-take one scene and splice it: `take-browser.sh` records only the
+  browser scene from the prepared window (`film.mjs prep`: dock in the
+  window, answers forgotten, tabs closed, plan opened from the Files
+  section, section folded again), ending on the exact scroll offset the
+  main take reads on from, and make-edit.py takes its first segments from
+  the `browser` source. The window must match the main take's opening
+  frame exactly: bookmark order (the store rewrites `bookmarks.json`;
+  reorder it with the app stopped), the editor caret, no tooltips.
+- After collapsing the sidebar, leave the pointer through host chrome (the
+  address bar) before parking it over the page: the tab strip slides under
+  the last host pointer position and the tab that lands there opens its
+  hover card, which then sits in every frame.
+- The screencast sends frames only when pixels change: a still window
+  yields a handful per second, so "few frames" is not a stall by itself.
+
