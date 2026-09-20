@@ -785,3 +785,17 @@ the same identity path as the iframe (execution reach and session access
 included). One Lucide resolver serves rows, tabs, inline actions and the
 palette, and it accepts only members of the icon table: an agent writing
 `icon: "Icon"` gets a dot, not a crashed sidebar.
+
+### 2026-09-20: Lurking follows the person, not the layout
+
+The floating chat folds to its strip (lurks) only on the person's own
+signals: a click or key that moved focus outside it, or a pointer that
+actually moved away. Chromium re-hit-tests after layout changes and fires
+the same leave and focus events without any input, so a sidebar section
+landing under a parked pointer, a panel sliding, or a row claiming focus as
+it mounts used to fold the chat mid-reply (the film take lost its streamed
+text that way). `lib/dock-attention.ts` holds the two rules: a leave counts
+when the pointer is outside the box and moved within 400 ms; focus outside
+counts when input preceded it within 400 ms. A parked pointer the dock slid
+away from is settled by the next real move.
+

@@ -50,6 +50,7 @@ import {
   projectAgentAsInfo,
   type SessionCheckoutInfo,
 } from "../lib/desktop-api";
+import { focusMovedByPerson, pointerLeft } from "../lib/dock-attention.js";
 import {
   readEditorSelection,
   selectionFromClipboard,
@@ -1032,6 +1033,12 @@ function ChatDockContent({
   // this dock's known autofocus calls are excluded from that authority.
   const userInteractionRef = useRef(0);
   const internalAutofocusDepthRef = useRef(0);
+  // When the person last pressed or typed, and last moved the pointer:
+  // only signals that follow real input may fold the dock (lurk). Layout
+  // moving under a parked pointer, or a row claiming focus as it lands,
+  // fires the same events and must not.
+  const lastInputAtRef = useRef(Number.NEGATIVE_INFINITY);
+  const lastPointerMoveAtRef = useRef(Number.NEGATIVE_INFINITY);
   useLayoutEffect(() => {
     if (!frontSurface) return;
     const inDock = (target: EventTarget | null) =>
@@ -1041,19 +1048,40 @@ function ChatDockContent({
         userInteractionRef.current += 1;
       }
       const inside = inDock(event.target);
-      setDockEngaged(inside);
-      if (!inside) setSlashDismissed(true);
+      if (inside) {
+        setDockEngaged(true);
+        return;
+      }
+      if (!focusMovedByPerson(performance.now() - lastInputAtRef.current))
+        return;
+      setDockEngaged(false);
+      setSlashDismissed(true);
     };
     // Clicks on unfocusable chrome (a webview, blank pane space) never
     // fire focusin — the pointer decides too.
     const onPointerDown = (event: PointerEvent) => {
       userInteractionRef.current += 1;
+      lastInputAtRef.current = performance.now();
       const inside = inDock(event.target);
       setDockEngaged(inside);
       if (!inside) setSlashDismissed(true);
     };
     const onKeyDown = () => {
       userInteractionRef.current += 1;
+      lastInputAtRef.current = performance.now();
+    };
+    // A parked pointer that the dock slid away from is still hovering as
+    // far as the person is concerned; the next real move settles it.
+    const onMouseMove = (event: MouseEvent) => {
+      lastPointerMoveAtRef.current = performance.now();
+      const box = sectionRef.current?.getBoundingClientRect() ?? null;
+      const outside = pointerLeft({
+        clientX: event.clientX,
+        clientY: event.clientY,
+        box,
+        msSinceMove: 0,
+      });
+      setDockHovered((hovered) => (hovered && outside ? false : hovered));
     };
     // Paste and drop can be the first interaction when invoked through a
     // context menu, accessibility tooling, or automation, so there is no
@@ -1066,12 +1094,14 @@ function ChatDockContent({
     window.addEventListener("focusin", onFocusIn);
     window.addEventListener("pointerdown", onPointerDown, true);
     window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("mousemove", onMouseMove, true);
     window.addEventListener("paste", onTransfer, true);
     window.addEventListener("drop", onTransfer, true);
     return () => {
       window.removeEventListener("focusin", onFocusIn);
       window.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("mousemove", onMouseMove, true);
       window.removeEventListener("paste", onTransfer, true);
       window.removeEventListener("drop", onTransfer, true);
     };
@@ -1986,7 +2016,19 @@ function ChatDockContent({
       <section
         ref={sectionRef}
         onMouseEnter={() => setDockHovered(true)}
-        onMouseLeave={() => setDockHovered(false)}
+        onMouseLeave={(event) => {
+          // Only a pointer that actually went elsewhere ends the hover;
+          // a leave the layout produced keeps the dock where it is.
+          if (
+            pointerLeft({
+              clientX: event.clientX,
+              clientY: event.clientY,
+              box: event.currentTarget.getBoundingClientRect(),
+              msSinceMove: performance.now() - lastPointerMoveAtRef.current,
+            })
+          )
+            setDockHovered(false);
+        }}
         onMouseDownCapture={onFocusRequest}
         onDragEnter={(event) => {
           if (!isComposerTransfer(event.dataTransfer)) return;
