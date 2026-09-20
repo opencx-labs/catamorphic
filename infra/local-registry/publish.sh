@@ -4,7 +4,10 @@
 set -e
 cd "$(dirname "$0")"
 curl -sf http://localhost:4873/-/ping >/dev/null 2>&1 || {
-  (bunx verdaccio --config config.yaml --listen 4873 > verdaccio.log 2>&1 &)
+  # Under bun's runtime, not node: the macOS application firewall lets bun
+  # accept connections, and build sandboxes (microVMs) reach the host by
+  # address, not loopback.
+  (bunx --bun verdaccio --config config.yaml --listen http://0.0.0.0:4873 > verdaccio.log 2>&1 &)
   sleep 5
 }
 cd ../..

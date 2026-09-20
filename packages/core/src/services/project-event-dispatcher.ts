@@ -170,6 +170,7 @@ export class ProjectEventDispatcher {
                 projectId: row.project_id,
                 externalUserId: session.external_user_id,
                 agentId: session.agent_id,
+                intent: "change",
               });
             }
             const correlationKey = `event:${row.activation_id}:${row.id}`;

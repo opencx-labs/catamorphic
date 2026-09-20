@@ -19,6 +19,7 @@ import {
   openModeFromEvent,
 } from "../../shared/open-mode.js";
 import type { SidebarMenuEntry, SidebarPreview } from "../lib/desktop-api.js";
+import { lucideIcon } from "../lib/lucide-icon.js";
 import { ShortcutHint } from "./shortcut-hint";
 import {
   sidebarItemPresentation,
@@ -39,10 +40,8 @@ export interface ContextMenuEntry {
   disabledReason?: string;
 }
 
-const SIDEBAR_ICONS = new Map(Object.entries(icons.icons));
-
 export function SidebarIcon({ name }: { name?: string }) {
-  const Icon = SIDEBAR_ICONS.get(name ?? "") ?? icons.Circle;
+  const Icon = lucideIcon(name) ?? icons.Circle;
   return <Icon className="size-3.5 shrink-0" aria-hidden="true" />;
 }
 
@@ -343,7 +342,7 @@ export function SidebarItemRow<
   }, [renaming]);
 
   const IconComponent =
-    typeof icon === "string" ? SIDEBAR_ICONS.get(icon) : undefined;
+    typeof icon === "string" ? (lucideIcon(icon) ?? icons.Circle) : undefined;
 
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: right-click mirrors the row's ⋯ button, which stays keyboard-reachable
@@ -499,10 +498,7 @@ export function SidebarItemRow<
             </button>
           </TitleHint>
           {inlineActions.map((entry) => {
-            const Icon =
-              Object.entries(icons.icons).find(
-                ([name]) => name === entry.icon,
-              )?.[1] ?? icons.Circle;
+            const Icon = lucideIcon(entry.icon) ?? icons.Circle;
             return (
               <ShortcutHint
                 key={`${entry.action}:${entry.label}`}

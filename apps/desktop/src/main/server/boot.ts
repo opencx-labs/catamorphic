@@ -160,6 +160,11 @@ export async function startEmbeddedServer(
     ? new E2eLocalSandboxProvider(resolveProjectData)
     : new MicrosandboxSandboxProvider({
         projectDataDirectory: resolveProjectData,
+        // Development only: builds fetch @catamorphic/* from the local
+        // registry, which a sandbox can only reach through the host network.
+        ...(process.env.CATAMORPHIC_SANDBOX_HOST_NETWORK === "1"
+          ? { networkProfiles: ["public", "private", "host"] as const }
+          : {}),
       });
   const clientRunners = new RemoteClientRunners(profileConfig, sandboxProvider);
   const environmentProvider = defineStaticEnvironments([

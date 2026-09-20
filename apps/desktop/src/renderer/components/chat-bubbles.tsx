@@ -14,6 +14,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { openModeFromEvent } from "../../shared/open-mode.js";
 import type { ChatSessionMenuEntry } from "../lib/chat-session-actions.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
@@ -71,6 +72,11 @@ export interface ChatBubblesProps {
   /** Reports the effective collapsed state so hosts can clear the bottom. */
   onCollapsedChange?: (collapsed: boolean) => void;
   onToggle: (localId: string) => void;
+  /**
+   * A bubble click with the app's open modifiers (⌘ = tab, ⌘⇧ = to the
+   * side) opens the chat as a workspace tab instead of floating it.
+   */
+  onOpenAs?: (localId: string, mode: "tab" | "side") => void;
   onClose: (localId: string) => void;
   onMenuAction: (localId: string, action: ChatSessionMenuEntry) => void;
   onNewChat: () => void;
@@ -103,6 +109,7 @@ function Bubble({
   fresh,
   expanded,
   onToggle,
+  onOpenAs,
   onClose,
   menu,
   nativeMenus = false,
@@ -120,6 +127,7 @@ function Bubble({
   fresh: boolean;
   expanded: boolean;
   onToggle: (localId: string) => void;
+  onOpenAs?: (localId: string, mode: "tab" | "side") => void;
   onClose: (localId: string) => void;
   menu?: ChatSessionMenuEntry[];
   nativeMenus?: boolean;
@@ -180,7 +188,14 @@ function Bubble({
       <ShortcutHint label={label} side="top" delay={BUBBLE_HINT_DELAY_MS}>
         <button
           type="button"
-          onClick={() => onToggle(entry.localId)}
+          onClick={(event) => {
+            const mode = openModeFromEvent(event, "floating");
+            if ((mode === "tab" || mode === "side") && onOpenAs) {
+              onOpenAs(entry.localId, mode);
+              return;
+            }
+            onToggle(entry.localId);
+          }}
           onContextMenu={
             menu && menu.length > 0
               ? (event) => {
@@ -277,6 +292,7 @@ export function ChatBubbles({
   autoCollapse,
   onCollapsedChange,
   onToggle,
+  onOpenAs,
   onClose,
   onMenuAction,
   onNewChat,
@@ -592,6 +608,7 @@ export function ChatBubbles({
               fresh={freshIds.has(entry.localId)}
               expanded={entry.mode !== "min" && entry.localId === activeLocalId}
               onToggle={onToggle}
+              onOpenAs={onOpenAs}
               onClose={onClose}
               menu={menus[entry.localId]}
               nativeMenus={nativeMenus}

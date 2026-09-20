@@ -594,7 +594,7 @@ describe("executionFiles", () => {
         devDependencies: { "@catamorphic/parser": "0.0.1" },
       }),
       ".catamorphic/contracts/package.json": JSON.stringify({
-        devDependencies: { "@catamorphic/app": "0.0.3" },
+        devDependencies: { "@catamorphic/app": "0.0.4" },
       }),
       ".catamorphic/apps/dashboard/package.json": JSON.stringify({
         name: "dashboard",
@@ -636,7 +636,7 @@ describe("executionFiles", () => {
       }),
       ".catamorphic/workflows/package.json": JSON.stringify({
         name: "@project/workflows",
-        dependencies: { "@catamorphic/workflow": "0.0.2" },
+        dependencies: { "@catamorphic/workflow": "0.0.3" },
       }),
       ".catamorphic/workflows/src/a.ts": "export const a = 1;",
       ".catamorphic/apps/dashboard/src/main.tsx": "export {};",

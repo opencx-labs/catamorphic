@@ -36,3 +36,151 @@ Prefer short, naturally connected prompts over a feature inventory. Keep the ans
 | Setup copy cluttered the website | Keep the removed caption and “About this film” section removed. |
 
 For the current website, the homepage title is `Work`; secondary titles use `Work · Page`. Preserve these and the accepted visual design when replacing media. Deliver the playable film, editable capture/render source, a concise verification record, and the local preview. Website publishing is a separate action requiring existing authorization.
+
+## Driving the desktop from a script (2026-09-19 film)
+
+Lessons from the "shape the app, then have it build a tool" film, which
+replaced the browse → ask → build → use cut on the homepage:
+
+- The desktop can have two page targets: the workspace window and the
+  detached chat dock (`?surface=dock`). Capture and drive the workspace
+  window explicitly (filter the target by URL); return the dock to the window
+  for filming so floating chats render in the captured frame.
+- Real CDP key events go to whatever has focus. After browsing, focus sits in
+  the page's webview and app shortcuts such as Cmd+N do not fire. Click the
+  visible control a person would use (the sidebar's New chat button) instead
+  of relying on shortcuts, and it also reads better on film.
+- Typing a URL into the new-tab palette can select a matching bookmark
+  rather than navigate. Open pages from a project bookmark with a real click
+  when the film needs a specific page.
+- Sidebar rows carry no accessible name beyond their text; find them by text
+  and click their `[data-tree-primary]` child.
+- Seed realistic history through the normal chat before filming: real turns,
+  short prompts, minimized afterwards so the strip shows their bubbles.
+- Keep a `film.mjs` with one command per scene so a failing scene can be
+  rehearsed alone; log markers relative to `start.json` for the edit.
+
+- Rehearse the exact build path once before recording. Three things broke
+  a take that only a full run reveals: the dev database predated a rewritten
+  migration (the app list returned 500 until the column was added), project
+  workspaces install `@catamorphic/*` from the local verdaccio registry (bump
+  and publish the packages or agents build against old kit and types), and
+  seeded skills are written at project creation only (refresh the demo
+  project's `.catamorphic/skills` from `SEED_SKILLS` after changing them).
+- Project themes wrap the workspace (`ProjectTheme` renders a `.size-full`
+  element with `data-theme`); `document.documentElement` keeps the profile
+  theme. Wait on the workspace scope, not the root.
+- Reset between takes: remove the personal `sidebar-projects/<id>.js` and
+  `settings-projects/<id>.json` layers, archive the take's chat, close tabs,
+  delete the agent's `.catamorphic` workspace and its app rows, return the
+  dock to the window (`catamorphicDesktop.dockDetach(false)`).
+- The Work assistant used to repeat the harness's "MCP server needs
+  authorization" notice in replies (user-level CLI plugins leak into local
+  agents); the workspace prompt now tells it those are host notices.
+- Host builds run in microVM sandboxes. A registry on `localhost` is the
+  VM's own loopback there; the desktop's dev plan sets
+  `CATAMORPHIC_SANDBOX_HOST_NETWORK=1` (turbo passes it through) so sandboxes
+  get the `private` and `host` network profiles, the registry listens on all
+  interfaces under bun's runtime (the macOS firewall admits bun, not node),
+  and the demo project's `.catamorphic/bunfig.toml` addresses the registry by
+  the Mac's LAN IP so the lockfile's tarball URLs resolve from both sides.
+- Agents compile apps locally unless told otherwise; the building-apps seed
+  now ends with the host `build_app` call and an `app:<name>` link, because
+  "no successful build yet" is what the person sees otherwise.
+- The desktop and any probe script must run the same msb binary: the SDK's
+  bundled one migrated the shared sandbox database and the developer's older
+  `~/.microsandbox/bin/msb` (which the desktop fell back to) then refused it.
+  The dev plan now passes the SDK's binary as `MSB_PATH`.
+- A project's build sandbox is created once and reused (`project_sandboxes`);
+  a sandbox created before a network or runtime change keeps its old
+  configuration. After changing sandbox settings, forget the project's row
+  and `msb remove` the sandbox so the next build creates a fresh one.
+- Probe scripts must live inside the repo: bun auto-installs the latest SDK
+  for a script outside any project, and that newer binary can migrate a
+  shared database the desktop's version then refuses.
+- Park the pointer over the page after every sidebar click. A pointer left
+  on a row keeps its tooltip open, and rows that shift under it (a new
+  section pushes the list down) open their tooltip too; a reset done by
+  right-click leaves the row's hover card in the first frames.
+- Wait on a section's title (`/^Launch/`), never on any text: the chat row
+  reads "Add a Launch section…" the moment the prompt is sent. A file's
+  mtime marks its last write, not the first, so it cannot date the landing.
+- Film on the default theme (Work Dark) unless the film is about themes; a
+  dev profile on another preset, or a first ask that switches the project
+  to light, clashes with the dark website the film sits on.
+- Delete, don't archive, earlier takes' chats: an app that lists sessions
+  shows archived ones too, and nine identical rows give the take away.
+- The bookmarks bar is part of the set. A dev profile carries the developer's
+  own imported bookmarks; replace them with a work set before filming
+  (desktop `bookmarks.json`: `pinnedByProfile` tiles and `libraryByProfile`
+  rows, each with a `faviconUrl` so nothing shows a globe). The 2026-09-19
+  film uses pinned Figma, Linear, Notion, Calendar and a list of Shopify,
+  Stripe, Slack, Webflow, Mailchimp, Drive; the original file is kept beside
+  the session scratchpad as `bookmarks.backup.json`.
+- Render at 60 fps: `Page.startScreencast` delivers frames at the display
+  rate, so a 30 fps render throws half of them away and reads as choppy.
+- Collapse the sidebar for the reading beat and bring it back to watch the
+  change land; the dock's New chat button (furthest right of the two) opens a
+  chat while the sidebar is away.
+- Scenario v3 (2026-09-19, evening): three asks in one chat: sidebar section,
+  then theme (light mode, calmer accent, softer font) with the chat minimized
+  and the dock collapsed so the change lands on a clean window, then the app
+  from the chat opened beside the page with ⌘⇧-click on its bubble (a new
+  desktop behaviour: bubbles follow the open modifiers). No captions; the
+  frame is the 1280x800 window at 1.5x (1920x1200, 60 fps).
+- A minimized chat has no visible inspector trigger; read busyness from every
+  mounted trigger plus spinners on the bubble and the chat row.
+- Run `caffeinate -dims` for the whole session. A pickup recorded while the
+  Mac slept produced 27 minutes of wall time, 235 frames and a dead app
+  runtime, and the markers no longer matched anything.
+- An agent's app may fail on first open for reasons the take cannot show
+  (here: a page size above the host's limit). Warm the app once before the
+  pickup, read the run's error from a database copy, fix the demo project
+  in a commit, and only then record.
+- Scroll like a hand, not a wheel: one `mouseWheel` of 160px lands as a
+  jump. A flick is ~40 ticks at 16 ms with an eased, shrinking delta
+  (`flick()` in film.mjs); two flicks of 200 and 280 with a beat between
+  read as a person skimming. Frames arrive at ~55 fps while the page moves.
+- A window driven over CDP stops rendering the moment another window
+  covers it (Chromium backgrounds occluded windows): the screencast delivers
+  nothing, the webview goes blank, synthetic input waits forever. The
+  desktop now passes `disable-backgrounding-occluded-windows` when it runs
+  with a debugging port (main/index.ts), so a take survives the person
+  raising their own browser. Never steal focus with `osascript` to fix
+  this: the person is at the Mac.
+- Re-take one scene and splice it: `take-browser.sh` records only the
+  browser scene from the prepared window (`film.mjs prep`: dock in the
+  window, answers forgotten, tabs closed, plan opened from the Files
+  section, section folded again), ending on the exact scroll offset the
+  main take reads on from, and make-edit.py takes its first segments from
+  the `browser` source. The window must match the main take's opening
+  frame exactly: bookmark order (the store rewrites `bookmarks.json`;
+  reorder it with the app stopped), the editor caret, no tooltips.
+- After collapsing the sidebar, leave the pointer through host chrome (the
+  address bar) before parking it over the page: the tab strip slides under
+  the last host pointer position and the tab that lands there opens its
+  hover card, which then sits in every frame.
+- The screencast sends frames only when pixels change: a still window
+  yields a handful per second, so "few frames" is not a stall by itself.
+- Read every status trigger, not the first visible one. Minimized bubbles and
+  rows mount their own `session-inspector-trigger`; a take that waited on
+  `find(visible)` saw a "New" bubble's trigger, timed out on "agent
+  working" and typed the next ask into a chat still busy with the first.
+  `chatWorking` is "any visible trigger says Working"; `chatIdle` is "one
+  says Ready and none says Working".
+- The main take's app scene cannot allow the app: the floating chat covers
+  the consent card, so the click lands on the chat. That is the pickup's
+  job (chat to its bubble, card, allow, app, chat back beside it). Before
+  the pickup, allow once by JS to warm the app, confirm it renders data
+  through its frame target, then clear `appAccessApprovals` so the card is
+  back for the camera.
+- Deleting chats in the database leaves their dock bubbles (workspace state
+  keeps the entries) and each bubble mounts a status trigger. Close the
+  bubbles through their close controls before filming.
+- The demo project's `bunfig.toml` names the Mac's LAN address; the address
+  changes with the network. Check `ipconfig getifaddr en0` against it before
+  any take that builds, and commit the change so the tree stays clean.
+- With attention-gated lurking (2026-09-20) the chat stays open through the
+  landing; that day's take shows the reply streaming while the section
+  arrives, the way it should.
+

@@ -31,6 +31,7 @@ offering local username/password.
 
 | Observed need | Read |
 | --- | --- |
+| Nothing installed yet; "a brain on this machine" that an MCP client can reach | [A first brain on one machine](references/first-brain.md) |
 | Stock image or `apps/server` | [Stock server](references/stock-server.md) |
 | New execution machine, Environment enrollment, multiple instances | [Managed machines and clusters](references/cluster-deployment.md) |
 | Existing or custom application | [Custom host](references/custom-host.md) |

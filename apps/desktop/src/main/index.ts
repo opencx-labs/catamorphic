@@ -78,6 +78,16 @@ if (process.platform === "darwin") {
   );
 }
 
+// A window driven over the debugging port (dev runs, films, e2e) keeps
+// rendering while another window covers it. Chromium otherwise pauses an
+// occluded window's compositor: screencast frames stop, the browser
+// webview goes blank and synthetic input waits on a frame that never
+// comes, so a take stalls the moment the person raises another app.
+if (app.commandLine.hasSwitch("remote-debugging-port")) {
+  app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
+  app.commandLine.appendSwitch("disable-renderer-backgrounding");
+}
+
 // Present as plain Chrome to web content, Vivaldi/Edge-style. Chromium
 // derives the default UA (and the Sec-CH-UA "brands" that Google's
 // supported-browser gate checks) from the app name/version — stripping

@@ -23,7 +23,10 @@ WORKDIR /app
 COPY . .
 # Packages (dists the server resolves) + the mobile PWA the server serves
 # at its root (invite webLinks open it directly).
-RUN bun install --frozen-lockfile \
+# --ignore-scripts: the workspace's pinned `node` helper package installs a
+# Node binary through npm in its preinstall step; the image has bun only, and
+# every build here runs under bun.
+RUN bun install --frozen-lockfile --ignore-scripts \
   && bunx turbo run build --filter='./packages/*' --filter=catamorphic-pwa --no-daemon \
   && rm -rf /root/.bun/install/cache
 

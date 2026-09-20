@@ -9,20 +9,28 @@ import type {
   SandboxStatus,
 } from "@catamorphic/sandbox";
 import { assertSandboxResources } from "@catamorphic/sandbox";
-import { Sandbox } from "microsandbox";
+import {
+  type SandboxStatus as MsbSandboxStatus,
+  NetworkPolicy,
+  type NetworkProfile,
+  Sandbox,
+} from "microsandbox";
 import { msbStdioRuntimeProvider } from "./stdio-runtime-provider.js";
 
 const DEFAULT_IMAGE = "oven/bun";
 const DEFAULT_MEMORY_MIB = 1024;
 const DEFAULT_CPUS = 1;
 
-function mapMsbStatus(
-  status: "running" | "stopped" | "crashed" | "draining",
-): SandboxStatus {
+function mapMsbStatus(status: MsbSandboxStatus): SandboxStatus {
   switch (status) {
+    case "created":
+    case "starting":
+      return "creating";
     case "running":
     case "draining":
       return "started";
+    // A paused VM is not serving; callers start it, which resumes it.
+    case "paused":
     case "stopped":
       return "stopped";
     case "crashed":
@@ -43,6 +51,13 @@ export interface MicrosandboxProviderConfig {
   idleTimeoutSeconds?: number;
   namePrefix?: string;
   /**
+   * Network reach of every sandbox, as microsandbox profiles. Unset keeps
+   * the runtime's default (public internet only). A development host adds
+   * `"private"` and `"host"` so builds can fetch from a registry served by
+   * the machine itself; production keeps sandboxes off the host network.
+   */
+  networkProfiles?: readonly NetworkProfile[];
+  /**
    * Shell command run once inside every new sandbox before it is handed to
    * the caller. Defaults to installing git when the image lacks it — core's
    * agent sessions require git for change detection, and common runtime
@@ -62,9 +77,12 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
   readonly resourceLimits = ["cpuMillis", "memoryMb"] as const;
   readonly deploymentRuntime: DeploymentRuntimeProvider;
   private readonly config: Required<
-    Omit<MicrosandboxProviderConfig, "projectDataDirectory">
+    Omit<MicrosandboxProviderConfig, "projectDataDirectory" | "networkProfiles">
   > &
-    Pick<MicrosandboxProviderConfig, "projectDataDirectory">;
+    Pick<
+      MicrosandboxProviderConfig,
+      "projectDataDirectory" | "networkProfiles"
+    >;
   private readonly connections = new Map<string, Sandbox>();
 
   constructor(config?: MicrosandboxProviderConfig) {
@@ -75,6 +93,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       cpus: config?.cpus ?? DEFAULT_CPUS,
       idleTimeoutSeconds: config?.idleTimeoutSeconds ?? 15 * 60,
       namePrefix: config?.namePrefix ?? "cata",
+      networkProfiles: config?.networkProfiles,
       setupCommand: config?.setupCommand ?? DEFAULT_SETUP_COMMAND,
     };
     this.deploymentRuntime = msbStdioRuntimeProvider({
@@ -107,6 +126,12 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       .detached(true);
     if (opts.envVars) builder = builder.envs(opts.envVars);
     if (opts.labels) builder = builder.labels(opts.labels);
+    const profiles = this.config.networkProfiles;
+    if (profiles && profiles.length > 0) {
+      builder = builder.network((network) =>
+        network.policy(NetworkPolicy.fromProfiles(profiles)),
+      );
+    }
     const dataDirectory =
       opts.labels?.purpose === "deployment-runtime" && opts.labels.projectId
         ? await this.config.projectDataDirectory?.({
@@ -140,8 +165,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
   async startSandbox(sandboxId: string): Promise<void> {
     const handle = await Sandbox.get(sandboxId);
     if (handle.status === "running") return;
-    const sandbox = await handle.startDetached();
-    this.connections.set(sandboxId, sandbox);
+    this.connections.set(sandboxId, await bringUp(handle));
   }
 
   async stopSandbox(sandboxId: string): Promise<void> {
@@ -274,10 +298,24 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     const sandbox =
       handle.status === "running"
         ? await handle.connect()
-        : await handle.startDetached();
+        : await bringUp(handle);
     this.connections.set(sandboxId, sandbox);
     return sandbox;
   }
+}
+
+/**
+ * A live connection to a sandbox that is not running. A paused VM resumes in
+ * place (restarting one is refused by msb); anything else boots.
+ */
+async function bringUp(
+  handle: Awaited<ReturnType<typeof Sandbox.get>>,
+): Promise<Sandbox> {
+  if (handle.status === "paused") {
+    await handle.resume();
+    return handle.connect();
+  }
+  return handle.startDetached();
 }
 
 function withCredentials(url: string, opts?: GitCloneOpts): string {

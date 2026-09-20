@@ -65,6 +65,12 @@ export interface AppPrefs {
   lastProjectId?: string;
   /** Sessions this profile has explicitly or implicitly marked unread. */
   unreadSessionIds: string[];
+  /**
+   * Apps this profile allowed to read its chats, as `<projectId>/<app>`
+   * (ADR 0148). Asked once per app; a rebuilt version that drops the
+   * declaration needs no new answer because it gains no access.
+   */
+  appAccessApprovals: string[];
 }
 
 export const DEFAULT_PREFS: AppPrefs = {
@@ -97,6 +103,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   prDefaultView: "for-you",
   rightSidebarOpen: true,
   unreadSessionIds: [],
+  appAccessApprovals: [],
 };
 
 function dimension(value: unknown, fallback: number, max: number): number {
@@ -186,5 +193,6 @@ export function normalizePrefs(raw: unknown): AppPrefs {
       ? { lastProjectId: record.lastProjectId }
       : {}),
     unreadSessionIds: stringList(record.unreadSessionIds),
+    appAccessApprovals: stringList(record.appAccessApprovals),
   };
 }

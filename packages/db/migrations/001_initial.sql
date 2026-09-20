@@ -152,6 +152,7 @@ CREATE TABLE app_versions (
     ready_at timestamp with time zone,
     published_at timestamp with time zone,
     workflow_shapes jsonb,
+    access jsonb,
     CONSTRAINT chk_active_is_published CHECK (((NOT is_active) OR ((kind)::text = 'published'::text))),
     CONSTRAINT chk_app_version_kind CHECK (((kind)::text = ANY ((ARRAY['preview'::character varying, 'published'::character varying])::text[]))),
     CONSTRAINT chk_app_version_status CHECK (((status)::text = ANY ((ARRAY['building'::character varying, 'ready'::character varying, 'failed'::character varying])::text[]))),

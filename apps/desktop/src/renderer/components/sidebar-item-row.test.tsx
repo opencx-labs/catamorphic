@@ -222,3 +222,34 @@ describe("SidebarItemRow menu motion", () => {
     });
   });
 });
+
+describe("SidebarItemRow icons", () => {
+  function mountIconRow(icon: string) {
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    const root = createRoot(container);
+    roots.push(root);
+    act(() => {
+      root.render(
+        <SidebarItemRow
+          label="Support answers"
+          icon={icon}
+          onOpen={() => {}}
+          onAction={() => {}}
+        />,
+      );
+    });
+    return container;
+  }
+
+  it("resolves Lucide alias names and never prints a name as text", () => {
+    const alias = mountIconRow("MessageCircleQuestion");
+    expect(alias.querySelector("svg")).not.toBeNull();
+    expect(alias.textContent).toBe("Support answers");
+
+    const unknown = mountIconRow("NoSuchIconName");
+    expect(unknown.querySelector("svg")).not.toBeNull();
+    expect(unknown.textContent).toBe("Support answers");
+  });
+});

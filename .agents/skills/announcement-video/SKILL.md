@@ -29,7 +29,7 @@ For a brief-only or storyboard-only request, deliver that planning artifact and 
 
 Explicit user instructions override these defaults. Resolve ordinary choices yourself; ask only for missing inputs that would change the result and cannot be found in the repository or conversation. Avoid repeated approval rounds for reversible drafts.
 
-For Work desktop films, read [references/work-demo.md](references/work-demo.md) before storyboarding or capture. It records the accepted interaction and pacing lessons from this website film.
+For Work desktop films, read [references/work-demo.md](references/work-demo.md) before storyboarding or capture. It records the accepted interaction and pacing lessons from this website film. Then follow [references/work-demo-runbook.md](references/work-demo-runbook.md): the environment, the reset, the take, the pickup, the edit and the install, step by step, with the scripts in [scripts/work-demo/](scripts/work-demo/).
 
 Use [references/brief-template.md](references/brief-template.md) to record a compact brief, shot timings, source evidence, and accepted corrections in the film project. Read [references/product-film-example.md](references/product-film-example.md) for the reusable composition example and its review lessons. Treat that example as historical evidence, not a current feature or version specification.
 
@@ -40,6 +40,7 @@ Use [references/brief-template.md](references/brief-template.md) to record a com
 - Capture the actual states needed for the film: closed launcher, open widget, floating layout, streaming response, annotation tools, and attachment confirmation when relevant. Choose the states that prove this release's benefit.
 - Inspect referenced videos when supplied. Record what to borrow: composition, depth, pacing, camera path, transitions, and pauses. If a reference cannot be opened, say so and work from the accessible evidence; do not claim to have watched it.
 - Locate the official logo in the brand or website repository (for Work, inspect its website; for Catamorphic, use `site/assets/logo.svg`). Use the exact asset and correct light/dark variant. Do not redraw the wordmark from memory.
+- Rehearse the complete path once, end to end, before recording, with the same data, agents and build services the take will use. Failures that only a full run reveals (a development database behind a rewritten migration, a package registry the build sandbox cannot reach, a runtime binary that no longer matches its database, seeded skills written before the guidance changed) cost a whole take each; fix them in the product or the environment and record the fix in the story reference.
 - Keep tokens, private URLs, customer identities, and sensitive dashboard content out of captures. Use an approved demo state, not blur as a substitute for choosing safe source material.
 
 ## 2. Design a readable action sequence

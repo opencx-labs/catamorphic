@@ -313,6 +313,62 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     expect((await sessions.list(other, projectId)).total).toBe(0);
   });
 
+  it("a sessions ref reads the caller's own sessions on every agent, and nobody else's (ADR 0148)", async () => {
+    // Alice, as an app that declared session access: her sessions on csm
+    // (created above) and sales alike, but never Bob's.
+    const appViewer: Identity = {
+      ...root,
+      externalUserId: "csm-alice",
+      scope: [
+        { kind: "app", projectId, name: "activity", channel: "dev" },
+        { kind: "sessions", projectId },
+      ],
+    };
+    const onSales = await sessions.create(admin, projectId, {
+      agentId: salesAgentId,
+    });
+    // One of Alice's own, created through her agent-scoped identity.
+    await sessions.create(viewer, projectId, { agentId: csmAgentId });
+    const mine = await sessions.list(appViewer, projectId);
+    expect(mine.total).toBeGreaterThan(0);
+    expect(mine.items.every((s) => s.externalUserId === "csm-alice")).toBe(
+      true,
+    );
+    const first = mine.items[0];
+    if (!first) throw new Error("expected a session");
+    expect((await sessions.get(appViewer, projectId, first.id)).id).toBe(
+      first.id,
+    );
+    await expect(
+      sessions.get(appViewer, projectId, onSales.id),
+    ).rejects.toThrow(AccessDeniedError);
+    // The ref is project-bound: it reads nothing in another project.
+    const elsewhere: Identity = {
+      ...appViewer,
+      scope: [
+        { kind: "sessions", projectId: "00000000-0000-4000-8000-0000000000ff" },
+      ],
+    };
+    await expect(sessions.list(elsewhere, projectId)).rejects.toThrow(
+      AccessDeniedError,
+    );
+    // "read" means read: the ref changes nothing, not even the viewer's own.
+    await expect(
+      sessions.deliver(appViewer, projectId, first.id, {
+        content: "hello",
+        author: { kind: "user", externalUserId: appViewer.externalUserId },
+        mode: "next_turn",
+        idempotencyKey: "app-deliver",
+      }),
+    ).rejects.toThrow(AccessDeniedError);
+    await expect(
+      sessions.archive(appViewer, projectId, first.id),
+    ).rejects.toThrow(AccessDeniedError);
+    await expect(
+      sessions.fork(appViewer, projectId, first.id, {}),
+    ).rejects.toThrow(AccessDeniedError);
+  });
+
   it("pages hierarchy branches without leaking foreign parents or child counts", async () => {
     const parent = await sessions.create(viewer, projectId, {
       agentId: csmAgentId,

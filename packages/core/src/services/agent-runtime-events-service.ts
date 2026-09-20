@@ -74,6 +74,7 @@ export class AgentRuntimeEventsService {
             identity: args.identity,
             sessionId: event.sessionId,
             lock: true,
+            intent: "change",
           });
           setSpanCorrelation({
             span,
@@ -98,6 +99,7 @@ export class AgentRuntimeEventsService {
       identity: args.identity,
       sessionId: args.sessionId,
       lock: false,
+      intent: "read",
     });
     const events = await this.db
       .selectFrom("agent_runtime_events")
@@ -249,6 +251,8 @@ export async function requireRuntimeSession(args: {
   identity: Identity;
   sessionId: string;
   lock: boolean;
+  /** Reads pass `read`; anything that records or answers passes `change`. */
+  intent: "read" | "change";
 }): Promise<{ projectId: string }> {
   let sessionQuery = args.db
     .selectFrom("agent_sessions")
@@ -271,6 +275,7 @@ export async function requireRuntimeSession(args: {
     projectId: session.project_id,
     externalUserId: session.external_user_id,
     agentId: session.agent_id,
+    intent: args.intent,
   });
   return { projectId: session.project_id };
 }

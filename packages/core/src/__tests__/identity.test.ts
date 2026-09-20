@@ -46,6 +46,22 @@ describe("identity scope (ADR 0053 / 0055)", () => {
     expect(scopeCovers(scope, { kind: "project", projectId })).toBe(false);
   });
 
+  it("a sessions ref covers the caller's sessions in one project only (ADR 0148)", () => {
+    const scope = [
+      { kind: "app" as const, projectId, name: "activity" },
+      { kind: "sessions" as const, projectId },
+    ];
+    expect(scopeCovers(scope, { kind: "sessions", projectId })).toBe(true);
+    expect(scopeCovers(scope, { kind: "sessions", projectId: "p2" })).toBe(
+      false,
+    );
+    // It is not an agent ref: nothing about it names an agent or a project.
+    expect(scopeCovers(scope, { kind: "agent", projectId, name: "csm" })).toBe(
+      false,
+    );
+    expect(scopeCovers(scope, { kind: "project", projectId })).toBe(false);
+  });
+
   it("document refs cover subtrees, and write implies read", () => {
     const tree = {
       kind: "document" as const,

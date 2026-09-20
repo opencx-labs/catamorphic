@@ -98,6 +98,14 @@ export class SessionActionsService {
           });
         if (!("idempotencyKey" in args))
           throw new Error("idempotencyKey is required");
+        // Everything past this point changes the session: settle access
+        // before the action is recorded, so a denied caller leaves no trace.
+        await this.sessions.assertSession(
+          input.identity,
+          input.projectId,
+          args.sessionId,
+          "change",
+        );
         const key = JSON.stringify([input.author, args.idempotencyKey]);
         const accepted = await this.db
           .insertInto("session_actions")

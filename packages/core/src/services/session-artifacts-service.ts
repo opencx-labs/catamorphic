@@ -534,6 +534,7 @@ export class SessionArtifactsService {
       projectId: input.projectId,
       externalUserId: row.external_user_id,
       agentId: row.agent_id,
+      intent: "change",
     });
     if (!input.allowClosed && row.status !== "active")
       throw new SessionArtifactConflictError("Session is closed");

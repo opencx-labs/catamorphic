@@ -704,6 +704,67 @@ window loses OS focus while the agent works, the chat lurks the same way it
 does behind a tab. Seeing the screen behind the dock is the agent's job
 through computer use, not a composer control.
 
+### 2026-09-19: Apps that read your chats, and two chart-free dashboard parts
+
+An app declares `catamorphic.access.sessions` in its package and the desktop
+asks once, in place of the app, before a build that reads the profile's chats
+mounts (`AppAccessConsent` in `screens/app-screen.tsx`, approval recorded per
+project and app in `appAccessApprovals`). The card uses the settings-card
+surface and one primary action; there is no "deny" button because closing the
+tab is the refusal. The app kit gained `Stat` (label over a large tabular
+number, optional toned detail) and `BarList` (horizontal bars scaled to the
+largest value, accent at low chroma), so agents can show "how much of each"
+without hand-rolled charts or literal colors; both are documented in the
+`designing-apps` seed. See ADR 0148.
+
+Apps built by agents now compose the kit before writing CSS: the
+`designing-apps` seed opens its inventory with "reach for the kit before
+CSS" and lists hand-rolled tiles, bars, tables and badges among the do-nots,
+because an agent given a stat tile in the inventory still drew its own when
+the rule was implicit.
+
+Two sidebar fixes from filming an agent-authored section: a Lucide alias
+name (`MessageCircleQuestion`) resolves through one shared resolver
+(`lib/lucide-icon.ts`, used by rows, tabs, inline actions and the palette)
+that accepts only members of the icon table, so an unknown name or a
+non-icon export such as `Icon` falls back to a dot, never text and never a
+crash; and hiding an item hides its
+subtree, since hiding only the `.catamorphic` row hoisted the workspace's
+folders into a project files section. Agents also finish an app with the
+host's `build_app` and an `app:<name>` link; a local `bun run build` alone
+leaves "no successful build yet" on the app's screen.
+
+An app runs its workflows where the person viewing it may: the app-narrowed
+identity keeps the viewer's execution reach in the project, so the desktop
+user's apps run on "This Mac" without any grant.
+
+A preview app calls the project as it is on this machine: its workflow calls
+read the dev checkout's working tree, the same files the preview was
+compiled from (a build never commits, and the turn checkpoint lands after
+the agent has already opened the app). Only published apps run the published
+ref. Before this, a freshly built preview answered "Workflow not found" for a
+workflow the agent had just written, because calls still resolved the
+project's initial published commit.
+
+### 2026-09-19: Bubble clicks follow the open modifiers
+
+A dock bubble opens its chat the way every other resource opens: a plain
+click floats it, ⌘-click opens it as a workspace tab, ⌘⇧-click opens it as a
+tab to the side of what you are reading (`openModeFromEvent`, the same
+mapping rows and links use). Before this, bubbles only toggled the floating
+panel, so reaching "chat beside the page" meant floating first and then
+"Open as tab" plus a split.
+
+### 2026-09-19: Host notices stay out of replies
+
+Local agents load the person's own CLI configuration, which can carry plugin
+MCP servers the desktop cannot authorize. The harness reports those at
+startup, and the assistant used to relay the notice unprompted ("the Slack
+connector needs authorization") in the middle of an unrelated answer. The
+workspace prompt now names those reports as host notices: connectors are
+managed in Settings, and the assistant mentions one only when the person asks
+about it or asks to use it.
+
 ## Work identity (2026-09-18)
 
 The desktop product is Work, powered by the Catamorphic framework. Its icon is
@@ -711,3 +772,34 @@ the orange W in `build/icon.svg`, shared with Work mobile and work.software.
 Theme presets are Work Dark and Work Light; the existing palette and motion
 contract continue to apply. Packaging, invitations and storage identity follow
 [ADR 0146](../../docs/decisions/0146-work-application-identity.md).
+
+### 2026-09-20: Review fixes on the app-access branch
+
+"Read" means read: the sessions ref an app gains (ADR 0148) lists and reads
+the viewer's chats and can change none of them; every session mutation asks
+for an agent ref, and the session-actions door settles access before it
+records an action. The consent card waits until both the app list and the
+profile's answers are known, so an approved app never flashes the question
+and an unanswered one never runs early. Apps driven over the MCP door take
+the same identity path as the iframe (execution reach and session access
+included). One Lucide resolver serves rows, tabs, inline actions and the
+palette, and it accepts only members of the icon table: an agent writing
+`icon: "Icon"` gets a dot, not a crashed sidebar.
+
+### 2026-09-20: Lurking follows the person, not the layout
+
+The floating chat folds to its strip (lurks) only on the person's own
+signals: a click or key that moved focus outside it, or a pointer that
+actually moved away. Chromium re-hit-tests after layout changes and fires
+the same leave and focus events without any input, so a sidebar section
+landing under a parked pointer, a panel sliding, or a row claiming focus as
+it mounts used to fold the chat mid-reply (the film take lost its streamed
+text that way). `lib/dock-attention.ts` holds the two rules: a leave counts
+when the pointer is outside the box and moved within 400 ms; focus outside
+counts when input preceded it within 400 ms. A parked pointer the dock slid
+away from is settled by the next real move.
+
+The strip itself shows what the agent is doing: its one line is the
+timeline's activity row (spinner, "Working…", the tool in progress), never
+whichever slice of the transcript happens to fit in fifty pixels. The film
+take had shown a lurked chat with only the person's own message in it.

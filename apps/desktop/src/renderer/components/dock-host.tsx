@@ -22,6 +22,7 @@ import {
   themeStyle,
   useProjectTheme,
 } from "../lib/theme.js";
+import { chatTabKey } from "../lib/workspace-state.js";
 import { ChatBubbles } from "./chat-bubbles.js";
 import { ChatDock } from "./chat-dock.js";
 import { DockDialogs } from "./dock-dialogs.js";
@@ -687,6 +688,22 @@ export function DockHost({
             autoCollapse={!detachedWindow && Boolean(tabbed)}
             onCollapsedChange={setCollapsed}
             onToggle={toggle}
+            onOpenAs={(id, mode) => {
+              const chat = scoped.find((chat) => chat.entry.localId === id);
+              if (!chat) return;
+              // The side transition promotes the chat to a tab itself and
+              // splits it against the tab that is active now; changing the
+              // entry first would make the chat the active tab and leave
+              // nothing to split against.
+              if (mode === "side") {
+                invoke(chat, { kind: "surface", key: chatTabKey(id), mode });
+                return;
+              }
+              invoke(chat, {
+                kind: "entry",
+                entry: { ...chat.entry, mode: "tab" },
+              });
+            }}
             onClose={(id) => actions.current.get(id)?.close?.()}
             onNewChat={() => {
               void desktopApi.dockNewChat();

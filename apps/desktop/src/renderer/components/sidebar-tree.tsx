@@ -5,6 +5,7 @@ import {
   type TreeRenderContext,
 } from "@catamorphic/app/ui";
 import { type ReactNode, useMemo } from "react";
+import { dropHiddenSubtrees } from "../lib/sidebar-hidden.js";
 import {
   projectSidebarItems,
   sidebarItemPresentation,
@@ -40,10 +41,11 @@ export function SidebarTree<T extends TreeItem>({
   const section = contribution?.section;
   const filtered = useMemo(
     () =>
-      projectSidebarItems(items, section).filter(
+      dropHiddenSubtrees(
+        projectSidebarItems(items, section),
         (item) =>
-          !sidebarItemPresentation({ section, id: item.id }).hide &&
-          !("hide" in item && item.hide === true),
+          sidebarItemPresentation({ section, id: item.id }).hide ||
+          ("hide" in item && item.hide === true),
       ),
     [items, section],
   );

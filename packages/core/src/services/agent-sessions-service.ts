@@ -35,6 +35,7 @@ import {
   type Identity,
   isBuilder,
   scopeCovers,
+  scopeCoversSessions,
 } from "../identity.js";
 import type { AgentCapabilitiesService } from "./agent-capabilities-service.js";
 import {
@@ -756,6 +757,7 @@ export class AgentSessionsService {
     const rows = candidates.filter(
       (row) =>
         isBuilder(identity, row.project_id) ||
+        scopeCoversSessions(identity, row.project_id) ||
         (row.agent_id !== null &&
           this.coveredAgentIds(identity, row.project_id).includes(
             row.agent_id,
@@ -815,16 +817,18 @@ export class AgentSessionsService {
     const offset = input.offset ?? 0;
 
     // A viewer sees only its own conversations, on agents its scope still
-    // covers (a revoked agent's sessions vanish from the list too).
+    // covers (a revoked agent's sessions vanish from the list too). A
+    // sessions ref (ADR 0148) covers every agent for that viewer.
     let query = this.db
       .selectFrom("agent_sessions")
       .where("project_id", "=", projectId);
     if (!isBuilder(identity, projectId)) {
-      const agentIds = this.coveredAgentIds(identity, projectId);
-      if (agentIds.length === 0) return { items: [], total: 0 };
-      query = query
-        .where("external_user_id", "=", identity.externalUserId)
-        .where("agent_id", "in", agentIds);
+      query = query.where("external_user_id", "=", identity.externalUserId);
+      if (!scopeCoversSessions(identity, projectId)) {
+        const agentIds = this.coveredAgentIds(identity, projectId);
+        if (agentIds.length === 0) return { items: [], total: 0 };
+        query = query.where("agent_id", "in", agentIds);
+      }
     }
 
     if (input.visibility) {
@@ -873,10 +877,12 @@ export class AgentSessionsService {
                           "=",
                           identity.externalUserId,
                         )
-                        .where(
-                          "ancestor.agent_id",
-                          "in",
-                          this.coveredAgentIds(identity, projectId),
+                        .$if(!scopeCoversSessions(identity, projectId), (own) =>
+                          own.where(
+                            "ancestor.agent_id",
+                            "in",
+                            this.coveredAgentIds(identity, projectId),
+                          ),
                         ),
                     )
                     .where((parent) =>
@@ -956,10 +962,12 @@ export class AgentSessionsService {
           .$if(!isBuilder(identity, projectId), (builder) =>
             builder
               .where("external_user_id", "=", identity.externalUserId)
-              .where(
-                "agent_id",
-                "in",
-                this.coveredAgentIds(identity, projectId),
+              .$if(!scopeCoversSessions(identity, projectId), (own) =>
+                own.where(
+                  "agent_id",
+                  "in",
+                  this.coveredAgentIds(identity, projectId),
+                ),
               ),
           )
           .select(["parent_session_id"])
@@ -1004,9 +1012,14 @@ export class AgentSessionsService {
       .where("project_id", "=", projectId)
       .where("id", "!=", ownSessionId);
     if (!isBuilder(identity, projectId)) {
-      const agentIds = this.coveredAgentIds(identity, projectId);
-      if (agentIds.length === 0) return [];
-      query = query.where("agent_id", "in", agentIds);
+      if (scopeCoversSessions(identity, projectId)) {
+        // An app reading the viewer's chats sees the viewer's own peers.
+        query = query.where("external_user_id", "=", identity.externalUserId);
+      } else {
+        const agentIds = this.coveredAgentIds(identity, projectId);
+        if (agentIds.length === 0) return [];
+        query = query.where("agent_id", "in", agentIds);
+      }
     }
     const rows = await query
       .selectAll()
@@ -1138,7 +1151,7 @@ export class AgentSessionsService {
     projectId: string,
     sessionId: string,
   ): Promise<AgentSessionDetail> {
-    await this.requireSession(identity, projectId, sessionId);
+    await this.requireSession(identity, projectId, sessionId, "read");
     // Progress and transcript must describe one database snapshot. Otherwise
     // a settling turn can return an old placeholder with "completed" execution,
     // causing clients to stop polling before they receive the final reply.
@@ -5958,6 +5971,7 @@ export class AgentSessionsService {
   ): Promise<void> {
     if (
       !isBuilder(identity, projectId) &&
+      !scopeCoversSessions(identity, projectId) &&
       this.coveredAgentIds(identity, projectId).length === 0
     ) {
       throw new AccessDeniedError();
@@ -6137,8 +6151,9 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     sessionId: string,
+    intent: "read" | "change" = "change",
   ): Promise<void> {
-    await this.requireSession(identity, projectId, sessionId);
+    await this.requireSession(identity, projectId, sessionId, intent);
   }
 
   /** Promote a latent session and create durable user attention. */
@@ -6380,10 +6395,16 @@ export class AgentSessionsService {
       .executeTakeFirst();
   }
 
+  /**
+   * The session a caller may act on. Every method that changes a session
+   * goes through the default `change` intent; only readers pass `read`, so
+   * an app's sessions ref (ADR 0148) can never reach a mutation by omission.
+   */
   private async requireSession(
     identity: Identity,
     projectId: string,
     sessionId: string,
+    intent: "read" | "change" = "change",
   ): Promise<SessionRow> {
     await this.requireProject(identity, projectId);
     const row = await this.db
@@ -6398,6 +6419,7 @@ export class AgentSessionsService {
       projectId,
       externalUserId: row.external_user_id,
       agentId: row.agent_id,
+      intent,
     });
     return row;
   }

@@ -30,6 +30,13 @@ export function createDevPlan(input: {
   instanceOverride?: string;
   target: DevTarget;
   ports: DevPorts;
+  /**
+   * The msb binary bundled with the microsandbox SDK. Passed to the desktop
+   * as MSB_PATH so development runs use the SDK's own runtime, never a
+   * differently versioned `msb` from the developer's PATH: the two share
+   * one sandbox database, and the older binary refuses a newer schema.
+   */
+  msbPath?: string;
 }): {
   instance: string;
   env: Record<string, string>;
@@ -59,6 +66,10 @@ export function createDevPlan(input: {
     env: {
       CATAMORPHIC_DESKTOP_DATA_DIR: desktopDataDir,
       CATAMORPHIC_DESKTOP_CDP_PORT: String(input.ports.desktopCdp),
+      // Build sandboxes may reach this machine: @catamorphic/* come from the
+      // local registry in development (infra/local-registry).
+      CATAMORPHIC_SANDBOX_HOST_NETWORK: "1",
+      ...(input.msbPath ? { MSB_PATH: input.msbPath } : {}),
       CATAMORPHIC_DESKTOP_VITE_PORT: String(input.ports.desktopVite),
       CATAMORPHIC_DATA_DIR: serverDataDir,
       PORT: String(input.ports.server),
