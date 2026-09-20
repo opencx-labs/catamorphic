@@ -17,6 +17,7 @@ import {
   Columns2,
   Ghost,
   Globe,
+  LoaderCircle,
   Maximize2,
   Minus,
   Paperclip,
@@ -2476,7 +2477,7 @@ function ChatDockContent({
           >
             <ChatTimeline
               focusMessageId={entry.focusMessageId}
-              className="min-h-0 flex-1"
+              className={lurking ? "hidden" : "min-h-0 flex-1"}
               contentClassName={isTab ? "mx-auto w-full max-w-4xl pt-12" : ""}
               messages={messages}
               activity={
@@ -2509,6 +2510,23 @@ function ChatDockContent({
               }}
             />
           </ResourceLinkBoundary>
+          {/* The strip has room for one line: what the agent is doing now
+            (the timeline's activity row, with its spinner), never a slice
+            of the transcript that happens to fit. */}
+          {lurking && (
+            <div
+              data-testid="lurk-status"
+              className="flex min-h-0 flex-1 items-center gap-2 px-4 text-xs text-fg-muted"
+            >
+              <LoaderCircle
+                className="size-4 shrink-0 animate-spin"
+                aria-hidden="true"
+              />
+              <span className="truncate animate-pulse">
+                {activity ?? "Working…"}
+              </span>
+            </div>
+          )}
           <ChatDeliveryRecovery chat={chat} />
           {runtimeSettingsError ? (
             <p

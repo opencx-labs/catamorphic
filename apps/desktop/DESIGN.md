@@ -799,3 +799,7 @@ when the pointer is outside the box and moved within 400 ms; focus outside
 counts when input preceded it within 400 ms. A parked pointer the dock slid
 away from is settled by the next real move.
 
+The strip itself shows what the agent is doing: its one line is the
+timeline's activity row (spinner, "Working…", the tool in progress), never
+whichever slice of the transcript happens to fit in fifty pixels. The film
+take had shown a lurked chat with only the person's own message in it.
