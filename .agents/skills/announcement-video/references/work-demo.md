@@ -162,4 +162,25 @@ replaced the browse → ask → build → use cut on the homepage:
   hover card, which then sits in every frame.
 - The screencast sends frames only when pixels change: a still window
   yields a handful per second, so "few frames" is not a stall by itself.
+- Read every status trigger, not the first visible one. Minimized bubbles and
+  rows mount their own `session-inspector-trigger`; a take that waited on
+  `find(visible)` saw a "New" bubble's trigger, timed out on "agent
+  working" and typed the next ask into a chat still busy with the first.
+  `chatWorking` is "any visible trigger says Working"; `chatIdle` is "one
+  says Ready and none says Working".
+- The main take's app scene cannot allow the app: the floating chat covers
+  the consent card, so the click lands on the chat. That is the pickup's
+  job (chat to its bubble, card, allow, app, chat back beside it). Before
+  the pickup, allow once by JS to warm the app, confirm it renders data
+  through its frame target, then clear `appAccessApprovals` so the card is
+  back for the camera.
+- Deleting chats in the database leaves their dock bubbles (workspace state
+  keeps the entries) and each bubble mounts a status trigger. Close the
+  bubbles through their close controls before filming.
+- The demo project's `bunfig.toml` names the Mac's LAN address; the address
+  changes with the network. Check `ipconfig getifaddr en0` against it before
+  any take that builds, and commit the change so the tree stays clean.
+- With attention-gated lurking (2026-09-20) the chat stays open through the
+  landing; that day's take shows the reply streaming while the section
+  arrives, the way it should.
 
