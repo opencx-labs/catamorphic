@@ -1,20 +1,35 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import {send,events,ws} from './cdp.mjs';
-const dir=new URL('./raw/',import.meta.url).pathname;
-const frames=[];const start=performance.now();
-fs.writeFileSync(new URL('./start.json',import.meta.url),JSON.stringify({start:Date.now()}));
-events.set('Page.screencastFrame',async e=>{
- const t=(performance.now()-start)/1000;
- const file=`frame-${String(frames.length).padStart(5,'0')}.jpg`;
- fs.writeFileSync(path.join(dir,file),Buffer.from(e.data,'base64'));
- frames.push({file,t,captureTimestamp:e.metadata.timestamp});
- await send('Page.screencastFrameAck',{sessionId:e.sessionId});
+import fs from "node:fs";
+import path from "node:path";
+import { events, send, ws } from "./cdp.mjs";
+
+const dir = new URL("./raw/", import.meta.url).pathname;
+const frames = [];
+const start = performance.now();
+fs.writeFileSync(
+  new URL("./start.json", import.meta.url),
+  JSON.stringify({ start: Date.now() }),
+);
+events.set("Page.screencastFrame", async (e) => {
+  const t = (performance.now() - start) / 1000;
+  const file = `frame-${String(frames.length).padStart(5, "0")}.jpg`;
+  fs.writeFileSync(path.join(dir, file), Buffer.from(e.data, "base64"));
+  frames.push({ file, t, captureTimestamp: e.metadata.timestamp });
+  await send("Page.screencastFrameAck", { sessionId: e.sessionId });
 });
-await send('Page.startScreencast',{format:'jpeg',quality:95,maxWidth:1280,maxHeight:800,everyNthFrame:1});
-console.log('RECORDING',new Date().toISOString());
-await new Promise(resolve=>process.once('SIGINT',resolve));
-await send('Page.stopScreencast');
-const duration=(performance.now()-start)/1000;
-fs.writeFileSync(path.join(dir,'manifest.json'),JSON.stringify({width:1280,height:800,duration,frames},null,2));
-console.log(JSON.stringify({duration,frames:frames.length}));ws.close();
+await send("Page.startScreencast", {
+  format: "jpeg",
+  quality: 95,
+  maxWidth: 1280,
+  maxHeight: 800,
+  everyNthFrame: 1,
+});
+console.log("RECORDING", new Date().toISOString());
+await new Promise((resolve) => process.once("SIGINT", resolve));
+await send("Page.stopScreencast");
+const duration = (performance.now() - start) / 1000;
+fs.writeFileSync(
+  path.join(dir, "manifest.json"),
+  JSON.stringify({ width: 1280, height: 800, duration, frames }, null, 2),
+);
+console.log(JSON.stringify({ duration, frames: frames.length }));
+ws.close();
