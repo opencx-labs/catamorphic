@@ -64,6 +64,17 @@ describe("browser popups", () => {
   it("still opens a plain new-tab request as a workspace tab", async () => {
     await inGuest(`window.open(${JSON.stringify(`${origin}/two`)}); true`);
     await app.waitFor(`document.querySelectorAll('webview').length === 2`);
+  });
+
+  // A self-closed page used to leave a dead, blank guest that kept focus
+  // and swallowed Cmd+W.
+  it("closes the tab when its page closes itself", async () => {
+    const two = `[...document.querySelectorAll('webview')].find(view => view.getAttribute('src')?.endsWith('/two'))`;
+    await app.waitFor(
+      `${two}?.getTitle?.() !== undefined && !${two}.isLoading()`,
+    );
+    await app.eval(`${two}.executeJavaScript('window.close(); true', true)`);
+    await app.waitFor(`document.querySelectorAll('webview').length === 1`);
     expect(app.getRendererErrors()).toEqual([]);
   });
 });

@@ -831,3 +831,27 @@ came out of one broken Claude sign-in:
 The agent wizard names the product people hold an account with (Claude,
 ChatGPT), and that is a new agent's default name. Harness names (Claude
 Code, Codex) stay where the harness itself is the subject.
+
+The right sidebar starts collapsed (`rightSidebarOpen` defaults to false).
+A first launch shows the work, not the chrome around it; the companion is
+one click away and the choice is remembered from then on.
+
+More from the same day of daily use:
+
+- **A page that closes itself takes its tab with it.** Sign-in hand-offs
+  call `window.close()` when done. Ignoring the guest's `close` event left
+  a dead, blank view that kept focus and swallowed every shortcut, Cmd+W
+  included. The tab now closes, as it would in Chrome.
+- **The chat region is found whenever it appears.** The dock host looked
+  the region up once; on a fresh project it was not mounted yet, so chats
+  were laid out over the whole window and a tab chat's status controls sat
+  under the tab bar. The host now waits for the region and follows
+  remounts.
+- **No empty pinned area.** With nothing pinned the pinned bookmarks area
+  is absent, not an empty state. It returns only as a drop target while
+  something is being dragged; "Pin across projects" works regardless.
+- **A folder moves what is below it.** Tree rows are absolutely placed, so
+  expanding or collapsing a folder used to snap every later row (and the
+  tree's height) while only the children faded. Row position and tree
+  height now ease over 200 ms (`packages/app/src/ui/tree.tsx`), off under
+  reduced motion.

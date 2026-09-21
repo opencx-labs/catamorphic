@@ -104,12 +104,24 @@ export function DockHost({
   }, []);
   useLayoutEffect(() => {
     if (detachedWindow || !activeProjectId) return;
-    const target = document.querySelector(
-      `[data-project-runtime="${CSS.escape(activeProjectId)}"] [data-workspace-chat-region]`,
-    );
-    if (!(target instanceof HTMLElement)) return;
+    const selector = `[data-project-runtime="${CSS.escape(activeProjectId)}"] [data-workspace-chat-region]`;
+    // The region mounts after the project does (and remounts with it), so
+    // one lookup is not enough: giving up here left chats laid out over the
+    // whole window, their tab-mode controls buried under the tab bar.
+    let target: HTMLElement | null = null;
+    const observer = new ResizeObserver(() => measure());
+    const resolve = () => {
+      if (target?.isConnected) return target;
+      if (target) observer.unobserve(target);
+      const found = document.querySelector(selector);
+      target = found instanceof HTMLElement ? found : null;
+      if (target) observer.observe(target);
+      return target;
+    };
     const measure = () => {
-      const bounds = target.getBoundingClientRect();
+      const current = resolve();
+      if (!current) return;
+      const bounds = current.getBoundingClientRect();
       setRegion((previous) =>
         previous.left === bounds.left &&
         previous.top === bounds.top &&
@@ -125,11 +137,16 @@ export function DockHost({
       );
     };
     measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(target);
+    // Mounts and sidebar toggles move the region without resizing anything
+    // observed yet; structural changes are the signal until it exists.
+    const mutations = new MutationObserver(() => {
+      if (!target?.isConnected) measure();
+    });
+    mutations.observe(document.body, { childList: true, subtree: true });
     window.addEventListener("resize", measure);
     return () => {
       observer.disconnect();
+      mutations.disconnect();
       window.removeEventListener("resize", measure);
     };
   }, [activeProjectId, detachedWindow]);

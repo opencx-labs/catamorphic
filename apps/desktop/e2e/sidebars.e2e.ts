@@ -25,6 +25,14 @@ beforeAll(async () => {
   projectId = project.id;
   await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Sidebar studio')`);
+  // A populated right sidebar still starts collapsed; the suite works with
+  // it open.
+  await app.waitFor(
+    `!!document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"]')`,
+  );
+  await waitRight(false);
+  await toggleRight();
+  await waitRight(true);
 });
 afterAll(async () => {
   await app?.stop();

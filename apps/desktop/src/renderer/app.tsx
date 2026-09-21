@@ -5793,6 +5793,7 @@ export function App({
                     onStateChange={(state) =>
                       onBrowserState(browser.localId, state)
                     }
+                    onPageClose={() => closeTab(browserTabKey(browser.localId))}
                     previewLinksWithAlt={prefs?.previewLinksWithAlt ?? true}
                     floatingDismissShortcut={keybindings["dismiss-floating"]}
                     onDismissFloating={
@@ -6291,6 +6292,7 @@ export function App({
                   onStateChange={(state) =>
                     onBrowserState(browser.localId, state)
                   }
+                  onPageClose={() => closeTab(browserTabKey(browser.localId))}
                   registerNavigate={(navigate) =>
                     browserNavigatorsRef.current.set(browser.localId, navigate)
                   }

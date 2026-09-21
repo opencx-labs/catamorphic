@@ -101,7 +101,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   reviewGrouping: "purpose",
   changesFileLayout: "tree",
   prDefaultView: "for-you",
-  rightSidebarOpen: true,
+  rightSidebarOpen: false,
   unreadSessionIds: [],
   appAccessApprovals: [],
 };
