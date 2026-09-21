@@ -48,6 +48,40 @@ describe("HarnessComponentStore", () => {
     expect(first.pathEntries).toHaveLength(1);
   });
 
+  it("reports download progress, and none once the component is here", async () => {
+    const fixture = await componentFixture();
+    const archive = await fs.readFile(fixture.archive);
+    const store = new HarnessComponentStore({
+      rootDir: fixture.installRoot,
+      artifacts: { codex: fixture.artifact },
+      fetchImpl: async () =>
+        new Response(archive, {
+          headers: { "content-length": String(archive.byteLength) },
+        }),
+      preferInstalled: false,
+    });
+    const ticks: Array<{ receivedBytes: number; totalBytes: number }> = [];
+    const stop = store.onProgress((progress) => {
+      expect(progress.harness).toBe("codex");
+      ticks.push(progress);
+    });
+
+    await store.ensure("codex");
+    expect(ticks[0]).toMatchObject({
+      receivedBytes: 0,
+      totalBytes: archive.byteLength,
+    });
+    expect(ticks.at(-1)).toMatchObject({
+      receivedBytes: archive.byteLength,
+      totalBytes: archive.byteLength,
+    });
+
+    const settled = ticks.length;
+    await store.ensure("codex");
+    stop();
+    expect(ticks).toHaveLength(settled);
+  });
+
   it("rejects an archive that does not match the shipped integrity pin", async () => {
     const fixture = await componentFixture();
     const fetchImpl: typeof fetch = async () =>

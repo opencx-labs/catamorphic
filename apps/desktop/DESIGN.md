@@ -803,3 +803,31 @@ The strip itself shows what the agent is doing: its one line is the
 timeline's activity row (spinner, "Working…", the tool in progress), never
 whichever slice of the transcript happens to fit in fifty pixels. The film
 take had shown a lurked chat with only the person's own message in it.
+
+### 2026-09-21: Sign-in never goes dark, and popups stay popups
+
+First real-use notes from running Work as the default browser. Three rules
+came out of one broken Claude sign-in:
+
+- **The wizard stays until its flow ends.** A sign-in creates its agent
+  before it finishes, and "an agent exists" used to close the setup wizard
+  on the spot, leaving a silent wait and then a terminal from nowhere. The
+  wizard now reports being mid-flow (`onEngagedChange`) and the host leaves
+  it alone until `onDone`. A terminal sign-in finishes the wizard by itself
+  when the credentials land; Continue remains the manual way out.
+- **A wait says what it is.** Harness executables arrive on first use
+  (Claude Code is ~200 MB). The sign-in button shows the download
+  ("Downloading… 42%") rather than sitting on "Starting…". Both actions of
+  a two-choice step are real buttons: the secondary one is outlined, same
+  height as the primary, and both animate hover and press over 150 ms.
+- **A scripted popup is a window, not a tab.** Pages that call `window.open`
+  with window features (Google sign-in, most OAuth and payment popups) hand
+  their result back through `window.opener`. Re-homing them as workspace
+  tabs produced a blank page and a failed sign-in. They now open as child
+  windows in the opener's session (`main/browser-popups.ts`); ordinary
+  `target=_blank` links still become tabs, and whatever a popup opens in
+  turn becomes a tab too.
+
+The agent wizard names the product people hold an account with (Claude,
+ChatGPT), and that is a new agent's default name. Harness names (Claude
+Code, Codex) stay where the harness itself is the subject.

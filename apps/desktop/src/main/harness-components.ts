@@ -47,6 +47,15 @@ interface HarnessComponentStoreOptions {
   preferInstalled?: boolean;
 }
 
+/** One tick of a first-use component download, for "Downloading… 42%" UI. */
+export interface HarnessDownloadProgress {
+  harness: DownloadableComponent;
+  displayName: string;
+  receivedBytes: number;
+  /** 0 when the registry declared no content-length. */
+  totalBytes: number;
+}
+
 interface PlatformRelease {
   rustTarget: string;
   claudeIntegrity: `sha512-${string}`;
@@ -133,11 +142,23 @@ export class HarnessComponentStore {
     Promise<HarnessExecutable>
   >();
 
+  private readonly progressListeners = new Set<
+    (progress: HarnessDownloadProgress) => void
+  >();
+
   constructor(options: HarnessComponentStoreOptions) {
     this.rootDir = options.rootDir;
     this.artifacts = options.artifacts ?? platformArtifacts();
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.preferInstalled = options.preferInstalled ?? true;
+  }
+
+  /** Watch first-use downloads; silent when the component is already here. */
+  onProgress(
+    listener: (progress: HarnessDownloadProgress) => void,
+  ): () => void {
+    this.progressListeners.add(listener);
+    return () => this.progressListeners.delete(listener);
   }
 
   async ensure(harness: DownloadableComponent): Promise<HarnessExecutable> {
@@ -211,7 +232,21 @@ export class HarnessComponentStore {
       if (!response.ok || !response.body) {
         throw new Error(`download returned HTTP ${response.status}`);
       }
-      await writeVerifiedArchive(response, archive, artifact.integrity);
+      await writeVerifiedArchive(
+        response,
+        archive,
+        artifact.integrity,
+        (receivedBytes, totalBytes) => {
+          for (const listener of this.progressListeners) {
+            listener({
+              harness,
+              displayName: artifact.displayName,
+              receivedBytes,
+              totalBytes,
+            });
+          }
+        },
+      );
       await fsPromises.mkdir(payload);
       const { x: extract } = await import("tar");
       await extract({
@@ -368,6 +403,7 @@ async function writeVerifiedArchive(
   response: Response,
   destination: string,
   expectedIntegrity: `sha512-${string}`,
+  onProgress: (receivedBytes: number, totalBytes: number) => void,
 ): Promise<void> {
   const declaredSize = Number(response.headers.get("content-length") ?? 0);
   if (declaredSize > MAX_ARCHIVE_BYTES) {
@@ -378,6 +414,10 @@ async function writeVerifiedArchive(
   const handle = await fsPromises.open(destination, "wx", 0o600);
   const hash = createHash("sha512");
   let received = 0;
+  // A ~200 MB body arrives in tens of thousands of chunks; a few ticks a
+  // second is all a progress label needs.
+  let lastTick = 0;
+  onProgress(0, declaredSize);
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -387,6 +427,10 @@ async function writeVerifiedArchive(
         throw new Error("component archive is too large");
       }
       hash.update(value);
+      if (Date.now() - lastTick >= 200) {
+        lastTick = Date.now();
+        onProgress(received, declaredSize);
+      }
       let offset = 0;
       while (offset < value.byteLength) {
         const { bytesWritten } = await handle.write(
@@ -397,6 +441,7 @@ async function writeVerifiedArchive(
         offset += bytesWritten;
       }
     }
+    onProgress(received, declaredSize);
   } finally {
     await handle.close();
   }

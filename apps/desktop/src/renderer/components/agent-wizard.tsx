@@ -37,9 +37,9 @@ type Flow =
 type AiSdkProvider = "anthropic" | "openai" | "openrouter";
 
 const primaryActionClass =
-  "min-h-9 w-full cursor-pointer rounded-md bg-accent px-3 py-2 text-sm font-medium text-accent-fg hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50";
+  "min-h-9 w-full cursor-pointer rounded-md bg-accent px-3 py-2 text-sm font-medium text-accent-fg transition-[opacity,transform] duration-150 hover:opacity-90 active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50";
 const secondaryActionClass =
-  "min-h-7 w-full cursor-pointer rounded-md px-3 py-1 text-sm text-fg-muted hover:bg-bg-overlay hover:text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50";
+  "min-h-9 w-full cursor-pointer rounded-md border border-border px-3 py-2 text-sm text-fg-muted transition-[background-color,border-color,color,opacity,transform] duration-150 hover:border-border-strong hover:bg-bg-overlay hover:text-fg active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50";
 
 const OPTIONS: Array<{
   id: "claude-code" | "codex" | "api-key" | "free";
@@ -48,13 +48,13 @@ const OPTIONS: Array<{
 }> = [
   {
     id: "claude-code",
-    title: "Claude Code",
-    description: "Uses this machine's Claude Code setup.",
+    title: "Claude",
+    description: "Your Claude account, via Claude Code.",
   },
   {
     id: "codex",
-    title: "Codex",
-    description: "Sign in with ChatGPT, via the Codex CLI.",
+    title: "ChatGPT",
+    description: "Your ChatGPT account, via the Codex CLI.",
   },
   {
     id: "api-key",
@@ -73,11 +73,16 @@ export function AgentWizard({
   open,
   onClose,
   onDone,
+  onEngagedChange,
 }: {
   variant: "tab" | "modal";
   open?: boolean;
   onClose: () => void;
   onDone: () => void;
+  /** True while the user is inside a flow (a detail step, or a sign-in in
+   * flight). The host must not close the wizard from under them then —
+   * a sign-in creates its agent before it finishes. */
+  onEngagedChange?: (engaged: boolean) => void;
 }) {
   const [step, setStep] = useState<Step>("choose");
   const [status, setStatus] = useState<{
@@ -114,6 +119,10 @@ export function AgentWizard({
   const [ccCommand, setCcCommand] = useState<string | null>(null);
   const [ccStarted, setCcStarted] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  // First-use harness download behind a sign-in (0–100, null = not known).
+  const [downloadPercent, setDownloadPercent] = useState<number | null>(null);
+  const [downloading, setDownloading] = useState(false);
 
   // Browser sign-ins (Codex, free models) resolve out of band.
   const [waitingFlow, setWaitingFlow] = useState<Flow | null>(null);
@@ -163,6 +172,38 @@ export function AgentWizard({
       else setError("Sign-in did not complete. Try again.");
     });
   }, []);
+
+  useEffect(() => {
+    return desktopApi.onAgentLoginProgress(
+      ({ agentId, receivedBytes, totalBytes }) => {
+        if (!Object.values(createdRef.current).includes(agentId)) return;
+        setDownloading(true);
+        setDownloadPercent(
+          totalBytes > 0
+            ? Math.min(100, Math.floor((receivedBytes / totalBytes) * 100))
+            : null,
+        );
+      },
+    );
+  }, []);
+
+  // A closed modal keeps its last step until reopened; it is not engaged.
+  const engaged =
+    (variant === "tab" || open === true) && (step !== "choose" || busy);
+  const onEngagedChangeRef = useRef(onEngagedChange);
+  onEngagedChangeRef.current = onEngagedChange;
+  useEffect(() => {
+    onEngagedChangeRef.current?.(engaged);
+    return () => onEngagedChangeRef.current?.(false);
+  }, [engaged]);
+
+  /** Pending words for a sign-in button: the download, when there is one. */
+  const startingLabel = (fallback: string) =>
+    downloading
+      ? downloadPercent === null
+        ? "Downloading…"
+        : `Downloading… ${downloadPercent}%`
+      : fallback;
 
   const goto = (next: Step) => {
     setError(null);
@@ -241,8 +282,12 @@ export function AgentWizard({
     try {
       const id = await ensureAgent(flow);
       waitingRef.current = { agentId: id, flow };
-      setWaitingFlow(flow);
       const result = await desktopApi.agentLogin(id);
+      setDownloading(false);
+      // Only once the browser hand-off really started: the modal steps
+      // aside for it, and must not vanish during a component download.
+      if (result.started && waitingRef.current?.agentId === id)
+        setWaitingFlow(flow);
       if (!result.started && result.error) {
         waitingRef.current = null;
         setWaitingFlow(null);
@@ -260,6 +305,7 @@ export function AgentWizard({
       setWaitingFlow(null);
       setBusy(false);
       setBusyFlow(null);
+      setDownloading(false);
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   };
@@ -279,12 +325,17 @@ export function AgentWizard({
       } else {
         setCcStarted(true);
         if (result.command) setCcCommand(result.command);
+        // Main watches the credentials: the wizard finishes by itself the
+        // moment the terminal sign-in lands (Continue stays as the manual
+        // way out).
+        if (result.started) waitingRef.current = { agentId: id, flow };
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(false);
       setBusyFlow(null);
+      setDownloading(false);
     }
   };
 
@@ -366,7 +417,8 @@ export function AgentWizard({
         </ShortcutHint>
       </div>
       <p className="text-[11px] text-fg-faint">
-        Finish sign-in in your terminal, then continue.
+        Finish sign-in in your terminal. This closes by itself when you're
+        signed in.
       </p>
     </div>
   );
@@ -461,7 +513,7 @@ export function AgentWizard({
                   Claude Code is already set up on this machine. Use that
                   account, or sign in with another account for this agent.
                 </p>
-                <div className="mt-3">{nameField("Claude Code")}</div>
+                <div className="mt-3">{nameField("Claude")}</div>
                 {connectionsField}
                 {commandBlock}
                 {ccStarted ? (
@@ -488,7 +540,7 @@ export function AgentWizard({
                     <PendingButton
                       type="button"
                       pending={busy && busyFlow === "claude-code-account"}
-                      pendingLabel="Starting…"
+                      pendingLabel={startingLabel("Starting…")}
                       disabled={busy}
                       data-disabled-reason="Wait for the current action to finish"
                       onClick={() =>
@@ -511,7 +563,7 @@ export function AgentWizard({
                   it here, finish it there, and you're set on this machine for
                   good.
                 </p>
-                <div className="mt-3">{nameField("Claude Code")}</div>
+                <div className="mt-3">{nameField("Claude")}</div>
                 {connectionsField}
                 {commandBlock}
                 <div className="mt-4 flex flex-col gap-2">
@@ -527,7 +579,7 @@ export function AgentWizard({
                     <PendingButton
                       type="button"
                       pending={busy}
-                      pendingLabel="Starting…"
+                      pendingLabel={startingLabel("Starting…")}
                       onClick={() => void startTerminalSignIn("claude-code")}
                       className={primaryActionClass}
                     >
@@ -555,7 +607,7 @@ export function AgentWizard({
                   Codex is already signed in on this machine. Use that account,
                   or sign in with another ChatGPT account for this agent.
                 </p>
-                <div className="mt-3">{nameField("Codex")}</div>
+                <div className="mt-3">{nameField("ChatGPT")}</div>
                 {connectionsField}
                 <div className="mt-4 flex flex-col gap-2">
                   <PendingButton
@@ -572,7 +624,7 @@ export function AgentWizard({
                   <PendingButton
                     type="button"
                     pending={busy && busyFlow === "codex-account"}
-                    pendingLabel="Opening…"
+                    pendingLabel={startingLabel("Opening…")}
                     disabled={busy}
                     data-disabled-reason="Wait for the current action to finish"
                     onClick={() => void startBrowserSignIn("codex-account")}
@@ -596,12 +648,12 @@ export function AgentWizard({
                   Codex runs locally via the Codex CLI and signs in with your
                   ChatGPT account in the browser.
                 </p>
-                <div className="mt-3">{nameField("Codex")}</div>
+                <div className="mt-3">{nameField("ChatGPT")}</div>
                 {connectionsField}
                 <PendingButton
                   type="button"
                   pending={busy}
-                  pendingLabel="Opening…"
+                  pendingLabel={startingLabel("Opening…")}
                   onClick={() => void startBrowserSignIn("codex")}
                   className={`mt-4 ${primaryActionClass}`}
                 >

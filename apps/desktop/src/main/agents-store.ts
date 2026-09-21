@@ -190,10 +190,12 @@ export function agentAccepts(config: {
   }
 }
 
-export const HARNESS_LABELS: Record<AgentHarness, string> = {
+/** What a new agent is called when the user leaves the name blank: the
+ * product people know (Claude, ChatGPT), not the harness that runs it. */
+export const DEFAULT_AGENT_NAMES: Record<AgentHarness, string> = {
   "ai-sdk": "Built-in",
-  "claude-code": "Claude Code",
-  codex: "Codex",
+  "claude-code": "Claude",
+  codex: "ChatGPT",
 };
 
 export interface CreateAgentInput {
@@ -342,7 +344,7 @@ export class AgentsStore {
   create(input: CreateAgentInput): AgentConfig {
     const stored: StoredAgent = {
       id: randomUUID(),
-      name: input.name?.trim() || HARNESS_LABELS[input.harness],
+      name: input.name?.trim() || DEFAULT_AGENT_NAMES[input.harness],
       harness: input.harness,
       ...(input.harness === "ai-sdk"
         ? { provider: input.provider ?? "anthropic" }
