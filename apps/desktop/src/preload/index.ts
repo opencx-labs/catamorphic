@@ -263,6 +263,22 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:agent-login-finished", handler);
   },
+  /** First-use harness download ticks while a sign-in is starting. */
+  onAgentLoginProgress: (
+    listener: (progress: {
+      agentId: string;
+      receivedBytes: number;
+      totalBytes: number;
+    }) => void,
+  ): (() => void) => {
+    const handler = (
+      _event: unknown,
+      progress: { agentId: string; receivedBytes: number; totalBytes: number },
+    ) => listener(progress);
+    ipcRenderer.on("catamorphic:agent-login-progress", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:agent-login-progress", handler);
+  },
 
   // --- profile MCP connections + connectors ---
   connectionsList: (): Promise<unknown> =>

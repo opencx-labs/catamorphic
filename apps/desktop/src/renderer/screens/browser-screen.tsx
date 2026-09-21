@@ -123,6 +123,7 @@ export function BrowserScreen({
   navigationHost,
   onRevealToolbar,
   onStateChange,
+  onPageClose,
   registerNavigate,
   registerHistoryNavigate,
   registerGuest,
@@ -154,6 +155,8 @@ export function BrowserScreen({
   navigationHost?: HTMLElement | null;
   onRevealToolbar?: () => void;
   onStateChange: (state: BrowserPageState) => void;
+  /** The page closed itself (`window.close()`); the tab should go too. */
+  onPageClose?: () => void;
   /** Set while this tab sits in a split: return it to a full-width tab. */
   onUnsplit?: () => void;
   /** Hands the host a navigate(url) for "open in current tab" flows. */
@@ -172,6 +175,8 @@ export function BrowserScreen({
 }) {
   const keybindings = useKeybindings();
   const webviewRef = useRef<WebviewElement | null>(null);
+  const onPageCloseRef = useRef(onPageClose);
+  onPageCloseRef.current = onPageClose;
   const dismissFloatingRef = useRef(onDismissFloating);
   dismissFloatingRef.current = onDismissFloating;
   const floating = onDismissFloating ? floatingDismissShortcut : "";
@@ -355,6 +360,11 @@ export function BrowserScreen({
       }, 1500);
       // A dead guest renderer leaves a frozen ghost — replace it.
       listen("render-process-gone", () => remountWebview());
+      // A page that closes itself (sign-in and payment hand-offs do, once
+      // done) leaves a dead guest behind: a blank view that keeps focus
+      // and swallows every shortcut, Cmd+W included. Chrome closes the
+      // tab; so do we.
+      listen("close", () => onPageCloseRef.current?.());
       listen("did-fail-load", ((event: CustomEvent) => {
         const { errorCode, errorDescription, validatedURL, isMainFrame } =
           event as unknown as {

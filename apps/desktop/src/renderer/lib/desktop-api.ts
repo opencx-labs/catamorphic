@@ -970,6 +970,13 @@ export interface CatamorphicDesktopApi {
   onAgentLoginFinished: (
     listener: (result: { agentId: string; ok: boolean }) => void,
   ) => () => void;
+  onAgentLoginProgress: (
+    listener: (progress: {
+      agentId: string;
+      receivedBytes: number;
+      totalBytes: number;
+    }) => void,
+  ) => () => void;
 
   connectionsList: () => Promise<ConnectionInfo[]>;
   connectionsCreate: (input: CreateConnectionInput) => Promise<ConnectionInfo>;

@@ -27,6 +27,13 @@ export interface AppPrefs {
   dockSide: "left" | "right";
   /** Where open chats and their bubble strip sit while expanded. */
   dockPlacement: "left" | "center" | "right";
+  /**
+   * An agent turn is work (notes between tool calls, plus the tool steps)
+   * followed by an answer. Two independent choices cover how the work
+   * reads: while the turn runs, and once the answer has landed.
+   */
+  chatWorkLive: "all" | "latest";
+  chatWorkSettled: "keep" | "collapse";
   /** Soft chime when an agent finishes or asks a question. */
   notificationSounds: boolean;
   /** OS notification for the same events while the app is unfocused. */
@@ -78,6 +85,8 @@ export const DEFAULT_PREFS: AppPrefs = {
   dockDetached: false,
   dockSide: "right",
   dockPlacement: "center",
+  chatWorkLive: "latest",
+  chatWorkSettled: "collapse",
   notificationSounds: true,
   desktopNotifications: true,
   sidebarOpen: true,
@@ -101,7 +110,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   reviewGrouping: "purpose",
   changesFileLayout: "tree",
   prDefaultView: "for-you",
-  rightSidebarOpen: true,
+  rightSidebarOpen: false,
   unreadSessionIds: [],
   appAccessApprovals: [],
 };
@@ -133,6 +142,8 @@ export function normalizePrefs(raw: unknown): AppPrefs {
     dockMultiProject: record.dockMultiProject === true,
     dockDetached: record.dockDetached === true,
     dockSide: record.dockSide === "left" ? "left" : "right",
+    chatWorkLive: record.chatWorkLive === "all" ? "all" : "latest",
+    chatWorkSettled: record.chatWorkSettled === "keep" ? "keep" : "collapse",
     dockPlacement:
       record.dockPlacement === "left" || record.dockPlacement === "right"
         ? record.dockPlacement

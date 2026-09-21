@@ -29,6 +29,7 @@ import type { ConnectorsService } from "../connectors.js";
 import {
   type DownloadableHarness,
   HarnessComponentStore,
+  type HarnessDownloadProgress,
   type HarnessExecutable,
   harnessPathEnvironment,
 } from "../harness-components.js";
@@ -233,6 +234,13 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     harness: DownloadableHarness,
   ): Promise<HarnessExecutable> {
     return this.harnessComponents.ensure(harness);
+  }
+
+  /** First-use harness downloads, so sign-in UI can show real progress. */
+  onHarnessDownloadProgress(
+    listener: (progress: HarnessDownloadProgress) => void,
+  ): () => void {
+    return this.harnessComponents.onProgress(listener);
   }
 
   /** Every agent-owned terminal needs Bun, including controller agents. */

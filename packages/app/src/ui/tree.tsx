@@ -221,6 +221,17 @@ export function Tree<T extends TreeItem>({
     else setOverrides((current) => new Map(current).set(id, next.has(id)));
   };
   const actualHeight = Math.min(height, tree.rows.length * rowHeight);
+  // Expanding or collapsing a folder moves every row below it. Rows are
+  // absolutely placed, so without this they (and the tree's own height)
+  // jump while only the folder's children fade: the rest must slide.
+  const slide = useMemo(
+    () =>
+      typeof matchMedia === "function" &&
+      matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? undefined
+        : "200ms cubic-bezier(0.2, 0, 0, 1)",
+    [],
+  );
   const reveal = useCallback(
     (id: string) => {
       const index = tree.rows.findIndex((row) => row.id === id);
@@ -468,6 +479,7 @@ export function Tree<T extends TreeItem>({
           overscrollBehavior:
             actualHeight < tree.rows.length * rowHeight ? "contain" : "auto",
           height: actualHeight,
+          transition: slide && `height ${slide}`,
           ...style,
         }}
         onScroll={(event) => {
@@ -557,7 +569,11 @@ export function Tree<T extends TreeItem>({
       >
         <div
           role="presentation"
-          style={{ height: tree.rows.length * rowHeight, position: "relative" }}
+          style={{
+            height: tree.rows.length * rowHeight,
+            position: "relative",
+            transition: slide && `height ${slide}`,
+          }}
         >
           {dropLineTop !== undefined && (
             <div
@@ -630,6 +646,7 @@ export function Tree<T extends TreeItem>({
                     height: rowHeight,
                     left: 0,
                     right: 0,
+                    transition: slide && `top ${slide}`,
                   }}
                 >
                   {renderItem(item, {

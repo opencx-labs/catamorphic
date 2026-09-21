@@ -350,7 +350,7 @@ it("clamps the preview to a compact viewport and dismisses on outside interactio
   await app.eval(`window.catamorphicDesktop.devWindow('setSize',720,600)`);
   await app.waitFor(`innerWidth<=720 && innerHeight<=600`);
   await app.eval(
-    `document.querySelector('[aria-label="Collapse sidebar"]')?.click(); document.querySelector('[aria-label="Collapse right sidebar"]')?.click()`,
+    `document.querySelector('[aria-label="Collapse sidebar"]')?.click(); [...document.querySelectorAll('[aria-label="Collapse right sidebar"]')].find(button => !button.closest('[inert]'))?.click()`,
   );
   await inspect("picture.svg");
   await wait(`return preview()?.querySelector('img')?.naturalWidth===360;`);

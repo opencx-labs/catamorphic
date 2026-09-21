@@ -42,6 +42,7 @@ import {
   passwordImportSupport,
   readBrowserKey,
 } from "./browser-import/password-native.js";
+import { guestWindowOpenAction } from "./browser-popups.js";
 import { PasswordVault } from "./browser-vault.js";
 import type { WindowProfileRegistry } from "./index.js";
 import type { ProfileConfigManager } from "./profile-config.js";
@@ -392,11 +393,44 @@ export function registerBrowserSupport(
     contents.on("preload-error", (_event, preloadPath, error) => {
       console.error("[browser] Guest preload failed", preloadPath, error);
     });
-    contents.setWindowOpenHandler(({ url }) => {
+    const openAsTab = (url: string) => {
       const host = contents.hostWebContents;
-      if (/^https?:/.test(url) && host && !host.isDestroyed())
+      if (host && !host.isDestroyed())
         host.send("catamorphic:browser-open-url", { url });
+    };
+    contents.setWindowOpenHandler(({ url, disposition }) => {
+      const action = guestWindowOpenAction({ url, disposition });
+      if (action === "popup") {
+        const host = contents.hostWebContents;
+        const parent = host ? BrowserWindow.fromWebContents(host) : null;
+        // A real child window in the opener's session: cookies carry over
+        // and `window.opener` works, which sign-in popups depend on.
+        return {
+          action: "allow",
+          overrideBrowserWindowOptions: {
+            ...(parent ? { parent } : {}),
+            autoHideMenuBar: true,
+            minimizable: false,
+            fullscreenable: false,
+            webPreferences: {
+              nodeIntegration: false,
+              contextIsolation: true,
+              sandbox: true,
+              webviewTag: false,
+            },
+          },
+        };
+      }
+      if (action === "tab") openAsTab(url);
       return { action: "deny" };
+    });
+    // The popup is a plain window, not a guest: anything it opens in turn
+    // lands as a workspace tab rather than a window tree.
+    contents.on("did-create-window", (popup) => {
+      popup.webContents.setWindowOpenHandler(({ url }) => {
+        if (/^https?:/i.test(url)) openAsTab(url);
+        return { action: "deny" };
+      });
     });
     contents.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown") return;
@@ -608,11 +642,21 @@ export function registerBrowserSupport(
   ipcMain.handle(
     "catamorphic:browser-history-favicon",
     (event, input: { profileId: string; url: string; faviconUrl: string }) => {
-      history.setFavicon(
-        windows.profileFor(event.sender),
-        input.url,
-        input.faviconUrl,
-      );
+      const profileId = windows.profileFor(event.sender);
+      history.setFavicon(profileId, input.url, input.faviconUrl);
+      // Bookmarks of the page (imported ones have no icon) learn it too.
+      const projectIds = profiles.get(profileId)?.projectIds ?? [];
+      const changed = bookmarks.observeFavicon({
+        profileId,
+        projectIds,
+        url: input.url,
+        faviconUrl: input.faviconUrl,
+      });
+      // Pinned and library changes ride along with any project's payload.
+      for (const projectId of changed.profileChanged
+        ? projectIds
+        : changed.projectIds)
+        bookmarksChanged(projectId, profileId);
     },
   );
 

@@ -107,11 +107,28 @@ export function BookmarksNav({
     id: string | null;
     position: "before" | "after" | "inside";
   } | null>(null);
+  // With nothing pinned the pinned area is gone entirely, not an empty
+  // state. It comes back only as a drop target, while something is being
+  // dragged; "Pin across projects" in a bookmark's menu works regardless.
+  const [dragging, setDragging] = useState(false);
   useEffect(() => {
-    const end = () => setGridDrop(null);
+    // Deferred a tick: revealing the area moves the dragged row, and
+    // Chromium cancels a drag whose source moves during `dragstart`.
+    let reveal: number | undefined;
+    const start = () => {
+      reveal = window.setTimeout(() => setDragging(true), 0);
+    };
+    const end = () => {
+      window.clearTimeout(reveal);
+      setGridDrop(null);
+      setDragging(false);
+    };
+    document.addEventListener("dragstart", start);
     document.addEventListener("dragend", end);
     document.addEventListener("drop", end);
     return () => {
+      window.clearTimeout(reveal);
+      document.removeEventListener("dragstart", start);
       document.removeEventListener("dragend", end);
       document.removeEventListener("drop", end);
     };
@@ -635,51 +652,62 @@ export function BookmarksNav({
     );
   };
 
+  const hasPinned =
+    !!data &&
+    (data.pinned.bookmarks.length > 0 || data.pinned.folders.length > 0);
+
   return (
     <div className="flex flex-col gap-2">
       {/* The section title already says "Bookmarks": the profile-wide pins
           and the saved library are unlabelled groups, and the project list
           is the one labelled, collapsible group. */}
-      <SidebarSubsection>
-        <section
-          className="max-h-[min(40vh,24rem)] overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
-          aria-label="Pinned bookmarks scroll area"
-        >
-          {data && (
-            <ul
-              role="list"
-              aria-label="Pinned bookmarks"
-              data-drop-zone="pinned"
-              data-drop={gridDrop?.id === null ? gridDrop.position : undefined}
-              {...gridHandlers()}
-              className={
-                pinnedStyle === "tiles"
-                  ? "grid grid-cols-4 gap-2 px-1 py-1"
-                  : "flex flex-col gap-0.5"
-              }
-            >
-              {data.pinned.bookmarks.filter((bookmark) => !bookmark.folderId)
-                .length === 0 && (
-                <li className="col-span-4 px-2 py-3 text-center text-xs text-fg-muted">
-                  Drop a tab here to pin across projects
-                </li>
-              )}
-              {projectSidebarItems(data.pinned.bookmarks, contribution?.section)
-                .filter(
-                  (bookmark) =>
-                    !contribution?.section.itemOverrides?.[bookmark.id]?.hide,
+      {hasPinned || dragging ? (
+        <SidebarSubsection>
+          <section
+            className="max-h-[min(40vh,24rem)] overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
+            aria-label="Pinned bookmarks scroll area"
+          >
+            {data && (
+              <ul
+                role="list"
+                aria-label="Pinned bookmarks"
+                data-drop-zone="pinned"
+                data-drop={
+                  gridDrop?.id === null ? gridDrop.position : undefined
+                }
+                {...gridHandlers()}
+                className={
+                  pinnedStyle === "tiles"
+                    ? "grid grid-cols-4 gap-2 px-1 py-1"
+                    : "flex flex-col gap-0.5"
+                }
+              >
+                {data.pinned.bookmarks.filter((bookmark) => !bookmark.folderId)
+                  .length === 0 && (
+                  <li className="col-span-4 px-2 py-3 text-center text-xs text-fg-muted">
+                    Drop a tab here to pin across projects
+                  </li>
+                )}
+                {projectSidebarItems(
+                  data.pinned.bookmarks,
+                  contribution?.section,
                 )
-                .filter((bookmark) => !bookmark.folderId)
-                .map((bookmark) => row(bookmark, true))}
-            </ul>
-          )}
-          {data && (
-            <ul role="list" className="flex flex-col gap-0.5">
-              {renderTree(data.pinned, true, false, true)}
-            </ul>
-          )}
-        </section>
-      </SidebarSubsection>
+                  .filter(
+                    (bookmark) =>
+                      !contribution?.section.itemOverrides?.[bookmark.id]?.hide,
+                  )
+                  .filter((bookmark) => !bookmark.folderId)
+                  .map((bookmark) => row(bookmark, true))}
+              </ul>
+            )}
+            {data && (
+              <ul role="list" className="flex flex-col gap-0.5">
+                {renderTree(data.pinned, true, false, true)}
+              </ul>
+            )}
+          </section>
+        </SidebarSubsection>
+      ) : null}
       {data?.library &&
         (data.library.bookmarks.length > 0 ||
           data.library.folders.length > 0) && (

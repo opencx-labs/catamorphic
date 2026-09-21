@@ -65,6 +65,7 @@ import {
 } from "../lib/slash-commands";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { classifyPastedText, selectionName, textPill } from "../lib/text-pills";
+import { useWorkDisplay } from "../lib/use-work-display.js";
 import type { ChatMode } from "../lib/workspace-types.js";
 import { AgentQuestionPanel } from "./agent-question-panel";
 import { AuthenticationRequiredCard } from "./authentication-required-card.js";
@@ -1982,6 +1983,7 @@ function ChatDockContent({
   // In a split, a tabbed chat occupies only its (ratio-sized) share of
   // the view; floating chats always overlay the full area.
   const splitPane = presentsAsTab && tabActive && slot !== "full";
+  const workDisplay = useWorkDisplay();
   const lurking =
     entry.mode === "partial" &&
     expanded &&
@@ -2483,6 +2485,8 @@ function ChatDockContent({
               activity={
                 chat.connectionLost || awaitingInput ? undefined : activity
               }
+              working={chat.isWorking}
+              workDisplay={workDisplay}
               queue={chat.queue}
               onUpdateQueued={chat.updateQueued}
               onRemoveQueued={chat.removeQueued}

@@ -649,6 +649,11 @@ export function App({
   // auto-opened tab on agent-less profiles, the modal that gates starting
   // a chat with no agents, Settings' "Add agent", and the palette command.
   const [wizardModalOpen, setWizardModalOpen] = useState(false);
+  // Either wizard surface (tab or modal) reports being mid-flow.
+  const wizardEngagedRef = useRef(false);
+  const setWizardEngaged = useCallback((engaged: boolean) => {
+    wizardEngagedRef.current = engaged;
+  }, []);
   const [connectorsModalOpen, setConnectorsModalOpen] = useState(false);
   // Ref'd for the agent-bridge handler (a mount-time effect closure).
   const setConnectorsModalOpenRef = useRef(setConnectorsModalOpen);
@@ -2299,8 +2304,11 @@ export function App({
   // Agent discovery is asynchronous at launch. If a persisted setup tab is
   // restored, or the first empty response races the real agents payload,
   // reconcile it away as soon as an existing agent is known.
+  // Not while the user is inside a wizard flow, though: a sign-in creates
+  // its agent first, and closing here would strand them mid-sign-in with no
+  // progress, command, or error in sight. The wizard's onDone closes it.
   useEffect(() => {
-    if (!hasAgents) return;
+    if (!hasAgents || wizardEngagedRef.current) return;
     setWizardModalOpen(false);
     updateWorkspace((ws) => {
       const tabs = ws.tabs.filter((tab) => tab.kind !== "agent-setup");
@@ -5714,6 +5722,7 @@ export function App({
                         variant="tab"
                         onClose={() => closeTab(tabKey(tab))}
                         onDone={() => closeTab(tabKey(tab))}
+                        onEngagedChange={setWizardEngaged}
                       />
                     ) : tab.kind === "diff" ? (
                       <Suspense fallback={<div className="flex-1 bg-bg" />}>
@@ -5784,6 +5793,7 @@ export function App({
                     onStateChange={(state) =>
                       onBrowserState(browser.localId, state)
                     }
+                    onPageClose={() => closeTab(browserTabKey(browser.localId))}
                     previewLinksWithAlt={prefs?.previewLinksWithAlt ?? true}
                     floatingDismissShortcut={keybindings["dismiss-floating"]}
                     onDismissFloating={
@@ -6282,6 +6292,7 @@ export function App({
                   onStateChange={(state) =>
                     onBrowserState(browser.localId, state)
                   }
+                  onPageClose={() => closeTab(browserTabKey(browser.localId))}
                   registerNavigate={(navigate) =>
                     browserNavigatorsRef.current.set(browser.localId, navigate)
                   }
@@ -6368,6 +6379,7 @@ export function App({
           setSidebarCustomization(null);
         }}
         onDone={() => setWizardModalOpen(false)}
+        onEngagedChange={setWizardEngaged}
       />
 
       {/* Configure-agent modal (ADR 0056): palette picker + Settings both

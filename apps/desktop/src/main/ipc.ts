@@ -1398,6 +1398,31 @@ export function registerIpcHandlers(
     loginWatchers.set(agent.id, timer);
   };
 
+  // The harness executable arrives on first use (~200 MB for Claude Code).
+  // The window that asked for the sign-in hears the download tick, so its
+  // button says what the wait is instead of sitting on "Starting…".
+  const ensureLoginHarness = async (
+    sender: WebContents,
+    agentId: string,
+    harness: "claude-code" | "codex",
+  ): Promise<HarnessExecutable | undefined> => {
+    const registry = state.current?.agentRegistry;
+    if (!registry) return undefined;
+    const stop = registry.onHarnessDownloadProgress((progress) => {
+      if (progress.harness !== harness || sender.isDestroyed()) return;
+      sender.send("catamorphic:agent-login-progress", {
+        agentId,
+        receivedBytes: progress.receivedBytes,
+        totalBytes: progress.totalBytes,
+      });
+    });
+    try {
+      return await registry.ensureHarnessExecutable(harness);
+    } finally {
+      stop();
+    }
+  };
+
   ipcMain.handle("catamorphic:agent-login", async (event, id: string) => {
     const store = storesFor(event).agents;
     const agent = store.get(id);
@@ -1462,8 +1487,7 @@ export function registerIpcHandlers(
       // server + browser hand-off; the process exits when login completes.
       let component: HarnessExecutable | undefined;
       try {
-        component =
-          await state.current?.agentRegistry.ensureHarnessExecutable("codex");
+        component = await ensureLoginHarness(event.sender, id, "codex");
       } catch (cause) {
         return {
           started: false,
@@ -1509,10 +1533,7 @@ export function registerIpcHandlers(
     // to run a sign-in is a terrible first impression.
     let component: HarnessExecutable | undefined;
     try {
-      component =
-        await state.current?.agentRegistry.ensureHarnessExecutable(
-          "claude-code",
-        );
+      component = await ensureLoginHarness(event.sender, id, "claude-code");
     } catch (cause) {
       return {
         started: false,

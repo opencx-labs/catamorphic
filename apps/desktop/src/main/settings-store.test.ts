@@ -134,14 +134,14 @@ it("invalid initial project values report errors and use defaults; unknown keys 
     paths.project!,
     JSON.stringify({
       contentFrame: "false",
-      rightSidebarOpen: false,
+      rightSidebarOpen: true,
       notificationSounds: false,
     }),
   );
   expect(loadSettings(paths)).toMatchObject({
     values: {
       contentFrame: false,
-      rightSidebarOpen: true,
+      rightSidebarOpen: false,
       notificationSounds: true,
     },
     sources: { contentFrame: "default" },

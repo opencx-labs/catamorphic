@@ -5,6 +5,7 @@ artifactName: "${productName}-${version}-${arch}.${ext}"
 directories:
   buildResources: build
   output: release
+afterPack: ./scripts/after-pack.mjs
 files:
   - out/**
   - package.json

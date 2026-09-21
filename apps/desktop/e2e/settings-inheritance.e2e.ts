@@ -133,7 +133,7 @@ it("keeps inherited controls usable in the compact light settings view", async (
 it("keeps checkbox rows and neighboring controls stable while changing and resetting overrides", async () => {
   await chooseScope("profile");
   await app.eval(
-    `document.querySelector('[aria-label="Collapse right sidebar"]')?.click()`,
+    `[...document.querySelectorAll('[aria-label="Collapse right sidebar"]')].find(button => !button.closest('[inert]'))?.click()`,
   );
   for (const width of [720, 900]) {
     await app.eval(
@@ -244,7 +244,7 @@ it("edits workspace padding, rounding and dividers independently and persists th
     );
   await chooseScope("profile");
   await app.eval(
-    `document.querySelector('[aria-label="Expand right sidebar"]')?.click()`,
+    `[...document.querySelectorAll('[aria-label="Expand right sidebar"]')].find(button => !button.closest('[inert]'))?.click()`,
   );
   await app.waitFor("!!document.querySelector('input[name=contentPadding]')");
   await app.eval(

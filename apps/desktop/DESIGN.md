@@ -803,3 +803,92 @@ The strip itself shows what the agent is doing: its one line is the
 timeline's activity row (spinner, "Working…", the tool in progress), never
 whichever slice of the transcript happens to fit in fifty pixels. The film
 take had shown a lurked chat with only the person's own message in it.
+
+### 2026-09-21: Sign-in never goes dark, and popups stay popups
+
+First real-use notes from running Work as the default browser. Three rules
+came out of one broken Claude sign-in:
+
+- **The wizard stays until its flow ends.** A sign-in creates its agent
+  before it finishes, and "an agent exists" used to close the setup wizard
+  on the spot, leaving a silent wait and then a terminal from nowhere. The
+  wizard now reports being mid-flow (`onEngagedChange`) and the host leaves
+  it alone until `onDone`. A terminal sign-in finishes the wizard by itself
+  when the credentials land; Continue remains the manual way out.
+- **A wait says what it is.** Harness executables arrive on first use
+  (Claude Code is ~200 MB). The sign-in button shows the download
+  ("Downloading… 42%") rather than sitting on "Starting…". Both actions of
+  a two-choice step are real buttons: the secondary one is outlined, same
+  height as the primary, and both animate hover and press over 150 ms.
+- **A scripted popup is a window, not a tab.** Pages that call `window.open`
+  with window features (Google sign-in, most OAuth and payment popups) hand
+  their result back through `window.opener`. Re-homing them as workspace
+  tabs produced a blank page and a failed sign-in. They now open as child
+  windows in the opener's session (`main/browser-popups.ts`); ordinary
+  `target=_blank` links still become tabs, and whatever a popup opens in
+  turn becomes a tab too.
+
+The agent wizard names the product people hold an account with (Claude,
+ChatGPT), and that is a new agent's default name. Harness names (Claude
+Code, Codex) stay where the harness itself is the subject.
+
+The right sidebar starts collapsed (`rightSidebarOpen` defaults to false).
+A first launch shows the work, not the chrome around it; the companion is
+one click away and the choice is remembered from then on.
+
+More from the same day of daily use:
+
+- **A page that closes itself takes its tab with it.** Sign-in hand-offs
+  call `window.close()` when done. Ignoring the guest's `close` event left
+  a dead, blank view that kept focus and swallowed every shortcut, Cmd+W
+  included. The tab now closes, as it would in Chrome.
+- **The chat region is found whenever it appears.** The dock host looked
+  the region up once; on a fresh project it was not mounted yet, so chats
+  were laid out over the whole window and a tab chat's status controls sat
+  under the tab bar. The host now waits for the region and follows
+  remounts.
+- **No empty pinned area.** With nothing pinned the pinned bookmarks area
+  is absent, not an empty state. It returns only as a drop target while
+  something is being dragged; "Pin across projects" works regardless.
+- **A folder moves what is below it.** Tree rows are absolutely placed, so
+  expanding or collapsing a folder used to snap every later row (and the
+  tree's height) while only the children faded. Row position and tree
+  height now ease over 200 ms (`packages/app/src/ui/tree.tsx`), off under
+  reduced motion.
+
+### 2026-09-21: A turn is work, then an answer
+
+An agent turn reaches the chat as a run of assistant messages: a note each
+time the agent pauses between tool calls (with the steps that led to it),
+and last the answer. People asked for three "modes" of showing that. Modes
+multiply; the turn already has two phases, so there are two independent
+choices instead (Settings → Workspace → Chat dock):
+
+- **While the agent works** (`chatWorkLive`): every note, or only the
+  latest, each new note replacing the one before.
+- **Once it has answered** (`chatWorkSettled`): notes kept in place, or
+  folded into steps.
+
+The default is `latest`+`collapse`: one note at a time while the agent
+works, then only the answer, with the notes one click away under its steps.
+The three requested behaviours are `all`+`keep` (how it used to read),
+`all`+`collapse`, and `latest`+`collapse`; the fourth combination comes
+free. A folded note is not a new kind of thing: it is a row of the same
+steps disclosure tool calls already use, in true order (a note follows its
+own steps), expandable to its Markdown, still addressable by message id.
+Nothing is dropped, only moved one click away. The grouping is a pure
+function (`lib/turn-groups.ts`); a failed turn's error card and the note
+before it always stay in place.
+
+Steps are chrome around the conversation, not part of its text: the steps
+block is `select-none`, so a drag across several replies selects the prose
+and skips the rows. An opened payload is content again and selectable.
+Every reply has a hover Copy beside Fork; it copies the Markdown source,
+which is what pastes well elsewhere.
+
+**Bookmarks learn their icon from a visit.** A row shows its stored icon,
+else guesses `/favicon.ico`. Imported and synced bookmarks arrive with no
+icon, and most sites declare theirs in markup, so the guess left a globe
+that no visit ever fixed (the real icon only went to history). A page's
+reported icon now reaches bookmarks of that page (scheme, `www.`, trailing
+slash and fragment ignored), and same-site bookmarks that still have none.
