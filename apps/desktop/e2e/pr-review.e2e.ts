@@ -341,8 +341,10 @@ it("virtualizes a large file tree and keeps the current file visible", async () 
 });
 
 it("keeps review context reachable and avoids horizontal overflow in a narrow window", async () => {
-  await app.eval("window.catamorphicDesktop.devWindow('setSize', 1000, 700)");
-  await wait("return window.innerWidth <= 1000;");
+  // Narrow means the review pane itself is under 700px; with the right
+  // sidebar collapsed by default the window has to be smaller to get there.
+  await app.eval("window.catamorphicDesktop.devWindow('setSize', 900, 700)");
+  await wait("return window.innerWidth <= 900;");
   await run("$('[data-testid=\"proposal-inspector-trigger\"]').click();");
   await wait("return !!$('[aria-label=\"Review status and people\"]');");
   expect(

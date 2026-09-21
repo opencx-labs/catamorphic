@@ -67,6 +67,16 @@ beforeAll(async () => {
   await wait(
     `const b=$('[data-testid="project-submit"]');if(b&&!b.disabled){b.click();return true;}return false;`,
   );
+  // Changes lives in the right sidebar, which starts collapsed.
+  await wait(
+    `return !!$('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"]');`,
+  );
+  await run(
+    `$$('[aria-label="Expand right sidebar"]').find(e=>!e.closest('[inert]'))?.click();return true;`,
+  );
+  await wait(
+    `return $('[data-workspace-visible="true"] [data-sidebar="right"]')?.getAttribute('aria-hidden') === 'false';`,
+  );
   await wait(`return $$('[data-worktree-path]').length === 1;`);
   await run(
     `setReactValue($('select[aria-label="Changes checkout"]'), ${JSON.stringify(linked)});return true;`,
