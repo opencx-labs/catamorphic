@@ -869,9 +869,9 @@ choices instead (Settings → Workspace → Chat dock):
 - **Once it has answered** (`chatWorkSettled`): notes kept in place, or
   folded into steps.
 
-The default is `latest`+`keep`: one note at a time while the agent works,
-every note back in place once it has answered. The three requested
-behaviours are `all`+`keep` (how it used to read),
+The default is `latest`+`collapse`: one note at a time while the agent
+works, then only the answer, with the notes one click away under its steps.
+The three requested behaviours are `all`+`keep` (how it used to read),
 `all`+`collapse`, and `latest`+`collapse`; the fourth combination comes
 free. A folded note is not a new kind of thing: it is a row of the same
 steps disclosure tool calls already use, in true order (a note follows its

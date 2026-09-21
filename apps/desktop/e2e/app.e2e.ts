@@ -536,7 +536,7 @@ describe("chat flows", () => {
     );
   });
 
-  it("streams preambles as separate completed messages", async () => {
+  it("folds the preambles of a turn into the steps of its answer", async () => {
     await run(
       `byText('button', 'New chat')?.click() ?? pressKey('n', { metaKey: true }); return true;`,
     );
@@ -556,14 +556,15 @@ describe("chat flows", () => {
         .filter((m) => m.role === 'Agent')
         .map((m) => m.text);
     `);
-    // Three separate agent messages, in emission order — not one merged blob.
+    // By default only the answer stays in the conversation; the notes the
+    // agent wrote on the way are rows of its steps, one click away.
     expect(
       agentTexts.filter((text) =>
         /look at the project|writing some notes|two preambles/.test(text),
       ),
-    ).toHaveLength(3);
-    // The file the fake agent wrote shows up in the turn's step log
-    // (collapsed by default; expanding reveals the file-edit row).
+    ).toHaveLength(1);
+    // Expanded, the step log holds both notes in emission order and the
+    // file the fake agent wrote.
     await runWait(
       `
       const toggle = $$('[data-testid="chat-turn-steps-toggle"]').at(-1);
@@ -577,6 +578,15 @@ describe("chat flows", () => {
         label: "turn step log shows NOTES.md",
       },
     );
+    expect(
+      await run<string[]>(`
+        return $$('[data-testid="chat-step"][data-step-kind="note"]')
+          .map((el) => el.textContent.trim());
+      `),
+    ).toEqual([
+      "First, I will look at the project.",
+      "Found it. Now writing some notes.",
+    ]);
   });
 
   it("shares archive and unread actions between the sidebar and dock", async () => {

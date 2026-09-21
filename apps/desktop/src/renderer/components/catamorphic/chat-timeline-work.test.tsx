@@ -68,8 +68,24 @@ describe("ChatTimeline work display", () => {
         article.querySelector(".cat-markdown:not([data-testid])")?.textContent,
     );
 
-  it("keeps every note in place by default", async () => {
+  it("shows only the answer by default, with the notes under its steps", async () => {
     await act(async () => root.render(<ChatTimeline messages={messages} />));
+    expect(container.querySelectorAll("article")).toHaveLength(2);
+    expect(articles().at(-1)).toBe("All fixed.");
+    expect(container.querySelectorAll('[data-step-kind="note"]')).toHaveLength(
+      2,
+    );
+  });
+
+  it("keeps every note in place when asked to", async () => {
+    await act(async () =>
+      root.render(
+        <ChatTimeline
+          messages={messages}
+          workDisplay={{ live: "all", settled: "keep" }}
+        />,
+      ),
+    );
     expect(container.querySelectorAll("article")).toHaveLength(4);
     expect(container.querySelectorAll('[data-step-kind="note"]')).toHaveLength(
       0,
@@ -129,7 +145,14 @@ describe("ChatTimeline work display", () => {
   });
 
   it("keeps steps out of text selection and copies the reply's Markdown", async () => {
-    await act(async () => root.render(<ChatTimeline messages={messages} />));
+    await act(async () =>
+      root.render(
+        <ChatTimeline
+          messages={messages}
+          workDisplay={{ live: "all", settled: "keep" }}
+        />,
+      ),
+    );
     for (const steps of container.querySelectorAll(
       '[data-testid="chat-turn-steps"]',
     ))

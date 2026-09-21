@@ -23,7 +23,7 @@ export interface WorkDisplay {
 
 export const DEFAULT_WORK_DISPLAY: WorkDisplay = {
   live: "latest",
-  settled: "keep",
+  settled: "collapse",
 };
 
 export type TimelineItem<T> =

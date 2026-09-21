@@ -614,6 +614,11 @@ describe("animate-before-unmount", () => {
     // its entrance (the pre-paint effect-flush regression).
     await run(`pressKey('n', { metaKey: true }); return true;`);
     await runWait(`return !!visibleDock();`, { label: "chat open" });
+    // Every arrival has to stay on screen to be measured: by default the
+    // preambles are replaced as they come and folded once answered.
+    await run(
+      `return window.catamorphicDesktop.setPrefs({ chatWorkLive: 'all', chatWorkSettled: 'keep' }).then(() => true);`,
+    );
     await run(`
       const log = visibleDock().querySelector('[role="log"]');
       window.__mounts = [];
@@ -648,6 +653,9 @@ describe("animate-before-unmount", () => {
     for (const mount of mounts) {
       expect(Number(mount.atInsert)).toBeLessThan(1);
     }
+    await run(
+      `return window.catamorphicDesktop.setPrefs({ chatWorkLive: 'latest', chatWorkSettled: 'collapse' }).then(() => true);`,
+    );
   });
 
   it("closing a chat bubble plays bubble-out before removal", async () => {
