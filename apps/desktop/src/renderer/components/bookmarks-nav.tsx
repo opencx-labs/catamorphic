@@ -112,8 +112,14 @@ export function BookmarksNav({
   // dragged; "Pin across projects" in a bookmark's menu works regardless.
   const [dragging, setDragging] = useState(false);
   useEffect(() => {
-    const start = () => setDragging(true);
+    // Deferred a tick: revealing the area moves the dragged row, and
+    // Chromium cancels a drag whose source moves during `dragstart`.
+    let reveal: number | undefined;
+    const start = () => {
+      reveal = window.setTimeout(() => setDragging(true), 0);
+    };
     const end = () => {
+      window.clearTimeout(reveal);
       setGridDrop(null);
       setDragging(false);
     };
@@ -121,6 +127,7 @@ export function BookmarksNav({
     document.addEventListener("dragend", end);
     document.addEventListener("drop", end);
     return () => {
+      window.clearTimeout(reveal);
       document.removeEventListener("dragstart", start);
       document.removeEventListener("dragend", end);
       document.removeEventListener("drop", end);

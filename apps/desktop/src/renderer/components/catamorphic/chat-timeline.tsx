@@ -704,7 +704,7 @@ function MessageImpl({
           button: without it the pointer leaves the group mid-crossing
           and the reveal fades out and back in — a visible blink. */}
       {message.role === "assistant" && (
-        <span className="absolute -right-8 bottom-0 flex flex-col gap-0.5 pl-2 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/msg:opacity-100">
+        <span className="absolute bottom-0 left-full flex items-center gap-0.5 pl-2 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/msg:opacity-100">
           <CopyMessageButton content={message.content} />
           {onFork && (
             <ShortcutHint label="Fork the chat from here">
