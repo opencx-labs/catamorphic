@@ -85,7 +85,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   dockDetached: false,
   dockSide: "right",
   dockPlacement: "center",
-  chatWorkLive: "all",
+  chatWorkLive: "latest",
   chatWorkSettled: "keep",
   notificationSounds: true,
   desktopNotifications: true,
@@ -142,7 +142,7 @@ export function normalizePrefs(raw: unknown): AppPrefs {
     dockMultiProject: record.dockMultiProject === true,
     dockDetached: record.dockDetached === true,
     dockSide: record.dockSide === "left" ? "left" : "right",
-    chatWorkLive: record.chatWorkLive === "latest" ? "latest" : "all",
+    chatWorkLive: record.chatWorkLive === "all" ? "all" : "latest",
     chatWorkSettled:
       record.chatWorkSettled === "collapse" ? "collapse" : "keep",
     dockPlacement:

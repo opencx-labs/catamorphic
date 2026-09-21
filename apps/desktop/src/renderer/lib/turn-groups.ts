@@ -22,7 +22,7 @@ export interface WorkDisplay {
 }
 
 export const DEFAULT_WORK_DISPLAY: WorkDisplay = {
-  live: "all",
+  live: "latest",
   settled: "keep",
 };
 
