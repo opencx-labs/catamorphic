@@ -38,6 +38,22 @@ export type TimelineItem<T> =
       working: boolean;
     };
 
+/**
+ * The message a turn settles on. Notes are flushed mid-turn with only
+ * `status` and `events`; settling stamps the turn's outcome (`changedFiles`
+ * among it) on the last message. Turns can follow each other with no user
+ * message between them (retries, triggers, other agents), and the answer of
+ * one must never fold into the steps of the next.
+ */
+function endsTurn(message: TurnGroupMessage): boolean {
+  const metadata = message.metadata;
+  return (
+    typeof metadata === "object" &&
+    metadata !== null &&
+    Array.isArray((metadata as { changedFiles?: unknown }).changedFiles)
+  );
+}
+
 function isFailed(message: TurnGroupMessage): boolean {
   const metadata = message.metadata;
   return (
@@ -62,11 +78,14 @@ export function groupTurns<T extends TurnGroupMessage>(
       continue;
     }
     let end = index;
-    while (end < messages.length && messages[end]?.role === "assistant")
+    while (end < messages.length && messages[end]?.role === "assistant") {
       end += 1;
+      if (endsTurn(messages[end - 1] as T)) break;
+    }
     const run = messages.slice(index, end);
-    // Only the run at the very end of the log can still be running.
-    const live = working && end === messages.length;
+    // Only an unsettled run at the very end of the log can still be running.
+    const live =
+      working && end === messages.length && !endsTurn(run.at(-1) as T);
     index = end;
     const fold = live
       ? display.live === "latest"

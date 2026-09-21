@@ -75,6 +75,37 @@ describe("groupTurns", () => {
     ).toEqual(["u1", "a1>a2+a3"]);
   });
 
+  it("never folds one turn's answer into the next turn's steps", () => {
+    const answer = (id: string) => ({
+      id,
+      role: "assistant",
+      metadata: { status: "completed", changedFiles: [] },
+    });
+    const display = { live: "latest", settled: "collapse" } as const;
+    // Two turns back to back, no user message between them.
+    const backToBack = [
+      user("u1"),
+      note("a1"),
+      answer("a2"),
+      note("b1"),
+      answer("b2"),
+    ];
+    expect(shape(groupTurns(backToBack, { working: false, display }))).toEqual([
+      "u1",
+      "a1>a2",
+      "b1>b2",
+    ]);
+    // The second turn still running: the first stays settled.
+    expect(
+      shape(
+        groupTurns([...backToBack.slice(0, 3), note("b1"), note("b2")], {
+          working: true,
+          display,
+        }),
+      ),
+    ).toEqual(["u1", "a1>a2", "b1>b2*"]);
+  });
+
   it("leaves a single-message turn alone", () => {
     expect(
       shape(
