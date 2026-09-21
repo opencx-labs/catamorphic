@@ -642,11 +642,21 @@ export function registerBrowserSupport(
   ipcMain.handle(
     "catamorphic:browser-history-favicon",
     (event, input: { profileId: string; url: string; faviconUrl: string }) => {
-      history.setFavicon(
-        windows.profileFor(event.sender),
-        input.url,
-        input.faviconUrl,
-      );
+      const profileId = windows.profileFor(event.sender);
+      history.setFavicon(profileId, input.url, input.faviconUrl);
+      // Bookmarks of the page (imported ones have no icon) learn it too.
+      const projectIds = profiles.get(profileId)?.projectIds ?? [];
+      const changed = bookmarks.observeFavicon({
+        profileId,
+        projectIds,
+        url: input.url,
+        faviconUrl: input.faviconUrl,
+      });
+      // Pinned and library changes ride along with any project's payload.
+      for (const projectId of changed.profileChanged
+        ? projectIds
+        : changed.projectIds)
+        bookmarksChanged(projectId, profileId);
     },
   );
 

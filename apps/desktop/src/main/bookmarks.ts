@@ -54,6 +54,25 @@ interface SerializedBookmarksFile {
 
 const EMPTY: ProjectBookmarks = { folders: [], bookmarks: [] };
 
+/** Same site: scheme and a leading `www.` do not make it another one. */
+function bookmarkSiteKey(raw: string): string | undefined {
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+    return url.host.replace(/^www\./, "");
+  } catch {
+    return undefined;
+  }
+}
+
+/** Same page: also ignores a trailing slash and the fragment. */
+function bookmarkPageKey(raw: string): string | undefined {
+  const site = bookmarkSiteKey(raw);
+  if (!site) return undefined;
+  const url = new URL(raw);
+  return `${site}${url.pathname.replace(/\/+$/, "")}${url.search}`;
+}
+
 /**
  * Put `id` before `beforeId` (or last) among the siblings of `parentId`, then
  * number every sibling in display order and keep both arrays sorted so
@@ -135,6 +154,46 @@ export class BookmarksStore {
 
   library(profileId: string): ProjectBookmarks {
     return this.data.libraryByProfile[profileId] ?? EMPTY;
+  }
+
+  /**
+   * A visited page reported its icon. Bookmarks of that page take it;
+   * bookmarks elsewhere on the same site take it only while they have
+   * none (imported and synced entries arrive without one, and guessing
+   * `/favicon.ico` misses every site that declares its icon in markup).
+   * Returns the project ids whose bookmarks changed.
+   */
+  observeFavicon(input: {
+    profileId: string;
+    projectIds: readonly string[];
+    url: string;
+    faviconUrl: string;
+  }): { projectIds: string[]; profileChanged: boolean } {
+    const page = bookmarkPageKey(input.url);
+    const site = bookmarkSiteKey(input.url);
+    if (!page || !site || !input.faviconUrl)
+      return { projectIds: [], profileChanged: false };
+    const apply = (scope: ProjectBookmarks | undefined): boolean => {
+      let changed = false;
+      for (const bookmark of scope?.bookmarks ?? []) {
+        const samePage = bookmarkPageKey(bookmark.url) === page;
+        const sameSite =
+          !bookmark.faviconUrl && bookmarkSiteKey(bookmark.url) === site;
+        if (!samePage && !sameSite) continue;
+        if (bookmark.faviconUrl === input.faviconUrl) continue;
+        bookmark.faviconUrl = input.faviconUrl;
+        changed = true;
+      }
+      return changed;
+    };
+    const projectIds = input.projectIds.filter((projectId) =>
+      apply(this.data.byProject[projectId]),
+    );
+    const pinnedChanged = apply(this.data.pinnedByProfile[input.profileId]);
+    const libraryChanged = apply(this.data.libraryByProfile[input.profileId]);
+    const profileChanged = pinnedChanged || libraryChanged;
+    if (projectIds.length > 0 || profileChanged) this.save();
+    return { projectIds, profileChanged };
   }
 
   addBookmark(

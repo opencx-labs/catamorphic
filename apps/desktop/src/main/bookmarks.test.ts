@@ -22,6 +22,55 @@ afterEach(() => {
 });
 
 describe("BookmarksStore", () => {
+  it("backfills icons from a visited page without overwriting other pages' icons", () => {
+    const { value, file } = store();
+    const imported = value.addBookmark("p", {
+      label: "Docs",
+      url: "http://www.site.test/docs/",
+    });
+    const elsewhere = value.addBookmark("p", {
+      label: "Blog",
+      url: "https://site.test/blog",
+    });
+    const own = value.addBookmark("p", {
+      label: "Pricing",
+      url: "https://site.test/pricing",
+      faviconUrl: "https://site.test/pricing.png",
+    });
+    const other = value.addBookmark("p", {
+      label: "Other",
+      url: "https://other.test/",
+    });
+
+    const changed = value.observeFavicon({
+      profileId: "profile",
+      projectIds: ["p", "untouched"],
+      // The visit landed on the https, slashless form of the bookmark.
+      url: "https://site.test/docs#intro",
+      faviconUrl: "https://site.test/icon.svg",
+    });
+
+    expect(changed).toEqual({ projectIds: ["p"], profileChanged: false });
+    const icon = (id: string) =>
+      value.forProject("p").bookmarks.find((b) => b.id === id)?.faviconUrl;
+    expect(icon(imported.id)).toBe("https://site.test/icon.svg");
+    // Same site, no icon yet: better than a guess at /favicon.ico.
+    expect(icon(elsewhere.id)).toBe("https://site.test/icon.svg");
+    // Another page's own icon stays.
+    expect(icon(own.id)).toBe("https://site.test/pricing.png");
+    expect(icon(other.id)).toBeUndefined();
+    // Persisted, and a repeat visit is a no-op.
+    expect(fs.readFileSync(file, "utf-8")).toContain("icon.svg");
+    expect(
+      value.observeFavicon({
+        profileId: "profile",
+        projectIds: ["p"],
+        url: "https://site.test/docs",
+        faviconUrl: "https://site.test/icon.svg",
+      }),
+    ).toEqual({ projectIds: [], profileChanged: false });
+  });
+
   it("reorders and reparents bookmarks and folders with one move", () => {
     const { value } = store();
     const a = value.addBookmark("p", { label: "A", url: "https://a.test" });

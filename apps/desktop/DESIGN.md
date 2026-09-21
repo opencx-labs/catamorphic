@@ -883,3 +883,10 @@ block is `select-none`, so a drag across several replies selects the prose
 and skips the rows. An opened payload is content again and selectable.
 Every reply has a hover Copy beside Fork; it copies the Markdown source,
 which is what pastes well elsewhere.
+
+**Bookmarks learn their icon from a visit.** A row shows its stored icon,
+else guesses `/favicon.ico`. Imported and synced bookmarks arrive with no
+icon, and most sites declare theirs in markup, so the guess left a globe
+that no visit ever fixed (the real icon only went to history). A page's
+reported icon now reaches bookmarks of that page (scheme, `www.`, trailing
+slash and fragment ignored), and same-site bookmarks that still have none.
