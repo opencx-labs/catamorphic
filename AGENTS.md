@@ -31,6 +31,15 @@ abstractions, or legacy preservation. If a genuinely new abstraction or a
 non-obvious design choice is required, surface it for explicit approval and
 record the accepted decision in an ADR before implementing it.
 
+### Where the product is described for agents and search
+
+`llms.txt` at the repository root is the agent-facing description of Work
+(capabilities, facts, where to read more). It mirrors
+https://work.software/llms.txt, which is canonical; the website repository's
+`DESIGN.md` ("Where the words live") maps every place messaging and capability
+claims appear. When a capability lands, changes, or is removed, update both
+copies in the same change, and the README's install and overview lines.
+
 ### Embeddable framework positioning (READ THIS FIRST)
 
 **Catamorphic ships as libraries a host application mounts in-process.** There is no standalone product and no default identity. The host provides auth, user/org model, database, and the deployment surface. The root `bun run dev` is a development convenience only: it starts the combined desktop and stock-server manual environment; libraries must never depend on that script. The in-repo reference host is the desktop app (`apps/desktop`, embedded server in `src/main/server/boot.ts`). The old web playground host was removed 2026-08 (severely out of date; will be rewritten from scratch if revisited).
