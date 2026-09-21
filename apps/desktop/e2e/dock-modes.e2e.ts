@@ -48,8 +48,13 @@ const helpers = `
   const dockH = () => frontDock()?.getBoundingClientRect().height ?? 0;
   const hoverDock = () => frontDock().dispatchEvent(
     new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }));
-  const unhoverDock = () => frontDock().dispatchEvent(
-    new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }));
+  // A real leave: the pointer moves somewhere outside the dock first (the
+  // dock ignores boundary events the layout produced under a parked pointer).
+  const unhoverDock = () => {
+    window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 4, clientY: 4 }));
+    frontDock().dispatchEvent(
+      new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body, clientX: 4, clientY: 4 }));
+  };
   const clickOutside = () =>
     window.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
 `;
