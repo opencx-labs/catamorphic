@@ -44,6 +44,22 @@ export const SETTINGS = {
     valid: oneOf("left", "center", "right"),
     options: { left: "Left", center: "Centered", right: "Right" },
   },
+  chatWorkLive: {
+    label: "While the agent works",
+    description:
+      "The notes an agent writes between its steps. Earlier notes fold into the steps line when only the latest is shown.",
+    scopes: profileScope,
+    valid: oneOf("all", "latest"),
+    options: { all: "Show every note", latest: "Show only the latest note" },
+  },
+  chatWorkSettled: {
+    label: "Once it has answered",
+    description:
+      "Folded work stays one click away, in order, under the steps line above the answer.",
+    scopes: profileScope,
+    valid: oneOf("keep", "collapse"),
+    options: { keep: "Keep the notes", collapse: "Fold notes into steps" },
+  },
   sidebarDividers: {
     label: "Sidebar dividers",
     description: "Show a vertical separator beside each sidebar.",

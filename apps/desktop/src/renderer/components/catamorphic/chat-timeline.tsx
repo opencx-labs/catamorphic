@@ -7,10 +7,13 @@ import {
   ArrowDown,
   ArrowUp,
   Bot,
+  Check,
   ChevronRight,
+  Copy,
   GitFork,
   KeyRound,
   LoaderCircle,
+  MessageSquareText,
   Pencil,
   Radio,
   RotateCcw,
@@ -30,6 +33,11 @@ import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 import { splitAttachmentMarkers } from "../../lib/composer-serialize";
+import {
+  DEFAULT_WORK_DISPLAY,
+  groupTurns,
+  type WorkDisplay,
+} from "../../lib/turn-groups";
 import { ContextPill } from "../context-pill";
 import { ShortcutHint } from "../shortcut-hint";
 import { SessionAttribution } from "./session-attribution.js";
@@ -154,6 +162,13 @@ export interface ChatTimelineProps {
   onHoldQueued?: (
     id: string | null,
   ) => undefined | boolean | Promise<undefined | boolean>;
+  /**
+   * The turn at the end of the log is still running. Defaults to whether
+   * an activity line is showing.
+   */
+  working?: boolean;
+  /** How a turn's work (notes and steps) reads; see lib/turn-groups. */
+  workDisplay?: WorkDisplay;
   /** Re-run the last failed turn in place. */
   onRetry?: () => void;
   /**
@@ -235,6 +250,8 @@ export function ChatTimeline({
   onRemoveQueued,
   onSendQueuedNow,
   onHoldQueued,
+  working,
+  workDisplay = DEFAULT_WORK_DISPLAY,
   onRetry,
   onReauth,
   reauthLabel,
@@ -278,9 +295,15 @@ export function ChatTimeline({
         )}
         {(() => {
           const keys = timelineKeys(messages);
-          return messages.map((message, index) => (
+          const keyOf = new Map(
+            messages.map((message, index) => [message, keys[index]]),
+          );
+          const row = (
+            message: ChatTimelineMessage,
+            foldedWork?: ChatTimelineMessage[],
+          ) => (
             <div
-              key={keys[index]}
+              key={keyOf.get(message)}
               data-message-id={message.id}
               tabIndex={-1}
               className={
@@ -291,6 +314,11 @@ export function ChatTimeline({
             >
               <Message
                 message={message}
+                foldedWork={foldedWork}
+                // A focused note inside the fold has to be on screen.
+                openWork={foldedWork?.some(
+                  (folded) => folded.id === focusMessageId,
+                )}
                 isLast={message.id === lastConversationId}
                 resolveAgentName={resolveAgentName}
                 onLinkClick={onLinkClick}
@@ -305,7 +333,17 @@ export function ChatTimeline({
                 onFork={onFork}
               />
             </div>
-          ));
+          );
+          return groupTurns(messages, {
+            working: working ?? Boolean(activity),
+            display: workDisplay,
+          }).flatMap((item) =>
+            item.kind === "message"
+              ? [row(item.message)]
+              : item.shown.map((message, index) =>
+                  row(message, index === 0 ? item.folded : undefined),
+                ),
+          );
         })()}
         {activity && (
           <div className="flex items-center gap-2 text-xs text-fg-muted">
@@ -488,12 +526,19 @@ const Message = memo(
     // one-line rows; re-rendering them is free.
     next.message.role !== "system" &&
     previous.message === next.message &&
+    previous.openWork === next.openWork &&
+    (previous.foldedWork?.length ?? 0) === (next.foldedWork?.length ?? 0) &&
+    (next.foldedWork ?? []).every(
+      (folded, index) => previous.foldedWork?.[index] === folded,
+    ) &&
     previous.isLast === next.isLast &&
     previous.reauthLabel === next.reauthLabel,
 );
 
 function MessageImpl({
   message,
+  foldedWork,
+  openWork,
   isLast,
   resolveAgentName,
   onLinkClick,
@@ -506,6 +551,9 @@ function MessageImpl({
   onFork,
 }: {
   message: ChatTimelineMessage;
+  /** Earlier notes of this turn, folded into this message's steps. */
+  foldedWork?: ChatTimelineMessage[];
+  openWork?: boolean;
   isLast: boolean;
   resolveAgentName?: (agentId: string) => string | undefined;
   renderLink?: ChatTimelineProps["renderLink"];
@@ -655,24 +703,36 @@ function MessageImpl({
       {/* The pl-2 bridges the gap between the message edge and the
           button: without it the pointer leaves the group mid-crossing
           and the reveal fades out and back in — a visible blink. */}
-      {message.role === "assistant" && onFork && (
-        <span className="absolute -right-8 bottom-0 pl-2 opacity-0 transition-opacity duration-150 group-hover/msg:opacity-100">
-          <ShortcutHint label="Fork the chat from here">
-            <button
-              type="button"
-              onClick={() => onFork(message.id)}
-              className="grid size-6 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-              aria-label="Fork the conversation from this message"
-              data-testid="chat-fork"
-            >
-              <GitFork className="size-3" />
-            </button>
-          </ShortcutHint>
+      {message.role === "assistant" && (
+        <span className="absolute -right-8 bottom-0 flex flex-col gap-0.5 pl-2 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/msg:opacity-100">
+          <CopyMessageButton content={message.content} />
+          {onFork && (
+            <ShortcutHint label="Fork the chat from here">
+              <button
+                type="button"
+                onClick={() => onFork(message.id)}
+                className="grid size-6 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                aria-label="Fork the conversation from this message"
+                data-testid="chat-fork"
+              >
+                <GitFork className="size-3" />
+              </button>
+            </ShortcutHint>
+          )}
         </span>
       )}
       {message.role === "assistant" && (
         <TurnSteps
-          steps={turnSteps(message)}
+          steps={[
+            // Work happens before the note that reports it: each folded
+            // note follows its own steps, and this message's steps close.
+            ...(foldedWork ?? []).flatMap((folded) => [
+              ...turnSteps(folded),
+              noteStep(folded),
+            ]),
+            ...turnSteps(message),
+          ]}
+          defaultExpanded={openWork}
           resolveToolIcon={resolveToolIcon}
           onFileClick={onFileClick}
         />
@@ -706,9 +766,51 @@ function MessageImpl({
   );
 }
 
+/**
+ * Copies the reply as the agent wrote it (Markdown source): what pastes
+ * well into a document, an issue, or another chat.
+ */
+function CopyMessageButton({ content }: { content: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1500);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+  return (
+    <ShortcutHint label={copied ? "Copied" : "Copy response"}>
+      <button
+        type="button"
+        onClick={() => {
+          void navigator.clipboard
+            .writeText(content)
+            .then(() => setCopied(true));
+        }}
+        className="grid size-6 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+        aria-label="Copy response"
+        data-testid="chat-copy"
+      >
+        {/* Both glyphs stay mounted so the swap cross-fades in place. */}
+        <span className="grid place-items-center">
+          <Copy
+            className={`col-start-1 row-start-1 size-3 transition-opacity duration-150 ${copied ? "opacity-0" : "opacity-100"}`}
+          />
+          <Check
+            className={`col-start-1 row-start-1 size-3 text-success transition-opacity duration-150 ${copied ? "opacity-100" : "opacity-0"}`}
+          />
+        </span>
+      </button>
+    </ShortcutHint>
+  );
+}
+
 /** One row of a turn's expandable event log. */
 interface TurnStep {
-  kind: "command" | "file_edit" | "tool" | "subagent" | "background";
+  kind: "command" | "file_edit" | "tool" | "subagent" | "background" | "note";
+  /** A folded note's message id, so focus and deep links still find it. */
+  messageId?: string;
+  /** Notes expand to rendered Markdown instead of a preformatted payload. */
+  markdown?: boolean;
   /** Row header — the technical detail lives here, not on the live line. */
   label: string;
   /** Monospace label (commands, paths, unrecognized tool names). */
@@ -729,6 +831,7 @@ const STEP_ICONS = {
   tool: Wrench,
   subagent: Bot,
   background: Radio,
+  note: MessageSquareText,
 } as const;
 
 /**
@@ -1083,6 +1186,24 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
   return steps;
 }
 
+/** A note the agent wrote mid-turn, as a row of the turn's steps. */
+function noteStep(message: ChatTimelineMessage): TurnStep {
+  const text = message.content.trim();
+  const firstLine =
+    text
+      .split("\n")
+      .map((line) => line.replace(/^[#>*\-\s]+/, "").trim())
+      .find(Boolean) ?? "Note";
+  return {
+    kind: "note",
+    label: firstLine,
+    messageId: message.id,
+    // A one-line note is fully read from its row; nothing to expand.
+    detail: text === firstLine ? undefined : text,
+    markdown: true,
+  };
+}
+
 /**
  * The expandable event log under an assistant reply: collapsed to a muted
  * "N steps" line; expanded, each step is a row that itself stays collapsed
@@ -1091,10 +1212,12 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
  */
 function TurnSteps({
   steps,
+  defaultExpanded = false,
   resolveToolIcon,
   onFileClick,
 }: {
   steps: TurnStep[];
+  defaultExpanded?: boolean;
   resolveToolIcon?: (toolName: string) => string | undefined;
   onFileClick?: (
     path: string,
@@ -1106,10 +1229,16 @@ function TurnSteps({
     },
   ) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  useEffect(() => {
+    if (defaultExpanded) setExpanded(true);
+  }, [defaultExpanded]);
   if (steps.length === 0) return null;
   return (
-    <div className="mb-1.5" data-testid="chat-turn-steps">
+    // Steps are chrome around the conversation, not part of its text: a
+    // drag across several replies selects the prose and skips these rows.
+    // An opened payload is content again, and selectable.
+    <div className="mb-1.5 select-none" data-testid="chat-turn-steps">
       <button
         type="button"
         onClick={() => setExpanded((value) => !value)}
@@ -1174,7 +1303,12 @@ function StepRow({
   const opensFile = Boolean(step.filePath && onFileClick);
   const interactive = expandable || opensFile;
   return (
-    <div data-testid="chat-step" data-file-path={step.filePath}>
+    <div
+      data-testid="chat-step"
+      data-step-kind={step.kind}
+      data-file-path={step.filePath}
+      data-message-id={step.messageId}
+    >
       <button
         type="button"
         onClick={
@@ -1221,13 +1355,24 @@ function StepRow({
             open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
           }`}
         >
-          <div className="overflow-hidden">
-            <pre
-              className={`mb-1 ml-6 mt-0.5 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-bg-inset p-2 text-[11px] leading-4 text-fg-muted ${step.detailMono ? "font-mono" : "font-sans"}`}
-              data-testid="chat-step-detail"
-            >
-              {step.detail}
-            </pre>
+          <div className="overflow-hidden" inert={!open}>
+            {step.markdown ? (
+              <div
+                className="cat-markdown mb-1 ml-6 mt-0.5 min-w-0 select-text break-words text-xs leading-5 text-fg-muted"
+                data-testid="chat-step-detail"
+              >
+                <Markdown remarkPlugins={REMARK_PLUGINS}>
+                  {step.detail}
+                </Markdown>
+              </div>
+            ) : (
+              <pre
+                className={`mb-1 ml-6 mt-0.5 max-h-56 select-text overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-bg-inset p-2 text-[11px] leading-4 text-fg-muted ${step.detailMono ? "font-mono" : "font-sans"}`}
+                data-testid="chat-step-detail"
+              >
+                {step.detail}
+              </pre>
+            )}
           </div>
         </div>
       )}

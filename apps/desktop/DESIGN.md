@@ -855,3 +855,31 @@ More from the same day of daily use:
   tree's height) while only the children faded. Row position and tree
   height now ease over 200 ms (`packages/app/src/ui/tree.tsx`), off under
   reduced motion.
+
+### 2026-09-21: A turn is work, then an answer
+
+An agent turn reaches the chat as a run of assistant messages: a note each
+time the agent pauses between tool calls (with the steps that led to it),
+and last the answer. People asked for three "modes" of showing that. Modes
+multiply; the turn already has two phases, so there are two independent
+choices instead (Settings → Workspace → Chat dock):
+
+- **While the agent works** (`chatWorkLive`): every note, or only the
+  latest, each new note replacing the one before.
+- **Once it has answered** (`chatWorkSettled`): notes kept in place, or
+  folded into steps.
+
+The three requested behaviours are `all`+`keep` (the default, unchanged),
+`all`+`collapse`, and `latest`+`collapse`; the fourth combination comes
+free. A folded note is not a new kind of thing: it is a row of the same
+steps disclosure tool calls already use, in true order (a note follows its
+own steps), expandable to its Markdown, still addressable by message id.
+Nothing is dropped, only moved one click away. The grouping is a pure
+function (`lib/turn-groups.ts`); a failed turn's error card and the note
+before it always stay in place.
+
+Steps are chrome around the conversation, not part of its text: the steps
+block is `select-none`, so a drag across several replies selects the prose
+and skips the rows. An opened payload is content again and selectable.
+Every reply has a hover Copy beside Fork; it copies the Markdown source,
+which is what pastes well elsewhere.
