@@ -17,7 +17,7 @@ contains the framework and Work's reference applications.
 Work supports Apple silicon Macs running macOS 12 or newer. The rename ships
 with the next desktop release. Until then, existing published alpha downloads
 still carry the Catamorphic name. Find the available build at
-[work.software](https://work.software/desktop/).
+[work.software](https://work.software/).
 
 After the first Work Preview is published:
 
