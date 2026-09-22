@@ -443,6 +443,33 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-09-23: Passwords work like Chrome's
+
+Saving passwords felt broken. Any click in a form offered to save, even
+a password the site had just rejected. The offer vanished when a sign-in
+redirected to another subdomain. Sign-ins that used a plain button were
+never seen, and filling was a bar across the page. Now a sign-in is
+offered only once it lands (ADR 0151): the next page has no password
+form, or the form goes away. **Update password?** appears when a saved
+password changed, and nothing appears when it didn't. A username from an
+email-first step carries into the password step.
+
+Clicking a login field lists the saved accounts under it, like Chrome's
+autofill dropdown. It uses the menu surface and paired pop motion, and
+flips above the field when there is no room below. The page keeps focus,
+so arrows, Enter and Escape work from the field. A new-password field
+offers a strong password as soon as it takes focus; using it fills the
+confirm field too. When the form goes out, the password saves itself and
+the tab shows **Password saved** with **Update**, which opens the editor
+for the username and a note.
+
+The save, update and saved states share one card in the page's top-right
+corner, where Chrome's key bubble opens. Unlike the site dialog it is not
+centered: it answers a sign-in in progress and must not take focus from
+the page. Password dots are drawn, not typed: font bullets look like
+specks at list sizes. Passwords now have their own page, like Sites,
+where each login reveals its password and note in place. Profile
+settings counts them and links there.
 
 ### 2026-09-11: Lean agent tool surface
 

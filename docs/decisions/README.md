@@ -165,3 +165,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0148](0148-session-access-for-apps.md) | Session access for apps | Accepted |
 | [0149](0149-observed-git-overviews.md) | Observed Git overviews | Accepted |
 | [0150](0150-site-settings.md) | Site settings: one modal per site, Chrome's permission model | Accepted |
+| [0151](0151-browser-password-manager.md) | Browser password manager: offers after sign-ins that land, suggestions under the field, generated passwords that save themselves | Accepted |

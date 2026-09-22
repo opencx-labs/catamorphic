@@ -1,9 +1,8 @@
 import type { ProjectSummary } from "@catamorphic/react/types";
-import { Check, Star, Trash2 } from "lucide-react";
+import { Check, ChevronRight, KeyRound, Star, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { BrowserImport } from "../components/browser-import";
 import { Modal } from "../components/modal";
-import { PasswordManager } from "../components/password-manager";
 import { PendingButton } from "../components/pending-button";
 import {
   desktopApi,
@@ -28,12 +27,15 @@ export function ProfileSettingsScreen({
   data,
   projects,
   onClose,
+  onOpenPasswords,
 }: {
   profileId: string;
   activeProfileId: string;
   data: ProfilesData;
   projects: ProjectSummary[];
   onClose: () => void;
+  /** Opens this profile's Passwords page. */
+  onOpenPasswords?: () => void;
 }) {
   const profile = data.profiles.find((candidate) => candidate.id === profileId);
   if (!profile) {
@@ -56,6 +58,7 @@ export function ProfileSettingsScreen({
       data={data}
       projects={projects}
       onClose={onClose}
+      onOpenPasswords={onOpenPasswords}
     />
   );
 }
@@ -66,12 +69,14 @@ function ProfileSettingsForm({
   data,
   projects,
   onClose,
+  onOpenPasswords,
 }: {
   profile: Profile;
   active: boolean;
   data: ProfilesData;
   projects: ProjectSummary[];
   onClose: () => void;
+  onOpenPasswords?: () => void;
 }) {
   const [name, setName] = useState(profile.name);
   const [saving, setSaving] = useState(false);
@@ -223,7 +228,7 @@ function ProfileSettingsForm({
           </div>
         </section>
 
-        <PasswordManager profileId={profile.id} />
+        <PasswordsLink profileId={profile.id} onOpen={onOpenPasswords} />
 
         <BrowserImport key={profile.id} profileId={profile.id} />
 
@@ -293,5 +298,61 @@ function ProfileSettingsForm({
         )}
       </div>
     </div>
+  );
+}
+
+/** Passwords live on their own page; this card counts them and opens it. */
+function PasswordsLink({
+  profileId,
+  onOpen,
+}: {
+  profileId: string;
+  onOpen?: () => void;
+}) {
+  const [count, setCount] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      void desktopApi
+        .vaultList({ profileId })
+        .then((saved) => {
+          if (!cancelled) setCount(saved.length);
+        })
+        .catch(() => {
+          if (!cancelled) setCount(null);
+        });
+    load();
+    const stop = desktopApi.onVaultChanged((changed) => {
+      if (changed === profileId) load();
+    });
+    return () => {
+      cancelled = true;
+      stop();
+    };
+  }, [profileId]);
+  return (
+    <section className="mt-4 rounded-lg border border-border bg-bg-raised/30 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="flex items-center gap-2 text-sm font-semibold text-fg">
+            <KeyRound className="size-4 text-fg-muted" /> Passwords
+          </h2>
+          <p className="mt-1 text-xs leading-5 text-fg-muted">
+            {count === null
+              ? "Saved logins stay in this profile and are encrypted by your device."
+              : `${count} saved ${count === 1 ? "login" : "logins"}, encrypted by your device.`}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onOpen}
+          disabled={!onOpen}
+          data-disabled-reason="Passwords open from a workspace window"
+          className="button-secondary button-sm"
+        >
+          Open passwords <ChevronRight className="size-3.5" />
+        </button>
+      </div>
+    </section>
   );
 }

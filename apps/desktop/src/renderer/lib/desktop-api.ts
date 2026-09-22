@@ -565,24 +565,30 @@ export interface SavedCredential {
   id: string;
   origin: string;
   username: string;
+  /** Notes are revealed like passwords; listings only say one exists. */
+  hasNote: boolean;
+  updatedAt: number;
 }
 
 export interface CredentialWithSecret extends SavedCredential {
   password: string;
+  note: string;
 }
 
+/** A sign-in worked: save it, or update the saved password it changed. */
 export interface BrowserCredentialSaveOffer {
   pendingId: string;
   guestId: number;
   origin: string;
   username: string;
+  mode: "save" | "update";
 }
 
-export interface BrowserCredentialFillOffer {
+/** A generated password was saved as its form went out. */
+export interface BrowserCredentialSaved {
   guestId: number;
-  formId?: string;
   origin: string;
-  credentials: SavedCredential[];
+  credential: SavedCredential;
 }
 
 export interface BrowserSuggestions {
@@ -1263,10 +1269,16 @@ export interface CatamorphicDesktopApi {
   onBrowserCredentialSaveOffer: (
     listener: (offer: BrowserCredentialSaveOffer) => void,
   ) => () => void;
-  onBrowserCredentialFillOffer: (
-    listener: (offer: BrowserCredentialFillOffer) => void,
+  onBrowserCredentialSaved: (
+    listener: (saved: BrowserCredentialSaved) => void,
   ) => () => void;
+  /** Saves (or updates) the offered login; null when the offer lapsed. */
   browserCredentialAccept: (input: {
+    profileId: string;
+    pendingId: string;
+  }) => Promise<SavedCredential | null>;
+  /** Never offer to save on the offer's site again. */
+  browserCredentialNever: (input: {
     profileId: string;
     pendingId: string;
   }) => Promise<boolean>;
@@ -1275,9 +1287,20 @@ export interface CatamorphicDesktopApi {
     profileId: string;
     guestId: number;
     credentialId: string;
-    formId?: string;
+    fieldId?: string;
     origin: string;
   }) => Promise<"filled" | "cancelled" | "origin-changed">;
+  /** A strong password to offer in the page's new-password field. */
+  browserPasswordSuggest: (input: {
+    profileId: string;
+    guestId: number;
+  }) => Promise<{ password: string } | null>;
+  /** Fill the suggested password; it saves when the form goes out. */
+  browserPasswordUseSuggested: (input: {
+    profileId: string;
+    guestId: number;
+    fieldId?: string;
+  }) => Promise<boolean>;
 
   profilesList: () => Promise<ProfilesData>;
   profilesCreate: (name: string) => Promise<Profile>;
@@ -1305,14 +1328,25 @@ export interface CatamorphicDesktopApi {
     origin: string;
     username: string;
     password: string;
+    note?: string;
   }) => Promise<SavedCredential>;
   vaultUpdate: (input: {
     profileId: string;
     id: string;
     origin: string;
     username: string;
+    /** Omit to keep the password. */
     password?: string;
+    /** Omit to keep the note. */
+    note?: string;
   }) => Promise<SavedCredential | null>;
+  vaultGeneratePassword: () => Promise<string>;
+  /** Sites the user chose never to save passwords for. */
+  vaultNeverSaved: (input: { profileId: string }) => Promise<string[]>;
+  vaultAllowSaving: (input: {
+    profileId: string;
+    origin: string;
+  }) => Promise<void>;
   vaultRemove: (input: { profileId: string; id: string }) => Promise<void>;
   vaultCopyPassword: (input: {
     profileId: string;

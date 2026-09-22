@@ -3,7 +3,6 @@ import {
   ArrowRight,
   Columns2,
   Globe,
-  KeyRound,
   RotateCw,
   Search,
   Settings,
@@ -15,14 +14,20 @@ import { createPortal } from "react-dom";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { siteOrigin } from "../../shared/site-settings.js";
 import { AuthorizationInspector } from "../components/authorization-inspector.js";
+import { usePasswordAutofill } from "../components/password-autofill.js";
+import {
+  type PasswordDraft,
+  PasswordEditor,
+} from "../components/password-editor.js";
+import {
+  PasswordPrompt,
+  type PasswordPromptState,
+} from "../components/password-prompt.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
 import {
   type Bookmark,
   type BookmarksData,
-  type BrowserCredentialFillOffer,
-  type BrowserCredentialSaveOffer,
   desktopApi,
-  type SavedCredential,
 } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 
@@ -47,6 +52,7 @@ interface WebviewElement extends HTMLElement {
   focus: () => void;
   send: (channel: string, payload: unknown) => void;
   getWebContentsId: () => number;
+  getZoomFactor: () => number;
 }
 
 export interface BrowserCommands {
@@ -136,6 +142,7 @@ export function BrowserScreen({
   floatingDismissShortcut,
   onUnsplit,
   onOpenSiteSettings,
+  onOpenPasswords,
 }: {
   profileId: string;
   /** Null only for a temporary profile browser before its first project. */
@@ -164,6 +171,8 @@ export function BrowserScreen({
   onUnsplit?: () => void;
   /** Opens the site settings modal for the page's origin (toolbar gear). */
   onOpenSiteSettings?: (origin: string) => void;
+  /** Opens the Passwords page ("Manage passwords"). */
+  onOpenPasswords?: () => void;
   /** Hands the host a navigate(url) for "open in current tab" flows. */
   registerNavigate?: (navigate: (url: string) => void) => void;
   /** Hands the host back/forward navigation for actions and mouse buttons. */
@@ -236,12 +245,15 @@ export function BrowserScreen({
   const [inputValue, setInputValue] = useState(initialUrl);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [saveOffer, setSaveOffer] = useState<BrowserCredentialSaveOffer | null>(
+  // The password card keeps its content through the exit motion.
+  const [passwordPrompt, setPasswordPrompt] =
+    useState<PasswordPromptState | null>(null);
+  const [passwordPromptOpen, setPasswordPromptOpen] = useState(false);
+  const [passwordDraft, setPasswordDraft] = useState<PasswordDraft | null>(
     null,
   );
-  const [fillOffer, setFillOffer] = useState<BrowserCredentialFillOffer | null>(
-    null,
-  );
+  const [passwordEditorOpen, setPasswordEditorOpen] = useState(false);
+  const pageAreaRef = useRef<HTMLDivElement | null>(null);
   // Bookmarks for this project+profile, so the star reflects real state
   // (Chrome: filled = saved, click again removes) instead of firing a
   // one-way "add" that silently duplicates on every press.
@@ -436,6 +448,7 @@ export function BrowserScreen({
             onPreviewLinkRef.current?.(link.url, link.mode);
           return;
         }
+        if (autofillMessageRef.current(message.channel, message.args)) return;
         if (message.channel === "catamorphic:dismiss-floating") {
           dismissFloatingRef.current?.();
           return;
@@ -472,13 +485,10 @@ export function BrowserScreen({
         const { url } = event as unknown as { url: string };
         setPageUrl(url);
         setInputValue(url);
-        // Login submits navigate immediately — that's exactly when the
-        // save offer should show (Chrome behavior). Only drop it when
-        // the user leaves the site.
-        setSaveOffer((offer) =>
-          offer && new URL(url).origin === offer.origin ? offer : null,
-        );
-        setFillOffer(null);
+        // A save offer rides out the sign-in's redirects (a login on
+        // accounts.example.com lands on app.example.com); the user's
+        // own navigation from the address bar dismisses it.
+        closeAutofillRef.current();
         sync();
         report({ url });
         void desktopApi.browserRecordHistory({
@@ -531,21 +541,96 @@ export function BrowserScreen({
   );
 
   useEffect(() => {
-    const stopSave = desktopApi.onBrowserCredentialSaveOffer((offer) => {
-      if (webviewRef.current?.getWebContentsId() === offer.guestId) {
-        setSaveOffer(offer);
+    const ownGuest = (guestId: number) => {
+      try {
+        return webviewRef.current?.getWebContentsId() === guestId;
+      } catch {
+        return false;
       }
+    };
+    const stopOffer = desktopApi.onBrowserCredentialSaveOffer((offer) => {
+      if (!ownGuest(offer.guestId)) return;
+      setPasswordPrompt({ kind: "offer", offer });
+      setPasswordPromptOpen(true);
     });
-    const stopFill = desktopApi.onBrowserCredentialFillOffer((offer) => {
-      if (webviewRef.current?.getWebContentsId() === offer.guestId) {
-        setFillOffer(offer);
-      }
+    const stopSaved = desktopApi.onBrowserCredentialSaved((saved) => {
+      if (!ownGuest(saved.guestId)) return;
+      setPasswordPrompt({
+        kind: "saved",
+        origin: saved.origin,
+        credential: saved.credential,
+      });
+      setPasswordPromptOpen(true);
     });
     return () => {
-      stopSave();
-      stopFill();
+      stopOffer();
+      stopSaved();
     };
   }, []);
+
+  const autofill = usePasswordAutofill({
+    profileId,
+    guestRef: webviewRef,
+    containerRef: pageAreaRef,
+    faviconUrl,
+    onManage: onOpenPasswords,
+  });
+  const autofillMessageRef = useRef(autofill.handleGuestMessage);
+  autofillMessageRef.current = autofill.handleGuestMessage;
+  const closeAutofillRef = useRef(autofill.close);
+  closeAutofillRef.current = autofill.close;
+  // A hidden tab has no field on screen to suggest under.
+  useEffect(() => {
+    if (!visible) autofill.close();
+  }, [visible, autofill.close]);
+
+  const dismissPasswordPrompt = useCallback(() => {
+    setPasswordPromptOpen(false);
+    setPasswordPrompt((prompt) => {
+      if (prompt?.kind === "offer")
+        void desktopApi.browserCredentialDismiss({
+          pendingId: prompt.offer.pendingId,
+        });
+      return prompt;
+    });
+  }, []);
+
+  const savePasswordOffer = async () => {
+    if (passwordPrompt?.kind !== "offer") return;
+    await desktopApi.browserCredentialAccept({
+      profileId,
+      pendingId: passwordPrompt.offer.pendingId,
+    });
+    setPasswordPromptOpen(false);
+  };
+
+  const neverSavePasswords = () => {
+    if (passwordPrompt?.kind !== "offer") return;
+    void desktopApi.browserCredentialNever({
+      profileId,
+      pendingId: passwordPrompt.offer.pendingId,
+    });
+    setPasswordPromptOpen(false);
+  };
+
+  const updateSavedPassword = async () => {
+    if (passwordPrompt?.kind !== "saved") return;
+    const { credential } = passwordPrompt;
+    // A generated password can land on a login that already had a note;
+    // the editor must show it rather than save over it.
+    const revealed = credential.hasNote
+      ? await desktopApi.vaultReveal({ profileId, id: credential.id })
+      : null;
+    if (credential.hasNote && !revealed) return;
+    setPasswordDraft({
+      id: credential.id,
+      origin: credential.origin,
+      username: credential.username,
+      note: revealed?.note ?? "",
+    });
+    setPasswordEditorOpen(true);
+    setPasswordPromptOpen(false);
+  };
 
   const navigate = useCallback(
     (raw: string) => {
@@ -557,6 +642,8 @@ export function BrowserScreen({
       setPageUrl(url);
       setInputValue(url);
       setLoadError(null);
+      // Going somewhere else answers an open save offer with "not now".
+      dismissPasswordPrompt();
       if (firstUrl === null) {
         setFirstUrl(url);
         return;
@@ -576,7 +663,7 @@ export function BrowserScreen({
       });
       view.focus();
     },
-    [firstUrl],
+    [firstUrl, dismissPasswordPrompt],
   );
 
   const registerNavigateRef = useRef(registerNavigate);
@@ -813,36 +900,6 @@ export function BrowserScreen({
     navigate(suggestion.target);
   };
 
-  const saveCredentials = async () => {
-    if (!saveOffer) return;
-    await desktopApi.browserCredentialAccept({
-      profileId,
-      pendingId: saveOffer.pendingId,
-    });
-    setSaveOffer(null);
-  };
-
-  const dismissSaveOffer = () => {
-    if (saveOffer) {
-      void desktopApi.browserCredentialDismiss({
-        pendingId: saveOffer.pendingId,
-      });
-    }
-    setSaveOffer(null);
-  };
-
-  const fillCredential = async (credential: SavedCredential) => {
-    if (!fillOffer) return;
-    await desktopApi.browserCredentialFill({
-      profileId,
-      guestId: fillOffer.guestId,
-      credentialId: credential.id,
-      formId: fillOffer.formId,
-      origin: fillOffer.origin,
-    });
-    setFillOffer(null);
-  };
-
   const displayValue = editing
     ? inputValue
     : pageUrl.replace(/^https?:\/\/(www\.)?/, "");
@@ -1069,39 +1126,10 @@ export function BrowserScreen({
         ? toolbarActive && toolbarHost && createPortal(toolbar, toolbarHost)
         : toolbar}
 
-      {/* Password bars: offer-to-save after submit, offer-to-fill on forms. */}
-      {saveOffer && (
-        <PasswordBar
-          icon={<KeyRound className="size-3.5 text-fg-muted" />}
-          text={`Save password for ${saveOffer.username || "this site"} on ${new URL(saveOffer.origin).host}?`}
-          actions={[
-            {
-              label: "Save",
-              primary: true,
-              onClick: () => void saveCredentials(),
-            },
-            { label: "Not now", onClick: dismissSaveOffer },
-          ]}
-        />
-      )}
-      {fillOffer && !saveOffer && (
-        <PasswordBar
-          icon={<KeyRound className="size-3.5 text-fg-muted" />}
-          text="Fill saved password?"
-          actions={[
-            ...fillOffer.credentials.slice(0, 2).map((credential) => ({
-              label: credential.username || "(no username)",
-              primary: true,
-              onClick: () => void fillCredential(credential),
-            })),
-            { label: "Dismiss", onClick: () => setFillOffer(null) },
-          ]}
-        />
-      )}
-
       {/* Stay on the app background until the guest actually mounts —
           flashing white for the pre-mount frames is its own kind of jank. */}
       <div
+        ref={pageAreaRef}
         className={`relative min-h-0 flex-1 ${
           ready && firstUrl ? "bg-white" : "bg-bg"
         }`}
@@ -1162,40 +1190,28 @@ export function BrowserScreen({
             </div>
           </div>
         )}
+        {autofill.overlay}
+        {passwordPrompt && (
+          <PasswordPrompt
+            state={passwordPrompt}
+            open={passwordPromptOpen}
+            onSave={savePasswordOffer}
+            onNever={neverSavePasswords}
+            onDismiss={dismissPasswordPrompt}
+            onUpdate={() => void updateSavedPassword()}
+            onExited={() => setPasswordPrompt(null)}
+          />
+        )}
       </div>
-    </div>
-  );
-}
-
-function PasswordBar({
-  icon,
-  text,
-  actions,
-}: {
-  icon: React.ReactNode;
-  text: string;
-  actions: { label: string; primary?: boolean; onClick: () => void }[];
-}) {
-  return (
-    <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-bg-raised px-3">
-      {icon}
-      <span className="min-w-0 flex-1 truncate text-[12px] text-fg-muted">
-        {text}
-      </span>
-      {actions.map((action) => (
-        <button
-          key={action.label}
-          type="button"
-          onClick={action.onClick}
-          className={`h-6 shrink-0 cursor-pointer rounded-md px-2.5 text-[12px] font-medium transition-colors duration-150 ${
-            action.primary
-              ? "bg-accent text-accent-fg hover:opacity-90"
-              : "text-fg-muted hover:bg-bg-overlay hover:text-fg"
-          }`}
-        >
-          {action.label}
-        </button>
-      ))}
+      {passwordDraft && (
+        <PasswordEditor
+          open={passwordEditorOpen}
+          profileId={profileId}
+          draft={passwordDraft}
+          heading="Edit saved password"
+          onClose={() => setPasswordEditorOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -72,6 +72,8 @@ import {
 import { guestWindowOpenAction } from "./browser-popups.js";
 import { PasswordVault } from "./browser-vault.js";
 import type { WindowProfileRegistry } from "./index.js";
+import { LoginCapture, type LoginSubmission } from "./login-capture.js";
+import { generateStrongPassword } from "./password-generator.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
 import { DEFAULT_SIDEBAR_FILE } from "./sidebar-config.js";
@@ -337,12 +339,21 @@ export function registerBrowserSupport(
     origin: string;
     username: string;
     password: string;
+    /** "update" replaces the password of `credentialId`. */
+    mode: "save" | "update";
+    credentialId: string | null;
     expiresAt: number;
   }
 
   const pendingCredentials = new Map<string, PendingCredential>();
-  const focusedLoginForms = new Map<number, string>();
-  const pendingLifetimeMs = 2 * 60 * 1000;
+  const pendingLifetimeMs = 5 * 60 * 1000;
+  const loginCapture = new LoginCapture();
+  // The generated password last suggested to each guest, held here so
+  // the renderer only ever names it back ("use the suggestion").
+  const suggestedPasswords = new Map<
+    number,
+    { origin: string; password: string }
+  >();
 
   const httpOrigin = (raw: string): string | null => {
     try {
@@ -378,35 +389,91 @@ export function registerBrowserSupport(
     return guest;
   };
 
-  const onLoginForms = async (
+  /** A sign-in worked: offer to save it, or to update a changed password. */
+  const offerToSave = async (
+    guest: WebContents,
+    host: WebContents,
+    profileId: string,
+    submission: LoginSubmission,
+  ) => {
+    const never = await vault.neverSaved(profileId);
+    if (never.includes(submission.origin)) return;
+    const match = await vault.match(profileId, submission);
+    if (match.status === "same" || guest.isDestroyed() || host.isDestroyed())
+      return;
+    const id = randomUUID();
+    pendingCredentials.set(id, {
+      id,
+      guestId: guest.id,
+      hostId: host.id,
+      profileId,
+      origin: submission.origin,
+      username: submission.username,
+      password: submission.password,
+      mode: match.status === "changed" ? "update" : "save",
+      credentialId: match.status === "changed" ? match.id : null,
+      expiresAt: Date.now() + pendingLifetimeMs,
+    });
+    host.send("catamorphic:browser-credential-save-offer", {
+      pendingId: id,
+      guestId: guest.id,
+      origin: submission.origin,
+      username: submission.username,
+      mode: match.status === "changed" ? "update" : "save",
+    });
+    setTimeout(() => pendingCredentials.delete(id), pendingLifetimeMs).unref();
+  };
+
+  /** Generated passwords save the moment the form goes out. */
+  const saveGenerated = async (
+    guest: WebContents,
+    host: WebContents,
+    profileId: string,
+    submission: LoginSubmission,
+  ) => {
+    const credential = await vault.save(profileId, submission);
+    vaultChanged(profileId);
+    if (host.isDestroyed()) return;
+    host.send("catamorphic:browser-credential-saved", {
+      guestId: guest.id,
+      origin: submission.origin,
+      credential,
+    });
+  };
+
+  const onLoginForms = (
     event: Electron.IpcMainEvent,
-    payload: { origin?: string; forms?: Array<{ id?: string }> },
+    payload: { origin?: unknown; passwordForms?: unknown; load?: unknown },
   ) => {
     const context = guestContext(event.sender);
-    if (!context || payload.origin !== context.origin) return;
-    const credentials = await vault.list(context.profileId, context.origin);
     if (
-      credentials.length === 0 ||
-      event.sender.isDestroyed() ||
-      guestContext(event.sender)?.origin !== context.origin
-    ) {
+      !context ||
+      payload.origin !== context.origin ||
+      typeof payload.passwordForms !== "number"
+    )
       return;
-    }
-    const formId = payload.forms?.find((form) => form.id)?.id;
-    context.host.send("catamorphic:browser-credential-fill-offer", {
-      guestId: event.sender.id,
-      formId,
+    const succeeded = loginCapture.formsReported(event.sender.id, {
       origin: context.origin,
-      credentials,
+      passwordForms: payload.passwordForms,
+      load: payload.load === true,
     });
+    if (succeeded)
+      void offerToSave(
+        event.sender,
+        context.host,
+        context.profileId,
+        succeeded,
+      ).catch((error: unknown) =>
+        console.warn("[browser] Password offer failed:", error),
+      );
   };
 
   const onSubmittedCredentials = (
     event: Electron.IpcMainEvent,
     payload: {
-      origin?: string;
-      username?: string;
-      password?: string;
+      origin?: unknown;
+      username?: unknown;
+      password?: unknown;
     },
   ) => {
     const context = guestContext(event.sender);
@@ -419,40 +486,49 @@ export function registerBrowserSupport(
     ) {
       return;
     }
-    const id = randomUUID();
-    const pending: PendingCredential = {
-      id,
-      guestId: event.sender.id,
-      hostId: context.host.id,
-      profileId: context.profileId,
+    const submission = loginCapture.submit(event.sender.id, {
       origin: context.origin,
       username: payload.username,
       password: payload.password,
-      expiresAt: Date.now() + pendingLifetimeMs,
-    };
-    pendingCredentials.set(id, pending);
-    context.host.send("catamorphic:browser-credential-save-offer", {
-      pendingId: id,
-      guestId: event.sender.id,
-      origin: context.origin,
-      username: payload.username,
     });
-    setTimeout(() => pendingCredentials.delete(id), pendingLifetimeMs).unref();
+    if (submission?.generated)
+      void saveGenerated(
+        event.sender,
+        context.host,
+        context.profileId,
+        submission,
+      ).catch((error: unknown) =>
+        console.warn("[browser] Saving a generated password failed:", error),
+      );
   };
 
-  const onLoginFormFocused = (
+  const onSubmittedUsername = (
     event: Electron.IpcMainEvent,
-    payload: { origin?: string; formId?: string },
+    payload: { origin?: unknown; username?: unknown },
   ) => {
     const context = guestContext(event.sender);
     if (
       !context ||
       payload.origin !== context.origin ||
-      typeof payload.formId !== "string"
-    ) {
+      typeof payload.username !== "string"
+    )
       return;
-    }
-    focusedLoginForms.set(event.sender.id, payload.formId);
+    loginCapture.rememberUsername(
+      event.sender.id,
+      context.origin,
+      payload.username,
+    );
+  };
+
+  /** Fill a generated password and remember it for auto-save. */
+  const fillGenerated = (
+    guest: WebContents,
+    origin: string,
+    password: string,
+    fieldId?: string,
+  ) => {
+    loginCapture.markGenerated(guest.id, origin, password);
+    guest.send("catamorphic:fill-generated", { fieldId, password });
   };
 
   // --- page notifications (site settings: notifications) ---
@@ -569,7 +645,7 @@ export function registerBrowserSupport(
     "catamorphic:browser-credentials-submitted",
     onSubmittedCredentials,
   );
-  ipcMain.on("catamorphic:browser-login-form-focused", onLoginFormFocused);
+  ipcMain.on("catamorphic:browser-username-submitted", onSubmittedUsername);
 
   const broadcast = (channel: string, payload: unknown) => {
     for (const window of BrowserWindow.getAllWindows()) {
@@ -742,7 +818,9 @@ export function registerBrowserSupport(
       if (!context) return;
       void vault.list(context.profileId, context.origin).then((credentials) => {
         if (contents.isDestroyed()) return;
-        const formId = focusedLoginForms.get(contents.id);
+        const stillHere = () =>
+          !contents.isDestroyed() &&
+          httpOrigin(contents.getURL()) === context.origin;
         const template: Electron.MenuItemConstructorOptions[] = credentials.map(
           (credential) => ({
             label: credential.username || "Saved password",
@@ -750,10 +828,8 @@ export function registerBrowserSupport(
               void vault
                 .reveal(context.profileId, credential.id)
                 .then((revealed) => {
-                  if (!revealed || contents.isDestroyed()) return;
-                  if (httpOrigin(contents.getURL()) !== context.origin) return;
+                  if (!revealed || !stillHere()) return;
                   contents.send("catamorphic:fill-credentials", {
-                    formId,
                     username: revealed.username,
                     password: revealed.password,
                   });
@@ -765,17 +841,8 @@ export function registerBrowserSupport(
         template.push({
           label: "Suggest strong password",
           click: () => {
-            if (
-              contents.isDestroyed() ||
-              httpOrigin(contents.getURL()) !== context.origin
-            ) {
-              return;
-            }
-            contents.send("catamorphic:fill-credentials", {
-              formId,
-              username: "",
-              password: `${randomUUID().replaceAll("-", "")}!aA1`,
-            });
+            if (stillHere())
+              fillGenerated(contents, context.origin, generateStrongPassword());
           },
         });
         Menu.buildFromTemplate(template).popup();
@@ -785,7 +852,8 @@ export function registerBrowserSupport(
     // window it was sent to takes it back.
     const hostForWithdrawal = contents.hostWebContents;
     contents.once("destroyed", () => {
-      focusedLoginForms.delete(contents.id);
+      loginCapture.forget(contents.id);
+      suggestedPasswords.delete(contents.id);
       // Posted notifications stay in Notification Center as in Chrome; the
       // bookkeeping for them goes with the tab.
       for (const [id, entry] of guestNotifications)
@@ -1434,6 +1502,11 @@ export function registerBrowserSupport(
   );
 
   // --- passwords ---
+  const credentialInput = z.object({
+    origin: z.string().max(2048),
+    username: z.string().max(1024),
+    note: z.string().max(10_000).optional(),
+  });
   ipcMain.handle(
     "catamorphic:vault-list",
     (_event, input: { profileId: string; origin?: string }) =>
@@ -1444,45 +1517,48 @@ export function registerBrowserSupport(
     (_event, input: { profileId: string; id: string }) =>
       vault.reveal(input.profileId, input.id),
   );
-  ipcMain.handle(
-    "catamorphic:vault-update",
-    async (
-      _event,
-      input: {
-        profileId: string;
-        id: string;
-        origin: string;
-        username: string;
-        password?: string;
-      },
-    ) => {
-      const updated = await vault.update(input.profileId, input.id, {
-        origin: input.origin,
-        username: input.username,
-        password: input.password,
-      });
-      if (updated) vaultChanged(input.profileId);
-      return updated;
-    },
+  ipcMain.handle("catamorphic:vault-update", async (_event, raw: unknown) => {
+    const input = credentialInput
+      .extend({
+        profileId: z.string(),
+        id: z.string(),
+        password: z.string().min(1).max(4096).optional(),
+      })
+      .parse(raw);
+    const updated = await vault.update(input.profileId, input.id, {
+      origin: input.origin,
+      username: input.username,
+      password: input.password,
+      note: input.note,
+    });
+    if (updated) vaultChanged(input.profileId);
+    return updated;
+  });
+  ipcMain.handle("catamorphic:vault-save", async (_event, raw: unknown) => {
+    const input = credentialInput
+      .extend({ profileId: z.string(), password: z.string().min(1).max(4096) })
+      .parse(raw);
+    const saved = await vault.save(input.profileId, {
+      origin: input.origin,
+      username: input.username,
+      password: input.password,
+      note: input.note,
+    });
+    vaultChanged(input.profileId);
+    return saved;
+  });
+  ipcMain.handle("catamorphic:vault-generate-password", () =>
+    generateStrongPassword(),
   );
   ipcMain.handle(
-    "catamorphic:vault-save",
-    async (
-      _event,
-      input: {
-        profileId: string;
-        origin: string;
-        username: string;
-        password: string;
-      },
-    ) => {
-      const saved = await vault.save(input.profileId, {
-        origin: input.origin,
-        username: input.username,
-        password: input.password,
-      });
+    "catamorphic:vault-never-saved",
+    (_event, input: { profileId: string }) => vault.neverSaved(input.profileId),
+  );
+  ipcMain.handle(
+    "catamorphic:vault-allow-saving",
+    async (_event, input: { profileId: string; origin: string }) => {
+      await vault.setNeverSave(input.profileId, input.origin, false);
       vaultChanged(input.profileId);
-      return saved;
     },
   );
   ipcMain.handle(
@@ -1500,27 +1576,55 @@ export function registerBrowserSupport(
       return true;
     },
   );
+  /** A save offer the calling window may still answer, or null. */
+  const takePending = (
+    renderer: WebContents,
+    profileId: string,
+    pendingId: string,
+  ): PendingCredential | null => {
+    const pending = pendingCredentials.get(pendingId);
+    if (
+      !pending ||
+      pending.expiresAt < Date.now() ||
+      pending.profileId !== profileId ||
+      pending.hostId !== renderer.id ||
+      windows.profileFor(renderer) !== profileId
+    )
+      return null;
+    pendingCredentials.delete(pendingId);
+    return pending;
+  };
   ipcMain.handle(
     "catamorphic:browser-credential-accept",
     async (event, input: { profileId: string; pendingId: string }) => {
-      const pending = pendingCredentials.get(input.pendingId);
-      pendingCredentials.delete(input.pendingId);
-      if (
-        !pending ||
-        pending.expiresAt < Date.now() ||
-        pending.profileId !== input.profileId ||
-        pending.hostId !== event.sender.id ||
-        httpOrigin(
-          rendererOwnsGuest(
-            event.sender,
-            pending.guestId,
-            input.profileId,
-          )?.getURL() ?? "",
-        ) !== pending.origin
-      ) {
-        return false;
-      }
-      await vault.save(input.profileId, pending);
+      const pending = takePending(
+        event.sender,
+        input.profileId,
+        input.pendingId,
+      );
+      if (!pending) return null;
+      const saved =
+        pending.mode === "update" && pending.credentialId
+          ? await vault.update(input.profileId, pending.credentialId, {
+              origin: pending.origin,
+              username: pending.username,
+              password: pending.password,
+            })
+          : await vault.save(input.profileId, pending);
+      vaultChanged(input.profileId);
+      return saved;
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:browser-credential-never",
+    async (event, input: { profileId: string; pendingId: string }) => {
+      const pending = takePending(
+        event.sender,
+        input.profileId,
+        input.pendingId,
+      );
+      if (!pending) return false;
+      await vault.setNeverSave(input.profileId, pending.origin, true);
       vaultChanged(input.profileId);
       return true;
     },
@@ -1535,6 +1639,55 @@ export function registerBrowserSupport(
     },
   );
   ipcMain.handle(
+    "catamorphic:browser-password-suggest",
+    (event, input: { profileId: string; guestId: number }) => {
+      const guest = rendererOwnsGuest(
+        event.sender,
+        input.guestId,
+        input.profileId,
+      );
+      const origin = guest ? httpOrigin(guest.getURL()) : null;
+      if (!guest || !origin) return null;
+      // One suggestion per page visit, as Chrome keeps it while the
+      // field stays the same.
+      const current = suggestedPasswords.get(guest.id);
+      const password =
+        current?.origin === origin
+          ? current.password
+          : generateStrongPassword();
+      suggestedPasswords.set(guest.id, { origin, password });
+      return { password };
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:browser-password-use-suggested",
+    (
+      event,
+      input: { profileId: string; guestId: number; fieldId?: string },
+    ) => {
+      const guest = rendererOwnsGuest(
+        event.sender,
+        input.guestId,
+        input.profileId,
+      );
+      const suggestion = guest ? suggestedPasswords.get(guest.id) : undefined;
+      if (
+        !guest ||
+        !suggestion ||
+        httpOrigin(guest.getURL()) !== suggestion.origin
+      )
+        return false;
+      suggestedPasswords.delete(guest.id);
+      fillGenerated(
+        guest,
+        suggestion.origin,
+        suggestion.password,
+        input.fieldId,
+      );
+      return true;
+    },
+  );
+  ipcMain.handle(
     "catamorphic:browser-credential-fill",
     async (
       event,
@@ -1542,7 +1695,7 @@ export function registerBrowserSupport(
         profileId: string;
         guestId: number;
         credentialId: string;
-        formId?: string;
+        fieldId?: string;
         origin: string;
       },
     ) => {
@@ -1570,7 +1723,7 @@ export function registerBrowserSupport(
         return "origin-changed" as const;
       }
       guest.send("catamorphic:fill-credentials", {
-        formId: input.formId,
+        fieldId: input.fieldId,
         username: credential.username,
         password: credential.password,
       });
@@ -1999,11 +2152,11 @@ export function registerBrowserSupport(
         onSubmittedCredentials,
       );
       ipcMain.removeListener(
-        "catamorphic:browser-login-form-focused",
-        onLoginFormFocused,
+        "catamorphic:browser-username-submitted",
+        onSubmittedUsername,
       );
       pendingCredentials.clear();
-      focusedLoginForms.clear();
+      suggestedPasswords.clear();
       unsubscribeRemoved();
       history.dispose();
       vault.dispose();
