@@ -1002,7 +1002,9 @@ export function BrowserScreen({
 
       <AuthorizationInspector />
 
-      {/* Bookmark star, Chrome-style: filled means saved, click toggles. */}
+      {/* Bookmark star, Chrome-style: filled means saved, click toggles.
+          Bookmarks belong to a project; without one the star says so
+          instead of silently doing nothing. */}
       {firstUrl && (
         <ShortcutHint
           label={currentBookmark ? "Remove bookmark" : "Bookmark this page"}
@@ -1010,7 +1012,9 @@ export function BrowserScreen({
           <button
             type="button"
             onClick={toggleBookmark}
-            className={`grid size-7 shrink-0 cursor-pointer place-items-center rounded-md transition-colors duration-150 hover:bg-bg-overlay ${
+            disabled={!projectId}
+            data-disabled-reason="Open a project to keep bookmarks"
+            className={`grid size-7 shrink-0 cursor-pointer place-items-center rounded-md transition-colors duration-150 hover:bg-bg-overlay disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent ${
               currentBookmark ? "text-accent" : "text-fg-muted hover:text-fg"
             }`}
             aria-label={
