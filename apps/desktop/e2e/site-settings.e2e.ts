@@ -75,6 +75,8 @@ describe("site settings", () => {
   });
 
   it("Allow answers the page and is remembered for the site", async () => {
+    // Before any decision the page reads Chrome's "default", not "granted".
+    expect(await inGuest("Notification.permission")).toBe("default");
     await click('[data-testid="site-permission-allow"]');
     await app.waitFor(`${guest}.getTitle() === 'perm:granted'`, {
       label: "page granted",
@@ -86,6 +88,7 @@ describe("site settings", () => {
       label: "granted again",
     });
     expect(await app.eval(`!!${modal}`)).toBe(false);
+    expect(await inGuest("Notification.permission")).toBe("granted");
   });
 
   it("the toolbar gear opens the same modal laid out in full", async () => {
@@ -120,6 +123,7 @@ describe("site settings", () => {
       label: "page denied",
     });
     expect(await app.eval(`!!${modal}`)).toBe(false);
+    expect(await inGuest("Notification.permission")).toBe("denied");
   });
 
   it("Delete data clears the site's cookies", async () => {

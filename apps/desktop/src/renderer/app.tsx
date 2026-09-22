@@ -1933,6 +1933,20 @@ export function App({
     [updateWorkspace],
   );
 
+  // A clicked page notification brings its tab forward, as in Chrome.
+  const selectTabRef = useRef(selectTab);
+  selectTabRef.current = selectTab;
+  useEffect(
+    () =>
+      desktopApi.onBrowserRevealGuest((guestId) => {
+        const match = [...browserGuestIdsRef.current].find(
+          ([, id]) => id === guestId,
+        );
+        if (match) selectTabRef.current(`browser:${match[0]}`);
+      }),
+    [],
+  );
+
   // target=_blank / window.open from any page in this window → new tab.
   const openBrowserTabRef = useRef(openBrowserTab);
   openBrowserTabRef.current = openBrowserTab;

@@ -1,5 +1,6 @@
 import {
   app,
+  autoUpdater,
   BrowserWindow,
   ipcMain,
   Menu,
@@ -64,6 +65,12 @@ export class DesktopWorkspaces {
     },
   ) {
     app.on("before-quit", () => {
+      this.quitting = true;
+    });
+    // An update restart closes every window without a before-quit; the
+    // hide-on-close below would cancel it and the app would sit on
+    // "Preparing to restart" forever.
+    autoUpdater.on("before-quit-for-update", () => {
       this.quitting = true;
     });
     app.on("browser-window-focus", (_event, window) => {

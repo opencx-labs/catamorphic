@@ -15,6 +15,7 @@ import {
   UpdatePreferencesStore,
 } from "./update-preferences.js";
 import { createUpdatePreparation } from "./update-preparation.js";
+import { markUpdateRestart } from "./update-restart.js";
 import { DesktopUpdaterController } from "./updater-controller.js";
 
 const INITIAL_CHECK_DELAY_MS = 30_000;
@@ -57,6 +58,12 @@ export function registerDesktopUpdater(options: {
   ipcMain.handle("catamorphic:update-install", () => controller.install());
 
   const supported = app.isPackaged && process.platform === "darwin";
+  // The installer relaunches the app in the background; the next launch
+  // reads this marker and brings its window to the front.
+  const onBeforeQuitForUpdate = () =>
+    markUpdateRestart(app.getPath("userData"));
+  if (supported)
+    nativeUpdater.on("before-quit-for-update", onBeforeQuitForUpdate);
   const initialTimer = supported
     ? setTimeout(() => void controller.check(false), INITIAL_CHECK_DELAY_MS)
     : null;
@@ -82,6 +89,11 @@ export function registerDesktopUpdater(options: {
       if (initialTimer) clearTimeout(initialTimer);
       if (interval) clearInterval(interval);
       if (supported) powerMonitor.removeListener("resume", onResume);
+      if (supported)
+        nativeUpdater.removeListener(
+          "before-quit-for-update",
+          onBeforeQuitForUpdate,
+        );
       for (const channel of [
         "catamorphic:update-state",
         "catamorphic:update-check",

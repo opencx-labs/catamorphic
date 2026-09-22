@@ -1234,6 +1234,10 @@ export interface CatamorphicDesktopApi {
   onBrowserOpenUrl: (
     listener: (url: string, mode?: OpenMode) => void,
   ) => () => void;
+  /** A notification of a page was clicked: bring that tab forward. */
+  onBrowserRevealGuest: (
+    listener: (webContentsId: number) => void,
+  ) => () => void;
   /** Close browser tabs whose URL starts with `prefix` (OAuth callback). */
   onBrowserCloseUrl: (listener: (prefix: string) => void) => () => void;
   onBrowserFocusAddress: (

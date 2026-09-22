@@ -24,6 +24,7 @@ import { probeMcpServer } from "@catamorphic/mcp";
 import type { McpToolPolicy } from "@catamorphic/sandbox";
 import {
   app,
+  autoUpdater,
   BrowserWindow,
   dialog,
   ipcMain,
@@ -1599,6 +1600,14 @@ export function registerIpcHandlers(
   // Dev-only: lets UI automation (CDP) drive window geometry, which
   // Electron's CDP endpoint does not support (no Browser.getWindowForTarget).
   if (!app.isPackaged) {
+    // What Electron's autoUpdater.quitAndInstall does before installing:
+    // announce the update quit, then close every window. The e2e suite
+    // proves the app really exits from there (hide-on-close must yield).
+    ipcMain.handle("catamorphic:dev-update-restart", () => {
+      autoUpdater.emit("before-quit-for-update");
+      for (const window of BrowserWindow.getAllWindows()) window.close();
+      return true;
+    });
     ipcMain.handle(
       "catamorphic:dev-window",
       (

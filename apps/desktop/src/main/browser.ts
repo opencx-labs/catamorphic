@@ -9,6 +9,7 @@ import {
   dialog,
   ipcMain,
   Menu,
+  Notification,
   type Session,
   screen,
   session,
@@ -453,6 +454,108 @@ export function registerBrowserSupport(
     }
     focusedLoginForms.set(event.sender.id, payload.formId);
   };
+
+  // --- page notifications (site settings: notifications) ---
+  // Chrome shows the site under a notification's title; Electron's own
+  // presenter would show only the app. Pages therefore ask the main
+  // process (guest preload wraps `Notification`), which also makes the
+  // site's stored choice the one that counts.
+  const guestNotifications = new Map<
+    number,
+    { notification: Notification; guest: WebContents }
+  >();
+  let nextGuestNotificationId = 1;
+  const notificationPermission = (
+    guest: WebContents,
+  ): "default" | "granted" | "denied" => {
+    const context = guestContext(guest);
+    if (!context) return "denied";
+    const state = decideSitePermission(
+      siteSettings.get(context.profileId, context.origin),
+      "notifications",
+    );
+    return state.outcome === "allow"
+      ? "granted"
+      : state.outcome === "block"
+        ? "denied"
+        : "default";
+  };
+  const onGuestNotificationPermission = (event: Electron.IpcMainEvent) => {
+    event.returnValue = notificationPermission(event.sender);
+  };
+  const onGuestNotificationClose = (
+    event: Electron.IpcMainEvent,
+    id: unknown,
+  ) => {
+    const entry =
+      typeof id === "number" ? guestNotifications.get(id) : undefined;
+    if (entry && entry.guest === event.sender) entry.notification.close();
+  };
+  ipcMain.on(
+    "catamorphic:guest-notification-permission",
+    onGuestNotificationPermission,
+  );
+  ipcMain.on("catamorphic:guest-notification-close", onGuestNotificationClose);
+  ipcMain.handle(
+    "catamorphic:guest-notification-show",
+    (event, input: unknown): number | null => {
+      const guest = event.sender;
+      const context = guestContext(guest);
+      if (
+        !context ||
+        notificationPermission(guest) !== "granted" ||
+        !Notification.isSupported()
+      )
+        return null;
+      const options = z
+        .object({
+          title: z.string().max(1024),
+          body: z.string().max(4096),
+          tag: z.string().max(256),
+          silent: z.boolean(),
+        })
+        .parse(input);
+      const id = nextGuestNotificationId++;
+      const notification = new Notification({
+        title: options.title,
+        subtitle: siteHost(context.origin),
+        body: options.body,
+        silent: options.silent,
+      });
+      const guestId = guest.id;
+      const send = (type: "show" | "click" | "close" | "error") => {
+        if (!guest.isDestroyed())
+          guest.send("catamorphic:guest-notification-event", { id, type });
+      };
+      notification.on("show", () => send("show"));
+      notification.on("click", () => {
+        // Chrome brings the tab forward; the window first, then its tab.
+        const host = guest.isDestroyed() ? null : guest.hostWebContents;
+        const window = host ? BrowserWindow.fromWebContents(host) : null;
+        if (window && !window.isDestroyed()) {
+          if (window.isMinimized()) window.restore();
+          window.show();
+          window.focus();
+          host?.send("catamorphic:browser-reveal-guest", { guestId });
+        }
+        send("click");
+      });
+      notification.on("close", () => {
+        guestNotifications.delete(id);
+        send("close");
+      });
+      // macOS refuses posts from an app it has not authorized (or, in
+      // development, one that is not signed): the page gets its error.
+      notification.on("failed", (_event, error) => {
+        console.warn("[browser] Page notification failed:", error);
+        guestNotifications.delete(id);
+        send("error");
+      });
+      guestNotifications.set(id, { notification, guest });
+      notification.show();
+      return id;
+    },
+  );
 
   ipcMain.on("catamorphic:browser-login-forms", onLoginForms);
   ipcMain.on(
@@ -1862,6 +1965,18 @@ export function registerBrowserSupport(
       }
       appCommandListeners.clear();
       ipcMain.removeListener("catamorphic:browser-login-forms", onLoginForms);
+      ipcMain.removeListener(
+        "catamorphic:guest-notification-permission",
+        onGuestNotificationPermission,
+      );
+      ipcMain.removeListener(
+        "catamorphic:guest-notification-close",
+        onGuestNotificationClose,
+      );
+      ipcMain.removeHandler("catamorphic:guest-notification-show");
+      for (const { notification } of guestNotifications.values())
+        notification.close();
+      guestNotifications.clear();
       ipcMain.removeListener(
         "catamorphic:browser-credentials-submitted",
         onSubmittedCredentials,
