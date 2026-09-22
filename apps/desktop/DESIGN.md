@@ -936,3 +936,15 @@ its list. The Electron bump to 44 (Chromium 152) that came with this also
 ends Gmail's "browser no longer supported" banner: Google admits only the
 two newest Chrome majors, and the app's user agent now reads as a clean
 Chrome string (a prerelease version tail used to leak into it).
+
+**An update restart is a quit.** Restart-to-update closed every window as
+Electron asks, but a workspace window only hides on close unless a quit is
+under way, so the app never left: "Preparing to restart" stayed on screen,
+the installer never ran, and every launch downloaded the same update again.
+Electron announces `before-quit-for-update` before closing windows; that is
+now a quit for the windows too. The installer relaunches the app behind
+other windows, so the quitting instance leaves a marker and the relaunch
+brings its window to the front. Page notifications also go through the
+main process now, with the site under the title as Chrome shows it and
+the site's own notification choice deciding; a page reads the real
+default / granted / denied state instead of Electron's always-granted.

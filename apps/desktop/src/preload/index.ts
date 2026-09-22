@@ -374,6 +374,8 @@ const api = {
   browserImportPasswords: (input: { profileId: string }): Promise<unknown> =>
     invoke("catamorphic:browser-import-passwords", input),
 
+  devUpdateRestart: (): Promise<boolean> =>
+    invoke("catamorphic:dev-update-restart"),
   devWindow: (action: string, width?: number, height?: number) =>
     invoke("catamorphic:dev-window", action, width, height),
   defaultProjectsDir: (): Promise<string> =>
@@ -714,6 +716,15 @@ const api = {
     ipcRenderer.on("catamorphic:browser-open-url", handler);
     return () =>
       ipcRenderer.removeListener("catamorphic:browser-open-url", handler);
+  },
+  onBrowserRevealGuest: (
+    listener: (webContentsId: number) => void,
+  ): (() => void) => {
+    const handler = (_event: unknown, payload: { guestId: number }) =>
+      listener(payload.guestId);
+    ipcRenderer.on("catamorphic:browser-reveal-guest", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:browser-reveal-guest", handler);
   },
   onBrowserCloseUrl: (listener: (prefix: string) => void): (() => void) => {
     const handler = (_event: unknown, payload: { prefix: string }) =>

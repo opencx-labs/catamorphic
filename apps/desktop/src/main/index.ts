@@ -48,6 +48,7 @@ import {
 import { projectTelemetrySettings } from "./telemetry-settings.js";
 import { registerTerminalSupport } from "./terminal.js";
 import { windowBackgroundColor } from "./theme.js";
+import { consumeUpdateRestart } from "./update-restart.js";
 import {
   type DesktopUpdaterService,
   registerDesktopUpdater,
@@ -358,6 +359,11 @@ function createWindow(
   window.once("ready-to-show", () => {
     if (dock) window.showInactive();
     else window.show();
+    // The relaunch after an update starts behind the user's other windows.
+    if (!dock && consumeUpdateRestart(app.getPath("userData"))) {
+      app.focus({ steal: true });
+      window.focus();
+    }
     // Native window managers can ignore zoom requests before the first show.
     if (!dock && saved.maximized) window.maximize();
     // Fullscreen after show: entering it on a hidden window leaves macOS

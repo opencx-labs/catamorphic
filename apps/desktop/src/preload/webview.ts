@@ -97,6 +97,155 @@ function alignClientHintBrands(): void {
 }
 alignClientHintBrands();
 
+/**
+ * Page notifications go through the main process so macOS shows the site
+ * under the title, as Chrome does, and so the site's own notification
+ * permission (site settings) is what decides. The page keeps the standard
+ * `Notification` surface: permission reads the site's real state
+ * (default / granted / denied), requestPermission prompts through the
+ * browser, and click/show/close events reach the page. Service-worker
+ * notifications are outside this path.
+ */
+type NotificationPermissionState = "default" | "granted" | "denied";
+interface GuestNotificationEvent {
+  id: number;
+  type: "show" | "click" | "close" | "error";
+}
+const notificationListeners = new Set<
+  (event: GuestNotificationEvent) => void
+>();
+ipcRenderer.on(
+  "catamorphic:guest-notification-event",
+  (_event, payload: GuestNotificationEvent) => {
+    for (const listener of notificationListeners) listener(payload);
+  },
+);
+contextBridge.exposeInMainWorld("__workNotifications", {
+  permission: (): NotificationPermissionState =>
+    ipcRenderer.sendSync("catamorphic:guest-notification-permission"),
+  show: (input: {
+    title: string;
+    body: string;
+    tag: string;
+    silent: boolean;
+  }): Promise<number | null> =>
+    ipcRenderer.invoke("catamorphic:guest-notification-show", input),
+  close: (id: number): void => {
+    ipcRenderer.send("catamorphic:guest-notification-close", id);
+  },
+  subscribe: (listener: (event: GuestNotificationEvent) => void): void => {
+    notificationListeners.add(listener);
+  },
+});
+if (typeof contextBridge.executeInMainWorld === "function") {
+  contextBridge.executeInMainWorld({
+    func: () => {
+      interface Bridge {
+        permission: () => NotificationPermissionState;
+        show: (input: {
+          title: string;
+          body: string;
+          tag: string;
+          silent: boolean;
+        }) => Promise<number | null>;
+        close: (id: number) => void;
+        subscribe: (listener: (event: GuestNotificationEvent) => void) => void;
+      }
+      const exposed = (window as Window & { __workNotifications?: Bridge })
+        .__workNotifications;
+      const Native = window.Notification;
+      if (!exposed || !Native) return;
+      const bridge: Bridge = exposed;
+      const registry = new Map<number, WorkNotification>();
+      type Handler = ((event: Event) => void) | null;
+      class WorkNotification extends EventTarget {
+        readonly title: string;
+        readonly body: string;
+        readonly tag: string;
+        readonly icon: string;
+        readonly badge = "";
+        readonly image = "";
+        readonly dir = "auto";
+        readonly lang = "";
+        readonly data: unknown;
+        readonly silent: boolean | null;
+        readonly requireInteraction: boolean;
+        readonly timestamp = Date.now();
+        onclick: Handler = null;
+        onshow: Handler = null;
+        onclose: Handler = null;
+        onerror: Handler = null;
+        private id: number | null = null;
+        private closed = false;
+        constructor(title: string, options: NotificationOptions = {}) {
+          super();
+          this.title = String(title);
+          this.body = options.body ?? "";
+          this.tag = options.tag ?? "";
+          this.icon = options.icon ?? "";
+          this.data = options.data;
+          this.silent = options.silent ?? null;
+          this.requireInteraction = options.requireInteraction ?? false;
+          void bridge
+            .show({
+              title: this.title,
+              body: this.body,
+              tag: this.tag,
+              silent: this.silent === true,
+            })
+            .then((id) => {
+              if (id === null) {
+                this.fire("error");
+                return;
+              }
+              this.id = id;
+              registry.set(id, this);
+              // Closed before the id arrived: close it now.
+              if (this.closed) bridge.close(id);
+            });
+        }
+        fire(type: "show" | "click" | "close" | "error"): void {
+          const event = new Event(type);
+          this.dispatchEvent(event);
+          const handler = this[`on${type}` as const];
+          if (typeof handler === "function") handler.call(this, event);
+        }
+        close(): void {
+          this.closed = true;
+          if (this.id !== null) bridge.close(this.id);
+        }
+        static get permission(): NotificationPermissionState {
+          return bridge.permission();
+        }
+        static get maxActions(): number {
+          return 0;
+        }
+        static requestPermission(
+          callback?: (permission: NotificationPermissionState) => void,
+        ): Promise<NotificationPermissionState> {
+          const request = Native.requestPermission().then(() =>
+            bridge.permission(),
+          );
+          if (callback) void request.then(callback);
+          return request;
+        }
+      }
+      bridge.subscribe(({ id, type }) => {
+        const notification = registry.get(id);
+        if (!notification) return;
+        notification.fire(type);
+        if (type === "close" || type === "error") registry.delete(id);
+      });
+      Object.defineProperty(window, "Notification", {
+        value: WorkNotification,
+        configurable: true,
+        writable: true,
+      });
+    },
+    args: [],
+  });
+}
+
 // Electron's BrowserWindow `app-command` event covers browser mouse buttons
 // on Windows/Linux. macOS delivers the auxiliary buttons to the guest page,
 // so forward them to the trusted host instead of leaving them inert.
