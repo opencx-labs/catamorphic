@@ -752,6 +752,13 @@ export function watchSidebarLayerFile(
   };
 
   watchDir();
+  // macOS FSEvents occasionally drops a change to a file written right
+  // after it was created; a slow stat poll catches what the watch missed.
+  const onPoll = (current: fs.Stats, previous: fs.Stats) => {
+    if (current.mtimeMs !== previous.mtimeMs || current.size !== previous.size)
+      fire();
+  };
+  fs.watchFile(file, { interval: 2000, persistent: false }, onPoll);
   try {
     parentWatcher = fs.watch(parent, (_event, changed) => {
       if (changed !== dirName) return;
@@ -771,6 +778,7 @@ export function watchSidebarLayerFile(
   return () => {
     disposed = true;
     clearTimeout(debounce);
+    fs.unwatchFile(file, onPoll);
     dirWatcher?.close();
     parentWatcher?.close();
   };

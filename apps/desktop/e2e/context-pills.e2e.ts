@@ -740,18 +740,15 @@ describe("context pills", () => {
     await run(
       `setReactValue(composer(), 'What does this say?'); composerKey('Enter'); return true;`,
     );
+    // The reply streams in; wait for the whole sentence, not its prefix.
+    // It is rendered as markdown in the timeline, so the pill's **bold**
+    // shows as bold text; assert the visible sentence.
     await runWait(
-      `return timelineText().includes('[text-pill selection sel.md:5-5]');`,
+      `return timelineText().includes('[text-pill selection sel.md:5-5] Second paragraph with bold words.');`,
       {
         timeoutMs: 30_000,
         label: "agent echoed selection pill",
       },
-    );
-    const echoed = await run<string>(`return timelineText();`);
-    // The reply is rendered as markdown in the timeline, so the pill's
-    // **bold** shows as bold text; assert the visible sentence.
-    expect(echoed).toContain(
-      "[text-pill selection sel.md:5-5] Second paragraph with bold words.",
     );
   }, 60_000);
 

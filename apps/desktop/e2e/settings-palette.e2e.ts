@@ -27,11 +27,12 @@ const destination = async (id: string) => {
   await app.waitFor(
     `document.querySelector('[data-setting-id="${id}"]')?.dataset.settingsTarget==='true'`,
   );
-  expect(
-    await app.eval(
-      `(()=>{const row=document.querySelector('[data-setting-id="${id}"]');const root=document.querySelector('[data-settings-scroll]');const a=row.getBoundingClientRect(),b=root.getBoundingClientRect();return a.top>=b.top && a.top<b.bottom})()`,
-    ),
-  ).toBe(true);
+  // The row is scrolled into view and kept there while the content above
+  // it settles; the wait covers that beat instead of one frame.
+  await app.waitFor(
+    `(()=>{const row=document.querySelector('[data-setting-id="${id}"]');const root=document.querySelector('[data-settings-scroll]');if(!row||!root)return false;const a=row.getBoundingClientRect(),b=root.getBoundingClientRect();return a.top>=b.top && a.top<b.bottom})()`,
+    { label: `${id} row in view` },
+  );
 };
 beforeAll(async () => {
   app = await launchApp();

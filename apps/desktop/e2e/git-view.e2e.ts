@@ -226,6 +226,12 @@ it("updates visible Changes promptly after external writes, staging and removal 
     `document.querySelector('[data-testid="git-changes"]')?.textContent.includes('live-refresh.txt')`,
     { timeoutMs: 8_000 },
   );
+  // The section reveals with motion; judge focus once that has settled,
+  // not on the frame the text landed.
+  await app.waitFor(
+    `document.querySelector('[data-sidebar="left"]')?.getAnimations({ subtree: true }).every((animation) => animation.playState !== 'running')`,
+    { timeoutMs: 8_000, label: "sidebar motion settled" },
+  );
   expect(
     await app.eval("document.activeElement?.getAttribute('aria-label')"),
   ).toBe(focusedBefore);
