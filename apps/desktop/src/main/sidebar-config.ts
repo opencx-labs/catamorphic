@@ -785,8 +785,7 @@ export function watchSidebarLayerFile(
 }
 
 export class SidebarConfigStore {
-  private watcher: fs.FSWatcher | undefined;
-  private debounce: ReturnType<typeof setTimeout> | undefined;
+  private unwatch: (() => void) | undefined;
 
   constructor(readonly file: string) {}
 
@@ -834,19 +833,17 @@ export class SidebarConfigStore {
     return loadSidebarConfigFile(this.file);
   }
 
+  /** The same watch as the project layers: directory events plus a poll. */
   watch(onChange: (config: SidebarConfig) => void): void {
-    const dir = path.dirname(this.file);
-    const name = path.basename(this.file);
-    this.watcher = fs.watch(dir, (_event, changed) => {
-      if (changed !== name) return;
-      clearTimeout(this.debounce);
-      this.debounce = setTimeout(() => onChange(this.load()), 100);
-    });
+    this.unwatch?.();
+    this.unwatch = watchSidebarLayerFile(this.file, () =>
+      onChange(this.load()),
+    );
   }
 
   dispose(): void {
-    this.watcher?.close();
-    clearTimeout(this.debounce);
+    this.unwatch?.();
+    this.unwatch = undefined;
   }
 }
 
