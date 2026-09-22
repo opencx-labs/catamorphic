@@ -218,9 +218,16 @@ it("updates visible Changes promptly after external writes, staging and removal 
     `setReactValue($('select[aria-label="Changes checkout"]'), ${JSON.stringify(linked)});`,
   );
   await wait(`return !!$('[data-worktree-path]');`);
+  // Focus something the user could be using: a background refresh must
+  // not take it. (A hidden pane's input is not a fair witness; it loses
+  // focus whenever that pane becomes inert.)
+  await app.eval(
+    "document.querySelector('select[aria-label=\"Changes checkout\"]').focus(); true",
+  );
   const focusedBefore = await app.eval(
     "document.activeElement?.getAttribute('aria-label')",
   );
+  expect(focusedBefore).toBe("Changes checkout");
   await fs.writeFile(file, "External editor change\n");
   await app.waitFor(
     `document.querySelector('[data-testid="git-changes"]')?.textContent.includes('live-refresh.txt')`,
