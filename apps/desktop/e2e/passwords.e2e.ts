@@ -8,7 +8,9 @@ import { type AppHandle, launchApp } from "./harness.js";
  * saved accounts under it, a new-password field suggests a strong
  * password that saves itself when the form goes out, and the saved card's
  * Update edits the username and note. Input into the page is real
- * pointer and keyboard input: the guest ignores untrusted events.
+ * keyboard input (the guest ignores untrusted events); synthetic pointer
+ * clicks into a guest are unreliable on the native macOS runner, so the
+ * page is driven by keys and only the app's own overlays are clicked.
  */
 let app: AppHandle;
 let origin: string;
@@ -74,7 +76,7 @@ const inGuest = <T = unknown>(code: string) =>
   app.eval<T>(`${guest}.executeJavaScript(${JSON.stringify(code)}, true)`);
 const pageReady = (title: string) =>
   app.waitFor(
-    `${guest}?.getTitle?.() === ${JSON.stringify(title)} && !${guest}.isLoading()`,
+    `(() => { try { return ${guest}?.getTitle?.() === ${JSON.stringify(title)} && !${guest}.isLoading(); } catch { return false; } })()`,
     { label: `${title} loaded` },
   );
 const navigate = async (path: string, title: string) => {
@@ -92,16 +94,6 @@ async function clickAt(point: { x: number; y: number }) {
       clickCount: 1,
     });
 }
-/** A real click on an element inside the page. */
-async function clickInPage(selector: string) {
-  const inner = await inGuest<{ x: number; y: number }>(
-    `(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
-  );
-  const frame = await app.eval<{ x: number; y: number }>(
-    `(() => { const r = ${guest}.getBoundingClientRect(); return { x: r.x, y: r.y }; })()`,
-  );
-  await clickAt({ x: frame.x + inner.x, y: frame.y + inner.y });
-}
 /** A real click on an element of the app. */
 async function clickInApp(selector: string) {
   await app.waitFor(`!!document.querySelector(${JSON.stringify(selector)})`, {
@@ -112,13 +104,40 @@ async function clickInApp(selector: string) {
   );
   await clickAt(point);
 }
-/**
- * Type into a field focused by script: a click would open the saved
- * accounts over the fields below it, as it does for a person.
- */
-async function typeInPage(selector: string, text: string) {
+/** Give a page field keyboard focus (a new-password field offers here). */
+async function focusInPage(selector: string) {
   await app.eval(`${guest}.focus(); true`);
   await inGuest(`document.querySelector(${JSON.stringify(selector)}).focus()`);
+  await app.waitFor(
+    `${guest}.executeJavaScript(${JSON.stringify(`document.activeElement === document.querySelector(${JSON.stringify(selector)}) && document.hasFocus()`)})`,
+    { label: `${selector} focused` },
+  );
+}
+/**
+ * Press a key in the page until its effect shows. The native macOS runner
+ * sometimes drops the first key into a freshly launched page; a repeat
+ * of Enter or ArrowDown is harmless once the first one has landed.
+ */
+async function pressUntil(
+  key: "Enter" | "ArrowDown",
+  effect: string,
+  label: string,
+) {
+  // A guest between documents throws instead of answering; that is "not yet".
+  const settled = `Promise.resolve().then(() => ${effect}).catch(() => false)`;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await app.press(key);
+    try {
+      await app.waitFor(settled, { timeoutMs: 3_000, label });
+      return;
+    } catch {
+      // Not yet: press again.
+    }
+  }
+  await app.waitFor(settled, { label });
+}
+async function typeInPage(selector: string, text: string) {
+  await focusInPage(selector);
   await app.insertText(text);
 }
 const profileId = () =>
@@ -136,7 +155,11 @@ describe("browser passwords", () => {
     await pageReady("Sign in");
     await typeInPage("#email", "alice@example.com");
     await typeInPage("#pw", "correct horse");
-    await clickInPage("#submit");
+    await pressUntil(
+      "Enter",
+      `${guest}?.getTitle?.() === 'Welcome'`,
+      "signed in",
+    );
     await pageReady("Welcome");
     await app.waitFor(`${prompt}?.dataset.kind === 'save'`, {
       label: "save offer",
@@ -157,21 +180,23 @@ describe("browser passwords", () => {
     await navigate("/login", "Sign in");
     await typeInPage("#email", "alice@example.com");
     await typeInPage("#pw", "wrong password");
-    await clickInPage("#submit");
-    await app.waitFor(
+    await pressUntil(
+      "Enter",
       `${guest}.executeJavaScript("!!document.querySelector('#error')")`,
-      { label: "error page" },
+      "error page",
     );
     await new Promise((resolve) => setTimeout(resolve, 1_000));
     expect(await app.eval(`!!${prompt}`)).toBe(false);
   });
 
-  it("lists saved accounts under a clicked login field and fills one", async () => {
+  it("lists saved accounts under a login field and fills one", async () => {
     await navigate("/login", "Sign in");
-    await clickInPage("#email");
-    await app.waitFor(
+    // ArrowDown in the field opens the list, as a click does.
+    await focusInPage("#email");
+    await pressUntil(
+      "ArrowDown",
       `document.querySelector('[data-testid="password-suggestions"]')?.dataset.open === 'true'`,
-      { label: "suggestions open" },
+      "suggestions open",
     );
     expect(
       await app.eval(
@@ -192,7 +217,7 @@ describe("browser passwords", () => {
   it("suggests a strong password for a new account and saves it on submit", async () => {
     await navigate("/signup", "Create account");
     await typeInPage("#email", "carol@example.com");
-    await clickInPage("#pw");
+    await focusInPage("#pw");
     await app.waitFor(
       `!!document.querySelector('[data-testid="password-suggestion-generated"]')`,
       { label: "generated suggestion" },
@@ -208,10 +233,12 @@ describe("browser passwords", () => {
       )})`,
       { label: "both fields filled" },
     );
-    await clickInPage("#submit");
-    await app.waitFor(`${prompt}?.dataset.kind === 'saved'`, {
-      label: "saved card",
-    });
+    // Filling leaves focus in the password field; Enter sends the form.
+    await pressUntil(
+      "Enter",
+      `${prompt}?.dataset.kind === 'saved'`,
+      "saved card",
+    );
     expect(await app.eval(`${prompt}.textContent`)).toContain(
       "carol@example.com",
     );
