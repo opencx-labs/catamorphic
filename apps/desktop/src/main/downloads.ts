@@ -134,7 +134,12 @@ export class DownloadsStore {
 
 /** "report.pdf" → "report (1).pdf" while the name is taken, as Chrome does. */
 export function uniqueSavePath(dir: string, filename: string): string {
-  const safe = filename.replaceAll(/[\\/:\u0000]/g, "_").trim() || "download";
+  const safe =
+    filename
+      .replaceAll(/[\\/:]/g, "_")
+      .split("\0")
+      .join("_")
+      .trim() || "download";
   const extension = path.extname(safe);
   const stem = safe.slice(0, safe.length - extension.length);
   let candidate = path.join(dir, safe);

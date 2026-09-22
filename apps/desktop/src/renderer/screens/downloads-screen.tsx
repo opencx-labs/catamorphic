@@ -55,7 +55,7 @@ const MENU: readonly ContextMenuEntry[] = [
 ];
 
 /**
- * Every download of the profile (ADR 0152), newest first, by day. A row
+ * Every download of the profile (ADR 0153), newest first, by day. A row
  * opens its file in Work when Work can show it, else reveals it in the
  * file manager; the usual open gestures apply. Right-click for the rest.
  */
@@ -268,6 +268,7 @@ function DownloadRow({
     record.state === "interrupted" ||
     (record.state === "completed" && !record.exists);
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: right-click opens the row's menu; every action is also a button inside the row
     <div
       data-item-id={record.id}
       data-testid="download-row"
