@@ -166,6 +166,52 @@ it("groups worktrees and opens committed versus local diffs without crossing che
   );
 });
 
+it("brings Changes back after it hid for being empty", async () => {
+  // A checkout with a single worktree and nothing to show: the section
+  // hides (hideEmpty is the default for Changes). It used to drop its
+  // subscription with it and never return.
+  const solo = path.join(temp, "Solo");
+  await fs.mkdir(solo);
+  await nativeGit(solo, ["init", "-b", "main"]);
+  await fs.writeFile(path.join(solo, "README.md"), "Solo\n");
+  await nativeGit(solo, ["add", "."]);
+  await nativeGit(solo, [...author, "commit", "-m", "Initial"]);
+  const original = await app.eval<string>(
+    "window.catamorphicDesktop.getPrefs().then((prefs) => prefs.lastProjectId)",
+  );
+  const project = await app.eval<{ id: string }>(
+    `window.catamorphicDesktop.createProject({name:'Solo',rootPath:${JSON.stringify(solo)},importExisting:true})`,
+  );
+  await app.eval(
+    `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(project.id)}})`,
+  );
+  const widget = `document.querySelector('[data-workspace-visible="true"] [data-sidebar-widget="changes"]')`;
+  await app.waitFor(`!!${widget}`, { timeoutMs: 15_000 });
+  // The right sidebar starts collapsed; a closed sidebar observes nothing.
+  await app.waitFor(
+    `(() => { const b = [...document.querySelectorAll('[data-workspace-visible="true"] [aria-label="Expand right sidebar"]')].find((e) => !e.closest('[inert]')); if (b) b.click(); return document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]')?.getAttribute('aria-hidden') === 'false'; })()`,
+    { timeoutMs: 8_000, label: "solo project's right sidebar open" },
+  );
+  await app.waitFor(`${widget}?.hidden === true`, {
+    timeoutMs: 8_000,
+    label: "clean solo checkout hides Changes",
+  });
+  await fs.writeFile(path.join(solo, "after-commit.txt"), "Back again\n");
+  await app.waitFor(
+    `${widget}?.hidden === false && ${widget}.textContent.includes('after-commit.txt')`,
+    { timeoutMs: 8_000, label: "external write brings Changes back" },
+  );
+  await fs.rm(path.join(solo, "after-commit.txt"));
+  await app.waitFor(`${widget}?.hidden === true`, {
+    timeoutMs: 8_000,
+    label: "removing the file hides Changes again",
+  });
+  await app.eval(
+    `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(original)}})`,
+  );
+  await wait(`return !!$('[data-worktree-path]');`);
+});
+
 it("updates visible Changes promptly after external writes, staging and removal without stealing focus", async () => {
   const file = path.join(linked, "live-refresh.txt");
   await run(

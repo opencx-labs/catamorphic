@@ -98,6 +98,7 @@ export function ConfiguredSection({
   surface,
   report,
   visible,
+  observeEmpty = false,
   onCustomize,
   onSearch,
   experienceContext,
@@ -132,6 +133,9 @@ export function ConfiguredSection({
   surface: SidebarSurface;
   report: (state: SidebarContentState) => void;
   visible: boolean;
+  /** Hidden only for being empty: Changes keeps its subscription so it
+   * notices the next edit and comes back. */
+  observeEmpty?: boolean;
   onCustomize: () => void;
   onSearch: (
     request:
@@ -492,7 +496,7 @@ export function ConfiguredSection({
               <GitNav
                 searchItems={searchItems}
                 key={projectId}
-                visible={visible && expanded}
+                visible={(visible || observeEmpty) && expanded}
                 activeSessionId={surface.sessionId ?? activeChatSessionId}
                 projectId={projectId}
                 onOpenDiff={onOpenTab}

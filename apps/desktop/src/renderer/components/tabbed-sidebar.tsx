@@ -80,6 +80,8 @@ export function TabbedSidebar({
     visible: boolean,
     report: (state: SidebarContentState) => void,
     relevant: boolean,
+    /** Hidden only for being empty; see SidebarSlot. */
+    observeEmpty: boolean,
   ) => ReactNode;
 }) {
   const storageKey = `catamorphic:sidebar:${scope}:${side}`;
@@ -112,6 +114,15 @@ export function TabbedSidebar({
       );
     return state !== "unavailable" && !(hideEmpty && state === "empty");
   };
+  // A section hidden only because it is empty must keep observing, or it
+  // can never learn that it has something to show again (Changes after a
+  // commit, until the next edit). Live sources keep a root lease the same
+  // way. A tab that vanished because every section in it is empty counts
+  // as the one to observe too.
+  const sectionEmptyHidden = (section: SidebarSectionConfig) =>
+    sectionRelevant(section) &&
+    !sectionAvailable(section) &&
+    content.get(section.id) === "empty";
   const tabs = configuredTabs.filter(
     (tab) =>
       matchesSidebarSurface(tab.when, surface) &&
@@ -270,6 +281,11 @@ export function TabbedSidebar({
                   }
                   available={sectionAvailable(section)}
                   visible={open && selected === tab.id}
+                  observeEmpty={
+                    open &&
+                    (selected === tab.id || !tabs.includes(tab)) &&
+                    sectionEmptyHidden(section)
+                  }
                   report={report}
                   renderSection={renderSection}
                 />
@@ -350,6 +366,7 @@ function SidebarSlot({
   relevant,
   available,
   visible,
+  observeEmpty = false,
   report,
   renderSection,
 }: {
@@ -358,12 +375,17 @@ function SidebarSlot({
   relevant: boolean;
   available: boolean;
   visible: boolean;
+  /** Hidden only for being empty. */
+  observeEmpty?: boolean;
   report: (id: string, state: SidebarContentState) => void;
   renderSection: (
     section: SidebarSectionConfig,
     visible: boolean,
     report: (state: SidebarContentState) => void,
     relevant: boolean,
+    /** Hidden for being empty; a section whose emptiness can change
+     * behind its back (Changes) keeps observing. Apps stay idle. */
+    observeEmpty: boolean,
   ) => ReactNode;
 }) {
   const [visited, setVisited] = useState(false);
@@ -386,6 +408,7 @@ function SidebarSlot({
           visible && relevant && available,
           onState,
           relevant,
+          observeEmpty,
         )}
     </div>
   );
