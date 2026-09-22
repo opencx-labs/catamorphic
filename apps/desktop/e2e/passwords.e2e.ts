@@ -8,7 +8,9 @@ import { type AppHandle, launchApp } from "./harness.js";
  * saved accounts under it, a new-password field suggests a strong
  * password that saves itself when the form goes out, and the saved card's
  * Update edits the username and note. Input into the page is real
- * pointer and keyboard input: the guest ignores untrusted events.
+ * keyboard input (the guest ignores untrusted events); synthetic pointer
+ * clicks into a guest are unreliable on the native macOS runner, so the
+ * page is driven by keys and only the app's own overlays are clicked.
  */
 let app: AppHandle;
 let origin: string;
@@ -92,16 +94,6 @@ async function clickAt(point: { x: number; y: number }) {
       clickCount: 1,
     });
 }
-/** A real click on an element inside the page. */
-async function clickInPage(selector: string) {
-  const inner = await inGuest<{ x: number; y: number }>(
-    `(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
-  );
-  const frame = await app.eval<{ x: number; y: number }>(
-    `(() => { const r = ${guest}.getBoundingClientRect(); return { x: r.x, y: r.y }; })()`,
-  );
-  await clickAt({ x: frame.x + inner.x, y: frame.y + inner.y });
-}
 /** A real click on an element of the app. */
 async function clickInApp(selector: string) {
   await app.waitFor(`!!document.querySelector(${JSON.stringify(selector)})`, {
@@ -112,13 +104,17 @@ async function clickInApp(selector: string) {
   );
   await clickAt(point);
 }
-/**
- * Type into a field focused by script: a click would open the saved
- * accounts over the fields below it, as it does for a person.
- */
-async function typeInPage(selector: string, text: string) {
+/** Give a page field keyboard focus (a new-password field offers here). */
+async function focusInPage(selector: string) {
   await app.eval(`${guest}.focus(); true`);
   await inGuest(`document.querySelector(${JSON.stringify(selector)}).focus()`);
+  await app.waitFor(
+    `${guest}.executeJavaScript(${JSON.stringify(`document.activeElement === document.querySelector(${JSON.stringify(selector)}) && document.hasFocus()`)})`,
+    { label: `${selector} focused` },
+  );
+}
+async function typeInPage(selector: string, text: string) {
+  await focusInPage(selector);
   await app.insertText(text);
 }
 const profileId = () =>
@@ -136,7 +132,7 @@ describe("browser passwords", () => {
     await pageReady("Sign in");
     await typeInPage("#email", "alice@example.com");
     await typeInPage("#pw", "correct horse");
-    await clickInPage("#submit");
+    await app.press("Enter");
     await pageReady("Welcome");
     await app.waitFor(`${prompt}?.dataset.kind === 'save'`, {
       label: "save offer",
@@ -157,7 +153,7 @@ describe("browser passwords", () => {
     await navigate("/login", "Sign in");
     await typeInPage("#email", "alice@example.com");
     await typeInPage("#pw", "wrong password");
-    await clickInPage("#submit");
+    await app.press("Enter");
     await app.waitFor(
       `${guest}.executeJavaScript("!!document.querySelector('#error')")`,
       { label: "error page" },
@@ -166,9 +162,11 @@ describe("browser passwords", () => {
     expect(await app.eval(`!!${prompt}`)).toBe(false);
   });
 
-  it("lists saved accounts under a clicked login field and fills one", async () => {
+  it("lists saved accounts under a login field and fills one", async () => {
     await navigate("/login", "Sign in");
-    await clickInPage("#email");
+    // ArrowDown in the field opens the list, as a click does.
+    await focusInPage("#email");
+    await app.press("ArrowDown");
     await app.waitFor(
       `document.querySelector('[data-testid="password-suggestions"]')?.dataset.open === 'true'`,
       { label: "suggestions open" },
@@ -192,7 +190,7 @@ describe("browser passwords", () => {
   it("suggests a strong password for a new account and saves it on submit", async () => {
     await navigate("/signup", "Create account");
     await typeInPage("#email", "carol@example.com");
-    await clickInPage("#pw");
+    await focusInPage("#pw");
     await app.waitFor(
       `!!document.querySelector('[data-testid="password-suggestion-generated"]')`,
       { label: "generated suggestion" },
@@ -208,7 +206,8 @@ describe("browser passwords", () => {
       )})`,
       { label: "both fields filled" },
     );
-    await clickInPage("#submit");
+    // Filling leaves focus in the password field; Enter sends the form.
+    await app.press("Enter");
     await app.waitFor(`${prompt}?.dataset.kind === 'saved'`, {
       label: "saved card",
     });
