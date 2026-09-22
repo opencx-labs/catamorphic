@@ -892,3 +892,23 @@ icon, and most sites declare theirs in markup, so the guess left a globe
 that no visit ever fixed (the real icon only went to history). A page's
 reported icon now reaches bookmarks of that page (scheme, `www.`, trailing
 slash and fragment ignored), and same-site bookmarks that still have none.
+
+### 2026-09-22: A site has one dialog
+
+A page asked for the microphone and nothing happened: the browser session
+answered permission requests from a fixed list, with no prompt and no
+place to change the answer. Chrome's site settings are the model people
+know, so that is the vocabulary (ADR 0149): per site, each capability is
+Ask, Allow or Block; a page's request prompts once; Allow and Block are
+remembered, "Allow this time" and dismissing are not.
+
+There is one dialog for a site, wherever it opens from: the gear beside
+the bookmark star, the palette's "Site settings" (offered while a browser
+tab is focused), a row on the Sites page, or the page's own request. It
+is centered like every other modal here, not a bubble hanging off the
+address bar. When a request is pending the question leads and the
+permissions and site data fold below it; opened by hand, everything is
+laid out. Site data is the cookies and storage the site keeps in the
+profile, deleted behind a confirm; permissions survive a delete, as in
+Chrome. The Sites page lists every site with a choice, a visit or cookies,
+customized sites first, and its rows open the same dialog.

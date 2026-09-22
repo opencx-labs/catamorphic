@@ -602,6 +602,60 @@ const api = {
     invoke("catamorphic:webview-preload"),
   browserPrepareProfile: (profileId: string): Promise<string> =>
     invoke("catamorphic:browser-prepare-profile", profileId),
+
+  // --- site settings (ADR 0149) ---
+  siteSettingsGet: (input: { origin: string }): Promise<unknown> =>
+    invoke("catamorphic:site-settings-get", input),
+  siteSettingsSet: (input: {
+    origin: string;
+    kind: string;
+    state: string;
+  }): Promise<unknown> => invoke("catamorphic:site-settings-set", input),
+  siteSettingsReset: (input: { origin: string }): Promise<void> =>
+    invoke("catamorphic:site-settings-reset", input),
+  siteSettingsClearData: (input: { origin: string }): Promise<void> =>
+    invoke("catamorphic:site-settings-clear-data", input),
+  siteSettingsList: (): Promise<unknown> =>
+    invoke("catamorphic:site-settings-list"),
+  siteSettingsOpenSystemPrivacy: (input: { kind: string }): Promise<void> =>
+    invoke("catamorphic:site-settings-open-system-privacy", input),
+  sitePermissionAnswer: (input: {
+    id: string;
+    decision: string;
+    remember: boolean;
+  }): Promise<boolean> => invoke("catamorphic:site-permission-answer", input),
+  onSitePermissionRequest: (listener: (request: unknown) => void) => {
+    const handler = (_event: unknown, request: unknown) => listener(request);
+    ipcRenderer.on("catamorphic:site-permission-request", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:site-permission-request",
+        handler,
+      );
+  },
+  onSitePermissionWithdrawn: (
+    listener: (payload: { ids: string[] }) => void,
+  ) => {
+    const handler = (_event: unknown, payload: { ids: string[] }) =>
+      listener(payload);
+    ipcRenderer.on("catamorphic:site-permission-withdrawn", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:site-permission-withdrawn",
+        handler,
+      );
+  },
+  onSiteSettingsChanged: (
+    listener: (change: { profileId: string; origin: string | null }) => void,
+  ) => {
+    const handler = (
+      _event: unknown,
+      change: { profileId: string; origin: string | null },
+    ) => listener(change);
+    ipcRenderer.on("catamorphic:site-settings-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:site-settings-changed", handler);
+  },
   browserRecordHistory: (input: {
     profileId: string;
     url: string;

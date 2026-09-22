@@ -31,6 +31,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -61,6 +62,7 @@ import {
   sidebarSections,
   visibleSidebarConfig,
 } from "../shared/sidebar.js";
+import { siteHost, siteOrigin } from "../shared/site-settings.js";
 import {
   isBrowserFile,
   localFileUrl,
@@ -115,6 +117,7 @@ import {
 } from "./components/shortcut-hint.js";
 import type { SidebarContentState } from "./components/sidebar-contribution.js";
 import { ConfiguredSection } from "./components/sidebar-navigation.js";
+import { SiteSettingsHost } from "./components/site-settings-modal.js";
 import { TabbedSidebar } from "./components/tabbed-sidebar.js";
 import {
   type PendingToolPermission,
@@ -197,6 +200,7 @@ import { McpAppScreen } from "./screens/mcp-app-screen.js";
 import { ProfileSettingsScreen } from "./screens/profile-settings-screen.js";
 import { RunScreen } from "./screens/run-screen.js";
 import { SettingsScreen } from "./screens/settings-screen.js";
+import { SitesScreen } from "./screens/sites-screen.js";
 
 // Heavy workspace surfaces stay out of the startup parse path. They remain
 // mounted after first use so editor state and terminal sessions survive tab
@@ -3179,6 +3183,11 @@ export function App({
   const [toolPermissions, setToolPermissions] = useState<
     PendingToolPermission[]
   >([]);
+  // The site whose settings modal is open by hand (gear, palette, Sites
+  // row); page permission requests show the same modal on their own.
+  const [siteSettingsOrigin, setSiteSettingsOrigin] = useState<string | null>(
+    null,
+  );
   const setToolPermissionsRef = useRef(setToolPermissions);
   setToolPermissionsRef.current = setToolPermissions;
 
@@ -4599,6 +4608,13 @@ export function App({
   const activeBrowserTabId = focusedTabKey?.startsWith("browser:")
     ? focusedTabKey.slice("browser:".length)
     : undefined;
+  const focusedSite = useMemo(() => {
+    const browser = workspace.browsers.find(
+      (entry) => entry.localId === activeBrowserTabId,
+    );
+    const origin = browser ? siteOrigin(browser.url) : null;
+    return origin ? { origin, host: siteHost(origin) } : null;
+  }, [workspace.browsers, activeBrowserTabId]);
   const activeTerminalTabId = focusedTabKey?.startsWith("terminal:")
     ? focusedTabKey.slice("terminal:".length)
     : undefined;
@@ -4896,6 +4912,8 @@ export function App({
     onOpenUrl: openUrl,
     onOpenTab: openTab,
     onOpenSession: openSession,
+    focusedSite,
+    onOpenSiteSettings: setSiteSettingsOrigin,
     onOpenHistory: (entry: HistoryEntry, mode: CommitMode) => {
       void openHistory(entry, mode).catch((cause: unknown) =>
         setLinkError(
@@ -5297,6 +5315,10 @@ export function App({
       <ToolPermissionModal
         pending={toolPermissions[0] ?? null}
         queued={Math.max(0, toolPermissions.length - 1)}
+      />
+      <SiteSettingsHost
+        origin={siteSettingsOrigin}
+        onClose={() => setSiteSettingsOrigin(null)}
       />
       <UpdateBanner
         hasActiveWork={hasActiveWork}
@@ -5705,6 +5727,11 @@ export function App({
                         onSearch={historySearch}
                         onOpen={openHistory}
                       />
+                    ) : tab.kind === "sites" ? (
+                      <SitesScreen
+                        active={Boolean(viewSlots[tabKey(tab)])}
+                        onOpenSite={setSiteSettingsOrigin}
+                      />
                     ) : tab.kind === "usage" ? (
                       <Suspense fallback={<div className="flex-1 bg-bg" />}>
                         <UsageScreen />
@@ -5794,6 +5821,7 @@ export function App({
                       onBrowserState(browser.localId, state)
                     }
                     onPageClose={() => closeTab(browserTabKey(browser.localId))}
+                    onOpenSiteSettings={setSiteSettingsOrigin}
                     previewLinksWithAlt={prefs?.previewLinksWithAlt ?? true}
                     floatingDismissShortcut={keybindings["dismiss-floating"]}
                     onDismissFloating={
@@ -6260,6 +6288,8 @@ export function App({
             onSearch={historySearch}
             onOpen={openHistory}
           />
+        ) : activeTab?.kind === "sites" ? (
+          <SitesScreen onOpenSite={setSiteSettingsOrigin} />
         ) : activeTab?.kind === "profile-settings" && profilesData ? (
           <ProfileSettingsScreen
             profileId={activeTab.name}
@@ -6293,6 +6323,7 @@ export function App({
                     onBrowserState(browser.localId, state)
                   }
                   onPageClose={() => closeTab(browserTabKey(browser.localId))}
+                  onOpenSiteSettings={setSiteSettingsOrigin}
                   registerNavigate={(navigate) =>
                     browserNavigatorsRef.current.set(browser.localId, navigate)
                   }

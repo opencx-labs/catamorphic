@@ -10,6 +10,7 @@ import {
   Menu,
   type Session,
   session,
+  shell,
   systemPreferences,
   type WebContents,
   webContents,
@@ -24,6 +25,19 @@ import { browserImportRequestSchema } from "../shared/browser-import.js";
 import { historyVisitSchema } from "../shared/history.js";
 import { matchesShortcut } from "../shared/keybindings.js";
 import { OPEN_ACTIONS } from "../shared/open-mode.js";
+import {
+  ALWAYS_GRANTED_PERMISSIONS,
+  decideSitePermission,
+  type SiteDetails,
+  type SitePermissionKind,
+  type SiteSummary,
+  type SystemMediaAccess,
+  siteHost,
+  siteOrigin,
+  sitePermissionAnswerSchema,
+  sitePermissionKindSchema,
+  sitePermissionStateSchema,
+} from "../shared/site-settings.js";
 import type { TerminalMacro } from "../shared/terminal-macros.js";
 import { BookmarksStore } from "./bookmarks.js";
 import { HistoryStore } from "./browser-history.js";
@@ -49,6 +63,11 @@ import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
 import { DEFAULT_SIDEBAR_FILE } from "./sidebar-config.js";
 import { registerSidebarSources } from "./sidebar-source-ipc.js";
+import {
+  cookieCoversHost,
+  SitePermissionBroker,
+  SiteSettingsStore,
+} from "./site-settings.js";
 
 /**
  * Browser support for workspace tabs. Pages render in `<webview>` tags in
@@ -69,6 +88,31 @@ import { registerSidebarSources } from "./sidebar-source-ipc.js";
 // it, and a failed prepare is retried on the next call instead of being
 // permanently marked done while half-applied.
 const preparedSessions = new Map<string, Promise<void>>();
+
+/**
+ * Site permissions (ADR 0149) are decided by the store and prompt broker
+ * that `registerBrowserSupport` owns; sessions are prepared lazily and
+ * read the policy at request time, so registration order never matters.
+ */
+interface SitePermissionPolicy {
+  request: (
+    guest: WebContents,
+    profileId: string,
+    permission: string,
+    details: {
+      requestingUrl?: string;
+      securityOrigin?: string;
+      mediaTypes?: string[];
+    },
+  ) => Promise<boolean>;
+  check: (
+    profileId: string,
+    permission: string,
+    requestingOrigin: string,
+    details: { requestingUrl?: string; mediaType?: string },
+  ) => boolean;
+}
+let sitePermissionPolicy: SitePermissionPolicy | null = null;
 
 /**
  * Chrome's client-hint brand list, derived from the session UA. Google's
@@ -128,15 +172,30 @@ async function doPrepareProfileSession(
     callback({ requestHeaders: headers });
   });
 
-  // Chrome-like permission behavior without prompt UI yet: allow the
-  // low-risk requests sites commonly need, deny device-level ones.
-  ses.setPermissionRequestHandler((_wc, permission, callback) => {
-    callback(
-      ["clipboard-sanitized-write", "fullscreen", "notifications"].includes(
-        permission,
-      ),
-    );
+  // Chrome-like site permissions: the profile's stored choices answer
+  // outright; anything undecided prompts in the site settings modal.
+  ses.setPermissionRequestHandler((wc, permission, callback, details) => {
+    const policy = sitePermissionPolicy;
+    if (!policy || !wc) {
+      callback(ALWAYS_GRANTED_PERMISSIONS.has(permission));
+      return;
+    }
+    void policy
+      .request(wc, profileId, permission, details)
+      .then(callback, () => callback(false));
   });
+  // Synchronous checks (`Notification.permission`, device labels) only
+  // deny what is explicitly blocked; "ask" reads as not-denied so the
+  // request handler above gets to prompt.
+  ses.setPermissionCheckHandler(
+    (_wc, permission, requestingOrigin, details) =>
+      sitePermissionPolicy?.check(
+        profileId,
+        permission,
+        requestingOrigin,
+        details,
+      ) ?? true,
+  );
 
   // Unpacked Chrome extensions: drop a folder under the profile's
   // extensions dir and it loads on next launch (content scripts, e.g.
@@ -190,9 +249,12 @@ export function registerBrowserSupport(
   const profilesDir = path.join(userData, "profiles");
   const history = new HistoryStore(profilesDir);
   const vault = new PasswordVault(profilesDir);
+  const siteSettings = new SiteSettingsStore(profilesDir);
+  const permissionBroker = new SitePermissionBroker();
   const unsubscribeRemoved = profiles.onRemoved((profileId) => {
     history.releaseProfile(profileId);
     vault.releaseProfile(profileId);
+    siteSettings.releaseProfile(profileId);
     preparedSessions.delete(partitionFor(profileId));
   });
   const bookmarks = new BookmarksStore(path.join(userData, "bookmarks.json"));
@@ -567,8 +629,283 @@ export function registerBrowserSupport(
         Menu.buildFromTemplate(template).popup();
       });
     });
-    contents.once("destroyed", () => focusedLoginForms.delete(contents.id));
+    // A prompt for a guest that closed would ask about nothing; the
+    // window it was sent to takes it back.
+    const hostForWithdrawal = contents.hostWebContents;
+    contents.once("destroyed", () => {
+      focusedLoginForms.delete(contents.id);
+      const ids = permissionBroker.withdrawGuest(contents.id);
+      if (
+        ids.length > 0 &&
+        hostForWithdrawal &&
+        !hostForWithdrawal.isDestroyed()
+      )
+        hostForWithdrawal.send("catamorphic:site-permission-withdrawn", {
+          ids,
+        });
+    });
   });
+
+  // --- site settings (ADR 0149) ---
+  const siteSettingsChanged = (profileId: string, origin: string | null) => {
+    for (const window of windows.windowsFor(profileId)) {
+      if (!window.isDestroyed())
+        window.webContents.send("catamorphic:site-settings-changed", {
+          profileId,
+          origin,
+        });
+    }
+  };
+
+  const systemMediaAccess = (
+    kind: "camera" | "microphone",
+  ): SystemMediaAccess => {
+    if (process.platform !== "darwin") return null;
+    const status = systemPreferences.getMediaAccessStatus(kind);
+    if (status === "granted" || status === "not-determined") return status;
+    return status === "unknown" ? null : "denied";
+  };
+
+  /**
+   * macOS gates the camera and microphone per app on top of the site's
+   * choice. Prompt the OS the first time, and let the site fail cleanly
+   * (rather than hang) when the app itself has been denied.
+   */
+  const ensureSystemMediaAccess = async (
+    kinds: readonly SitePermissionKind[],
+  ): Promise<boolean> => {
+    if (process.platform !== "darwin") return true;
+    for (const kind of kinds) {
+      if (kind !== "camera" && kind !== "microphone") continue;
+      const status = systemPreferences.getMediaAccessStatus(kind);
+      if (status === "granted") continue;
+      if (status !== "not-determined") return false;
+      if (!(await systemPreferences.askForMediaAccess(kind))) return false;
+    }
+    return true;
+  };
+
+  sitePermissionPolicy = {
+    request: async (guest, profileId, permission, details) => {
+      const origin = siteOrigin(details.requestingUrl ?? guest.getURL());
+      if (!origin) return ALWAYS_GRANTED_PERMISSIONS.has(permission);
+      const decision = decideSitePermission(
+        siteSettings.get(profileId, origin),
+        permission,
+        details,
+      );
+      if (decision.outcome === "block") return false;
+      if (decision.outcome === "allow") {
+        return ensureSystemMediaAccess(
+          permission === "media"
+            ? (details.mediaTypes ?? []).flatMap((type) =>
+                type === "audio"
+                  ? ["microphone" as const]
+                  : type === "video"
+                    ? ["camera" as const]
+                    : [],
+              )
+            : [],
+        );
+      }
+      const host = guest.hostWebContents;
+      if (!host || host.isDestroyed()) return false;
+      const answer = await permissionBroker.ask(
+        { profileId, origin, guestId: guest.id, kinds: decision.kinds },
+        (request) => host.send("catamorphic:site-permission-request", request),
+      );
+      if (!answer) return false;
+      if (answer.remember) {
+        for (const kind of decision.kinds)
+          siteSettings.set(profileId, origin, kind, answer.decision);
+        siteSettingsChanged(profileId, origin);
+      }
+      if (answer.decision === "block") return false;
+      return ensureSystemMediaAccess(decision.kinds);
+    },
+    check: (profileId, permission, requestingOrigin, details) => {
+      const origin = siteOrigin(details.requestingUrl ?? requestingOrigin);
+      if (!origin) return ALWAYS_GRANTED_PERMISSIONS.has(permission);
+      return (
+        decideSitePermission(siteSettings.get(profileId, origin), permission, {
+          mediaTypes: details.mediaType ? [details.mediaType] : undefined,
+        }).outcome !== "block"
+      );
+    },
+  };
+
+  const siteCookies = async (profileId: string, host: string) => {
+    await prepareProfileSession(profilesDir, profileId);
+    const jar = session.fromPartition(partitionFor(profileId)).cookies;
+    return (await jar.get({})).filter((cookie) =>
+      cookieCoversHost(cookie.domain ?? "", host),
+    );
+  };
+
+  const siteSummary = async (
+    profileId: string,
+    origin: string,
+  ): Promise<SiteSummary> => {
+    const host = siteHost(origin);
+    const visit = history.siteVisits(profileId).get(origin);
+    return {
+      origin,
+      host,
+      permissions: siteSettings.get(profileId, origin),
+      cookies: (await siteCookies(profileId, host)).length,
+      lastVisitAt: visit?.lastVisitAt ?? null,
+      faviconUrl: visit?.faviconUrl ?? null,
+    };
+  };
+
+  const originInput = z.object({ origin: z.string().url() });
+
+  ipcMain.handle(
+    "catamorphic:site-settings-get",
+    async (event, input: unknown): Promise<SiteDetails> => {
+      const { origin } = originInput.parse(input);
+      const profileId = windows.profileFor(event.sender);
+      return {
+        ...(await siteSummary(profileId, origin)),
+        system: {
+          camera: systemMediaAccess("camera"),
+          microphone: systemMediaAccess("microphone"),
+        },
+      };
+    },
+  );
+
+  ipcMain.handle("catamorphic:site-settings-set", (event, input: unknown) => {
+    const { origin, kind, state } = z
+      .object({
+        origin: z.string().url(),
+        kind: sitePermissionKindSchema,
+        state: sitePermissionStateSchema,
+      })
+      .parse(input);
+    const profileId = windows.profileFor(event.sender);
+    const permissions = siteSettings.set(profileId, origin, kind, state);
+    siteSettingsChanged(profileId, origin);
+    return permissions;
+  });
+
+  ipcMain.handle("catamorphic:site-settings-reset", (event, input: unknown) => {
+    const { origin } = originInput.parse(input);
+    const profileId = windows.profileFor(event.sender);
+    siteSettings.reset(profileId, origin);
+    siteSettingsChanged(profileId, origin);
+  });
+
+  ipcMain.handle(
+    "catamorphic:site-settings-clear-data",
+    async (event, input: unknown) => {
+      const { origin } = originInput.parse(input);
+      const profileId = windows.profileFor(event.sender);
+      const ses = session.fromPartition(partitionFor(profileId));
+      const host = siteHost(origin);
+      // Per-origin storage first; then every cookie the site can read,
+      // which includes parent-domain cookies clearStorageData's origin
+      // filter leaves alone.
+      await ses.clearStorageData({
+        origin,
+        storages: [
+          "cookies",
+          "filesystem",
+          "indexdb",
+          "localstorage",
+          "shadercache",
+          "serviceworkers",
+          "cachestorage",
+        ],
+      });
+      for (const cookie of await siteCookies(profileId, host)) {
+        const domain = (cookie.domain ?? host).replace(/^\./, "");
+        await ses.cookies
+          .remove(
+            `${cookie.secure ? "https" : "http"}://${domain}${cookie.path ?? "/"}`,
+            cookie.name,
+          )
+          .catch(() => {});
+      }
+      await ses.cookies.flushStore();
+      await ses.clearCodeCaches({ urls: [origin] }).catch(() => {});
+      siteSettingsChanged(profileId, origin);
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:site-settings-list",
+    async (event): Promise<SiteSummary[]> => {
+      const profileId = windows.profileFor(event.sender);
+      const origins = new Set<string>(siteSettings.origins(profileId));
+      const visits = history.siteVisits(profileId);
+      for (const origin of visits.keys()) origins.add(origin);
+      await prepareProfileSession(profilesDir, profileId);
+      const cookies = await session
+        .fromPartition(partitionFor(profileId))
+        .cookies.get({});
+      const hosts = [...origins].map(siteHost);
+      for (const cookie of cookies) {
+        const domain = (cookie.domain ?? "").replace(/^\./, "");
+        if (!domain || hosts.some((host) => cookieCoversHost(domain, host)))
+          continue;
+        const origin = `${cookie.secure ? "https" : "http"}://${domain}`;
+        origins.add(origin);
+        hosts.push(domain);
+      }
+      const sites = [...origins].map((origin): SiteSummary => {
+        const host = siteHost(origin);
+        const visit = visits.get(origin);
+        return {
+          origin,
+          host,
+          permissions: siteSettings.get(profileId, origin),
+          cookies: cookies.filter((cookie) =>
+            cookieCoversHost(cookie.domain ?? "", host),
+          ).length,
+          lastVisitAt: visit?.lastVisitAt ?? null,
+          faviconUrl: visit?.faviconUrl ?? null,
+        };
+      });
+      return sites
+        .sort(
+          (a, b) =>
+            Number(Object.keys(b.permissions).length > 0) -
+              Number(Object.keys(a.permissions).length > 0) ||
+            (b.lastVisitAt ?? 0) - (a.lastVisitAt ?? 0) ||
+            b.cookies - a.cookies ||
+            a.host.localeCompare(b.host),
+        )
+        .slice(0, 500);
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:site-permission-answer",
+    (event, input: unknown) => {
+      const answer = sitePermissionAnswerSchema.parse(input);
+      // Only a window of the profile the prompt was sent to may answer it.
+      return (
+        permissionBroker.answer(answer, windows.profileFor(event.sender)) !==
+        null
+      );
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:site-settings-open-system-privacy",
+    async (_event, input: unknown) => {
+      const { kind } = z
+        .object({ kind: z.enum(["camera", "microphone"]) })
+        .parse(input);
+      if (process.platform !== "darwin") return;
+      await shell.openExternal(
+        `x-apple.systempreferences:com.apple.preference.security?Privacy_${
+          kind === "camera" ? "Camera" : "Microphone"
+        }`,
+      );
+    },
+  );
 
   ipcMain.handle(
     "catamorphic:browser-prepare-profile",
@@ -1277,6 +1614,7 @@ export function registerBrowserSupport(
       unsubscribeRemoved();
       history.dispose();
       vault.dispose();
+      sitePermissionPolicy = null;
       preparedSessions.clear();
     },
   };
