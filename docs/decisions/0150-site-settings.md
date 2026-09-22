@@ -61,11 +61,14 @@ with a choice, a visit in history, or cookies, customized sites first.
 Chromium's permission handler first (a `media` request with no media types)
 and the session's display-media handler second. The picker runs at the
 first stage: "Choose what to share", Chrome's three panes (a browser tab
-of this window, an application window, an entire screen), tab audio as an
-option, one Share button. Cancel denies the permission, so the page sees
+of this window, an application window, an entire screen), one Share
+button. Audio is not asked: at that stage Chromium has not said whether
+the page wants audio, so a shared tab carries its audio exactly when the
+page asked for it (Chrome's default state). Cancel denies the permission, so the page sees
 `NotAllowedError` exactly as in Chrome; a pick is stashed for the second
 stage, which hands it over. Tabs are shared by their main frame (audio
-too, with local echo kept on), windows and screens by capturer id. Tabs
+too when requested, with local echo kept on), windows and screens by
+capturer id. Tabs
 list instantly; windows and screens arrive in a second pass because macOS
 can take seconds to answer. When the capturer lists no screens (stale or
 missing Screen Recording access on macOS), the displays are listed by id

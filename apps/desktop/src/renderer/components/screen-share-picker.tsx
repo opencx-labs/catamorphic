@@ -16,7 +16,7 @@ import { SiteFavicon } from "./site-favicon.js";
 
 /**
  * Chrome's "Choose what to share" for a page's `getDisplayMedia` call
- * (ADR 0149): one of this window's tabs, an application window, or an
+ * (ADR 0150): one of this window's tabs, an application window, or an
  * entire screen. Tab sharing can carry the tab's audio. Cancel, Escape or
  * a closed tab refuse the request; the page sees NotAllowedError.
  */
@@ -84,8 +84,6 @@ function ScreenSharePicker({
   const [error, setError] = useState<string | null>(null);
   const [kind, setKind] = useState<ScreenShareKind>("tab");
   const [selected, setSelected] = useState<ScreenShareSource | null>(null);
-  const [audio, setAudio] = useState(request.audioRequested);
-  const [nonce, setNonce] = useState(0);
   const [loadingCapture, setLoadingCapture] = useState(true);
 
   // Tabs are instant; windows and screens can take the OS a few seconds
@@ -125,14 +123,12 @@ function ScreenSharePicker({
     return () => {
       cancelled = true;
     };
-  }, [nonce, request.guestId]);
+  }, [request.guestId]);
 
-  // Thumbnails age; a pane switch is a natural moment to refresh them.
   const switchKind = (next: ScreenShareKind) => {
     if (next === kind) return;
     setKind(next);
     setSelected(null);
-    setNonce((value) => value + 1);
   };
 
   const list = useMemo<ScreenShareSource[]>(() => {
@@ -146,12 +142,7 @@ function ScreenSharePicker({
   const screenDenied = sources?.system === "denied";
   const share = () => {
     if (!selected) return;
-    onAnswer({
-      id: selected.id,
-      kind: selected.kind,
-      name: selected.name,
-      audio: selected.kind === "tab" && audio,
-    });
+    onAnswer({ id: selected.id, kind: selected.kind, name: selected.name });
   };
 
   return (
@@ -203,7 +194,7 @@ function ScreenSharePicker({
 
       <div className="mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <AnimatedHeight>
-          <div key={`${kind}:${nonce}`} className="animate-fade-in">
+          <div key={kind} className="animate-fade-in">
             {screenDenied && kind !== "tab" && (
               <p className="mb-3 rounded-md border border-warning/30 bg-warning/8 px-3 py-2 text-[12px] leading-4 text-warning">
                 Work has no Screen Recording access on this Mac, so windows and
@@ -271,16 +262,9 @@ function ScreenSharePicker({
 
       <div className="mt-4 flex items-center gap-3">
         {kind === "tab" && (
-          <label className="flex cursor-pointer items-center gap-2 text-[12px] text-fg-muted">
-            <input
-              type="checkbox"
-              checked={audio}
-              onChange={(event) => setAudio(event.target.checked)}
-              className="accent-accent"
-              data-testid="screen-share-audio"
-            />
-            Also share tab audio
-          </label>
+          <p className="text-[12px] text-fg-muted">
+            A shared tab brings its audio along when the site asks for it.
+          </p>
         )}
         <div className="ml-auto flex items-center gap-2">
           <button

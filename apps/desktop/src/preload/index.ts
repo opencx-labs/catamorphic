@@ -608,7 +608,7 @@ const api = {
   browserPrepareProfile: (profileId: string): Promise<string> =>
     invoke("catamorphic:browser-prepare-profile", profileId),
 
-  // --- site settings (ADR 0149) ---
+  // --- site settings (ADR 0150) ---
   siteSettingsGet: (input: { origin: string }): Promise<unknown> =>
     invoke("catamorphic:site-settings-get", input),
   siteSettingsSet: (input: {

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Screen sharing (ADR 0149): a page's `getDisplayMedia` call opens the
+ * Screen sharing (ADR 0150): a page's `getDisplayMedia` call opens the
  * app's own picker, Chrome-style, with three kinds of source: one of this
  * window's browser tabs, an application window, or an entire screen.
  */
@@ -13,8 +13,6 @@ export interface ScreenShareRequest {
   /** The requesting guest's webContents id (the tab asking to share). */
   guestId: number;
   origin: string;
-  /** The page asked for audio too (tab audio is the only kind we can give). */
-  audioRequested: boolean;
 }
 
 export interface ScreenShareSource {
@@ -41,12 +39,16 @@ export interface ScreenShareSources {
   system: SystemScreenAccess;
 }
 
+/**
+ * What was picked. Audio is not a choice here: Chromium asks the
+ * permission handler (where the picker runs) before it says whether the
+ * page wants audio, so a shared tab carries its audio exactly when the
+ * page asked for it, which is Chrome's default as well.
+ */
 export const screenShareChoiceSchema = z.object({
   id: z.string().min(1),
   kind: z.enum(["tab", "window", "screen"]),
   name: z.string().max(4096),
-  /** Share the tab's audio along with its picture. */
-  audio: z.boolean(),
 });
 export type ScreenShareChoice = z.infer<typeof screenShareChoiceSchema>;
 

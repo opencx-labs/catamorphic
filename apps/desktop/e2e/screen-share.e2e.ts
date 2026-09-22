@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp } from "./harness.js";
 
 /**
- * Screen sharing (ADR 0149): a page's getDisplayMedia opens the app's
+ * Screen sharing (ADR 0150): a page's getDisplayMedia opens the app's
  * picker; a screen, a window, or one of the window's tabs can be shared,
  * tab audio rides along when asked for, and cancelling refuses the
  * request the way Chrome does (NotAllowedError).
@@ -109,11 +109,6 @@ describe("screen sharing", () => {
       `!!document.querySelector('[data-testid="screen-share-tabs"] [data-testid="screen-share-source"]')`,
       { label: "tab row" },
     );
-    expect(
-      await app.eval(
-        `document.querySelector('[data-testid="screen-share-audio"]').checked`,
-      ),
-    ).toBe(true);
     await click(
       '[data-testid="screen-share-tabs"] [data-testid="screen-share-source"]',
     );

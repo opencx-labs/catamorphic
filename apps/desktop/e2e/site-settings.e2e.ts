@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp } from "./harness.js";
 
 /**
- * Site settings (ADR 0149): a page's permission request opens the site
+ * Site settings (ADR 0150): a page's permission request opens the site
  * settings modal centered with the question first; Allow is remembered
  * for the site; the toolbar gear reopens the same modal with everything
  * laid out; the Sites page lists the site; Delete data clears its cookies.

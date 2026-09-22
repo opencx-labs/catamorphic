@@ -103,7 +103,7 @@ import {
 const preparedSessions = new Map<string, Promise<void>>();
 
 /**
- * Site permissions (ADR 0149) are decided by the store and prompt broker
+ * Site permissions (ADR 0150) are decided by the store and prompt broker
  * that `registerBrowserSupport` owns; sessions are prepared lazily and
  * read the policy at request time, so registration order never matters.
  */
@@ -691,7 +691,7 @@ export function registerBrowserSupport(
     });
   });
 
-  // --- site settings (ADR 0149) ---
+  // --- site settings (ADR 0150) ---
   const siteSettingsChanged = (profileId: string, origin: string | null) => {
     for (const window of windows.windowsFor(profileId)) {
       if (!window.isDestroyed())
@@ -747,12 +747,7 @@ export function registerBrowserSupport(
     const { guest, host } = input;
     const answer = await screenShareBroker.ask(
       input.profileId,
-      {
-        id: randomUUID(),
-        guestId: guest.id,
-        origin: input.origin,
-        audioRequested: true,
-      },
+      { id: randomUUID(), guestId: guest.id, origin: input.origin },
       (prompt) => host.send("catamorphic:screen-share-request", prompt),
     );
     const choice = answer?.choice;
@@ -763,12 +758,7 @@ export function registerBrowserSupport(
       // Only a tab of the same window: the picker listed exactly those.
       if (!tab || tab.isDestroyed() || tab.hostWebContents !== host)
         return null;
-      return {
-        video: tab.mainFrame,
-        ...(choice.audio
-          ? { audio: tab.mainFrame, enableLocalEcho: true }
-          : {}),
-      };
+      return { video: tab.mainFrame };
     }
     return { video: { id: choice.id, name: choice.name } };
   };
@@ -838,8 +828,7 @@ export function registerBrowserSupport(
       const origin = siteOrigin(request.securityOrigin);
       const host = guest?.hostWebContents;
       if (
-        !guest ||
-        guest.getType() !== "webview" ||
+        guest?.getType() !== "webview" ||
         !origin ||
         !host ||
         host.isDestroyed() ||
@@ -858,8 +847,15 @@ export function registerBrowserSupport(
           callback({});
           return;
         }
-        // Audio the page did not ask for would fail the request.
-        callback(request.audioRequested ? streams : { video: streams.video });
+        // A shared tab carries its audio when the page asked for audio
+        // (Chrome's default); windows and screens have none to give.
+        const frame =
+          streams.video && !("id" in streams.video) ? streams.video : null;
+        callback(
+          request.audioRequested && frame
+            ? { video: frame, audio: frame, enableLocalEcho: true }
+            : { video: streams.video },
+        );
       };
       if (stashed) {
         deliver(stashed);
@@ -888,6 +884,7 @@ export function registerBrowserSupport(
       const wanted = new Set(kinds ?? ["tab", "window", "screen"]);
       const thumbnailSize = { width: 360, height: 225 };
       const profileId = windows.profileFor(event.sender);
+      const visits = wanted.has("tab") ? history.siteVisits(profileId) : null;
       const tabs = wanted.has("tab")
         ? await Promise.all(
             webContents
@@ -915,9 +912,7 @@ export function registerBrowserSupport(
                   kind: "tab",
                   name: contents.getTitle() || url,
                   thumbnail,
-                  icon:
-                    history.siteVisits(profileId).get(siteOrigin(url) ?? "")
-                      ?.faviconUrl ?? null,
+                  icon: visits?.get(siteOrigin(url) ?? "")?.faviconUrl ?? null,
                   url,
                   current: contents.id === guestId,
                 };

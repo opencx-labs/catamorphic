@@ -927,8 +927,9 @@ customized sites first, and its rows open the same dialog.
 
 **Sharing a screen has a picker, not a prompt.** `getDisplayMedia` used to
 fail outright. Now it opens "Choose what to share", Chrome's three panes
-(this window's tabs, windows, entire screen) with tab audio as a checkbox,
-in the same centered modal frame as everything else. Cancel refuses the
+(this window's tabs, windows, entire screen) in the same centered modal
+frame as everything else; a shared tab brings its audio when the site asks
+for it. Cancel refuses the
 request the way Chrome does. Tabs list at once; windows and screens follow
 when the OS answers, and screens are still offered when macOS withholds
 its list. The Electron bump to 44 (Chromium 152) that came with this also

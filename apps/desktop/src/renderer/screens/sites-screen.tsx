@@ -28,7 +28,7 @@ function visitLabel(time: number | null): string {
 }
 
 /**
- * Every site this profile has settings or data for (ADR 0149): sites with
+ * Every site this profile has settings or data for (ADR 0150): sites with
  * a custom permission first, then by last visit. A row opens the same
  * site settings modal the toolbar gear does.
  */

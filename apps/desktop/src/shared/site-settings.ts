@@ -2,7 +2,7 @@ import { z } from "zod";
 
 /**
  * Per-site permissions and data, Chrome's "site settings" vocabulary
- * mapped onto Electron's session permission handlers (ADR 0149).
+ * mapped onto Electron's session permission handlers (ADR 0150).
  *
  * A site is an origin (`https://chatgpt.com`). Each permission kind is one
  * of three states: `ask` (the site prompts, the default for anything that
@@ -115,11 +115,6 @@ export const sitePermissionKindSchema = z.enum(SITE_PERMISSION_KINDS);
 export type SitePermissions = Partial<
   Record<SitePermissionKind, SitePermissionState>
 >;
-export const sitePermissionsSchema = z.record(
-  sitePermissionKindSchema,
-  sitePermissionStateSchema,
-);
-
 /** Stored data keeps what it can: unknown kinds and states are dropped. */
 export function sanitizePermissions(value: unknown): SitePermissions {
   const out: SitePermissions = {};

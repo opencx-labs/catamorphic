@@ -11,7 +11,7 @@ import {
 } from "../shared/site-settings.js";
 
 /**
- * Per-profile site permissions (ADR 0149): `profiles/<id>/site-settings.json`
+ * Per-profile site permissions (ADR 0150): `profiles/<id>/site-settings.json`
  * maps an origin to the choices the user made for it. Everything at its
  * default is absent, so the file lists exactly what the user decided.
  */

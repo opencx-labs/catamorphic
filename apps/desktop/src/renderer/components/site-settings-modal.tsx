@@ -33,7 +33,7 @@ import { ShortcutHint } from "./shortcut-hint.js";
 import { SiteFavicon } from "./site-favicon.js";
 
 /**
- * One modal for everything about a site (ADR 0149): what it may use, what
+ * One modal for everything about a site (ADR 0150): what it may use, what
  * it stored, and the prompt when a page asks for something new. Opened by
  * the toolbar gear, the palette, a Sites row, or a page's request. With a
  * request pending the question leads and the rest folds away; opened by
