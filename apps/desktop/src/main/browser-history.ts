@@ -9,6 +9,7 @@ import {
   historyIdentity,
   isHistoryUrl,
 } from "../shared/history.js";
+import { siteOrigin } from "../shared/site-settings.js";
 import type { ImportedHistoryEntry } from "./browser-import/types.js";
 
 export interface HistorySuggestion {
@@ -249,6 +250,28 @@ export class HistoryStore {
         .sort((a, b) => b.entry.visitCount - a.entry.visitCount)[0]?.bare ??
       null
     );
+  }
+  /** Latest visit and icon per site origin (Sites page, site settings). */
+  siteVisits(
+    profileId: string,
+  ): Map<string, { lastVisitAt: number; faviconUrl: string | null }> {
+    const sites = new Map<
+      string,
+      { lastVisitAt: number; faviconUrl: string | null }
+    >();
+    for (const entry of this.web(profileId)) {
+      const origin = siteOrigin(entry.url);
+      if (!origin) continue;
+      const current = sites.get(origin);
+      if (!current || entry.lastVisitAt > current.lastVisitAt)
+        sites.set(origin, {
+          lastVisitAt: entry.lastVisitAt,
+          faviconUrl: entry.faviconUrl ?? current?.faviconUrl ?? null,
+        });
+      else if (!current.faviconUrl && entry.faviconUrl)
+        current.faviconUrl = entry.faviconUrl;
+    }
+    return sites;
   }
   releaseProfile(profileId: string): void {
     clearTimeout(this.writes.get(profileId));

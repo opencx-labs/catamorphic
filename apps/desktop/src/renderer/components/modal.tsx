@@ -32,6 +32,14 @@ export function Modal({
         : null;
     panelRef.current?.focus({ preventScroll: true });
     const onKeyDown = (event: KeyboardEvent) => {
+      // A dialog stacked on top of this one (a confirm inside a settings
+      // modal) owns the keys; only the topmost open dialog reacts.
+      const dialogs = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          '[role="dialog"][aria-modal="true"]',
+        ),
+      ).filter((element) => !element.closest("[inert]"));
+      if (dialogs.at(-1) !== panelRef.current) return;
       // The app-styled select owns Escape/Tab while its top-layer picker is
       // open. Dismiss that picker before dismissing or cycling this dialog.
       if (

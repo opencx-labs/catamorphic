@@ -96,10 +96,14 @@ if (app.commandLine.hasSwitch("remote-debugging-port")) {
 // consistently Chrome. There is no "register as a browser with Google"
 // path; identical-engine browsers get blocked by name (Vivaldi proved
 // it by misspelling theirs), so shipping Chrome's identity IS the fix.
+// Whole tokens: a prerelease version ("0.1.0-alpha.8") left "-alpha.8"
+// dangling in the UA, which is not a Chrome UA any more. Chromium also
+// drops the spaces from the app name ("Work Development/1.2.3" is
+// "WorkDevelopment/1.2.3" in the token).
 app.userAgentFallback = app.userAgentFallback
-  .replace(/ Electron\/[\d.]+/, "")
-  .replace(new RegExp(` ${app.name}/[\\d.]+`), "")
-  .replace(/ catamorphic-desktop\/[\d.]+/, "");
+  .replace(/ Electron\/\S+/, "")
+  .replace(new RegExp(` ${app.name.replaceAll(" ", "")}/\\S+`), "")
+  .replace(/ catamorphic-desktop\/\S+/, "");
 
 // E2E runs point userData at a throwaway dir so tests never touch real
 // settings/projects/DB, and may run beside a normally-running app.

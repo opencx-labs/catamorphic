@@ -164,3 +164,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0147](0147-uniform-sidebar-sections.md) | Uniform sidebar sections: one status language and one drag-and-drop model | Accepted |
 | [0148](0148-session-access-for-apps.md) | Session access for apps | Accepted |
 | [0149](0149-observed-git-overviews.md) | Observed Git overviews | Accepted |
+| [0150](0150-site-settings.md) | Site settings: one modal per site, Chrome's permission model | Accepted |

@@ -15,6 +15,18 @@ import { WorkspaceRoot } from "./workspace-root.js";
 import "./styles.css";
 import "./lib/dev-performance.js";
 
+// Electron 43.6–44.4.3 throws from a <webview>'s own disconnectedCallback
+// whenever a loaded guest is removed (electron/electron#53989, fixed by
+// #54089, not yet in a release). The removal still completes; only the
+// uncaught report is noise. Drop this with the Electron bump that has it.
+window.addEventListener(
+  "error",
+  (event) => {
+    if (/Invalid guestInstanceId/.test(event.message)) event.preventDefault();
+  },
+  { capture: true },
+);
+
 const detachedWindow =
   new URLSearchParams(location.search).get("surface") === "dock";
 document.documentElement.dataset.surface = detachedWindow

@@ -6,12 +6,14 @@ import {
   KeyRound,
   RotateCw,
   Search,
+  Settings,
   Star,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { OpenMode } from "../../shared/open-mode.js";
+import { siteOrigin } from "../../shared/site-settings.js";
 import { AuthorizationInspector } from "../components/authorization-inspector.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
 import {
@@ -133,6 +135,7 @@ export function BrowserScreen({
   onDismissFloating,
   floatingDismissShortcut,
   onUnsplit,
+  onOpenSiteSettings,
 }: {
   profileId: string;
   /** Null only for a temporary profile browser before its first project. */
@@ -159,6 +162,8 @@ export function BrowserScreen({
   onPageClose?: () => void;
   /** Set while this tab sits in a split: return it to a full-width tab. */
   onUnsplit?: () => void;
+  /** Opens the site settings modal for the page's origin (toolbar gear). */
+  onOpenSiteSettings?: (origin: string) => void;
   /** Hands the host a navigate(url) for "open in current tab" flows. */
   registerNavigate?: (navigate: (url: string) => void) => void;
   /** Hands the host back/forward navigation for actions and mouse buttons. */
@@ -926,6 +931,8 @@ export function BrowserScreen({
     </>
   );
 
+  const currentSite = siteOrigin(pageUrl);
+
   const toolbar = (
     <div
       data-browser-toolbar
@@ -995,7 +1002,9 @@ export function BrowserScreen({
 
       <AuthorizationInspector />
 
-      {/* Bookmark star, Chrome-style: filled means saved, click toggles. */}
+      {/* Bookmark star, Chrome-style: filled means saved, click toggles.
+          Bookmarks belong to a project; without one the star says so
+          instead of silently doing nothing. */}
       {firstUrl && (
         <ShortcutHint
           label={currentBookmark ? "Remove bookmark" : "Bookmark this page"}
@@ -1003,7 +1012,9 @@ export function BrowserScreen({
           <button
             type="button"
             onClick={toggleBookmark}
-            className={`grid size-7 shrink-0 cursor-pointer place-items-center rounded-md transition-colors duration-150 hover:bg-bg-overlay ${
+            disabled={!projectId}
+            data-disabled-reason="Open a project to keep bookmarks"
+            className={`grid size-7 shrink-0 cursor-pointer place-items-center rounded-md transition-colors duration-150 hover:bg-bg-overlay disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent ${
               currentBookmark ? "text-accent" : "text-fg-muted hover:text-fg"
             }`}
             aria-label={
@@ -1016,6 +1027,20 @@ export function BrowserScreen({
                 currentBookmark ? "scale-110 fill-current" : "scale-100"
               }`}
             />
+          </button>
+        </ShortcutHint>
+      )}
+      {/* Site settings gear: permissions and data for this page's site. */}
+      {onOpenSiteSettings && currentSite && (
+        <ShortcutHint label="Site settings">
+          <button
+            type="button"
+            onClick={() => onOpenSiteSettings(currentSite)}
+            className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+            aria-label="Site settings"
+            data-testid="site-settings-button"
+          >
+            <Settings className="size-3.5" />
           </button>
         </ShortcutHint>
       )}

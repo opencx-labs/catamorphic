@@ -37,6 +37,7 @@ import {
   Send,
   Settings2,
   Settings as SettingsIcon,
+  SlidersHorizontal,
   Smartphone,
   Sparkles,
   SquareTerminal,
@@ -573,6 +574,8 @@ export function CommandPalette({
   pickerRequest,
   searchRequest,
   onOpenHistory,
+  focusedSite = null,
+  onOpenSiteSettings,
   incognitoAllowed = true,
 }: {
   variant: "overlay" | "tab";
@@ -653,6 +656,9 @@ export function CommandPalette({
   pickerRequest?: { kind: PaletteInPicker; nonce: string } | null;
   searchRequest?: PaletteSearchRequest | null;
   onOpenHistory: (entry: HistoryEntry, mode: CommitMode) => void;
+  /** The site of the focused browser tab; its settings command leads. */
+  focusedSite?: { origin: string; host: string } | null;
+  onOpenSiteSettings?: (origin: string) => void;
   /** Project policy (ADR 0062): hide the incognito command when false. */
   incognitoAllowed?: boolean;
 }) {
@@ -1360,6 +1366,41 @@ export function CommandPalette({
       })),
     [historyResults.entries, bookmarks],
   );
+  const sitePageItems = useMemo<PaletteItem[]>(() => {
+    const items: PaletteItem[] = [];
+    if (focusedSite && onOpenSiteSettings) {
+      const { origin, host } = focusedSite;
+      items.push({
+        id: "site-settings",
+        icon: Settings2,
+        label: "Site settings",
+        detail: host,
+        keywords: [
+          "site",
+          "permissions",
+          "camera",
+          "microphone",
+          "location",
+          "notifications",
+          "cookies",
+          host,
+        ],
+        kind: "action",
+        run: () => onOpenSiteSettings(origin),
+      });
+    }
+    items.push({
+      id: "open-sites",
+      icon: SlidersHorizontal,
+      label: "Sites",
+      detail: "Permissions and data per site",
+      keywords: ["sites", "permissions", "cookies", "site settings", "data"],
+      kind: "navigate",
+      run: (mode) =>
+        onOpenTab({ kind: "sites", name: "sites", label: "Sites" }, mode),
+    });
+    return items;
+  }, [focusedSite, onOpenSiteSettings, onOpenTab]);
   const historyPageItem = useMemo<PaletteItem>(
     () => ({
       id: "open-history",
@@ -1416,6 +1457,7 @@ export function CommandPalette({
         ...sidebarItems,
         ...historyItems,
         historyPageItem,
+        ...sitePageItems,
         ...settingItems,
       ]),
     [
@@ -1427,6 +1469,7 @@ export function CommandPalette({
       sidebarItems,
       historyItems,
       historyPageItem,
+      sitePageItems,
       settingItems,
     ],
   );
@@ -1966,12 +2009,15 @@ export function CommandPalette({
     if (!trimmed) {
       return [
         ...startingActionItems,
+        // A focused site's settings lead its zero state, like chat commands.
+        ...sitePageItems.filter((item) => item.id === "site-settings"),
         ...actionItems,
         ...skillItems,
         ...projectItems,
         ...profileItems,
         ...sidebarItems,
         historyPageItem,
+        ...sitePageItems.filter((item) => item.id !== "site-settings"),
         ...historyItems.slice(0, 8),
       ];
     }
@@ -2038,6 +2084,7 @@ export function CommandPalette({
     sidebarItems,
     historyItems,
     historyPageItem,
+    sitePageItems,
     historyResults.error,
     historyResults.loading,
     historyResults.refresh,

@@ -44,6 +44,12 @@ import type {
   PrDetails,
 } from "../../shared/pr-details.js";
 import type {
+  ScreenShareAnswer,
+  ScreenShareKind,
+  ScreenShareRequest,
+  ScreenShareSources,
+} from "../../shared/screen-share.js";
+import type {
   SettingsPatch,
   SettingsScope,
   SettingsSnapshot,
@@ -52,6 +58,15 @@ import type {
   SidebarSourceItem,
   SidebarSourceRequest,
 } from "../../shared/sidebar-source.js";
+import type {
+  SiteDetails,
+  SitePermissionAnswer,
+  SitePermissionKind,
+  SitePermissionRequest,
+  SitePermissionState,
+  SitePermissions,
+  SiteSummary,
+} from "../../shared/site-settings.js";
 import type { TerminalAppearanceResult } from "../../shared/terminal-appearance.js";
 import type { ThemeFonts } from "../../shared/theme-fonts.js";
 import type { DesktopUpdateState } from "../../shared/update.js";
@@ -1164,6 +1179,39 @@ export interface CatamorphicDesktopApi {
 
   webviewPreloadPath: () => Promise<string>;
   browserPrepareProfile: (profileId: string) => Promise<string>;
+  siteSettingsGet: (input: { origin: string }) => Promise<SiteDetails>;
+  siteSettingsSet: (input: {
+    origin: string;
+    kind: SitePermissionKind;
+    state: SitePermissionState;
+  }) => Promise<SitePermissions>;
+  siteSettingsReset: (input: { origin: string }) => Promise<void>;
+  siteSettingsClearData: (input: { origin: string }) => Promise<void>;
+  siteSettingsList: () => Promise<SiteSummary[]>;
+  siteSettingsOpenSystemPrivacy: (input: {
+    kind: "camera" | "microphone" | "screen";
+  }) => Promise<void>;
+  screenShareSources: (input: {
+    guestId?: number;
+    kinds?: ScreenShareKind[];
+  }) => Promise<ScreenShareSources>;
+  screenShareAnswer: (answer: ScreenShareAnswer) => Promise<boolean>;
+  onScreenShareRequest: (
+    listener: (request: ScreenShareRequest) => void,
+  ) => () => void;
+  onScreenShareWithdrawn: (
+    listener: (payload: { ids: string[] }) => void,
+  ) => () => void;
+  sitePermissionAnswer: (answer: SitePermissionAnswer) => Promise<boolean>;
+  onSitePermissionRequest: (
+    listener: (request: SitePermissionRequest) => void,
+  ) => () => void;
+  onSitePermissionWithdrawn: (
+    listener: (payload: { ids: string[] }) => void,
+  ) => () => void;
+  onSiteSettingsChanged: (
+    listener: (change: { profileId: string; origin: string | null }) => void,
+  ) => () => void;
   browserRecordHistory: (input: {
     profileId: string;
     url: string;

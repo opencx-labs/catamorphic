@@ -902,5 +902,37 @@ existing rows and disclosure state. Linux watches only the directories Git
 reports on, never ignored trees; a cooldown after each scan keeps continuous
 agent edits from scanning more than about a fifth of the time. A Changes
 section hidden for being empty keeps observing, so the next edit brings it
-back (it used to drop its subscription with the section and stay gone). See [ADR 0149](../../docs/decisions/0149-observed-git-overviews.md)
+back (it used to drop its subscription with the section and stay gone). See [ADR 0150](../../docs/decisions/0149-observed-git-overviews.md)
 and the [measurement report](docs/performance.md#changes-subscriptions).
+
+### 2026-09-22: A site has one dialog
+
+A page asked for the microphone and nothing happened: the browser session
+answered permission requests from a fixed list, with no prompt and no
+place to change the answer. Chrome's site settings are the model people
+know, so that is the vocabulary (ADR 0150): per site, each capability is
+Ask, Allow or Block; a page's request prompts once; Allow and Block are
+remembered, "Allow this time" and dismissing are not.
+
+There is one dialog for a site, wherever it opens from: the gear beside
+the bookmark star, the palette's "Site settings" (offered while a browser
+tab is focused), a row on the Sites page, or the page's own request. It
+is centered like every other modal here, not a bubble hanging off the
+address bar. When a request is pending the question leads and the
+permissions and site data fold below it; opened by hand, everything is
+laid out. Site data is the cookies and storage the site keeps in the
+profile, deleted behind a confirm; permissions survive a delete, as in
+Chrome. The Sites page lists every site with a choice, a visit or cookies,
+customized sites first, and its rows open the same dialog.
+
+**Sharing a screen has a picker, not a prompt.** `getDisplayMedia` used to
+fail outright. Now it opens "Choose what to share", Chrome's three panes
+(this window's tabs, windows, entire screen) in the same centered modal
+frame as everything else; a shared tab brings its audio when the site asks
+for it. Cancel refuses the
+request the way Chrome does. Tabs list at once; windows and screens follow
+when the OS answers, and screens are still offered when macOS withholds
+its list. The Electron bump to 44 (Chromium 152) that came with this also
+ends Gmail's "browser no longer supported" banner: Google admits only the
+two newest Chrome majors, and the app's user agent now reads as a clean
+Chrome string (a prerelease version tail used to leak into it).
