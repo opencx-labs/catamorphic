@@ -97,3 +97,86 @@ before adding a worker or a more complex index.
 
 `renderer/lib/palette-search.test.ts` covers bounded large-index results and long
 input. Preserve the prepared-index boundary and result cap when adding providers.
+
+## Changes subscriptions
+
+[ADR 0149](../../../docs/decisions/0149-observed-git-overviews.md) replaces the
+Changes section's 15-second polling with scoped main-process subscriptions.
+Native filesystem events invalidate Git snapshots; Git remains authoritative.
+Notifications coalesce for 200 ms with a 1-second maximum wait. A two-minute
+reconciliation repairs missed events and replaced directories. Hidden windows
+and collapsed sections release their subscription; returning refreshes immediately.
+Identical consumers share watches, snapshots and in-flight reads. Committed diffs
+are cached by HEAD and base commit IDs for the subscription's lifetime.
+
+### Before/after measurement, 2026-09-18
+
+Measured on an Apple M3 Pro, macOS 26.5.2, against main
+`3485e4d86f369f1808ede1fff1968578532304f1`. The synthetic repository contained
+21,001 tracked files and 10,000 ignored files, with one selected checkout. Both
+implementations used the same fixture and Git subprocess backend. Initial warm
+status reads took 130 to 164 ms. These are backend measurements, not complete
+Electron process-tree CPU or keystroke-to-paint timings.
+
+| Measurement | 15-second polling | Observed snapshots |
+| --- | ---: | ---: |
+| Status scans during 60 seconds of idle, after initialization | 3 | 0 |
+| Process and child CPU over startup, idle and one edit | 1.70 s | 0.98 s |
+| Edit 1 second after initial snapshot | 14,348 ms | 439 ms |
+| Edit 7.5 seconds after initial snapshot | 7,818 ms | 556 ms |
+| Edit 14 seconds after initial snapshot | 1,194 ms | 495 ms |
+
+The CPU samples include startup and the final edit, so they do not establish an
+app-wide percentage improvement. The short idle window ends before the new
+two-minute reconciliation. Native watcher overhead and resource limits depend
+on the OS and repository size; on macOS and Windows ignored output
+notifications are filtered after delivery, not excluded from the OS watch (see
+the Linux section below). This is not an overnight soak.
+
+Reproduce with `bun apps/desktop/scripts/git-overview-benchmark.mjs <fixture>
+<poll|watch> [idle-seconds] [edit-delay-ms]`. The script requires a disposable
+Git fixture and refuses one containing its reserved probe file. It creates only
+that file, then removes it. Run each mode on the same clean synthetic repository;
+use `/usr/bin/time -l` on macOS for process-plus-child CPU. `poll` isolates the old
+15-second schedule using the current reader; for a historical whole-backend
+comparison, set `GIT_OVERVIEW_BASELINE` to an extracted pre-change `git-view.ts`
+module whose package imports resolve in the worktree. The numbers above used
+the historical reader.
+
+### Linux watch budget and sustained writes, 2026-09-22
+
+Measured on the rebased branch (main `ab14403f`), same M3 Pro. The synthetic
+fixture was rebuilt to the same shape (21,002 tracked, 10,000 ignored); the
+table above reproduced within noise (idle scans 0; edit latency 467 / 499 /
+545 ms against 14,769 / 8,311 / 1,767 ms polling; process-plus-child CPU
+0.85 s against 2.0 s).
+
+Linux, in the `node:24.13.0-bookworm-slim` image with this monorepo mounted
+(27,675 directories, 209 holding tracked files):
+
+| Watch strategy | inotify watches | Setup |
+| --- | ---: | ---: |
+| Node recursive `fs.watch` on the checkout | 282,264 | 34.9 s |
+| Walked watch over non-ignored directories | 209 | 32 ms |
+
+The image's `max_user_watches` was 1,048,576; older distributions default to
+8,192, where the recursive strategy fails outright and the monitor would fall
+back to two-minute reconciliation. The walked strategy is used on Linux only.
+
+Sustained writes, an atomic save every 250 ms for 30 s (120 saves) with the
+subscription live:
+
+| | Scans | Scans per minute |
+| --- | ---: | ---: |
+| Debounce only | 119 | 238 |
+| Debounce plus post-scan cooldown | 40 | 80 |
+| 15-second polling, for reference | 2 | 4 |
+
+Each scan of this fixture takes about 150 ms, so the cooldown holds scanning
+near a fifth of wall time while an agent edits continuously, and only while a
+Changes section is visible. Idle and single-edit behaviour is unchanged.
+
+Tests cover external atomic saves, index changes, renames, deletes, commits,
+linked checkouts and shared refs, ignored output with tracked exceptions, burst
+coalescing, shared ownership, teardown races and fallback recovery. The Electron
+Changes suite verifies visible writes/staging/removal without moving input focus.

@@ -29,10 +29,8 @@ import { SidebarTree } from "./sidebar-tree.js";
 import type { WorkspaceTab } from "./workspace-tabs.js";
 
 /** Per-checkout changes, with separate index, working-file and committed comparisons.
- * Refresh on focus, Git mutations and a bounded poll; preserve each disclosure's state.
+ * Subscribe only while visible; main coalesces filesystem changes and reconciles Git.
  */
-
-const REFRESH_MS = 15_000;
 
 /** A/M/D/R in the status colors — the classic dev-tool shorthand. */
 const KIND_BADGES: Record<
@@ -116,6 +114,13 @@ export function GitNav({
     );
   }, [projectId, scope, followedSession]);
   const [overview, setOverview] = useState<GitOverview | null>(null);
+  // Another project or checkout starts from nothing; collapsing and
+  // re-expanding keeps the last overview on screen while it resubscribes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new scope must not display the previous checkout.
+  useEffect(() => {
+    setOverview(null);
+    setError(null);
+  }, [projectId, scope, followedSession]);
   const [owners, setOwners] = useState<SessionCheckoutInfo[]>([]);
   useEffect(() => {
     if (!visible) return;
@@ -136,85 +141,51 @@ export function GitNav({
   const [fetching, setFetching] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
   useSidebarRefresh(() => setRefreshVersion((value) => value + 1));
-  // Only another project starts from nothing. Collapsing and re-expanding
-  // keeps the last overview on screen while a fresh read runs behind it.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the project id is the reset key, not a value the effect reads.
-  useEffect(() => {
-    setOverview(null);
-    setError(null);
-  }, [projectId]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: explicit section refresh restarts its scoped read.
   useEffect(() => {
     if (!visible) return;
-    let cancelled = false;
-    let running = false;
-    let queued = false;
-    let timer: number | undefined;
-    let delay = REFRESH_MS;
-    const load = async () => {
-      if (running) {
-        queued = true;
-        return;
-      }
-      running = true;
+    let stop: (() => void) | undefined;
+    let active = true;
+    const connect = () => {
+      stop?.();
+      stop = undefined;
+      if (document.visibilityState === "hidden") return;
+      // Refreshing until the subscription's first snapshot lands (a shared
+      // scope answers at once; a new one after its read).
       setFetching(true);
-      window.clearTimeout(timer);
-      const started = performance.now();
-      try {
-        const next = await readOverview();
-        if (!cancelled) {
+      stop = desktopApi.watchGitOverview(
+        {
+          projectId,
+          paths:
+            scope === "follow" ? undefined : scope === "all" ? "all" : [scope],
+          sessionId: scope === "follow" ? followedSession : undefined,
+        },
+        (next) => {
+          if (!active) return;
+          setFetching(false);
           setOverview(next);
-          setError(null);
-          delay = Math.max(
-            REFRESH_MS,
-            Math.min(120_000, (performance.now() - started) * 20),
-          );
-        }
-      } catch (reason) {
-        delay = Math.min(120_000, delay * 2);
-        if (!cancelled)
-          setError(
-            reason instanceof Error
-              ? reason.message
-              : "Could not read Git changes.",
-          );
-      } finally {
-        running = false;
-        if (!cancelled) setFetching(false);
-        if (queued && !cancelled) {
-          queued = false;
-          void load();
-        } else if (!cancelled) {
-          timer = window.setTimeout(() => {
-            if (document.visibilityState !== "hidden" && document.hasFocus())
-              void load();
-          }, delay);
-        }
-      }
+          setError(next.error ?? null);
+        },
+      );
     };
-    void load();
-    const focus = () => {
-      if (document.visibilityState !== "hidden") void load();
-    };
-    window.addEventListener("focus", focus);
-    document.addEventListener("visibilitychange", focus);
+    // Keep the last snapshot on focus/refresh: no empty flash or lost disclosures.
+    connect();
+    window.addEventListener("focus", connect);
+    document.addEventListener("visibilitychange", connect);
     const unsubscribe = desktopApi.onGitChanged((change) => {
-      if (
-        change.projectId === projectId &&
-        document.visibilityState !== "hidden"
-      )
-        void load();
+      if (change.projectId === projectId) connect();
     });
     return () => {
-      cancelled = true;
-      // A read cut short by hiding the section is no longer in flight.
+      active = false;
+      stop?.();
+      // A subscription cut short by hiding the section is no longer pending.
       setFetching(false);
-      window.clearTimeout(timer);
-      window.removeEventListener("focus", focus);
-      document.removeEventListener("visibilitychange", focus);
+      window.removeEventListener("focus", connect);
+      document.removeEventListener("visibilitychange", connect);
       unsubscribe();
     };
-  }, [projectId, readOverview, visible, refreshVersion]);
+  }, [projectId, scope, followedSession, visible, refreshVersion]);
+
   if (searchItems)
     searchItems.current = async () => {
       const snapshot = await readOverview();

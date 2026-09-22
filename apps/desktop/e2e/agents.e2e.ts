@@ -1082,8 +1082,11 @@ describe("agents and profiles", () => {
       return true;
     `);
     await runWait(
+      // The user prompt also contains chip-two. Wait for the completed tool
+      // result before the next scenario extracts its terminalId.
       `return $$('[role="log"] article')
-        .some((el) => el.textContent.includes('chip-two'));`,
+        .some((el) => el.textContent.includes('chip-two') &&
+                      el.textContent.includes('terminal result'));`,
       { timeoutMs: 30_000, label: "second run returned output" },
     );
     await runWait(

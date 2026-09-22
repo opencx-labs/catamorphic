@@ -62,6 +62,68 @@ it("reports an empty section as invisible even when another section keeps its ta
   }
 });
 
+it("asks a section hidden for being empty to keep observing", async () => {
+  const seen: Array<{ visible: boolean; observeEmpty: boolean }> = [];
+  function Empty({
+    visible,
+    observeEmpty,
+    report,
+  }: {
+    visible: boolean;
+    observeEmpty: boolean;
+    report: (state: SidebarContentState) => void;
+  }) {
+    useEffect(() => report("empty"), [report]);
+    seen.push({ visible, observeEmpty });
+    return null;
+  }
+  Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+  const node = document.createElement("div");
+  document.body.append(node);
+  const root = createRoot(node);
+  try {
+    await act(async () =>
+      root.render(
+        <TabbedSidebar
+          side="right"
+          scope="observe-test"
+          open
+          tabs={[
+            {
+              id: "shared",
+              title: "Shared",
+              sections: [
+                { id: "changes", type: "git", hideEmpty: true },
+                { id: "other", type: "custom" },
+              ],
+            },
+          ]}
+          onCustomize={() => {}}
+          renderSection={(section, visible, report, _relevant, observeEmpty) =>
+            section.id === "changes" ? (
+              <Empty
+                visible={visible}
+                observeEmpty={observeEmpty}
+                report={report}
+              />
+            ) : (
+              <span>Other section</span>
+            )
+          }
+        />,
+      ),
+    );
+    // Hidden as empty, yet still asked to observe; never both at once.
+    expect(seen.at(-1)).toEqual({ visible: false, observeEmpty: true });
+    expect(seen.every((entry) => !(entry.visible && entry.observeEmpty))).toBe(
+      true,
+    );
+  } finally {
+    await act(async () => root.unmount());
+    node.remove();
+  }
+});
+
 function Probe({
   state,
   report,
