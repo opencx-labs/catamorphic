@@ -129,8 +129,9 @@ Electron process-tree CPU or keystroke-to-paint timings.
 The CPU samples include startup and the final edit, so they do not establish an
 app-wide percentage improvement. The short idle window ends before the new
 two-minute reconciliation. Native watcher overhead and resource limits depend
-on the OS and repository size; ignored output notifications are filtered after
-delivery, not excluded from the OS watch. This is not an overnight soak.
+on the OS and repository size; on macOS and Windows ignored output
+notifications are filtered after delivery, not excluded from the OS watch (see
+the Linux section below). This is not an overnight soak.
 
 Reproduce with `bun apps/desktop/scripts/git-overview-benchmark.mjs <fixture>
 <poll|watch> [idle-seconds] [edit-delay-ms]`. The script requires a disposable
@@ -141,6 +142,39 @@ use `/usr/bin/time -l` on macOS for process-plus-child CPU. `poll` isolates the 
 comparison, set `GIT_OVERVIEW_BASELINE` to an extracted pre-change `git-view.ts`
 module whose package imports resolve in the worktree. The numbers above used
 the historical reader.
+
+### Linux watch budget and sustained writes, 2026-09-22
+
+Measured on the rebased branch (main `ab14403f`), same M3 Pro. The synthetic
+fixture was rebuilt to the same shape (21,002 tracked, 10,000 ignored); the
+table above reproduced within noise (idle scans 0; edit latency 467 / 499 /
+545 ms against 14,769 / 8,311 / 1,767 ms polling; process-plus-child CPU
+0.85 s against 2.0 s).
+
+Linux, in the `node:24.13.0-bookworm-slim` image with this monorepo mounted
+(27,675 directories, 209 holding tracked files):
+
+| Watch strategy | inotify watches | Setup |
+| --- | ---: | ---: |
+| Node recursive `fs.watch` on the checkout | 282,264 | 34.9 s |
+| Walked watch over non-ignored directories | 209 | 32 ms |
+
+The image's `max_user_watches` was 1,048,576; older distributions default to
+8,192, where the recursive strategy fails outright and the monitor would fall
+back to two-minute reconciliation. The walked strategy is used on Linux only.
+
+Sustained writes, an atomic save every 250 ms for 30 s (120 saves) with the
+subscription live:
+
+| | Scans | Scans per minute |
+| --- | ---: | ---: |
+| Debounce only | 119 | 238 |
+| Debounce plus post-scan cooldown | 40 | 80 |
+| 15-second polling, for reference | 2 | 4 |
+
+Each scan of this fixture takes about 150 ms, so the cooldown holds scanning
+near a fifth of wall time while an agent edits continuously, and only while a
+Changes section is visible. Idle and single-edit behaviour is unchanged.
 
 Tests cover external atomic saves, index changes, renames, deletes, commits,
 linked checkouts and shared refs, ignored output with tracked exceptions, burst

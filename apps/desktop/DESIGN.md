@@ -898,5 +898,9 @@ slash and fragment ignored), and same-site bookmarks that still have none.
 The Changes section subscribes to the checkout being viewed. Native file events
 trigger debounced Git reads, with a slow reconciliation for missed events. Hidden
 consumers release their watches; returning refreshes immediately. Refresh retains
-existing rows and disclosure state. See [ADR 0149](../../docs/decisions/0149-observed-git-overviews.md)
+existing rows and disclosure state. Linux watches only the directories Git
+reports on, never ignored trees; a cooldown after each scan keeps continuous
+agent edits from scanning more than about a fifth of the time. A Changes
+section hidden for being empty keeps observing, so the next edit brings it
+back (it used to drop its subscription with the section and stay gone). See [ADR 0149](../../docs/decisions/0149-observed-git-overviews.md)
 and the [measurement report](docs/performance.md#changes-subscriptions).
