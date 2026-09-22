@@ -52,8 +52,9 @@ const setSelect = (kind: string, value: string) =>
 describe("site settings", () => {
   it("a page's permission request opens the modal with the question first", async () => {
     // The title can land before dom-ready; scripts need the latter.
+    // getTitle itself throws until the guest is attached and dom-ready.
     await app.waitFor(
-      `${guest}?.getTitle?.() === 'Lab' && !${guest}.isLoading()`,
+      `(() => { const view = ${guest}; try { return view.getTitle() === 'Lab' && !view.isLoading(); } catch { return false; } })()`,
       { label: "page ready" },
     );
     await inGuest("askNotifications(); true");

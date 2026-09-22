@@ -98,6 +98,26 @@ export function SettingsScreen({
     setSelected(entry.category);
     let highlighted: HTMLElement | null = null;
     let frame = 0;
+    // Content above the target can still be settling (sections mounting,
+    // previews loading) after the scroll; keep the target in view while
+    // it does, then leave scrolling to the user.
+    let anchor: ResizeObserver | null = null;
+    let anchorTimeout: ReturnType<typeof setTimeout> | undefined;
+    const keepInView = (target: HTMLElement) => {
+      anchor?.disconnect();
+      anchor = new ResizeObserver(() => {
+        const distance =
+          target.getBoundingClientRect().top - root.getBoundingClientRect().top;
+        if (distance >= 0 && distance < root.clientHeight) return;
+        root.scrollTo({
+          top: root.scrollTop + distance - 12,
+          behavior: "instant",
+        });
+        navigationScrollTop.current = root.scrollTop;
+      });
+      for (const child of root.children) anchor.observe(child);
+      anchorTimeout = setTimeout(() => anchor?.disconnect(), 1500);
+    };
     const reveal = () => {
       const target =
         root.querySelector<HTMLElement>(
@@ -124,6 +144,7 @@ export function SettingsScreen({
           "rounded-lg",
         );
         highlighted = target;
+        keepInView(target);
         const control =
           target.querySelector<HTMLElement>("[data-setting-control]") ??
           target.querySelector<HTMLElement>(
@@ -150,6 +171,8 @@ export function SettingsScreen({
       observer.disconnect();
       clearTimeout(timeout);
       cancelAnimationFrame(frame);
+      anchor?.disconnect();
+      clearTimeout(anchorTimeout);
       if (highlighted) {
         delete highlighted.dataset.settingsTarget;
         highlighted.classList.remove(

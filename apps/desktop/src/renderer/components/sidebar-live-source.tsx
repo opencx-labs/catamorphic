@@ -1,6 +1,6 @@
 import { createCollection } from "@catamorphic/app";
 import { CollectionTree, useCollection } from "@catamorphic/app/ui";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type {
   SidebarSourceCapabilities,
   SidebarSourceItem,
@@ -39,6 +39,9 @@ export function SidebarLiveSource({ projectId }: { projectId: string }) {
     move: false,
     drop: false,
   });
+  const publishRef = useRef<((event: { type: "invalidate" }) => void) | null>(
+    null,
+  );
   // biome-ignore lint/correctness/useExhaustiveDependencies: switching the configured module must replace its cache and release old leases.
   const collection = useMemo(
     () =>
@@ -82,6 +85,7 @@ export function SidebarLiveSource({ projectId }: { projectId: string }) {
           },
           subscribe: (publish) => {
             if (!api) return () => {};
+            publishRef.current = publish;
             let released = false;
             const leaseId = crypto.randomUUID();
             const unsubscribe = api.onSidebarSourceChanged((event) => {
@@ -318,7 +322,10 @@ export function SidebarLiveSource({ projectId }: { projectId: string }) {
                 .catch((cause: unknown) => {
                   throw sourceError(cause);
                 });
-              // The worker publishes invalidation after a successful action.
+              // The worker also publishes invalidation through the
+              // subscription, but that lease may still be settling; the
+              // user's own action must show regardless.
+              publishRef.current?.({ type: "invalidate" });
             }}
           />
         )}
