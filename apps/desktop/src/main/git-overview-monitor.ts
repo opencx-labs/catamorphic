@@ -1,4 +1,10 @@
-import { type FSWatcher, statSync, watch } from "node:fs";
+import {
+  type Dirent,
+  type FSWatcher,
+  readdirSync,
+  statSync,
+  watch,
+} from "node:fs";
 import path from "node:path";
 import type { GitOverview } from "../shared/git.js";
 import { type GitComparisonCache, gitOverview, readGit } from "./git-view.js";
@@ -6,25 +12,39 @@ import { type GitComparisonCache, gitOverview, readGit } from "./git-view.js";
 const RECONCILE_MS = 120_000;
 const DEBOUNCE_MS = 200;
 const MAX_WAIT_MS = 1_000;
+/** After a scan, wait this many times its duration before the next. */
+const COOLDOWN_FACTOR = 4;
+const COOLDOWN_MAX_MS = 5_000;
 
 type Listener = (snapshot: GitOverview) => void;
+/** Names reach the listener relative to `directory`, `/`-separated. */
 type Watch = (
   directory: string,
   listener: (name: string | null, event?: string) => void,
   failed: () => void,
+  /** Subtrees not worth watching, relative to `directory`. */
+  skip: (relative: string) => boolean,
 ) => () => void;
 
 function nativeWatch(
   directory: string,
   listener: (name: string | null, event?: string) => void,
   failed: () => void,
+  skip: (relative: string) => boolean,
 ) {
+  // Linux has no recursive watch primitive: Node walks the tree and takes
+  // one inotify watch per directory, ignored trees included. A monorepo
+  // has tens of thousands of those (node_modules) against a per-user budget
+  // that can be 8192, and the walk itself takes seconds. macOS (FSEvents)
+  // and Windows watch a tree with one handle, so they keep the native path.
+  if (process.platform === "linux")
+    return walkedWatch(directory, listener, failed, skip);
   let watcher: FSWatcher;
   try {
     watcher = watch(
       directory,
       { recursive: true, persistent: false },
-      (event, name) => listener(name, event),
+      (event, name) => listener(name?.split(path.sep).join("/") ?? null, event),
     );
     watcher.on("error", () => {
       watcher.close();
@@ -34,6 +54,71 @@ function nativeWatch(
   } catch {
     failed();
     return () => {};
+  }
+}
+
+/**
+ * Recursive watch built from single-directory watches, visiting only the
+ * directories Git would report on. A directory appearing later reaches the
+ * listener as a rename in its parent; the monitor rebuilds the watches then.
+ */
+export function walkedWatch(
+  directory: string,
+  listener: (name: string | null, event?: string) => void,
+  failed: () => void,
+  skip: (relative: string) => boolean,
+  watchOne: typeof watch = watch,
+): () => void {
+  const watchers: FSWatcher[] = [];
+  let closed = false;
+  const close = () => {
+    closed = true;
+    for (const watcher of watchers.splice(0)) watcher.close();
+  };
+  const fail = () => {
+    if (closed) return;
+    close();
+    failed();
+  };
+  const visit = (relative: string) => {
+    const absolute = relative ? path.join(directory, relative) : directory;
+    let watcher: FSWatcher;
+    try {
+      watcher = watchOne(absolute, { persistent: false }, (event, name) =>
+        listener(
+          name === null
+            ? relative || null
+            : `${relative ? `${relative}/` : ""}${String(name)}`,
+          event,
+        ),
+      );
+    } catch {
+      if (!relative) fail(); // The root itself: give up, the fallback retries.
+      return;
+    }
+    watcher.on("error", fail);
+    watchers.push(watcher);
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(absolute, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue; // Symlinked trees stay unwatched.
+      const child = relative ? `${relative}/${entry.name}` : entry.name;
+      if (!skip(child)) visit(child);
+    }
+  };
+  visit("");
+  return close;
+}
+
+function isDirectory(target: string): boolean {
+  try {
+    return statSync(target).isDirectory();
+  } catch {
+    return false; // Gone: nothing new to ignore.
   }
 }
 
@@ -75,7 +160,8 @@ export class GitOverviewMonitor {
         root,
         paths,
         read: this.options.read ?? gitOverview,
-        watch: (directory, listener) => this.watch(directory, listener),
+        watch: (directory, listener, skip) =>
+          this.watch(directory, listener, skip),
         reconcileMs: this.options.reconcileMs ?? RECONCILE_MS,
       });
       this.entries.set(key, entry);
@@ -96,6 +182,7 @@ export class GitOverviewMonitor {
   private watch(
     directory: string,
     listener: (name: string | null, event?: string) => void,
+    skip: (relative: string) => boolean,
   ): () => void {
     // Replacing a directory changes its inode; never reuse a watch on the old tree.
     let identity = directory;
@@ -115,10 +202,15 @@ export class GitOverviewMonitor {
       };
       entry = { listeners, close: () => {} };
       this.watchers.set(identity, entry);
-      entry.close = (this.options.watch ?? nativeWatch)(directory, emit, () => {
-        this.watchers.delete(identity);
-        emit(null);
-      });
+      entry.close = (this.options.watch ?? nativeWatch)(
+        directory,
+        emit,
+        () => {
+          this.watchers.delete(identity);
+          emit(null);
+        },
+        skip,
+      );
     }
     entry.listeners.add(listener);
     const retained = entry;
@@ -150,6 +242,9 @@ class Entry {
   private running = false;
   private dirty = false;
   private fingerprint = "";
+  // Sustained writes (an agent editing) arrive slower than the debounce and
+  // would scan once per save. Scanning stays under ~1/5 of wall time.
+  private cooldownUntil = 0;
   private rebuildWatches = true;
   private topology = "";
 
@@ -160,6 +255,7 @@ class Entry {
       watch: (
         directory: string,
         listener: (name: string | null, event?: string) => void,
+        skip: (relative: string) => boolean,
       ) => () => void;
       read: typeof gitOverview;
       reconcileMs: number;
@@ -176,6 +272,11 @@ class Entry {
       this.dirty = true;
       return;
     }
+    const cooldown = this.cooldownUntil - Date.now();
+    if (cooldown > 0) {
+      this.debounce = setTimeout(this.refresh, cooldown);
+      return;
+    }
     void this.load();
   };
 
@@ -189,6 +290,7 @@ class Entry {
   private async load(): Promise<void> {
     this.running = true;
     clearTimeout(this.timer);
+    const started = Date.now();
     try {
       // Retain the old watches until replacements are installed: no gap during a scan.
       const discovery =
@@ -237,6 +339,9 @@ class Entry {
       }
     } finally {
       this.running = false;
+      this.cooldownUntil =
+        Date.now() +
+        Math.min(COOLDOWN_MAX_MS, COOLDOWN_FACTOR * (Date.now() - started));
       if (!this.disposed) {
         if (this.dirty) {
           this.dirty = false;
@@ -293,54 +398,67 @@ class Entry {
         /* A removed/plain checkout is retried by reconciliation. */
       }
       if (this.disposed) break;
+      const isIgnored = (relative: string) =>
+        ignored.some((item) =>
+          item.endsWith("/")
+            ? relative === item.slice(0, -1) || relative.startsWith(item)
+            : relative === item,
+        );
       releases.push(
-        this.options.watch(root, (name, event) => {
-          if (name === null) {
-            this.rebuildWatches = true;
+        this.options.watch(
+          root,
+          (name, event) => {
+            if (name === null) {
+              this.rebuildWatches = true;
+              this.invalidate();
+              return;
+            }
+            const relative = name;
+            if (relative === ".git") {
+              this.rebuildWatches = true;
+              this.invalidate();
+              return;
+            }
+            if (relative.startsWith(".git/")) return;
+            if (relative === ".gitignore" || relative.endsWith("/.gitignore"))
+              this.rebuildWatches = true;
+            if (isIgnored(relative)) return;
+            // Editors save atomically (write a temp file, rename it over the
+            // original), so file renames are the common case and never change
+            // what is ignored. Directories can: a fresh node_modules/ must be
+            // filtered before its contents flood the queue.
+            if (event === "rename" && isDirectory(path.join(root, name)))
+              this.rebuildWatches = true;
             this.invalidate();
-            return;
-          }
-          const relative = name.split(path.sep).join("/");
-          if (relative === ".git") {
-            this.rebuildWatches = true;
-            this.invalidate();
-            return;
-          }
-          if (relative.startsWith(".git/")) return;
-          if (relative === ".gitignore" || relative.endsWith("/.gitignore"))
-            this.rebuildWatches = true;
-          if (
-            ignored.some((item) =>
-              item.endsWith("/")
-                ? relative === item.slice(0, -1) || relative.startsWith(item)
-                : relative === item,
-            )
-          )
-            return;
-          if (event === "rename") this.rebuildWatches = true;
-          this.invalidate();
-        }),
+          },
+          (relative) => relative === ".git" || isIgnored(relative),
+        ),
       );
     }
     if (!this.disposed)
       for (const directory of metadata) {
         releases.push(
-          this.options.watch(directory, (name) => {
-            const relative = name?.split(path.sep).join("/");
-            if (
-              relative?.endsWith(".lock") ||
-              relative?.startsWith("objects/") ||
-              relative?.startsWith("logs/")
-            )
-              return;
-            if (
-              relative === "config" ||
-              relative?.startsWith("info/") ||
-              relative?.startsWith("worktrees/")
-            )
-              this.rebuildWatches = true;
-            this.invalidate();
-          }),
+          this.options.watch(
+            directory,
+            (name) => {
+              const relative = name ?? undefined;
+              if (
+                relative?.endsWith(".lock") ||
+                relative?.startsWith("objects/") ||
+                relative?.startsWith("logs/")
+              )
+                return;
+              if (
+                relative === "config" ||
+                relative?.startsWith("info/") ||
+                relative?.startsWith("worktrees/")
+              )
+                this.rebuildWatches = true;
+              this.invalidate();
+            },
+            // Object and reflog churn is filtered above; not worth watches.
+            (relative) => relative === "objects" || relative === "logs",
+          ),
         );
       }
     for (const release of this.release) release();
