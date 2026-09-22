@@ -462,7 +462,7 @@ export function registerBrowserSupport(
   // site's stored choice the one that counts.
   const guestNotifications = new Map<
     number,
-    { notification: Notification; guest: WebContents }
+    { notification: Notification; guest: WebContents; tag: string }
   >();
   let nextGuestNotificationId = 1;
   const notificationPermission = (
@@ -515,6 +515,13 @@ export function registerBrowserSupport(
           silent: z.boolean(),
         })
         .parse(input);
+      // Chrome replaces an earlier notification carrying the same tag.
+      if (options.tag)
+        for (const [priorId, entry] of guestNotifications)
+          if (entry.guest === guest && entry.tag === options.tag) {
+            guestNotifications.delete(priorId);
+            entry.notification.close();
+          }
       const id = nextGuestNotificationId++;
       const notification = new Notification({
         title: options.title,
@@ -551,7 +558,7 @@ export function registerBrowserSupport(
         guestNotifications.delete(id);
         send("error");
       });
-      guestNotifications.set(id, { notification, guest });
+      guestNotifications.set(id, { notification, guest, tag: options.tag });
       notification.show();
       return id;
     },
@@ -779,6 +786,10 @@ export function registerBrowserSupport(
     const hostForWithdrawal = contents.hostWebContents;
     contents.once("destroyed", () => {
       focusedLoginForms.delete(contents.id);
+      // Posted notifications stay in Notification Center as in Chrome; the
+      // bookkeeping for them goes with the tab.
+      for (const [id, entry] of guestNotifications)
+        if (entry.guest === contents) guestNotifications.delete(id);
       const ids = permissionBroker.withdrawGuest(contents.id);
       const shareIds = screenShareBroker.withdrawGuest(contents.id);
       if (hostForWithdrawal && !hostForWithdrawal.isDestroyed()) {
@@ -920,11 +931,17 @@ export function registerBrowserSupport(
     check: (profileId, permission, requestingOrigin, details) => {
       const origin = siteOrigin(details.requestingUrl ?? requestingOrigin);
       if (!origin) return ALWAYS_GRANTED_PERMISSIONS.has(permission);
-      return (
-        decideSitePermission(siteSettings.get(profileId, origin), permission, {
-          mediaTypes: details.mediaType ? [details.mediaType] : undefined,
-        }).outcome !== "block"
+      const decision = decideSitePermission(
+        siteSettings.get(profileId, origin),
+        permission,
+        { mediaTypes: details.mediaType ? [details.mediaType] : undefined },
       );
+      // Notifications need a granted state to post (Chrome refuses at
+      // "default" too); frames and workers outside the main-world wrapper
+      // would otherwise post from an undecided site without a prompt.
+      // requestPermission still reaches the request handler regardless.
+      if (permission === "notifications") return decision.outcome === "allow";
+      return decision.outcome !== "block";
     },
     displayMedia: (profileId, request, callback) => {
       const guest = request.frame ? webContents.fromFrame(request.frame) : null;

@@ -176,6 +176,7 @@ if (typeof contextBridge.executeInMainWorld === "function") {
         onclose: Handler = null;
         onerror: Handler = null;
         private id: number | null = null;
+        private closed = false;
         constructor(title: string, options: NotificationOptions = {}) {
           super();
           this.title = String(title);
@@ -199,6 +200,8 @@ if (typeof contextBridge.executeInMainWorld === "function") {
               }
               this.id = id;
               registry.set(id, this);
+              // Closed before the id arrived: close it now.
+              if (this.closed) bridge.close(id);
             });
         }
         fire(type: "show" | "click" | "close" | "error"): void {
@@ -208,8 +211,8 @@ if (typeof contextBridge.executeInMainWorld === "function") {
           if (typeof handler === "function") handler.call(this, event);
         }
         close(): void {
-          if (this.id === null) return;
-          bridge.close(this.id);
+          this.closed = true;
+          if (this.id !== null) bridge.close(this.id);
         }
         static get permission(): NotificationPermissionState {
           return bridge.permission();
