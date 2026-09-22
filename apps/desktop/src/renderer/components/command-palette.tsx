@@ -13,6 +13,7 @@ import {
   Command,
   Cpu,
   Diff,
+  Download,
   FileCode,
   FileSearch,
   Gauge,
@@ -1404,6 +1405,19 @@ export function CommandPalette({
             mode,
           ),
       });
+    items.push({
+      id: "open-downloads",
+      icon: Download,
+      label: "Downloads",
+      detail: "Files saved from pages",
+      keywords: ["downloads", "files", "saved", "download"],
+      kind: "navigate",
+      run: (mode) =>
+        onOpenTab(
+          { kind: "downloads", name: "downloads", label: "Downloads" },
+          mode,
+        ),
+    });
     items.push({
       id: "open-sites",
       icon: SlidersHorizontal,

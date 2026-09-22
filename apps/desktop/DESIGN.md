@@ -1008,3 +1008,16 @@ files, Git and internals out of answers for non-technical people; load the
 workflow or app skills only when the work needs them. Building an automation
 now reads as "every weekday at 9, a reminder lands in this chat; late if this
 Mac is off", not as a watcher id.
+
+### 2026-09-23: Downloads live in the dock
+
+A download used to end in an OS save dialog and then silence. Now it
+saves to the downloads folder without a question (ADR 0153), and the dock,
+where the app's own activity already lives, grows a download button
+beside the chat bubbles: a ring fills while bytes arrive, a tick marks a
+finished file nobody has looked at, and the bubble shows the last few
+with a way to the Downloads page. The page lists everything by day, with
+pause, cancel, Show in Finder, Remove from list, and the usual open
+gestures. Opening a file means opening it in Work when Work can show it
+(what a browser tab renders, plus plain text); anything else is revealed
+in the file manager rather than handed to whatever app the OS would pick.

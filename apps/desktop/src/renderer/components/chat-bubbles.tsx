@@ -9,6 +9,7 @@ import {
   type CSSProperties,
   type DOMAttributes,
   type MouseEvent,
+  type ReactNode,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -71,6 +72,8 @@ export interface ChatBubblesProps {
   autoCollapse: boolean;
   /** Reports the effective collapsed state so hosts can clear the bottom. */
   onCollapsedChange?: (collapsed: boolean) => void;
+  /** Rendered at the rail's end, outside the chat strip: the downloads bubble. */
+  trailing?: ReactNode;
   onToggle: (localId: string) => void;
   /**
    * A bubble click with the app's open modifiers (⌘ = tab, ⌘⇧ = to the
@@ -291,6 +294,7 @@ export function ChatBubbles({
   activeLocalId,
   autoCollapse,
   onCollapsedChange,
+  trailing,
   onToggle,
   onOpenAs,
   onClose,
@@ -671,6 +675,7 @@ export function ChatBubbles({
             <SignalBadge signals={aggregate} size="md" />
           </span>
         </button>
+        {trailing}
       </div>
       {dockMenuAt && onToggleDetached && (
         <MenuPortal
