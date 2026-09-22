@@ -633,6 +633,27 @@ const api = {
         handler,
       );
   },
+  screenShareSources: (input: {
+    guestId?: number;
+    kinds?: string[];
+  }): Promise<unknown> => invoke("catamorphic:screen-share-sources", input),
+  screenShareAnswer: (input: {
+    requestId: string;
+    choice: unknown;
+  }): Promise<boolean> => invoke("catamorphic:screen-share-answer", input),
+  onScreenShareRequest: (listener: (request: unknown) => void) => {
+    const handler = (_event: unknown, request: unknown) => listener(request);
+    ipcRenderer.on("catamorphic:screen-share-request", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:screen-share-request", handler);
+  },
+  onScreenShareWithdrawn: (listener: (payload: { ids: string[] }) => void) => {
+    const handler = (_event: unknown, payload: { ids: string[] }) =>
+      listener(payload);
+    ipcRenderer.on("catamorphic:screen-share-withdrawn", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:screen-share-withdrawn", handler);
+  },
   onSitePermissionWithdrawn: (
     listener: (payload: { ids: string[] }) => void,
   ) => {

@@ -76,8 +76,9 @@ export const SITE_PERMISSIONS: Record<
   screenShare: {
     label: "Screen sharing",
     ask: "share your screen",
-    default: "ask",
-    prompts: true,
+    description: "You pick the tab, window or screen every time.",
+    default: "allow",
+    prompts: false,
   },
   fullscreen: {
     label: "Fullscreen",
@@ -191,9 +192,9 @@ export function permissionKindsFor(
       const types = details?.mediaTypes ?? [];
       if (types.includes("audio")) kinds.push("microphone");
       if (types.includes("video")) kinds.push("camera");
-      // A media request with no declared types is a device-list check;
-      // treat it as both so a block on either holds.
-      return kinds.length > 0 ? kinds : ["microphone", "camera"];
+      // getDisplayMedia arrives as a media request with no declared
+      // types; the picker is its prompt, so it is the screen-share kind.
+      return kinds.length > 0 ? kinds : ["screenShare"];
     }
     case "mediaKeySystem":
       // DRM playback (Widevine). No user-facing switch, always fine.

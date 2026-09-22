@@ -57,6 +57,30 @@ service workers and caches. The modal shows the cookie count and deletes
 behind a confirm. The **Sites page** (`kind: "sites"` tab) lists every site
 with a choice, a visit in history, or cookies, customized sites first.
 
+**Screen sharing has its own picker.** A page's `getDisplayMedia` reaches
+Chromium's permission handler first (a `media` request with no media types)
+and the session's display-media handler second. The picker runs at the
+first stage: "Choose what to share", Chrome's three panes (a browser tab
+of this window, an application window, an entire screen), tab audio as an
+option, one Share button. Cancel denies the permission, so the page sees
+`NotAllowedError` exactly as in Chrome; a pick is stashed for the second
+stage, which hands it over. Tabs are shared by their main frame (audio
+too, with local echo kept on), windows and screens by capturer id. Tabs
+list instantly; windows and screens arrive in a second pass because macOS
+can take seconds to answer. When the capturer lists no screens (stale or
+missing Screen Recording access on macOS), the displays are listed by id
+so sharing can still be attempted, and a denied app gets a note with a
+System Settings link. The "Screen sharing" site permission is therefore
+Allow (the picker is the prompt) or Block; it never asks on its own.
+
+**Electron 44.** Gmail flagged the browser as unsupported: Electron 43
+carries Chromium 150 and Google keeps only the two newest Chrome majors.
+Electron 44 (Chromium 152) fixes that, at the cost of macOS 13 as the
+minimum and the async clipboard API. The user agent also carried a
+dangling prerelease tail (`-alpha.8`) because only the numeric part of the
+app's version token was stripped; whole tokens are stripped now, and the
+app name token is matched without spaces, as Chromium writes it.
+
 ## Consequences
 
 - Sites that used to get notifications silently now ask once, as in Chrome.
@@ -65,3 +89,12 @@ with a choice, a visit in history, or cookies, customized sites first.
   cache is not cleared per site.
 - Device permissions (USB, HID, serial) and pop-up blocking stay as they
   were; they can join the same vocabulary later.
+- System audio with a screen or window share is Windows-only in Electron;
+  the picker offers audio for tabs only.
+- Keeping Google's supported-browser gate happy means staying within two
+  Chromium majors of Chrome stable: track Electron releases.
+- Electron 43.6 through 44.4.3 throw an uncaught `Invalid guestInstanceId`
+  from a `<webview>`'s `disconnectedCallback` when a loaded guest is
+  removed (electron/electron#53989; fix #54089 merged to 44-x-y). The
+  removal still completes. Until a release carries the fix, the renderer
+  swallows that one error and the e2e harness ignores it (TODO.md).

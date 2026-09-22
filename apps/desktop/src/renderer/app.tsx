@@ -107,6 +107,7 @@ import { RemoteConnectModal } from "./components/remote-connect-modal.js";
 import { RemoteConnectionIndicator } from "./components/remote-connection-indicator.js";
 import { RemoteHistoryModal } from "./components/remote-history-modal.js";
 import type { RemoteFeatures } from "./components/remote-nav.js";
+import { ScreenShareHost } from "./components/screen-share-picker.js";
 import {
   ArchiveSessionDialog,
   CreateSubsessionDialog,
@@ -5320,6 +5321,7 @@ export function App({
         origin={siteSettingsOrigin}
         onClose={() => setSiteSettingsOrigin(null)}
       />
+      <ScreenShareHost />
       <UpdateBanner
         hasActiveWork={hasActiveWork}
         onOpenRelease={(url) => openBrowserTab(url)}

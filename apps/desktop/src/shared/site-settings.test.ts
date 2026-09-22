@@ -19,7 +19,10 @@ describe("site permission vocabulary", () => {
     expect(
       permissionKindsFor("media", { mediaTypes: ["audio", "video"] }),
     ).toEqual(["microphone", "camera"]);
-    expect(permissionKindsFor("media")).toEqual(["microphone", "camera"]);
+    expect(permissionKindsFor("media")).toEqual(["screenShare"]);
+    expect(permissionKindsFor("media", { mediaTypes: [] })).toEqual([
+      "screenShare",
+    ]);
     expect(permissionKindsFor("midiSysex")).toEqual(["midi"]);
     expect(permissionKindsFor("openExternal")).toEqual(["externalApps"]);
     expect(permissionKindsFor("hid")).toEqual([]);
@@ -48,6 +51,15 @@ describe("site permission vocabulary", () => {
     expect(decideSitePermission({}, "unknown-thing")).toEqual({
       outcome: "block",
     });
+  });
+
+  it("lets the screen-share picker be the prompt unless blocked", () => {
+    expect(decideSitePermission({}, "display-capture")).toEqual({
+      outcome: "allow",
+    });
+    expect(
+      decideSitePermission({ screenShare: "block" }, "display-capture"),
+    ).toEqual({ outcome: "block" });
   });
 
   it("blocks the whole request when any kind is blocked", () => {

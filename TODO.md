@@ -1,5 +1,11 @@
 # TODO
 
+- **Electron 44.4.4 (or later): drop the `Invalid guestInstanceId` guards.**
+  Electron 43.6–44.4.3 throw from a `<webview>`'s `disconnectedCallback`
+  when a loaded guest is removed (electron/electron#53989, fix #54089
+  merged to 44-x-y on 2026-09-18). Until a release carries it, the
+  renderer swallows that one uncaught error (`main.tsx`) and the e2e
+  harness ignores it (`e2e/harness.ts`). Remove both with the bump.
 - **Full-stack Claude Code e2e via a fake CLI.** The ask_user flow now has
   three pins: harness unit tests (mocked query), the harness↔core seam
   integration test (`packages/claude-code/src/__tests__/

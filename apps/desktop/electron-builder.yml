@@ -57,7 +57,7 @@ mac:
     - Contents/MacOS/browser-keychain
   category: public.app-category.developer-tools
   icon: build/icon.icns
-  minimumSystemVersion: "12.0"
+  minimumSystemVersion: "13.0"
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.inherit.plist

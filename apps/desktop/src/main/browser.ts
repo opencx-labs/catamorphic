@@ -5,10 +5,12 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  desktopCapturer,
   dialog,
   ipcMain,
   Menu,
   type Session,
+  screen,
   session,
   shell,
   systemPreferences,
@@ -26,8 +28,18 @@ import { historyVisitSchema } from "../shared/history.js";
 import { matchesShortcut } from "../shared/keybindings.js";
 import { OPEN_ACTIONS } from "../shared/open-mode.js";
 import {
+  type ScreenShareAnswer,
+  type ScreenShareRequest,
+  type ScreenShareSource,
+  type ScreenShareSources,
+  type SystemScreenAccess,
+  screenShareAnswerSchema,
+  tabSourceWebContentsId,
+} from "../shared/screen-share.js";
+import {
   ALWAYS_GRANTED_PERMISSIONS,
   decideSitePermission,
+  permissionKindsFor,
   type SiteDetails,
   type SitePermissionKind,
   type SiteSummary,
@@ -65,6 +77,7 @@ import { DEFAULT_SIDEBAR_FILE } from "./sidebar-config.js";
 import { registerSidebarSources } from "./sidebar-source-ipc.js";
 import {
   cookieCoversHost,
+  PromptBroker,
   SitePermissionBroker,
   SiteSettingsStore,
 } from "./site-settings.js";
@@ -111,6 +124,12 @@ interface SitePermissionPolicy {
     requestingOrigin: string,
     details: { requestingUrl?: string; mediaType?: string },
   ) => boolean;
+  /** A page's getDisplayMedia: pick a source in the app's own picker. */
+  displayMedia: (
+    profileId: string,
+    request: Electron.DisplayMediaRequestHandlerHandlerRequest,
+    callback: (streams: Electron.Streams) => void,
+  ) => void;
 }
 let sitePermissionPolicy: SitePermissionPolicy | null = null;
 
@@ -196,6 +215,16 @@ async function doPrepareProfileSession(
         details,
       ) ?? true,
   );
+  // Without a handler getDisplayMedia fails outright; with one, the
+  // app's picker chooses a tab, window or screen.
+  ses.setDisplayMediaRequestHandler((request, callback) => {
+    const policy = sitePermissionPolicy;
+    if (!policy) {
+      callback({});
+      return;
+    }
+    policy.displayMedia(profileId, request, callback);
+  });
 
   // Unpacked Chrome extensions: drop a folder under the profile's
   // extensions dir and it loads on next launch (content scripts, e.g.
@@ -251,6 +280,10 @@ export function registerBrowserSupport(
   const vault = new PasswordVault(profilesDir);
   const siteSettings = new SiteSettingsStore(profilesDir);
   const permissionBroker = new SitePermissionBroker();
+  const screenShareBroker = new PromptBroker<
+    ScreenShareRequest,
+    ScreenShareAnswer
+  >();
   const unsubscribeRemoved = profiles.onRemoved((profileId) => {
     history.releaseProfile(profileId);
     vault.releaseProfile(profileId);
@@ -452,6 +485,15 @@ export function registerBrowserSupport(
   // bindings as the renderer, including Ctrl/Option combinations inside pages.
   app.on("web-contents-created", (_event, contents: WebContents) => {
     if (contents.getType() !== "webview") return;
+    // Pages that set no background render on white, as in Chrome. The
+    // guest is otherwise transparent, which a tab share captures as black.
+    // User-origin CSS: any rule of the page's own wins over it.
+    contents.on("dom-ready", () => {
+      if (contents.isDestroyed()) return;
+      void contents
+        .insertCSS("html{background-color:#fff}", { cssOrigin: "user" })
+        .catch(() => {});
+    });
     contents.on("preload-error", (_event, preloadPath, error) => {
       console.error("[browser] Guest preload failed", preloadPath, error);
     });
@@ -635,14 +677,17 @@ export function registerBrowserSupport(
     contents.once("destroyed", () => {
       focusedLoginForms.delete(contents.id);
       const ids = permissionBroker.withdrawGuest(contents.id);
-      if (
-        ids.length > 0 &&
-        hostForWithdrawal &&
-        !hostForWithdrawal.isDestroyed()
-      )
-        hostForWithdrawal.send("catamorphic:site-permission-withdrawn", {
-          ids,
-        });
+      const shareIds = screenShareBroker.withdrawGuest(contents.id);
+      if (hostForWithdrawal && !hostForWithdrawal.isDestroyed()) {
+        if (ids.length > 0)
+          hostForWithdrawal.send("catamorphic:site-permission-withdrawn", {
+            ids,
+          });
+        if (shareIds.length > 0)
+          hostForWithdrawal.send("catamorphic:screen-share-withdrawn", {
+            ids: shareIds,
+          });
+      }
     });
   });
 
@@ -685,6 +730,49 @@ export function registerBrowserSupport(
     return true;
   };
 
+  /**
+   * The app's picker for a page's getDisplayMedia. Chromium asks the
+   * permission handler first (a `media` request with no media types) and
+   * the display-media handler second; picking at the first stage lets a
+   * cancel deny the permission, which the page sees as NotAllowedError
+   * (Chrome's answer), and the second stage hands over the pick.
+   */
+  const pendingShares = new Map<number, Electron.Streams>();
+  const pickShare = async (input: {
+    guest: WebContents;
+    host: WebContents;
+    profileId: string;
+    origin: string;
+  }): Promise<Electron.Streams | null> => {
+    const { guest, host } = input;
+    const answer = await screenShareBroker.ask(
+      input.profileId,
+      {
+        id: randomUUID(),
+        guestId: guest.id,
+        origin: input.origin,
+        audioRequested: true,
+      },
+      (prompt) => host.send("catamorphic:screen-share-request", prompt),
+    );
+    const choice = answer?.choice;
+    if (!choice) return null;
+    const tabId = tabSourceWebContentsId(choice.id);
+    if (choice.kind === "tab" && tabId !== null) {
+      const tab = webContents.fromId(tabId);
+      // Only a tab of the same window: the picker listed exactly those.
+      if (!tab || tab.isDestroyed() || tab.hostWebContents !== host)
+        return null;
+      return {
+        video: tab.mainFrame,
+        ...(choice.audio
+          ? { audio: tab.mainFrame, enableLocalEcho: true }
+          : {}),
+      };
+    }
+    return { video: { id: choice.id, name: choice.name } };
+  };
+
   sitePermissionPolicy = {
     request: async (guest, profileId, permission, details) => {
       const origin = siteOrigin(details.requestingUrl ?? guest.getURL());
@@ -695,6 +783,19 @@ export function registerBrowserSupport(
         details,
       );
       if (decision.outcome === "block") return false;
+      if (
+        permission === "media" &&
+        permissionKindsFor(permission, details).every(
+          (kind) => kind === "screenShare",
+        )
+      ) {
+        const host = guest.hostWebContents;
+        if (!host || host.isDestroyed()) return false;
+        const streams = await pickShare({ guest, host, profileId, origin });
+        if (!streams) return false;
+        pendingShares.set(guest.id, streams);
+        return true;
+      }
       if (decision.outcome === "allow") {
         return ensureSystemMediaAccess(
           permission === "media"
@@ -710,7 +811,7 @@ export function registerBrowserSupport(
       }
       const host = guest.hostWebContents;
       if (!host || host.isDestroyed()) return false;
-      const answer = await permissionBroker.ask(
+      const answer = await permissionBroker.askPermission(
         { profileId, origin, guestId: guest.id, kinds: decision.kinds },
         (request) => host.send("catamorphic:site-permission-request", request),
       );
@@ -732,7 +833,162 @@ export function registerBrowserSupport(
         }).outcome !== "block"
       );
     },
+    displayMedia: (profileId, request, callback) => {
+      const guest = request.frame ? webContents.fromFrame(request.frame) : null;
+      const origin = siteOrigin(request.securityOrigin);
+      const host = guest?.hostWebContents;
+      if (
+        !guest ||
+        guest.getType() !== "webview" ||
+        !origin ||
+        !host ||
+        host.isDestroyed() ||
+        decideSitePermission(
+          siteSettings.get(profileId, origin),
+          "display-capture",
+        ).outcome === "block"
+      ) {
+        callback({});
+        return;
+      }
+      const stashed = pendingShares.get(guest.id);
+      pendingShares.delete(guest.id);
+      const deliver = (streams: Electron.Streams | null) => {
+        if (!streams) {
+          callback({});
+          return;
+        }
+        // Audio the page did not ask for would fail the request.
+        callback(request.audioRequested ? streams : { video: streams.video });
+      };
+      if (stashed) {
+        deliver(stashed);
+        return;
+      }
+      void pickShare({ guest, host, profileId, origin }).then(deliver);
+    },
   };
+
+  const systemScreenAccess = (): SystemScreenAccess => {
+    if (process.platform !== "darwin") return null;
+    const status = systemPreferences.getMediaAccessStatus("screen");
+    if (status === "granted" || status === "not-determined") return status;
+    return status === "unknown" ? null : "denied";
+  };
+
+  ipcMain.handle(
+    "catamorphic:screen-share-sources",
+    async (event, input: unknown): Promise<ScreenShareSources> => {
+      const { guestId, kinds } = z
+        .object({
+          guestId: z.number().int().optional(),
+          kinds: z.array(z.enum(["tab", "window", "screen"])).optional(),
+        })
+        .parse(input ?? {});
+      const wanted = new Set(kinds ?? ["tab", "window", "screen"]);
+      const thumbnailSize = { width: 360, height: 225 };
+      const profileId = windows.profileFor(event.sender);
+      const tabs = wanted.has("tab")
+        ? await Promise.all(
+            webContents
+              .getAllWebContents()
+              .filter(
+                (contents) =>
+                  contents.getType() === "webview" &&
+                  contents.hostWebContents === event.sender &&
+                  /^https?:/i.test(contents.getURL()),
+              )
+              .map(async (contents): Promise<ScreenShareSource> => {
+                const thumbnail = await contents
+                  .capturePage()
+                  .then((image) =>
+                    image.isEmpty()
+                      ? null
+                      : image
+                          .resize({ width: thumbnailSize.width })
+                          .toDataURL(),
+                  )
+                  .catch(() => null);
+                const url = contents.getURL();
+                return {
+                  id: `tab:${contents.id}`,
+                  kind: "tab",
+                  name: contents.getTitle() || url,
+                  thumbnail,
+                  icon:
+                    history.siteVisits(profileId).get(siteOrigin(url) ?? "")
+                      ?.faviconUrl ?? null,
+                  url,
+                  current: contents.id === guestId,
+                };
+              }),
+          )
+        : [];
+      const captureKinds = (["screen", "window"] as const).filter((kind) =>
+        wanted.has(kind),
+      );
+      const captured =
+        captureKinds.length > 0
+          ? await desktopCapturer
+              .getSources({
+                types: [...captureKinds],
+                thumbnailSize,
+                fetchWindowIcons: true,
+              })
+              .catch(() => [])
+          : [];
+      const toSource = (
+        source: Electron.DesktopCapturerSource,
+        kind: "screen" | "window",
+      ): ScreenShareSource => ({
+        id: source.id,
+        kind,
+        name: source.name,
+        thumbnail: source.thumbnail.isEmpty()
+          ? null
+          : source.thumbnail.toDataURL(),
+        icon:
+          source.appIcon && !source.appIcon.isEmpty()
+            ? source.appIcon.resize({ width: 32 }).toDataURL()
+            : null,
+      });
+      let screens = captured
+        .filter((source) => source.id.startsWith("screen:"))
+        .map((source) => toSource(source, "screen"));
+      // macOS lists no screens when Screen Recording access is stale or
+      // missing; the displays still exist and their ids are what the
+      // capturer would have used, so sharing can still be attempted.
+      if (wanted.has("screen") && screens.length === 0) {
+        const displays = screen.getAllDisplays();
+        screens = displays.map((display, index) => ({
+          id: `screen:${display.id}:0`,
+          kind: "screen",
+          name: displays.length === 1 ? "Entire screen" : `Screen ${index + 1}`,
+          thumbnail: null,
+          icon: null,
+        }));
+      }
+      return {
+        tabs,
+        windows: captured
+          .filter((source) => source.id.startsWith("window:"))
+          .map((source) => toSource(source, "window")),
+        screens,
+        system: systemScreenAccess(),
+      };
+    },
+  );
+
+  ipcMain.handle("catamorphic:screen-share-answer", (event, input: unknown) => {
+    const answer = screenShareAnswerSchema.parse(input);
+    return (
+      screenShareBroker.answer(
+        answer.requestId,
+        answer,
+        windows.profileFor(event.sender),
+      ) !== null
+    );
+  });
 
   const siteCookies = async (profileId: string, host: string) => {
     await prepareProfileSession(profilesDir, profileId);
@@ -886,8 +1142,11 @@ export function registerBrowserSupport(
       const answer = sitePermissionAnswerSchema.parse(input);
       // Only a window of the profile the prompt was sent to may answer it.
       return (
-        permissionBroker.answer(answer, windows.profileFor(event.sender)) !==
-        null
+        permissionBroker.answer(
+          answer.id,
+          answer,
+          windows.profileFor(event.sender),
+        ) !== null
       );
     },
   );
@@ -896,13 +1155,17 @@ export function registerBrowserSupport(
     "catamorphic:site-settings-open-system-privacy",
     async (_event, input: unknown) => {
       const { kind } = z
-        .object({ kind: z.enum(["camera", "microphone"]) })
+        .object({ kind: z.enum(["camera", "microphone", "screen"]) })
         .parse(input);
       if (process.platform !== "darwin") return;
+      const pane =
+        kind === "camera"
+          ? "Camera"
+          : kind === "microphone"
+            ? "Microphone"
+            : "ScreenCapture";
       await shell.openExternal(
-        `x-apple.systempreferences:com.apple.preference.security?Privacy_${
-          kind === "camera" ? "Camera" : "Microphone"
-        }`,
+        `x-apple.systempreferences:com.apple.preference.security?Privacy_${pane}`,
       );
     },
   );
@@ -1112,9 +1375,12 @@ export function registerBrowserSupport(
     async (_event, input: { profileId: string; id: string }) => {
       const credential = await vault.reveal(input.profileId, input.id);
       if (!credential) return false;
-      clipboard.writeText(credential.password);
+      await clipboard.writeText(credential.password);
+      // Electron 44: clipboard reads are asynchronous.
       setTimeout(() => {
-        if (clipboard.readText() === credential.password) clipboard.clear();
+        void Promise.resolve(clipboard.readText()).then((text) => {
+          if (text === credential.password) return clipboard.clear();
+        });
       }, 30_000).unref();
       return true;
     },

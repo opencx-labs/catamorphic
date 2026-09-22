@@ -96,7 +96,7 @@ describe("SitePermissionBroker", () => {
   it("delivers a request and resolves with the answer", async () => {
     const broker = new SitePermissionBroker();
     let delivered: { id: string; kinds: string[] } | null = null;
-    const answered = broker.ask(
+    const answered = broker.askPermission(
       {
         profileId: "p1",
         origin: "https://a.test",
@@ -112,11 +112,11 @@ describe("SitePermissionBroker", () => {
     expect(broker.has(id)).toBe(true);
     // Another profile's window cannot answer it.
     expect(
-      broker.answer({ id, decision: "allow", remember: true }, "p2"),
+      broker.answer(id, { id, decision: "allow", remember: true }, "p2"),
     ).toBeNull();
     expect(broker.has(id)).toBe(true);
     expect(
-      broker.answer({ id, decision: "allow", remember: true }, "p1"),
+      broker.answer(id, { id, decision: "allow", remember: true }, "p1"),
     ).toEqual({
       profileId: "p1",
       request: {
@@ -133,18 +133,18 @@ describe("SitePermissionBroker", () => {
     });
     expect(broker.has(id)).toBe(false);
     expect(
-      broker.answer({ id, decision: "block", remember: false }),
+      broker.answer(id, { id, decision: "block", remember: false }),
     ).toBeNull();
   });
 
   it("denies the requests of a guest that goes away", async () => {
     const broker = new SitePermissionBroker();
     const ids: string[] = [];
-    const first = broker.ask(
+    const first = broker.askPermission(
       { profileId: "p1", origin: "https://a.test", guestId: 7, kinds: [] },
       (request) => ids.push(request.id),
     );
-    const other = broker.ask(
+    const other = broker.askPermission(
       { profileId: "p1", origin: "https://b.test", guestId: 8, kinds: [] },
       (request) => ids.push(request.id),
     );

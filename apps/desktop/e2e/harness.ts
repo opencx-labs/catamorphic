@@ -363,12 +363,19 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
       result?: unknown;
       error?: { message: string };
     };
-    if (message.method === "Runtime.exceptionThrown")
-      rendererErrors.push(
+    if (message.method === "Runtime.exceptionThrown") {
+      const description =
         message.params?.exceptionDetails?.exception?.description ??
-          message.params?.exceptionDetails?.text ??
-          "Uncaught renderer exception",
-      );
+        message.params?.exceptionDetails?.text ??
+        "Uncaught renderer exception";
+      // Electron 43.6–44.4.3 throws from a <webview>'s own
+      // disconnectedCallback whenever a loaded guest is removed
+      // (electron/electron#53989, fixed by #54089; not yet released).
+      // Harmless to the app and outside its control; drop this filter
+      // with the Electron bump that carries the fix.
+      if (!/Invalid guestInstanceId/.test(description))
+        rendererErrors.push(description);
+    }
     if (message.id === undefined) return;
     const waiter = pending.get(message.id);
     if (!waiter) return;

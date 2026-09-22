@@ -114,10 +114,10 @@ export function cookieCoversHost(cookieDomain: string, host: string): boolean {
   );
 }
 
-interface PendingRequest {
-  request: SitePermissionRequest;
+interface PendingPrompt<TRequest, TAnswer> {
+  request: TRequest;
   profileId: string;
-  resolve: (answer: SitePermissionAnswer | null) => void;
+  resolve: (answer: TAnswer | null) => void;
   timer: ReturnType<typeof setTimeout>;
 }
 
@@ -125,40 +125,28 @@ interface PendingRequest {
 const REQUEST_LIFETIME_MS = 10 * 60 * 1000;
 
 /**
- * Prompts in flight between a guest's permission request and the user's
- * answer in the site settings modal. One entry per request; a guest that
- * goes away withdraws its prompts.
+ * Prompts in flight between a guest's request and the user's answer in a
+ * modal (site permissions, screen-share picks). One entry per request; a
+ * guest that goes away withdraws its prompts.
  */
-export class SitePermissionBroker {
-  private pending = new Map<string, PendingRequest>();
+export class PromptBroker<
+  TRequest extends { id: string; guestId: number },
+  TAnswer,
+> {
+  private pending = new Map<string, PendingPrompt<TRequest, TAnswer>>();
 
   ask(
-    input: {
-      profileId: string;
-      origin: string;
-      guestId: number;
-      kinds: SitePermissionKind[];
-    },
-    deliver: (request: SitePermissionRequest) => void,
-  ): Promise<SitePermissionAnswer | null> {
-    const request: SitePermissionRequest = {
-      id: randomUUID(),
-      guestId: input.guestId,
-      origin: input.origin,
-      kinds: input.kinds,
-    };
+    profileId: string,
+    request: TRequest,
+    deliver: (request: TRequest) => void,
+  ): Promise<TAnswer | null> {
     return new Promise((resolve) => {
       const timer = setTimeout(
         () => this.settle(request.id, null),
         REQUEST_LIFETIME_MS,
       );
       timer.unref?.();
-      this.pending.set(request.id, {
-        request,
-        profileId: input.profileId,
-        resolve,
-        timer,
-      });
+      this.pending.set(request.id, { request, profileId, resolve, timer });
       deliver(request);
     });
   }
@@ -168,13 +156,14 @@ export class SitePermissionBroker {
    * sent to may answer it; anything else leaves it pending and returns null.
    */
   answer(
-    answer: SitePermissionAnswer,
+    id: string,
+    answer: TAnswer,
     profileId?: string,
-  ): { profileId: string; request: SitePermissionRequest } | null {
-    const entry = this.pending.get(answer.id);
+  ): { profileId: string; request: TRequest } | null {
+    const entry = this.pending.get(id);
     if (!entry || (profileId !== undefined && entry.profileId !== profileId))
       return null;
-    this.settle(answer.id, answer);
+    this.settle(id, answer);
     return { profileId: entry.profileId, request: entry.request };
   }
 
@@ -191,11 +180,38 @@ export class SitePermissionBroker {
     return this.pending.has(id);
   }
 
-  private settle(id: string, answer: SitePermissionAnswer | null): void {
+  private settle(id: string, answer: TAnswer | null): void {
     const entry = this.pending.get(id);
     if (!entry) return;
     clearTimeout(entry.timer);
     this.pending.delete(id);
     entry.resolve(answer);
+  }
+}
+
+/** Site permission prompts: the request carries the kinds being asked. */
+export class SitePermissionBroker extends PromptBroker<
+  SitePermissionRequest,
+  SitePermissionAnswer
+> {
+  askPermission(
+    input: {
+      profileId: string;
+      origin: string;
+      guestId: number;
+      kinds: SitePermissionKind[];
+    },
+    deliver: (request: SitePermissionRequest) => void,
+  ): Promise<SitePermissionAnswer | null> {
+    return this.ask(
+      input.profileId,
+      {
+        id: randomUUID(),
+        guestId: input.guestId,
+        origin: input.origin,
+        kinds: input.kinds,
+      },
+      deliver,
+    );
   }
 }
