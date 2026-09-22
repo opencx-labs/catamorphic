@@ -1,4 +1,4 @@
-# 0149: Site settings
+# 0150: Site settings
 
 - **Status:** Accepted
 - **Date:** 2026-09-22

@@ -5124,6 +5124,7 @@ export function App({
     visible: boolean,
     report: (state: SidebarContentState) => void,
     relevant: boolean,
+    observeEmpty: boolean,
   ) =>
     projectId ? (
       <ConfiguredSection
@@ -5132,6 +5133,7 @@ export function App({
         relevant={relevant}
         report={report}
         visible={visible}
+        observeEmpty={observeEmpty}
         onCustomize={() => customizeSidebar("left")}
         onSearch={(request) => {
           setSearchRequest({ ...request, nonce: crypto.randomUUID() });

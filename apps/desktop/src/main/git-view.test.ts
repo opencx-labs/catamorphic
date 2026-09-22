@@ -301,3 +301,32 @@ describe("worktree Git views", () => {
     ).toBeTruthy();
   });
 });
+
+it("caches committed comparisons by object IDs and evicts unused checkouts", async () => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), "git-comparisons-"));
+  try {
+    await nativeGit(temp, ["init", "-b", "main"]);
+    await fs.writeFile(path.join(temp, "file.txt"), "base");
+    await nativeGit(temp, ["add", "."]);
+    await nativeGit(temp, [...author, "commit", "-m", "base"]);
+    await nativeGit(temp, ["checkout", "-b", "feature"]);
+    await fs.writeFile(path.join(temp, "file.txt"), "feature");
+    await nativeGit(temp, ["add", "."]);
+    await nativeGit(temp, [...author, "commit", "-m", "feature"]);
+    const cache = new Map();
+    const first = await gitOverview(temp, undefined, cache);
+    const files = first.worktrees[0]?.branchChanges;
+    await fs.writeFile(path.join(temp, "file.txt"), "working edit");
+    const next = await gitOverview(temp, undefined, cache);
+    expect(next.worktrees[0]?.branchChanges).toBe(files);
+    const head = (await nativeGit(temp, ["rev-parse", "HEAD"])).trim();
+    await nativeGit(temp, ["update-ref", "refs/heads/main", head]);
+    const updated = await gitOverview(temp, undefined, cache);
+    expect(updated.worktrees[0]?.branchChanges).toEqual([]);
+    expect(updated.worktrees[0]?.branchChanges).not.toBe(files);
+    await gitOverview(temp, [], cache);
+    expect(cache.size).toBe(0);
+  } finally {
+    await fs.rm(temp, { recursive: true, force: true });
+  }
+});

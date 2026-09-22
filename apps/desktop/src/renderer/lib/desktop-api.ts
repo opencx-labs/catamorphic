@@ -630,6 +630,7 @@ export type {
   GitDiffMode,
   GitFileDiff,
   GitOverview,
+  GitOverviewSubscription,
   GitRecordInput,
   GitWorktree,
 } from "../../shared/git.js";
@@ -639,6 +640,7 @@ import type {
   GitDiffInput,
   GitFileDiff,
   GitOverview,
+  GitOverviewSubscription,
   GitRecordInput,
 } from "../../shared/git.js";
 
@@ -1404,6 +1406,10 @@ export interface CatamorphicDesktopApi {
     paths?: string[],
     sessionId?: string,
   ) => Promise<GitOverview>;
+  watchGitOverview: (
+    input: GitOverviewSubscription,
+    listener: (snapshot: GitOverview) => void,
+  ) => () => void;
   sessionCheckouts: (projectId: string) => Promise<SessionCheckoutInfo[]>;
   sessionUseProjectFolder: (input: {
     projectId: string;

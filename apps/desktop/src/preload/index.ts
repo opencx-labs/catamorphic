@@ -39,7 +39,12 @@ import type {
 } from "../shared/dock-position.js";
 import type { FilePreviewInput } from "../shared/file-preview.js";
 import type { FileSearchInput } from "../shared/file-search.js";
-import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
+import type {
+  GitDiffInput,
+  GitOverview,
+  GitOverviewSubscription,
+  GitRecordInput,
+} from "../shared/git.js";
 import type { OpenMode } from "../shared/open-mode.js";
 import type { PrCommentInput, PrDecisionInput } from "../shared/pr-details.js";
 import type { SettingsScope } from "../shared/settings.js";
@@ -1007,6 +1012,24 @@ const api = {
     sessionId?: string,
   ): Promise<unknown> =>
     invoke("catamorphic:git-overview", projectId, paths, sessionId),
+  watchGitOverview: (
+    input: GitOverviewSubscription,
+    listener: (snapshot: GitOverview) => void,
+  ): (() => void) => {
+    const id = crypto.randomUUID();
+    const handler = (
+      _event: unknown,
+      message: { id: string; snapshot: GitOverview },
+    ) => {
+      if (message.id === id) listener(message.snapshot);
+    };
+    ipcRenderer.on("catamorphic:git-overview-snapshot", handler);
+    ipcRenderer.send("catamorphic:git-overview-subscribe", id, input);
+    return () => {
+      ipcRenderer.removeListener("catamorphic:git-overview-snapshot", handler);
+      ipcRenderer.send("catamorphic:git-overview-unsubscribe", id);
+    };
+  },
   sessionCheckouts: (projectId: string): Promise<unknown> =>
     invoke("catamorphic:session-checkouts", projectId),
   sessionUseProjectFolder: (input: { projectId: string; sessionId: string }) =>
