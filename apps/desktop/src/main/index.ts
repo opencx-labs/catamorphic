@@ -68,6 +68,18 @@ app.setName(
   }),
 );
 
+// Development seam for CDP-driven runs: an unattended session cannot
+// answer the Keychain sheet safeStorage raises for an unsigned build, so
+// it uses Chromium's mock keychain (as E2E does). The password vault then
+// skips its Touch ID sheet too (browser-vault.ts). Packaged builds ignore it.
+if (
+  !app.isPackaged &&
+  process.env.CATAMORPHIC_DEV_NO_SYSTEM_PROMPTS === "1" &&
+  process.platform === "darwin"
+) {
+  app.commandLine.appendSwitch("use-mock-keychain");
+}
+
 // macOS 26.x + Apple Silicon: V8's background compiler threads race the
 // OS's MAP_JIT write-protection and SIGTRAP in ThreadIsolation::
 // RegisterInstructionStreamAllocation (electron/electron#51351 family).

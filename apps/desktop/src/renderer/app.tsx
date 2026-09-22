@@ -198,6 +198,7 @@ import {
 } from "./screens/browser-screen.js";
 import { HistoryScreen } from "./screens/history-screen.js";
 import { McpAppScreen } from "./screens/mcp-app-screen.js";
+import { PasswordsScreen } from "./screens/passwords-screen.js";
 import { ProfileSettingsScreen } from "./screens/profile-settings-screen.js";
 import { RunScreen } from "./screens/run-screen.js";
 import { SettingsScreen } from "./screens/settings-screen.js";
@@ -1413,6 +1414,13 @@ export function App({
         split,
       };
     });
+  };
+  /** The Passwords page of a profile (the window's own by default). */
+  const openPasswords = (profileId?: string) => {
+    const target =
+      profileId ?? activeProfile?.id ?? profilesData?.defaultProfileId;
+    if (target)
+      openTab({ kind: "passwords", name: target, label: "Passwords" });
   };
 
   // Chrome's New Tab analog: a fresh tab whose content is the palette.
@@ -5737,6 +5745,7 @@ export function App({
                         data={profilesData}
                         projects={allProjects}
                         onClose={() => closeTab(tabKey(tab))}
+                        onOpenPasswords={() => openPasswords(tab.name)}
                       />
                     ) : tab.kind === "history" ? (
                       <HistoryScreen
@@ -5745,6 +5754,8 @@ export function App({
                         onSearch={historySearch}
                         onOpen={openHistory}
                       />
+                    ) : tab.kind === "passwords" ? (
+                      <PasswordsScreen profileId={tab.name} />
                     ) : tab.kind === "sites" ? (
                       <SitesScreen
                         active={Boolean(viewSlots[tabKey(tab)])}
@@ -5840,6 +5851,7 @@ export function App({
                     }
                     onPageClose={() => closeTab(browserTabKey(browser.localId))}
                     onOpenSiteSettings={setSiteSettingsOrigin}
+                    onOpenPasswords={() => openPasswords(browser.profileId)}
                     previewLinksWithAlt={prefs?.previewLinksWithAlt ?? true}
                     floatingDismissShortcut={keybindings["dismiss-floating"]}
                     onDismissFloating={
@@ -6306,6 +6318,8 @@ export function App({
             onSearch={historySearch}
             onOpen={openHistory}
           />
+        ) : activeTab?.kind === "passwords" ? (
+          <PasswordsScreen profileId={activeTab.name} />
         ) : activeTab?.kind === "sites" ? (
           <SitesScreen onOpenSite={setSiteSettingsOrigin} />
         ) : activeTab?.kind === "profile-settings" && profilesData ? (
@@ -6315,6 +6329,7 @@ export function App({
             data={profilesData}
             projects={allProjects}
             onClose={() => closeTab(tabKey(activeTab))}
+            onOpenPasswords={() => openPasswords(activeTab.name)}
           />
         ) : workspace.browsers.length > 0 ? (
           <div className="relative flex min-h-0 flex-1 flex-col">
@@ -6342,6 +6357,7 @@ export function App({
                   }
                   onPageClose={() => closeTab(browserTabKey(browser.localId))}
                   onOpenSiteSettings={setSiteSettingsOrigin}
+                  onOpenPasswords={() => openPasswords(browser.profileId)}
                   registerNavigate={(navigate) =>
                     browserNavigatorsRef.current.set(browser.localId, navigate)
                   }

@@ -146,63 +146,17 @@ describe("ProfileSettingsScreen", () => {
     expect(container.textContent).toContain("Profile not found");
   });
 
-  it("opens password management from profile settings", async () => {
-    await act(async () => {
-      root.render(
-        <ProfileSettingsScreen
-          profileId={profile.id}
-          activeProfileId={profile.id}
-          data={{ profiles: [profile], defaultProfileId: profile.id }}
-          projects={[project]}
-          onClose={() => undefined}
-        />,
-      );
-    });
-    const add = [...container.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("Add password"),
-    );
-    await act(async () => add?.click());
-    // Forms open in dialogs at the body, never inline in the page.
-    const editor = document.querySelector('[data-testid="password-editor"]');
-    expect(
-      container.querySelector('[data-testid="password-editor"]'),
-    ).toBeNull();
-    expect(editor).not.toBeNull();
-    expect(
-      editor?.querySelector('[data-testid="password-origin"]'),
-    ).not.toBeNull();
-    expect(
-      editor?.querySelector('[data-testid="password-username"]'),
-    ).not.toBeNull();
-    expect(
-      editor?.querySelector('[data-testid="password-value"]'),
-    ).not.toBeNull();
-    const dialogRoot = editor?.closest("[role=dialog]")?.parentElement;
-    expect(dialogRoot?.getAttribute("aria-hidden")).toBe("false");
-    expect(desktopApi.vaultList).toHaveBeenCalledWith({
-      profileId: profile.id,
-    });
-    const cancel = [...(editor?.querySelectorAll("button") ?? [])].find(
-      (button) => button.textContent === "Cancel",
-    );
-    await act(async () => cancel?.click());
-    expect(dialogRoot?.getAttribute("aria-hidden")).toBe("true");
-    expect(document.activeElement).toBe(add);
-  });
-
-  it("searches passwords by website and username, with every term required", async () => {
+  it("counts saved logins and opens the profile's Passwords page", async () => {
     vi.mocked(desktopApi.vaultList).mockResolvedValueOnce([
       {
         id: "credential-1",
         origin: "https://accounts.example.com",
         username: "alice@example.com",
-      },
-      {
-        id: "credential-2",
-        origin: "https://github.com",
-        username: "octocat",
+        hasNote: false,
+        updatedAt: 0,
       },
     ]);
+    const onOpenPasswords = vi.fn();
     await act(async () => {
       root.render(
         <ProfileSettingsScreen
@@ -211,95 +165,15 @@ describe("ProfileSettingsScreen", () => {
           data={{ profiles: [profile], defaultProfileId: profile.id }}
           projects={[project]}
           onClose={() => undefined}
+          onOpenPasswords={onOpenPasswords}
         />,
       );
     });
-    expect(container.querySelectorAll("[data-item-id]")).toHaveLength(2);
-    const search = container.querySelector<HTMLInputElement>(
-      '[data-testid="password-search"]',
+    expect(container.textContent).toContain("1 saved login");
+    const open = [...container.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Open passwords"),
     );
-    const valueSetter = Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      "value",
-    )?.set;
-    await act(async () => {
-      valueSetter?.call(search, "example alice");
-      search?.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    expect(container.querySelectorAll("[data-item-id]")).toHaveLength(1);
-    expect(container.textContent).toContain("accounts.example.com");
-    expect(container.textContent).not.toContain("octocat");
-    expect(container.textContent).toContain("1 match");
-
-    await act(async () => {
-      search?.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "Escape",
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-    });
-    expect(search?.value).toBe("");
-    expect(container.querySelectorAll("[data-item-id]")).toHaveLength(2);
-  });
-
-  it("reveals, copies, and confirms deletion with website-specific feedback", async () => {
-    vi.mocked(desktopApi.vaultList).mockResolvedValueOnce([
-      {
-        id: "credential-1",
-        origin: "https://accounts.example.com",
-        username: "alice@example.com",
-      },
-    ]);
-    vi.mocked(desktopApi.vaultReveal).mockResolvedValueOnce({
-      id: "credential-1",
-      origin: "https://accounts.example.com",
-      username: "alice@example.com",
-      password: "correct horse battery staple",
-    });
-    await act(async () => {
-      root.render(
-        <ProfileSettingsScreen
-          profileId={profile.id}
-          activeProfileId={profile.id}
-          data={{ profiles: [profile], defaultProfileId: profile.id }}
-          projects={[project]}
-          onClose={() => undefined}
-        />,
-      );
-    });
-
-    const reveal = container.querySelector<HTMLButtonElement>(
-      '[aria-label="Reveal password for accounts.example.com"]',
-    );
-    await act(async () => reveal?.click());
-    expect(container.textContent).toContain("correct horse battery staple");
-    expect(desktopApi.vaultReveal).toHaveBeenCalledWith({
-      profileId: profile.id,
-      id: "credential-1",
-    });
-
-    const copy = container.querySelector<HTMLButtonElement>(
-      '[aria-label="Copy password for accounts.example.com"]',
-    );
-    await act(async () => copy?.click());
-    expect(
-      container.querySelector(
-        '[aria-label="Password for accounts.example.com copied"]',
-      ),
-    ).not.toBeNull();
-    expect(container.textContent).toContain(
-      "The clipboard will clear in 30 seconds.",
-    );
-
-    const deleteButton = container.querySelector<HTMLButtonElement>(
-      '[aria-label="Delete password for accounts.example.com"]',
-    );
-    await act(async () => deleteButton?.click());
-    expect(container.textContent).not.toContain("Delete the password for");
-    expect(document.body.textContent).toContain(
-      "Delete the password for accounts.example.com?",
-    );
+    await act(async () => open?.click());
+    expect(onOpenPasswords).toHaveBeenCalledOnce();
   });
 });

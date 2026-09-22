@@ -784,17 +784,23 @@ const api = {
         handler,
       );
   },
-  onBrowserCredentialFillOffer: (listener: (offer: unknown) => void) => {
-    const handler = (_event: unknown, offer: unknown) => listener(offer);
-    ipcRenderer.on("catamorphic:browser-credential-fill-offer", handler);
+  onBrowserCredentialSaved: (listener: (saved: unknown) => void) => {
+    const handler = (_event: unknown, saved: unknown) => listener(saved);
+    ipcRenderer.on("catamorphic:browser-credential-saved", handler);
     return () =>
       ipcRenderer.removeListener(
-        "catamorphic:browser-credential-fill-offer",
+        "catamorphic:browser-credential-saved",
         handler,
       );
   },
-  browserCredentialAccept: (input: unknown): Promise<boolean> =>
+  browserCredentialAccept: (input: unknown): Promise<unknown> =>
     invoke("catamorphic:browser-credential-accept", input),
+  browserCredentialNever: (input: unknown): Promise<boolean> =>
+    invoke("catamorphic:browser-credential-never", input),
+  browserPasswordSuggest: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:browser-password-suggest", input),
+  browserPasswordUseSuggested: (input: unknown): Promise<boolean> =>
+    invoke("catamorphic:browser-password-use-suggested", input),
   browserCredentialDismiss: (input: unknown): Promise<void> =>
     invoke("catamorphic:browser-credential-dismiss", input),
   browserCredentialFill: (input: unknown): Promise<unknown> =>
@@ -919,6 +925,7 @@ const api = {
     origin: string;
     username: string;
     password: string;
+    note?: string;
   }): Promise<unknown> => invoke("catamorphic:vault-save", input),
   vaultUpdate: (input: {
     profileId: string;
@@ -926,7 +933,16 @@ const api = {
     origin: string;
     username: string;
     password?: string;
+    note?: string;
   }): Promise<unknown> => invoke("catamorphic:vault-update", input),
+  vaultGeneratePassword: (): Promise<string> =>
+    invoke("catamorphic:vault-generate-password"),
+  vaultNeverSaved: (input: { profileId: string }): Promise<string[]> =>
+    invoke("catamorphic:vault-never-saved", input),
+  vaultAllowSaving: (input: {
+    profileId: string;
+    origin: string;
+  }): Promise<void> => invoke("catamorphic:vault-allow-saving", input),
   vaultRemove: (input: { profileId: string; id: string }): Promise<void> =>
     invoke("catamorphic:vault-remove", input),
   vaultCopyPassword: (input: {

@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { safeStorage, systemPreferences } from "electron";
+import { app, safeStorage, systemPreferences } from "electron";
 import { argon2d, argon2id } from "hash-wasm";
 import * as kdbx from "kdbxweb";
 
@@ -33,14 +33,22 @@ kdbx.CryptoEngine.setArgon2Impl(
   },
 );
 
+/**
+ * Listing metadata. Notes can hold recovery codes and the like, so a
+ * listing only says whether one exists; `reveal` returns its text.
+ */
 export interface SavedCredential {
   id: string;
   origin: string;
   username: string;
+  hasNote: boolean;
+  /** Last change, ms since epoch. */
+  updatedAt: number;
 }
 
 export interface CredentialWithSecret extends SavedCredential {
   password: string;
+  note: string;
 }
 
 export interface CredentialUpdate {
@@ -48,7 +56,15 @@ export interface CredentialUpdate {
   username: string;
   /** Omit to keep the existing password. */
   password?: string;
+  /** Omit to keep the existing note. */
+  note?: string;
 }
+
+/** How a submitted login relates to what the vault already holds. */
+export type CredentialMatch =
+  | { status: "new" }
+  | { status: "same"; id: string }
+  | { status: "changed"; id: string };
 
 interface OpenVault {
   db: kdbx.Kdbx;
@@ -57,6 +73,8 @@ interface OpenVault {
 }
 
 const VAULT_GROUP = "Work Browser";
+/** Meta custom data key: origins the user chose never to save for. */
+const NEVER_SAVE_KEY = "work.never-save";
 
 export function normalizeCredentialOrigin(raw: string): string {
   const value = raw.trim();
@@ -180,6 +198,15 @@ export class PasswordVault {
    */
   private async deviceAuth(vault: OpenVault, reason: string): Promise<boolean> {
     if (vault.deviceAuthed) return true;
+    // Development seam (see main/index.ts): an unpackaged app driven over
+    // CDP cannot answer a Touch ID sheet. Packaged builds always prompt.
+    if (
+      process.env.CATAMORPHIC_DEV_NO_SYSTEM_PROMPTS === "1" &&
+      !app.isPackaged
+    ) {
+      vault.deviceAuthed = true;
+      return true;
+    }
     if (process.platform === "darwin") {
       try {
         if (systemPreferences.canPromptTouchID()) {
@@ -216,6 +243,21 @@ export class PasswordVault {
     return "";
   }
 
+  private summary(entry: kdbx.KdbxEntry): SavedCredential {
+    return {
+      id: entry.uuid.id,
+      origin: this.originOf(entry),
+      username: this.fieldText(entry, "UserName"),
+      hasNote: this.fieldText(entry, "Notes").length > 0,
+      updatedAt: entry.times.lastModTime?.getTime() ?? 0,
+    };
+  }
+
+  private setNote(entry: kdbx.KdbxEntry, note: string): void {
+    if (note) entry.fields.set("Notes", kdbx.ProtectedValue.fromString(note));
+    else entry.fields.delete("Notes");
+  }
+
   /** Non-secret listing (origin + username) — safe without device auth. */
   async list(profileId: string, origin?: string): Promise<SavedCredential[]> {
     const vault = await this.unlock(profileId);
@@ -227,11 +269,7 @@ export class PasswordVault {
         (entry) =>
           !normalizedOrigin || this.originOf(entry) === normalizedOrigin,
       )
-      .map((entry) => ({
-        id: entry.uuid.id,
-        origin: this.originOf(entry),
-        username: this.fieldText(entry, "UserName"),
-      }))
+      .map((entry) => this.summary(entry))
       .sort((a, b) =>
         `${a.origin}\n${a.username}`.localeCompare(
           `${b.origin}\n${b.username}`,
@@ -255,11 +293,81 @@ export class PasswordVault {
     );
     if (!entry) return null;
     return {
-      id: entry.uuid.id,
-      origin: this.originOf(entry),
-      username: this.fieldText(entry, "UserName"),
+      ...this.summary(entry),
       password: this.fieldText(entry, "Password"),
+      note: this.fieldText(entry, "Notes"),
     };
+  }
+
+  /**
+   * Compare a submitted login with the vault without revealing anything:
+   * an unchanged password is not offered again, a changed one is offered
+   * as an update to the same entry (Chrome's "Update password?").
+   */
+  async match(
+    profileId: string,
+    input: { origin: string; username: string; password: string },
+  ): Promise<CredentialMatch> {
+    const vault = await this.unlock(profileId);
+    const origin = normalizeCredentialOrigin(input.origin);
+    const candidates = this.entries(vault.db).filter(
+      (entry) => this.originOf(entry) === origin,
+    );
+    const sameUser = candidates.find(
+      (entry) => this.fieldText(entry, "UserName") === input.username,
+    );
+    if (sameUser) {
+      return this.fieldText(sameUser, "Password") === input.password
+        ? { status: "same", id: sameUser.uuid.id }
+        : { status: "changed", id: sameUser.uuid.id };
+    }
+    // A form without a username field (a password-only step) that repeats
+    // a saved password is the same login, not a new one.
+    if (!input.username) {
+      const samePassword = candidates.find(
+        (entry) => this.fieldText(entry, "Password") === input.password,
+      );
+      if (samePassword) return { status: "same", id: samePassword.uuid.id };
+    }
+    return { status: "new" };
+  }
+
+  /** Origins the user chose never to save passwords for. */
+  async neverSaved(profileId: string): Promise<string[]> {
+    const vault = await this.unlock(profileId);
+    return this.readNeverSaved(vault);
+  }
+
+  async setNeverSave(
+    profileId: string,
+    origin: string,
+    never: boolean,
+  ): Promise<string[]> {
+    const vault = await this.unlock(profileId);
+    const normalized = normalizeCredentialOrigin(origin);
+    const current = this.readNeverSaved(vault).filter(
+      (candidate) => candidate !== normalized,
+    );
+    const next = never ? [...current, normalized].sort() : current;
+    vault.db.meta.customData.set(NEVER_SAVE_KEY, {
+      value: JSON.stringify(next),
+      lastModified: new Date(),
+    });
+    await this.persist(vault);
+    return next;
+  }
+
+  private readNeverSaved(vault: OpenVault): string[] {
+    const raw = vault.db.meta.customData.get(NEVER_SAVE_KEY)?.value;
+    if (!raw) return [];
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return Array.isArray(parsed)
+        ? parsed.filter((value): value is string => typeof value === "string")
+        : [];
+    } catch {
+      return [];
+    }
   }
 
   /** Import in one write, preserving accounts added or edited during Keychain auth. */
@@ -313,7 +421,12 @@ export class PasswordVault {
   /** Create or update (same origin+username ⇒ update), Chrome-style. */
   async save(
     profileId: string,
-    input: { origin: string; username: string; password: string },
+    input: {
+      origin: string;
+      username: string;
+      password: string;
+      note?: string;
+    },
   ): Promise<SavedCredential> {
     const vault = await this.unlock(profileId);
     const origin = normalizeCredentialOrigin(input.origin);
@@ -330,13 +443,10 @@ export class PasswordVault {
       "Password",
       kdbx.ProtectedValue.fromString(input.password),
     );
+    if (input.note !== undefined) this.setNote(entry, input.note);
     entry.times.update();
     await this.persist(vault);
-    return {
-      id: entry.uuid.id,
-      origin,
-      username: input.username,
-    };
+    return this.summary(entry);
   }
 
   async update(
@@ -359,9 +469,10 @@ export class PasswordVault {
         kdbx.ProtectedValue.fromString(input.password),
       );
     }
+    if (input.note !== undefined) this.setNote(entry, input.note);
     entry.times.update();
     await this.persist(vault);
-    return { id, origin, username: input.username };
+    return this.summary(entry);
   }
 
   async remove(profileId: string, id: string): Promise<void> {

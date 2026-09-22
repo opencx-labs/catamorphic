@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { matchesShortcut } from "../shared/keybindings.js";
+import {
+  classifyPasswordField,
+  type FieldDescriptor,
+  isStandaloneUsername,
+  isUsernameCandidate,
+} from "../shared/login-fields.js";
 import { openModeFromEvent } from "../shared/open-mode.js";
 
 /**
@@ -8,8 +14,9 @@ import { openModeFromEvent } from "../shared/open-mode.js";
  * and the trusted main process; the embedding renderer receives metadata
  * and status only. Jobs, all Chrome-like:
  *  - present Chrome's client-hint brands to JS (see below),
- *  - detect login forms and report submissions (offer-to-save),
- *  - fill credentials into the current login form on command.
+ *  - place password suggestions under login fields and report submitted
+ *    logins (offer-to-save, auto-save of generated passwords),
+ *  - fill saved or generated passwords on command.
  */
 
 /**
@@ -265,77 +272,280 @@ if (process.platform === "darwin") {
   );
 }
 
-interface LoginForm {
-  id: string;
-  form: HTMLFormElement | null;
+/**
+ * Passwords. The page tells the host where a login field is when the
+ * user clicks it (or tabs into a new-password field), so the host can
+ * draw suggestions under it; keys the suggestions own while open come
+ * back to the host. Submitted logins go to the trusted main process, and
+ * so does every report of the page's password forms, which is how main
+ * decides whether a sign-in worked. Secrets arrive only from main, to be
+ * written into the fields.
+ */
+type LoginFieldKind = "username" | "current-password" | "new-password";
+
+interface LoginGroup {
+  /** The form, or the document for formless (script-driven) sign-ins. */
+  scope: ParentNode;
   username: HTMLInputElement | null;
-  password: HTMLInputElement;
+  passwords: HTMLInputElement[];
 }
 
-const formIds = new WeakMap<HTMLInputElement, string>();
-let nextFormId = 1;
+const fieldIds = new WeakMap<HTMLInputElement, string>();
+const fieldsById = new Map<string, WeakRef<HTMLInputElement>>();
+let nextFieldId = 1;
+function fieldId(input: HTMLInputElement): string {
+  let id = fieldIds.get(input);
+  if (!id) {
+    id = `login-field-${nextFieldId++}`;
+    fieldIds.set(input, id);
+    fieldsById.set(id, new WeakRef(input));
+  }
+  return id;
+}
+function fieldById(id: unknown): HTMLInputElement | null {
+  if (typeof id !== "string") return null;
+  const input = fieldsById.get(id)?.deref();
+  return input?.isConnected ? input : null;
+}
 
 function visible(el: HTMLElement): boolean {
   const rect = el.getBoundingClientRect();
   return rect.width > 0 && rect.height > 0;
 }
-
-function findLoginForms(includeNewPassword = false): LoginForm[] {
-  const passwords = [
-    ...document.querySelectorAll<HTMLInputElement>(
-      'input[type="password"], input[autocomplete="current-password"]',
-    ),
-  ].filter(
-    (input) =>
-      visible(input) &&
-      (includeNewPassword ||
-        input.autocomplete.toLowerCase() !== "new-password") &&
-      !input.disabled &&
-      !input.readOnly,
-  );
-  return passwords.map((password) => {
-    let id = formIds.get(password);
-    if (!id) {
-      id = `login-form-${nextFormId++}`;
-      formIds.set(password, id);
-    }
-    const form = password.closest("form");
-    const scope: ParentNode = form ?? document;
-    const username =
-      [
-        ...scope.querySelectorAll<HTMLInputElement>(
-          'input[autocomplete="username"], input[autocomplete="email"], input[type="email"], input[type="text"], input[type="tel"]',
-        ),
-      ]
-        .filter((input) => visible(input) && !input.disabled && !input.readOnly)
-        // The username field is the closest eligible input above the
-        // password field in DOM order.
-        .filter(
-          (candidate) =>
-            candidate.compareDocumentPosition(password) &
-            Node.DOCUMENT_POSITION_FOLLOWING,
-        )
-        .at(-1) ?? null;
-    return { id, form, username, password };
-  });
+function editable(input: HTMLInputElement): boolean {
+  return visible(input) && !input.disabled && !input.readOnly;
 }
 
-let announcedForms = "";
-function announceForms(): void {
-  const forms = findLoginForms();
-  const key = JSON.stringify([location.origin, forms.map((form) => form.id)]);
-  if (key === announcedForms) return;
-  announcedForms = key;
-  if (forms.length > 0) {
-    ipcRenderer.send("catamorphic:browser-login-forms", {
-      origin: location.origin,
-      forms: forms.map((form) => ({ id: form.id })),
+// "Show password" toggles turn a password field into a text field; it is
+// still the password field (and must not read as the form going away).
+const passwordFields = new WeakSet<HTMLInputElement>();
+function isPasswordField(input: HTMLInputElement): boolean {
+  if (input.type === "password") passwordFields.add(input);
+  return input.type === "password" || passwordFields.has(input);
+}
+
+function describe(input: HTMLInputElement): FieldDescriptor {
+  const labels = [...(input.labels ?? [])].map((label) => label.textContent);
+  return {
+    type: input.type,
+    autocomplete: input.getAttribute("autocomplete") ?? "",
+    hints: [
+      input.name,
+      input.id,
+      input.placeholder,
+      input.getAttribute("aria-label"),
+      ...labels,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  };
+}
+
+function formHints(scope: ParentNode): string {
+  if (!(scope instanceof HTMLFormElement)) return document.title;
+  const submit = scope.querySelector<HTMLElement>(
+    'button:not([type="button"]):not([type="reset"]), input[type="submit"]',
+  );
+  return [
+    scope.id,
+    scope.getAttribute("action"),
+    scope.getAttribute("aria-label"),
+    submit?.textContent,
+    submit instanceof HTMLInputElement ? submit.value : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function loginGroups(): LoginGroup[] {
+  const groups = new Map<ParentNode, HTMLInputElement[]>();
+  for (const input of document.querySelectorAll<HTMLInputElement>("input")) {
+    if (!isPasswordField(input) || !editable(input)) continue;
+    const scope = input.form ?? document;
+    groups.set(scope, [...(groups.get(scope) ?? []), input]);
+  }
+  return [...groups].map(([scope, passwords]) => ({
+    scope,
+    passwords,
+    username: usernameBefore(scope, passwords[0]),
+  }));
+}
+
+/** The closest account-like field above the first password field. */
+function usernameBefore(
+  scope: ParentNode,
+  password: HTMLInputElement | undefined,
+): HTMLInputElement | null {
+  if (!password) return null;
+  return (
+    [...scope.querySelectorAll<HTMLInputElement>("input")]
+      .filter(
+        (input) =>
+          !isPasswordField(input) &&
+          editable(input) &&
+          input.compareDocumentPosition(password) &
+            Node.DOCUMENT_POSITION_FOLLOWING &&
+          isUsernameCandidate(describe(input)),
+      )
+      .at(-1) ?? null
+  );
+}
+
+function kindOf(input: HTMLInputElement): LoginFieldKind | null {
+  if (!editable(input)) return null;
+  const group = loginGroups().find(
+    (candidate) =>
+      candidate.passwords.includes(input) || candidate.username === input,
+  );
+  if (group) {
+    if (group.username === input) return "username";
+    return classifyPasswordField({
+      field: describe(input),
+      index: group.passwords.indexOf(input),
+      count: group.passwords.length,
+      formHints: formHints(group.scope),
     });
   }
+  return !isPasswordField(input) && isStandaloneUsername(describe(input))
+    ? "username"
+    : null;
+}
+
+// --- suggestions under a field ---
+let shownField: HTMLInputElement | null = null;
+let suggestionsOpen = false;
+/** Enter picks a row only while one is highlighted; otherwise it submits. */
+let suggestionHighlighted = false;
+/** Where a context-menu fill lands when no field id comes with it. */
+let lastFocusedField: HTMLInputElement | null = null;
+
+function showSuggestions(input: HTMLInputElement): void {
+  const kind = kindOf(input);
+  if (!kind) return;
+  shownField = input;
+  const rect = input.getBoundingClientRect();
+  ipcRenderer.sendToHost("catamorphic:autofill-show", {
+    fieldId: fieldId(input),
+    kind,
+    value: input.value,
+    rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+  });
+}
+function hideSuggestions(reason: "blur" | "other" = "other"): void {
+  if (!shownField) return;
+  shownField = null;
+  // A press on the list itself blurs the page first; the host knows
+  // whether that is what happened.
+  ipcRenderer.sendToHost("catamorphic:autofill-hide", { reason });
+}
+
+window.addEventListener(
+  "click",
+  (event) => {
+    const input = event.target;
+    if (input instanceof HTMLInputElement && event.isTrusted)
+      showSuggestions(input);
+  },
+  { capture: true },
+);
+// Chrome offers a generated password as soon as a new-password field
+// takes focus; sign-in suggestions wait for a click or ArrowDown.
+window.addEventListener(
+  "focusin",
+  (event) => {
+    const input = event.target;
+    if (!(input instanceof HTMLInputElement)) return;
+    lastFocusedField = input;
+    if (kindOf(input) === "new-password" && !input.value)
+      showSuggestions(input);
+  },
+  { capture: true },
+);
+window.addEventListener(
+  "focusout",
+  (event) => {
+    if (event.target === shownField) hideSuggestions("blur");
+  },
+  { capture: true },
+);
+window.addEventListener(
+  "input",
+  (event) => {
+    if (event.target !== shownField || !shownField) return;
+    ipcRenderer.sendToHost("catamorphic:autofill-input", {
+      fieldId: fieldId(shownField),
+      value: shownField.value,
+    });
+  },
+  { capture: true },
+);
+window.addEventListener("scroll", () => hideSuggestions(), {
+  capture: true,
+  passive: true,
+});
+window.addEventListener("resize", () => hideSuggestions());
+ipcRenderer.on("catamorphic:autofill-open", (_event, state: unknown) => {
+  const { open, highlighted } =
+    state && typeof state === "object"
+      ? (state as { open?: unknown; highlighted?: unknown })
+      : {};
+  suggestionsOpen = open === true;
+  suggestionHighlighted = highlighted === true;
+});
+const SUGGESTION_KEYS = new Set(["ArrowDown", "ArrowUp", "Enter", "Escape"]);
+window.addEventListener(
+  "keydown",
+  (event) => {
+    const input = event.target;
+    if (!(input instanceof HTMLInputElement)) return;
+    if (suggestionsOpen && input === shownField) {
+      if (event.key === "Tab") {
+        hideSuggestions();
+        return;
+      }
+      const owned =
+        SUGGESTION_KEYS.has(event.key) &&
+        !event.isComposing &&
+        (event.key !== "Enter" || suggestionHighlighted);
+      if (owned) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        ipcRenderer.sendToHost("catamorphic:autofill-key", { key: event.key });
+        return;
+      }
+    }
+    if (event.key === "ArrowDown" && !event.altKey && !event.metaKey) {
+      if (kindOf(input)) {
+        event.preventDefault();
+        showSuggestions(input);
+      }
+      return;
+    }
+    // Enter in a login field submits it, often without a submit event.
+    if (event.key === "Enter") {
+      hideSuggestions();
+      captureSubmission(input);
+    }
+  },
+  { capture: true },
+);
+
+// --- form reports: main decides from these whether a sign-in worked ---
+let reportedPasswordForms = -1;
+function reportForms(load: boolean): void {
+  const passwordForms = loginGroups().length;
+  if (!load && passwordForms === reportedPasswordForms) return;
+  reportedPasswordForms = passwordForms;
+  ipcRenderer.send("catamorphic:browser-login-forms", {
+    origin: location.origin,
+    passwordForms,
+    load,
+  });
 }
 
 // Ignore unrelated SPA churn. A ticking clock, chat stream, or video UI
 // should not keep scanning the whole document and sending duplicate IPC.
+let observeDebounce: ReturnType<typeof setTimeout> | undefined;
 const observer = new MutationObserver((mutations) => {
   const touchesForm = mutations.some(
     (mutation) =>
@@ -349,82 +559,114 @@ const observer = new MutationObserver((mutations) => {
   if (!touchesForm || observeDebounce !== undefined) return;
   observeDebounce = setTimeout(() => {
     observeDebounce = undefined;
-    announceForms();
-  }, 400);
+    if (shownField && !editable(shownField)) hideSuggestions();
+    reportForms(false);
+  }, 300);
 });
-let observeDebounce: ReturnType<typeof setTimeout> | undefined;
-
-window.addEventListener("DOMContentLoaded", () => {
-  announceForms();
+const observeForms = () =>
   observer.observe(document.documentElement, {
     childList: true,
     subtree: true,
     attributes: true,
-    attributeFilter: ["type", "autocomplete"],
+    attributeFilter: ["type", "autocomplete", "style", "class", "hidden"],
   });
+
+window.addEventListener("DOMContentLoaded", () => {
+  reportForms(true);
+  observeForms();
 });
 window.addEventListener("pagehide", () => {
+  hideSuggestions();
   observer.disconnect();
   clearTimeout(observeDebounce);
   observeDebounce = undefined;
 });
 window.addEventListener("pageshow", (event) => {
   if (!event.persisted) return;
-  announcedForms = "";
-  announceForms();
-  observer.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ["type", "autocomplete"],
-  });
+  reportForms(true);
+  observeForms();
 });
 
-// Offer-to-save: capture submitted credentials. Capture phase on the
-// window sees submissions even when the page cancels the event later.
-function captureSubmission(): void {
-  for (const { username, password } of findLoginForms(true)) {
-    if (password.value) {
-      ipcRenderer.send("catamorphic:browser-credentials-submitted", {
-        origin: location.origin,
-        username: username?.value ?? "",
-        password: password.value,
-      });
-      return;
-    }
-  }
-}
-window.addEventListener("submit", captureSubmission, { capture: true });
-window.addEventListener(
-  "focusin",
-  (event) => {
-    const input = event.target;
-    if (!(input instanceof HTMLInputElement) || input.type !== "password") {
-      return;
-    }
-    const form = findLoginForms(true).find(
-      (candidate) => candidate.password === input,
+// --- submissions ---
+/**
+ * Report what a sign-in submitted. `from` is the element that submitted
+ * (a form, a button, a field): its group is the one that counts, and a
+ * formless page takes whichever group holds a password.
+ */
+function captureSubmission(from: Element): void {
+  const form =
+    from instanceof HTMLFormElement
+      ? from
+      : ((from as HTMLInputElement | HTMLButtonElement).form ??
+        from.closest("form"));
+  const groups = loginGroups();
+  const group =
+    groups.find((candidate) => candidate.scope === (form ?? document)) ??
+    (form
+      ? undefined
+      : groups.find((candidate) =>
+          candidate.passwords.some((input) => input.value),
+        ));
+  if (group) {
+    const newPasswords = group.passwords.filter(
+      (input, index) =>
+        classifyPasswordField({
+          field: describe(input),
+          index,
+          count: group.passwords.length,
+          formHints: formHints(group.scope),
+        }) === "new-password",
     );
-    if (!form) return;
-    ipcRenderer.send("catamorphic:browser-login-form-focused", {
+    // A change form submits the new password; a sign-in its only one.
+    const password =
+      newPasswords.find((input) => input.value)?.value ??
+      group.passwords.find((input) => input.value)?.value ??
+      "";
+    if (!password) return;
+    ipcRenderer.send("catamorphic:browser-credentials-submitted", {
       origin: location.origin,
-      formId: form.id,
+      username: group.username?.value.trim() ?? "",
+      password,
     });
+    return;
+  }
+  // An email-first step: remember who is signing in for the next step.
+  const scope: ParentNode = form ?? document;
+  const username = [...scope.querySelectorAll<HTMLInputElement>("input")].find(
+    (input) =>
+      editable(input) && input.value && isStandaloneUsername(describe(input)),
+  );
+  if (username)
+    ipcRenderer.send("catamorphic:browser-username-submitted", {
+      origin: location.origin,
+      username: username.value.trim(),
+    });
+}
+
+// Capture phase on the window sees submissions even when the page
+// cancels the event later.
+window.addEventListener(
+  "submit",
+  (event) => {
+    if (event.target instanceof HTMLFormElement)
+      captureSubmission(event.target);
   },
   { capture: true },
 );
-// Many SPAs sign in from a button click without a submit event.
+// Many SPAs sign in from a plain button (or a div) click.
 window.addEventListener(
   "click",
   (event) => {
-    const target = event.target as HTMLElement | null;
+    const target = event.target as Element | null;
     const button = target?.closest?.(
-      'button[type="submit"], input[type="submit"], button:not([type])',
+      'button, input[type="submit"], input[type="button"], [role="button"]',
     );
-    if (button) captureSubmission();
+    if (button && event.isTrusted) captureSubmission(button);
   },
   { capture: true },
 );
+
+// --- filling ---
 
 function setNativeValue(input: HTMLInputElement, value: string): void {
   // React and friends ignore direct .value writes; go through the native
@@ -438,20 +680,70 @@ function setNativeValue(input: HTMLInputElement, value: string): void {
   input.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+/** The login group around a field (or the page's first, lacking one). */
+function groupFor(input: HTMLInputElement | null): LoginGroup | null {
+  const groups = loginGroups();
+  return (
+    groups.find(
+      (group) =>
+        !!input &&
+        (group.passwords.includes(input) ||
+          group.username === input ||
+          group.scope === (input.form ?? document)),
+    ) ??
+    groups[0] ??
+    null
+  );
+}
+
 ipcRenderer.on(
   "catamorphic:fill-credentials",
   (
     _event,
-    payload: { formId?: string; username: string; password: string },
+    payload: { fieldId?: string; username: string; password: string },
   ) => {
-    const forms = findLoginForms(true);
-    const target = forms.find((form) => form.id === payload.formId) ?? forms[0];
-    if (!target) return;
-    if (target.username && payload.username) {
-      setNativeValue(target.username, payload.username);
+    const field = fieldById(payload.fieldId) ?? lastFocusedField;
+    const group = groupFor(field);
+    if (!group) {
+      // An email-first step has only the username field.
+      if (field && kindOf(field) === "username" && payload.username) {
+        setNativeValue(field, payload.username);
+        field.focus();
+      }
+      return;
     }
-    setNativeValue(target.password, payload.password);
-    target.password.focus();
+    if (group.username && payload.username)
+      setNativeValue(group.username, payload.username);
+    const password = group.passwords[0];
+    if (password) {
+      setNativeValue(password, payload.password);
+      password.focus();
+    }
+    hideSuggestions();
+  },
+);
+
+ipcRenderer.on(
+  "catamorphic:fill-generated",
+  (_event, payload: { fieldId?: string; password: string }) => {
+    const field = fieldById(payload.fieldId) ?? lastFocusedField;
+    const group = groupFor(field);
+    if (!group) return;
+    // The new password and its confirmation; never a change form's
+    // current password.
+    const targets = group.passwords.filter(
+      (input, index) =>
+        classifyPasswordField({
+          field: describe(input),
+          index,
+          count: group.passwords.length,
+          formHints: formHints(group.scope),
+        }) === "new-password",
+    );
+    for (const input of targets.length ? targets : group.passwords)
+      setNativeValue(input, payload.password);
+    hideSuggestions();
+    (field ?? targets[0])?.focus();
   },
 );
 

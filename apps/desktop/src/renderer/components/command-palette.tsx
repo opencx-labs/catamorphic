@@ -20,6 +20,7 @@ import {
   GitCompare,
   Globe,
   History,
+  KeyRound,
   LayoutGrid,
   Link,
   Link2,
@@ -1389,6 +1390,20 @@ export function CommandPalette({
         run: () => onOpenSiteSettings(origin),
       });
     }
+    if (profileId)
+      items.push({
+        id: "open-passwords",
+        icon: KeyRound,
+        label: "Passwords",
+        detail: "Saved logins and notes",
+        keywords: ["passwords", "logins", "credentials", "keychain", "notes"],
+        kind: "navigate",
+        run: (mode) =>
+          onOpenTab(
+            { kind: "passwords", name: profileId, label: "Passwords" },
+            mode,
+          ),
+      });
     items.push({
       id: "open-sites",
       icon: SlidersHorizontal,
@@ -1400,7 +1415,7 @@ export function CommandPalette({
         onOpenTab({ kind: "sites", name: "sites", label: "Sites" }, mode),
     });
     return items;
-  }, [focusedSite, onOpenSiteSettings, onOpenTab]);
+  }, [focusedSite, onOpenSiteSettings, onOpenTab, profileId]);
   const historyPageItem = useMemo<PaletteItem>(
     () => ({
       id: "open-history",
