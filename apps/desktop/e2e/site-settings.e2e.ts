@@ -51,7 +51,11 @@ const setSelect = (kind: string, value: string) =>
 
 describe("site settings", () => {
   it("a page's permission request opens the modal with the question first", async () => {
-    await app.waitFor(`${guest}?.getTitle?.() === 'Lab'`);
+    // The title can land before dom-ready; scripts need the latter.
+    await app.waitFor(
+      `${guest}?.getTitle?.() === 'Lab' && !${guest}.isLoading()`,
+      { label: "page ready" },
+    );
     await inGuest("askNotifications(); true");
     await app.waitFor(
       `!!document.querySelector('[data-testid="site-permission-prompt"]')`,

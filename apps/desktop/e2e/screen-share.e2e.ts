@@ -55,7 +55,11 @@ const title = () => app.eval<string>(`${guest}.getTitle()`);
 
 describe("screen sharing", () => {
   it("getDisplayMedia opens the picker with the asking tab listed", async () => {
-    await app.waitFor(`${guest}?.getTitle?.() === 'Share Lab'`);
+    // The title can land before dom-ready; scripts need the latter.
+    await app.waitFor(
+      `${guest}?.getTitle?.() === 'Share Lab' && !${guest}.isLoading()`,
+      { label: "page ready" },
+    );
     await inGuest("share({ video: true }); true");
     await waitForPicker();
     await app.waitFor(
