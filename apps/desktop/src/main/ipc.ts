@@ -1605,6 +1605,9 @@ export function registerIpcHandlers(
     // proves the app really exits from there (hide-on-close must yield).
     ipcMain.handle("catamorphic:dev-update-restart", () => {
       autoUpdater.emit("before-quit-for-update");
+      // Electron quits once the last window has closed (macOS keeps the
+      // app alive otherwise); the installer's terminate stands in for it.
+      app.once("window-all-closed", () => app.quit());
       for (const window of BrowserWindow.getAllWindows()) window.close();
       return true;
     });
