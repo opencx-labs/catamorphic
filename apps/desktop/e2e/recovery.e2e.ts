@@ -129,8 +129,15 @@ describe("interrupted turn recovery", () => {
         label: "interrupted message after the worker lease expires",
       },
     );
-    expect(await run<string[]>(`return activityLines();`)).toEqual([]);
-    expect(await run<number>(`return spinnersOn();`)).toBe(0);
+    // The activity line and spinner fade out over a beat after the note
+    // lands; what matters is that they go, not that they are gone on the
+    // very frame the note appears.
+    await runWait(`return activityLines().length === 0;`, {
+      label: "activity line gone after the interruption",
+    });
+    await runWait(`return spinnersOn() === 0;`, {
+      label: "no spinner after the interruption",
+    });
 
     // The relaunch killed the harness's in-memory session. Sending again
     // must NOT dead-end on "Session not found" — the host re-anchors with
