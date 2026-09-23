@@ -324,7 +324,33 @@ export function registerBrowserSupport(
     };
     appCommandListeners.set(window, listener);
     window.on("app-command", listener);
-    window.once("closed", () => appCommandListeners.delete(window));
+    // macOS three-finger swipe (System Settings → Trackpad → "Swipe between
+    // pages"). Two-finger swipes reach the page as wheel events and are
+    // handled by the guest preload.
+    const onSwipe = (_event: Electron.Event, swipeDirection: string) => {
+      const direction =
+        swipeDirection === "right"
+          ? "back"
+          : swipeDirection === "left"
+            ? "forward"
+            : null;
+      if (!direction) return;
+      const focused = webContents.getFocusedWebContents();
+      const guestId =
+        focused?.getType() === "webview" &&
+        focused.hostWebContents === window.webContents
+          ? focused.id
+          : null;
+      window.webContents.send("catamorphic:browser-navigate", {
+        webContentsId: guestId,
+        direction,
+      });
+    };
+    window.on("swipe", onSwipe);
+    window.once("closed", () => {
+      appCommandListeners.delete(window);
+      window.removeListener("swipe", onSwipe);
+    });
   };
   app.on("browser-window-created", attachBrowserCommands);
   for (const window of BrowserWindow.getAllWindows()) {
