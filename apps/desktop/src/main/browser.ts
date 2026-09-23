@@ -25,7 +25,11 @@ import type {
   BookmarkPlacement,
 } from "../shared/bookmark-target.js";
 import { browserImportRequestSchema } from "../shared/browser-import.js";
-import { historyVisitSchema } from "../shared/history.js";
+import {
+  type HistoryProject,
+  historyProjectSchema,
+  historyVisitSchema,
+} from "../shared/history.js";
 import { matchesShortcut } from "../shared/keybindings.js";
 import { OPEN_ACTIONS } from "../shared/open-mode.js";
 import {
@@ -1472,6 +1476,7 @@ export function registerBrowserSupport(
     const query = z
       .object({
         query: z.string().max(4096).optional(),
+        projectId: z.string().min(1).optional(),
         offset: z.number().int().nonnegative().optional(),
         limit: z.number().int().positive().max(200).optional(),
       })
@@ -1481,17 +1486,27 @@ export function registerBrowserSupport(
       ...query,
     });
   });
+  /** A visit names only projects of the profile it lands in. */
+  const ownedProject = (
+    profileId: string,
+    project: HistoryProject | undefined,
+  ): HistoryProject | undefined =>
+    project && profiles.get(profileId)?.projectIds.includes(project.id)
+      ? project
+      : undefined;
   ipcMain.handle("catamorphic:history-record", (event, input: unknown) => {
     const { visit, revisit } = z
       .object({ visit: historyVisitSchema, revisit: z.boolean() })
       .parse(input);
     const profileId = windows.profileFor(event.sender);
+    const project = ownedProject(profileId, visit.project);
     if (
       visit.target.kind !== "web" &&
-      !profiles.get(profileId)?.projectIds.includes(visit.target.projectId)
+      visit.target.kind !== "local" &&
+      visit.target.projectId !== project?.id
     )
       return;
-    history.recordVisit({ profileId, visit, revisit });
+    history.recordVisit({ profileId, visit: { ...visit, project }, revisit });
     historyChanged(profileId);
   });
   ipcMain.handle("catamorphic:history-remove", (event, id: unknown) => {
@@ -1507,22 +1522,35 @@ export function registerBrowserSupport(
 
   ipcMain.handle(
     "catamorphic:browser-history-record",
-    (event, input: { profileId: string; url: string; title: string }) => {
-      history.record(windows.profileFor(event.sender), input.url, input.title);
-      historyChanged(windows.profileFor(event.sender));
+    (event, input: unknown) => {
+      const { url, title, project } = z
+        .object({
+          url: z.string(),
+          title: z.string(),
+          project: historyProjectSchema.optional(),
+        })
+        .parse(input);
+      const profileId = windows.profileFor(event.sender);
+      history.record({
+        profileId,
+        url,
+        title,
+        project: ownedProject(profileId, project),
+      });
+      historyChanged(profileId);
     },
   );
 
   ipcMain.handle(
     "catamorphic:browser-history-retitle",
-    (event, input: { profileId: string; url: string; title: string }) => {
+    (event, input: { url: string; title: string }) => {
       history.retitle(windows.profileFor(event.sender), input.url, input.title);
       historyChanged(windows.profileFor(event.sender));
     },
   );
   ipcMain.handle(
     "catamorphic:browser-history-favicon",
-    (event, input: { profileId: string; url: string; faviconUrl: string }) => {
+    (event, input: { url: string; faviconUrl: string }) => {
       const profileId = windows.profileFor(event.sender);
       history.setFavicon(profileId, input.url, input.faviconUrl);
       // Bookmarks of the page (imported ones have no icon) learn it too.

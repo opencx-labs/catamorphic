@@ -1,3 +1,4 @@
+import type { LucideIcon } from "lucide-react";
 import {
   AppWindow,
   FileText,
@@ -13,8 +14,12 @@ import type {
   HistoryQuery,
 } from "../../shared/history.js";
 import { desktopApi } from "./desktop-api.js";
+import { downloadIcon } from "./downloads.js";
 
-export const HISTORY_ICONS = {
+const HISTORY_ICONS: Record<
+  Exclude<HistoryEntry["target"]["kind"], "local">,
+  LucideIcon
+> = {
   web: Globe,
   app: LayoutGrid,
   file: FileText,
@@ -23,25 +28,34 @@ export const HISTORY_ICONS = {
   run: Workflow,
   artifact: AppWindow,
 };
+export function historyIcon(entry: HistoryEntry): LucideIcon {
+  return entry.target.kind === "local"
+    ? downloadIcon(entry.target.path)
+    : HISTORY_ICONS[entry.target.kind];
+}
+/** The line under the title: where the entry lives. */
 export function historyDetail(entry: HistoryEntry): string {
-  return entry.target.kind === "web"
-    ? entry.target.url
-    : `${entry.projectName ?? "Project"} · ${entry.target.resource}`;
+  const { target } = entry;
+  if (target.kind === "web") return target.url;
+  if (target.kind === "local") return target.path;
+  return `${entry.project?.name ?? "Project"} · ${target.resource}`;
 }
-export function historyDestination(entry: HistoryEntry): string {
-  const target = entry.target;
-  return target.kind === "web"
-    ? target.url
-    : `${target.kind === "chat" ? "session" : target.kind}:${encodeURIComponent(target.resource)}`;
+/** A project resource as a surface link its project can open. */
+export function historyDestination(
+  target: Extract<HistoryEntry["target"], { projectId: string }>,
+): string {
+  return `${target.kind === "chat" ? "session" : target.kind}:${encodeURIComponent(target.resource)}`;
 }
+const EMPTY_PAGE: HistoryPage = { entries: [], total: 0, projects: [] };
 export function useHistory({
   query = "",
+  projectId,
   offset = 0,
   limit = 100,
   enabled = true,
   profileId,
 }: HistoryQuery & { enabled?: boolean; profileId?: string }) {
-  const key = JSON.stringify([profileId, query, offset, limit]);
+  const key = JSON.stringify([profileId, query, projectId, offset, limit]);
   const [result, setResult] = useState<{
     key: string;
     page: HistoryPage;
@@ -63,7 +77,7 @@ export function useHistory({
     const timer = setTimeout(
       () => {
         void desktopApi
-          .historyQuery({ query, offset, limit })
+          .historyQuery({ query, projectId, offset, limit })
           .then((page) => {
             if (active) setResult({ key, page });
           })
@@ -80,8 +94,8 @@ export function useHistory({
       active = false;
       clearTimeout(timer);
     };
-  }, [query, offset, limit, enabled, profileId, revision, key]);
-  const page = result?.key === key ? result.page : { entries: [], total: 0 };
+  }, [query, projectId, offset, limit, enabled, profileId, revision, key]);
+  const page = result?.key === key ? result.page : EMPTY_PAGE;
   return {
     ...page,
     error,

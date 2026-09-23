@@ -87,7 +87,7 @@ import {
   type SidebarConfig,
   type SidebarItem,
 } from "../lib/desktop-api.js";
-import { HISTORY_ICONS, historyDetail, useHistory } from "../lib/history.js";
+import { historyDetail, historyIcon, useHistory } from "../lib/history.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
@@ -1343,7 +1343,7 @@ export function CommandPalette({
     () =>
       historyResults.entries.map((entry) => ({
         id: `history:${entry.id}`,
-        icon: HISTORY_ICONS[entry.target.kind],
+        icon: historyIcon(entry),
         iconNode:
           entry.target.kind === "web" && entry.faviconUrl ? (
             <SiteFavicon

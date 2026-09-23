@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import type { HistoryProject } from "../../shared/history.js";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { siteOrigin } from "../../shared/site-settings.js";
 import { AuthorizationInspector } from "../components/authorization-inspector.js";
@@ -120,6 +121,7 @@ function sameUrl(a: string, b: string): boolean {
 export function BrowserScreen({
   profileId,
   projectId,
+  projectName,
   initialUrl,
   active,
   toolbarActive = active,
@@ -147,6 +149,8 @@ export function BrowserScreen({
   profileId: string;
   /** Null only for a temporary profile browser before its first project. */
   projectId: string | null;
+  /** Names the project in the profile's history (ADR 0153). */
+  projectName?: string;
   initialUrl: string;
   /** This browser tab is the focused workspace tab. */
   active: boolean;
@@ -265,6 +269,10 @@ export function BrowserScreen({
   // one-way "add" that silently duplicates on every press.
   const [bookmarks, setBookmarks] = useState<BookmarksData | null>(null);
   const pageTitleRef = useRef("");
+  const historyProjectRef = useRef<HistoryProject | undefined>(undefined);
+  historyProjectRef.current = projectId
+    ? { id: projectId, name: projectName ?? "" }
+    : undefined;
   const suggestSeq = useRef(0);
   // Inline completion must only appear while typing forward, never while
   // deleting (Chrome behavior).
@@ -515,9 +523,9 @@ export function BrowserScreen({
         sync();
         report({ url });
         void desktopApi.browserRecordHistory({
-          profileId,
           url,
           title: view.getTitle() || url,
+          project: historyProjectRef.current,
         });
       }) as EventListener);
       listen("did-navigate-in-page", ((event: CustomEvent) => {
@@ -531,9 +539,9 @@ export function BrowserScreen({
         sync();
         report({ url });
         void desktopApi.browserRecordHistory({
-          profileId,
           url,
           title: view.getTitle() || url,
+          project: historyProjectRef.current,
         });
       }) as EventListener);
       listen("page-title-updated", ((event: CustomEvent) => {
@@ -541,7 +549,6 @@ export function BrowserScreen({
         pageTitleRef.current = title;
         report({ title });
         void desktopApi.browserRetitleHistory({
-          profileId,
           url: view.getURL(),
           title,
         });
@@ -553,7 +560,6 @@ export function BrowserScreen({
         report({ faviconUrl: nextFavicon });
         if (nextFavicon) {
           void desktopApi.browserSetHistoryFavicon({
-            profileId,
             url: view.getURL(),
             faviconUrl: nextFavicon,
           });
