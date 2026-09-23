@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * History (ADR 0153) is the profile's log of what was opened: web pages,
+ * History (ADR 0154) is the profile's log of what was opened: web pages,
  * files on this machine, and a project's own resources. Every entry may
  * name the project it was opened in; project resources always do, a page
  * or a loose file names the workspace it was opened from, if any.

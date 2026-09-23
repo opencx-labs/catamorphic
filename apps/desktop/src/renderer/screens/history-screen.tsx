@@ -29,7 +29,7 @@ function dayLabel(time: number): string {
 }
 const ALL_PROJECTS = "";
 /**
- * The profile's history (ADR 0153), newest first, by day. The scope menu
+ * The profile's history (ADR 0154), newest first, by day. The scope menu
  * narrows it to what was opened in one project; search stays with the
  * palette's history mode.
  */

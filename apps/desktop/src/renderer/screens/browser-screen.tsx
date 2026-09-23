@@ -149,7 +149,7 @@ export function BrowserScreen({
   profileId: string;
   /** Null only for a temporary profile browser before its first project. */
   projectId: string | null;
-  /** Names the project in the profile's history (ADR 0153). */
+  /** Names the project in the profile's history (ADR 0154). */
   projectName?: string;
   initialUrl: string;
   /** This browser tab is the focused workspace tab. */

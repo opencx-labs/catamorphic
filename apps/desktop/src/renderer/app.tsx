@@ -1827,7 +1827,7 @@ export function App({
     }
     if (target.kind === "local") {
       // A file outside any project reopens as it opened: a browser tab
-      // showing what Work can show (ADR 0152).
+      // showing what Work can show (ADR 0153).
       openBrowserTab(localFileUrl(target.path), {
         title: entry.title,
         side: mode === "side",

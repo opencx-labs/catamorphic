@@ -22,7 +22,7 @@ const MAX_ENTRIES = 50_000;
 const WRITE_DEBOUNCE_MS = 500;
 
 /**
- * The profile's history (ADR 0153): web pages, files on this machine and
+ * The profile's history (ADR 0154): web pages, files on this machine and
  * project resources in one store, each entry naming the project it was
  * opened in when there was one.
  */
@@ -96,7 +96,10 @@ export class HistoryStore {
     const id = historyIdentity(visit.target);
     const existing = entries.find((entry) => entry.id === id);
     if (existing)
+      // The project is where it was opened last; a visit without one
+      // (a page from the no-project window) clears it.
       Object.assign(existing, visit, {
+        project: visit.project,
         lastVisitAt: revisit ? Date.now() : existing.lastVisitAt,
         visitCount: existing.visitCount + (revisit ? 1 : 0),
       });
