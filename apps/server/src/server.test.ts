@@ -256,6 +256,26 @@ describe("stock server", () => {
     );
   });
 
+  it("receives webhooks without an account and runs team automations (ADR 0156)", async () => {
+    const kinds = server.catamorphic.core.triggers
+      .listKinds()
+      .map((kind) => kind.name);
+    expect(kinds).toEqual(
+      expect.arrayContaining(["webhook", "schedule", "github.pull_request"]),
+    );
+    // The intake is public: a sender has no account, only the URL.
+    const unknown = await server.app.inject({
+      method: "POST",
+      url: "/api/hooks/00000000-0000-4000-8000-000000000001/support/token",
+      headers: { "content-type": "application/json" },
+      payload: "{}",
+    });
+    expect(unknown.statusCode).toBe(404);
+    expect(unknown.json()).toEqual({
+      error: "No workflow listens on this webhook",
+    });
+  });
+
   it("resolves an OAuth access token to the current authenticated user", async () => {
     const user = await server.stockAuth.createLocalUser({
       username: "oauthuser",

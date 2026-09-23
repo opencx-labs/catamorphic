@@ -258,6 +258,47 @@ export function isScoped(identity: Identity): boolean {
 }
 
 /**
+ * The project's team principal (ADR 0156): team automations run as it and
+ * team chats belong to it. It is never a person; a chat it owns is shared
+ * by everyone whose role reaches the chat's agent.
+ */
+export const TEAM_PRINCIPAL_ID = "catamorphic:team";
+
+export function isTeamPrincipal(externalUserId: string): boolean {
+  return externalUserId === TEAM_PRINCIPAL_ID;
+}
+
+/**
+ * The identity one team automation runs with: a builder of its project,
+ * allowed exactly the Environment and connection aliases a builder
+ * consented to when enabling it.
+ */
+export function teamIdentity(input: {
+  tenantId: string;
+  projectId: string;
+  environment: string;
+  connections?: ReadonlyArray<{
+    alias: string;
+    capabilities?: readonly string[];
+  }>;
+}): Identity {
+  return {
+    tenantId: input.tenantId,
+    externalUserId: TEAM_PRINCIPAL_ID,
+    scope: [{ kind: "project", projectId: input.projectId }],
+    executionScope: [{ projectId: input.projectId, name: input.environment }],
+    connectionScope: (input.connections ?? []).map((connection) => ({
+      projectId: input.projectId,
+      environment: input.environment,
+      alias: connection.alias,
+      ...(connection.capabilities
+        ? { capabilities: connection.capabilities }
+        : {}),
+    })),
+  };
+}
+
+/**
  * True when the identity may edit the project's program: the root identity,
  * or a scoped one holding the project's `project` ref (ADR 0055).
  */

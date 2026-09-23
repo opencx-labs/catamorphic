@@ -38,6 +38,7 @@ import { registerSessionArtifactRoutes } from "./routes/session-artifacts.js";
 import { registerSessionMailboxRoutes } from "./routes/session-mailboxes.js";
 import { registerTriggerRoutes } from "./routes/triggers.js";
 import { registerWatcherRoutes } from "./routes/watchers.js";
+import { registerWebhookRoutes } from "./routes/webhooks.js";
 import { registerWorkflowEnablementRoutes } from "./routes/workflow-enablements.js";
 import { registerWorkflowRoutes } from "./routes/workflows.js";
 
@@ -76,6 +77,12 @@ export interface CatamorphicPluginOptions {
    * things a host decides for everyone.
    */
   features?: Partial<HostFeatures>;
+  /**
+   * The API base outsiders reach this plugin at (e.g.
+   * `https://brain.acme.com/api`), for URLs handed to other services such
+   * as webhook URLs. Defaults to the request's own origin and mount prefix.
+   */
+  publicApiBase?: string;
 }
 
 /** What a host enables for all callers; defaults are the most permissive. */
@@ -100,6 +107,7 @@ export const DEFAULT_HOST_FEATURES: HostFeatures = {
 export interface RouteContext {
   core?: CatamorphicCore;
   features: HostFeatures;
+  publicApiBase?: string;
 }
 
 /**
@@ -176,6 +184,9 @@ export const catamorphicPlugin: FastifyPluginAsync<
 
   const ctx: RouteContext = {
     core: opts.core,
+    ...(opts.publicApiBase
+      ? { publicApiBase: opts.publicApiBase.replace(/\/$/, "") }
+      : {}),
     // Explicit `undefined` from a host (a field computed from env) must not
     // erase the default.
     features: {
@@ -203,6 +214,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerMembershipRoutes(app, ctx);
   registerDocumentRoutes(app, ctx);
   registerPublicationRoutes(app, ctx);
+  registerWebhookRoutes(app, ctx);
   registerAppRoutes(app, ctx);
   registerSessionArtifactRoutes(app, ctx);
   registerAppsMcpRoutes(app, ctx);

@@ -60,6 +60,23 @@ describe("DeploymentService", () => {
     expect(result.remoteSha).toBe(result.commitSha);
   });
 
+  it("tells enablements about each published revision", async () => {
+    const published: Array<{ projectId: string; commitSha: string }> = [];
+    const notified = new DeploymentService(manager, async (input) => {
+      published.push(input);
+    });
+    const repo = await manager.openDev(TENANT, PROJECT, ALICE);
+    try {
+      await repo.writeFile("src/a.ts", "hello");
+    } finally {
+      await repo.dispose();
+    }
+    const result = await notified.deploy(TENANT, PROJECT, ALICE);
+    expect(published).toEqual([
+      { projectId: PROJECT, commitSha: result.remoteSha },
+    ]);
+  });
+
   it("deploy returns nothing-to-deploy when clean", async () => {
     const result = await service.deploy(TENANT, PROJECT, ALICE);
     expect(result.status).toBe("nothing-to-deploy");

@@ -18,7 +18,8 @@ Discover this host's actual capabilities and schemas before authoring.
 | Remind the user | deliver with mode: "message_only", attention: "required" | One-shot schedule owned by the session, no default expiry |
 | Wake an agent to do work | deliver with mode: "next_turn" | One-shot or conditional monitor; stop when its purpose is complete |
 | Monitor events without noise | Inspect the event/state, then deliver only a meaningful change | Session watcher or explicitly enabled reusable workflow |
-| Have an agent prepare a recurring result in a stable chat | wake with a stable workflow-scoped key | Member-owned enablement; reuse the same session |
+| Have an agent prepare a recurring result in a stable chat | wake with a stable workflow-scoped key | Member or team enablement; reuse the same session |
+| Have an agent handle something for the whole team (a PR review, an inbound request) | wake with the event's key; the team sees one shared chat | Team enablement |
 
 Neither saving source nor deploying alone turns a trigger on. A workflow return
 ends that run, not its recurring activation.
@@ -191,11 +192,16 @@ export const remindUser = defineWorkflow(({ defineBoundary }) => ({
   work when idle or queues behind the active turn; interrupt requests a course
   change. The host preserves origin in model input and in visible history.
   Authoring a workflow message does not grant system/developer instruction rank.
-- wake creates/reuses a stable member session and requests attention when its
-  agent turn settles. Its optional notification title/body customizes that alert.
-  It is member-only; service-owned enablements have no implicit personal recipient.
+- wake creates/reuses a stable session and requests attention when its agent
+  turn settles. Its optional notification title/body customizes that alert. Who
+  the chat belongs to follows the enablement: a member's enablement wakes that
+  member's own chat; a team enablement wakes a team chat everyone on the project
+  sees and can continue, or one member's chat with audience: { member: "<id>" }
+  (a current member; use an id from an event or a lookup, never a guess). A team
+  chat runs as the team, with the enablement's connections, not as any person.
   Grant the project agent and its required connections/Environment. Use deliver
-  when the session id is known. Choose a stable wake key to reuse the conversation.
+  when the session id is known. Choose a stable wake key to reuse the conversation,
+  such as the pull request number for a review chat.
 - spawn respects the source agent's configured delegation routes. Fresh context
   is the default. fork explicitly copies transcript history; create makes an
   independent conversation. Do not simulate children as untracked shell agents.

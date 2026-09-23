@@ -2,13 +2,14 @@ import type { ConnectionPrincipalKind } from "./connection-types.js";
 
 export type WorkflowEnablementStatus = "active" | "suspended" | "disabled";
 
+/**
+ * Who an enablement acts for (ADR 0156): one member, with their own
+ * authority, or the project's team, running as the team principal with
+ * the connections a builder consented to.
+ */
 export type WorkflowEnablementOwner =
   | { type: "member"; externalUserId: string }
-  | {
-      type: "service";
-      principalKind: "project_service" | "tenant_service";
-      connectionId: string;
-    };
+  | { type: "team" };
 
 export interface WorkflowEnablementConnection {
   alias: string;

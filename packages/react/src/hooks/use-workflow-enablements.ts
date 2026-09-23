@@ -2,6 +2,7 @@
 
 import type { paths } from "@catamorphic/api-client";
 import {
+  type QueryClient,
   type UseMutationResult,
   type UseQueryResult,
   useMutation,
@@ -14,10 +15,12 @@ import {
   runWithCatamorphicError,
 } from "../lib/errors.js";
 import { useCatamorphic } from "../provider.js";
+import { webhookKeys } from "./use-webhooks.js";
 
 type ListResponse =
   paths["/api/projects/{projectId}/workflow-enablements"]["get"]["responses"][200]["content"]["application/json"];
-export type WorkflowEnablement = ListResponse[number];
+export type WorkflowEnablementList = ListResponse;
+export type WorkflowEnablement = ListResponse["items"][number];
 export type WorkflowEnablementPreview =
   paths["/api/projects/{projectId}/workflow-enablement-preview"]["post"]["responses"][200]["content"]["application/json"];
 export type WorkflowEnablementInput =
@@ -30,10 +33,20 @@ export const workflowEnablementKeys = {
     [...workflowEnablementKeys.project(projectId), { workflowName }] as const,
 };
 
+/** Enabling or pausing changes what listens: webhook URLs follow. */
+function invalidateAutomation(queryClient: QueryClient, projectId: string) {
+  return Promise.all([
+    queryClient.invalidateQueries({
+      queryKey: workflowEnablementKeys.project(projectId),
+    }),
+    queryClient.invalidateQueries({ queryKey: webhookKeys.list(projectId) }),
+  ]);
+}
+
 export function useWorkflowEnablements(
   projectId: string | undefined,
   workflowName?: string,
-): UseQueryResult<WorkflowEnablement[], CatamorphicError> {
+): UseQueryResult<WorkflowEnablementList, CatamorphicError> {
   const { apiClient } = useCatamorphic();
   return useQuery({
     queryKey: workflowEnablementKeys.list(projectId ?? "", workflowName),
@@ -93,10 +106,7 @@ export function useCreateWorkflowEnablement(
         );
         return assertApiOk(result, "Workflow could not be enabled");
       }),
-    onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: workflowEnablementKeys.project(projectId),
-      }),
+    onSuccess: () => invalidateAutomation(queryClient, projectId),
   });
 }
 
@@ -139,9 +149,6 @@ export function useUpdateWorkflowEnablement(
                 );
         return assertApiOk(result, "Workflow enablement could not be updated");
       }),
-    onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: workflowEnablementKeys.project(projectId),
-      }),
+    onSuccess: () => invalidateAutomation(queryClient, projectId),
   });
 }

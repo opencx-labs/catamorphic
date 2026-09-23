@@ -216,6 +216,12 @@ export {
 } from "./hooks/use-upsert-project-secret.js";
 export { useWatchers, watcherKeys } from "./hooks/use-watchers.js";
 export {
+  useRotateWebhook,
+  useWebhooks,
+  type Webhook,
+  webhookKeys,
+} from "./hooks/use-webhooks.js";
+export {
   type UseWorkflowOptions,
   useWorkflow,
 } from "./hooks/use-workflow.js";
@@ -226,6 +232,7 @@ export {
   useWorkflowEnablements,
   type WorkflowEnablement,
   type WorkflowEnablementInput,
+  type WorkflowEnablementList,
   type WorkflowEnablementPreview,
   workflowEnablementKeys,
 } from "./hooks/use-workflow-enablements.js";

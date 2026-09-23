@@ -104,7 +104,10 @@ export function SidebarActivity({
             icon="MessageSquare"
             resource
             description={session.activity ?? undefined}
-            badges={[session.attentionRequired ? "Needs you" : "Working"]}
+            badges={[
+              ...(session.owner === "team" ? ["Team"] : []),
+              session.attentionRequired ? "Needs you" : "Working",
+            ]}
             onOpen={(mode) => onOpenSession(session, mode)}
             onAction={() => {}}
           />

@@ -29,6 +29,17 @@ export function friendlyType(rawType: string): string {
     return `${friendlyInner} List`;
   }
 
+  // Structural types read as code; a person sees that it holds details.
+  if (
+    rawType.startsWith("{") ||
+    rawType.startsWith("Record<") ||
+    rawType.includes("=>")
+  )
+    return "Details";
+  if (rawType === "unknown" || rawType === "any") return "Anything";
+  // Long unions and generics are for the code view.
+  if (rawType.length > 32) return "Details";
+
   return rawType;
 }
 

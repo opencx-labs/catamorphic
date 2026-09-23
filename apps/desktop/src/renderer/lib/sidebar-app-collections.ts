@@ -132,11 +132,14 @@ export function useSidebarAppCollections({
                 label: session.title ?? "Untitled chat",
                 description: session.activity ?? undefined,
                 icon: "MessageSquare",
-                badges: session.attentionRequired
-                  ? ["Needs you"]
-                  : session.running
-                    ? ["Working"]
-                    : [],
+                badges: [
+                  ...(session.owner === "team" ? ["Team"] : []),
+                  ...(session.attentionRequired
+                    ? ["Needs you"]
+                    : session.running
+                      ? ["Working"]
+                      : []),
+                ],
                 actions: [
                   { id: "open", label: "Open chat" },
                   { id: "archive", label: "Archive", icon: "Archive" },

@@ -253,6 +253,7 @@ export const WORKSPACE_TOOL_POLICY: Readonly<
   run_background_command: { ...write, eager: true },
   read_background_output: { ...read, eager: true },
   stop_background_command: { ...write, eager: true },
+  watch_command: { ...write, eager: true },
   write_terminal: write,
   sync_project: write,
   create_pull_request: write,
@@ -900,15 +901,74 @@ export function buildWorkspaceToolkit(
     {
       name: "stop_background_command",
       description:
-        "Stop a background command (Ctrl+C, then close its terminal) and return its last output.",
+        "Stop a background command (Ctrl+C, then close its terminal) and return its last output, or stop a watch.",
       parameters: {
-        id: z.string().describe("The id run_background_command returned"),
+        id: z
+          .string()
+          .describe("The id run_background_command or watch_command returned"),
       },
       execute: (input, ctx) =>
-        bridge.stopBackgroundCommand({
-          sessionId: ctx.sessionId ?? "",
-          id: String(input.id),
-        }),
+        String(input.id).startsWith("watch-")
+          ? bridge.stopCommandWatch({
+              sessionId: ctx.sessionId ?? "",
+              id: String(input.id),
+            })
+          : bridge.stopBackgroundCommand({
+              sessionId: ctx.sessionId ?? "",
+              id: String(input.id),
+            }),
+    },
+    {
+      name: "watch_command",
+      description:
+        "Wait for something without polling: re-run a quick check command here every few seconds and wake this chat when it matters, across turns and app restarts. until 'success' wakes once when the check exits 0 (curl -fsS <url>/health; test -f out.pdf), then ends. until 'change' wakes whenever its output or exit status changes, until stopped. Print only what matters (jq, grep) so timestamps are not changes. Checks missed during sleep collapse into one. The first check runs now; its result is returned. Stop with stop_background_command.",
+      parameters: {
+        command: z
+          .string()
+          .describe("A quick read-only check; it runs many times"),
+        description: z
+          .string()
+          .describe(
+            "What you wait for in 3-8 plain words, shown to the person",
+          ),
+        until: z
+          .enum(["success", "change"])
+          .describe(
+            "'success': wake once when it exits 0. 'change': wake on every change.",
+          ),
+        every_seconds: z
+          .number()
+          .int()
+          .min(5)
+          .max(86_400)
+          .optional()
+          .describe("Seconds between checks (default 30)"),
+        expires_in_seconds: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Give up after this long (and say so)"),
+      },
+      execute: (input, ctx) => {
+        if (!ctx.sessionId) throw new Error("Watches need a chat.");
+        return bridge.startCommandWatch({
+          projectId: ctx.projectId,
+          sessionId: ctx.sessionId,
+          command: String(input.command),
+          description: String(input.description ?? ""),
+          until: input.until === "change" ? "change" : "success",
+          ...(ctx.workingDirectory
+            ? { workingDirectory: ctx.workingDirectory }
+            : {}),
+          ...(typeof input.every_seconds === "number"
+            ? { everySeconds: input.every_seconds }
+            : {}),
+          ...(typeof input.expires_in_seconds === "number"
+            ? { expiresInSeconds: input.expires_in_seconds }
+            : {}),
+        });
+      },
     },
     {
       name: "write_terminal",

@@ -13,6 +13,7 @@ function fakeTerminals() {
       running: boolean;
       completions: number;
       exit: number | null;
+      shellExit?: number;
     }
   >();
   let next = 0;
@@ -32,6 +33,13 @@ function fakeTerminals() {
     close(id: string) {
       const terminal = state.get(id);
       if (terminal) terminal.running = false;
+    },
+    /** The command ran `exit`: the shell ends by itself with this code. */
+    exitShell(id: string, code: number) {
+      const terminal = state.get(id);
+      if (!terminal) return;
+      terminal.running = false;
+      terminal.shellExit = code;
     },
     terminals: {
       async create() {
@@ -53,6 +61,7 @@ function fakeTerminals() {
         return true;
       },
       isRunning: (id: string) => state.get(id)?.running ?? false,
+      exitCode: (id: string) => state.get(id)?.shellExit,
       isBusy: (id: string) => {
         const terminal = state.get(id);
         return Boolean(terminal?.running && terminal.completions === 0);
@@ -83,8 +92,12 @@ function fakeTerminals() {
 function setup() {
   const fake = fakeTerminals();
   const snapshots: BackgroundCommandView[][] = [];
-  const wakes: Array<{ sessionId: string; notice: string; content: string }> =
-    [];
+  const wakes: Array<{
+    sessionId: string;
+    notice: string;
+    content: string;
+    mode?: string;
+  }> = [];
   const commands = new BackgroundCommands({
     terminals: fake.terminals,
     attach: async ({ terminalId }) => `terminal:${terminalId}`,
@@ -179,6 +192,32 @@ describe("BackgroundCommands", () => {
     await expect(
       commands.read({ sessionId: "other", id: "t1" }),
     ).rejects.toThrow("No background command");
+    commands.dispose();
+  }, 10_000);
+
+  it("a command that exits its own shell finished; right after its output wake, quietly", async () => {
+    const { fake, commands, wakes } = setup();
+    const started = commands.start({
+      projectId: "p",
+      sessionId: "chat",
+      command: "until test -f out; do sleep 1; done; echo FOUND; exit 0",
+      description: "Wait for out",
+      wakeOnOutput: "FOUND",
+    });
+    await until(() => fake.written.length > 0);
+    await started;
+    fake.print("t1", "FOUND\n");
+    await until(() => wakes.length > 0);
+    fake.exitShell("t1", 0);
+    await until(() => wakes.length > 1);
+    expect(wakes.map((wake) => [wake.notice, wake.mode])).toEqual([
+      ["Wait for out printed what you were waiting for", undefined],
+      ["Wait for out finished", "message_only"],
+    ]);
+    expect(commands.list()[0]).toMatchObject({
+      status: "finished",
+      exitCode: 0,
+    });
     commands.dispose();
   }, 10_000);
 

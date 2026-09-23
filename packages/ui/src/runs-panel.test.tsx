@@ -167,7 +167,7 @@ describe("RunsPanel", () => {
     expect(screen.queryByText("Pause processing")).not.toBeInTheDocument();
     expect(screen.getByText("Batch processing")).toBeInTheDocument();
     expect(screen.getByText("Batch processing, step 2")).toBeInTheDocument();
-    expect(screen.getByText("Retry scope")).toBeInTheDocument();
+    expect(screen.getByText("Step")).toBeInTheDocument();
   });
 
   it("defaults to the current Batch processing scope and allows prior scopes", () => {

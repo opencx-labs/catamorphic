@@ -966,6 +966,14 @@ export interface Watchers {
   workflow_name: string;
 }
 
+export interface WebhookEndpoints {
+  created_at: Generated<Timestamp>;
+  id: Generated<string>;
+  name: string;
+  project_id: string;
+  token: string;
+}
+
 export interface WorkerNodes {
   authority_id: string;
   capacity: Json | null;
@@ -1010,11 +1018,9 @@ export interface WorkflowEnablements {
   environment_name: string;
   expires_at: Timestamp | null;
   id: Generated<string>;
-  owner_connection_id: string | null;
   owner_external_user_id: string | null;
   owner_identity: Json;
   owner_kind: string;
-  owner_principal_kind: string | null;
   project_id: string;
   remote_branch: Generated<string>;
   revision: Generated<number>;
@@ -1208,6 +1214,7 @@ export interface DB {
   user_notification_events: UserNotificationEvents;
   watcher_runs: WatcherRuns;
   watchers: Watchers;
+  webhook_endpoints: WebhookEndpoints;
   worker_nodes: WorkerNodes;
   workflow_enablement_connections: WorkflowEnablementConnections;
   workflow_enablement_events: WorkflowEnablementEvents;

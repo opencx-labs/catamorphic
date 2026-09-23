@@ -4,7 +4,11 @@ import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { ArtifactRef, Identity } from "../identity.js";
+import {
+  type ArtifactRef,
+  type Identity,
+  TEAM_PRINCIPAL_ID,
+} from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
 import type { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import {
@@ -245,5 +249,66 @@ describe("WorkflowEnablementsService", () => {
         enablementId: created!.id,
       }),
     ).toMatchObject({ status: "active", suspensionReason: null });
+  });
+
+  it("team automations: builders enable them, members see them, runs are the team's", async () => {
+    const builder: Identity = {
+      tenantId,
+      externalUserId: "builder",
+      scope: [{ kind: "project", projectId }],
+      executionScope: [{ projectId, name: "local" }],
+    };
+    const team = { type: "team" as const };
+    expect(service.mayManageTeam({ identity: memberA, projectId })).toBe(false);
+    expect(service.mayManageTeam({ identity: builder, projectId })).toBe(true);
+    await expect(
+      service.preview({
+        identity: memberA,
+        projectId,
+        workflowName: "watchInbox",
+        owner: team,
+      }),
+    ).rejects.toBeInstanceOf(AccessDeniedError);
+
+    const preview = await service.preview({
+      identity: builder,
+      projectId,
+      workflowName: "watchInbox",
+      owner: team,
+    });
+    const created = await service.create({
+      identity: builder,
+      projectId,
+      workflowName: "watchInbox",
+      owner: team,
+      consentDigest: preview.consentDigest,
+    });
+    expect(created.owner).toEqual(team);
+
+    // Everyone sees the team's automation; only its managers change it.
+    for (const member of [memberA, memberB]) {
+      expect(
+        (await service.list({ identity: member, projectId })).map(
+          (item) => item.id,
+        ),
+      ).toContain(created.id);
+    }
+    await expect(
+      service.disable({ identity: memberA, enablementId: created.id }),
+    ).rejects.toBeInstanceOf(AccessDeniedError);
+
+    // It runs as the team, never as the builder who switched it on.
+    const revalidated = await service.revalidate({
+      identity: builder,
+      enablementId: created.id,
+    });
+    expect(revalidated.ownerIdentity).toMatchObject({
+      externalUserId: TEAM_PRINCIPAL_ID,
+      scope: [{ kind: "project", projectId }],
+      executionScope: [{ projectId, name: "local" }],
+    });
+    expect(
+      await service.disable({ identity: builder, enablementId: created.id }),
+    ).toMatchObject({ status: "disabled" });
   });
 });

@@ -87,6 +87,17 @@ changes into its shared origin. An accepted PR reaches members through their
 normal project download. If sync fails, preserve both histories and resolve
 the error rather than force-pushing one over the other.
 
+## Webhooks and team automations
+
+The stock server receives webhooks for project workflows and runs team
+automations while nobody is signed in. Set `CATAMORPHIC_PUBLIC_URL` to the
+HTTPS origin senders reach; webhook URLs use it (without it they follow the
+address a builder used, which a sender outside the LAN cannot reach). A builder
+copies a workflow's URL from its **Automate** panel after enabling it for the
+team, and configures signed senders with a project secret named in the
+workflow's `verify`. Requests are answered 202 once stored; a failing workflow
+shows in its runs, not to the sender. See ADR 0156.
+
 ## Boundaries
 
 - The operational credential proves machine access. It is not a Catamorphic

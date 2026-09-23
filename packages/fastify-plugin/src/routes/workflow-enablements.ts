@@ -3,10 +3,12 @@ import {
   AuthenticationRequiredError,
   ConnectionPermissionDeniedError,
   ConnectionUnavailableError,
+  ProductionDeploymentNotFoundError,
   WorkflowEnablementConflictError,
   WorkflowEnablementConsentRequiredError,
   WorkflowEnablementNotFoundError,
   WorkflowEnablementSuspendedError,
+  WorkflowNotFoundError,
 } from "@catamorphic/core";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
@@ -25,6 +27,16 @@ import {
 const EnablementParamsSchema = ProjectIdParamsSchema.extend({
   enablementId: z.string().uuid(),
 });
+/**
+ * Enabling uses the project's published version; a workflow that is only
+ * saved (or changed since publishing) is not there yet.
+ */
+const NotPublishedErrorSchema = z.object({
+  error: z.string(),
+  reason: z.literal("not_published"),
+});
+const PreviewConflictSchema = z.union([NotPublishedErrorSchema, ErrorSchema]);
+
 const SelectionSchema = z.record(z.string(), z.string().uuid()).optional();
 const PreviewBodySchema = z.object({
   workflowName: z.string().min(1),
@@ -46,7 +58,14 @@ export function registerWorkflowEnablementRoutes(
     schema: {
       params: ProjectIdParamsSchema,
       querystring: z.object({ workflowName: z.string().optional() }),
-      response: { 200: z.array(WorkflowEnablementSchema), 503: ErrorSchema },
+      response: {
+        200: z.object({
+          items: z.array(WorkflowEnablementSchema),
+          /** Whether the caller may enable and manage team automations. */
+          canManageTeam: z.boolean(),
+        }),
+        503: ErrorSchema,
+      },
     },
     handler: async (request, reply) => {
       const workflowEnablements = service();
@@ -55,13 +74,19 @@ export function registerWorkflowEnablementRoutes(
           .status(503)
           .send({ error: "Workflow enablements unavailable" });
       }
-      return reply.send(
-        await workflowEnablements.list({
-          identity: resolveIdentity(request),
-          projectId: request.params.projectId,
+      const identity = resolveIdentity(request);
+      const { projectId } = request.params;
+      return reply.send({
+        items: await workflowEnablements.list({
+          identity,
+          projectId,
           workflowName: request.query.workflowName,
         }),
-      );
+        canManageTeam: workflowEnablements.mayManageTeam({
+          identity,
+          projectId,
+        }),
+      });
     },
   });
 
@@ -74,7 +99,7 @@ export function registerWorkflowEnablementRoutes(
       response: {
         200: WorkflowEnablementPreviewSchema,
         403: ErrorSchema,
-        409: ErrorSchema,
+        409: PreviewConflictSchema,
         428: AuthenticationRequiredSchema,
         503: ErrorSchema,
       },
@@ -109,7 +134,7 @@ export function registerWorkflowEnablementRoutes(
       response: {
         201: WorkflowEnablementSchema,
         403: ErrorSchema,
-        409: ErrorSchema,
+        409: PreviewConflictSchema,
         428: AuthenticationRequiredSchema,
         503: ErrorSchema,
       },
@@ -177,7 +202,7 @@ export function registerWorkflowEnablementRoutes(
           200: WorkflowEnablementSchema,
           403: ErrorSchema,
           404: ErrorSchema,
-          409: ErrorSchema,
+          409: PreviewConflictSchema,
         },
       },
       handler: async (request, reply) => {
@@ -220,7 +245,7 @@ export function registerWorkflowEnablementRoutes(
         200: WorkflowEnablementSchema,
         403: ErrorSchema,
         404: ErrorSchema,
-        409: ErrorSchema,
+        409: PreviewConflictSchema,
         428: AuthenticationRequiredSchema,
       },
     },
@@ -266,6 +291,16 @@ function handleEnablementError(error: unknown, reply: FastifyReply) {
   }
   if (error instanceof WorkflowEnablementNotFoundError) {
     return reply.status(404).send({ error: error.message });
+  }
+  if (
+    error instanceof WorkflowNotFoundError ||
+    error instanceof ProductionDeploymentNotFoundError
+  ) {
+    return reply.status(409).send({
+      error:
+        "This workflow isn't in the project's published version yet. Publish the project's changes, then turn it on.",
+      reason: "not_published",
+    });
   }
   if (
     error instanceof AccessDeniedError ||

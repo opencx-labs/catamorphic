@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import http from "node:http";
 import type { ElicitRequest, ElicitResult } from "@catamorphic/mcp";
 import type {
@@ -22,6 +23,11 @@ import {
   BrowserDriver,
   browserUrl,
 } from "./browser-driver.js";
+import {
+  CommandWatches,
+  isCommandWatch,
+  runShellCheck,
+} from "./command-watches.js";
 import type { AgentTerminals } from "./terminal.js";
 
 /**
@@ -102,6 +108,31 @@ export interface WorkspaceBridge {
     status: BackgroundCommandView["status"];
     output: string;
   }>;
+  /**
+   * Repeat a check until it succeeds or report when its output changes
+   * (ADR 0156). Durable across restarts; wakes the chat like a background
+   * command does.
+   */
+  startCommandWatch(input: {
+    projectId: string;
+    sessionId: string;
+    command: string;
+    description: string;
+    workingDirectory?: string;
+    everySeconds?: number;
+    until: "success" | "change";
+    expiresInSeconds?: number;
+  }): Promise<{
+    id: string;
+    status: BackgroundCommandView["status"];
+    exitCode: number | null;
+    output: string;
+    nextCheckInSeconds: number | null;
+  }>;
+  stopCommandWatch(input: {
+    sessionId: string;
+    id: string;
+  }): Promise<{ status: BackgroundCommandView["status"] }>;
   backgroundCommands(filter?: {
     projectId?: string;
     sessionId?: string;
@@ -218,7 +249,13 @@ const modelOutput = (raw: string): string =>
 
 export function registerAgentBridge(
   agentTerminals: AgentTerminals,
-  targetFor?: (projectId?: string) => Electron.WebContents | undefined,
+  targetFor: (projectId?: string) => Electron.WebContents | undefined,
+  watchOptions: {
+    /** Where command watches are saved between runs of the app. */
+    file: string;
+    /** The agent's toolchain env, so a check finds the same tools. */
+    env: () => Promise<Record<string, string>>;
+  },
 ): {
   bridge: WorkspaceBridge;
   /** Env for an agent terminal so its `open` shim reaches this app. */
@@ -270,12 +307,8 @@ export function registerAgentBridge(
       typeof params.projectId === "string"
         ? params.projectId
         : undefined;
-    const target = targetFor?.(projectId);
-    const windows = targetFor
-      ? target
-        ? [{ webContents: target }]
-        : []
-      : BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed());
+    const target = targetFor(projectId);
+    const windows = target ? [{ webContents: target }] : [];
     if (windows.length === 0) return Promise.resolve(null);
     const id = ++nextId;
     return new Promise<T | null>((resolve) => {
@@ -312,7 +345,7 @@ export function registerAgentBridge(
     const windows = BrowserWindow.getAllWindows().filter(
       (window) => !window.isDestroyed(),
     );
-    const recipient = targetFor?.(
+    const recipient = targetFor(
       typeof params.projectId === "string" ? params.projectId : undefined,
     );
     const target = recipient
@@ -453,14 +486,44 @@ export function registerAgentBridge(
       }),
     modelOutput,
     encode: encodeCommand,
-    changed: (commands) => {
-      for (const window of BrowserWindow.getAllWindows()) {
-        if (!window.isDestroyed())
-          window.webContents.send("catamorphic:background-commands", commands);
+    changed: () => publishBackground(),
+  });
+  const watches = new CommandWatches({
+    run: async ({ command, workingDirectory, timeoutMs }) => {
+      const result = await runShellCheck({
+        command,
+        ...(workingDirectory ? { workingDirectory } : {}),
+        timeoutMs,
+        env: { ...process.env, ...(await watchOptions.env()) },
+      });
+      return { exitCode: result.exitCode, output: modelOutput(result.raw) };
+    },
+    load: async () => {
+      try {
+        const saved: unknown = JSON.parse(
+          await fs.readFile(watchOptions.file, "utf8"),
+        );
+        return Array.isArray(saved) ? saved.filter(isCommandWatch) : [];
+      } catch {
+        return [];
       }
     },
+    save: async (list) => {
+      const temporary = `${watchOptions.file}.${process.pid}.tmp`;
+      await fs.writeFile(temporary, JSON.stringify(list, null, 2));
+      await fs.rename(temporary, watchOptions.file);
+    },
+    changed: () => publishBackground(),
   });
-  ipcMain.handle("catamorphic:background-commands", () => background.list());
+  const backgroundWork = () => [...background.list(), ...watches.list()];
+  function publishBackground() {
+    const work = backgroundWork();
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed())
+        window.webContents.send("catamorphic:background-commands", work);
+    }
+  }
+  ipcMain.handle("catamorphic:background-commands", () => backgroundWork());
 
   const bridge: WorkspaceBridge = {
     async overview(projectId) {
@@ -527,8 +590,16 @@ export function registerAgentBridge(
     startBackgroundCommand: (input) => background.start(input),
     readBackgroundCommand: (input) => background.read(input),
     stopBackgroundCommand: (input) => background.stop(input),
-    backgroundCommands: (filter) => background.list(filter),
-    setBackgroundNotifier: (notify) => background.setNotifier(notify),
+    startCommandWatch: (input) => watches.start(input),
+    stopCommandWatch: (input) => watches.stop(input),
+    backgroundCommands: (filter) => [
+      ...background.list(filter),
+      ...watches.list(filter),
+    ],
+    setBackgroundNotifier: (notify) => {
+      background.setNotifier(notify);
+      void watches.setNotifier(notify);
+    },
 
     async writeTerminal(projectId, terminalId, data) {
       const key =
@@ -663,10 +734,16 @@ export function registerAgentBridge(
       await rpc("closeSurface", { projectId, key });
     },
     async sessionProcessCount(projectId, sessionIds) {
-      return agentTerminals.countForOwners(projectId, sessionIds);
+      return (
+        agentTerminals.countForOwners(projectId, sessionIds) +
+        watches.count(projectId, sessionIds)
+      );
     },
     async stopSessionProcesses(projectId, sessionIds) {
-      return agentTerminals.killForOwners(projectId, sessionIds);
+      return (
+        agentTerminals.killForOwners(projectId, sessionIds) +
+        (await watches.stopForSessions(projectId, sessionIds))
+      );
     },
   };
 
@@ -721,6 +798,7 @@ export function registerAgentBridge(
     },
     dispose() {
       background.dispose();
+      watches.dispose();
       ipcMain.removeHandler("catamorphic:background-commands");
       hookServer.close();
       for (const entry of pending.values()) {

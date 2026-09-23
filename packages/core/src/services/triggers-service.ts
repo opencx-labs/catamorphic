@@ -904,6 +904,37 @@ export class TriggersService {
         });
       }
     }
+    // One webhook name is one URL with one signature check: workflows that
+    // share a name must agree on it, or the sender could not satisfy both.
+    const webhookChecks = new Map<
+      string,
+      { workflow: string; verify: string }
+    >();
+    for (const binding of bindings) {
+      if (binding.kind !== "webhook") continue;
+      const config = binding.config;
+      if (
+        !config ||
+        typeof config !== "object" ||
+        !("name" in config) ||
+        typeof config.name !== "string"
+      )
+        continue;
+      const verify = JSON.stringify(
+        "verify" in config ? (config.verify ?? null) : null,
+      );
+      const first = webhookChecks.get(config.name);
+      if (!first) {
+        webhookChecks.set(config.name, {
+          workflow: binding.workflowName,
+          verify,
+        });
+      } else if (first.verify !== verify) {
+        errors.push(
+          `Workflows '${first.workflow}' and '${binding.workflowName}' bind webhook '${config.name}' with different verify settings`,
+        );
+      }
+    }
     // Effective MCP tool names must be unique per project and may not claim
     // the shared poll tool. Serve time keeps a backstop, but the primary
     // enforcement is here: a name collision should stop the deploy, not

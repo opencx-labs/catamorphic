@@ -5,7 +5,6 @@ import type { Kysely, Selectable } from "kysely";
 import type { Identity } from "../identity.js";
 import type { AgentSessionsService } from "./agent-sessions-service.js";
 import type { GithubService } from "./github-service.js";
-import { ProjectEventDispatcher } from "./project-event-dispatcher.js";
 import type { ProjectEventMonitorsService } from "./project-event-monitors-service.js";
 import type { ProjectEventsService } from "./project-events-service.js";
 import type { RunsService } from "./runs-service.js";
@@ -503,15 +502,14 @@ export class WatchersService {
     }
   }
 
-  async dispatchPending(input: { limit?: number } = {}): Promise<number> {
-    return withSpan({ tracer, name: "watcher.dispatch" }, () =>
-      this.dispatchPendingInner(input),
+  /** Disable watchers past their expiry. Event delivery is core's (see `dispatchEvents`). */
+  async expireDue(input: { limit?: number } = {}): Promise<void> {
+    return withSpan({ tracer, name: "watcher.expire" }, () =>
+      this.expireDueInner(input),
     );
   }
 
-  private async dispatchPendingInner(
-    input: { limit?: number } = {},
-  ): Promise<number> {
+  private async expireDueInner(input: { limit?: number } = {}): Promise<void> {
     await this.cleanupRetired();
     const rows = await this.db
       .selectFrom("watchers")
@@ -551,11 +549,6 @@ export class WatchersService {
         );
       }
     }
-    return new ProjectEventDispatcher(
-      this.db,
-      this.deps.triggers,
-      this.deps.workflowEnablements,
-    ).dispatch(input);
   }
 
   private async latestProjectSequence(projectId: string): Promise<number> {
@@ -575,32 +568,6 @@ export class WatchersService {
       .where("id", "=", watcherId)
       .execute();
   }
-}
-
-export function startWatcherDispatcher(input: {
-  watchers: WatchersService;
-  pollEveryMs?: number;
-}): { stop: () => Promise<void> } {
-  let stopped = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const tick = async () => {
-    await input.watchers.dispatchPending().catch((error) => {
-      console.warn("[catamorphic] Watcher dispatch failed", error);
-    });
-    if (stopped) return;
-    timer = setTimeout(() => {
-      pending = tick();
-    }, input.pollEveryMs ?? 1_000);
-    timer.unref?.();
-  };
-  let pending = tick();
-  return {
-    stop: async () => {
-      stopped = true;
-      if (timer) clearTimeout(timer);
-      await pending;
-    },
-  };
 }
 
 function watcherStatus(value: string): Watcher["status"] {

@@ -1,11 +1,11 @@
 # Agent tool surface
 
 Accepted in ADR 0133, following the September 2026 audit of desktop tools and
-review apps. The default desktop projection has nine fixed host registrations:
+review apps. The default desktop projection has ten fixed host registrations:
 `discover_capabilities`, `invoke_capability`, `workspace_overview`, `read_tab`,
-`open_surface`, `update_todo_list`, and the three background-command tools
+`open_surface`, `update_todo_list`, the three background-command tools
 (`run_background_command`, `read_background_output`, `stop_background_command`,
-ADR 0155). Harness-native execution and question adapters are
+ADR 0155), and `watch_command` (ADR 0156). Harness-native execution and question adapters are
 additional. Previously up to 57 fixed host registrations were offered, before
 connectors, workflow tools, native tools and duplicate gateway mounts.
 
@@ -49,6 +49,7 @@ Availability also depends on identity, services, agent mode and topology.
 | `desktop_settings` | Deferred, the owning profile's settings files, scopes and validation errors for the configuration skill |
 | `open_browser`, `browser_snapshot`, `browser_act`, `surface_control` | Deferred, signed-in browser and user takeover |
 | `run_background_command`, `read_background_output`, `stop_background_command` | Eager, long-running processes in their own agent terminals; they outlive the turn and wake the chat when they finish (ADR 0155). Foreground commands use each harness's native shell |
+| `watch_command` | Eager. A quick check re-run on an interval in the chat's working directory; wakes the chat once on success or on every output change. Durable across restarts, missed checks coalesce, `stop_background_command` ends it (ADR 0156) |
 | `write_terminal` | Deferred, raw input to a terminal (prompts, REPLs, Ctrl+C, the person's own terminal on request) |
 | `build_app` | Deferred, host preview by default; `publish: true` explicitly publishes |
 | `sync_project`, `create_pull_request` | Deferred, managed checkout and linked-remote semantics |
@@ -113,4 +114,12 @@ and nothing told an agent when work finished. Every harness now starts such
 work with `run_background_command` and is woken by a system message when it
 ends or prints a watched line. The three schemas cost about 1.3 KB; the eager
 budget is 7 KB.
+
+## Command watches (ADR 0156)
+
+Waiting on something outside the agent's own processes (a deploy, a review, a
+file) used to mean a sleep loop that held the turn, or a workflow whose isolated
+checkout could not see the person's files or localhost. `watch_command` runs a
+check where the agent's commands run and wakes the chat like a background command.
+Its schema costs about 1.3 KB; the eager budget rose to 8.3 KB.
 

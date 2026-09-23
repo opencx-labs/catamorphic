@@ -9,6 +9,7 @@ import {
   PanelRight,
   Plus,
   Search,
+  Users,
 } from "lucide-react";
 import {
   type ReactNode,
@@ -1129,6 +1130,13 @@ function SessionsNav({
               labelContent={
                 <>
                   <AnimatedTitle text={sessionLabel(session)} />
+                  {session.owner === "team" && (
+                    <Users
+                      className="ml-1.5 size-3 shrink-0 text-fg-faint"
+                      aria-label="Team chat"
+                      data-testid="sidebar-team-chat"
+                    />
+                  )}
                   {session.attentionRequired ? (
                     <span className="sr-only">Ready for you</span>
                   ) : unreadSessionIds.has(session.id) ? (
@@ -1145,6 +1153,9 @@ function SessionsNav({
                 description: session.activity ?? undefined,
                 metadata: [
                   { label: "Agent", value: agentName },
+                  ...(session.owner === "team"
+                    ? [{ label: "Belongs to", value: "The team" }]
+                    : []),
                   {
                     label: "Environment",
                     value: session.environment ?? "Default",

@@ -62,9 +62,17 @@ export interface SessionHostOperations {
     },
     { messageId: string; turnId: string | null; created: boolean }
   >;
+  /**
+   * Start or continue the chat for `key`, and deliver `content` to its
+   * agent. `audience` says whose chat it is (ADR 0156): the whole team's
+   * (shared with everyone whose role reaches the agent), or one member's.
+   * A member's automation wakes that member's chat; a team automation
+   * wakes the team's chat unless it names a member.
+   */
   wake: Call<
     {
       key: string;
+      audience?: "team" | { member: string };
       agentSlug?: string;
       mode?: "next_turn" | "interrupt";
       notification?: { title?: string; body?: string };

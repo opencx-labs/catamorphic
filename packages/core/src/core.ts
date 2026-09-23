@@ -70,6 +70,7 @@ import { executeHostCall } from "./services/host-calls.js";
 import { MembershipsService } from "./services/memberships-service.js";
 import { PluginsService } from "./services/plugins-service.js";
 import { ProjectEnvironmentsService } from "./services/project-environments-service.js";
+import { ProjectEventDispatcher } from "./services/project-event-dispatcher.js";
 import type { ProjectEventSourceProvider } from "./services/project-event-monitors-service.js";
 import { ProjectEventMonitorsService } from "./services/project-event-monitors-service.js";
 import { ProjectEventsService } from "./services/project-events-service.js";
@@ -111,7 +112,9 @@ import {
   type PushNotificationTransport,
   UserNotificationsService,
 } from "./services/user-notifications-service.js";
+import { wakeAudience } from "./services/wake-audience.js";
 import { WatchersService } from "./services/watchers-service.js";
+import { WebhooksService } from "./services/webhooks-service.js";
 import { WorkflowEnablementsService } from "./services/workflow-enablements-service.js";
 import { WorkflowsService } from "./services/workflows-service.js";
 
@@ -320,6 +323,8 @@ export class CatamorphicCore {
 
   readonly projects: ProjectsService;
   readonly projectEvents: ProjectEventsService;
+  /** Project webhook URLs and their durable intake (ADR 0156). */
+  readonly webhooks: WebhooksService;
   readonly projectEventMonitors: ProjectEventMonitorsService;
   readonly projectEventSources: readonly ProjectEventSourceProvider[];
   readonly workflows: WorkflowsService;
@@ -357,7 +362,13 @@ export class CatamorphicCore {
   readonly retention: RetentionService;
   readonly plugins?: PluginsService;
   readonly secrets?: SecretsService;
-  readonly runPluginsLoader?: RunPluginsLoader;
+  readonly runPluginsLoader: RunPluginsLoader;
+  /** A project member's current identity: the host's resolver, else stock memberships. */
+  private readonly resolveMember: (args: {
+    tenantId: string;
+    projectId: string;
+    externalUserId: string;
+  }) => Promise<Identity | null>;
   readonly devSandboxes?: DevSandboxService;
   readonly agentContext?: AgentContextService;
   readonly agentSessions?: AgentSessionsService;
@@ -500,38 +511,40 @@ export class CatamorphicCore {
             throw new Error("Coding agents are not configured");
           }
           const input = sessionWakeArgs(args);
-          let enabledEnvironment: string | undefined;
           const run = await this.db
             .selectFrom("workflow_runs")
-            .select("workflow_enablement_id")
+            .select(["workflow_enablement_id", "environment_name"])
             .where("id", "=", context.runId)
             .executeTakeFirst();
-          if (run?.workflow_enablement_id) {
-            const enablement = await this.db
-              .selectFrom("workflow_enablements")
-              .select([
-                "owner_kind",
-                "owner_external_user_id",
-                "environment_name",
-              ])
-              .where("id", "=", run.workflow_enablement_id)
-              .executeTakeFirstOrThrow();
-            if (
-              enablement.owner_kind !== "member" ||
-              enablement.owner_external_user_id !==
-                context.caller.externalUserId
-            ) {
-              throw new Error(
-                "catamorphic.sessions.wake requires a member-owned workflow enablement",
-              );
-            }
-            enabledEnvironment = enablement.environment_name;
-          }
-          return this.agentSessions.wake(context.caller, context.projectId, {
+          const enablement = run?.workflow_enablement_id
+            ? await this.db
+                .selectFrom("workflow_enablements")
+                .select([
+                  "owner_kind",
+                  "owner_external_user_id",
+                  "environment_name",
+                ])
+                .where("id", "=", run.workflow_enablement_id)
+                .executeTakeFirstOrThrow()
+            : undefined;
+          const environment =
+            enablement?.environment_name ??
+            input.environment ??
+            run?.environment_name ??
+            undefined;
+          const owner = await wakeAudience({
+            caller: context.caller,
+            projectId: context.projectId,
+            audience: input.audience,
+            enablement,
+            environment,
+            resolveMember: this.resolveMember,
+          });
+          return this.agentSessions.wake(owner, context.projectId, {
             ...input,
             wakeKey: JSON.stringify([context.workflowName, input.key]),
             origin: await this.workflowSessionOrigin(context),
-            environment: enabledEnvironment ?? input.environment,
+            ...(environment ? { environment } : {}),
             workflowName: context.workflowName,
             runId: context.runId,
           });
@@ -572,6 +585,19 @@ export class CatamorphicCore {
       { seedFiles: this.seedFiles },
     );
     this.projectEvents = new ProjectEventsService(this.db);
+    this.webhooks = new WebhooksService(this.db, {
+      events: this.projectEvents,
+      secretValue: async ({ projectId, name }) =>
+        (
+          await this.db
+            .selectFrom("project_secrets")
+            .select("value")
+            .where("project_id", "=", projectId)
+            .where("stage", "=", "production")
+            .where("name", "=", name)
+            .executeTakeFirst()
+        )?.value,
+    });
     this.projectEventMonitors = new ProjectEventMonitorsService(this.db);
     this.appStorage = new AppStorageService(this.db);
     this.agentRuntimeEvents = new AgentRuntimeEventsService(this.db);
@@ -670,7 +696,9 @@ export class CatamorphicCore {
         this.executionAllocations,
       );
     }
-    this.deployment = new DeploymentService(this.projectManager);
+    this.deployment = new DeploymentService(this.projectManager, (input) =>
+      this.workflowEnablements.markUpdateAvailable(input),
+    );
     this.deploymentArtifacts = new DeploymentArtifactsService(this.db);
     this.deploymentRuntime = this.sandboxProvider
       ? new DeploymentRuntimeService(
@@ -683,6 +711,10 @@ export class CatamorphicCore {
           },
         )
       : undefined;
+    // Read at call time: memberships are constructed further down.
+    this.resolveMember =
+      config.resolveMemberIdentity ??
+      ((args) => this.memberships.identityFor(args));
     const executionJobs = new ExecutionJobsService(this.db, config.workerNode);
     this.retention = new RetentionService(this.db, config.retention);
     const executionWorker = new ExecutionWorkerService(
@@ -704,15 +736,18 @@ export class CatamorphicCore {
     // Secrets exist independently of plugins: a project declares its own with
     // `defineSecrets` in code, and plugins may declare additional ones.
     this.secrets = new SecretsService(this.db, this.plugins, (args) =>
-      this.workflows.listDeclaredSecrets(args),
+      args.purpose === "run"
+        ? this.workflows.declaredSecretsForRun(args)
+        : this.workflows.listDeclaredSecrets(args),
+    );
+    this.runPluginsLoader = new RunPluginsLoader(
+      this.secrets,
+      this.plugins && this.pluginResolver
+        ? { plugins: this.plugins, resolver: this.pluginResolver }
+        : undefined,
+      this.capabilities,
     );
     if (this.plugins && this.pluginResolver) {
-      this.runPluginsLoader = new RunPluginsLoader(
-        this.plugins,
-        this.secrets,
-        this.pluginResolver,
-        this.capabilities,
-      );
       this.agentContext = new AgentContextService(
         this.plugins,
         this.pluginResolver,
@@ -846,9 +881,7 @@ export class CatamorphicCore {
           policies: this.appPolicies,
           ...args,
         }),
-      resolveMemberIdentity:
-        config.resolveMemberIdentity ??
-        ((args) => this.memberships.identityFor(args)),
+      resolveMemberIdentity: this.resolveMember,
     });
     this.schedules = new SchedulesService(this.db, this.triggers);
 
@@ -989,6 +1022,21 @@ export class CatamorphicCore {
       });
     }
   }
+  /**
+   * One pass of durable event delivery (ADR 0138, 0156): retire expired
+   * watchers, then run every active workflow bound to new Project Events
+   * (webhooks, chat events, GitHub). Hosts call it on a timer with
+   * `startEventDispatcher`, whether or not coding agents are configured.
+   */
+  async dispatchEvents(input: { limit?: number } = {}): Promise<number> {
+    await this.watchers?.expireDue(input);
+    return new ProjectEventDispatcher(
+      this.db,
+      this.triggers,
+      this.workflowEnablements,
+    ).dispatch(input);
+  }
+
   private async workflowSessionOrigin(
     context: import("./services/capability-providers.js").HostCallContext,
   ) {
@@ -1116,8 +1164,26 @@ function sessionDeliveryArgs(value: unknown): {
   };
 }
 
+/** Who a wake reaches: the team's chat, or one member's (ADR 0156). */
+function wakeAudienceArg(
+  value: unknown,
+): "team" | { member: string } | undefined {
+  if (value === undefined) return undefined;
+  if (value === "team") return "team";
+  if (
+    value &&
+    typeof value === "object" &&
+    "member" in value &&
+    typeof value.member === "string" &&
+    value.member.trim()
+  )
+    return { member: value.member.trim() };
+  throw new Error('audience must be "team" or { member: "<user id>" }');
+}
+
 function sessionWakeArgs(value: unknown): {
   key: string;
+  audience?: "team" | { member: string };
   content: string;
   agentSlug?: string;
   environment?: string;
@@ -1179,8 +1245,10 @@ function sessionWakeArgs(value: unknown): {
   const agentSlug = optionalString("agentSlug", 255);
   const environment = optionalString("environment", 255);
   const title = optionalString("title", 500);
+  const audience = wakeAudienceArg(input.audience);
   return {
     key,
+    ...(audience ? { audience } : {}),
     content: requiredString("content"),
     ...(agentSlug ? { agentSlug } : {}),
     ...(environment ? { environment } : {}),

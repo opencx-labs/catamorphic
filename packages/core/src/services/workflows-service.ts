@@ -10,7 +10,7 @@ import {
   type WorkflowGraph,
   type WorkflowTriggerBinding,
 } from "@catamorphic/parser";
-import { type Identity, isBuilder } from "../identity.js";
+import { type Identity, isBuilder, mayUseProject } from "../identity.js";
 import { AccessDeniedError, assertBuilder } from "./artifact-scope.js";
 import { withProgram } from "./program-reader.js";
 import {
@@ -122,6 +122,28 @@ export class WorkflowsService {
     ref?: string;
   }): Promise<DeclaredSecret[]> {
     await this.requireProject(args.identity, args.projectId);
+    return this.readDeclaredSecrets(args);
+  }
+
+  /**
+   * The secrets a run needs. A run's caller may be any member allowed to run
+   * the workflow (or the team principal); the declarations belong to the
+   * program, so reading them for injection is not a builder operation.
+   */
+  async declaredSecretsForRun(args: {
+    identity: Identity;
+    projectId: string;
+  }): Promise<DeclaredSecret[]> {
+    if (!mayUseProject(args.identity, args.projectId))
+      throw new AccessDeniedError();
+    return this.readDeclaredSecrets(args);
+  }
+
+  private readDeclaredSecrets(args: {
+    identity: Identity;
+    projectId: string;
+    ref?: string;
+  }): Promise<DeclaredSecret[]> {
     return this.withDev(args.identity, args.projectId, async (repo) => {
       const files = await workflowSourceFiles(repo, args.ref);
       const key = `${args.projectId}:${hashParseableSources(files)}`;

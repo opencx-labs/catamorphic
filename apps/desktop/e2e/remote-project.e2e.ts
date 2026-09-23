@@ -134,11 +134,15 @@ function startFakeServer(): Promise<void> {
         "/api/projects/remote-1/workflows",
         "/api/projects/remote-1/apps",
         "/api/projects/remote-1/skills",
-        "/api/projects/remote-1/workflow-enablements",
         "/api/projects/remote-1/proposals",
       ].includes(url.pathname)
     )
       return send(200, []);
+    if (
+      req.method === "GET" &&
+      url.pathname === "/api/projects/remote-1/workflow-enablements"
+    )
+      return send(200, { items: [], canManageTeam: false });
     if (
       req.method === "GET" &&
       url.pathname === "/api/projects/remote-1/agent/sessions"

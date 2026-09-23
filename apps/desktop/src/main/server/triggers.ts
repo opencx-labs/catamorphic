@@ -10,6 +10,7 @@ import {
   mcpToolKind,
   SESSION_TRIGGER_KINDS,
   schedule,
+  webhook,
 } from "@catamorphic/server-sdk";
 import { z } from "zod";
 import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./boot.js";
@@ -54,6 +55,7 @@ export const DESKTOP_TRIGGER_KINDS = [
   terminalIdle,
   aiToolCall,
   schedule,
+  webhook,
   ...GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
 ];
 

@@ -1,7 +1,7 @@
 /** Replaceable desktop doctrine. Mechanics live in the existing host services. */
 export const DESKTOP_WORKSPACE_SKILL = `---
 name: desktop-workspace
-description: Work with the user's browser, terminals and background commands, chats, worktrees, connections and shared project state in Work. Load for desktop interaction or session coordination.
+description: Work with the user's browser, terminals, background commands and watches, chats, worktrees, connections and shared project state in Work. Load for desktop interaction or session coordination.
 ---
 
 # Desktop workspace
@@ -75,6 +75,15 @@ blocks for news when you have nothing else to do. stop_background_command ends i
 Stop what you no longer need, and leave a dev server running when the person will
 use it. Open its terminal with open_surface and its key when output is worth their
 attention.
+
+To wait for something that is not your own process (a deploy going live, a PR
+review, a file appearing, a status page), use watch_command with a quick check. With
+until "success" the chat wakes once when the check exits 0; with until "change" it
+wakes whenever the check's output changes, until you stop it. Make the check print
+only the part that matters. Watches survive restarts; checks missed while the
+computer sleeps collapse into one, so tell the person it reports late if this
+computer is off. stop_background_command ends a watch as well. For events a
+project workflow already receives (webhooks, GitHub), prefer a workflow.
 
 write_terminal sends raw input to a terminal: an answer to a prompt, a REPL line,
 or Ctrl+C (\u0003). It also types into the person's own terminal when they ask

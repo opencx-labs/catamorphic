@@ -47,6 +47,8 @@ interface TerminalSession {
    */
   shed: number;
   running: boolean;
+  /** The shell's own exit code once it ended by itself (not killed). */
+  exitCode?: number;
   /** The shell binary's name — the idle foreground process. */
   shellName: string;
   /** A foreground command is running (chip spinners, agent waits). */
@@ -118,6 +120,11 @@ export interface AgentTerminals {
   /** Buffer content from `offset`, capped to `maxChars`. */
   readFrom(sessionId: string, offset: number, maxChars?: number): string;
   isRunning(sessionId: string): boolean;
+  /**
+   * The exit code of a shell that ended by itself (a command ran `exit`);
+   * undefined while it runs, or once its terminal was closed or killed.
+   */
+  exitCode(sessionId: string): number | undefined;
   /** A foreground command is running (vs. the shell idling). */
   isBusy(sessionId: string): boolean;
   /**
@@ -332,6 +339,7 @@ export function registerTerminalSupport(
     });
     pty.onExit(({ exitCode }) => {
       session.running = false;
+      session.exitCode = exitCode;
       session.releaseSender?.();
       if (!sessions.has(sessionId)) return;
       emit(session, "catamorphic:terminal-exit", { sessionId, exitCode });
@@ -498,6 +506,7 @@ export function registerTerminalSupport(
       return text.slice(start).slice(-maxChars);
     },
     isRunning: (sessionId) => sessions.get(sessionId)?.running ?? false,
+    exitCode: (sessionId) => sessions.get(sessionId)?.exitCode,
     isBusy: (sessionId) => {
       const session = sessions.get(sessionId);
       if (!session) return false;

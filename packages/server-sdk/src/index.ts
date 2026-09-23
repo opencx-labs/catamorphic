@@ -210,3 +210,9 @@ export type {
 export { ScopedClient, TenantScopedClient } from "./scoped-client.js";
 export { SESSION_TRIGGER_KINDS } from "./session-trigger-kinds.js";
 export { defineStaticEnvironments } from "./static-environments.js";
+export {
+  WEBHOOK_NAME_PATTERN,
+  type WebhookVerifyConfig,
+  webhook,
+  webhookVerifyConfig,
+} from "./webhook-trigger-kind.js";

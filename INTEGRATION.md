@@ -171,6 +171,30 @@ inline until the workflow's first durable wait, then detaches with an honest
 workspace (`syncTypes`). A trigger firing starts ordinary Runs — no new run
 family. See `docs/decisions/0039-custom-trigger-kinds.md`.
 
+Project Events (webhooks, chat events, GitHub) reach workflows through the
+event dispatcher. Start it once per server, whether or not coding agents are
+configured, and stop it on shutdown:
+
+```ts
+import { startEventDispatcher } from "@catamorphic/core";
+const events = startEventDispatcher({ core: catamorphic.core });
+// on shutdown: await events.stop();
+```
+
+Webhooks are a built-in trigger kind: register `webhook` from
+`@catamorphic/server-sdk` in `triggerKinds`, and pass `publicApiBase` (the
+public URL of the mounted API, including its prefix) to `catamorphicPlugin` or
+`createApp` so the webhook URLs builders copy point at the reachable host.
+`POST <api>/hooks/:projectId/:name/:token` is public; the token and the
+optional HMAC check are its credential. Builders list URLs with
+`GET <api>/projects/:projectId/webhooks` and rotate one with
+`POST <api>/projects/:projectId/webhooks/:name/rotate`. See ADR 0156.
+
+Enablements belong to a member or to the team (`owner: { type: "team" }`). A
+team enablement runs as the project's team principal with shared connections,
+and its `wake` calls reach a team chat every member of the agent's role sees
+(`AgentSession.owner === "team"`), or one member with `audience: { member }`.
+
 ### Observability
 
 Catamorphic libraries use only the OpenTelemetry APIs (`@opentelemetry/api`
@@ -816,7 +840,8 @@ with `connections:manage_service`. An Environment binding chooses allowed
 principal kinds, capabilities, and any assigned service connection. A trigger
 scan is the unattended enablement boundary: it must resolve every required
 alias to an assigned service connection, then freezes those ids for dispatch.
-Member connections are never eligible for schedules or webhooks. To prevent a
+Member connections are never eligible for team automations (schedules,
+webhooks and events that run while nobody is present). To prevent a
 privileged service action from running in a local Environment, do not create
 that alias binding there and grant it only in the managed Environment.
 

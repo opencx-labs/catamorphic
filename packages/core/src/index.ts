@@ -7,6 +7,7 @@ export {
 } from "@catamorphic/parser";
 export type { CatamorphicCoreConfig } from "./core.js";
 export { CatamorphicCore, createCatamorphicCore } from "./core.js";
+export { startEventDispatcher } from "./event-dispatcher.js";
 export {
   type AgentRef,
   type AgentRefToolPolicy,
@@ -28,6 +29,7 @@ export {
   identityMayUseEnvironment,
   isBuilder,
   isScoped,
+  isTeamPrincipal,
   mayUseProject,
   narrowIdentity,
   PROJECT_PERMISSION_PATTERN,
@@ -37,7 +39,9 @@ export {
   SYSTEM_AUTHOR,
   sameArtifact,
   scopeCovers,
+  TEAM_PRINCIPAL_ID,
   type TenantId,
+  teamIdentity,
   type WorkflowRef,
 } from "./identity.js";
 export {
@@ -588,11 +592,14 @@ export {
   type PushSubscriptionInput,
   UserNotificationsService,
 } from "./services/user-notifications-service.js";
+export { type Watcher, WatchersService } from "./services/watchers-service.js";
 export {
-  startWatcherDispatcher,
-  type Watcher,
-  WatchersService,
-} from "./services/watchers-service.js";
+  WEBHOOK_MAX_BYTES,
+  type WebhookEndpoint,
+  WebhookNotFoundError,
+  WebhookRejectedError,
+  WebhooksService,
+} from "./services/webhooks-service.js";
 export type { WorkerCapacity } from "./services/worker-capacity.js";
 export {
   capacityFits,

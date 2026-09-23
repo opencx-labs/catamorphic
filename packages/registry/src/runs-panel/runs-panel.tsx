@@ -183,7 +183,9 @@ export function RunDetail({ runId }: { runId: string }) {
             ) ? (
               <p className="mt-1 text-[11px] capitalize text-fg-muted">
                 {run.phase === "boundary"
-                  ? "Retry scope"
+                  ? run.currentStepIndex === null
+                    ? "Running"
+                    : `Step ${run.currentStepIndex + 1}`
                   : ["source", "process", "sink"].includes(run.phase)
                     ? "Batch processing"
                     : label(run.phase)}

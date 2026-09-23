@@ -37,6 +37,7 @@ describe("workspace coordination tools", () => {
       "run_background_command",
       "stop_background_command",
       "update_todo_list",
+      "watch_command",
       "workspace_overview",
     ]);
     expect(workPlaybook({ hasTools: true }).length).toBeLessThan(2000);
@@ -56,8 +57,9 @@ describe("workspace coordination tools", () => {
         ),
       ),
     }));
-    // Background execution is a core need for every harness (ADR 0155).
-    expect(Buffer.byteLength(JSON.stringify(wire))).toBeLessThan(7000);
+    // Background execution and watches are core needs for every harness
+    // (ADR 0155, 0156).
+    expect(Buffer.byteLength(JSON.stringify(wire))).toBeLessThan(8300);
     expect(
       toolkit.tools.every(
         (tool) =>

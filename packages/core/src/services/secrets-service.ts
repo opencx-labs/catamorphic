@@ -36,6 +36,8 @@ interface DeclaredSecretEntry {
 export type ProjectSecretDeclarationsReader = (args: {
   identity: Identity;
   projectId: string;
+  /** `run`: injecting into a run the caller may start, not managing values. */
+  purpose: "manage" | "run";
 }) => Promise<
   readonly {
     name: string;
@@ -66,6 +68,7 @@ export class SecretsService {
   private async declaredSecrets(args: {
     identity: Identity;
     projectId: string;
+    purpose?: "manage" | "run";
   }): Promise<Map<string, DeclaredSecretEntry>> {
     const { identity, projectId } = args;
     const declared = new Map<string, DeclaredSecretEntry>();
@@ -73,6 +76,7 @@ export class SecretsService {
     for (const secret of (await this.projectDeclarations?.({
       identity,
       projectId,
+      purpose: args.purpose ?? "manage",
     })) ?? []) {
       declared.set(secret.name, {
         label: secret.label,
@@ -211,7 +215,11 @@ export class SecretsService {
     missingRequired: string[];
   }> {
     const { identity, projectId, stage } = opts;
-    const declared = await this.declaredSecrets({ identity, projectId });
+    const declared = await this.declaredSecrets({
+      identity,
+      projectId,
+      purpose: "run",
+    });
     if (declared.size === 0) {
       return { values: {}, missingRequired: [] };
     }

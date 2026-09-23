@@ -17,7 +17,7 @@ import { context, trace } from "@opentelemetry/api";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { Identity } from "../identity.js";
+import { type Identity, teamIdentity } from "../identity.js";
 import { AgentSessionsService } from "../services/agent-sessions-service.js";
 import { AgentTurnsService } from "../services/agent-turns-service.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
@@ -664,6 +664,54 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     };
     await expect(
       sessions.sendMessage(revoked, projectId, session.id, "still there?"),
+    ).rejects.toThrow(AccessDeniedError);
+  });
+
+  it("a team chat is shared with everyone whose role reaches its agent (ADR 0156)", async () => {
+    const team = teamIdentity({
+      tenantId: root.tenantId,
+      projectId,
+      environment: "local",
+    });
+    const shared = await sessions.create(team, projectId, {
+      agentId: csmAgentId,
+    });
+    expect(shared.owner).toBe("team");
+    const carol: Identity = { ...viewer, externalUserId: "csm-carol" };
+    for (const member of [viewer, carol]) {
+      const listed = await sessions.list(member, projectId);
+      expect(listed.items.find((item) => item.id === shared.id)?.owner).toBe(
+        "team",
+      );
+      expect((await sessions.get(member, projectId, shared.id)).id).toBe(
+        shared.id,
+      );
+    }
+    // Teammates continue it, and nobody's own chats leak through it.
+    await sessions.deliver(carol, projectId, shared.id, {
+      content: "Picking this up",
+      author: { kind: "user", externalUserId: carol.externalUserId },
+      mode: "message_only",
+      idempotencyKey: "team-note",
+    });
+    expect(
+      (await sessions.list(carol, projectId)).items.every(
+        (item) => item.owner === "team" || item.externalUserId === "csm-carol",
+      ),
+    ).toBe(true);
+    // A role that does not reach the agent does not see the team's chat.
+    const salesViewer: Identity = {
+      ...viewer,
+      externalUserId: "sales-dan",
+      scope: [{ kind: "agent", projectId, name: "sales" }],
+    };
+    expect(
+      (await sessions.list(salesViewer, projectId)).items.some(
+        (item) => item.id === shared.id,
+      ),
+    ).toBe(false);
+    await expect(
+      sessions.get(salesViewer, projectId, shared.id),
     ).rejects.toThrow(AccessDeniedError);
   });
 });

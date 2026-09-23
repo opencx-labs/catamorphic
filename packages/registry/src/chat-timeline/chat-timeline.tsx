@@ -505,7 +505,8 @@ const TOOL_STEP_LABELS: Record<string, string> = {
   // Workspace tools (the host bridge; same names on every harness).
   run_background_command: "Ran command in background",
   read_background_output: "Checked a background command",
-  stop_background_command: "Stopped a background command",
+  stop_background_command: "Stopped background work",
+  watch_command: "Watched for a change",
   write_terminal: "Typed into a terminal",
   workspace_overview: "Looked at the workspace",
   read_tab: "Read a tab",
@@ -559,6 +560,7 @@ const DESKTOP_STEP_TOOLS = new Set([
   "run_background_command",
   "read_background_output",
   "stop_background_command",
+  "watch_command",
   "write_terminal",
   "sync_project",
   "create_pull_request",

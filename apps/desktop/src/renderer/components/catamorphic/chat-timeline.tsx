@@ -142,6 +142,8 @@ export interface AgentQuestion {
  * process a `run_background_command` step started.
  */
 export interface ChatBackgroundCommand {
+  /** A background command, or a command watch (ADR 0156). */
+  kind: "command" | "watch";
   command: string;
   description: string;
   status: "running" | "finished" | "stopped";
@@ -862,8 +864,12 @@ interface TurnStep {
   detail?: string;
   /** Technical payloads use mono; host-tool summaries read as normal prose. */
   detailMono?: boolean;
-  /** A background command's step: its key into the live states, and its words. */
-  background?: { ref: string; description: string };
+  /** A background command's or watch's step: its key into the live states, and its words. */
+  background?: {
+    ref: string;
+    kind: ChatBackgroundCommand["kind"];
+    description: string;
+  };
 }
 
 const STEP_ICONS = {
@@ -910,7 +916,7 @@ const TOOL_STEP_LABELS: Record<string, string> = {
   KillShell: "Stopped a background task",
   // Workspace tools (the host bridge; same names on every harness).
   read_background_output: "Checked a background command",
-  stop_background_command: "Stopped a background command",
+  stop_background_command: "Stopped background work",
   write_terminal: "Typed into a terminal",
   workspace_overview: "Looked at the workspace",
   read_tab: "Read a tab",
@@ -1236,17 +1242,24 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
   return steps;
 }
 
-/** A run_background_command call's command and words, when this event is one. */
-function backgroundStart(
-  event: Record<string, unknown>,
-): { command: string; description: string } | undefined {
+/** A run_background_command or watch_command call's command and words. */
+function backgroundStart(event: Record<string, unknown>):
+  | {
+      kind: ChatBackgroundCommand["kind"];
+      command: string;
+      description: string;
+    }
+  | undefined {
   if (event.type !== "tool_call") return undefined;
   const name = typeof event.toolName === "string" ? event.toolName : "";
-  if (
-    name !== "run_background_command" &&
-    !name.endsWith("/run_background_command")
-  )
-    return undefined;
+  const tool = name.slice(name.lastIndexOf("/") + 1);
+  const kind =
+    tool === "run_background_command"
+      ? "command"
+      : tool === "watch_command"
+        ? "watch"
+        : undefined;
+  if (!kind) return undefined;
   const input = asRecord(event.toolInput);
   // Normalized the way the host records the process, so the two pair up.
   const command =
@@ -1256,7 +1269,7 @@ function backgroundStart(
     (typeof input?.description === "string"
       ? input.description.replace(/\s+/g, " ").trim()
       : "") || command.replace(/\s+/g, " ").slice(0, 80);
-  return { command, description };
+  return { kind, command, description };
 }
 
 /**
@@ -1271,14 +1284,14 @@ function assignBackgroundCommands(
   if (commands.length === 0) return assigned;
   const queues = new Map<string, ChatBackgroundCommand[]>();
   for (const command of commands) {
-    const key = `${command.command}\u0000${command.description}`;
+    const key = `${command.kind}\u0000${command.command}\u0000${command.description}`;
     queues.set(key, [...(queues.get(key) ?? []), command]);
   }
   for (const message of messages) {
     if (message.role !== "assistant") continue;
     for (const step of turnSteps(message)) {
       if (!step.background || !step.detail) continue;
-      const key = `${step.detail}\u0000${step.background.description}`;
+      const key = `${step.background.kind}\u0000${step.detail}\u0000${step.background.description}`;
       const match = queues.get(key)?.shift();
       if (match) assigned.set(step.background.ref, match);
     }
@@ -1291,7 +1304,16 @@ const BackgroundStates = createContext<Map<string, ChatBackgroundCommand>>(
 );
 
 /** What a background step says: running pulses, then how it ended. */
-function backgroundLabel(state: ChatBackgroundCommand | undefined): string {
+function backgroundLabel(
+  kind: ChatBackgroundCommand["kind"],
+  state: ChatBackgroundCommand | undefined,
+): string {
+  if (kind === "watch") {
+    if (state?.status === "running") return "Watching";
+    if (state?.status === "finished") return "Watched until done";
+    if (state?.status === "stopped") return "Stopped watching";
+    return "Watched";
+  }
   if (state?.status === "running") return "Running in background";
   if (state?.status === "stopped") return "Stopped command in background";
   if (state?.exitCode)
@@ -1483,7 +1505,7 @@ function StepRow({
               className={pulsing ? "animate-pulse text-fg" : undefined}
               data-testid="chat-background-status"
             >
-              {backgroundLabel(background)}
+              {backgroundLabel(step.background.kind, background)}
             </span>
             <span className="truncate text-fg-faint">{step.label}</span>
           </span>

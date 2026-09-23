@@ -3,7 +3,12 @@ import { getTracer, withSpan } from "@catamorphic/otel";
 import type { WorkflowGraph } from "@catamorphic/parser";
 import type { Kysely, Selectable, Transaction } from "kysely";
 import type { Identity } from "../identity.js";
-import { hasControlPlanePermission } from "../identity.js";
+import {
+  hasControlPlanePermission,
+  isBuilder,
+  mayUseProject,
+  teamIdentity,
+} from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import type { ConnectionAdmissionService } from "./connection-admission.js";
 import type { ResolvedConnectionBinding } from "./connection-types.js";
@@ -121,7 +126,7 @@ export class WorkflowEnablementsService {
     ) {
       throw new AccessDeniedError();
     }
-    this.assertMayManage(input.identity, owner);
+    this.assertMayManage(input.identity, input.projectId, owner);
     await this.deps.assertWorkflowAccess({
       identity: input.identity,
       projectId: input.projectId,
@@ -143,7 +148,7 @@ export class WorkflowEnablementsService {
           projectId: input.projectId,
           environment: admission.environmentName,
           requirements: target.requirements,
-          unattended: owner.type === "service",
+          unattended: owner.type === "team",
         })
       : [];
     for (const connection of resolved) {
@@ -155,16 +160,6 @@ export class WorkflowEnablementsService {
           selected,
         );
       }
-    }
-    if (
-      owner.type === "service" &&
-      !resolved.some(
-        (connection) =>
-          connection.connectionId === owner.connectionId &&
-          connection.principalKind === owner.principalKind,
-      )
-    ) {
-      throw new ConnectionPermissionDeniedError();
     }
     const connections = resolved.map(mapResolvedConnection);
     const capabilities = [
@@ -270,14 +265,6 @@ export class WorkflowEnablementsService {
                   preview.owner.type === "member"
                     ? preview.owner.externalUserId
                     : null,
-                owner_connection_id:
-                  preview.owner.type === "service"
-                    ? preview.owner.connectionId
-                    : null,
-                owner_principal_kind:
-                  preview.owner.type === "service"
-                    ? preview.owner.principalKind
-                    : null,
                 owner_identity: toJson(input.identity),
                 capabilities: toJson(preview.capabilities),
                 consent_digest: preview.consentDigest,
@@ -356,10 +343,13 @@ export class WorkflowEnablementsService {
       !input.includeAll ||
       !hasControlPlanePermission(input.identity, "connections:manage_service")
     ) {
+      // Everyone on the project sees the team's automations; of members'
+      // automations, only their own.
+      const seesTeam = mayUseProject(input.identity, input.projectId);
       query = query.where((eb) =>
         eb.or([
+          ...(seesTeam ? [eb("owner_kind", "=", "team")] : []),
           eb("owner_external_user_id", "=", input.identity.externalUserId),
-          eb("created_by_external_user_id", "=", input.identity.externalUserId),
         ]),
       );
     }
@@ -378,7 +368,11 @@ export class WorkflowEnablementsService {
       input.enablementId,
       input.identity.tenantId,
     );
-    this.assertMayManage(input.identity, ownerFromRow(row));
+    const readsTeam =
+      row.owner_kind === "team" &&
+      mayUseProject(input.identity, row.project_id);
+    if (!readsTeam)
+      this.assertMayManage(input.identity, row.project_id, ownerFromRow(row));
     return this.hydrate(row);
   }
 
@@ -397,7 +391,7 @@ export class WorkflowEnablementsService {
       input.enablementId,
       input.identity.tenantId,
     );
-    this.assertMayManage(input.identity, ownerFromRow(row));
+    this.assertMayManage(input.identity, row.project_id, ownerFromRow(row));
     await this.revalidate({
       identity: input.identity,
       enablementId: input.enablementId,
@@ -532,16 +526,24 @@ export class WorkflowEnablementsService {
       return this.failRevalidation(row, input.identity, "expired");
     }
     const storedIdentity = row.owner_identity as unknown as Identity;
+    const connections = await this.connectionRows(row.id);
+    // A team automation never runs as the builder who enabled it: it runs
+    // as the team principal, allowed exactly what was consented to.
     const ownerIdentity =
-      row.owner_kind === "member" &&
-      storedIdentity.scope !== undefined &&
-      this.deps.resolveMemberIdentity
-        ? await this.deps.resolveMemberIdentity({
+      row.owner_kind === "team"
+        ? teamIdentity({
             tenantId: row.tenant_id,
             projectId: row.project_id,
-            externalUserId: row.owner_external_user_id!,
+            environment: row.environment_name,
+            connections,
           })
-        : storedIdentity;
+        : storedIdentity.scope !== undefined && this.deps.resolveMemberIdentity
+          ? await this.deps.resolveMemberIdentity({
+              tenantId: row.tenant_id,
+              projectId: row.project_id,
+              externalUserId: row.owner_external_user_id!,
+            })
+          : storedIdentity;
     if (!ownerIdentity) {
       return this.failRevalidation(row, input.identity, "member_removed");
     }
@@ -564,7 +566,6 @@ export class WorkflowEnablementsService {
     } catch {
       return this.failRevalidation(row, input.identity, "environment_denied");
     }
-    const connections = await this.connectionRows(row.id);
     if (connections.length > 0 && !this.deps.connectionAdmission) {
       return this.failRevalidation(
         row,
@@ -709,7 +710,7 @@ export class WorkflowEnablementsService {
       input.enablementId,
       input.identity.tenantId,
     );
-    this.assertMayManage(input.identity, ownerFromRow(row));
+    this.assertMayManage(input.identity, row.project_id, ownerFromRow(row));
     await this.db.transaction().execute(async (trx) => {
       await trx
         .updateTable("workflow_enablements")
@@ -732,8 +733,18 @@ export class WorkflowEnablementsService {
     return this.get(input);
   }
 
+  /** Whether this identity may enable, pause and update team automations. */
+  mayManageTeam(input: { identity: Identity; projectId: string }): boolean {
+    return (
+      isBuilder(input.identity, input.projectId) ||
+      hasControlPlanePermission(input.identity, "connections:manage_service")
+    );
+  }
+
+  /** A member manages their own; the team's are managed by its builders. */
   private assertMayManage(
     identity: Identity,
+    projectId: string,
     owner: WorkflowEnablementOwner,
   ): void {
     if (
@@ -742,9 +753,7 @@ export class WorkflowEnablementsService {
     ) {
       return;
     }
-    if (hasControlPlanePermission(identity, "connections:manage_service")) {
-      return;
-    }
+    if (this.mayManageTeam({ identity, projectId })) return;
     throw new AccessDeniedError();
   }
 
@@ -860,13 +869,7 @@ function ownerFromRow(
 ): WorkflowEnablementOwner {
   return row.owner_kind === "member"
     ? { type: "member", externalUserId: row.owner_external_user_id! }
-    : {
-        type: "service",
-        principalKind: row.owner_principal_kind as
-          | "project_service"
-          | "tenant_service",
-        connectionId: row.owner_connection_id!,
-      };
+    : { type: "team" };
 }
 
 function mapResolvedConnection(

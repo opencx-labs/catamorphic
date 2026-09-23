@@ -3831,64 +3831,63 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            /** Format: uuid */
-                            projectId: string;
-                            workflowName: string;
-                            /** Format: uuid */
-                            deploymentArtifactId: string;
-                            commitSha: string;
-                            remoteBranch: string;
-                            environment: string;
-                            owner: {
-                                /** @enum {string} */
-                                type: "member";
-                                externalUserId: string;
-                            } | {
-                                /** @enum {string} */
-                                type: "service";
-                                /** @enum {string} */
-                                principalKind: "project_service" | "tenant_service";
+                            items: {
                                 /** Format: uuid */
-                                connectionId: string;
-                            };
-                            connections: {
-                                alias: string;
+                                projectId: string;
+                                workflowName: string;
                                 /** Format: uuid */
-                                bindingId: string;
-                                /** Format: uuid */
-                                connectionId: string;
-                                providerKind: string;
-                                /** @enum {string} */
-                                principalKind: "member" | "project_service" | "tenant_service";
+                                deploymentArtifactId: string;
+                                commitSha: string;
+                                remoteBranch: string;
+                                environment: string;
+                                owner: {
+                                    /** @enum {string} */
+                                    type: "member";
+                                    externalUserId: string;
+                                } | {
+                                    /** @enum {string} */
+                                    type: "team";
+                                };
+                                connections: {
+                                    alias: string;
+                                    /** Format: uuid */
+                                    bindingId: string;
+                                    /** Format: uuid */
+                                    connectionId: string;
+                                    providerKind: string;
+                                    /** @enum {string} */
+                                    principalKind: "member" | "project_service" | "tenant_service";
+                                    capabilities: string[];
+                                }[];
                                 capabilities: string[];
-                            }[];
-                            capabilities: string[];
-                            consentDigest: string;
-                            /** Format: uuid */
-                            id: string;
-                            /** @enum {string} */
-                            status: "active" | "suspended" | "disabled";
-                            suspensionReason: string | null;
-                            updateAvailable: boolean;
-                            temporary: boolean;
-                            /** Format: date-time */
-                            expiresAt: string | null;
-                            revision: number;
-                            triggers: {
+                                consentDigest: string;
                                 /** Format: uuid */
                                 id: string;
-                                /** Format: uuid */
-                                definitionId: string;
-                                kind: string;
-                                config: unknown;
                                 /** @enum {string} */
-                                status: "active" | "paused";
+                                status: "active" | "suspended" | "disabled";
+                                suspensionReason: string | null;
+                                updateAvailable: boolean;
+                                temporary: boolean;
+                                /** Format: date-time */
+                                expiresAt: string | null;
+                                revision: number;
+                                triggers: {
+                                    /** Format: uuid */
+                                    id: string;
+                                    /** Format: uuid */
+                                    definitionId: string;
+                                    kind: string;
+                                    config: unknown;
+                                    /** @enum {string} */
+                                    status: "active" | "paused";
+                                }[];
+                                /** Format: date-time */
+                                createdAt: string;
+                                /** Format: date-time */
+                                updatedAt: string;
                             }[];
-                            /** Format: date-time */
-                            createdAt: string;
-                            /** Format: date-time */
-                            updatedAt: string;
-                        }[];
+                            canManageTeam: boolean;
+                        };
                     };
                 };
                 /** @description Default Response */
@@ -3925,11 +3924,7 @@ export interface paths {
                             externalUserId: string;
                         } | {
                             /** @enum {string} */
-                            type: "service";
-                            /** @enum {string} */
-                            principalKind: "project_service" | "tenant_service";
-                            /** Format: uuid */
-                            connectionId: string;
+                            type: "team";
                         };
                         connectionSelections?: {
                             [key: string]: string;
@@ -3960,11 +3955,7 @@ export interface paths {
                                 externalUserId: string;
                             } | {
                                 /** @enum {string} */
-                                type: "service";
-                                /** @enum {string} */
-                                principalKind: "project_service" | "tenant_service";
-                                /** Format: uuid */
-                                connectionId: string;
+                                type: "team";
                             };
                             connections: {
                                 alias: string;
@@ -4024,6 +4015,10 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            reason: "not_published";
+                        } | {
                             error: string;
                         };
                     };
@@ -4095,11 +4090,7 @@ export interface paths {
                             externalUserId: string;
                         } | {
                             /** @enum {string} */
-                            type: "service";
-                            /** @enum {string} */
-                            principalKind: "project_service" | "tenant_service";
-                            /** Format: uuid */
-                            connectionId: string;
+                            type: "team";
                         };
                         connectionSelections?: {
                             [key: string]: string;
@@ -4129,11 +4120,7 @@ export interface paths {
                                 externalUserId: string;
                             } | {
                                 /** @enum {string} */
-                                type: "service";
-                                /** @enum {string} */
-                                principalKind: "project_service" | "tenant_service";
-                                /** Format: uuid */
-                                connectionId: string;
+                                type: "team";
                             };
                             connections: {
                                 alias: string;
@@ -4178,6 +4165,10 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            reason: "not_published";
+                        } | {
                             error: string;
                         };
                     };
@@ -4260,11 +4251,7 @@ export interface paths {
                                 externalUserId: string;
                             } | {
                                 /** @enum {string} */
-                                type: "service";
-                                /** @enum {string} */
-                                principalKind: "project_service" | "tenant_service";
-                                /** Format: uuid */
-                                connectionId: string;
+                                type: "team";
                             };
                             connections: {
                                 alias: string;
@@ -4380,11 +4367,7 @@ export interface paths {
                                 externalUserId: string;
                             } | {
                                 /** @enum {string} */
-                                type: "service";
-                                /** @enum {string} */
-                                principalKind: "project_service" | "tenant_service";
-                                /** Format: uuid */
-                                connectionId: string;
+                                type: "team";
                             };
                             connections: {
                                 alias: string;
@@ -4455,6 +4438,10 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            reason: "not_published";
+                        } | {
                             error: string;
                         };
                     };
@@ -4509,11 +4496,7 @@ export interface paths {
                                 externalUserId: string;
                             } | {
                                 /** @enum {string} */
-                                type: "service";
-                                /** @enum {string} */
-                                principalKind: "project_service" | "tenant_service";
-                                /** Format: uuid */
-                                connectionId: string;
+                                type: "team";
                             };
                             connections: {
                                 alias: string;
@@ -4584,6 +4567,10 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            reason: "not_published";
+                        } | {
                             error: string;
                         };
                     };
@@ -4644,11 +4631,7 @@ export interface paths {
                                 externalUserId: string;
                             } | {
                                 /** @enum {string} */
-                                type: "service";
-                                /** @enum {string} */
-                                principalKind: "project_service" | "tenant_service";
-                                /** Format: uuid */
-                                connectionId: string;
+                                type: "team";
                             };
                             connections: {
                                 alias: string;
@@ -4719,6 +4702,10 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            reason: "not_published";
+                        } | {
                             error: string;
                         };
                     };
@@ -6222,6 +6209,8 @@ export interface paths {
                                 /** Format: uuid */
                                 projectId: string;
                                 externalUserId: string;
+                                /** @enum {string} */
+                                owner: "member" | "team";
                                 provider: string;
                                 /** @enum {string} */
                                 source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -6343,6 +6332,8 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             externalUserId: string;
+                            /** @enum {string} */
+                            owner: "member" | "team";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -6622,6 +6613,8 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             externalUserId: string;
+                            /** @enum {string} */
+                            owner: "member" | "team";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -6821,6 +6814,8 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             externalUserId: string;
+                            /** @enum {string} */
+                            owner: "member" | "team";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -6959,6 +6954,8 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             externalUserId: string;
+                            /** @enum {string} */
+                            owner: "member" | "team";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -7164,6 +7161,8 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             externalUserId: string;
+                            /** @enum {string} */
+                            owner: "member" | "team";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -7290,6 +7289,8 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             externalUserId: string;
+                            /** @enum {string} */
+                            owner: "member" | "team";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -7490,6 +7491,8 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             externalUserId: string;
+                            /** @enum {string} */
+                            owner: "member" | "team";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -7707,6 +7710,8 @@ export interface paths {
                                 /** Format: uuid */
                                 projectId: string;
                                 externalUserId: string;
+                                /** @enum {string} */
+                                owner: "member" | "team";
                                 provider: string;
                                 /** @enum {string} */
                                 source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -7844,6 +7849,8 @@ export interface paths {
                                 /** Format: uuid */
                                 projectId: string;
                                 externalUserId: string;
+                                /** @enum {string} */
+                                owner: "member" | "team";
                                 provider: string;
                                 /** @enum {string} */
                                 source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -8024,6 +8031,8 @@ export interface paths {
                                 /** Format: uuid */
                                 projectId: string;
                                 externalUserId: string;
+                                /** @enum {string} */
+                                owner: "member" | "team";
                                 provider: string;
                                 /** @enum {string} */
                                 source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -8229,6 +8238,8 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             externalUserId: string;
+                            /** @enum {string} */
+                            owner: "member" | "team";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -8809,6 +8820,8 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             externalUserId: string;
+                            /** @enum {string} */
+                            owner: "member" | "team";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -9318,6 +9331,8 @@ export interface paths {
                                 /** Format: uuid */
                                 projectId: string;
                                 externalUserId: string;
+                                /** @enum {string} */
+                                owner: "member" | "team";
                                 provider: string;
                                 /** @enum {string} */
                                 source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -9477,6 +9492,8 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             externalUserId: string;
+                            /** @enum {string} */
+                            owner: "member" | "team";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -10535,6 +10552,8 @@ export interface paths {
                             /** Format: uuid */
                             projectId: string;
                             externalUserId: string;
+                            /** @enum {string} */
+                            owner: "member" | "team";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -12540,6 +12559,126 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/webhooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            name: string;
+                            url: string;
+                            workflows: string[];
+                            listening: boolean;
+                            verified: boolean;
+                        }[];
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/webhooks/{name}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    name: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            name: string;
+                            url: string;
+                            workflows: string[];
+                            listening: boolean;
+                            verified: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -15957,6 +16096,81 @@ export interface paths {
                             }[];
                             sourceCode: string;
                         } | null;
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/hooks/{projectId}/{name}/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    name: string;
+                    token: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            id: string;
+                            duplicate: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
                     };
                 };
             };

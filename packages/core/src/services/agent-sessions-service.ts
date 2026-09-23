@@ -34,8 +34,10 @@ import {
   type AgentRef,
   type Identity,
   isBuilder,
+  isTeamPrincipal,
   scopeCovers,
   scopeCoversSessions,
+  TEAM_PRINCIPAL_ID,
 } from "../identity.js";
 import type { AgentCapabilitiesService } from "./agent-capabilities-service.js";
 import {
@@ -140,6 +142,11 @@ export interface AgentSession {
   id: string;
   projectId: string;
   externalUserId: string;
+  /**
+   * `team`: a shared chat owned by the project's team (ADR 0156), open to
+   * everyone whose role reaches its agent. `member`: one person's chat.
+   */
+  owner: "member" | "team";
   provider: string;
   /** Surface that first created this conversation; informational, not auth. */
   source: AgentSessionSource;
@@ -403,9 +410,16 @@ export function summarizeSessionTask(message: string): string | null {
   return `${normalized.slice(0, SESSION_TASK_SUMMARY_LIMIT - 1)}…`;
 }
 
-/** First line of the user's request, trimmed into a commit subject. */
-function checkpointMessage(userMessage: string): string {
-  const firstLine = userMessage.split("\n", 1)[0]?.trim() ?? "";
+/**
+ * First line of the turn's request, trimmed into a commit subject. A turn a
+ * workflow or the host started drops its provenance header: history reads
+ * "Agent: Deploy is live: done", never the model-facing wrapper.
+ */
+export function checkpointMessage(userMessage: string): string {
+  const request = userMessage
+    .replace(/^\s*\[Catamorphic [^\]\n]*\]\s*/, "")
+    .trimStart();
+  const firstLine = request.split("\n", 1)[0]?.trim() ?? "";
   const subject =
     firstLine.length > 68 ? `${firstLine.slice(0, 67).trimEnd()}…` : firstLine;
   return subject ? `Agent: ${subject}` : "Agent checkpoint";
@@ -853,12 +867,28 @@ export class AgentSessionsService {
       .selectFrom("agent_sessions")
       .where("project_id", "=", projectId);
     if (!isBuilder(identity, projectId)) {
-      query = query.where("external_user_id", "=", identity.externalUserId);
-      if (!scopeCoversSessions(identity, projectId)) {
-        const agentIds = this.coveredAgentIds(identity, projectId);
-        if (agentIds.length === 0) return { items: [], total: 0 };
-        query = query.where("agent_id", "in", agentIds);
-      }
+      const agentIds = this.coveredAgentIds(identity, projectId);
+      // A sessions ref reads the caller's own chats on every agent;
+      // otherwise only on the agents their role reaches.
+      const everyAgent = scopeCoversSessions(identity, projectId);
+      if (!everyAgent && agentIds.length === 0) return { items: [], total: 0 };
+      // Their own chats, plus the team's chats on agents their role reaches.
+      query = query.where((eb) =>
+        eb.or([
+          eb.and([
+            eb("external_user_id", "=", identity.externalUserId),
+            ...(everyAgent ? [] : [eb("agent_id", "in", agentIds)]),
+          ]),
+          ...(agentIds.length
+            ? [
+                eb.and([
+                  eb("external_user_id", "=", TEAM_PRINCIPAL_ID),
+                  eb("agent_id", "in", agentIds),
+                ]),
+              ]
+            : []),
+        ]),
+      );
     }
 
     if (input.visibility) {
@@ -6749,6 +6779,7 @@ function mapSession(
     id: row.id,
     projectId: row.project_id,
     externalUserId: row.external_user_id,
+    owner: isTeamPrincipal(row.external_user_id) ? "team" : "member",
     provider: row.provider,
     source: parseSessionSource(row.source),
     providerSessionId: row.provider_session_id,

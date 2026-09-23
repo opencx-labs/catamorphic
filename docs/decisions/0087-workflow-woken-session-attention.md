@@ -1,6 +1,6 @@
 # ADR 0087: Workflow-woken sessions are the notification record
 
-- **Status:** Accepted
+- **Status:** Superseded by 0156 (who a wake reaches)
 - **Date:** 2026-09-03
 - **Refines:** 0068, 0074, and 0077
 

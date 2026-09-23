@@ -1069,3 +1069,29 @@ The line under a working chat says what the agent is doing in its own words:
 a command's description, the in-progress todo, or the heading of its
 reasoning summary. "Working..." is only what it says before it has said
 anything.
+
+### 2026-09-23: Automations run for you or for the team; agents can watch
+
+The Automate panel asks one question before anything else, to those who
+manage the project: runs for **Just me** or **The team**. A team automation
+runs as the project, not as the person who switched it on, so its consent
+summary says "The team" and its chats are shared: they carry a small Team
+mark in the sidebar, the chat header and on mobile, and anyone on the project
+can open one and continue it. A pull request review lands as one team chat,
+not one per person. Members see the team's automations but not the controls.
+
+Turning on uses the project's published version. When a workflow is only
+saved, the panel says so in plain words and offers **Publish changes and
+continue** to those who can publish, instead of a "not found" error; the
+consent review follows without starting over.
+
+A workflow that listens on a webhook shows its URL in the same panel, with a
+copy button and a quiet "Replace URL" that asks once before cutting senders
+off. Until the workflow is on, it says "Enable to start receiving" rather than
+pretending the URL works.
+
+An agent waiting for something that is not its own process (a deploy, a
+review, a file) watches it instead of sleeping. The step reads "Watching" and
+pulses like a background command, then settles into "Watched until done" or
+"Stopped watching". The chat wakes with one quiet line when the check passes
+or changes. A laptop that slept through ten checks makes one when it wakes.

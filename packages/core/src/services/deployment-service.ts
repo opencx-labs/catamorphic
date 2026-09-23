@@ -22,7 +22,14 @@ const REMOTE_BRANCH = "main";
  * per-user dev repo.
  */
 export class DeploymentService {
-  constructor(private readonly projectManager: ProjectManager) {}
+  constructor(
+    private readonly projectManager: ProjectManager,
+    /** Told about every published revision (enablements offer the update). */
+    private readonly onPublished?: (input: {
+      projectId: string;
+      commitSha: string;
+    }) => Promise<void>,
+  ) {}
 
   private async withDev<T>(
     tenantId: string,
@@ -246,6 +253,9 @@ export class DeploymentService {
           });
         });
         forgetProgramFetch(this.projectManager, tenantId, projectId);
+        await this.onPublished?.({ projectId, commitSha: publishedSha }).catch(
+          () => {},
+        );
         return {
           status: "deployed" as const,
           commitSha: status.baseCommit,
@@ -341,6 +351,9 @@ export class DeploymentService {
         // serve the pre-push tree to a role/tool resolution that follows
         // the deploy immediately.
         forgetProgramFetch(this.projectManager, tenantId, projectId);
+        await this.onPublished?.({ projectId, commitSha: result.sha }).catch(
+          () => {},
+        );
         return {
           status: "deployed" as const,
           commitSha: result.sha,

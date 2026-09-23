@@ -26,7 +26,7 @@ export function ProjectWorkflows({ projectId }: { projectId: string }) {
       <div>
         <h2 className="font-medium">Workflows</h2>
         <p className="mt-1 text-sm text-fg-muted">
-          Choose what runs for your account. Review access before enabling
+          Choose what runs automatically. Review access before enabling
           automatic runs.
         </p>
       </div>
@@ -55,16 +55,19 @@ export function ProjectWorkflows({ projectId }: { projectId: string }) {
       <ul className="flex flex-col divide-y divide-border">
         {workflows.data?.map((workflow) => {
           const settings =
-            enablements.data?.filter(
+            enablements.data?.items.filter(
               (item) => item.workflowName === workflow.name,
             ) ?? [];
+          const active = settings.filter((item) => item.status === "active");
           const status = settings.some((item) => item.updateAvailable)
             ? "Update to review"
             : settings.some((item) => item.status === "suspended")
               ? "Needs attention"
-              : settings.some((item) => item.status === "active")
-                ? "Enabled"
-                : "Not enabled";
+              : active.some((item) => item.owner.type === "team")
+                ? "Runs for the team"
+                : active.length
+                  ? "Enabled"
+                  : "Not enabled";
           return (
             <li key={workflow.name}>
               <button

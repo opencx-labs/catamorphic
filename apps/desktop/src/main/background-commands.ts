@@ -10,7 +10,8 @@ export type { BackgroundCommandView };
  * it wakes the agent's chat when it finishes (or prints a line the agent
  * asked to hear about), for every harness alike.
  */
-interface Tracked extends BackgroundCommandView {
+interface Tracked extends Omit<BackgroundCommandView, "kind" | "key"> {
+  key: string;
   completionsBefore: number;
   promptsBefore: number;
   startOffset: number;
@@ -31,6 +32,7 @@ export interface BackgroundCommandsDeps {
     | "create"
     | "writeAny"
     | "isRunning"
+    | "exitCode"
     | "isBusy"
     | "commandTracking"
     | "bufferLength"
@@ -63,6 +65,11 @@ export type BackgroundNotifier = (input: {
   /** What the person sees in the chat, in plain words. */
   notice: string;
   idempotencyKey: string;
+  /**
+   * `message_only` records the news without starting a turn: the agent
+   * heard about this command moments ago and will read it next turn.
+   */
+  mode?: "next_turn" | "message_only";
 }) => Promise<void>;
 
 /** The model reads at most this much in one wake message. */
@@ -296,7 +303,10 @@ export class BackgroundCommands {
     if (tracked.status !== "running") return;
     const { terminals } = this.deps;
     if (tracked.wakeOnOutput && opts.wake) this.scanOutput(tracked);
-    if (!terminals.isRunning(tracked.id)) {
+    const shellExit = terminals.isRunning(tracked.id)
+      ? undefined
+      : terminals.exitCode(tracked.id);
+    if (!terminals.isRunning(tracked.id) && shellExit === undefined) {
       // The person closed its terminal (or the chat was archived).
       tracked.status = "stopped";
       tracked.endedAt = Date.now();
@@ -311,7 +321,12 @@ export class BackgroundCommands {
     }
     let finished = false;
     let exitCode: number | null = null;
-    {
+    if (shellExit !== undefined) {
+      // The command ended its own shell (`exit`): it finished, and the
+      // shell's code is the command's.
+      finished = true;
+      exitCode = shellExit;
+    } else {
       const tracking = terminals.commandTracking(tracked.id);
       if (tracking?.seen) {
         // A completion marker for this command is exact, exit code included.
@@ -344,6 +359,8 @@ export class BackgroundCommands {
             : `failed with exit code ${exitCode}`;
       this.wake(tracked, {
         key: "exit",
+        // Just woken by its output: the end is news, not a new errand.
+        quiet: Date.now() - tracked.lastOutputWake < OUTPUT_WAKE_INTERVAL_MS,
         notice:
           exitCode && exitCode !== 0
             ? `${tracked.description} failed (exit ${exitCode})`
@@ -359,7 +376,7 @@ export class BackgroundCommands {
 
   private wake(
     tracked: Tracked,
-    message: { key: string; notice: string; content: string },
+    message: { key: string; notice: string; content: string; quiet?: boolean },
   ): void {
     // An archived chat no longer takes messages; its command ended with it.
     this.notify?.({
@@ -368,6 +385,7 @@ export class BackgroundCommands {
       idempotencyKey: `background:${tracked.id}:${message.key}`,
       notice: message.notice,
       content: message.content,
+      ...(message.quiet ? { mode: "message_only" as const } : {}),
     }).catch(() => {});
   }
 
@@ -403,6 +421,7 @@ export class BackgroundCommands {
 function view(tracked: Tracked): BackgroundCommandView {
   return {
     id: tracked.id,
+    kind: "command",
     projectId: tracked.projectId,
     sessionId: tracked.sessionId,
     command: tracked.command,

@@ -23,6 +23,7 @@ import {
   Paperclip,
   PictureInPicture2,
   Radio,
+  Users,
   X,
 } from "lucide-react";
 import {
@@ -2123,6 +2124,17 @@ function ChatDockContent({
                       <Ghost className="size-3" />
                       Incognito
                     </span>
+                  )}
+                  {chat.session?.owner === "team" && (
+                    <ShortcutHint label="Team chat: everyone on the project sees and continues it">
+                      <span
+                        className="flex shrink-0 items-center gap-1 rounded-full border border-border-strong bg-bg-inset px-1.5 py-0.5 text-[10px] font-medium text-fg-muted"
+                        data-testid="chat-team-badge"
+                      >
+                        <Users className="size-3" />
+                        Team
+                      </span>
+                    </ShortcutHint>
                   )}
                 </span>
                 {projectName && (

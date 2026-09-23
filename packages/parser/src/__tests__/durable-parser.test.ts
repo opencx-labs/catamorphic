@@ -433,3 +433,46 @@ it("projects step descriptions and identifies the first boundary input correctly
     stepLabel: "Starting information",
   });
 });
+
+describe("host call labels", () => {
+  it("names chat and connection calls in words, never code", () => {
+    const graph = parseWorkflow(`
+export const triage = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ input, connections }: BoundaryContext<{ q: string }>) =>
+        connections.gmail.searchThreads({ query: input.q }),
+    }),
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<{ id: string }>) =>
+        host["catamorphic.sessions"].wake({ key: input.id, content: "Triage" }),
+    }),
+  ],
+}));
+`);
+    const labels = graph.nodes
+      .filter((node) => node.type === "step")
+      .map((node) => node.label);
+    expect(labels).toEqual(["Gmail: search threads", "Wake a chat"]);
+  });
+});
+
+describe("descriptions", () => {
+  it("reads wrapped JSDoc as prose and keeps paragraphs", () => {
+    const graph = parseWorkflow(`
+/**
+ * Triage an inbound request in a chat the whole
+ * team can see.
+ *
+ * The form posts to the support webhook.
+ * @displayname Triage
+ */
+export const triage = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: ({ input }: BoundaryContext<{ a: string }>) => input })],
+}));
+`);
+    expect(graph.description).toBe(
+      "Triage an inbound request in a chat the whole team can see.\n\nThe form posts to the support webhook.",
+    );
+  });
+});

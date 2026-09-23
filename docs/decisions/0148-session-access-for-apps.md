@@ -74,7 +74,8 @@ publication is the builder's approval, as it is for the workflow set.
   HEAD, the source they were compiled from; published builds call the
   published ref. A viewer therefore never runs unpublished code, and a
   builder's preview never answers with a workflow that predates it.
-- The `sessions` ref is read-oriented by intent, but it also covers the
-  session actions a viewer may take on their own conversations (archive,
-  interrupt). Widening it to other users' sessions or to transcripts of
-  other agents' conversations is out of scope and would need a new ref.
+- The `sessions` ref only reads. Changing a session (delivering,
+  interrupting, archiving, forking) takes the agent ref its chat runs on,
+  which no app-widened identity carries. Widening it to other users'
+  sessions is out of scope and would need a new ref. Team chats (ADR 0156)
+  are read and continued through the agent ref, like the member's own.

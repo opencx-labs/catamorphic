@@ -223,7 +223,7 @@ export class WorkspaceContextAgent implements CodingAgentProvider {
       if (running.length > 0) {
         desktop.push(
           [
-            "Your background commands still running (they wake this chat when they finish):",
+            "Your background commands and watches still running (they wake this chat when they finish or see what you asked for):",
             ...running.map(
               (command) =>
                 `- ${command.id}: ${command.description} (${command.command.replace(/\s+/g, " ").slice(0, 120)})`,
@@ -269,7 +269,7 @@ export function workPlaybook({ hasTools }: { hasTools: boolean }): string {
   const tools = hasTools
     ? `
 
-Use your own file and shell tools for ordinary work; Bun is on PATH. Start anything long-running (dev servers, watchers, slow builds or test runs) with run_background_command and keep working: it runs in a terminal the person can open, outlives this turn, and wakes this chat when it finishes, so never wait on it with sleep. Give commands a short plain description; the person sees it as what you are doing, as they see an in-progress todo's activeForm. Read more of what the person sees with read_tab (a page's full text, a terminal's output, another chat, an editor selection). Browser tools from elsewhere, such as a Chrome extension or MCP server, see a different browser, not Work's tabs. Control Work's browser or terminals, reach other chats, build apps and connect services through discover_capabilities; the desktop-workspace skill explains these when a task needs them.
+Use your own file and shell tools for ordinary work; Bun is on PATH. Start anything long-running (dev servers, slow builds or test runs) with run_background_command and keep working: it runs in a terminal the person can open, outlives this turn, and wakes this chat when it finishes, so never wait on it with sleep. To wait on anything else (a file, a deploy, a review), use watch_command, never a polling loop. Give commands a short plain description; the person sees it as what you are doing, as they see an in-progress todo's activeForm. Read more of what the person sees with read_tab (a page's full text, a terminal's output, another chat, an editor selection). Browser tools from elsewhere, such as a Chrome extension or MCP server, see a different browser, not Work's tabs. Control Work's browser or terminals, reach other chats, build apps and connect services through discover_capabilities; the desktop-workspace skill explains these when a task needs them.
 
 Show results instead of describing where they are: link them in Markdown as [Title](app:<name>), [Title](workflow:<exportName>), [Title](file:<path>) or a web URL, and open the one that matters with open_surface. Use update_todo_list to show progress on multi-step work.`
     : "";

@@ -87,6 +87,17 @@ concrete input type to define that part of the schema; do not use \`any\` or
 If every kind is rejected as \`never\`, refresh types through the host rather than
 fabricating a registry or editing generated declarations.
 
+Webhooks use \`trigger("webhook", { name: "github" })\`: a lowercase name that
+becomes the project's URL segment. The server stores each request durably and
+answers 202 before the workflow runs, so a redelivery (same delivery id header) runs
+once. The payload's \`payload\` holds \`{ name, headers, contentType, body }\`,
+with JSON and form bodies parsed. Add \`verify: { secret: "GITHUB_WEBHOOK_SECRET",
+header: "x-hub-signature-256", prefix: "sha256=" }\` for senders that sign with
+HMAC-SHA256; the secret is a project secret, and unsigned requests are rejected.
+Every workflow on one webhook name must declare the same verify. People who manage
+the project copy the URL from the workflow's **Automate** panel after enabling it.
+Webhooks reach servers that are online, so enable them on a brain server.
+
 Schedules use either \`{ at: "an absolute ISO timestamp with offset" }\` or
 \`{ cron: "0 8 * * 1-5", timezone: "Asia/Amman" }\`. Their payload is
 \`{ activationId: string; scheduledFor: string; firedAt: string }\`. Use
@@ -99,7 +110,8 @@ credentials; see \`workflow-lifecycle\`. Brokered calls such as
 \`context.connections.gmail.search(...)\` are returned host transitions, not
 ordinary promises. Session notifications use \`deliver\` with \`attention: "required"\`;
 \`mode: "message_only"\` alerts without invoking a model. Use \`wake\` when a workflow
-needs a stable member session to perform agent work, not just display a reminder.
+needs a stable session to perform agent work, not just display a reminder: the
+enabling member's chat, or for a team enablement a team chat (see \`session-workflows\`).
 
 ## App contracts and secrets
 

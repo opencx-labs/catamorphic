@@ -9,6 +9,32 @@ import { WorkflowEnablementPanel } from "./workflow-enablement-panel.js";
 const preview = vi.fn();
 const create = vi.fn();
 const update = vi.fn();
+const rotate = vi.fn();
+const deploy = vi.fn();
+let canManageTeam = false;
+let enablementItems: unknown[] = [];
+const memberEnablement = {
+  id: "enablement-1",
+  projectId: "project-1",
+  workflowName: "watchInbox",
+  deploymentArtifactId: "artifact-1",
+  commitSha: "b".repeat(40),
+  remoteBranch: "main",
+  environment: "local",
+  owner: { type: "member", externalUserId: "alice" },
+  connections: [],
+  capabilities: [],
+  consentDigest: "c".repeat(64),
+  status: "active",
+  suspensionReason: null,
+  updateAvailable: true,
+  temporary: false,
+  expiresAt: null,
+  revision: 1,
+  triggers: [],
+  createdAt: "2026-09-03T00:00:00.000Z",
+  updatedAt: "2026-09-03T00:00:00.000Z",
+};
 
 vi.mock("@catamorphic/react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@catamorphic/react")>()),
@@ -52,30 +78,31 @@ vi.mock("@catamorphic/react", async (importOriginal) => ({
     },
   }),
   useWorkflowEnablements: () => ({
-    data: [
-      {
-        id: "enablement-1",
-        projectId: "project-1",
-        workflowName: "watchInbox",
-        deploymentArtifactId: "artifact-1",
-        commitSha: "b".repeat(40),
-        remoteBranch: "main",
-        environment: "local",
-        owner: { type: "member", externalUserId: "alice" },
-        connections: [],
-        capabilities: [],
-        consentDigest: "c".repeat(64),
-        status: "active",
-        suspensionReason: null,
-        updateAvailable: true,
-        temporary: false,
-        expiresAt: null,
-        revision: 1,
-        triggers: [],
-        createdAt: "2026-09-03T00:00:00.000Z",
-        updatedAt: "2026-09-03T00:00:00.000Z",
-      },
-    ],
+    data: { items: enablementItems, canManageTeam },
+    isSuccess: true,
+  }),
+  useWebhooks: () => ({
+    data: canManageTeam
+      ? [
+          {
+            name: "github",
+            url: "https://brain.example/api/hooks/project-1/github/token",
+            workflows: ["watchInbox"],
+            listening: false,
+            verified: true,
+          },
+        ]
+      : undefined,
+  }),
+  useDeployProject: () => ({
+    mutateAsync: deploy,
+    isPending: false,
+    error: null,
+  }),
+  useRotateWebhook: () => ({
+    mutateAsync: rotate,
+    isPending: false,
+    error: null,
   }),
   usePreviewWorkflowEnablement: () => ({
     mutateAsync: preview,
@@ -103,6 +130,10 @@ beforeEach(() => {
   preview.mockReset();
   create.mockReset();
   update.mockReset();
+  rotate.mockReset();
+  deploy.mockReset();
+  canManageTeam = false;
+  enablementItems = [memberEnablement];
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -231,4 +262,139 @@ it("returns to exact consent review after account authorization without enabling
     action: "update-deployment",
     consentDigest: "reviewed-digest",
   });
+});
+
+it("enables a workflow for the team and shows its webhook URL to builders", async () => {
+  canManageTeam = true;
+  enablementItems = [];
+  preview.mockResolvedValueOnce({
+    projectId: "project-1",
+    workflowName: "watchInbox",
+    commitSha: "f".repeat(40),
+    environment: "local",
+    owner: { type: "team" },
+    connections: [],
+    connectionLabels: {},
+    capabilities: [],
+    triggers: [
+      {
+        kind: "webhook",
+        config: {
+          name: "github",
+          verify: { secret: "GITHUB_SECRET", header: "x-hub-signature-256" },
+        },
+      },
+    ],
+    consentDigest: "team-digest",
+  });
+  await act(async () =>
+    root.render(
+      <WorkflowEnablementPanel
+        projectId="project-1"
+        workflowName="watchInbox"
+        onClose={() => {}}
+      />,
+    ),
+  );
+  const button = (text: string) =>
+    [...container.querySelectorAll("button")].find((item) =>
+      item.textContent?.startsWith(text),
+    );
+  expect(
+    container.querySelector<HTMLInputElement>(
+      'input[aria-label="github webhook URL"]',
+    )?.value,
+  ).toBe("https://brain.example/api/hooks/project-1/github/token");
+  expect(container.textContent).toContain("Enable to start receiving");
+
+  await act(async () => button("The team")?.click());
+  await act(async () => button("Enable for the team")?.click());
+  expect(preview).toHaveBeenCalledWith({
+    workflowName: "watchInbox",
+    environment: "local",
+    owner: { type: "team" },
+  });
+  expect(container.textContent).toContain("The team");
+  expect(container.textContent).toContain("Webhook github (signed)");
+
+  await act(async () => button("Confirm and enable")?.click());
+  expect(create).toHaveBeenCalledWith({
+    workflowName: "watchInbox",
+    environment: "local",
+    owner: { type: "team" },
+    connectionSelections: {},
+    consentDigest: "team-digest",
+  });
+});
+
+it("shows the team's automation to members without letting them manage it", async () => {
+  enablementItems = [
+    { ...memberEnablement, owner: { type: "team" }, updateAvailable: false },
+  ];
+  await act(async () =>
+    root.render(
+      <WorkflowEnablementPanel
+        projectId="project-1"
+        workflowName="watchInbox"
+        onClose={() => {}}
+      />,
+    ),
+  );
+  expect(container.textContent).toContain("For the team");
+  expect(container.textContent).not.toContain("The team");
+  expect(
+    [...container.querySelectorAll("button")].some((item) =>
+      item.textContent?.startsWith("Pause"),
+    ),
+  ).toBe(false);
+  expect(container.textContent).toContain("Enable for me");
+});
+
+it("offers to publish a saved workflow before turning it on", async () => {
+  canManageTeam = true;
+  enablementItems = [];
+  preview.mockRejectedValueOnce(
+    new CatamorphicError({
+      code: "conflict",
+      message:
+        "This workflow isn't in the project's published version yet. Publish the project's changes, then turn it on.",
+      details: { reason: "not_published" },
+    }),
+  );
+  preview.mockResolvedValueOnce({
+    projectId: "project-1",
+    workflowName: "watchInbox",
+    commitSha: "a".repeat(40),
+    environment: "local",
+    owner: { type: "member", externalUserId: "alice" },
+    connections: [],
+    connectionLabels: {},
+    capabilities: [],
+    triggers: [],
+    consentDigest: "after-publish",
+  });
+  deploy.mockResolvedValueOnce({ status: "deployed" });
+  await act(async () =>
+    root.render(
+      <WorkflowEnablementPanel
+        projectId="project-1"
+        workflowName="watchInbox"
+        onClose={() => {}}
+      />,
+    ),
+  );
+  const button = (text: string) =>
+    [...container.querySelectorAll("button")].find((item) =>
+      item.textContent?.startsWith(text),
+    );
+  await act(async () => button("Enable for me")?.click());
+  expect(
+    container.querySelector('[data-testid="workflow-not-published"]')
+      ?.textContent,
+  ).toContain("published version");
+  expect(button("Enable for me")).toBeUndefined();
+  await act(async () => button("Publish changes and continue")?.click());
+  expect(deploy).toHaveBeenCalledTimes(1);
+  expect(preview).toHaveBeenCalledTimes(2);
+  expect(container.textContent).toContain("Consent summary");
 });

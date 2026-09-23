@@ -91,8 +91,8 @@ current source when documentation and the installed version differ.
   checking the installed version.
 - Treating login as project access or assigning a silent default role.
 - Treating account authentication as consent to enable every compatible
-  workflow, or allowing a service-owned enablement to target a personal
-  session.
+  workflow, or waking one member's personal chat from a team automation
+  without naming that member.
 - Targeting project presentation by role slug instead of resolved builder
   state and namespaced permissions.
 - Writing Better Auth password hashes or rows directly.

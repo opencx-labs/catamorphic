@@ -3,6 +3,7 @@ import { SEED_SKILLS } from "../seeds.js";
 import {
   activityLabel,
   buildAgentSystemPrompt,
+  checkpointMessage,
   liveStatusLine,
   modelVisibleDelivery,
   parsePorcelain,
@@ -203,5 +204,19 @@ describe("buildAgentSystemPrompt", () => {
       }),
     ).toBe("Use the host's billing plugin.");
     expect(buildAgentSystemPrompt({ standingPrompt: false })).toBe("");
+  });
+});
+
+describe("checkpointMessage", () => {
+  it("names a turn by its request, never the host's provenance header", () => {
+    expect(checkpointMessage("Fix the login page\nIt 500s")).toBe(
+      "Agent: Fix the login page",
+    );
+    expect(
+      checkpointMessage(
+        "[Catamorphic system message: background_command. This message was not written by the user.]\n\nWatch watch-1 (Deploy is live) succeeded on check 3.",
+      ),
+    ).toBe("Agent: Watch watch-1 (Deploy is live) succeeded on check 3.");
+    expect(checkpointMessage("")).toBe("Agent checkpoint");
   });
 });

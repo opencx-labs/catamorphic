@@ -206,6 +206,16 @@
   gap: 16px;
   font-weight: 500;
 }
+/* The name keeps its width; a long type label gives way and truncates. */
+.workflow-parameters dt > :first-child {
+  flex-shrink: 0;
+}
+.workflow-parameters dt > :last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .workflow-parameters dd {
   margin-top: 4px;
 }
