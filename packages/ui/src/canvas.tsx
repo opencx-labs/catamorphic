@@ -15,6 +15,7 @@ import {
   type OnNodesChange,
   ReactFlow,
   useNodesInitialized,
+  useOnViewportChange,
   useReactFlow,
   useStore,
 } from "@xyflow/react";
@@ -285,6 +286,28 @@ function KeepInView({
   entered: string[];
 }) {
   const { getViewport, setViewport, fitView } = useReactFlow();
+  const anyVisible = useCallback(() => {
+    const canvas = canvasRef.current?.getBoundingClientRect();
+    const nodes = canvasRef.current?.querySelectorAll(".react-flow__node");
+    if (!canvas || !nodes?.length) return true;
+    return [...nodes].some((node) => {
+      const box = node.getBoundingClientRect();
+      return (
+        box.right > canvas.left &&
+        box.left < canvas.right &&
+        box.bottom > canvas.top &&
+        box.top < canvas.bottom
+      );
+    });
+  }, [canvasRef]);
+  // Whether the graph was on screen after the person last moved the view: a
+  // viewport they deliberately emptied is theirs to keep.
+  const visibleAfterMove = useRef(true);
+  useOnViewportChange({
+    onEnd: () => {
+      visibleAfterMove.current = anyVisible();
+    },
+  });
   const width = useStore((state) => state.width);
   const height = useStore((state) => state.height);
   const reveal = useCallback(
@@ -336,7 +359,7 @@ function KeepInView({
     [canvasRef, getViewport, setViewport],
   );
   // Wait for a resize (such as an opening panel) to settle before panning.
-  // A resize that leaves nothing on screen refits instead.
+  // A resize that pushes the whole graph off screen refits instead.
   useEffect(() => {
     if (width === 0 || height === 0) return;
     const timer = setTimeout(() => {
@@ -344,29 +367,17 @@ function KeepInView({
         reveal([selectedId]);
         return;
       }
-      const canvas = canvasRef.current?.getBoundingClientRect();
-      const nodes = canvasRef.current?.querySelectorAll(".react-flow__node");
-      if (!canvas || !nodes?.length) return;
-      const visible = [...nodes].some((node) => {
-        const box = node.getBoundingClientRect();
-        return (
-          box.right > canvas.left &&
-          box.left < canvas.right &&
-          box.bottom > canvas.top &&
-          box.top < canvas.bottom
-        );
+      if (!visibleAfterMove.current || anyVisible()) return;
+      void fitView({
+        ...FIT_VIEW_OPTIONS,
+        duration: window.matchMedia?.("(prefers-reduced-motion: reduce)")
+          .matches
+          ? 0
+          : GRAPH_TRANSITION_MS,
       });
-      if (!visible)
-        void fitView({
-          ...FIT_VIEW_OPTIONS,
-          duration: window.matchMedia?.("(prefers-reduced-motion: reduce)")
-            .matches
-            ? 0
-            : GRAPH_TRANSITION_MS,
-        });
     }, 120);
     return () => clearTimeout(timer);
-  }, [selectedId, width, height, reveal, canvasRef, fitView]);
+  }, [selectedId, width, height, reveal, anyVisible, fitView]);
   useEffect(() => {
     if (entered.length === 0) return;
     const timer = setTimeout(() => reveal(entered), GRAPH_TRANSITION_MS + 40);

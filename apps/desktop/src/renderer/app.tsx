@@ -4537,9 +4537,13 @@ export function App({
   );
   // Workflow tabs and chips read the workflow's display name, never the
   // export identifier, whichever way the tab was opened.
-  const hasWorkflowTabs = workspace.tabs.some((tab) => tab.kind === "workflow");
+  const needsWorkflowTitles =
+    workspace.tabs.some((tab) => tab.kind === "workflow") ||
+    Object.values(chipAttention)
+      .flat()
+      .some((key) => key.startsWith("workflow:"));
   const workflowSummaries = useWorkflows(
-    hasWorkflowTabs ? projectId : undefined,
+    needsWorkflowTitles ? projectId : undefined,
   );
   const workflowTitles = new Map(
     (workflowSummaries.data ?? []).flatMap((workflow) =>
@@ -4922,6 +4926,14 @@ export function App({
         key,
         kind: "chat",
         label: chatLabels[key.slice("chat:".length)] ?? "Chat",
+      };
+    }
+    if (key.startsWith("workflow:")) {
+      const name = key.slice("workflow:".length);
+      return {
+        key,
+        kind: "workflow",
+        label: workflowTitles.get(name) ?? name,
       };
     }
     const tab = presentedTabs.find((candidate) => tabKey(candidate) === key);

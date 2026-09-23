@@ -21,6 +21,8 @@ export function WorkflowReview(props: {
   projectId: string;
   workflowName: string;
   onClose?: () => void;
+  /** Hosts whose tab or title already names the workflow pass false. */
+  showTitle?: boolean;
 }) {
   return (
     <WorkflowEditorScope>
@@ -33,10 +35,12 @@ function WorkflowReviewContent({
   projectId,
   workflowName,
   onClose,
+  showTitle = true,
 }: {
   projectId: string;
   workflowName: string;
   onClose?: () => void;
+  showTitle?: boolean;
 }) {
   const workflow = useWorkflow(projectId, workflowName);
   const environments = useEnvironments(projectId, { workload: "workflow" });
@@ -142,9 +146,23 @@ function WorkflowReviewContent({
       )}
       <div className="relative min-h-[300px] flex-1">
         <WorkflowCanvas />
-        {workflow.data?.description && (
-          <p className="pointer-events-none absolute top-3 left-3 max-w-sm text-xs leading-relaxed text-fg-muted">
-            {workflow.data.description}
+        {(showTitle || workflow.data?.description) && (
+          <div className="pointer-events-none absolute top-3 left-3 max-w-sm">
+            {showTitle && (
+              <h2 className="text-sm font-medium">
+                {workflow.data?.displayName ?? workflowName}
+              </h2>
+            )}
+            {workflow.data?.description && (
+              <p className="mt-0.5 text-xs leading-relaxed text-fg-muted">
+                {workflow.data.description}
+              </p>
+            )}
+          </div>
+        )}
+        {environments.isSuccess && !available && (
+          <p className="pointer-events-none absolute top-12 right-3 text-xs text-fg-muted">
+            No permitted execution environment is ready.
           </p>
         )}
         <div className="catamorphic-editor-controls">

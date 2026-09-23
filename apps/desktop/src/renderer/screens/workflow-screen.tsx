@@ -87,6 +87,7 @@ function WorkflowScreenContent(props: WorkflowScreenProps) {
       <WorkflowReview
         projectId={props.projectId}
         workflowName={props.workflowName}
+        showTitle={false}
       />
     );
   return <WorkflowAuthoringScreen {...props} />;
@@ -223,6 +224,7 @@ function WorkflowWorkbench({
   const write = useWriteProjectFile(projectId);
   const [saveError, setSaveError] = useState<string>();
   const [saved, setSaved] = useState(false);
+  const [statusRequest, setStatusRequest] = useState(0);
   useEffect(() => {
     if (!saved) return;
     const timer = setTimeout(() => setSaved(false), 1500);
@@ -282,6 +284,7 @@ function WorkflowWorkbench({
       setSaveError(
         cause instanceof Error ? cause.message : "Could not save your changes.",
       );
+      setStatusRequest((value) => value + 1);
     }
   }, [buffer, dirty, filePath, refreshFile, write, canEdit]);
 
@@ -318,7 +321,10 @@ function WorkflowWorkbench({
     triggerCount > 0 ? projectId : undefined,
     workflowName,
   );
-  const enablement = enablements.data?.[0];
+  // Any active enablement means the workflow runs automatically for you.
+  const enablement =
+    enablements.data?.find((item) => item.status === "active") ??
+    enablements.data?.[0];
   const automation: WorkflowAutomation =
     triggerCount === 0
       ? { kind: "none" }
@@ -366,12 +372,11 @@ function WorkflowWorkbench({
             ],
           }
         : undefined;
-  // A decision that only the user can make opens the status popover once.
-  const [statusRequest, setStatusRequest] = useState(0);
-  const decisionKey = saveError ?? (conflict ? "conflict" : undefined);
+  // A decision only the user can make (a failed save, a file changed under
+  // the draft) opens the status popover.
   useEffect(() => {
-    if (decisionKey) setStatusRequest((value) => value + 1);
-  }, [decisionKey]);
+    if (conflict) setStatusRequest((value) => value + 1);
+  }, [conflict]);
 
   const panelTitle =
     shownView === "step"
@@ -397,8 +402,9 @@ function WorkflowWorkbench({
         if (
           event.key === "Escape" &&
           view &&
-          !(event.target as HTMLElement).closest(
-            "input, textarea, select, .monaco-editor",
+          !(
+            event.target instanceof Element &&
+            event.target.closest("input, textarea, select, .monaco-editor")
           )
         ) {
           event.stopPropagation();

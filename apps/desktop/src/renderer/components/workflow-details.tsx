@@ -273,7 +273,8 @@ export function WorkflowStepDetails({
           <Code2 className="size-3.5" /> View code
         </button>
       </div>
-      {node.parameters?.length || node.arguments?.length ? (
+      {node.type !== "input" &&
+      (node.parameters?.length || node.arguments?.length) ? (
         <WorkflowSection title="Information used">
           <WorkflowParameters
             parameters={node.parameters ?? []}

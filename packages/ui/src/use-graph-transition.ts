@@ -74,8 +74,7 @@ export function useGraphTransition({
   useLayoutEffect(() => {
     const target = targets.current;
     const previous = rendered.current;
-    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)");
-    if (previous.nodes.length === 0 || reduce?.matches) {
+    if (previous.nodes.length === 0) {
       setFrame(null);
       return;
     }
@@ -97,7 +96,13 @@ export function useGraphTransition({
         before ? pose(before) : { ...pose(node), opacity: 0 },
       );
     }
+    // Arrivals are reported with or without motion; only the tween is optional.
     if (added.length) setEntered(added);
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    if (reduce?.matches) {
+      setFrame(null);
+      return;
+    }
     const removed = previous.nodes.filter((node) => !matched.has(node.id));
     const ghostIds = new Map(
       removed.map((node) => [node.id, `leaving:${node.id}`]),

@@ -185,7 +185,7 @@ describe("trigger layout", () => {
     };
     expect(height("untriggered")).toBe(44);
     expect(height("searchKb")).toBe(64);
-    // Two badges share a row.
-    expect(height("escalateTicket")).toBe(64);
+    // "ticket.created" and "ticket.reopened" are too long to share a row.
+    expect(height("escalateTicket")).toBe(86);
   });
 });
