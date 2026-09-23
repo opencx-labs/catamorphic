@@ -115,6 +115,7 @@ export function SidebarActivity({
           key={workflow.name}
           projectId={projectId}
           name={workflow.name}
+          title={workflow.displayName ?? workflow.name}
           visible={visible}
           onOpenTab={onOpenTab}
           report={reportWorkflow}
@@ -126,12 +127,14 @@ export function SidebarActivity({
 function WorkflowActivity({
   projectId,
   name,
+  title,
   visible,
   onOpenTab,
   report,
 }: {
   projectId: string;
   name: string;
+  title: string;
   visible: boolean;
   onOpenTab: (tab: WorkspaceTab, mode?: OpenMode) => void;
   report: (
@@ -162,7 +165,7 @@ function WorkflowActivity({
     <>
       {runs.isError && (
         <p role="alert" className="sidebar-empty-state">
-          Could not load {name} activity.{" "}
+          Could not load {title} activity.{" "}
           <button type="button" onClick={() => void runs.refetch()}>
             Retry
           </button>
@@ -170,15 +173,17 @@ function WorkflowActivity({
       )}
       <SidebarTree
         items={active}
-        label={`${name} activity`}
+        label={`${title} activity`}
         renderItem={(run) => (
           <SidebarItemRow
             itemId={run.id}
-            label={name}
+            label={title}
             icon="Workflow"
             resource
             badges={[run.status]}
-            onOpen={(mode) => onOpenTab({ kind: "workflow", name }, mode)}
+            onOpen={(mode) =>
+              onOpenTab({ kind: "workflow", name, label: title }, mode)
+            }
             onAction={() => {}}
           />
         )}

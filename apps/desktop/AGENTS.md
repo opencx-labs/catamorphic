@@ -172,10 +172,13 @@ execution, live authorization, media, and user takeover across projections.
 ## Workflow authoring
 
 The desktop owns workflow details, source editing, draft protection, and run or
-automation actions in `screens/workflow-screen.tsx`. Compose the scoped canvas
-and headless hooks; do not move the inspector back into `@catamorphic/ui`
-(ADR 0097). Keep the canvas mounted through inspector changes and preserve the
-last valid preview while code is incomplete. The visible
+automation actions in `screens/workflow-screen.tsx` (ADR 0097, 0157). The tab
+names the workflow; the surface never repeats it. State and actions float in the
+canvas corner through `components/workflow-status.tsx`, and the side panel opens
+only for a subject (selection, code, run, automatic runs, change request) with a
+close button. Do not add a panel toggle or header back. Compose the scoped
+canvas and headless hooks; keep the canvas mounted through panel changes and
+preserve the last valid preview while code is incomplete. The visible
 `e2e/workflows.e2e.ts` suite covers live source polling, graph transitions,
 source access, draft restoration and conflicts, and contextual agent editing.
 

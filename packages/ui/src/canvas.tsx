@@ -1,10 +1,6 @@
 import {
-  activePanelTabAtom,
-  graphAtom,
-  panelVisibilityAtom,
   reactFlowEdgesAtom,
   reactFlowNodesAtom,
-  rightPanelOpenAtom,
   selectedNodeIdAtom,
 } from "@catamorphic/react";
 import {
@@ -32,7 +28,10 @@ import {
   useState,
 } from "react";
 import { nodeTypes as builtInNodeTypes } from "./nodes/index.js";
-import { useGraphTransition } from "./use-graph-transition.js";
+import {
+  GRAPH_TRANSITION_MS,
+  useGraphTransition,
+} from "./use-graph-transition.js";
 
 const FIT_VIEW_OPTIONS: FitViewOptions = {
   padding: 0.08,
@@ -79,49 +78,43 @@ function computeTranslateExtent(
   ];
 }
 
-const MINIMAP_NODE_COLORS: Record<string, string> = {
-  input: "#ca8a04",
-  source: "#0891b2",
-  sink: "#16a34a",
-  step: "#2563eb",
-  branch: "#a855f7",
-  "if-block": "transparent",
-  "loop-block": "#f97316",
-  parallel: "#06b6d4",
-  "parallel-block": "#06b6d4",
-  "scope-block": "#94a3b8",
-  "durable-boundary": "#94a3b8",
-  batch: "#0d9488",
-  pause: "#d97706",
-  "call-workflow": "#6366f1",
-  delay: "#737373",
-  return: "#22c55e",
-};
+const CONTAINER_TYPES = new Set([
+  "if-block",
+  "loop-block",
+  "parallel-block",
+  "scope-block",
+  "durable-boundary",
+  "batch",
+  "branch",
+]);
 
-function minimapNodeColor(node: { type?: string }): string {
-  return MINIMAP_NODE_COLORS[node.type ?? ""] ?? "#525252";
+/** Minimap shapes are themed in CSS; SVG fill attributes cannot read tokens. */
+function minimapNodeClass(node: { type?: string }): string {
+  return CONTAINER_TYPES.has(node.type ?? "")
+    ? "catamorphic-minimap-container"
+    : "catamorphic-minimap-node";
 }
 
+/**
+ * The workflow graph. Clicking a node selects it (`selectedNodeIdAtom`) and
+ * clicking empty canvas clears the selection; hosts derive their inspector
+ * from that selection instead of a separate open/closed state.
+ */
 export function WorkflowCanvas({
   nodeRenderers,
+  showMinimap = false,
 }: {
   nodeRenderers?: Partial<NodeTypes>;
+  /** An overview of large graphs in the bottom-right corner. */
+  showMinimap?: boolean;
 } = {}) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const [viewportReady, setViewportReady] = useState(false);
   const [nodes, setNodes] = useAtom(reactFlowNodesAtom);
   const edges = useAtomValue(reactFlowEdgesAtom);
-  const graph = useAtomValue(graphAtom);
-  const animated = useGraphTransition({
-    nodes,
-    edges,
-    graphNodes: graph?.nodes ?? [],
-  });
+  const animated = useGraphTransition({ nodes, edges });
   const selectedNodeId = useAtomValue(selectedNodeIdAtom);
   const setSelectedNodeId = useSetAtom(selectedNodeIdAtom);
-  const panelVisibility = useAtomValue(panelVisibilityAtom);
-  const [isOpen, setRightPanelOpen] = useAtom(rightPanelOpenAtom);
-  const setActiveTab = useSetAtom(activePanelTabAtom);
 
   useEffect(() => {
     setNodes((prev) => {
@@ -163,12 +156,8 @@ export function WorkflowCanvas({
   const onNodeClick: NodeMouseHandler = useCallback(
     (_event, node) => {
       setSelectedNodeId(node.id);
-      if (!isOpen) {
-        setRightPanelOpen(true);
-        setActiveTab("details");
-      }
     },
-    [setSelectedNodeId, setRightPanelOpen, setActiveTab, isOpen],
+    [setSelectedNodeId],
   );
 
   const onPaneClick = useCallback(() => {
@@ -206,12 +195,18 @@ export function WorkflowCanvas({
         proOptions={{ hideAttribution: true }}
       >
         <InitialVisibleFit canvasRef={canvasRef} onReady={setViewportReady} />
+        {viewportReady && (
+          <KeepInView
+            canvasRef={canvasRef}
+            selectedId={selectedNodeId}
+            entered={animated.entered}
+          />
+        )}
         <Background />
-        <Controls />
-        {panelVisibility.minimap && (
+        <Controls showInteractive={false} fitViewOptions={FIT_VIEW_OPTIONS} />
+        {showMinimap && (
           <MiniMap
-            nodeColor={minimapNodeColor}
-            maskColor="rgba(0, 0, 0, 0.6)"
+            nodeClassName={minimapNodeClass}
             pannable
             zoomable
             style={{ width: 120, height: 90 }}
@@ -269,5 +264,113 @@ function InitialVisibleFit({
       observer.disconnect();
     };
   }, [canvasRef, initialized, fitView, viewportWidth, viewportHeight, onReady]);
+  return null;
+}
+
+const KEEP_IN_VIEW_MARGIN = 24;
+
+/**
+ * Keeps what the user is working with on screen without refitting: the
+ * selection stays visible when the canvas narrows (an inspector opens) or a
+ * code cursor selects a distant step, and steps an edit adds are brought into
+ * view once they arrive. Pans only, never zooms, and only when needed.
+ */
+function KeepInView({
+  canvasRef,
+  selectedId,
+  entered,
+}: {
+  canvasRef: RefObject<HTMLDivElement | null>;
+  selectedId: string | null;
+  entered: string[];
+}) {
+  const { getViewport, setViewport, fitView } = useReactFlow();
+  const width = useStore((state) => state.width);
+  const height = useStore((state) => state.height);
+  const reveal = useCallback(
+    (ids: string[]) => {
+      const canvas = canvasRef.current?.getBoundingClientRect();
+      if (!canvas || canvas.width === 0 || canvas.height === 0) return;
+      const boxes = ids.flatMap((id) => {
+        const element = canvasRef.current?.querySelector(
+          `.react-flow__node[data-id="${CSS.escape(id)}"]`,
+        );
+        return element ? [element.getBoundingClientRect()] : [];
+      });
+      if (boxes.length === 0) return;
+      const left = Math.min(...boxes.map((box) => box.left));
+      const top = Math.min(...boxes.map((box) => box.top));
+      const right = Math.max(...boxes.map((box) => box.right));
+      const bottom = Math.max(...boxes.map((box) => box.bottom));
+      // Larger than the canvas: align its leading edge instead.
+      const shift = (start: number, end: number, min: number, max: number) =>
+        end - start > max - min
+          ? min - start
+          : end > max
+            ? max - end
+            : start < min
+              ? min - start
+              : 0;
+      const dx = shift(
+        left,
+        right,
+        canvas.left + KEEP_IN_VIEW_MARGIN,
+        canvas.right - KEEP_IN_VIEW_MARGIN,
+      );
+      const dy = shift(
+        top,
+        bottom,
+        canvas.top + KEEP_IN_VIEW_MARGIN,
+        canvas.bottom - KEEP_IN_VIEW_MARGIN,
+      );
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+      const viewport = getViewport();
+      const reduce = window.matchMedia?.(
+        "(prefers-reduced-motion: reduce)",
+      ).matches;
+      void setViewport(
+        { ...viewport, x: viewport.x + dx, y: viewport.y + dy },
+        { duration: reduce ? 0 : GRAPH_TRANSITION_MS },
+      );
+    },
+    [canvasRef, getViewport, setViewport],
+  );
+  // Wait for a resize (such as an opening panel) to settle before panning.
+  // A resize that leaves nothing on screen refits instead.
+  useEffect(() => {
+    if (width === 0 || height === 0) return;
+    const timer = setTimeout(() => {
+      if (selectedId) {
+        reveal([selectedId]);
+        return;
+      }
+      const canvas = canvasRef.current?.getBoundingClientRect();
+      const nodes = canvasRef.current?.querySelectorAll(".react-flow__node");
+      if (!canvas || !nodes?.length) return;
+      const visible = [...nodes].some((node) => {
+        const box = node.getBoundingClientRect();
+        return (
+          box.right > canvas.left &&
+          box.left < canvas.right &&
+          box.bottom > canvas.top &&
+          box.top < canvas.bottom
+        );
+      });
+      if (!visible)
+        void fitView({
+          ...FIT_VIEW_OPTIONS,
+          duration: window.matchMedia?.("(prefers-reduced-motion: reduce)")
+            .matches
+            ? 0
+            : GRAPH_TRANSITION_MS,
+        });
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [selectedId, width, height, reveal, canvasRef, fitView]);
+  useEffect(() => {
+    if (entered.length === 0) return;
+    const timer = setTimeout(() => reveal(entered), GRAPH_TRANSITION_MS + 40);
+    return () => clearTimeout(timer);
+  }, [entered, reveal]);
   return null;
 }

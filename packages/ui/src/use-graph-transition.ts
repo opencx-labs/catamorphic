@@ -3,7 +3,8 @@ import { workflowNodeKeys } from "@catamorphic/react";
 import type { Edge, Node } from "@xyflow/react";
 import { useLayoutEffect, useRef, useState } from "react";
 
-const DURATION = 220;
+export const GRAPH_TRANSITION_MS = 220;
+const DURATION = GRAPH_TRANSITION_MS;
 type Pose = {
   x: number;
   y: number;
@@ -33,17 +34,22 @@ function pose(node: Node): Pose {
   };
 }
 
-/** Interpolate the layout itself so edges follow their nodes on every frame. */
+/**
+ * Interpolate the layout itself so edges follow their nodes on every frame.
+ * Identity comes from each node's own workflow data, never from a separate
+ * graph source: the graph and its laid-out nodes update on different renders,
+ * and pairing one with the other would swap steps that share a parser id.
+ */
 export function useGraphTransition({
   nodes,
   edges,
-  graphNodes,
 }: {
   nodes: Node[];
   edges: Edge[];
-  graphNodes: WorkflowNode[];
 }) {
-  const keys = workflowNodeKeys(graphNodes);
+  const keys = workflowNodeKeys(
+    nodes.map((node) => node.data as unknown as WorkflowNode),
+  );
   const signature = JSON.stringify(
     nodes.map((node) => [
       node.id,
@@ -53,6 +59,9 @@ export function useGraphTransition({
     ]),
   );
   const [frame, setFrame] = useState<Frame | null>(null);
+  // Nodes the latest layout change added, so the canvas can bring them into
+  // view once they arrive. A fresh array per change re-triggers observers.
+  const [entered, setEntered] = useState<string[]>([]);
   const rendered = useRef<{
     nodes: Node[];
     edges: Edge[];
@@ -78,14 +87,17 @@ export function useGraphTransition({
     );
     const matched = new Set<string>();
     const starts = new Map<string, Pose>();
+    const added: string[] = [];
     for (const node of target.nodes) {
       const before = byKey.get(target.keys.get(node.id) ?? node.id);
       if (before) matched.add(before.id);
+      else added.push(node.id);
       starts.set(
         node.id,
         before ? pose(before) : { ...pose(node), opacity: 0 },
       );
     }
+    if (added.length) setEntered(added);
     const removed = previous.nodes.filter((node) => !matched.has(node.id));
     const ghostIds = new Map(
       removed.map((node) => [node.id, `leaving:${node.id}`]),
@@ -153,6 +165,10 @@ export function useGraphTransition({
       }
       const t = (low + high) / 2;
       const eased = 3 * (1 - t) * t ** 2 + t ** 3;
+      // Staged within one duration: departures clear first, moves run
+      // throughout, and arrivals fade in once their neighbors make room.
+      const exit = Math.max(0, 1 - eased / 0.6);
+      const enter = Math.max(0, (eased - 0.35) / 0.65);
       const poses = new Map<string, Pose>();
       for (const node of target.nodes) {
         const from = starts.get(node.id) ?? pose(node);
@@ -163,18 +179,21 @@ export function useGraphTransition({
           y: mix(from.y, to.y),
           width: mix(from.width, to.width),
           height: mix(from.height, to.height),
-          opacity: mix(from.opacity, 1),
+          opacity:
+            from.opacity === 0
+              ? enter
+              : from.opacity + (1 - from.opacity) * eased,
         });
       }
       setFrame({
         poses,
         leaving: leaving.map((node) => ({
           ...node,
-          style: { ...node.style, opacity: (1 - eased) * pose(node).opacity },
+          style: { ...node.style, opacity: exit * pose(node).opacity },
         })),
         leavingEdges: leavingEdges.map((edge) => ({
           ...edge,
-          style: { ...edge.style, opacity: 1 - eased },
+          style: { ...edge.style, opacity: exit },
         })),
       });
       raf = requestAnimationFrame(tick);
@@ -227,5 +246,6 @@ export function useGraphTransition({
       ...(frame?.leavingEdges ?? []),
     ],
     transitioning: frame !== null,
+    entered,
   };
 }

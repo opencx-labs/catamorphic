@@ -44,9 +44,10 @@ flows through the generated `@catamorphic/api-client` and TanStack Query.
 - Batch item pagination uses explicit Previous/Next controls. The selected
   batch scope is identified by `workflowStepAttemptId`, including prior failed
   or canceled attempts.
-- The panel is controlled by `panelVisibilityAtom.runsPanel`. Escape behavior
-  comes from `useEditorKeyboard` and closes the Runs panel before the detail
-  panel.
+- The packaged editor keeps the Runs pane open state locally and exposes it to
+  `renderControls`. `useEditorKeyboard({ onEscape })` lets that pane close first;
+  otherwise Escape clears the selection, which closes a selection-driven
+  inspector (ADR 0157).
 
 ## Shared editor state
 

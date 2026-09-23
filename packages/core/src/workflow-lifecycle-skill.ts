@@ -81,7 +81,8 @@ alone is not consent to enable every eligible workflow.
 4. Deploy through the host's offered flow and verify the revision. A saved file,
    git commit, or push alone does not update a deployment or an existing enablement.
 5. Enable through the host's consent flow with the intended owner, Environment,
-   connections, and triggers. In the desktop, the member uses **Automate** and
+   connections, and triggers. In the desktop, the member opens the workflow's
+   status, chooses **Automatic** (shown when the code declares triggers), and
    **Enable for me**. Connecting an account may finish that initiated flow;
    connecting an account by itself never initiates it.
 

@@ -1,20 +1,15 @@
-import {
-  useDeployProject,
-  useEnvironments,
-  useProjectGit,
-  useRuns,
-  useTriggerRun,
-  useWorkflow,
-} from "@catamorphic/react";
+import { useEnvironments, useRuns, useTriggerRun } from "@catamorphic/react";
 import type { ParameterInfo } from "@catamorphic/react/types";
 import { friendlyParamName } from "@catamorphic/ui";
 import { ChevronDown, Play } from "lucide-react";
-import { useEffect, useId, useState } from "react";
-import { desktopApi } from "../lib/desktop-api.js";
+import { useId, useState } from "react";
 import { RunDetail } from "./catamorphic/runs-panel.js";
-import { Collapsible } from "./collapsible.js";
 import { PendingButton } from "./pending-button.js";
 import { WorkflowSection } from "./workflow-details.js";
+import {
+  useWorkflowPublication,
+  WorkflowPublishCallout,
+} from "./workflow-publish.js";
 
 function enumValues(
   param: ParameterInfo,
@@ -90,21 +85,13 @@ export function WorkflowRuns({
   canPublish: boolean;
 }) {
   const formId = useId();
-  const [versionOpen, setVersionOpen] = useState(false);
-  const [recording, setRecording] = useState(false);
-  const status = useProjectGit(projectId);
-  const published = useWorkflow(
-    status.data?.remoteHead ? projectId : undefined,
+  const publication = useWorkflowPublication({
+    projectId,
     workflowName,
-    { ref: status.data?.remoteHead ?? undefined },
-  );
-  const needsPublish =
-    !status.isPending &&
-    (!status.data?.remoteHead || published.error?.status === 404);
-  useEffect(() => {
-    if (needsPublish) setVersionOpen(true);
-  }, [needsPublish]);
-  const deploy = useDeployProject(projectId);
+    dirty,
+    canPublish,
+  });
+  const { published, missing, publishing } = publication;
   const environments = useEnvironments(projectId, { workload: "workflow" });
   const runs = useRuns({ projectId, workflowName, limit: 15 });
   const trigger = useTriggerRun({ projectId, workflowName });
@@ -128,59 +115,10 @@ export function WorkflowRuns({
     : !environment
       ? "Choose an available environment first"
       : !published.data
-        ? "Publish a project version containing this workflow first"
+        ? "Publish this workflow first"
         : undefined;
-  const recordableFiles = status.data?.modifiedFiles ?? [];
-  const record = async () => {
-    if (dirty || !canPublish || recording || !recordableFiles.length) return;
-    setRecording(true);
-    setError(undefined);
-    try {
-      await desktopApi.gitRecord({
-        projectId,
-        paths: recordableFiles,
-        message: `Record changes for ${workflowName}`,
-      });
-      await status.refetch();
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "Could not record the changes.",
-      );
-    } finally {
-      setRecording(false);
-    }
-  };
-  const publish = async () => {
-    if (
-      dirty ||
-      status.data?.dirty ||
-      !canPublish ||
-      deploy.isPending ||
-      recording
-    )
-      return;
-    setError(undefined);
-    try {
-      const result = await deploy.mutateAsync({
-        message: `Publish project for ${workflowName}`,
-      });
-      if (result.status === "conflict")
-        setError(
-          "The project has conflicting changes. Resolve them in Changes before publishing again.",
-        );
-      await status.refetch();
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "Could not publish the project.",
-      );
-    }
-  };
   const start = async () => {
-    if (blocked || trigger.isPending || deploy.isPending) return;
+    if (blocked || trigger.isPending || publishing) return;
     setError(undefined);
     try {
       const input: unknown = jsonMode
@@ -199,92 +137,9 @@ export function WorkflowRuns({
   };
   return (
     <div className="workflow-detail-body" data-testid="workflow-runs">
-      <h2 className="text-base font-semibold">Run workflow</h2>
-      <p className="mt-2 text-[13px] leading-relaxed text-fg-muted">
-        Runs use the published project version. Saving code updates your draft;
-        publishing makes it available for new runs.
-      </p>
-      <div className="workflow-technical">
-        <button
-          type="button"
-          className="workflow-text-action"
-          aria-expanded={versionOpen}
-          aria-controls={`${formId}-version`}
-          onClick={() => setVersionOpen(!versionOpen)}
-        >
-          <ChevronDown
-            className={`size-3 transition-transform duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${versionOpen ? "" : "-rotate-90"}`}
-          />
-          {status.data?.remoteHead
-            ? `Published version ${status.data.remoteHead.slice(0, 7)}`
-            : "Publish a version to begin"}
-        </button>
-        <Collapsible open={versionOpen}>
-          <div id={`${formId}-version`}>
-            <p className="mt-3 text-xs text-fg-muted">
-              Publishing uses the latest Git commit, including its workflows and
-              apps. Recording changes saves local history. Publishing makes that
-              version available for runs; it does not upload private documents.
-              Existing runs keep their version. Automatic runs require a
-              separate review.
-            </p>
-            {recordableFiles.length > 0 && (
-              <div className="mt-3">
-                <p className="text-xs text-fg-muted">
-                  Review the saved files to record:
-                </p>
-                <ul className="mt-2 max-h-36 overflow-y-auto text-xs font-mono">
-                  {recordableFiles.map((file) => (
-                    <li key={file}>{file}</li>
-                  ))}
-                </ul>
-                <PendingButton
-                  type="button"
-                  className="workflow-secondary mt-3"
-                  pending={recording}
-                  disabled={dirty || !canPublish || deploy.isPending}
-                  data-disabled-reason={
-                    dirty
-                      ? "Save your workflow edits first"
-                      : !canPublish
-                        ? "Only project builders can record changes"
-                        : "Publishing is in progress"
-                  }
-                  onClick={() => void record()}
-                >
-                  Record changes in Git
-                </PendingButton>
-              </div>
-            )}
-            <PendingButton
-              type="button"
-              className="workflow-secondary mt-3"
-              pending={deploy.isPending}
-              disabled={dirty || !canPublish || status.data?.dirty || recording}
-              data-disabled-reason={
-                !canPublish
-                  ? "Only project builders can publish a version"
-                  : dirty
-                    ? "Save your workflow changes before publishing"
-                    : "Record your saved changes in Git before publishing"
-              }
-              onClick={() => void publish()}
-            >
-              Publish project version
-            </PendingButton>
-          </div>
-        </Collapsible>
-      </div>
-      {(status.error || (status.data?.remoteHead && published.error)) && (
-        <p className="mt-3 text-xs text-warning">
-          {status.error?.message ??
-            (published.error?.status === 404
-              ? "This workflow is not available in the published version. Publish your saved changes to include it."
-              : published.error?.message)}
-        </p>
-      )}
+      <WorkflowPublishCallout publication={publication} purpose="runs" />
       <form
-        className="mt-5 space-y-4"
+        className="mt-6 space-y-4"
         onSubmit={(event) => {
           event.preventDefault();
           void start();
@@ -431,7 +286,7 @@ export function WorkflowRuns({
           <p className="text-xs text-fg-muted">
             {published.data
               ? "No information is required."
-              : "Inputs appear after this workflow is published."}
+              : "Inputs appear once this workflow is published."}
           </p>
         )}
         {error && (
@@ -444,16 +299,18 @@ export function WorkflowRuns({
           className="workflow-primary"
           pending={trigger.isPending}
           pendingLabel="Starting…"
-          disabled={Boolean(blocked) || deploy.isPending}
+          disabled={Boolean(blocked) || publishing}
           data-disabled-reason={
-            deploy.isPending ? "Wait for publishing to finish" : blocked
+            publishing ? "Wait for publishing to finish" : blocked
           }
         >
           <span className="inline-flex items-center gap-1.5">
             <Play className="size-3.5" /> Start run
           </span>
         </PendingButton>
-        {blocked && <p className="text-xs text-fg-muted">{blocked}.</p>}
+        {blocked && !missing && (
+          <p className="text-xs text-fg-muted">{blocked}.</p>
+        )}
       </form>
       <WorkflowSection title="Recent runs">
         {runs.isPending && <p className="text-fg-muted">Loading runs…</p>}

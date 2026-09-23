@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseProject } from "../index.js";
+import { layoutGraph, parseProject } from "../index.js";
 
 const TRIGGERED_SOURCE = `
 import { defineWorkflow, trigger } from "@catamorphic/workflow";
@@ -168,5 +168,24 @@ export const escalate = defineWorkflow(({ defineBoundary }) => ({
     });
     expect(result.errors.length).toBeGreaterThan(0);
     expect(result.errors[0]?.message).toContain("string literal");
+  });
+});
+
+describe("trigger layout", () => {
+  it("reserves room for the start node's trigger badges", () => {
+    const result = parseProject({ "src/tickets.ts": TRIGGERED_SOURCE });
+    const height = (name: string) => {
+      const graph = result.workflows.find(
+        (workflow) => workflow.functionName === name,
+      )?.graph;
+      if (!graph) throw new Error(`missing ${name}`);
+      return layoutGraph({ nodes: graph.nodes, edges: graph.edges }).nodes.find(
+        (node) => node.type === "input",
+      )?.height;
+    };
+    expect(height("untriggered")).toBe(44);
+    expect(height("searchKb")).toBe(64);
+    // Two badges share a row.
+    expect(height("escalateTicket")).toBe(64);
   });
 });

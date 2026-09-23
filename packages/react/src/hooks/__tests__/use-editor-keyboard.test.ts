@@ -1,73 +1,52 @@
 import { act } from "@testing-library/react";
 import { useAtom } from "jotai";
 import { describe, expect, it } from "vitest";
-import { panelVisibilityAtom, rightPanelOpenAtom } from "../../atoms.js";
+import { selectedNodeIdAtom } from "../../atoms.js";
 import { renderHookWithProviders } from "../../test/render.js";
 import { useEditorKeyboard } from "../use-editor-keyboard.js";
 
-function pressEscape() {
+function pressEscape(target: EventTarget = document) {
   act(() => {
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    target.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
   });
 }
 
 describe("useEditorKeyboard", () => {
-  it("closes the Runs pane first when Escape pressed", () => {
+  it("lets the host consume Escape before the selection clears", () => {
+    let paneOpen = true;
     const { result } = renderHookWithProviders(() => {
-      useEditorKeyboard();
-      const [panels, setPanels] = useAtom(panelVisibilityAtom);
-      const [right, setRight] = useAtom(rightPanelOpenAtom);
-      return { panels, setPanels, right, setRight };
+      useEditorKeyboard({
+        onEscape: () => {
+          if (!paneOpen) return false;
+          paneOpen = false;
+          return true;
+        },
+      });
+      return useAtom(selectedNodeIdAtom);
     });
 
-    act(() => {
-      result.current.setPanels((current) => ({
-        ...current,
-        runsPanel: true,
-      }));
-      result.current.setRight(true);
-    });
-    expect(result.current.panels.runsPanel).toBe(true);
-    expect(result.current.right).toBe(true);
+    act(() => result.current[1]("step-1"));
+    pressEscape();
+    expect(paneOpen).toBe(false);
+    expect(result.current[0]).toBe("step-1");
 
     pressEscape();
-
-    expect(result.current.panels.runsPanel).toBe(false);
-    expect(result.current.right).toBe(true);
+    expect(result.current[0]).toBeNull();
   });
 
-  it("closes right panel if the Runs pane is already closed", () => {
+  it("leaves Escape to text fields", () => {
     const { result } = renderHookWithProviders(() => {
       useEditorKeyboard();
-      const [panels, setPanels] = useAtom(panelVisibilityAtom);
-      const [right, setRight] = useAtom(rightPanelOpenAtom);
-      return { panels, setPanels, right, setRight };
+      return useAtom(selectedNodeIdAtom);
     });
+    const input = document.createElement("textarea");
+    document.body.append(input);
 
-    act(() => {
-      result.current.setPanels((current) => ({
-        ...current,
-        runsPanel: false,
-      }));
-      result.current.setRight(true);
-    });
-
-    pressEscape();
-
-    expect(result.current.right).toBe(false);
-  });
-
-  it("is a no-op when nothing is open", () => {
-    const { result } = renderHookWithProviders(() => {
-      useEditorKeyboard();
-      const [panels] = useAtom(panelVisibilityAtom);
-      const [right] = useAtom(rightPanelOpenAtom);
-      return { panels, right };
-    });
-
-    pressEscape();
-
-    expect(result.current.panels.runsPanel).toBe(false);
-    expect(result.current.right).toBe(false);
+    act(() => result.current[1]("step-1"));
+    pressEscape(input);
+    expect(result.current[0]).toBe("step-1");
+    input.remove();
   });
 });

@@ -75,7 +75,7 @@ families for boundaries or batch processing.
 - `useSubmitRunInput({ runId, pauseId })` — `mutateAsync({ idempotencyKey, value })`
 - `useRunItems({ run, workflowStepAttemptId, status?, limit?, offset?, pollInterval? })`
 - `useRunItemSteps({ run, workflowStepAttemptId, itemId, pollInterval? })`
-- `useEditorKeyboard()` — Escape-key handling for the editor's panels.
+- `useEditorKeyboard({ onEscape? })` — Escape clears the selected step after host handling.
 
 `workflowName` is optional so selection-driven screens can mount `useRuns`
 before a workflow is selected; the query remains disabled until both IDs are
@@ -191,12 +191,12 @@ The scope is idempotent — nesting one inside another reuses the ambient
 store unless you pass `isolate` to force a fresh one (useful for
 side-by-side editors that must not share selection).
 
-Atoms exposed for host chrome: `codeAtom`, `graphAtom`, `selectedNodeIdAtom`,
-`selectedNodeAtom`, `panelVisibilityAtom`, `rightPanelOpenAtom`,
-`activePanelTabAtom`, `showRunDialogAtom`, `lastTriggerDataAtom`,
-`executionStateAtom`, `reactFlowNodesAtom`,
-`reactFlowEdgesAtom`, `codeEditorReadOnlyAtom`, `aiLoadingAtom`,
-and `collapsedNodeIdsAtom`.
+Atoms exposed for host chrome: `codeAtom`, `graphAtom`, `graphParseStateAtom`,
+`selectedNodeIdAtom`, `selectedNodeAtom`, `showRunDialogAtom`,
+`lastTriggerDataAtom`, `executionStateAtom`, `reactFlowNodesAtom`,
+`reactFlowEdgesAtom`, `codeEditorReadOnlyAtom`, and `collapsedNodeIdsAtom`.
+There is no panel-visibility atom: an inspector follows `selectedNodeAtom`
+and the host decides what else it shows.
 
 ## Error envelope
 
@@ -276,8 +276,10 @@ to the public graph rather than asserting the two shapes are identical.
 returns the canonical production `Run`, which is handed to the host's
 `renderRunsPanel` slot and selected while the query cache refreshes.
 
-`useEditorKeyboard()` wires the Escape-key behaviour (close the Runs pane,
-then the detail panel). Mount it at most once per scope.
+`useEditorKeyboard({ onEscape? })` wires the Escape key: `onEscape` runs
+first (return true when it closed something, such as a Runs pane), then the
+selected step clears, which closes a selection-driven inspector. Keys typed
+into fields are ignored. Mount it at most once per scope.
 
 ## Embedding with `@catamorphic/ui`
 

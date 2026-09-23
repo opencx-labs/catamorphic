@@ -109,7 +109,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0094](0094-durable-agent-reconnects.md) | Durable agent reconnects and unexpected-stop visibility | Accepted |
 | [0095](0095-authoritative-agent-execution.md) | Authoritative agent execution and independent connections | Accepted |
 | [0096](0096-desktop-resource-link-routing.md) | Desktop resource links use workspace targets | Accepted |
-| [0097](0097-host-owned-workflow-inspectors.md) | Host-owned workflow inspectors | Accepted |
+| [0097](0097-host-owned-workflow-inspectors.md) | Host-owned workflow inspectors | Accepted (layout and packaged toolbar amended by 0157) |
 | [0098](0098-project-authorized-local-and-remote-agents.md) | Project-authorized local and remote agent execution | Accepted |
 | [0099](0099-shared-postgres-server-environments.md) | Shared-Postgres server instances as managed Environments | Accepted |
 | [0100](0100-workspace-resource-admission.md) | Workspace reservations and provider-enforced resource limits | Accepted |
@@ -169,3 +169,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0152](0152-agent-context-channels.md) | Agent context: a short standing prompt and per-turn context beside the message | Accepted |
 | [0153](0153-downloads-in-the-dock.md) | Downloads in the dock: no save dialog, a dock button with progress, a Downloads page | Accepted |
 | [0154](0154-profile-history.md) | History belongs to the profile: loose files, the project as an attribute, a project scope on the page | Accepted |
+| [0157](0157-workflow-status-chrome.md) | Workflow tabs: status chrome and a panel that follows its subject | Accepted |

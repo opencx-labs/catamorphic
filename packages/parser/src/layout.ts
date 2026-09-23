@@ -4,6 +4,10 @@ import type { WorkflowEdge, WorkflowNode } from "./types.js";
 const NODE_WIDTH = 240;
 const BASE_HEIGHT = 44;
 const DESCRIBED_NODE_HEIGHT = 56;
+/** The start node lists its triggers as badges under the label. */
+const TRIGGER_NODE_HEIGHT = 64;
+const TRIGGER_ROW_HEIGHT = 22;
+const TRIGGERS_PER_ROW = 2;
 const RANK_SEP = 32;
 const NODE_SEP = 36;
 const BRANCH_GAP = 28;
@@ -33,6 +37,14 @@ interface SizeInfo {
 }
 
 function estimateNodeHeight(node: WorkflowNode): number {
+  const triggers =
+    node.type === "input" ? (node.triggerBindings?.length ?? 0) : 0;
+  if (triggers > 0) {
+    return (
+      TRIGGER_NODE_HEIGHT +
+      (Math.ceil(triggers / TRIGGERS_PER_ROW) - 1) * TRIGGER_ROW_HEIGHT
+    );
+  }
   if (
     node.type === "source" ||
     node.type === "sink" ||

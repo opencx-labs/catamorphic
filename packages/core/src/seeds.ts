@@ -545,9 +545,10 @@ contract while using the same resolved permission vocabulary.
 
 Workflow code declares provider-neutral requirements in its top-level
 \`connections\` array. Roles decide who may use those aliases; the host decides
-which concrete providers satisfy them. Each member opens **Automate**, chooses
-**Enable for me**, reviews the pinned revision, Environment, actions, and
-triggers, then authenticates anything missing. When the member initiated that
+which concrete providers satisfy them. Each member opens the workflow's
+automatic runs from its status, chooses **Enable for me**, reviews the pinned
+revision, Environment, actions, and triggers, then authenticates anything
+missing. When the member initiated that
 flow, the host may finish enabling automatically after the final required
 connection succeeds. Merely connecting an account never opts the member into
 every eligible workflow.
