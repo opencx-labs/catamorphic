@@ -252,29 +252,46 @@ export function DockHost({
         expanded: !collapsed || Boolean(expanded),
       });
   }, [detachedWindow, expanded, dialogOpen, railWidth, collapsed]);
-  // Over the headroom (or any empty space) the window lets clicks through.
+  // Over the headroom, the margins around the chat, or any other empty
+  // space, the window lets clicks through to whatever is behind it. Only
+  // dock content answers a hit test there: the app root and the body are
+  // pointer-transparent (styles.css), so a hit on either is empty space.
   useEffect(() => {
     if (!detachedWindow) return;
     let ignoring = false;
+    let last: { x: number; y: number } | null = null;
     const update = (interactive: boolean) => {
       if (ignoring === !interactive) return;
       ignoring = !interactive;
       void desktopApi.dockIgnoreMouse(ignoring).catch(() => {});
     };
-    const move = (event: MouseEvent) => {
-      const target = document.elementFromPoint(event.clientX, event.clientY);
+    const hitTest = () => {
+      if (!last) return;
+      const target = document.elementFromPoint(last.x, last.y);
       update(
         Boolean(target) &&
           target !== document.body &&
           target !== document.documentElement,
       );
     };
-    const leave = () => update(true);
+    const move = (event: MouseEvent) => {
+      last = { x: event.clientX, y: event.clientY };
+      hitTest();
+    };
+    const leave = () => {
+      last = null;
+      update(true);
+    };
+    // The window grows and shrinks under a parked pointer (a chat opening,
+    // the strip collapsing): what is under it changes without a move.
+    const resized = () => requestAnimationFrame(hitTest);
     document.addEventListener("mousemove", move);
     document.documentElement.addEventListener("mouseleave", leave);
+    window.addEventListener("resize", resized);
     return () => {
       document.removeEventListener("mousemove", move);
       document.documentElement.removeEventListener("mouseleave", leave);
+      window.removeEventListener("resize", resized);
       update(true);
     };
   }, [detachedWindow]);

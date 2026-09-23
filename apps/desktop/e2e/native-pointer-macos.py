@@ -3,6 +3,7 @@
 import ctypes
 import os
 import sys
+import time
 
 if not (
     sys.platform == "darwin"
@@ -30,11 +31,24 @@ cf.CFRelease.restype = None
 point = Point(float(sys.argv[1]), float(sys.argv[2]))
 if cg.CGWarpMouseCursorPosition(point) != 0:
     sys.exit("Failed to move the native pointer")
-# kCGEventMouseMoved = 5, kCGMouseButtonLeft = 0, kCGHIDEventTap = 0.
-event = cg.CGEventCreateMouseEvent(None, 5, point, 0)
-if not event:
-    sys.exit("Failed to create native mouse event")
-try:
-    cg.CGEventPost(0, event)
-finally:
-    cf.CFRelease(event)
+
+
+def post(kind):
+    # kCGMouseButtonLeft = 0, kCGHIDEventTap = 0.
+    event = cg.CGEventCreateMouseEvent(None, kind, point, 0)
+    if not event:
+        sys.exit("Failed to create native mouse event")
+    try:
+        cg.CGEventPost(0, event)
+    finally:
+        cf.CFRelease(event)
+
+
+# kCGEventMouseMoved = 5; a click is kCGEventLeftMouseDown = 1 then
+# kCGEventLeftMouseUp = 2 at the same point.
+post(5)
+if len(sys.argv) > 3 and sys.argv[3] == "click":
+    time.sleep(0.05)
+    post(1)
+    time.sleep(0.05)
+    post(2)

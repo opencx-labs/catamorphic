@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { assertIsolatedDesktopTestHost } from "../../../scripts/desktop-test-environment.js";
 import { electronLaunchArgs } from "./harness-args.js";
-import { moveNativePointer } from "./native-pointer.js";
+import { clickNativePointer, moveNativePointer } from "./native-pointer.js";
 
 /**
  * E2E harness: builds the app (electron-vite), launches the real Electron
@@ -78,6 +78,12 @@ export interface AppHandle {
   press: (key: KeyName, modifiers?: number) => Promise<void>;
   /** Move the OS pointer to renderer coordinates on the isolated desktop. */
   movePointer: (point: { x: number; y: number }) => Promise<void>;
+  /**
+   * Click with the OS pointer at renderer coordinates: the click lands on
+   * whichever window the OS finds there, so a window above the workspace
+   * either takes it or lets it through.
+   */
+  clickPointer: (point: { x: number; y: number }) => Promise<void>;
   /** Insert text through Chromium's real editing path (including Monaco). */
   insertText: (text: string) => Promise<void>;
   /**
@@ -257,6 +263,12 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
           "window.catamorphicDesktop.devWindow('get').then(state => state.contentBounds)",
         );
         await moveNativePointer({ x: bounds.x + x, y: bounds.y + y });
+      },
+      clickPointer: async ({ x, y }) => {
+        const bounds = await client.eval<{ x: number; y: number }>(
+          "window.catamorphicDesktop.devWindow('get').then(state => state.contentBounds)",
+        );
+        await clickNativePointer({ x: bounds.x + x, y: bounds.y + y });
       },
       connectToFrame,
       getOutput: () => output,
