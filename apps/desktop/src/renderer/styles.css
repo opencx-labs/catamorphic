@@ -1640,6 +1640,16 @@ html[data-surface="dock"] body {
   background: transparent;
 }
 
+/* The detached dock is a transparent window that draws only its chat, its
+   strip and their popovers; everything else is the screen behind it. The
+   app root fills the window, so it must not register as content: the
+   host hit-tests under the pointer and lets clicks through wherever only
+   the root or the body answers. Dock content opts back in with
+   pointer-events-auto, as it does over the workspace. */
+html[data-surface="dock"] #root {
+  pointer-events: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   [data-dock-rail] {
     transition: none;
