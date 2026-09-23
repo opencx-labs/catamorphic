@@ -72,6 +72,10 @@ import type { OpenMode as CommitMode } from "../../shared/open-mode.js";
 import { SETTINGS_CATALOG } from "../../shared/settings-catalog.js";
 import { sidebarSections } from "../../shared/sidebar.js";
 import type { TerminalMacro } from "../../shared/terminal-macros.js";
+import {
+  defaultModelLabel,
+  useAgentDefaultModel,
+} from "../lib/agent-default-model.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
 import { commandScore } from "../lib/command-score.js";
 import {
@@ -899,6 +903,14 @@ export function CommandPalette({
             model.resolvedId === (focusedChat?.model || targetAgent?.model),
         )
       : undefined;
+  // What the default row means right now, asked of the harness, so picking
+  // it is an informed choice. (OpenRouter shows its catalog pick instead;
+  // the other built-in providers always pin a model.)
+  const harnessDefault = useAgentDefaultModel({
+    projectId,
+    agent: targetAgent,
+    enabled: picker === "model" && targetAgent?.harness !== "ai-sdk",
+  });
 
   // Keep the exiting list intact, but always start a fresh opening even if
   // the user reopens before its exit animation has finished. This precedes
@@ -1605,8 +1617,13 @@ export function CommandPalette({
         rows.push({
           id: "pick:model:",
           icon: Cpu,
-          label: focusedChat ? "Agent default" : "Harness default (automatic)",
-          detail: focusedChat && agent.model ? agent.model : undefined,
+          label: focusedChat ? "Agent default" : defaultModelLabel(agent, null),
+          detail:
+            focusedChat && agent.model
+              ? agent.model
+              : harnessDefault.data?.model
+                ? defaultModelLabel(agent, harnessDefault.data.model)
+                : undefined,
           keywords: ["default", "auto"],
           kind: "action",
           ...(current === "" ? { current: true } : {}),
@@ -2132,6 +2149,7 @@ export function CommandPalette({
     catalog,
     harnessModels,
     effortModel,
+    harnessDefault.data?.model,
   ]);
 
   const results = useMemo(

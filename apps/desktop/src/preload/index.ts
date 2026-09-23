@@ -18,6 +18,7 @@ const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> =>
   }) as Promise<T>;
 
 import type { AgentCommandsResult } from "../shared/agent-commands.js";
+import type { AgentDefaultModelResult } from "../shared/agent-default-model.js";
 import type {
   BookmarkMove,
   BookmarkPlacement,
@@ -230,6 +231,13 @@ const api = {
     sessionId?: string;
   }): Promise<AgentCommandsResult> =>
     invoke("catamorphic:agent-commands", input),
+  /** The model the harness runs here when nothing pins one. */
+  agentDefaultModel: (input: {
+    projectId: string;
+    agentId: string;
+    sessionId?: string;
+  }): Promise<AgentDefaultModelResult> =>
+    invoke("catamorphic:agent-default-model", input),
   /**
    * Proactive auth probe: what is knowably wrong before a send, plus
    * main's verdict on whether a one-click re-login flow exists.

@@ -881,7 +881,7 @@ describe("agents and profiles", () => {
       return true;
     `);
     await runWait(
-      `return $('[role="log"] span.animate-pulse')?.textContent.trim() === 'Waiting...';`,
+      `return $('[role="log"] [data-testid="activity-text"]')?.textContent.trim() === 'Waiting...';`,
       { timeoutMs: 30_000, label: "first slow turn running" },
     );
     // Queue behind the running turn, then promote via the bubble's send-now.
@@ -942,7 +942,7 @@ describe("agents and profiles", () => {
       return true;
     `);
     await runWait(
-      `return $('[role="log"] span.animate-pulse')?.textContent.trim() === 'Waiting...';`,
+      `return $('[role="log"] [data-testid="activity-text"]')?.textContent.trim() === 'Waiting...';`,
       { timeoutMs: 30_000, label: "second slow turn running" },
     );
     await run(`

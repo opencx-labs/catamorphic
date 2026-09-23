@@ -23,6 +23,7 @@ import type {
 } from "@catamorphic/sandbox";
 import { PROJECT_TOOLS_SERVER_KEY } from "@catamorphic/sandbox";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
+import type { AgentDefaultModelResult } from "../../shared/agent-default-model.js";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { AgentConfig } from "../agents-store.js";
 import type { ConnectorsService } from "../connectors.js";
@@ -163,6 +164,12 @@ const CODEX_SANDBOX_MODES = {
 } as const;
 
 /**
+ * How long a harness's default-model answer stays fresh. Settings edits
+ * (~/.claude/settings.json, ~/.codex/config.toml) show up within this.
+ */
+const DEFAULT_MODEL_TTL_MS = 60_000;
+
+/**
  * Workspace tools withheld from a read-only agent: anything that runs
  * commands, mutates the project, or acts on the user's behalf. What's left
  * is observation (overview, read_tab, read_terminal, snapshots) and
@@ -199,6 +206,11 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
    * hardcoded: until the catalog answers, such agents stay unresolved.
    */
   private openrouterDefault: string | undefined;
+  /** Harness default-model answers per agent and folder (see defaultModel). */
+  private readonly defaultModels = new Map<
+    string,
+    { signature: string; at: number; result: Promise<AgentDefaultModelResult> }
+  >();
 
   /** Workspace tools shared by every harness that can mount them. */
   readonly workspaceToolkit: WorkspaceToolkit | undefined;
@@ -394,6 +406,113 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         })
       ).filter((command) => !generatedAliases.has(command.name)),
     };
+  }
+
+  /**
+   * The model a chat with this agent runs in `workingDirectory` when neither
+   * the chat nor the agent pins one — asked of the harness itself, with the
+   * same configuration, consent, and credentials as execution: Claude
+   * Code's effective settings, Codex's config layers and catalog default,
+   * the built-in agent's resolved OpenRouter model. Answers are cached
+   * briefly per agent and folder; each probe spawns the harness CLI.
+   */
+  async defaultModel({
+    projectId,
+    agentId,
+    workingDirectory,
+  }: {
+    projectId: string;
+    agentId: string;
+    workingDirectory: string;
+  }): Promise<AgentDefaultModelResult> {
+    const ref = parseProjectAgentId(agentId);
+    if (ref && ref.projectId !== projectId)
+      return { model: null, error: "This agent belongs to another project." };
+    const resolved = ref
+      ? this.resolveProjectConfig(agentId, ref.projectId, ref.slug)
+      : this.findConfig(agentId);
+    if (!resolved) return { model: null, error: "Select an available agent." };
+    if ("error" in resolved) return { model: null, error: resolved.error };
+    const { config, profileId } = resolved;
+    if (profileId !== this.deps.profiles.profileForProject(projectId).id)
+      return { model: null, error: "This agent belongs to another profile." };
+    // E2E: every harness is the fake agent, whose catalog lists this model.
+    if (this.deps.e2eFake)
+      return { model: { id: "fake-model-a-2.1", name: "Fake Model A" } };
+    if (config.harness === "ai-sdk") {
+      const id = this.resolvedModel(config);
+      return { model: id ? { id } : null };
+    }
+    const key = `${agentId}\n${workingDirectory}`;
+    const signature = JSON.stringify(config);
+    const cached = this.defaultModels.get(key);
+    if (
+      cached?.signature === signature &&
+      Date.now() - cached.at < DEFAULT_MODEL_TTL_MS
+    )
+      return cached.result;
+    const result = this.probeDefaultModel(config, workingDirectory);
+    this.defaultModels.set(key, { signature, at: Date.now(), result });
+    // A failed probe is not an answer worth keeping.
+    void result.then((value) => {
+      if (value.error && this.defaultModels.get(key)?.result === result)
+        this.defaultModels.delete(key);
+    });
+    return result;
+  }
+
+  private async probeDefaultModel(
+    config: AgentConfig,
+    workingDirectory: string,
+  ): Promise<AgentDefaultModelResult> {
+    if (config.harness === "ai-sdk") return { model: null };
+    try {
+      const { component, environment } = await this.ensureNativeComponents(
+        config.harness,
+      );
+      if (config.harness === "codex") {
+        const { resolveCodexModel } = await import("@catamorphic/codex");
+        return {
+          model: await resolveCodexModel({
+            executable: component.executablePath,
+            workingDirectory,
+            env: {
+              ...environment,
+              ...(config.auth === "account"
+                ? { CODEX_HOME: this.agentHome(config.id) }
+                : {}),
+              ...(config.auth === "api-key" && config.apiKey
+                ? { CODEX_API_KEY: config.apiKey }
+                : {}),
+            },
+          }),
+        };
+      }
+      const { resolveClaudeCodeModel } = await import(
+        "@catamorphic/claude-code"
+      );
+      return {
+        model: await resolveClaudeCodeModel({
+          workingDirectory,
+          pathToClaudeCodeExecutable: component.executablePath,
+          env: {
+            ...environment,
+            ...(config.auth === "account"
+              ? { CLAUDE_CONFIG_DIR: this.agentHome(config.id) }
+              : {}),
+            ...(config.auth === "api-key" && config.apiKey
+              ? { ANTHROPIC_API_KEY: config.apiKey }
+              : {}),
+          },
+        }),
+      };
+    } catch (cause) {
+      console.warn("[desktop] default model discovery failed:", cause);
+      return {
+        model: null,
+        error: "Could not ask the agent which model it uses by default.",
+      };
+    }
   }
 
   async refreshOpenRouterDefault(): Promise<void> {

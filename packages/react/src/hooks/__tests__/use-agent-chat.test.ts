@@ -306,6 +306,77 @@ describe("useAgentChat", () => {
     expect(result.current.isWorking).toBe(false);
     expect(result.current.activity).toBeUndefined();
   });
+  it("keeps an activity line from the send through to the running turn", async () => {
+    let accepted = false;
+    server.use(
+      http.get(
+        apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`),
+        async () => {
+          // The refetch after the acknowledgement takes a moment to land.
+          if (accepted) await new Promise((resolve) => setTimeout(resolve, 50));
+          return HttpResponse.json({
+            ...session,
+            execution: accepted ? execution : null,
+            pendingTurns: [],
+            messages: [],
+          });
+        },
+      ),
+      http.post(
+        apiUrl(
+          `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/messages`,
+        ),
+        () => {
+          accepted = true;
+          return HttpResponse.json(
+            {
+              messageId: "accepted",
+              turnId: "turn",
+              mode: "next_turn",
+              created: true,
+            },
+            { status: 202 },
+          );
+        },
+      ),
+    );
+    const seen: (string | undefined)[] = [];
+    const { result } = renderHookWithProviders(() => {
+      const chat = useAgentChat(PROJECT_ID, { sessionId: SESSION_ID });
+      if (seen.at(-1) !== chat.activity) seen.push(chat.activity);
+      return chat;
+    });
+    await waitFor(() => expect(result.current.session).not.toBeNull());
+    // Not awaited inside act: every intermediate render must be observed.
+    act(() => {
+      void result.current.send("Build this");
+    });
+    await waitFor(() => expect(result.current.activity).toBe("Running tests"));
+    expect(seen.slice(seen.indexOf("Sending message"))).toEqual([
+      "Sending message",
+      "Running tests",
+    ]);
+  });
+  it("carries the activity line through a turn the host accepted but has not started", async () => {
+    server.use(
+      http.get(
+        apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`),
+        () =>
+          HttpResponse.json({
+            ...session,
+            execution: { ...execution, status: "queued", activity: null },
+            pendingTurns: [],
+            messages: [],
+          }),
+      ),
+    );
+    const { result } = renderHookWithProviders(() =>
+      useAgentChat(PROJECT_ID, { sessionId: SESSION_ID }),
+    );
+    await waitFor(() => expect(result.current.session).not.toBeNull());
+    expect(result.current.isWorking).toBe(false);
+    expect(result.current.activity).toBe("Waiting for agent");
+  });
   it("keeps the transcript and exposes lost connectivity until the host answers again", async () => {
     let offline = false;
     server.use(

@@ -1120,6 +1120,33 @@ kbd {
   animation: title-change 1200ms cubic-bezier(0.2, 0, 0, 1);
 }
 
+/* Agent activity changed: one beat of the working pulse carries the swap.
+   The old line dims away upward, the new one rises in, then the breathing
+   (animate-pulse) resumes. See ActivityText. */
+@keyframes activity-leave {
+  to {
+    opacity: 0;
+    translate: 0 -3px;
+    filter: blur(1.5px);
+  }
+}
+
+@keyframes activity-arrive {
+  from {
+    opacity: 0;
+    translate: 0 3px;
+    filter: blur(1.5px);
+  }
+}
+
+.animate-activity-leave {
+  animation: activity-leave 150ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
+.animate-activity-arrive {
+  animation: activity-arrive 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
 /* Agent pointer: the agent directing the user's attention at an element
    (point_at tool). A soft accent ring with a gentle breathing pulse — a
    waiting state, like the question badge's pulse: it loops only until the

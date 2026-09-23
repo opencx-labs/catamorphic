@@ -375,6 +375,21 @@ export function useAgentChat(
         messageId: receipt.messageId,
       });
       blockedSendRef.current = null;
+      // Stay "sending" until the session shows what the host did with the
+      // message (the turn it queued or started), so the activity line
+      // carries through instead of blinking out before the refetch lands.
+      // Bounded by one refetch: a message the session never shows still
+      // settles.
+      await queryClient.invalidateQueries({
+        queryKey: [
+          "cat",
+          "project",
+          projectId,
+          "agent",
+          "session",
+          targetSessionId,
+        ],
+      });
     } catch (error) {
       if (operationScopeRef.current !== scope) return;
       setActionError(toCatamorphicError({ cause: error }));
@@ -560,7 +575,11 @@ export function useAgentChat(
             ? "Retrying message"
             : isSending
               ? "Sending message"
-              : undefined,
+              : // Accepted, not yet picked up: the activity line carries
+                // through to the turn instead of blinking out before it.
+                session.data?.execution?.status === "queued"
+                ? "Waiting for agent"
+                : undefined,
     connectionLost: session.error?.code === "network",
     error,
     authenticationRequired: authenticationRequiredFrom(error),
