@@ -56,7 +56,7 @@ describe("workspace coordination tools", () => {
         ),
       ),
     }));
-    // Background execution is a core need for every harness (ADR 0153).
+    // Background execution is a core need for every harness (ADR 0155).
     expect(Buffer.byteLength(JSON.stringify(wire))).toBeLessThan(7000);
     expect(
       toolkit.tools.every(

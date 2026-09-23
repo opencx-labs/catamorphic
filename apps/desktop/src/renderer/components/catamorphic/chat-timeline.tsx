@@ -138,7 +138,7 @@ export interface AgentQuestion {
 }
 
 /**
- * A background command's live state (ADR 0153): the host's view of the
+ * A background command's live state (ADR 0155): the host's view of the
  * process a `run_background_command` step started.
  */
 export interface ChatBackgroundCommand {

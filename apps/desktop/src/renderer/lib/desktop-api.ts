@@ -27,6 +27,7 @@ import type {
   DockRegion,
   DockSize,
 } from "../../shared/dock-position.js";
+import type { DownloadRecord } from "../../shared/downloads.js";
 import type { FilePreviewInput } from "../../shared/file-preview.js";
 import type {
   FileSearchInput,
@@ -1202,6 +1203,17 @@ export interface CatamorphicDesktopApi {
   siteSettingsOpenSystemPrivacy: (input: {
     kind: "camera" | "microphone" | "screen";
   }) => Promise<void>;
+  downloadsList: () => Promise<DownloadRecord[]>;
+  downloadsReveal: (input: { id: string }) => Promise<void>;
+  downloadsPause: (input: { id: string }) => Promise<void>;
+  downloadsResume: (input: { id: string }) => Promise<void>;
+  downloadsCancel: (input: { id: string }) => Promise<void>;
+  downloadsRemove: (input: { id: string }) => Promise<void>;
+  downloadsClear: () => Promise<void>;
+  downloadsOpenFolder: () => Promise<void>;
+  onDownloadsChanged: (
+    listener: (downloads: DownloadRecord[]) => void,
+  ) => () => void;
   screenShareSources: (input: {
     guestId?: number;
     kinds?: ScreenShareKind[];

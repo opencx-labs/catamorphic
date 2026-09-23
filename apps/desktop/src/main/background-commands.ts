@@ -4,7 +4,7 @@ import type { AgentTerminals } from "./terminal.js";
 export type { BackgroundCommandView };
 
 /**
- * Background commands (ADR 0153): long-running processes an agent starts
+ * Background commands (ADR 0155): long-running processes an agent starts
  * and keeps working beside. Each runs in its own agent terminal, so the
  * person can open it and watch; it outlives the turn that started it; and
  * it wakes the agent's chat when it finishes (or prints a line the agent

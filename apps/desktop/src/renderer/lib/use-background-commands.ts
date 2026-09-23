@@ -3,7 +3,7 @@ import type { BackgroundCommandView } from "../../shared/background-commands.js"
 import { desktopApi } from "./desktop-api.js";
 
 /**
- * Live background commands (ADR 0153), from main: one shared subscription
+ * Live background commands (ADR 0155), from main: one shared subscription
  * for every chat, so a step keeps pulsing until its process ends.
  */
 let commands: BackgroundCommandView[] = [];

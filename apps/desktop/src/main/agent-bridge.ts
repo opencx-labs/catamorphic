@@ -70,7 +70,7 @@ export interface WorkspaceBridge {
   ): Promise<unknown>;
   /**
    * Start a long-running command in its own background agent terminal
-   * (ADR 0153): it outlives the turn, shows as a chip the person can open,
+   * (ADR 0155): it outlives the turn, shows as a chip the person can open,
    * and wakes the chat when it finishes or prints a watched line.
    */
   startBackgroundCommand(input: {

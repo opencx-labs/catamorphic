@@ -249,7 +249,7 @@ export const WORKSPACE_TOOL_POLICY: Readonly<
   open_browser: presentation,
   browser_snapshot: read,
   browser_act: write,
-  // Long-running work is a core execution need for every harness (ADR 0153).
+  // Long-running work is a core execution need for every harness (ADR 0155).
   run_background_command: { ...write, eager: true },
   read_background_output: { ...read, eager: true },
   stop_background_command: { ...write, eager: true },

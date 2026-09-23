@@ -1,4 +1,4 @@
-/** A background command as the chat shows it (ADR 0153). */
+/** A background command as the chat shows it (ADR 0155). */
 export interface BackgroundCommandView {
   id: string;
   projectId: string;

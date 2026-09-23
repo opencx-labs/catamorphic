@@ -199,6 +199,7 @@ export class DesktopWorkspaces {
               title: z.string().max(4096),
               mode: z.enum(["replace", "tab", "side", "floating"]),
               nonce: z.string().max(128),
+              open: z.enum(["page", "browser"]).optional(),
             })
             .optional(),
         })

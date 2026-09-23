@@ -1,4 +1,4 @@
-# 0153 — Native shells, host background commands, and the agent's live status
+# 0155 — Native shells, host background commands, and the agent's live status
 
 - **Status:** Accepted
 - **Date:** 2026-09-23

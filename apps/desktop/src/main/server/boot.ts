@@ -586,7 +586,7 @@ export async function startEmbeddedServer(
     tenantId: DESKTOP_TENANT_ID,
     externalUserId: DESKTOP_USER_ID,
   };
-  // A finished background command wakes its chat (ADR 0153): a system
+  // A finished background command wakes its chat (ADR 0155): a system
   // message the agent reads, with a plain notice for the person.
   workspaceBridge?.setBackgroundNotifier(async (input) => {
     await catamorphic.core.agentSessions?.deliver(
