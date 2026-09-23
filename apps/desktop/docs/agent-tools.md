@@ -1,9 +1,9 @@
 # Agent tool surface
 
 Accepted in ADR 0133, following the September 2026 audit of desktop tools and
-review apps. The default desktop projection has five fixed host registrations:
-`discover_capabilities`, `invoke_capability`, `workspace_overview`, `open_surface`,
-and `update_todo_list`. Harness-native execution and question adapters are
+review apps. The default desktop projection has six fixed host registrations:
+`discover_capabilities`, `invoke_capability`, `workspace_overview`, `read_tab`,
+`open_surface`, and `update_todo_list`. Harness-native execution and question adapters are
 additional. Previously up to 57 fixed host registrations were offered, before
 connectors, workflow tools, native tools and duplicate gateway mounts.
 
@@ -38,12 +38,13 @@ Availability also depends on identity, services, agent mode and topology.
 
 | Operations | Projection and purpose |
 |---|---|
-| `workspace_overview`, `open_surface`, `update_todo_list` | Eager, bounded workspace context and visible handoff/progress |
+| `workspace_overview`, `read_tab`, `open_surface`, `update_todo_list` | Eager, bounded workspace context, reading what is on screen, and visible handoff/progress |
 | `list_project_sessions`, `read_project_session`, `send_project_session_message` | Deferred, authorized peer coordination; `children_only` filters the listing |
 | `spawn_subsession`, `wait_for_subsessions`, `interrupt_subsession` | Deferred, host-owned child sessions and delivery |
 | `request_user_attention`, `set_session_activity`, `read_todo_list` | Deferred, session state |
 | `list_worktrees`, `create_worktree`, `use_worktree` | Deferred and native-only; `path: null` returns to primary. Git facts use shell; assignment uses the host |
-| `read_tab`, `point_at`, `set_chat_icon` | Deferred, live selection and optional presentation; `target: null` clears highlighting |
+| `point_at`, `set_chat_icon` | Deferred, optional presentation; `target: null` clears highlighting |
+| `desktop_settings` | Deferred, the owning profile's settings files, scopes and validation errors for the configuration skill |
 | `open_browser`, `browser_snapshot`, `browser_act`, `surface_control` | Deferred, signed-in browser and user takeover |
 | `run_terminal`, `read_terminal`, `write_terminal` | Deferred, visible persistent host PTYs; ordinary commands use native execution |
 | `build_app` | Deferred, host preview by default; `publish: true` explicitly publishes |
@@ -92,3 +93,12 @@ activity naming and live revocation. Scripted desktop workspace E2Es route throu
 discovery/invocation, and the review E2E creates its app through the same gateway.
 Real-provider visual checks are still necessary: scripted success cannot prove
 that a model finds the right skill or chooses the intended operation.
+
+## read_tab joins the eager surface (ADR 0152)
+
+Each turn's context already names the focused surface with a short look inside
+it, but a real Claude Code run asked "What is this thing?" over a web page and
+reached for a personal Chrome MCP (a different browser) because `read_tab` sat
+behind discovery. Reading what the person sees is the most common workspace
+question, so `read_tab` is eager. Its schema is one string parameter.
+

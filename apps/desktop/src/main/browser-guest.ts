@@ -132,6 +132,14 @@ export const BROWSER_GUEST = String.raw`
     },
     clear,
     read() {return {url:location.href,title:document.title,text:(document.body?.innerText || '').slice(0,30000)};},
+    glance(limit) {
+      const squash = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+      const main = document.querySelector('main, article, [role=main]');
+      const text = squash((main && main.innerText.trim() ? main : document.body)?.innerText).slice(0, limit);
+      const description = squash(document.querySelector('meta[name=description], meta[property="og:description"]')?.getAttribute('content')).slice(0, 300);
+      const selection = squash(getSelection()?.toString()).slice(0, limit);
+      return {url:location.href,title:document.title,description,selection,text};
+    },
   };
 })();
 `;

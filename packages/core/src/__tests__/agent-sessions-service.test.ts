@@ -152,22 +152,21 @@ describe("seed skill set", () => {
 });
 
 describe("buildAgentSystemPrompt", () => {
-  it("teaches the defineWorkflow model and preserves host instructions", () => {
+  it("frames general work and defers mechanics to skills", () => {
     const prompt = buildAgentSystemPrompt({
       systemPrompt: "Use the host's billing plugin.",
     });
 
-    expect(prompt).toContain("exported defineWorkflow");
-    expect(prompt).toContain('There is no "use workflow" directive');
-    expect(prompt).toContain('"use step"');
-    expect(prompt).toContain("defineBatch");
-    expect(prompt).toContain("defineBoundary");
-    expect(prompt).toContain("execute ordered boundary and batch scopes");
-    expect(prompt).toContain("continuation state persisted in Postgres");
-    expect(prompt).toContain("controls: { cancel: true }");
-    expect(prompt).toContain("@catamorphic/workflow");
-    expect(prompt).toContain("Never create local copies");
+    expect(prompt).toContain("any kind of work");
+    expect(prompt).toContain("Most requests are not about code");
+    expect(prompt).toContain("what the person is looking at");
+    expect(prompt).toContain("non-technical people");
+    expect(prompt).toContain("load the matching skill");
+    // Workflow mechanics arrive with the skill, not in every conversation.
+    expect(prompt).not.toContain("defineBoundary");
+    expect(prompt).not.toContain("Postgres");
     expect(prompt).toContain("Use the host's billing plugin.");
+    expect(prompt.length).toBeLessThan(2400);
   });
 
   it("lets a host replace the standing prompt (ADR 0049)", () => {

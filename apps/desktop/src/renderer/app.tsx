@@ -3935,7 +3935,15 @@ export function App({
               })),
             }),
           );
-          return { tabs, chats, sidebar, split: ws.split };
+          return {
+            tabs,
+            chats,
+            sidebar,
+            split: ws.split,
+            // What the user looked at before the active tab: when they open
+            // a chat as its own tab to ask about "this", it is usually here.
+            previousTabKey: previousActiveTabKeyRef.current ?? null,
+          };
         }
         case "browserActivity": {
           const key = String(params.key);

@@ -413,6 +413,34 @@ export class RolesService {
     };
   }
 
+  /**
+   * The display names and descriptions of assigned roles, in assignment
+   * order, for the member's own agent context (ADR 0152). Unknown and
+   * invalid roles are skipped, as they are when resolving access.
+   */
+  async describe(input: {
+    tenantId: string;
+    projectId: string;
+    roles: readonly string[];
+  }): Promise<Array<{ name: string; description?: string }>> {
+    const entries = await this.load(input.tenantId, input.projectId);
+    return input.roles.flatMap((slug) => {
+      const definition = entries.find(
+        (entry) => entry.slug === slug,
+      )?.definition;
+      return definition
+        ? [
+            {
+              name: definition.name,
+              ...(definition.description
+                ? { description: definition.description }
+                : {}),
+            },
+          ]
+        : [];
+    });
+  }
+
   async assignedRolesRequireManagement(input: {
     tenantId: string;
     projectId: string;

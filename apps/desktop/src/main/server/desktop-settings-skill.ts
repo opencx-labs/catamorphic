@@ -17,10 +17,10 @@ description: Edit Work desktop configuration files to customize theme, fonts, sh
 
 # Configure the desktop
 
-The live desktop_settings_context supplied each turn identifies this project's
-owning profile, exact host file paths, access mode and current validation errors.
-Use those paths, not the foreground profile, a guessed home directory, a sandbox
-path, or a session worktree's .catamorphic folder. Read the relevant files first;
+Call the desktop_settings tool (discover it if it is not loaded) for this
+project's owning profile, exact host file paths, access mode and current
+validation errors. Use those paths, not the foreground profile, a guessed home
+directory, a sandbox path, or a session worktree's .catamorphic folder. Read the relevant files first;
 a missing file is an empty object inheriting defaults. Read this skill for the file
 schema. Edit with ordinary file or shell facilities, preserving unrelated keys.
 Prefer writing a complete JSON object to a temporary sibling and renaming it over
@@ -110,7 +110,7 @@ ${SIDEBAR_AUTHORING_GUIDE}
 
 Valid edits apply live. Invalid JSON or invalid known preference/theme/shortcut
 values leave the last valid configuration active and show a file-specific error
-in Settings and subsequent desktop_settings_context. On a fresh app start, a file
+in Settings, desktop_settings, and the next turn's context. On a fresh app start, a file
 with no previously valid value uses defaults until repaired. Fix the file before
 making unrelated UI edits; do not interpret a fallback as a successful update.
 

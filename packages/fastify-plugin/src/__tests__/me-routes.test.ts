@@ -38,6 +38,17 @@ describe("GET /me (ADR 0055 introspection)", () => {
         proposals: {},
         proposalsOpenPullRequests: true,
         agentSessions: {},
+        memberships: {
+          describeMember: async ({ projectId }: { projectId: string }) =>
+            projectId === PROJECT_ID
+              ? [
+                  {
+                    name: "CSM",
+                    description: "Customer success; not technical.",
+                  },
+                ]
+              : null,
+        },
       } as never,
       features: { publications: "members" },
     });
@@ -60,6 +71,9 @@ describe("GET /me (ADR 0055 introspection)", () => {
             { path: "docs/**", access: "read" },
             { path: "store/customers/acme/**", access: "write" },
           ],
+          roles: [
+            { name: "CSM", description: "Customer success; not technical." },
+          ],
         },
         {
           projectId: "other",
@@ -70,6 +84,7 @@ describe("GET /me (ADR 0055 introspection)", () => {
           workflows: [],
           apps: [],
           documents: [],
+          roles: [],
         },
       ],
       features: {
@@ -135,6 +150,7 @@ describe("GET /me (ADR 0055 introspection)", () => {
           workflows: [],
           apps: [],
           documents: [],
+          roles: [],
         },
       ],
       features: {

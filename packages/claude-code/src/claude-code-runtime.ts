@@ -44,11 +44,12 @@ import {
   agentCapabilityTools,
   extraToolResult,
   mergePolicyLayers,
+  renderTurnContext,
   resolveMcpServers,
   resolveToolPermissionAcross,
-  withAgentContext,
 } from "@catamorphic/sandbox";
 import type { ZodRawShape } from "zod";
+import { turnContextHooks } from "./turn-context.js";
 
 const SUBAGENT_TOOLS = new Set(["Task", "Agent"]);
 const DEFAULT_POST_TURN_DRAIN_TIMEOUT_MS = 250;
@@ -705,7 +706,7 @@ export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
       systemPrompt: {
         type: "preset",
         preset: "claude_code",
-        append: withAgentContext(state.systemPrompt, input.context),
+        ...(state.systemPrompt ? { append: state.systemPrompt } : {}),
       },
       env: {
         ...process.env,
@@ -756,7 +757,12 @@ export class ClaudeCodeAgentRuntime implements AgentRuntimeProvider {
           requestId: callback.requestId,
           signal: callback.signal,
         }),
-      hooks: runtimeHooks((event) => this.publishHookEvent(state, event)),
+      hooks: {
+        ...runtimeHooks((event) => this.publishHookEvent(state, event)),
+        ...turnContextHooks({
+          turnContext: renderTurnContext(input.context) || undefined,
+        }),
+      },
       settingSources: ["user", "project", "local"],
       includePartialMessages: true,
     };

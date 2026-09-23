@@ -367,13 +367,15 @@ it("keeps context small and excludes other users, credentials, and permission li
       harnessSandbox: "provider_configured",
     },
   });
-  expect(
-    await cat.core.agentCapabilities.prompt({
-      identity: alice,
-      projectId,
-      sessionId,
-    }),
-  ).toContain('"agentLoopHost":"controller"');
+  const fragment = await cat.core.agentCapabilities.prompt({
+    identity: alice,
+    projectId,
+    sessionId,
+  });
+  expect(fragment).toMatchObject({ source: "session", trust: "host" });
+  // Plain facts for the model; infrastructure ids stay behind context.read.
+  expect(fragment.text).toContain("Person: Alice");
+  expect(fragment.text).not.toMatch(/allocation|bindingId|workerNodeId/i);
   expect(JSON.stringify(value)).not.toMatch(
     /must-not-appear|Bob|executionScope|connectionScope/,
   );

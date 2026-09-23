@@ -33,6 +33,7 @@ import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { ConnectorsService } from "../connectors.js";
 import { DesktopCredentialVault } from "../credential-vault.js";
 import type { IncognitoSessionsStore } from "../incognito-sessions.js";
+import { localPerson } from "../local-person.js";
 import {
   type McpAppsService,
   mcpAppViewCsp,
@@ -485,6 +486,14 @@ export async function startEmbeddedServer(
     triggerKinds: DESKTOP_TRIGGER_KINDS,
     mcpToolKinds: DESKTOP_MCP_TOOL_KINDS,
     agentCapabilities: {
+      // Who the agent works with: the person at this computer and, for a
+      // project linked to a company server, their roles there (ADR 0152).
+      currentUser: async ({ projectId }) => {
+        const roles = profileConfig
+          .forProject(projectId)
+          .remoteProjects.get(projectId)?.capabilities?.roles;
+        return { ...localPerson(), ...(roles ? { roles } : {}) };
+      },
       capabilities: [componentRegistryCapability],
       sources: [
         desktopCapabilitySource({

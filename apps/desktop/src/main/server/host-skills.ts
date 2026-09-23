@@ -83,14 +83,21 @@ export function materializeHostSkills(
 const SKILLS_PREAMBLE =
   "Skills are reusable playbooks invoked by name — when the user asks to \"use the X skill\" (the app's command palette and /commands send exactly that phrasing), or a task matches a skill's description, load the skill and follow it.";
 
+/** A listing line: the name and the description's first sentence. */
 function listing(skills: Array<{ name: string; description: string }>): string {
   return skills
-    .map((skill) =>
-      skill.description
-        ? `  - ${skill.name}: ${skill.description}`
-        : `  - ${skill.name}`,
-    )
+    .map((skill) => {
+      const summary = firstSentence(skill.description);
+      return summary ? `  - ${skill.name}: ${summary}` : `  - ${skill.name}`;
+    })
     .join("\n");
+}
+
+function firstSentence(description: string): string {
+  const text = description.replace(/\s+/g, " ").trim();
+  const end = text.search(/[.!?](\s|$)/);
+  const sentence = end === -1 ? text : text.slice(0, end + 1);
+  return sentence.length > 200 ? `${sentence.slice(0, 199)}…` : sentence;
 }
 
 export interface SkillsNoteOpts {
@@ -107,6 +114,11 @@ export interface SkillsNoteOpts {
   picked?: string[];
   /** Whether this harness carries the read_skill workspace tool. */
   hasTools: boolean;
+  /**
+   * The harness already lists the app tier natively (Claude Code's skills
+   * plugin), so the prompt names only the tiers it cannot see.
+   */
+  appSkillsNative?: boolean;
 }
 
 /**
@@ -151,7 +163,7 @@ export function composeSkillsNote(opts: SkillsNoteOpts): string | undefined {
     ...(userSkills.length > 0
       ? [`- The user's personal skills (theirs alone):\n${listing(userSkills)}`]
       : []),
-    ...(opts.appSkills.length > 0
+    ...(opts.appSkills.length > 0 && !opts.appSkillsNative
       ? [
           `- App skills, shipped by the app the user is working in:\n${listing(opts.appSkills)}`,
         ]

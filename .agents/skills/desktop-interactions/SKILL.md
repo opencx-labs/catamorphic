@@ -41,6 +41,9 @@ intent, not instructions to restore superseded behavior.
 
 When adding a setting, update the shared settings catalog and its destination in
 Settings. Keep search metadata independent of live values. Desktop project agents
-receive `configuring-catamorphic-desktop` through the host skill tier and edit configuration files directly. The per-turn context supplies owning
-profile, exact paths and filesystem access limits. Maintain schemas and live
-validation with the UI; do not add settings-specific tools or mirrored files. Core seeds describe host-neutral mechanics and must not import desktop code.
+receive `configuring-catamorphic-desktop` through the host skill tier and edit configuration files directly. The read-only `desktop_settings`
+tool supplies owning profile, exact paths and filesystem access limits; turn
+context carries only validation errors. Maintain schemas and live validation
+with the UI; do not add settings write tools or mirrored files. Agent context
+follows ADR 0152: new per-turn facts are `TurnOptions.context` fragments, never
+text prepended to the user's message. Core seeds describe host-neutral mechanics and must not import desktop code.

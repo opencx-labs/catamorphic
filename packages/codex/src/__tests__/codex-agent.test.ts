@@ -456,16 +456,32 @@ describe("CodexAgent", () => {
       discover: vi.fn(async () => ({ items: [] })),
       invoke: vi.fn(async () => ({})),
     };
-    resumeThread.mockImplementation(() => turnDone());
+    const delivered: unknown[] = [];
+    resumeThread.mockImplementation(() => ({
+      runStreamed: async (
+        input: string | Array<{ type: string; text?: string }>,
+        run: { turnOptions?: { context?: unknown } },
+      ) => {
+        expect(typeof input === "string" ? input : input[0]?.text).toBe(
+          "hello",
+        );
+        delivered.push(run.turnOptions?.context);
+        return turnDone().runStreamed();
+      },
+    }));
     const agent = new CodexAgent();
-    for (const context of ["Host A", "Host B"]) {
+    for (const text of ["Host A", "Host B"]) {
+      const context = [{ source: "session", trust: "host" as const, text }];
       for await (const _event of agent.sendMessage(session, "hello", {
         context,
         capabilities,
       })) {
         /* drain */
       }
-      expect(setContext).toHaveBeenLastCalledWith(context);
+      // Stable instructions stay developer instructions; the turn's
+      // context rides turn/start beside the message (ADR 0152).
+      expect(setContext).toHaveBeenLastCalledWith(undefined);
+      expect(delivered.at(-1)).toEqual(context);
       expect(codexCtor.mock.calls.at(-1)?.[0]).toMatchObject({
         config: {
           mcp_servers: {

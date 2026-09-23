@@ -1,13 +1,16 @@
 # Agent context and capabilities
 
-Read `AGENT-CAPABILITIES.md` and ADR 0103 in the installed source. Keep the existing
+Read `AGENT-CAPABILITIES.md`, ADR 0103 and ADR 0152 in the installed source. Keep the existing
 host identity and Environment/Allocation system.
 
 1. Inspect the current user's verified identity, project/session, Allocation,
    agent-loop host, command target, and working directory. Do not infer placement
    from the agent's name or Git remote.
-2. Configure optional display name/time zone through `agentCapabilities.currentUser`.
-   Never inject a tenant directory, secrets, or permission arrays into prompts.
+2. Configure optional display name, time zone and (for hosts with their own
+   entitlements) described roles through `agentCapabilities.currentUser`. Give
+   stock roles a `description` saying who holds them and how technical they are;
+   agents read it every turn. Never inject a tenant directory, secrets, or
+   permission arrays into prompts.
 3. Register typed capabilities with live authorization. The stock host provides
    a member directory only under ordinary membership-management permission.
    Custom hosts decide their own directory and assignment visibility.

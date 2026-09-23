@@ -133,6 +133,22 @@
                               "required": ["path", "access"],
                               "additionalProperties": false
                             }
+                          },
+                          "roles": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "description": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["name"],
+                              "additionalProperties": false
+                            }
                           }
                         },
                         "required": [
@@ -143,7 +159,8 @@
                           "agents",
                           "workflows",
                           "apps",
-                          "documents"
+                          "documents",
+                          "roles"
                         ],
                         "additionalProperties": false
                       }

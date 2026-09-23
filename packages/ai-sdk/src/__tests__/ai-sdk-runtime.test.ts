@@ -378,7 +378,7 @@ describe("AiSdkAgentRuntime", () => {
       const turn = await runtime.startTurn({
         sessionId: session.sessionId,
         message: { role: "user", content: "Hello" },
-        context,
+        context: [{ source: "session", trust: "host", text: context }],
         capabilities,
       });
       await collectUntil({
@@ -388,14 +388,20 @@ describe("AiSdkAgentRuntime", () => {
           event.type === "turn.completed" && event.turnId === turn.turnId,
       });
       const call = model.doStreamCalls.at(-1);
-      expect(call?.prompt).toContainEqual({
+      const prompt = call?.prompt ?? [];
+      // The instructions stay stable (cacheable); the turn's context is a
+      // separate system message right before the user's own message.
+      expect(prompt[0]?.role).toBe("system");
+      expect(prompt[0]?.content).not.toContain("Host");
+      const lastUser =
+        prompt.length -
+        1 -
+        [...prompt].reverse().findIndex((message) => message.role === "user");
+      expect(prompt[lastUser - 1]).toEqual({
         role: "system",
         content: expect.stringContaining(context),
       });
-      if (context === "Host B")
-        expect(
-          call?.prompt.find((message) => message.role === "system")?.content,
-        ).not.toContain("Host A");
+      expect(JSON.stringify(prompt[lastUser])).not.toContain("Host");
       expect(call?.tools).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ name: "discover_capabilities" }),

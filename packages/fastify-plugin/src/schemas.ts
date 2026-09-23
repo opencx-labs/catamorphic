@@ -1791,6 +1791,10 @@ export const MeSchema = z.object({
       documents: z.array(
         z.object({ path: z.string(), access: z.enum(["read", "write"]) }),
       ),
+      /** The caller's roles in this project, described (ADR 0152). */
+      roles: z.array(
+        z.object({ name: z.string(), description: z.string().optional() }),
+      ),
     }),
   ),
   features: z.object({

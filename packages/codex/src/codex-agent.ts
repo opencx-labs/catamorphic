@@ -325,11 +325,13 @@ export class CodexAgent implements CodingAgentProvider {
     if (opts?.toolPolicies) {
       this.callerPolicies.set(session.sessionId, opts.toolPolicies);
     }
-    const context =
-      [this.sessionInstructions.get(session.sessionId), opts?.context]
-        .filter(Boolean)
-        .join("\n\n") || undefined;
-    const client = this.clientFor(session, capabilityServer, context);
+    // Session instructions are stable developer instructions; the turn's
+    // context travels separately on turn/start (ADR 0152).
+    const client = this.clientFor(
+      session,
+      capabilityServer,
+      this.sessionInstructions.get(session.sessionId),
+    );
     const threadOptions = this.threadOptions(session.workingDirectory, opts);
     const thread = session.providerSessionId
       ? client.resumeThread(session.providerSessionId, threadOptions)

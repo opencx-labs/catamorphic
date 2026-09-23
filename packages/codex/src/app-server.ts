@@ -526,6 +526,24 @@ export class CodexAppServer {
         // switches between the project folder and a managed worktree.
         cwd: options.workingDirectory,
         effort: options.modelReasoningEffort,
+        // Per-turn context (ADR 0152) rides Codex's own channel beside the
+        // prompt; observed content (page text) is marked untrusted.
+        ...(turnOptions?.context?.length
+          ? {
+              additionalContext: Object.fromEntries(
+                turnOptions.context.map((fragment) => [
+                  `catamorphic.${fragment.source}`,
+                  {
+                    value: fragment.text,
+                    kind:
+                      fragment.trust === "observed"
+                        ? "untrusted"
+                        : "application",
+                  },
+                ]),
+              ),
+            }
+          : {}),
         input:
           typeof input === "string"
             ? [{ type: "text", text: input, text_elements: [] }]

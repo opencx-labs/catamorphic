@@ -145,6 +145,31 @@ export class MembershipsService {
   }
 
   /**
+   * The roles one member holds in a project, described for their own agent
+   * context (ADR 0152). `null` when they are not a member.
+   */
+  async describeMember(input: {
+    projectId: string;
+    tenantId: string;
+    externalUserId: string;
+  }): Promise<Array<{ name: string; description?: string }> | null> {
+    const row = await this.db
+      .selectFrom("memberships")
+      .innerJoin("projects", "projects.id", "memberships.project_id")
+      .where("memberships.project_id", "=", input.projectId)
+      .where("memberships.external_user_id", "=", input.externalUserId)
+      .where("projects.tenant_id", "=", input.tenantId)
+      .selectAll("memberships")
+      .executeTakeFirst();
+    if (!row) return null;
+    return this.roles.describe({
+      tenantId: input.tenantId,
+      projectId: input.projectId,
+      roles: mapMembership(row).roles,
+    });
+  }
+
+  /**
    * The identity a member gets: their membership row expanded through the
    * project's committed roles. `null` when the user is not a member — the
    * host decides whether that is 401, 403 or a signup prompt. This is the

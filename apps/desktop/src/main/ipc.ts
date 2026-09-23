@@ -1836,6 +1836,7 @@ export function registerIpcHandlers(
         : (project?.permissions ?? []),
       agents: project?.agents ?? [],
       documents: project?.documents ?? [],
+      roles: project?.roles ?? [],
       features: me.features,
     };
   };

@@ -369,9 +369,9 @@ Workflow execution uses an immutable source snapshot. For persistent local data,
 
 Preferences such as theme, fonts, keyboard shortcuts, tabs and notifications are
 host configuration, not workflow code. Consult the host's offered configuration
-skill and tools before editing them. In Catamorphic desktop, use the host skill
-\`configuring-catamorphic-desktop\` and the per-turn host configuration context
-for exact file paths, schemas and scopes. Edit those files directly when accessible. Other embedders may expose a different contract.
+skill and tools before editing them. In the Work desktop, use the host skill
+\`configuring-catamorphic-desktop\` and its \`desktop_settings\` tool for exact
+file paths, schemas and scopes. Edit those files directly when accessible. Other embedders may expose a different contract.
 Never assume a sandbox's filesystem is the host's configuration directory.
 
 ## Adding automations or apps to a project that has none
@@ -436,11 +436,11 @@ Access is enforced by the host from **roles you commit** as
 {
   "version": 1,
   "name": "CSM",
-  "description": "Customer success: their own customers, the handbook, the CSM assistant.",
+  "description": "Customer success managers. Not technical: they want plain answers about their customers' accounts, renewals and health, and ready-to-send drafts. Never show them code.",
   "agents": ["csm-assistant"],                 // or { "name": "…", "toolPolicies": { "slack": { "default": "ask" } } }
   "workflows": ["crm.lookup", "docs.search"],
   "environments": ["local"],
-  "connections": ["gmail"],
+  "connections": [{ "environment": "local", "alias": "gmail" }],
   "apps": ["customer-tracker"],
   "documents": [
     "docs/**",                                                       // read the handbook
@@ -448,13 +448,17 @@ Access is enforced by the host from **roles you commit** as
   ]
 }
 // .catamorphic/roles/admin.json
-{ "version": 1, "name": "Admin", "builder": true, "documents": ["store/**"] }
+{ "version": 1, "name": "Admin", "description": "Runs the brain: builds workflows, apps and agents. Comfortable with technical detail.", "builder": true, "documents": ["store/**"] }
 // .catamorphic/roles/brain-maintainer.json
-{ "version": 1, "name": "Brain Maintainer", "permissions": ["brain:maintain"], "agents": ["brain-maintainer"] }
+{ "version": 1, "name": "Brain Maintainer", "description": "Keeps the handbook and shared documents current. Edits text, not code.", "permissions": ["brain:maintain"], "agents": ["brain-maintainer"] }
 \`\`\`
 
 Rules of thumb when authoring roles:
 
+- Always write a \`description\`: who holds the role, what they do, and how
+  technical they are. Agents read the member's role descriptions every turn to
+  decide what to say and how, so "Sales reps; not technical; want short
+  answers with next steps" beats "Sales".
 - \`{param}\` placeholders are filled from each member's grants (the host
   says "alice: customer = acme, globex"); an entry whose placeholder is not
   granted yields nothing — never a wildcard.

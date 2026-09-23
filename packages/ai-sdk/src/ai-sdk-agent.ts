@@ -36,7 +36,6 @@ import {
   resolveMcpServers,
   stagedPluginFiles,
   ToolGate,
-  withAgentContext,
 } from "@catamorphic/sandbox";
 import {
   dynamicTool,
@@ -50,8 +49,9 @@ import {
 } from "ai";
 import { z } from "zod";
 import { agentTelemetry } from "./telemetry.js";
+import { turnContextMessages } from "./turn-context.js";
 
-const DEFAULT_INSTRUCTIONS = `You are working in a Catamorphic project — a folder that can hold any kind of work: documents, notes, data, code, automations, apps.
+const DEFAULT_INSTRUCTIONS = `You are an agent working with a person in their project folder, which can hold any kind of work: documents, notes, data, code, automations, apps.
 Use the provided tools to inspect and edit the project in your working directory.
 Read AGENTS.md and relevant .catamorphic/skills/*/SKILL.md and .agents/skills/*/SKILL.md files, when they exist, before making substantial changes.
 Keep changes focused, run relevant checks, and do not commit changes.
@@ -396,19 +396,24 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     state.pendingAsk = undefined;
     const requestMessages: ModelMessage[] = [
       ...state.messages,
-      pendingAsk
-        ? {
-            role: "tool",
-            content: [
-              {
-                type: "tool-result",
-                toolCallId: pendingAsk.toolCallId,
-                toolName: "ask_user",
-                output: { type: "text", value: message },
-              },
-            ],
-          }
-        : userMessage(message, opts?.attachments ?? []),
+      ...(pendingAsk
+        ? [
+            {
+              role: "tool" as const,
+              content: [
+                {
+                  type: "tool-result" as const,
+                  toolCallId: pendingAsk.toolCallId,
+                  toolName: "ask_user",
+                  output: { type: "text" as const, value: message },
+                },
+              ],
+            },
+          ]
+        : [
+            ...turnContextMessages(opts?.context),
+            userMessage(message, opts?.attachments ?? []),
+          ]),
     ];
     yield* this.runTurn(state, requestMessages, opts);
   }
@@ -488,7 +493,9 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     const agent = new ToolLoopAgent({
       telemetry: telemetry.settings,
       model,
-      instructions: withAgentContext(state.instructions, opts?.context),
+      instructions: state.instructions,
+      // Turn context arrives as a system message beside the prompt (ADR 0152).
+      allowSystemInMessages: true,
       tools: {
         ...state.tools,
         ...(opts?.askQuestion
