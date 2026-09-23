@@ -35,6 +35,7 @@ import type {
 } from "../../shared/file-search.js";
 import type {
   HistoryPage,
+  HistoryProject,
   HistoryQuery,
   HistoryVisit,
 } from "../../shared/history.js";
@@ -1236,17 +1237,15 @@ export interface CatamorphicDesktopApi {
     listener: (change: { profileId: string; origin: string | null }) => void,
   ) => () => void;
   browserRecordHistory: (input: {
-    profileId: string;
     url: string;
     title: string;
+    project?: HistoryProject;
   }) => Promise<void>;
   browserRetitleHistory: (input: {
-    profileId: string;
     url: string;
     title: string;
   }) => Promise<void>;
   browserSetHistoryFavicon: (input: {
-    profileId: string;
     url: string;
     faviconUrl: string;
   }) => Promise<void>;

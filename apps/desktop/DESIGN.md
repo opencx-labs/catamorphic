@@ -1022,6 +1022,18 @@ gestures. Opening a file means opening it in Work when Work can show it
 (what a browser tab renders, plus plain text); anything else is revealed
 in the file manager rather than handed to whatever app the OS would pick.
 
+### 2026-09-23: History belongs to the profile
+
+History was stored per profile but shaped per project: anything that was
+not a web page had to be a project's resource, so a downloaded file
+opened as a tab became a "project file" by absolute path and the
+no-project window recorded nothing. Now the log is the profile's (ADR
+0154): a page, a file on this machine, or a project's resource, each
+naming the project it was opened in when there was one. The page grows a
+scope menu in its header, "All projects" or one project, a facet rather
+than a filter field, so search stays with the palette. A loose file
+reopens as it opened, as a browser tab.
+
 ### 2026-09-23: Long work runs beside the chat, and the agent says what it is doing
 
 A dev server or a slow build used to hold the chat on "Working" or vanish

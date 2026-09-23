@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { HistoryStore } from "./browser-history.js";
 
 const dirs: string[] = [];
@@ -17,7 +17,11 @@ describe("HistoryStore", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "browser-history-"));
     dirs.push(dir);
     const history = new HistoryStore(dir);
-    history.record("profile", "https://example.com/page", "Example");
+    history.record({
+      profileId: "profile",
+      url: "https://example.com/page",
+      title: "Example",
+    });
     history.setFavicon(
       "profile",
       "https://example.com/page",
@@ -65,7 +69,11 @@ it("searches all surface types while web suggestions remain web-only, and suppor
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "history-resource-"));
   dirs.push(dir);
   const store = new HistoryStore(dir);
-  store.record("one", "https://example.org/report", "Quarterly report");
+  store.record({
+    profileId: "one",
+    url: "https://example.org/report",
+    title: "Quarterly report",
+  });
   store.recordVisit({
     profileId: "one",
     visit: {
@@ -75,7 +83,7 @@ it("searches all surface types while web suggestions remain web-only, and suppor
         resource: "reports/quarter.md",
       },
       title: "Quarterly report",
-      projectName: "Acme",
+      project: { id: "project", name: "Acme" },
     },
   });
   expect(store.query({ profileId: "one", query: "quarterly" }).total).toBe(2);
@@ -102,7 +110,7 @@ it("never records auth callbacks, credentials in URLs, or non-web protocols", ()
     "https://user:secret@app.test/",
     "file:///tmp/secret",
   ])
-    store.record("one", url, "Secret");
+    store.record({ profileId: "one", url, title: "Secret" });
   expect(store.query({ profileId: "one" }).total).toBe(0);
   store.dispose();
 });
@@ -134,5 +142,67 @@ it("updates a resource title without adding a visit or restoring removed history
   store.clear("profile");
   store.recordVisit({ profileId: "profile", visit, revisit: false });
   expect(store.query({ profileId: "profile" }).total).toBe(0);
+  store.dispose();
+});
+
+it("keeps files outside any project, scopes by the project a visit named, and lists those projects", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "history-projects-"));
+  dirs.push(dir);
+  const store = new HistoryStore(dir);
+  const acme = { id: "acme", name: "Acme" };
+  const lab = { id: "lab", name: "Lab" };
+  // Each visit lands later than the one before.
+  let now = Date.now();
+  vi.spyOn(Date, "now").mockImplementation(() => ++now);
+  store.recordVisit({
+    profileId: "one",
+    visit: {
+      target: { kind: "local", path: "/Users/me/Downloads/notes.txt" },
+      title: "notes.txt",
+      project: acme,
+    },
+  });
+  store.recordVisit({
+    profileId: "one",
+    visit: {
+      target: { kind: "file", projectId: "lab", resource: "README.md" },
+      title: "README.md",
+      project: lab,
+    },
+  });
+  store.record({
+    profileId: "one",
+    url: "https://example.org/",
+    title: "Example",
+  });
+  // The same page seen from a project now belongs to that project.
+  store.record({
+    profileId: "one",
+    url: "https://example.org/",
+    title: "Example",
+    project: { id: "lab", name: "Lab renamed" },
+  });
+  const all = store.query({ profileId: "one" });
+  expect(all.total).toBe(3);
+  expect(all.projects).toEqual([{ id: "lab", name: "Lab renamed" }, acme]);
+  expect(
+    store
+      .query({ profileId: "one", projectId: "acme" })
+      .entries.map((entry) => entry.target),
+  ).toEqual([{ kind: "local", path: "/Users/me/Downloads/notes.txt" }]);
+  expect(store.query({ profileId: "one", projectId: "lab" }).total).toBe(2);
+  expect(store.query({ profileId: "one", query: "downloads" }).total).toBe(1);
+  // Local files are identified by path alone, whatever project saw them.
+  store.recordVisit({
+    profileId: "one",
+    visit: {
+      target: { kind: "local", path: "/Users/me/Downloads/notes.txt" },
+      title: "notes.txt",
+    },
+  });
+  expect(store.query({ profileId: "one" }).total).toBe(3);
+  expect(store.query({ profileId: "one", projectId: "acme" }).total).toBe(0);
+  expect(store.suggest("one", "notes", 5)).toEqual([]);
+  vi.restoreAllMocks();
   store.dispose();
 });

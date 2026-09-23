@@ -160,6 +160,12 @@ describe("downloads", () => {
       `document.querySelectorAll('webview').length === ${before + 1} && [...document.querySelectorAll('webview')].some((view) => (view.getAttribute('src') || '').startsWith('file://') && view.getAttribute('src').endsWith('notes.txt'))`,
       { label: "text file opened in a browser tab" },
     );
+    // History (ADR 0154) keeps the opened file as a file on this machine,
+    // opened in this project, not as one of the project's own files.
+    await app.waitFor(
+      `window.catamorphicDesktop.historyQuery({}).then((page) => page.entries.some((entry) => entry.target.kind === 'local' && entry.target.path.endsWith('/notes.txt') && entry.project?.name === 'Downloads lab'))`,
+      { label: "download recorded in history" },
+    );
   });
 
   it("Remove from list forgets the download and keeps the file", async () => {
