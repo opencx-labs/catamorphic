@@ -566,7 +566,7 @@ export function BrowserScreen({
         }
       }) as EventListener);
     },
-    [profileId, remountWebview],
+    [remountWebview],
   );
 
   useEffect(() => {

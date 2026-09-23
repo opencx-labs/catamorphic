@@ -728,7 +728,7 @@ export function MenuPortal<TMenuEntry extends ContextMenuEntry>({
           <button
             key={`${entry.action}:${entry.label}`}
             type="button"
-            role="menuitem"
+            role={entry.checked === undefined ? "menuitem" : "menuitemradio"}
             aria-checked={entry.checked}
             tabIndex={open ? 0 : -1}
             disabled={Boolean(entry.disabledReason)}
@@ -759,7 +759,7 @@ function menuButtons(
 ): HTMLButtonElement[] {
   return [
     ...(ref.current?.querySelectorAll<HTMLButtonElement>(
-      "[role=menuitem]:not(:disabled)",
+      "[role=menuitem]:not(:disabled), [role=menuitemradio]:not(:disabled)",
     ) ?? []),
   ];
 }
