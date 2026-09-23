@@ -46,6 +46,8 @@ import {
   parseChatBookmarkUrl,
 } from "../shared/bookmark-target.js";
 import type { PendingChatMessage } from "../shared/chat.js";
+import type { WorkspaceNavigation } from "../shared/desktop-workspace.js";
+import { type DownloadRecord, fileUrlFor } from "../shared/downloads.js";
 import {
   type HistoryEntry,
   type HistoryVisit,
@@ -196,6 +198,7 @@ import {
   type BrowserPageState,
   BrowserScreen,
 } from "./screens/browser-screen.js";
+import { DownloadsScreen } from "./screens/downloads-screen.js";
 import { HistoryScreen } from "./screens/history-screen.js";
 import { McpAppScreen } from "./screens/mcp-app-screen.js";
 import { PasswordsScreen } from "./screens/passwords-screen.js";
@@ -1851,17 +1854,37 @@ export function App({
 
   const openLinkedSurfaceRef = useRef(openLinkedSurface);
   openLinkedSurfaceRef.current = openLinkedSurface;
-  const consumedNavigation = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    const navigation = runtime.navigation;
-    if (
-      !navigation ||
-      !workspaceReady ||
-      !runtime.visible ||
-      consumedNavigation.current === navigation.nonce
-    )
+  /** A saved download opens as a browser tab; Work shows what it can. */
+  const openDownload = (record: DownloadRecord, mode: CommitMode) => {
+    openBrowserTab(fileUrlFor(record.savePath), {
+      title: record.filename,
+      side: mode === "side",
+      floating: mode === "floating",
+    });
+  };
+  const openDownloadRef = useRef(openDownload);
+  openDownloadRef.current = openDownload;
+  const openTabRef = useRef(openTab);
+  openTabRef.current = openTab;
+  const consumeSurface = (
+    navigation: NonNullable<WorkspaceNavigation["surface"]>,
+  ) => {
+    if (navigation.open === "page") {
+      if (navigation.url === "downloads")
+        openTabRef.current(
+          { kind: "downloads", name: "downloads", label: "Downloads" },
+          navigation.mode,
+        );
       return;
-    consumedNavigation.current = navigation.nonce;
+    }
+    if (navigation.open === "browser") {
+      openBrowserTab(navigation.url, {
+        title: navigation.title,
+        side: navigation.mode === "side",
+        floating: navigation.mode === "floating",
+      });
+      return;
+    }
     void openLinkedSurfaceRef
       .current(navigation.url, {
         mode: navigation.mode,
@@ -1874,7 +1897,35 @@ export function App({
             : "Could not reopen this item.",
         ),
       );
+  };
+  const consumeSurfaceRef = useRef(consumeSurface);
+  consumeSurfaceRef.current = consumeSurface;
+  const consumedNavigation = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const navigation = runtime.navigation;
+    if (
+      !navigation ||
+      !workspaceReady ||
+      !runtime.visible ||
+      consumedNavigation.current === navigation.nonce
+    )
+      return;
+    consumedNavigation.current = navigation.nonce;
+    consumeSurfaceRef.current(navigation);
   }, [runtime.navigation, runtime.visible, workspaceReady]);
+  // The dock in this window asks directly (no project needed).
+  useEffect(() => {
+    if (!runtime.visible) return;
+    const onNavigate = (event: Event) => {
+      const surface = (
+        event as CustomEvent<NonNullable<WorkspaceNavigation["surface"]>>
+      ).detail;
+      if (surface) consumeSurfaceRef.current(surface);
+    };
+    window.addEventListener("catamorphic:dock-navigate", onNavigate);
+    return () =>
+      window.removeEventListener("catamorphic:dock-navigate", onNavigate);
+  }, [runtime.visible]);
 
   const openMessageLink = (
     value: string,
@@ -5769,6 +5820,11 @@ export function App({
                         active={Boolean(viewSlots[tabKey(tab)])}
                         onOpenSite={setSiteSettingsOrigin}
                       />
+                    ) : tab.kind === "downloads" ? (
+                      <DownloadsScreen
+                        active={Boolean(viewSlots[tabKey(tab)])}
+                        onOpen={openDownload}
+                      />
                     ) : tab.kind === "usage" ? (
                       <Suspense fallback={<div className="flex-1 bg-bg" />}>
                         <UsageScreen />
@@ -6330,6 +6386,8 @@ export function App({
           <PasswordsScreen profileId={activeTab.name} />
         ) : activeTab?.kind === "sites" ? (
           <SitesScreen onOpenSite={setSiteSettingsOrigin} />
+        ) : activeTab?.kind === "downloads" ? (
+          <DownloadsScreen onOpen={openDownload} />
         ) : activeTab?.kind === "profile-settings" && profilesData ? (
           <ProfileSettingsScreen
             profileId={activeTab.name}

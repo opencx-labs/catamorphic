@@ -80,7 +80,17 @@ export interface DockSnapshot {
 export interface WorkspaceNavigation {
   projectId: string;
   newWindow?: boolean;
-  surface?: { url: string; title: string; mode: OpenMode; nonce: string };
+  surface?: {
+    url: string;
+    title: string;
+    mode: OpenMode;
+    nonce: string;
+    /**
+     * How the url opens: a linked surface (default), an app page named by
+     * the url ("downloads"), or a plain browser tab at the url.
+     */
+    open?: "page" | "browser";
+  };
 }
 export type WorkspaceEvent =
   | ({ kind: "navigate" } & WorkspaceNavigation)

@@ -71,6 +71,7 @@ import {
 } from "./browser-import/password-native.js";
 import { guestWindowOpenAction } from "./browser-popups.js";
 import { PasswordVault } from "./browser-vault.js";
+import { DownloadsManager, DownloadsStore } from "./downloads.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { LoginCapture, type LoginSubmission } from "./login-capture.js";
 import { generateStrongPassword } from "./password-generator.js";
@@ -135,6 +136,14 @@ interface SitePermissionPolicy {
   ) => void;
 }
 let sitePermissionPolicy: SitePermissionPolicy | null = null;
+/** Downloads (ADR 0153) attach to the manager `registerBrowserSupport` owns. */
+let downloadHook:
+  | ((
+      profileId: string,
+      item: Electron.DownloadItem,
+      contents: WebContents,
+    ) => void)
+  | null = null;
 
 /**
  * Chrome's client-hint brand list, derived from the session UA. Google's
@@ -218,6 +227,11 @@ async function doPrepareProfileSession(
         details,
       ) ?? true,
   );
+  // Downloads save without a dialog; the manager names the file and
+  // keeps the record the dock and the Downloads page show.
+  ses.on("will-download", (_event, item, contents) => {
+    downloadHook?.(profileId, item, contents);
+  });
   // Without a handler getDisplayMedia fails outright; with one, the
   // app's picker chooses a tab, window or screen.
   ses.setDisplayMediaRequestHandler((request, callback) => {
@@ -287,6 +301,59 @@ export function registerBrowserSupport(
     ScreenShareRequest,
     ScreenShareAnswer
   >();
+  const downloads = new DownloadsManager(new DownloadsStore(profilesDir), {
+    downloadsDir: () =>
+      process.env.CATAMORPHIC_DOWNLOADS_DIR || app.getPath("downloads"),
+    broadcast: (profileId, list) => {
+      for (const window of windows.windowsFor(profileId))
+        if (!window.isDestroyed())
+          window.webContents.send("catamorphic:downloads-changed", {
+            profileId,
+            downloads: list,
+          });
+    },
+  });
+  downloadHook = (profileId, item, contents) => {
+    const page = contents.isDestroyed() ? "" : contents.getURL();
+    const host =
+      siteHost(siteOrigin(page) ?? siteOrigin(item.getURL()) ?? "") || null;
+    downloads.attach(profileId, item, host);
+  };
+  const downloadInput = z.object({ id: z.string().min(1) });
+  ipcMain.handle("catamorphic:downloads-list", (event) =>
+    downloads.list(windows.profileFor(event.sender)),
+  );
+  ipcMain.handle("catamorphic:downloads-reveal", (event, input: unknown) => {
+    const { id } = downloadInput.parse(input);
+    const record = downloads.store.get(windows.profileFor(event.sender), id);
+    if (!record) return;
+    if (fs.existsSync(record.savePath)) shell.showItemInFolder(record.savePath);
+    else void shell.openPath(path.dirname(record.savePath));
+  });
+  ipcMain.handle("catamorphic:downloads-pause", (_event, input: unknown) => {
+    downloads.pause(downloadInput.parse(input).id);
+  });
+  ipcMain.handle("catamorphic:downloads-resume", (_event, input: unknown) => {
+    downloads.resume(downloadInput.parse(input).id);
+  });
+  ipcMain.handle("catamorphic:downloads-cancel", (_event, input: unknown) => {
+    downloads.cancel(downloadInput.parse(input).id);
+  });
+  ipcMain.handle("catamorphic:downloads-remove", (event, input: unknown) => {
+    downloads.remove(
+      windows.profileFor(event.sender),
+      downloadInput.parse(input).id,
+    );
+  });
+  ipcMain.handle("catamorphic:downloads-clear", (event) => {
+    downloads.clearFinished(windows.profileFor(event.sender));
+  });
+  ipcMain.handle("catamorphic:downloads-open-folder", () => {
+    const dir =
+      process.env.CATAMORPHIC_DOWNLOADS_DIR || app.getPath("downloads");
+    fs.mkdirSync(dir, { recursive: true });
+    void shell.openPath(dir);
+  });
   const unsubscribeRemoved = profiles.onRemoved((profileId) => {
     history.releaseProfile(profileId);
     vault.releaseProfile(profileId);
@@ -703,7 +770,12 @@ export function registerBrowserSupport(
     contents.on("dom-ready", () => {
       if (contents.isDestroyed()) return;
       void contents
-        .insertCSS("html{background-color:#fff}", { cssOrigin: "user" })
+        // color-scheme too: Chromium's plain-text and image viewers
+        // otherwise pick dark text colors from the app's dark scheme and
+        // paint them on the white canvas.
+        .insertCSS("html{background-color:#fff;color-scheme:light}", {
+          cssOrigin: "user",
+        })
         .catch(() => {});
     });
     contents.on("preload-error", (_event, preloadPath, error) => {
@@ -2187,6 +2259,19 @@ export function registerBrowserSupport(
       history.dispose();
       vault.dispose();
       sitePermissionPolicy = null;
+      downloadHook = null;
+      downloads.dispose();
+      for (const channel of [
+        "catamorphic:downloads-list",
+        "catamorphic:downloads-reveal",
+        "catamorphic:downloads-pause",
+        "catamorphic:downloads-resume",
+        "catamorphic:downloads-cancel",
+        "catamorphic:downloads-remove",
+        "catamorphic:downloads-clear",
+        "catamorphic:downloads-open-folder",
+      ])
+        ipcMain.removeHandler(channel);
       preparedSessions.clear();
     },
   };

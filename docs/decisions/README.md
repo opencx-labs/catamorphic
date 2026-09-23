@@ -167,3 +167,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0150](0150-site-settings.md) | Site settings: one modal per site, Chrome's permission model | Accepted |
 | [0151](0151-browser-password-manager.md) | Browser password manager: offers after sign-ins that land, suggestions under the field, generated passwords that save themselves | Accepted |
 | [0152](0152-agent-context-channels.md) | Agent context: a short standing prompt and per-turn context beside the message | Accepted |
+| [0153](0153-downloads-in-the-dock.md) | Downloads in the dock: no save dialog, a dock button with progress, a Downloads page | Accepted |

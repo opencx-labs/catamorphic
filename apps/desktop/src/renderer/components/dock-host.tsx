@@ -13,6 +13,7 @@ import type {
   DockData,
   DockSnapshot,
 } from "../../shared/desktop-workspace.js";
+import { fileUrlFor } from "../../shared/downloads.js";
 import { localPresentations } from "../lib/chat-presentations.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { matchesBinding, useKeybindings } from "../lib/keybindings.js";
@@ -26,6 +27,7 @@ import { chatTabKey } from "../lib/workspace-state.js";
 import { ChatBubbles } from "./chat-bubbles.js";
 import { ChatDock } from "./chat-dock.js";
 import { DockDialogs } from "./dock-dialogs.js";
+import { DownloadsBubble } from "./downloads-bubble.js";
 
 const EMPTY: DockSnapshot = {
   chats: [],
@@ -91,6 +93,29 @@ export function DockHost({
   );
   const showing = useRef(new Set<string>());
   const currentProjectId = activeProjectId ?? snapshot.activeProjectId;
+  // The downloads bubble opens things in the workspace: through the
+  // workspaces service when this is the detached dock window, straight
+  // to this window's app otherwise (it needs no project for that).
+  const navigateSurface = (surface: {
+    url: string;
+    title: string;
+    mode: "replace" | "tab" | "side" | "floating";
+    open: "page" | "browser";
+  }) => {
+    const nonce = crypto.randomUUID();
+    if (detachedWindow && currentProjectId) {
+      void desktopApi.workspaceNavigate({
+        projectId: currentProjectId,
+        surface: { ...surface, nonce },
+      });
+      return;
+    }
+    window.dispatchEvent(
+      new CustomEvent("catamorphic:dock-navigate", {
+        detail: { ...surface, nonce },
+      }),
+    );
+  };
   const currentTheme = useProjectTheme(currentProjectId);
   useEffect(() => {
     if (currentTheme) applyTheme(currentTheme);
@@ -722,6 +747,26 @@ export function DockHost({
               });
             }}
             onClose={(id) => actions.current.get(id)?.close?.()}
+            trailing={
+              <DownloadsBubble
+                onOpenAll={() =>
+                  navigateSurface({
+                    url: "downloads",
+                    title: "Downloads",
+                    mode: "tab",
+                    open: "page",
+                  })
+                }
+                onOpenFile={(record) =>
+                  navigateSurface({
+                    url: fileUrlFor(record.savePath),
+                    title: record.filename,
+                    mode: "tab",
+                    open: "browser",
+                  })
+                }
+              />
+            }
             onNewChat={() => {
               void desktopApi.dockNewChat();
             }}

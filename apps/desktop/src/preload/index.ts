@@ -626,6 +626,29 @@ const api = {
     invoke("catamorphic:site-settings-list"),
   siteSettingsOpenSystemPrivacy: (input: { kind: string }): Promise<void> =>
     invoke("catamorphic:site-settings-open-system-privacy", input),
+
+  // --- downloads (ADR 0153) ---
+  downloadsList: (): Promise<unknown> => invoke("catamorphic:downloads-list"),
+  downloadsReveal: (input: { id: string }): Promise<void> =>
+    invoke("catamorphic:downloads-reveal", input),
+  downloadsPause: (input: { id: string }): Promise<void> =>
+    invoke("catamorphic:downloads-pause", input),
+  downloadsResume: (input: { id: string }): Promise<void> =>
+    invoke("catamorphic:downloads-resume", input),
+  downloadsCancel: (input: { id: string }): Promise<void> =>
+    invoke("catamorphic:downloads-cancel", input),
+  downloadsRemove: (input: { id: string }): Promise<void> =>
+    invoke("catamorphic:downloads-remove", input),
+  downloadsClear: (): Promise<void> => invoke("catamorphic:downloads-clear"),
+  downloadsOpenFolder: (): Promise<void> =>
+    invoke("catamorphic:downloads-open-folder"),
+  onDownloadsChanged: (listener: (downloads: unknown) => void) => {
+    const handler = (_event: unknown, payload: { downloads: unknown }) =>
+      listener(payload.downloads);
+    ipcRenderer.on("catamorphic:downloads-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:downloads-changed", handler);
+  },
   sitePermissionAnswer: (input: {
     id: string;
     decision: string;
