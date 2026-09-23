@@ -216,6 +216,12 @@ export interface AgentTodo {
   /** Important task detail, collapsed by default in the UI. */
   description: string;
   status: AgentTodoStatus;
+  /**
+   * What the agent is doing while this item is in progress, in the
+   * present continuous ("Reviewing database migrations"). Shown as the
+   * turn's live status.
+   */
+  activeForm?: string;
 }
 
 export interface AgentTodoInput {
@@ -224,6 +230,7 @@ export interface AgentTodoInput {
   title: string;
   description: string;
   status: AgentTodoStatus;
+  activeForm?: string;
 }
 
 export interface AgentMessage {
@@ -421,7 +428,7 @@ Every turn comes with fresh session context beside the person's message: who the
 
 Infer how technical they are from their role, how they write, and what the project holds. For non-technical people, speak in outcomes and plain words: what you made, where to find it, what happens next. Leave out file paths, internal folders such as .catamorphic, Git, commits, branches, deployments, environments, schemas, and the names of tools or skills, unless they ask. For engineers, be precise and keep the technical substance.
 
-Answer what was asked first. Reveal complexity only when it helps the person decide or act. Files you create only to test, check, or run something are yours to clean up; do not mention them.
+Answer what was asked first. Reveal complexity only when it helps the person decide or act. Files you create only to test, check, or run something are yours to clean up; do not mention them. When a tool takes a short description, write one in plain words: the person sees it as what you are doing right now.
 
 ## Build what the work needs
 
@@ -568,6 +575,13 @@ export class AgentSessionsService {
   readonly mailboxes: SessionMailboxesService;
   readonly hostId: string;
   private readonly workerNode?: { id: string; token: string };
+  /**
+   * The line a running turn shows while it works, in the agent's own words:
+   * the latest harness status, step description or in-progress todo. Kept
+   * per session for the life of a turn; generic labels fill in only while
+   * the agent has said nothing.
+   */
+  private readonly liveStatus = new Map<string, string>();
   readonly authorityLeaseMs: number;
   private readonly projectManager: ProjectManager;
   private readonly codingAgents: CodingAgentRegistry;
@@ -1149,7 +1163,14 @@ export class AgentSessionsService {
       const id = requestedId || randomUUID();
       if (usedIds.has(id)) throw new Error(`Duplicate todo id: ${id}`);
       usedIds.add(id);
-      return { id, title, description, status: item.status };
+      const activeForm = liveStatusLine(item.activeForm);
+      return {
+        id,
+        title,
+        description,
+        status: item.status,
+        ...(activeForm ? { activeForm } : {}),
+      };
     });
     await this.db
       .updateTable("agent_sessions")
@@ -1159,6 +1180,18 @@ export class AgentSessionsService {
       })
       .where("id", "=", sessionId)
       .execute();
+    // The in-progress item is the agent's live line, shown at once even when
+    // the next harness event is a long command away.
+    const current = todos.find((item) => item.status === "in_progress");
+    if (current?.activeForm) {
+      this.liveStatus.set(sessionId, current.activeForm);
+      await this.db
+        .updateTable("agent_turns")
+        .set({ activity: current.activeForm, activity_at: sql`now()` })
+        .where("session_id", "=", sessionId)
+        .where("status", "=", "running")
+        .execute();
+    }
     return todos;
   }
 
@@ -3988,8 +4021,7 @@ export class AgentSessionsService {
           event.type === "tool_call" ||
           event.type === "command" ||
           event.type === "file_edit" ||
-          event.type === "subagent" ||
-          event.type === "background";
+          event.type === "subagent";
 
         try {
           const agent = await this.resolveAgent(session.agent_id, projectId);
@@ -4212,6 +4244,7 @@ export class AgentSessionsService {
             throw new Error(
               "Execution ownership was lost. Check the last actions before retrying.",
             );
+          this.liveStatus.delete(sessionId);
           const preparationOwned = await this.turns.progress({
             turnId: extras.turnId,
             leaseToken: extras.leaseToken,
@@ -4272,6 +4305,29 @@ export class AgentSessionsService {
               }
               continue;
             }
+            // A status is the agent's live line, never turn content.
+            const said = liveStatusLine(
+              event.type === "status" ? event.content : event.description,
+            );
+            if (said) this.liveStatus.set(sessionId, said);
+            const activity =
+              this.liveStatus.get(sessionId) ?? activityLabel(event);
+            if (event.type === "status") {
+              const owned = await this.turns.progress({
+                turnId: extras.turnId,
+                leaseToken: extras.leaseToken,
+                phase: blockingQuestions.size > 0 ? "waiting" : "working",
+                activity:
+                  blockingQuestions.size > 0
+                    ? "Waiting for your answer"
+                    : activity,
+              });
+              if (!owned)
+                throw new Error(
+                  "Execution ownership was lost. Check the last actions before retrying.",
+                );
+              continue;
+            }
             if (continuesTurn(event)) await flushHeldText();
             if (event.type === "error" && !event.errorKind && event.content) {
               event.errorKind = connectionFailureKind(event.content);
@@ -4289,7 +4345,9 @@ export class AgentSessionsService {
                 activity:
                   blockingQuestions.size > 0
                     ? "Waiting for your answer"
-                    : activityLabel(event),
+                    : event.type === "question" || event.type === "error"
+                      ? activityLabel(event)
+                      : activity,
               });
               if (!owned)
                 throw new Error(
@@ -4306,7 +4364,7 @@ export class AgentSessionsService {
                 trx
                   .updateTable("agent_messages")
                   .set({
-                    content: activityLabel(event),
+                    content: activity,
                     metadata: progressMetadata(segmentEvents),
                   })
                   .where("id", "=", assistantMessageId)
@@ -4329,6 +4387,7 @@ export class AgentSessionsService {
           }
           // A bookkeeping failure after completion must not replay agent actions.
           providerFinished = true;
+          this.liveStatus.delete(sessionId);
           const savingOwned = await this.turns.progress({
             turnId: extras.turnId,
             leaseToken: extras.leaseToken,
@@ -6507,6 +6566,17 @@ function progressMetadata(events: AgentEvent[]): JsonObject {
  * (ADR 0057) — stamped on the settled message as `metadata.usage`, never
  * rendered as activity rows — so they are filtered out here.
  */
+/** One calm line from an agent-written status: no newlines, no trailing period, bounded. */
+export function liveStatusLine(value: string | undefined): string | undefined {
+  const line = value
+    ?.replace(/[*_`#]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[.:]+$/, "");
+  if (!line) return undefined;
+  return line.length > 80 ? `${line.slice(0, 79).trimEnd()}…` : line;
+}
+
 function stepLogEvents(events: AgentEvent[]): JsonObject[] {
   const steps: AgentEvent[] = [];
   const invocations = new Map<string, number>();
@@ -6549,12 +6619,6 @@ export function activityLabel(event: AgentEvent): string {
     return event.content
       ? `Delegating: ${event.content}`
       : "Delegating to a subagent...";
-  }
-  if (event.type === "background") {
-    if (event.status === "ended") return "Stopped a background process...";
-    return event.content
-      ? `Running in background: ${event.content}`
-      : "Started a background process...";
   }
   if (event.type === "question") return "Waiting for your answer...";
   if (event.type === "title") return "Thinking...";
@@ -6858,6 +6922,9 @@ function agentTodos(value: unknown): AgentTodo[] {
         title: item.title,
         description: item.description,
         status: item.status,
+        ...(typeof item.activeForm === "string" && item.activeForm
+          ? { activeForm: item.activeForm }
+          : {}),
       },
     ];
   });

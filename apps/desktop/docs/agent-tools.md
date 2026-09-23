@@ -1,9 +1,11 @@
 # Agent tool surface
 
 Accepted in ADR 0133, following the September 2026 audit of desktop tools and
-review apps. The default desktop projection has six fixed host registrations:
+review apps. The default desktop projection has nine fixed host registrations:
 `discover_capabilities`, `invoke_capability`, `workspace_overview`, `read_tab`,
-`open_surface`, and `update_todo_list`. Harness-native execution and question adapters are
+`open_surface`, `update_todo_list`, and the three background-command tools
+(`run_background_command`, `read_background_output`, `stop_background_command`,
+ADR 0153). Harness-native execution and question adapters are
 additional. Previously up to 57 fixed host registrations were offered, before
 connectors, workflow tools, native tools and duplicate gateway mounts.
 
@@ -46,7 +48,8 @@ Availability also depends on identity, services, agent mode and topology.
 | `point_at`, `set_chat_icon` | Deferred, optional presentation; `target: null` clears highlighting |
 | `desktop_settings` | Deferred, the owning profile's settings files, scopes and validation errors for the configuration skill |
 | `open_browser`, `browser_snapshot`, `browser_act`, `surface_control` | Deferred, signed-in browser and user takeover |
-| `run_terminal`, `read_terminal`, `write_terminal` | Deferred, visible persistent host PTYs; ordinary commands use native execution |
+| `run_background_command`, `read_background_output`, `stop_background_command` | Eager, long-running processes in their own agent terminals; they outlive the turn and wake the chat when they finish (ADR 0153). Foreground commands use each harness's native shell |
+| `write_terminal` | Deferred, raw input to a terminal (prompts, REPLs, Ctrl+C, the person's own terminal on request) |
 | `build_app` | Deferred, host preview by default; `publish: true` explicitly publishes |
 | `sync_project`, `create_pull_request` | Deferred, managed checkout and linked-remote semantics |
 | `request_connection`, `read_skill` | Deferred connection consent and one skill fallback for inaccessible files |
@@ -101,4 +104,13 @@ it, but a real Claude Code run asked "What is this thing?" over a web page and
 reached for a personal Chrome MCP (a different browser) because `read_tab` sat
 behind discovery. Reading what the person sees is the most common workspace
 question, so `read_tab` is eager. Its schema is one string parameter.
+
+## Background commands join the eager surface (ADR 0153)
+
+Before them, a long build or dev server either held a turn open or died with
+Claude Code's per-turn process, Codex could only guess at daemonized commands,
+and nothing told an agent when work finished. Every harness now starts such
+work with `run_background_command` and is woken by a system message when it
+ends or prints a watched line. The three schemas cost about 1.3 KB; the eager
+budget is 7 KB.
 

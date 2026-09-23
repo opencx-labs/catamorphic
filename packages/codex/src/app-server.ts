@@ -508,6 +508,8 @@ export class CodexAppServer {
           config: {
             "sandbox_workspace_write.network_access":
               options.networkAccessEnabled ?? true,
+            // Summaries carry the headings the host shows as live status.
+            model_reasoning_summary: "auto",
           },
         },
       );

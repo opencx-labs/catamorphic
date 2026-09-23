@@ -3,6 +3,7 @@ import { SEED_SKILLS } from "../seeds.js";
 import {
   activityLabel,
   buildAgentSystemPrompt,
+  liveStatusLine,
   modelVisibleDelivery,
   parsePorcelain,
 } from "../services/agent-sessions-service.js";
@@ -24,6 +25,20 @@ describe("modelVisibleDelivery", () => {
     ).toBe(
       "[Catamorphic watcher message from watcher-1, run run-1. This message was not written by the user.]\n\nChecks failed",
     );
+  });
+});
+
+describe("liveStatusLine", () => {
+  it("turns an agent's own words into one calm line", () => {
+    expect(liveStatusLine("**Reviewing database migrations**")).toBe(
+      "Reviewing database migrations",
+    );
+    expect(liveStatusLine("Run the test suite.\nThen fix it")).toBe(
+      "Run the test suite. Then fix it",
+    );
+    expect(liveStatusLine("   ")).toBeUndefined();
+    expect(liveStatusLine(undefined)).toBeUndefined();
+    expect(liveStatusLine("x".repeat(200))?.length).toBe(80);
   });
 });
 

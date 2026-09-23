@@ -65,6 +65,7 @@ import {
 } from "../lib/slash-commands";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { classifyPastedText, selectionName, textPill } from "../lib/text-pills";
+import { useBackgroundCommands } from "../lib/use-background-commands";
 import { useWorkDisplay } from "../lib/use-work-display.js";
 import type { ChatMode } from "../lib/workspace-types.js";
 import { AgentQuestionPanel } from "./agent-question-panel";
@@ -254,7 +255,6 @@ interface TurnEvent {
   status?: string;
   subagentId?: string;
   subagentType?: string;
-  backgroundId?: string;
   toolName?: string;
   toolInput?: unknown;
   toolResult?: unknown;
@@ -279,9 +279,8 @@ const activityLine = (event: TurnEvent): string => {
 /**
  * Chips derived from the chat's own turn events (not workspace tabs):
  * subagents from the latest turn that delegated work — spinning while the
- * turn runs, inspectable after — and background watchers (processes the
- * agent started in the background or demonstrably left running), which
- * persist across turns until an event ends them.
+ * turn runs, inspectable after. Background commands are terminals, and
+ * their chips come with the workspace's terminal surfaces.
  */
 function activityChips(
   messages: Array<{ role: string; metadata?: unknown }>,
@@ -291,7 +290,6 @@ function activityChips(
   let lastSubagentEvents: TurnEvent[] | undefined;
   let currentTurnEvents: TurnEvent[] = [];
   let currentTurnHasSubagents = false;
-  const watchers = new Map<string, { label: string; ended: boolean }>();
   // Apps the agent worked on (file edits under .catamorphic/apps/<name>/); active while
   // the CURRENT turn touches them.
   const apps = new Map<string, { active: boolean }>();
@@ -341,17 +339,6 @@ function activityChips(
               ? event.toolResult
               : existing?.toolResult,
         });
-        continue;
-      }
-      if (event.type !== "background" || !event.backgroundId) continue;
-      if (event.status === "ended") {
-        const watcher = watchers.get(event.backgroundId);
-        if (watcher) watcher.ended = true;
-      } else {
-        watchers.set(event.backgroundId, {
-          label: firstLine(event.content) || "background process",
-          ended: false,
-        });
       }
     }
   }
@@ -393,18 +380,6 @@ function activityChips(
             : ["No visible activity yet."],
       });
     }
-  }
-  for (const [id, watcher] of watchers) {
-    if (watcher.ended) continue;
-    chips.push({
-      key: `watcher:${id}`,
-      kind: "watcher",
-      label: watcher.label,
-      info: [
-        watcher.label,
-        "Running in the background — read the terminals, or ask the agent to stop it.",
-      ],
-    });
   }
   for (const [name, app] of apps) {
     chips.push({
@@ -608,6 +583,7 @@ function ChatDockContent({
   }, [chat.isSending]);
   const [checkout, setCheckout] = useState<SessionCheckoutInfo | null>(null);
   const activeSessionId = chat.sessionId ?? entry.sessionId;
+  const backgroundCommands = useBackgroundCommands(activeSessionId);
   const [moveState, setMoveState] = useState<{
     canMove: boolean;
     reason: string | null;
@@ -2479,6 +2455,7 @@ function ChatDockContent({
           >
             <ChatTimeline
               focusMessageId={entry.focusMessageId}
+              backgroundCommands={backgroundCommands}
               className={lurking ? "hidden" : "min-h-0 flex-1"}
               contentClassName={isTab ? "mx-auto w-full max-w-4xl pt-12" : ""}
               messages={messages}

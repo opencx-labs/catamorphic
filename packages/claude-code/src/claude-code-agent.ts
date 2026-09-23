@@ -83,26 +83,19 @@ export interface ClaudeCodeAgentOpts {
    * them like any other MCP server.
    */
   extraTools?: ExtraTool[];
-  /**
-   * Swap the built-in shell-execution tools (Bash, and its siblings
-   * PowerShell) for the host's terminal tools. Claude Code's
-   * own shell runs inside the CLI process where the host can't see or
-   * manage it; hosts that provide terminal tools via {@link extraTools}
-   * disable the built-ins so every command runs through terminals the
-   * host fully intercepts (and the user can watch and take over).
-   *
-   * Per-turn, not absolute: on turns where the workspace server is not
-   * mounted (sessions resurrected after a host restart run without host
-   * context), the built-in shell tools come back — an agent must never
-   * be left with no way to run commands at all. Background-task
-   * follow/stop tools (TaskOutput/TaskStop) stay available either way —
-   * with Bash disabled they still manage background subagents.
-   */
-  disableBash?: boolean;
   /** Use host session watchers instead of private native Monitor tasks. */
   disableNativeMonitors?: boolean;
   hostOwnsTodos?: boolean;
   hostOwnsSubagents?: boolean;
+  /**
+   * The host runs background commands (its own tools keep them alive
+   * across turns and wake the session when they finish). Claude Code's
+   * native backgrounding lives inside the per-turn CLI process, which a
+   * long-running command would either keep "working" or be killed with,
+   * so it is switched off and its follow/stop tools removed. Inferred when
+   * the extra tools include `run_background_command`.
+   */
+  hostOwnsBackground?: boolean;
   /**
    * External MCP servers for this agent (the host's resolved connection
    * set). Passed to the CLI as native `mcpServers` config and allowlisted
@@ -166,6 +159,14 @@ export interface ClaudeCodeAgentOpts {
   memory?: boolean;
 }
 
+/** Claude Code's own background-task follow/stop tools, both generations. */
+const NATIVE_BACKGROUND_TOOLS = [
+  "TaskOutput",
+  "TaskStop",
+  "BashOutput",
+  "KillShell",
+];
+
 /**
  * Tools the harness lets Claude Code use without prompting. Everything else
  * is routed through {@link denyUnlistedTools} and rejected — the desktop
@@ -194,25 +195,16 @@ const ALLOWED_TOOLS = [
   "Agent",
   // Background-task management: follow output / stop. Newer CLIs use
   // TaskOutput/TaskStop; BashOutput/KillShell are the legacy names.
-  "TaskOutput",
-  "TaskStop",
-  "BashOutput",
-  "KillShell",
+  // Removed when the host owns background commands.
+  ...NATIVE_BACKGROUND_TOOLS,
   // AskUserQuestion is deliberately NOT listed: its permission check must
   // reach canUseTool, where the harness parks the call and surfaces the
   // questions to the user (see buildOptions). Allowlisting it would let
   // the tool run with no answers at all.
 ];
 
-/**
- * Tools that execute commands inside the CLI process, invisible to the
- * host. When the host mounts its own terminal tools ({@link
- * ClaudeCodeAgentOpts.disableBash}), these are removed from the model's
- * context entirely (`disallowedTools`, not just a call-time deny) so the
- * model reaches for the workspace terminals instead of a tool it can see
- * but never use.
- */
-const SHELL_EXECUTION_TOOLS = new Set(["Bash", "PowerShell"]);
+/** Shell tools, removed in read-only (plan) mode. */
+const SHELL_EXECUTION_TOOLS = ["Bash", "PowerShell"];
 
 /** The shared host list replaces Claude Code's private plan when mounted. */
 const NATIVE_TODO_TOOL = "TodoWrite";
@@ -223,24 +215,13 @@ const FILE_EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 /** Both generations of the subagent tool's name. */
 const SUBAGENT_TOOLS = new Set(["Task", "Agent"]);
 
-/** Both generations of the stop-background-task tool's name. */
-const TASK_STOP_TOOLS = ["TaskStop", "KillShell"];
-
 /**
  * Permission fallback for tools outside {@link ALLOWED_TOOLS}: deny with a
  * reason the model can read, instead of hanging on a prompt nobody will see.
- * Shell-execution tools get a redirect, not a dead end — a model that
- * reaches for Bash (an old transcript, a subagent) should land on the
- * workspace terminals, not conclude it cannot run commands.
  */
-const denyUnlistedTools: CanUseTool = async (toolName) => ({
+const denyUnlistedTools: CanUseTool = async () => ({
   behavior: "deny",
-  message: SHELL_EXECUTION_TOOLS.has(toolName)
-    ? "Built-in shell tools are disabled here. Run commands with the " +
-      "workspace terminal tools instead: run_terminal executes a command " +
-      "in a visible terminal tab (read_terminal follows it, write_terminal " +
-      "answers prompts)."
-    : "This tool is not available in the Catamorphic desktop harness.",
+  message: "This tool is not available in the Catamorphic desktop harness.",
 });
 
 interface SessionState {
@@ -810,12 +791,10 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
           })
         : undefined;
 
-    // Shell interception is per-turn: only swap the built-in shell tools
-    // out when the workspace terminals are actually mounted to replace
-    // them. A session resurrected without host context keeps Bash — an
-    // agent with no way to run commands at all is broken, not safe.
-    const shellToolsDisabled =
-      Boolean(this.opts.disableBash) && workspaceServer !== undefined;
+    const hostOwnsBackground =
+      this.opts.hostOwnsBackground ||
+      (workspaceServer !== undefined &&
+        extraTools.some((tool) => tool.name === "run_background_command"));
     const hostOwnsTodos =
       this.opts.hostOwnsTodos ||
       (workspaceServer !== undefined &&
@@ -826,7 +805,8 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         extraTools.some((tool) => tool.name === "spawn_subsession"));
     const readOnly = this.opts.permissionMode === "plan";
     const disallowedTools = [
-      ...(shellToolsDisabled || readOnly ? SHELL_EXECUTION_TOOLS : []),
+      ...(readOnly ? SHELL_EXECUTION_TOOLS : []),
+      ...(hostOwnsBackground ? NATIVE_BACKGROUND_TOOLS : []),
       ...(readOnly ? FILE_EDIT_TOOLS : []),
       ...(this.opts.disableNativeMonitors || readOnly ? ["Monitor"] : []),
       ...(hostOwnsTodos ? [NATIVE_TODO_TOOL] : []),
@@ -859,6 +839,9 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         ...process.env,
         ...(this.opts.memory === false
           ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" }
+          : {}),
+        ...(hostOwnsBackground
+          ? { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" }
           : {}),
         ...this.opts.env,
       },
@@ -939,7 +922,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         return denyUnlistedTools(toolName, input, options);
       },
       hooks: {
-        ...backgroundTaskHooks((event) => live.hookEvents.push(event)),
+        ...mcpResultHooks((event) => live.hookEvents.push(event)),
         ...turnContextHooks(live),
       },
       // Recognize everything real Claude Code recognizes: the repo's
@@ -977,43 +960,13 @@ function mapMcpServers(
 }
 
 /**
- * Background-process interception. The CLI's own background machinery is
- * kept — Bash `run_in_background` and TaskOutput/TaskStop behave exactly
- * as they do in stock Claude Code — but PostToolUse hooks watch the
- * structured tool responses so the host learns the moment a background
- * task starts (the response's `backgroundTaskId`) or is stopped.
+ * External MCP tool results: the assistant block only carries the CALL;
+ * the result payload (what an MCP Apps view renders) arrives in a
+ * PostToolUse hook.
  */
-function backgroundTaskHooks(
+function mcpResultHooks(
   emit: (event: AgentEvent) => void,
-): Options["hooks"] {
-  const onBashDone: HookCallback = async (input) => {
-    const data = input as {
-      tool_input?: { command?: string; run_in_background?: boolean };
-      tool_response?: { backgroundTaskId?: string; timedOutAfterMs?: number };
-    };
-    const backgroundId = data.tool_response?.backgroundTaskId;
-    if (backgroundId) {
-      emit({
-        type: "background",
-        status: "started",
-        backgroundId,
-        content: data.tool_input?.command ?? "",
-      });
-    }
-    return {};
-  };
-  const onTaskStop: HookCallback = async (input) => {
-    const data = input as {
-      tool_input?: { task_id?: string; shell_id?: string };
-    };
-    const backgroundId = data.tool_input?.task_id ?? data.tool_input?.shell_id;
-    if (backgroundId) {
-      emit({ type: "background", status: "ended", backgroundId });
-    }
-    return {};
-  };
-  // External MCP tool results: the assistant block only carries the CALL;
-  // the result payload (what an MCP Apps view renders) arrives here.
+): NonNullable<Options["hooks"]> {
   const onMcpToolDone: HookCallback = async (input) => {
     const data = input as {
       tool_name?: string;
@@ -1032,13 +985,7 @@ function backgroundTaskHooks(
     });
     return {};
   };
-  return {
-    PostToolUse: [
-      { matcher: "Bash", hooks: [onBashDone] },
-      { matcher: TASK_STOP_TOOLS.join("|"), hooks: [onTaskStop] },
-      { matcher: "^mcp__", hooks: [onMcpToolDone] },
-    ],
-  };
+  return { PostToolUse: [{ matcher: "^mcp__", hooks: [onMcpToolDone] }] };
 }
 
 /**
@@ -1395,7 +1342,13 @@ function mapContentBlock(block: ContentBlockLike): AgentEvent | null {
       // would be noise — matching the ai-sdk harness's ask_user.
       if (name === "AskUserQuestion") return null;
       if (name === "Bash") {
-        return { type: "command", content: String(input.command ?? "") };
+        return {
+          type: "command",
+          content: String(input.command ?? ""),
+          ...(typeof input.description === "string" && input.description
+            ? { description: input.description }
+            : {}),
+        };
       }
       if (FILE_EDIT_TOOLS.has(name)) {
         const filePath = input.file_path ?? input.notebook_path;
@@ -1417,7 +1370,14 @@ function mapContentBlock(block: ContentBlockLike): AgentEvent | null {
           ...(block.id ? { toolUseId: block.id } : {}),
         };
       }
-      return { type: "tool_call", toolName: name, toolInput: input };
+      return {
+        type: "tool_call",
+        toolName: name,
+        toolInput: input,
+        ...(typeof input.description === "string" && input.description
+          ? { description: input.description }
+          : {}),
+      };
     }
     default:
       return null;

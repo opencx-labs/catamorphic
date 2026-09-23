@@ -96,3 +96,13 @@ export function renderTurnContext(
     })
     .join("\n\n");
 }
+
+/**
+ * The heading of a reasoning summary ("**Reviewing database migrations**"):
+ * the agent's own words for what it is doing, which hosts show as its live
+ * status. Only an explicit bold heading counts; raw reasoning never does.
+ */
+export function reasoningHeading(text: string): string | undefined {
+  const heading = text.match(/\*\*([^*\n]+)\*\*/)?.[1]?.trim();
+  return heading || undefined;
+}

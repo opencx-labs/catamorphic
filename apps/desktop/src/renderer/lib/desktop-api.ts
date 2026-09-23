@@ -4,6 +4,7 @@ import type { ResourcePreview } from "@catamorphic/react";
 import type { ImportableBrowser } from "../../main/browser-import/types.js";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
 import type { AppPrefs } from "../../shared/app-prefs.js";
+import type { BackgroundCommandView } from "../../shared/background-commands.js";
 import type {
   BookmarkMove,
   BookmarkPlacement,
@@ -1163,6 +1164,10 @@ export interface CatamorphicDesktopApi {
   terminalRestoreBuffer: (
     sessionId: string,
   ) => Promise<{ buffer: string } | null>;
+  backgroundCommands: () => Promise<BackgroundCommandView[]>;
+  onBackgroundCommands: (
+    listener: (commands: BackgroundCommandView[]) => void,
+  ) => () => void;
   onTerminalBusy: (
     listener: (payload: { sessionId: string; busy: boolean }) => void,
   ) => () => void;

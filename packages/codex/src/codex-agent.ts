@@ -23,6 +23,7 @@ import {
   listenAgentCapabilityGateway,
   mergePolicyLayers,
   positiveTokenCount,
+  reasoningHeading,
   renderUserMessage,
   resolveMcpServers,
   resolveToolPermissionAcross,
@@ -362,11 +363,6 @@ export class CodexAgent implements CodingAgentProvider {
       return;
     }
 
-    // Codex gives the model no background-process tools, so watchers are
-    // detected instead of intercepted: commands that daemonize something
-    // (trailing "&", nohup, docker -d, …) and commands still running when
-    // the turn ends both surface as "background" events.
-    const runningCommands = new Map<string, string>();
     let terminal = false;
     let streamError: string | undefined;
     try {
@@ -386,29 +382,6 @@ export class CodexAgent implements CodingAgentProvider {
         if (event.type === "thread.started" && !session.providerSessionId) {
           this.turnAbortControllers.set(event.thread_id, abortController);
           yield { type: "session", providerSessionId: event.thread_id };
-        }
-        if (event.type === "item.started" || event.type === "item.updated") {
-          const item = event.item;
-          if (
-            item.type === "command_execution" &&
-            item.status === "in_progress"
-          ) {
-            runningCommands.set(item.id, item.command);
-          }
-        }
-        if (event.type === "item.completed") {
-          runningCommands.delete(event.item.id);
-        }
-        if (event.type === "turn.completed" || event.type === "turn.failed") {
-          for (const [id, command] of runningCommands) {
-            yield {
-              type: "background",
-              status: "detected",
-              backgroundId: `codex-exec-${id}`,
-              content: command,
-            };
-          }
-          runningCommands.clear();
         }
         yield* mapEvent(event, opts?.model ?? this.opts.model);
       }
@@ -550,31 +523,6 @@ export function codexToolFilter(
   return { enabled_tools: sorted.filter((tool) => resolve(tool) === "allow") };
 }
 
-/**
- * Commands that hand a process off to the background: shell job control
- * (trailing "&"), the classic detachers, and the daemon flags of the
- * common dev servers. Conservative on purpose — a false "watcher" chip is
- * noise the user has to dismiss.
- */
-const DAEMONIZING_COMMAND = new RegExp(
-  [
-    String.raw`(?:^|[;&|]\s*)nohup\s`,
-    String.raw`(?:^|[;&|]\s*)setsid\s`,
-    String.raw`&\s*$`,
-    String.raw`\bdocker\s+(?:container\s+)?run\b[^;|&]*\s(?:-d|--detach)\b`,
-    String.raw`\bdocker\s+compose\b[^;|&]*\bup\b[^;|&]*\s(?:-d|--detach)\b`,
-    String.raw`\bdocker-compose\b[^;|&]*\bup\b[^;|&]*\s(?:-d|--detach)\b`,
-    String.raw`\bpm2\s+start\b`,
-    String.raw`\btmux\s+new(?:-session)?\s[^;|&]*-d\b`,
-    String.raw`\bscreen\s+-dm\b`,
-  ].join("|"),
-);
-
-/** Whether a completed command likely left a process running behind it. */
-export function isDaemonizingCommand(command: string): boolean {
-  return DAEMONIZING_COMMAND.test(command.trim());
-}
-
 function mergedEnv(overrides: Record<string, string>): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -639,6 +587,7 @@ function mapEvent(event: ThreadEvent, model?: string): AgentEvent[] {
             toolInput: event.item.arguments,
             content: event.item.tool,
             status: "started",
+            ...describedBy(event.item.arguments),
           },
         ];
       return [];
@@ -664,8 +613,8 @@ function mapEvent(event: ThreadEvent, model?: string): AgentEvent[] {
 
 function mapItemEvent(item: ThreadItem): AgentEvent[] {
   switch (item.type) {
-    case "command_execution": {
-      const events: AgentEvent[] = [
+    case "command_execution":
+      return [
         {
           type: "command",
           content: `${item.command}\n${item.aggregated_output}`,
@@ -673,17 +622,12 @@ function mapItemEvent(item: ThreadItem): AgentEvent[] {
           status: "ended",
         },
       ];
-      // A command that succeeded by daemonizing something left a process
-      // running that Codex can no longer see or manage — flag it.
-      if (item.exit_code === 0 && isDaemonizingCommand(item.command)) {
-        events.push({
-          type: "background",
-          status: "detected",
-          backgroundId: `codex-daemon-${item.id}`,
-          content: item.command,
-        });
-      }
-      return events;
+    case "reasoning": {
+      // Codex's reasoning summaries open with a bold heading ("**Reviewing
+      // database migrations**"): the agent's own words for what it is
+      // doing, which is exactly the live status line.
+      const heading = reasoningHeading(item.text);
+      return heading ? [{ type: "status", content: heading }] : [];
     }
     case "file_change":
       // One event per changed file so host-execution change tracking (which
@@ -770,4 +714,13 @@ async function stageTurnInput(text: string, attachments?: AgentAttachment[]) {
     await cleanup();
     throw error;
   }
+}
+
+/** A tool call's own `description` argument, when the agent wrote one. */
+function describedBy(args: unknown): { description?: string } {
+  const description =
+    typeof args === "object" && args !== null && "description" in args
+      ? (args as { description?: unknown }).description
+      : undefined;
+  return typeof description === "string" && description ? { description } : {};
 }

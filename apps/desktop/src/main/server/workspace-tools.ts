@@ -152,6 +152,7 @@ export interface TodoListBridge {
       title: string;
       description: string;
       status: AgentTodoStatus;
+      activeForm?: string;
     }>,
   ): Promise<AgentTodoItem[]>;
 }
@@ -248,8 +249,10 @@ export const WORKSPACE_TOOL_POLICY: Readonly<
   open_browser: presentation,
   browser_snapshot: read,
   browser_act: write,
-  run_terminal: write,
-  read_terminal: read,
+  // Long-running work is a core execution need for every harness (ADR 0153).
+  run_background_command: { ...write, eager: true },
+  read_background_output: { ...read, eager: true },
+  stop_background_command: { ...write, eager: true },
   write_terminal: write,
   sync_project: write,
   create_pull_request: write,
@@ -472,19 +475,11 @@ export function buildWorkspaceToolkit(
     {
       name: "update_todo_list",
       description:
-        "Replace this chat's complete todo list so the user can track progress. Use it for multi-step work, update it as steps progress, and clear it with an empty items array when no list is useful. Every item needs a short action title, a detailed description with important task specifics, and a status. Echo an existing item's id when editing, completing, reordering, or retaining it; omit id only for a new item. Omitting an existing item removes it.",
+        "Replace this chat's complete todo list so the user can track progress. Use it for multi-step work, update it as steps progress, and clear it with an empty items array when no list is useful. Every item needs a short action title, a detailed description with important task specifics, and a status. Echo an existing item's id when editing, completing, reordering, or retaining it; omit id only for a new item. Omitting an existing item removes it. Give the in-progress item an activeForm; the person sees it as what you are doing.",
       parameters: {
-        items: z
-          .array(
-            z.object({
-              id: z.string().uuid().optional(),
-              title: z.string().min(1).max(200),
-              description: z.string().min(1).max(4_000),
-              status: z.enum(["pending", "in_progress", "completed"]),
-            }),
-          )
-          .max(50)
-          .describe("The complete desired todo list, in display order"),
+        items: todoInputSchema.describe(
+          "The complete desired todo list, in display order",
+        ),
       },
       execute: async (input, ctx) => {
         if (!ctx.sessionId) throw new Error("This turn has no chat session.");
@@ -839,88 +834,92 @@ export function buildWorkspaceToolkit(
         ),
     },
     {
-      name: "run_terminal",
+      name: "run_background_command",
       description:
-        "Run a shell command in a real terminal in the user's workspace (project directory, user's login shell). By default a NEW terminal opens in the background: it appears as a chip on your chat, not as a tab — the user's view doesn't move. Show it to them with open_surface (the returned key) when the output is worth their attention. Pass terminalId to reuse a terminal (a terminal you opened earlier, or any terminal from workspace_overview; running in the user's own terminal marks it agent-controlled until you release it). Prefer reusing one terminal for routine sequential commands — shell state (cwd, env vars) persists there. Multi-line commands are safe (sent as one block). Waits for the command to finish (default 2 minutes; set timeoutMs up to 600000 for longer builds) and returns its output plus exitCode (0 = success) when available. Commands that outlast the wait return commandRunning: true — follow them with read_terminal (waitForIdleMs + sinceOffset with the returned offset), don't re-run them. Close scaffolding terminals with surface_control.",
+        "Start a long-running command (a dev server, a watcher, a slow build or test run, anything you would otherwise wait on) in its own background terminal and keep working. It keeps running after this turn, shows as a chip on your chat the person can open to watch, and wakes this chat with a message when it finishes, so never poll with sleep. Use your own shell for quick commands. Returns the command's id, its status, and its first output (a quick failure shows up here). Set wake_on_output to also be woken when a line matches, e.g. 'ready on|listening|error'.",
       parameters: {
         command: z.string().describe("The shell command to run"),
-        terminalId: z
+        description: z
+          .string()
+          .describe(
+            "What it does in 3-8 plain words, e.g. 'Start the dev server'. Shown to the person.",
+          ),
+        wake_on_exit: z
+          .boolean()
+          .optional()
+          .describe("Wake this chat when it finishes (default true)"),
+        wake_on_output: z
           .string()
           .optional()
           .describe(
-            "Existing terminal to run in (from workspace_overview or a previous run_terminal); omit for a new terminal",
-          ),
-        timeoutMs: z
-          .number()
-          .int()
-          .positive()
-          .optional()
-          .describe(
-            "How long to wait for the command to finish, in ms (default 120000, max 600000)",
+            "A regular expression; wake this chat when an output line matches (at most every 15 seconds)",
           ),
       },
-      execute: (input, ctx) =>
-        bridge.runTerminal(
-          ctx.projectId,
-          ctx.sessionId ?? "",
-          String(input.command),
-          typeof input.terminalId === "string" && input.terminalId
-            ? input.terminalId
-            : undefined,
-          typeof input.timeoutMs === "number" ? input.timeoutMs : undefined,
-          ctx.workingDirectory,
-        ),
+      execute: (input, ctx) => {
+        if (!ctx.sessionId) throw new Error("Background commands need a chat.");
+        return bridge.startBackgroundCommand({
+          projectId: ctx.projectId,
+          sessionId: ctx.sessionId,
+          command: String(input.command),
+          description: String(input.description ?? ""),
+          ...(ctx.workingDirectory
+            ? { workingDirectory: ctx.workingDirectory }
+            : {}),
+          ...(typeof input.wake_on_exit === "boolean"
+            ? { wakeOnExit: input.wake_on_exit }
+            : {}),
+          ...(typeof input.wake_on_output === "string" && input.wake_on_output
+            ? { wakeOnOutput: input.wake_on_output }
+            : {}),
+        });
+      },
     },
     {
-      name: "read_terminal",
+      name: "read_background_output",
       description:
-        "Read a terminal's output, whether its shell is alive (running), and whether a command is executing right now (busy). Works on any terminal from workspace_overview. To follow a long-running command, pass waitForIdleMs (blocks until the command finishes or the deadline, up to 600000) and sinceOffset (the offset a previous run_terminal/read_terminal returned) to get only the new output — that's one call, not a poll loop. lastExitCode is the most recently finished command's exit code when known.",
+        "Read a background command's output since your last read, with its status (running, finished, stopped) and exit code. Pass wait_seconds to block until it prints something new or finishes, when you have nothing else to do meanwhile.",
       parameters: {
-        terminalId: z.string().describe("Terminal id from run_terminal"),
-        sinceOffset: z
+        id: z.string().describe("The id run_background_command returned"),
+        wait_seconds: z
           .number()
           .int()
-          .nonnegative()
+          .min(0)
+          .max(600)
           .optional()
-          .describe(
-            "Return only output after this buffer offset (from a previous call's `offset`)",
-          ),
-        waitForIdleMs: z
-          .number()
-          .int()
-          .positive()
-          .optional()
-          .describe(
-            "Block until the foreground command finishes, up to this many ms",
-          ),
+          .describe("Block up to this long for new output or the end"),
       },
-      execute: async (input, ctx) => {
-        const state = await bridge.readTerminal(
-          ctx.projectId,
-          String(input.terminalId),
-          {
-            ...(typeof input.sinceOffset === "number"
-              ? { sinceOffset: input.sinceOffset }
-              : {}),
-            ...(typeof input.waitForIdleMs === "number"
-              ? { waitForIdleMs: input.waitForIdleMs }
-              : {}),
-          },
-        );
-        if (!state) {
-          throw new Error(
-            "No such terminal (closed?). Check workspace_overview.",
-          );
-        }
-        return state;
+      execute: (input, ctx) =>
+        bridge.readBackgroundCommand({
+          sessionId: ctx.sessionId ?? "",
+          id: String(input.id),
+          ...(typeof input.wait_seconds === "number"
+            ? { waitMs: input.wait_seconds * 1000 }
+            : {}),
+        }),
+    },
+    {
+      name: "stop_background_command",
+      description:
+        "Stop a background command (Ctrl+C, then close its terminal) and return its last output.",
+      parameters: {
+        id: z.string().describe("The id run_background_command returned"),
       },
+      execute: (input, ctx) =>
+        bridge.stopBackgroundCommand({
+          sessionId: ctx.sessionId ?? "",
+          id: String(input.id),
+        }),
     },
     {
       name: "write_terminal",
       description:
         "Send raw input to a terminal you control: answer a prompt, drive an interactive command (REPLs, installers), or send control sequences. End a line with \\r to press Enter; '\\u0003' sends Ctrl+C to stop the foreground process. Targeting the user's own terminal takes it over first (they see the handoff). Fails if the user has taken the terminal over.",
       parameters: {
-        terminalId: z.string().describe("Terminal id from run_terminal"),
+        terminalId: z
+          .string()
+          .describe(
+            "A terminal id: a background command's id, or one from workspace_overview",
+          ),
         data: z
           .string()
           .describe("Raw input, e.g. 'y\\r' or '\\u0003' for Ctrl+C"),
@@ -1116,6 +1115,13 @@ const todoInputSchema = z
       title: z.string().min(1).max(200),
       description: z.string().min(1).max(4_000),
       status: z.enum(["pending", "in_progress", "completed"]),
+      activeForm: z
+        .string()
+        .max(80)
+        .optional()
+        .describe(
+          "Present continuous, shown to the person while this is in progress, e.g. 'Reviewing database migrations'",
+        ),
     }),
   )
   .max(50);

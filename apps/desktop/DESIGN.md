@@ -1008,3 +1008,18 @@ files, Git and internals out of answers for non-technical people; load the
 workflow or app skills only when the work needs them. Building an automation
 now reads as "every weekday at 9, a reminder lands in this chat; late if this
 Mac is off", not as a watcher id.
+
+### 2026-09-23: Long work runs beside the chat, and the agent says what it is doing
+
+A dev server or a slow build used to hold the chat on "Working" or vanish
+when the turn ended. Now an agent starts it with a background command (ADR
+0153): it runs in its own terminal, a chip the person can open, and the chat
+moves on. Its step stays in view and pulses, "Running in background", until
+the process ends; then it reads "Ran command in background" and folds in with
+the other steps, and one quiet line in the chat says it finished while the
+agent picks the result up. Quick commands stay on each agent's own shell.
+
+The line under a working chat says what the agent is doing in its own words:
+a command's description, the in-progress todo, or the heading of its
+reasoning summary. "Working..." is only what it says before it has said
+anything.

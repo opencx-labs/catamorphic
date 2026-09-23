@@ -601,11 +601,15 @@ describe("AiSdkCodingAgent", () => {
     });
   });
 
-  it("runs bash with the project working directory and timeout", async () => {
+  it("runs bash in the project folder with the requested timeout", async () => {
     const provider = createProvider();
     const model = new MockLanguageModelV4({
       doStream: [
-        toolCallStream("bash", { command: "bun test", timeoutMs: 2_500 }),
+        toolCallStream("bash", {
+          command: "bun test",
+          description: "Run the test suite",
+          timeout: 2_500,
+        }),
         textStream("Tests passed."),
       ],
     });
@@ -614,12 +618,16 @@ describe("AiSdkCodingAgent", () => {
 
     const events = await collect(agent, session, "Run tests");
 
-    expect(provider.executeCommand).toHaveBeenCalledWith(
-      "sandbox-1",
-      "bun test",
-      { cwd: "/workspace/project", timeout: 3 },
-    );
-    expect(events[0]).toEqual({ type: "command", content: "bun test" });
+    const [, script, opts] =
+      vi.mocked(provider.executeCommand).mock.calls[0] ?? [];
+    expect(script).toContain("cd '/workspace/project'");
+    expect(script).toContain("\nbun test\n");
+    expect(opts).toMatchObject({ cwd: "/workspace/project", timeout: 3 });
+    expect(events[0]).toEqual({
+      type: "command",
+      content: "bun test",
+      description: "Run the test suite",
+    });
   });
 
   it("retains AI SDK response messages across turns", async () => {
@@ -728,8 +736,8 @@ describe("AiSdkCodingAgent", () => {
     await collect(agent, session, "Run the verbose command");
 
     const secondPrompt = JSON.stringify(model.doStreamCalls[1]?.prompt);
-    expect(secondPrompt).toContain("...[output truncated]");
-    expect(secondPrompt).not.toContain("x".repeat(100_001));
+    expect(secondPrompt).toContain("characters omitted");
+    expect(secondPrompt).not.toContain("x".repeat(30_001));
   });
 });
 

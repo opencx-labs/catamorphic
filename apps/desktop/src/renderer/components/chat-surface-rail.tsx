@@ -9,7 +9,6 @@ import {
   Globe,
   LayoutGrid,
   LoaderCircle,
-  Radio,
   SquareTerminal,
   X,
 } from "lucide-react";
@@ -32,7 +31,6 @@ const SURFACE_GROUP_LABELS = {
   editor: "Files",
   chat: "Chats",
   subagent: "Subagents",
-  watcher: "Watchers",
   app: "Apps",
   workflow: "Workflows",
   mcpapp: "App views",
@@ -44,7 +42,6 @@ const SURFACE_ICONS = {
   editor: FileCode,
   chat: GitFork,
   subagent: Bot,
-  watcher: Radio,
   app: LayoutGrid,
   workflow: GitBranch,
   mcpapp: AppWindow,
@@ -53,7 +50,7 @@ const SURFACE_ICONS = {
 /** Stable, complementary empty-state and composer copy for each chat. */
 /**
  * One surface chip: open on click, tile right on ⌘-click or the button.
- * Chips carrying `info` (subagents, watchers) open their detail popover
+ * Chips carrying `info` (subagents) open their detail popover
  * instead — they have no workspace tab behind them.
  */
 function SurfaceChip({
@@ -421,8 +418,8 @@ export function SurfacesRail({
 
   return (
     <div ref={railRef} className="relative mx-3">
-      {/* Detail popover for chips that ARE their surface (subagents,
-          watchers): the chip's activity feed, expanded upward. */}
+      {/* Detail popover for chips that ARE their surface (subagents):
+          the chip's activity feed, expanded upward. */}
       <PopPanel
         open={Boolean(infoSurface)}
         className="absolute bottom-full left-0 z-20 mb-1.5 max-h-64 w-80 overflow-y-auto rounded-lg border border-border bg-bg-raised p-2 shadow-2xl"

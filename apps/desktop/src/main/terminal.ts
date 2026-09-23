@@ -40,6 +40,12 @@ interface TerminalSession {
    */
   chunks: string[];
   chunksLength: number;
+  /**
+   * Characters shed from the head of the buffer so far: offsets handed to
+   * agents count every character ever written, so "output since" reads
+   * stay exact however much a chatty process prints.
+   */
+  shed: number;
   running: boolean;
   /** The shell binary's name — the idle foreground process. */
   shellName: string;
@@ -107,7 +113,7 @@ export interface AgentTerminals {
   writeAny(sessionId: string, data: string): boolean;
   /** Rolling buffer tail (most recent `maxChars`). */
   read(sessionId: string, maxChars?: number): string | null;
-  /** Total buffered length — baseline for "output since" reads. */
+  /** Characters written so far (absolute) — baseline for "output since" reads. */
   bufferLength(sessionId: string): number | null;
   /** Buffer content from `offset`, capped to `maxChars`. */
   readFrom(sessionId: string, offset: number, maxChars?: number): string;
@@ -158,9 +164,11 @@ export function registerTerminalSupport(
     ) {
       const head = session.chunks.shift();
       session.chunksLength -= head?.length ?? 0;
+      session.shed += head?.length ?? 0;
     }
     const only = session.chunks[0];
     if (session.chunks.length === 1 && only && only.length > BUFFER_CAP) {
+      session.shed += only.length - BUFFER_CAP;
       session.chunks[0] = only.slice(-BUFFER_CAP);
       session.chunksLength = session.chunks[0].length;
     }
@@ -281,6 +289,7 @@ export function registerTerminalSupport(
       sender: input.sender,
       chunks: [],
       chunksLength: 0,
+      shed: 0,
       running: true,
       shellName: path.basename(shell),
       busy: false,
@@ -477,15 +486,15 @@ export function registerTerminalSupport(
     },
     bufferLength: (sessionId) => {
       const session = sessions.get(sessionId);
-      return session ? session.chunksLength : null;
+      return session ? session.shed + session.chunksLength : null;
     },
     readFrom: (sessionId, offset, maxChars = 20_000) => {
       const session = sessions.get(sessionId);
       if (!session) return "";
       const text = bufferText(session);
-      // The rolling buffer may have shed its head since the offset was
-      // taken; clamp into range, newest content wins.
-      const start = Math.max(0, Math.min(offset, text.length));
+      // Offsets are absolute; output shed since the offset was taken is
+      // gone, so reading resumes at the oldest retained character.
+      const start = Math.max(0, Math.min(offset - session.shed, text.length));
       return text.slice(start).slice(-maxChars);
     },
     isRunning: (sessionId) => sessions.get(sessionId)?.running ?? false,

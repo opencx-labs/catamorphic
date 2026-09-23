@@ -586,6 +586,22 @@ export async function startEmbeddedServer(
     tenantId: DESKTOP_TENANT_ID,
     externalUserId: DESKTOP_USER_ID,
   };
+  // A finished background command wakes its chat (ADR 0153): a system
+  // message the agent reads, with a plain notice for the person.
+  workspaceBridge?.setBackgroundNotifier(async (input) => {
+    await catamorphic.core.agentSessions?.deliver(
+      desktopIdentity,
+      input.projectId,
+      input.sessionId,
+      {
+        content: input.content,
+        author: { kind: "system", code: "background_command" },
+        mode: "next_turn",
+        idempotencyKey: input.idempotencyKey,
+        metadata: { notice: input.notice },
+      },
+    );
+  });
   catamorphic.core.agentSessions?.setArchiveResourcesHandler({
     impact: async ({ projectId, sessionIds }) => ({
       activeProcessCount: workspaceBridge

@@ -1176,8 +1176,7 @@ already shows an origin, or the project was imported from GitHub, use the
 sync_project / create_pull_request tools instead — and never replace an
 existing remote without asking.
 
-Run everything below in a terminal at the project root (run_terminal, or
-your own shell if you have one).
+Run everything below with your shell at the project root.
 
 ## 1. Preflight
 
@@ -1195,9 +1194,10 @@ your own shell if you have one).
 
 - \`gh auth status\` — already logged in? Continue.
 - If not: tell the user you are starting GitHub login, then run
-  \`gh auth login --web --git-protocol https\` in a visible terminal. It
-  prints a one-time code and opens the browser; the user finishes there.
-  Wait for the command to exit, then re-check \`gh auth status\`.
+  \`gh auth login --web --git-protocol https\` in a terminal they can see
+  (in Work: run_background_command, then open its terminal with
+  open_surface). It prints a one-time code and opens the browser; the user
+  finishes there. When it exits, re-check \`gh auth status\`.
 - Never ask the user to paste tokens or passwords into the chat.
 
 ## 3. Confirm before pushing

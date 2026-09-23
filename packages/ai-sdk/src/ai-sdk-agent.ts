@@ -32,6 +32,7 @@ import {
   isMediaAttachment,
   mergePolicyLayers,
   positiveTokenCount,
+  reasoningHeading,
   renderUserMessage,
   resolveMcpServers,
   stagedPluginFiles,
@@ -48,6 +49,12 @@ import {
   tool,
 } from "ai";
 import { z } from "zod";
+import {
+  runShell,
+  SHELL_DEFAULT_TIMEOUT_MS,
+  SHELL_MAX_TIMEOUT_MS,
+  type ShellState,
+} from "./shell.js";
 import { agentTelemetry } from "./telemetry.js";
 import { turnContextMessages } from "./turn-context.js";
 
@@ -332,6 +339,7 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
           provider: sandboxProvider,
           sandboxId: opts.sandboxId,
           workingDirectory: opts.workingDirectory,
+          shell: {},
         },
         this.opts.extraTools ?? [],
         {
@@ -579,9 +587,21 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
           abortSignal: state.abort?.signal,
         }),
       );
+      let reasoning = "";
       for await (const part of result.stream) {
         if (part.type === "text-delta") {
           text += part.text;
+          continue;
+        }
+        // Reasoning summaries open with a bold heading: the live status.
+        if (part.type === "reasoning-delta") {
+          reasoning += part.text;
+          continue;
+        }
+        if (part.type === "reasoning-end") {
+          const heading = reasoningHeading(reasoning);
+          reasoning = "";
+          if (heading) yield { type: "status", content: heading };
           continue;
         }
         if (part.type === "tool-call") {
@@ -767,6 +787,8 @@ function effortProviderOptions(effort: AgentEffort) {
           },
     openai: {
       reasoningEffort: effort === "xhigh" || effort === "max" ? "high" : effort,
+      // Summaries carry the headings the host shows as live status.
+      reasoningSummary: "auto",
     },
   };
 }
@@ -778,6 +800,8 @@ interface ToolContext {
   >;
   sandboxId: string;
   workingDirectory: string;
+  /** Where the next shell command starts; `cd` persists between calls. */
+  shell: ShellState;
 }
 
 /**
@@ -1092,8 +1116,12 @@ function createTools(
           toModelOutput: ({ output }) => mediaModelOutput(output),
           execute: async (input: Record<string, unknown>) => {
             const result = await extra.execute(input, extraContext);
-            context.workingDirectory =
+            const workingDirectory =
               extraContext.workingDirectory ?? context.workingDirectory;
+            // A new checkout assignment starts the shell over in its root.
+            if (workingDirectory !== context.workingDirectory)
+              context.shell.cwd = undefined;
+            context.workingDirectory = workingDirectory;
             return typeof result === "string"
               ? truncateToolOutput(result)
               : result;
@@ -1214,27 +1242,33 @@ function createTools(
       }),
     }),
     bash: tool({
-      description:
-        "Run a shell command in the assigned project workspace. Use it for listing, searching, tests, builds, and other project operations.",
+      description: `Run a shell command and wait for it to finish. The working directory persists between calls (a \`cd\` carries over); it starts in the project folder. Output combines stdout and stderr; long output keeps its start and end. Default timeout ${SHELL_DEFAULT_TIMEOUT_MS / 1000}s, at most ${SHELL_MAX_TIMEOUT_MS / 1000}s. For servers, watchers and anything long-lived, use run_background_command instead when it is available. Quote paths with spaces. Prefer read/edit/write for files.`,
       inputSchema: z.object({
-        command: z.string(),
-        timeoutMs: z.number().int().positive().max(3_600_000).optional(),
+        command: z.string().describe("The command to run"),
+        description: z
+          .string()
+          .optional()
+          .describe(
+            "What this command does in 5-10 plain words, e.g. 'Run the test suite'. Shown to the person as what you're doing.",
+          ),
+        timeout: z
+          .number()
+          .int()
+          .positive()
+          .max(SHELL_MAX_TIMEOUT_MS)
+          .optional()
+          .describe(`Milliseconds (max ${SHELL_MAX_TIMEOUT_MS})`),
       }),
-      execute: async ({ command, timeoutMs }) => {
-        const result = await context.provider.executeCommand(
-          context.sandboxId,
+      execute: async ({ command, timeout }, { abortSignal }) =>
+        runShell({
+          provider: context.provider,
+          sandboxId: context.sandboxId,
+          root: context.workingDirectory,
+          state: context.shell,
           command,
-          {
-            cwd: context.workingDirectory,
-            timeout:
-              timeoutMs === undefined ? undefined : Math.ceil(timeoutMs / 1000),
-          },
-        );
-        return {
-          exitCode: result.exitCode,
-          output: truncateToolOutput(result.result),
-        };
-      },
+          ...(timeout !== undefined ? { timeoutMs: timeout } : {}),
+          ...(abortSignal ? { signal: abortSignal } : {}),
+        }),
     }),
   };
 }
@@ -1296,6 +1330,9 @@ function mapToolCall(toolName: string, input: unknown): AgentEvent {
     return {
       type: "command",
       content: typeof values?.command === "string" ? values.command : "",
+      ...(typeof values?.description === "string" && values.description
+        ? { description: values.description }
+        : {}),
     };
   }
   if (toolName === "write" || toolName === "edit") {
@@ -1305,7 +1342,14 @@ function mapToolCall(toolName: string, input: unknown): AgentEvent {
       filePath: typeof values?.path === "string" ? values.path : undefined,
     };
   }
-  return { type: "tool_call", toolName, toolInput: input };
+  return {
+    type: "tool_call",
+    toolName,
+    toolInput: input,
+    ...(typeof values?.description === "string" && values.description
+      ? { description: values.description }
+      : {}),
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

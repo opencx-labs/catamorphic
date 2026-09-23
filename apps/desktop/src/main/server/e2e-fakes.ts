@@ -266,9 +266,9 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
     private readonly sandboxProvider: SandboxProvider,
     /**
      * The real workspace toolkit, when the host has one: keyed prompts
-     * ("terminal: <cmd>", "terminal @<id>: <cmd>") execute the actual
-     * run_terminal tool, so e2e covers the bridge → renderer → chips
-     * path with the deterministic agent.
+     * ("terminal: <cmd>", "background: <cmd>") execute the actual
+     * background-command tools, so e2e covers the bridge → renderer →
+     * chips path with the deterministic agent.
      */
     private readonly workspaceTools: ExtraTool[] = [],
     /**
@@ -803,22 +803,6 @@ export class E2eFakeCodingAgent implements CodingAgentProvider {
       return;
     }
 
-    // "watcher" → a background process the agent started (exercises the
-    // watcher chip that persists across turns).
-    if (prompt.includes("watcher")) {
-      yield { type: "title", content: "Background work" };
-      yield { type: "text", content: "Starting the dev server for you." };
-      yield {
-        type: "background",
-        status: "started",
-        backgroundId: "fake-bg-1",
-        content: "npm run dev",
-      };
-      yield { type: "text", content: "It's running in the background." };
-      yield { type: "done" };
-      return;
-    }
-
     if (prompt.includes("prepare pdf")) {
       await this.sandboxProvider.uploadFiles(
         state.sandboxId,
@@ -1029,49 +1013,56 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
     // user must see instead is the actionable rewrite (agent-errors.ts) —
     // the e2e asserts that mapping on the real send path. One-shot: the
     // retry of the same message recovers (exercises retry-in-place).
-    // "terminal: <cmd>" / "terminal @<id>: <cmd>" → the REAL run_terminal
-    // workspace tool. E2e's only path through the bridge with the
-    // deterministic agent — chips, spinners, targeting all run for real.
-    const terminalRun = /^terminal(?:\s+@(\S+))?:\s*(.+)$/s.exec(
-      message.trim(),
-    );
+    // "terminal: <cmd>" → the REAL run_background_command tool, then a
+    // blocking read until it ends: E2e's path through the bridge with the
+    // deterministic agent (chips, spinners, output). "background: <cmd>"
+    // starts one and ends the turn, leaving it to wake the chat.
+    const terminalRun = /^(terminal|background):\s*(.+)$/s.exec(message.trim());
     if (terminalRun) {
-      const [, targetId, command] = terminalRun;
-      const tool = workspaceTools.find(
-        (candidate) => candidate.name === "run_terminal",
-      );
-      if (!tool || !command) {
-        yield { type: "error", content: "run_terminal unavailable" };
+      const [, mode, command] = terminalRun;
+      const tool = (name: string) =>
+        workspaceTools.find((candidate) => candidate.name === name);
+      const start = tool("run_background_command");
+      const read = tool("read_background_output");
+      if (!start || !read || !command) {
+        yield { type: "error", content: "background commands unavailable" };
         yield { type: "done" };
         return;
       }
+      // Without words of its own, a command is titled by itself.
+      const description =
+        mode === "background" ? "Run it in the background" : "";
       yield { type: "title", content: "Terminal exercise" };
-      yield { type: "command", content: command };
+      yield {
+        type: "tool_call",
+        toolName: "run_background_command",
+        toolInput: { command, description },
+        description,
+      };
       try {
-        const result = await tool.execute(
-          { command, ...(targetId ? { terminalId: targetId } : {}) },
+        const started = (await start.execute(
+          { command, description, wake_on_exit: mode === "background" },
           state.toolContext,
-        );
-        // Human-readable body with the machine-readable bits e2e greps for
-        // ('terminal result', the "terminalId":"..." pattern, and the raw
-        // command output) preserved verbatim.
-        const resultRecord = result as {
-          key?: string;
-          terminalId?: string;
-          output?: string;
-          commandRunning?: boolean;
-        };
-        const cleanOutput = String(resultRecord.output ?? "")
-          // biome-ignore lint/suspicious/noControlCharactersInRegex: strips OSC sequences from terminal output
-          .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g, "")
-          // biome-ignore lint/suspicious/noControlCharactersInRegex: strips CSI sequences
-          .replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, "")
-          // biome-ignore lint/suspicious/noControlCharactersInRegex: strips keypad mode toggles
-          .replace(/\u001b[=>]/g, "")
-          .trim();
+        )) as { id: string; key: string; status: string; output: string };
+        if (mode === "background") {
+          yield {
+            type: "text",
+            content: `Started it in the background ("terminalId":"${started.id}").`,
+          };
+          yield { type: "done" };
+          return;
+        }
+        let output = started.output;
+        if (started.status === "running") {
+          const finished = (await read.execute(
+            { id: started.id, wait_seconds: 60 },
+            state.toolContext,
+          )) as { output: string };
+          output += finished.output;
+        }
         yield {
           type: "text",
-          content: `Ran it in the terminal ("terminalId":"${resultRecord.terminalId ?? "unknown"}"). terminal result:\n\n${cleanOutput}${resultRecord.key ? `\n\n[Open terminal](${resultRecord.key})` : ""}`,
+          content: `Ran it in the terminal ("terminalId":"${started.id}"). terminal result:\n\n${cleanTerminalText(output)}\n\n[Open terminal](${started.key})`,
         };
       } catch (error) {
         yield {
@@ -1548,4 +1539,18 @@ export const ${name} = defineWorkflow(({ defineBoundary }) => ({
     defineBoundary({ run: (context: BoundaryContext<unknown>) => context.host["catamorphic.sessions"].stop({ idempotencyKey: "stop" }) }),
   ],
 }));`;
+}
+
+/** Terminal output without escape sequences, for e2e assertions. */
+function cleanTerminalText(output: string): string {
+  return (
+    output
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: strips OSC sequences from terminal output
+      .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g, "")
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: strips CSI sequences
+      .replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, "")
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: strips keypad mode toggles
+      .replace(/\u001b[=>]/g, "")
+      .trim()
+  );
 }
