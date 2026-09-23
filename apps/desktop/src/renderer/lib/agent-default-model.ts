@@ -44,6 +44,18 @@ export function useAgentDefaultModel({
 }
 
 /**
+ * Whether two model ids name the same model. Settings ids can carry a
+ * context-window suffix ("claude-opus-5[1m]") that usage reports omit.
+ */
+export function sameModel(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  const base = (id: string) => id.replace(/\[[^\]]*\]$/, "");
+  return Boolean(a && b && base(a) === base(b));
+}
+
+/**
  * How to name an unpinned model: the harness's own answer when it gave one,
  * otherwise who decides ("Claude Code default"), never a vague "Automatic".
  */

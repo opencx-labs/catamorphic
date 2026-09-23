@@ -379,17 +379,20 @@ export function useAgentChat(
       // message (the turn it queued or started), so the activity line
       // carries through instead of blinking out before the refetch lands.
       // Bounded by one refetch: a message the session never shows still
-      // settles.
-      await queryClient.invalidateQueries({
-        queryKey: [
-          "cat",
-          "project",
-          projectId,
-          "agent",
-          "session",
-          targetSessionId,
-        ],
-      });
+      // settles. The send mutation already started that refetch; join it.
+      await queryClient.invalidateQueries(
+        {
+          queryKey: [
+            "cat",
+            "project",
+            projectId,
+            "agent",
+            "session",
+            targetSessionId,
+          ],
+        },
+        { cancelRefetch: false },
+      );
     } catch (error) {
       if (operationScopeRef.current !== scope) return;
       setActionError(toCatamorphicError({ cause: error }));

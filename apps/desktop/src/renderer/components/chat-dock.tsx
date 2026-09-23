@@ -45,6 +45,7 @@ import type {
 import { modifiersForMode } from "../../shared/open-mode.js";
 import {
   defaultModelLabel,
+  sameModel,
   useAgentDefaultModel,
 } from "../lib/agent-default-model.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
@@ -2253,7 +2254,7 @@ function ChatDockContent({
                   Boolean(harnessDefault.data?.model || reportedModel)
                 }
                 reportedModel={
-                  reportedModel !== runningModel ? reportedModel : null
+                  sameModel(reportedModel, runningModel) ? null : reportedModel
                 }
                 onInspect={() => {
                   setInspected(true);

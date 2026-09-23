@@ -628,6 +628,8 @@ export function CommandPalette({
   defaultAgentId: string | null;
   /** The chat the session-scoped commands act on; null = none focused. */
   focusedChat: {
+    /** Its checkout can carry its own harness settings. */
+    sessionId: string | null;
     agentId: string | null;
     model: string | null;
     effort: AgentEffort | null;
@@ -909,6 +911,7 @@ export function CommandPalette({
   const harnessDefault = useAgentDefaultModel({
     projectId,
     agent: targetAgent,
+    sessionId: focusedChat?.sessionId,
     enabled: picker === "model" && targetAgent?.harness !== "ai-sdk",
   });
 

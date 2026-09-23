@@ -451,6 +451,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       Date.now() - cached.at < DEFAULT_MODEL_TTL_MS
     )
       return cached.result;
+    // Folders come and go (worktrees, session checkouts): drop stale answers.
+    for (const [entryKey, entry] of this.defaultModels)
+      if (Date.now() - entry.at >= DEFAULT_MODEL_TTL_MS)
+        this.defaultModels.delete(entryKey);
     const result = this.probeDefaultModel(config, workingDirectory);
     this.defaultModels.set(key, { signature, at: Date.now(), result });
     // A failed probe is not an answer worth keeping.
@@ -482,7 +486,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                 ? { CODEX_HOME: this.agentHome(config.id) }
                 : {}),
               ...(config.auth === "api-key" && config.apiKey
-                ? { CODEX_API_KEY: config.apiKey }
+                ? {
+                    CODEX_API_KEY: config.apiKey,
+                    OPENAI_API_KEY: config.apiKey,
+                  }
                 : {}),
             },
           }),
