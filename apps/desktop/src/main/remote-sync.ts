@@ -78,6 +78,8 @@ export interface RemoteMe {
     workflows: string[];
     apps: string[];
     documents: Array<{ path: string; access: "read" | "write" }>;
+    /** Absent on hosts older than ADR 0152. */
+    roles?: Array<{ name: string; description?: string }>;
   }>;
   features: {
     publications: "public" | "members" | false;

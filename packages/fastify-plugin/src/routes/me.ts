@@ -42,6 +42,12 @@ export function registerMeRoutes(app: FastifyInstance, ctx: RouteContext) {
             builder && ctx.core?.projects
               ? await ctx.core.projects.get(identity, projectId)
               : null;
+          const roles =
+            (await ctx.core?.memberships?.describeMember({
+              projectId,
+              tenantId: identity.tenantId,
+              externalUserId: identity.externalUserId,
+            })) ?? [];
           return {
             projectId,
             builder,
@@ -72,6 +78,7 @@ export function registerMeRoutes(app: FastifyInstance, ctx: RouteContext) {
                 const doc = ref as { path: string; access?: "read" | "write" };
                 return { path: doc.path, access: doc.access ?? "read" };
               }),
+            roles,
           };
         }),
       );

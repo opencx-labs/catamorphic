@@ -17,6 +17,8 @@ export interface RemoteCapabilities {
   permissions: string[];
   agents: string[];
   documents: Array<{ path: string; access: "read" | "write" }>;
+  /** The member's roles, described, for their agents' context (ADR 0152). */
+  roles?: Array<{ name: string; description?: string }>;
   features: {
     publications: "public" | "members" | false;
     proposals: boolean;

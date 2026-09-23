@@ -57,13 +57,14 @@ project-overridable settings. `ProfileConfigManager.forProject` identifies an ow
 profile; `resolveSettings` resolves layers. These are different operations.
 
 Project agents receive the `configuring-catamorphic-desktop` host skill, with
-schema tables generated from the preference, theme and action registries. Each
-turn's `desktop_settings_context` supplies the initiating project's owning profile,
-exact file paths, access mode and validation errors. It resolves the primary project
-folder even when the session runs in a worktree or another profile is foreground.
-Native agents edit files directly with ordinary file/shell facilities; native
-permissions still apply. Read-only agents inspect only. Sandboxed agents without
-host filesystem access must report that limitation. No settings tools or mirrored
+schema tables generated from the preference, theme and action registries. The
+read-only `desktop_settings` workspace tool returns the initiating project's owning
+profile, exact file paths, access mode and validation errors. It resolves the primary
+project folder even when the session runs in a worktree or another profile is
+foreground. Turn context carries only current validation errors (ADR 0152). Native
+agents edit files directly with ordinary file/shell facilities; native permissions
+still apply. Read-only agents inspect only. Sandboxed agents without host filesystem
+access must report that limitation. No settings write tools or mirrored
 configuration transport exist.
 
 `ConfigFile` retains each file's last valid JSON object. Profile-owned `SettingsStore`

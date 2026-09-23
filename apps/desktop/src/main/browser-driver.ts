@@ -148,6 +148,15 @@ export class BrowserDriver {
   read(): Promise<unknown> {
     return this.serial(() => this.evaluate("read"));
   }
+  /**
+   * A passive look at the page for per-turn context: title, description,
+   * selection, and the start of the main text. Unlike read(), it neither
+   * focuses the tab nor shows agent activity, and never queues behind an
+   * agent's browser work.
+   */
+  glance(limit: number): Promise<unknown> {
+    return this.evaluate("glance", [limit]);
+  }
   clear(): Promise<unknown> {
     return this.serial(() => this.evaluate("clear"));
   }

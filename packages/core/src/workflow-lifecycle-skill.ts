@@ -90,8 +90,14 @@ when requested. Resolve name collisions, parameterize session-specific targets,
 validate, deploy, and enable normally. Stop the old watcher when its replacement
 is active to avoid duplicate work; do not merge the entire temporary ref.
 
-Report the source or watcher link, owner, execution host/Environment, lifetime,
-and which of saved, shared, deployed, or enabled actually succeeded. For reminders,
-include the resolved date/time, offline delivery behavior, and archive cancellation
-as described by \`session-workflows\`.
+## Telling the person
+
+Report in the person's terms: what the automation does, when it runs, where they
+can see it (a workflow or app link), and which of saved, shared, deployed or
+switched on actually succeeded. For a reminder, give the resolved date and time,
+and say that it arrives late if this computer is off and stops if the chat is
+archived (see \`session-workflows\`). Add the source link, owner, execution
+Environment and lifetime when the person is technical or asks. Never mention
+watcher ids, artifact refs, temporary source files or internal folders to a
+non-technical person.
 `;

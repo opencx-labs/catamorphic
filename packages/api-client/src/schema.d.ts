@@ -49,6 +49,10 @@ export interface paths {
                                     /** @enum {string} */
                                     access: "read" | "write";
                                 }[];
+                                roles: {
+                                    name: string;
+                                    description?: string;
+                                }[];
                             }[];
                             features: {
                                 publications: ("public" | "members") | false;

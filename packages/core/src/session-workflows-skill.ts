@@ -36,8 +36,9 @@ Local session watchers stay on the local host and use its Environment. They cann
 run while that host is stopped; overdue one-shots run once when it returns. Closing
 a chat leaves reminders active. Archiving cancels all its watchers and those of
 its subsessions, including paused ones; restoring the chat does not restart them.
-When confirming a reminder, tell the user its resolved date and time, which host
-runs it, that an offline local host delivers it late, and that archiving cancels it.
+When confirming a reminder, tell the user its resolved date and time, that it
+arrives late if this computer is off (or name the machine that runs it when it is
+not this one), and that archiving the chat cancels it. Say it in plain words.
 
 Session event kinds: session.created, session.message-received, session.message-sent,
 session.turn-changed, session.state-changed, session.work-changed, and

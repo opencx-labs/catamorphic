@@ -639,6 +639,37 @@ describe("AiSdkCodingAgent", () => {
     expect(secondPrompt).toContain("Second request");
   });
 
+  it("delivers turn context beside the user's message, never inside it", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: [textStream("It is the Work website.")],
+    });
+    const agent = new AiSdkCodingAgent({
+      model,
+      sandboxProvider: createProvider(),
+    });
+    const session = await start(agent);
+    const events = [];
+    for await (const event of agent.sendMessage(session, "What is this?", {
+      context: [
+        { source: "session", trust: "host", text: "Person: Ada" },
+        { source: "workspace", trust: "observed", text: "Page: work.software" },
+      ],
+    })) {
+      events.push(event);
+    }
+    const prompt = model.doStreamCalls[0]?.prompt ?? [];
+    const user = prompt.at(-1);
+    expect(user?.role).toBe("user");
+    expect(JSON.stringify(user)).not.toContain("work.software");
+    expect(prompt.at(-2)).toEqual({
+      role: "system",
+      content: expect.stringContaining(
+        "<workspace_context>\nObserved on the user's screen",
+      ),
+    });
+    expect(prompt[0]?.content).not.toContain("Person: Ada");
+  });
+
   it("rejects escaping paths while allowing the model to recover", async () => {
     const provider = createProvider();
     const model = new MockLanguageModelV4({

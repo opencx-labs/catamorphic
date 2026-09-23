@@ -8,7 +8,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { WorkspaceBridge } from "../agent-bridge.js";
-import { WORKSPACE_TOOLS_PLAYBOOK } from "./workspace-context-agent.js";
+import { workPlaybook } from "./workspace-context-agent.js";
 import {
   buildWorkspaceToolkit,
   WORKSPACE_TOOL_POLICY,
@@ -30,8 +30,13 @@ describe("workspace coordination tools", () => {
         .filter((tool) => tool.eager)
         .map((tool) => tool.name)
         .sort(),
-    ).toEqual(["open_surface", "update_todo_list", "workspace_overview"]);
-    expect(WORKSPACE_TOOLS_PLAYBOOK.length).toBeLessThan(1800);
+    ).toEqual([
+      "open_surface",
+      "read_tab",
+      "update_todo_list",
+      "workspace_overview",
+    ]);
+    expect(workPlaybook({ hasTools: true }).length).toBeLessThan(2000);
     const eager = [
       ...toolkit.tools.filter((tool) => tool.eager),
       ...agentCapabilityTools({

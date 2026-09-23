@@ -211,7 +211,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       rootDir: deps.harnessComponentsDir,
     });
     this.workspaceToolkit = deps.workspaceBridge
-      ? buildWorkspaceToolkit(deps.workspaceBridge)
+      ? buildWorkspaceToolkit(deps.workspaceBridge, {
+          desktopSettings: (projectId) => this.settingsContext(projectId),
+        })
       : undefined;
     const needsOpenRouterDefault = deps.profiles
       .list()
@@ -1165,12 +1167,11 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const bridge = this.deps.workspaceBridge;
     if (!bridge) return provider;
     const hasTools = opts.hasTools && this.workspaceToolkit !== undefined;
-    return new WorkspaceContextAgent(
-      provider,
+    return new WorkspaceContextAgent(provider, {
       bridge,
       hasTools,
-      () => this.skillsNote(opts.config, opts.profileId, hasTools),
-      {
+      skillsNote: () => this.skillsNote(opts.config, opts.profileId, hasTools),
+      coordination: {
         strategy: opts.config.coordination ?? "shared-first",
         peers: (projectId, sessionId) =>
           this.deps.sessionPeers?.(projectId, sessionId) ?? Promise.resolve([]),
@@ -1178,13 +1179,27 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           this.deps.checkoutNotice?.(projectId, sessionId) ??
           Promise.resolve(null),
       },
-      (projectId) => this.settingsContext(projectId, opts.config),
-      (sessionId, options) =>
+      desktopFacts: (projectId) => {
+        const settings = this.settingsContext(projectId, opts.config);
+        return {
+          ...("personalFilesDirectory" in settings &&
+          settings.personalFilesDirectory
+            ? { personalFilesDirectory: settings.personalFilesDirectory }
+            : {}),
+          ...("errors" in settings && settings.errors?.length
+            ? {
+                settingsErrors: settings.errors,
+              }
+            : {}),
+        };
+      },
+      bindTurn: (sessionId, options) =>
         this.mcp.bindSessionQuestions({ sessionId, options }),
-    );
+    });
   }
 
-  private settingsContext(projectId: string, config: AgentConfig) {
+  /** Host configuration paths and state, for the desktop_settings tool. */
+  settingsContext(projectId: string, config?: Pick<AgentConfig, "mode">) {
     return desktopSettingsContext({
       config: this.deps.profileConfig,
       profileId: this.deps.profiles.profileForProject(projectId).id,
@@ -1192,7 +1207,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         id: projectId,
         rootPath: this.deps.projectRootPath?.(projectId) ?? null,
       },
-      access: config.mode === "read-only" ? "read-only" : "native",
+      access: config?.mode === "read-only" ? "read-only" : "native",
     });
   }
 
@@ -1209,6 +1224,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const setting = config.skills ?? { mode: "all" };
     return composeSkillsNote({
       appSkills: host?.skills ?? [],
+      // The skills plugin lists the app tier for Claude Code itself.
+      appSkillsNative:
+        config.harness === "claude-code" && setting.mode !== "picked",
       ...(host ? { appSkillsDir: host.skillsDir } : {}),
       userSkills: this.deps.userSkills?.(profileId) ?? [],
       ...(setting.mode === "picked" ? { picked: setting.names } : {}),

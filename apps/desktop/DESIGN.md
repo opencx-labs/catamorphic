@@ -975,3 +975,25 @@ brings its window to the front. Page notifications also go through the
 main process now, with the site under the title as Chrome shows it and
 the site's own notification choice deciding; a page reads the real
 default / granted / denied state instead of Electron's always-granted.
+
+### 2026-09-23: The agent sees what you see, and talks like you do
+
+Asked "What is this thing?" over the Work website, an agent described the
+empty project's config folder and first commit. The page was in its context,
+but only as the last line of a tab list pasted into the person's own message,
+behind a wall of workflow mechanics every chat carried. Now each turn arrives
+with context beside the message, never in it (ADR 0152):
+
+- what the person is looking at comes first, with a short passive look
+  inside it (a page's opening text and description, an editor selection, a
+  terminal's latest output);
+- where the chat sits: floating over the view, beside it in a split, or
+  full window, when "this" means what they looked at just before;
+- who they are, their role and its description, and where commands run.
+
+The standing prompt is short and general: most requests are not about code;
+answer about the screen first; match the person's role and fluency; keep
+files, Git and internals out of answers for non-technical people; load the
+workflow or app skills only when the work needs them. Building an automation
+now reads as "every weekday at 9, a reminder lands in this chat; late if this
+Mac is off", not as a watcher id.

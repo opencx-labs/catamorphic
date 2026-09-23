@@ -86,6 +86,7 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
       ".catamorphic/roles/csm.json": JSON.stringify({
         version: 1,
         name: "CSM",
+        description: "Customer success managers; not technical.",
         agents: ["csm-assistant"],
         workflows: ["crm.lookup"],
         documents: [
@@ -232,6 +233,23 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
       path: "store/customers/globex/**",
       access: "write",
     });
+    // Agents learn who they serve from the member's described roles.
+    expect(
+      await core.memberships.describeMember({
+        projectId,
+        tenantId: root.tenantId,
+        externalUserId: "bob",
+      }),
+    ).toEqual([
+      { name: "CSM", description: "Customer success managers; not technical." },
+    ]);
+    expect(
+      await core.memberships.describeMember({
+        projectId,
+        tenantId: root.tenantId,
+        externalUserId: "stranger",
+      }),
+    ).toBeNull();
     // Not a member → null (the host decides 401/403).
     expect(
       await core.memberships.identityFor({

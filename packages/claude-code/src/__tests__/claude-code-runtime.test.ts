@@ -980,7 +980,7 @@ describe("ClaudeCodeAgentRuntime conformance", () => {
 });
 
 describe("ClaudeCodeAgentRuntime", () => {
-  it("appends host facts to the preset and exposes only the deferred capability entry points", async () => {
+  it("delivers host facts beside the prompt and exposes only the deferred capability entry points", async () => {
     const runtime = new ClaudeCodeAgentRuntime();
     queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
     const session = await startSession(runtime);
@@ -991,7 +991,9 @@ describe("ClaudeCodeAgentRuntime", () => {
     const turn = await runtime.startTurn({
       sessionId: session.sessionId,
       message: { role: "user", content: "Hello" },
-      context: "Verified host facts",
+      context: [
+        { source: "session", trust: "host", text: "Verified host facts" },
+      ],
       capabilities,
     });
     await collectUntil({
@@ -1000,11 +1002,32 @@ describe("ClaudeCodeAgentRuntime", () => {
       until: (event) =>
         event.type === "turn.completed" && event.turnId === turn.turnId,
     });
-    expect(optionsFromLastQuery().systemPrompt).toEqual({
+    const options = optionsFromLastQuery();
+    // The preset append stays the session's stable instructions; the turn's
+    // facts ride UserPromptSubmit's additionalContext (ADR 0152).
+    expect(options.systemPrompt).toEqual({
       type: "preset",
       preset: "claude_code",
-      append: "Host instructions\n\nVerified host facts",
+      append: "Host instructions",
     });
+    const onPrompt = options.hooks?.UserPromptSubmit?.[0]?.hooks[0];
+    const signal = new AbortController().signal;
+    const input = {
+      hook_event_name: "UserPromptSubmit",
+      prompt: "Hello",
+      session_id: "s",
+      transcript_path: "",
+      cwd: "",
+    } as const;
+    expect(await onPrompt?.(input, undefined, { signal })).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "UserPromptSubmit",
+        additionalContext:
+          "<session_context>\nVerified host facts\n</session_context>",
+      },
+    });
+    // Mid-turn inputs carry only their own text.
+    expect(await onPrompt?.(input, undefined, { signal })).toEqual({});
     expect(createSdkMcpServer).toHaveBeenCalledWith(
       expect.objectContaining({
         tools: expect.arrayContaining([

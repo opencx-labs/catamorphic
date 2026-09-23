@@ -243,7 +243,8 @@ export const WORKSPACE_TOOL_POLICY: Readonly<
   point_at: presentation,
   set_chat_icon: presentation,
   workspace_overview: { ...read, eager: true },
-  read_tab: read,
+  // What is on screen is the most common workspace question (ADR 0152).
+  read_tab: { ...read, eager: true },
   open_browser: presentation,
   browser_snapshot: read,
   browser_act: write,
@@ -254,11 +255,16 @@ export const WORKSPACE_TOOL_POLICY: Readonly<
   create_pull_request: write,
   request_connection: write,
   read_skill: read,
+  desktop_settings: read,
   surface_control: write,
 };
 
 export function buildWorkspaceToolkit(
   bridge: WorkspaceBridge,
+  host: {
+    /** Work's settings files and their state for one project's profile. */
+    desktopSettings?: (projectId: string) => unknown;
+  } = {},
 ): WorkspaceToolkit {
   let readChatTranscript: ChatTranscriptReader | null = null;
   let setChatIcon: ChatIconSetter | null = null;
@@ -1024,6 +1030,17 @@ export function buildWorkspaceToolkit(
           );
         }
         return result;
+      },
+    },
+    {
+      name: "desktop_settings",
+      description:
+        "Get the files that configure Work for this project and person (preferences, theme, keyboard shortcuts, sidebar) with their scopes, and any validation errors. Use with the configuring-catamorphic-desktop skill when the person wants to change how Work looks or behaves.",
+      parameters: {},
+      execute: async (_input, ctx) => {
+        if (!host.desktopSettings)
+          throw new Error("Work settings are not available here.");
+        return host.desktopSettings(ctx.projectId);
       },
     },
     {

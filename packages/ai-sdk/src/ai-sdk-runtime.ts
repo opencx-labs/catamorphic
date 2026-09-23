@@ -22,7 +22,6 @@ import {
   type AgentEventBufferOptions,
   AgentRuntimeUnsupportedError,
   agentCapabilityTools,
-  withAgentContext,
 } from "@catamorphic/sandbox";
 import {
   type LanguageModel,
@@ -33,6 +32,7 @@ import {
 } from "ai";
 import { z } from "zod";
 import { agentTelemetry } from "./telemetry.js";
+import { turnContextMessages } from "./turn-context.js";
 
 const DEFAULT_INSTRUCTIONS = `You are working in a Catamorphic project, a folder that can hold documents, notes, data, code, automations, and apps.
 Use the available tools to inspect and edit the project in your working directory.
@@ -274,7 +274,7 @@ export class AiSdkAgentRuntime implements AgentRuntimeProvider {
       interrupted: false,
     };
     state.activeTurn = activeTurn;
-    state.transcript.push(message);
+    state.transcript.push(...turnContextMessages(args.context), message);
     this.publish(state, {
       eventId: `ai-sdk:turn:${turnId}:started`,
       build: (base) => ({ ...base, type: "turn.started" }),
@@ -425,7 +425,9 @@ export class AiSdkAgentRuntime implements AgentRuntimeProvider {
         const agent = new ToolLoopAgent({
           telemetry: telemetry.settings,
           model,
-          instructions: withAgentContext(state.instructions, args?.context),
+          instructions: state.instructions,
+          // Turn context arrives as a system message beside the prompt (ADR 0152).
+          allowSystemInMessages: true,
           tools: {
             ...state.tools,
             ...Object.fromEntries(

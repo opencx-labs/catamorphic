@@ -37,6 +37,15 @@ import type { AgentTerminals } from "./terminal.js";
 export interface WorkspaceBridge {
   /** Tabs, chats, and sidebar items of the project's open workspace. */
   overview(projectId: string): Promise<unknown>;
+  /**
+   * A passive look at a browser tab (title, description, selection, main
+   * text excerpt) for per-turn context; never focuses it or shows activity.
+   */
+  glanceBrowser(
+    projectId: string,
+    key: string,
+    limit: number,
+  ): Promise<unknown>;
   /** Expand a tab from the overview: page text, terminal buffer, file. */
   readTab(projectId: string, key: string): Promise<unknown>;
   openBrowser(
@@ -438,6 +447,10 @@ export function registerAgentBridge(
         );
       }
       return result;
+    },
+
+    async glanceBrowser(projectId, key, limit) {
+      return (await driverFor(projectId, key)).glance(limit);
     },
 
     async readTab(projectId, key) {

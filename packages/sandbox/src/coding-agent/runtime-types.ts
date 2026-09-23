@@ -1,4 +1,7 @@
-import type { AgentCapabilityGateway } from "../agent-capabilities.js";
+import type {
+  AgentCapabilityGateway,
+  TurnContextFragment,
+} from "../agent-capabilities.js";
 import type { AgentQuestion } from "../types.js";
 import type { ToolPermissionRequest } from "./tool-policy.js";
 
@@ -94,8 +97,8 @@ export interface AgentRuntimeMessage {
 }
 
 export interface StartAgentTurn {
-  /** Fresh host facts, separate from user prose. */
-  context?: string;
+  /** Fresh facts for this turn, delivered beside the message (ADR 0152). */
+  context?: TurnContextFragment[];
   /** Live session-scoped gateway; remote hosts supply their own transport. */
   capabilities?: AgentCapabilityGateway;
   sessionId: string;

@@ -624,6 +624,8 @@ export class CatamorphicCore {
       environments: this.executionEnvironments,
       options: config.agentCapabilities,
       resolveMemberIdentity: config.resolveMemberIdentity,
+      // Constructed below; read at call time.
+      memberRoles: (args) => this.memberships.describeMember(args),
     });
     const connectionProviders = config.connectionProviders ?? [];
     const credentialVault = config.credentialVault;

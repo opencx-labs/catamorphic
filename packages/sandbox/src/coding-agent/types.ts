@@ -1,4 +1,7 @@
-import type { AgentCapabilityGateway } from "../agent-capabilities.js";
+import type {
+  AgentCapabilityGateway,
+  TurnContextFragment,
+} from "../agent-capabilities.js";
 import type { AgentEvent, AgentQuestion, SandboxProvider } from "../types.js";
 import type { McpToolPolicyLayers } from "./tool-policy.js";
 
@@ -235,8 +238,11 @@ export interface TurnOptions {
   /** Acknowledge input only after the model step incorporating it completes. */
   acknowledgeMessages?: (input: { ids: string[] }) => Promise<void>;
 
-  /** Fresh host facts, separate from user prose. */
-  context?: string;
+  /**
+   * Fresh facts for this turn, delivered beside the user's message through
+   * the harness's native context channel (ADR 0152).
+   */
+  context?: TurnContextFragment[];
   /** Live session-scoped gateway; remote hosts supply their own transport. */
   capabilities?: AgentCapabilityGateway;
   model?: string;

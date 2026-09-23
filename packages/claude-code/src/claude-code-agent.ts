@@ -42,13 +42,14 @@ import {
   isMediaAttachment,
   mergePolicyLayers,
   positiveTokenCount,
+  renderTurnContext,
   renderUserMessage,
   resolveMcpServers,
   stagePluginDocs,
   ToolGate,
-  withAgentContext,
 } from "@catamorphic/sandbox";
 import type { ZodRawShape } from "zod";
+import { turnContextHooks } from "./turn-context.js";
 
 export interface ClaudeCodeAgentOpts {
   /** Host-owned plugin reference directory; defaults to the working directory. */
@@ -286,6 +287,11 @@ interface LiveTurn {
   nextPending?: Promise<IteratorResult<SDKMessage>>;
   /** Events from SDK hooks, drained between stream messages. */
   hookEvents: AgentEvent[];
+  /**
+   * This turn's context (ADR 0152), handed to the first prompt through the
+   * UserPromptSubmit hook and then cleared.
+   */
+  turnContext?: string;
   /** Subagents this query spawned, keyed by their Task tool-use id. */
   openSubagents: Set<string>;
   /**
@@ -482,6 +488,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
     const cwd = state.workingDirectory || undefined;
 
     const live = createLiveTurn(state);
+    live.turnContext = renderTurnContext(opts?.context) || undefined;
     live.acknowledgeMessages = opts?.acknowledgeMessages;
     if (opts?.readPendingMessages) {
       live.inputAbort = new AbortController();
@@ -513,7 +520,7 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         options: {
           ...this.buildOptions(
             cwd,
-            withAgentContext(state?.systemPrompt, opts?.context),
+            state?.systemPrompt,
             state?.toolContext,
             opts,
             live,
@@ -931,7 +938,10 @@ export class ClaudeCodeAgent implements CodingAgentProvider {
         if (policed) return policed;
         return denyUnlistedTools(toolName, input, options);
       },
-      hooks: backgroundTaskHooks((event) => live.hookEvents.push(event)),
+      hooks: {
+        ...backgroundTaskHooks((event) => live.hookEvents.push(event)),
+        ...turnContextHooks(live),
+      },
       // Recognize everything real Claude Code recognizes: the repo's
       // CLAUDE.md / .claude (skills, agents, commands, settings) plus the
       // agent's own home ("user" resolves inside this agent's private
