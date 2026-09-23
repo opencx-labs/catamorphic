@@ -976,6 +976,17 @@ main process now, with the site under the title as Chrome shows it and
 the site's own notification choice deciding; a page reads the real
 default / granted / denied state instead of Electron's always-granted.
 
+### 2026-09-23: The trackpad turns pages
+
+Two-finger swipes are how people go back in Chrome, and they reached the
+page here as plain horizontal scrolling. The guest preload now does what
+Chrome does: horizontal pixel deltas that nothing under the pointer can
+consume accumulate toward a threshold, an arrow at the edge grows with
+the gesture and fills when crossing it will navigate, and a change of
+direction or a pause starts over. A page that can still scroll sideways
+keeps the gesture. macOS three-finger swipes arrive as the window's own
+event and go the same way. No setting: the gesture is the platform's.
+
 ### 2026-09-23: The agent sees what you see, and talks like you do
 
 Asked "What is this thing?" over the Work website, an agent described the

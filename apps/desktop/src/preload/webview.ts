@@ -273,6 +273,101 @@ if (process.platform === "darwin") {
 }
 
 /**
+ * Two-finger history swipe, as Chrome does it: horizontal trackpad scroll
+ * that nothing under the pointer can consume accumulates toward a
+ * threshold; crossing it navigates. The host draws the arrow that grows
+ * with the gesture. macOS delivers two-finger swipes as wheel events with
+ * pixel deltas (three-finger swipes arrive as the window's `swipe` event
+ * and are handled by the main process).
+ */
+const SWIPE_THRESHOLD_PX = 220;
+const SWIPE_IDLE_MS = 200;
+let swipeSum = 0;
+let swipeArmed = true;
+let swipeTimer: ReturnType<typeof setTimeout> | undefined;
+let swipeShown: "back" | "forward" | null = null;
+
+const reportSwipe = (
+  direction: "back" | "forward" | null,
+  progress: number,
+) => {
+  if (direction === null && swipeShown === null) return;
+  swipeShown = direction;
+  ipcRenderer.sendToHost("catamorphic:browser-swipe", { direction, progress });
+};
+
+const resetSwipe = () => {
+  clearTimeout(swipeTimer);
+  swipeTimer = undefined;
+  swipeSum = 0;
+  swipeArmed = true;
+  reportSwipe(null, 0);
+};
+
+/** Can anything from the target up to the document scroll horizontally that way? */
+const scrollableToward = (target: EventTarget | null, deltaX: number) => {
+  let node = target instanceof Element ? target : null;
+  while (node) {
+    const style = getComputedStyle(node);
+    const overflow = style.overflowX;
+    const scrolls =
+      node === document.documentElement ||
+      node === document.body ||
+      overflow === "auto" ||
+      overflow === "scroll" ||
+      overflow === "overlay";
+    if (scrolls && node.scrollWidth > node.clientWidth + 1) {
+      if (deltaX < 0 && node.scrollLeft > 0) return true;
+      if (
+        deltaX > 0 &&
+        node.scrollLeft + node.clientWidth < node.scrollWidth - 1
+      )
+        return true;
+    }
+    node = node.parentElement;
+  }
+  return false;
+};
+
+window.addEventListener(
+  "wheel",
+  (event) => {
+    if (event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) return;
+    const { deltaX, deltaY } = event;
+    // A vertical scroll, or a mixed one, is not a history gesture.
+    if (Math.abs(deltaX) < 2 || Math.abs(deltaX) < Math.abs(deltaY) * 2) {
+      if (swipeSum !== 0) resetSwipe();
+      return;
+    }
+    if (scrollableToward(event.target, deltaX)) {
+      if (swipeSum !== 0) resetSwipe();
+      return;
+    }
+    clearTimeout(swipeTimer);
+    swipeTimer = setTimeout(resetSwipe, SWIPE_IDLE_MS);
+    // A change of direction mid-gesture starts over.
+    if (swipeSum !== 0 && Math.sign(swipeSum) !== Math.sign(deltaX))
+      swipeSum = 0;
+    swipeSum += deltaX;
+    // Fingers moving right (negative deltaX) pull the previous page in.
+    const direction = swipeSum < 0 ? "back" : "forward";
+    const progress = Math.min(1, Math.abs(swipeSum) / SWIPE_THRESHOLD_PX);
+    if (!swipeArmed) return;
+    reportSwipe(direction, progress);
+    if (progress >= 1) {
+      swipeArmed = false;
+      // The navigation replaces this page (and its idle timer): clear the
+      // arrow now rather than leaving it to a world that is going away.
+      reportSwipe(null, 0);
+      ipcRenderer.sendToHost("catamorphic:browser-mouse-history", {
+        direction,
+      });
+    }
+  },
+  { capture: true, passive: true },
+);
+
+/**
  * Passwords. The page tells the host where a login field is when the
  * user clicks it (or tabs into a new-password field), so the host can
  * draw suggestions under it; keys the suggestions own while open come

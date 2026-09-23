@@ -245,6 +245,12 @@ export function BrowserScreen({
   const [inputValue, setInputValue] = useState(initialUrl);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  // Two-finger history swipe in flight: the arrow at the edge grows with
+  // the gesture and fills once it will navigate (Chrome's overscroll cue).
+  const [swipe, setSwipe] = useState<{
+    direction: "back" | "forward";
+    progress: number;
+  } | null>(null);
   // The password card keeps its content through the exit motion.
   const [passwordPrompt, setPasswordPrompt] =
     useState<PasswordPromptState | null>(null);
@@ -371,6 +377,8 @@ export function BrowserScreen({
       };
       listen("did-attach", markAlive);
       listen("did-start-loading", markAlive);
+      // A navigation ends any swipe cue, whichever page started it.
+      listen("did-start-loading", () => setSwipe(null));
       window.clearTimeout(attachWatchdogRef.current);
       attachWatchdogRef.current = window.setTimeout(() => {
         if (!alive) remountWebview();
@@ -451,6 +459,21 @@ export function BrowserScreen({
         if (autofillMessageRef.current(message.channel, message.args)) return;
         if (message.channel === "catamorphic:dismiss-floating") {
           dismissFloatingRef.current?.();
+          return;
+        }
+        if (message.channel === "catamorphic:browser-swipe") {
+          const payload = message.args[0] as {
+            direction: "back" | "forward" | null;
+            progress: number;
+          };
+          setSwipe(
+            payload.direction &&
+              (payload.direction === "back"
+                ? view.canGoBack()
+                : view.canGoForward())
+              ? { direction: payload.direction, progress: payload.progress }
+              : null,
+          );
           return;
         }
         if (message.channel !== "catamorphic:browser-mouse-history") return;
@@ -1166,6 +1189,30 @@ export function BrowserScreen({
         ) : (
           <div className="grid h-full place-items-center">
             <p className="text-sm text-fg-faint">Search or enter an address</p>
+          </div>
+        )}
+        {swipe && (
+          <div
+            aria-hidden="true"
+            data-testid="browser-swipe-indicator"
+            data-direction={swipe.direction}
+            className={`pointer-events-none absolute top-1/2 grid size-11 -translate-y-1/2 place-items-center rounded-full border shadow-lg transition-colors duration-100 ${
+              swipe.direction === "back" ? "left-3" : "right-3"
+            } ${
+              swipe.progress >= 1
+                ? "border-accent bg-accent text-accent-fg"
+                : "border-border bg-bg-overlay text-fg"
+            }`}
+            style={{
+              opacity: Math.min(1, 0.35 + swipe.progress * 0.65),
+              transform: `translateY(-50%) scale(${0.7 + swipe.progress * 0.3})`,
+            }}
+          >
+            {swipe.direction === "back" ? (
+              <ArrowLeft className="size-5" />
+            ) : (
+              <ArrowRight className="size-5" />
+            )}
           </div>
         )}
         {/* Main-frame load failure: a way out instead of a white pane. */}
