@@ -38,6 +38,8 @@ export interface ContextMenuEntry {
   icon?: string;
   url?: string;
   disabledReason?: string;
+  /** The entry currently in force, in a menu that picks one of several. */
+  checked?: boolean;
 }
 
 export function SidebarIcon({ name }: { name?: string }) {
@@ -727,17 +729,23 @@ export function MenuPortal<TMenuEntry extends ContextMenuEntry>({
             key={`${entry.action}:${entry.label}`}
             type="button"
             role="menuitem"
+            aria-checked={entry.checked}
             tabIndex={open ? 0 : -1}
             disabled={Boolean(entry.disabledReason)}
             data-disabled-reason={entry.disabledReason}
             onClick={() => onPick(entry)}
-            className={`flex h-7 w-full cursor-pointer items-center rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${
+            className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${
               entry.danger
                 ? "text-danger hover:bg-danger/10"
-                : "text-fg-muted hover:bg-bg-raised hover:text-fg"
+                : entry.checked
+                  ? "text-fg hover:bg-bg-raised"
+                  : "text-fg-muted hover:bg-bg-raised hover:text-fg"
             }`}
           >
-            {entry.label}
+            <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+            {entry.checked && (
+              <icons.Check className="size-3.5 shrink-0" aria-hidden="true" />
+            )}
           </button>
         ))}
       </div>

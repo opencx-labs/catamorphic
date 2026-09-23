@@ -79,10 +79,7 @@ export function HistoryScreen({
       action: project.id,
       label: project.name || "Project",
     })),
-  ].map((entry) => ({
-    ...entry,
-    icon: entry.action === projectId ? "Check" : undefined,
-  }));
+  ].map((entry) => ({ ...entry, checked: entry.action === projectId }));
   const open = async (entry: HistoryEntry, mode: OpenMode) => {
     setError(null);
     try {

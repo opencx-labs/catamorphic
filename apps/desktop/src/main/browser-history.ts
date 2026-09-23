@@ -44,7 +44,15 @@ export class HistoryStore {
       if (Array.isArray(raw))
         for (const value of raw) {
           const parsed = historyEntrySchema.safeParse(value);
-          if (parsed.success) entries.push(parsed.data);
+          // A project resource always names its project; one without it
+          // predates ADR 0154 and is dropped rather than migrated.
+          if (
+            parsed.success &&
+            (parsed.data.target.kind === "web" ||
+              parsed.data.target.kind === "local" ||
+              parsed.data.project)
+          )
+            entries.push(parsed.data);
         }
     } catch {
       /* A new profile has no history. */
