@@ -284,11 +284,16 @@ export function DockHost({
     };
     // The window grows and shrinks under a parked pointer (a chat opening,
     // the strip collapsing): what is under it changes without a move.
-    const resized = () => requestAnimationFrame(hitTest);
+    let frame = 0;
+    const resized = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(hitTest);
+    };
     document.addEventListener("mousemove", move);
     document.documentElement.addEventListener("mouseleave", leave);
     window.addEventListener("resize", resized);
     return () => {
+      cancelAnimationFrame(frame);
       document.removeEventListener("mousemove", move);
       document.documentElement.removeEventListener("mouseleave", leave);
       window.removeEventListener("resize", resized);
