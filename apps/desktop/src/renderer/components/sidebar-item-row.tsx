@@ -728,8 +728,9 @@ export function MenuPortal<TMenuEntry extends ContextMenuEntry>({
           <button
             key={`${entry.action}:${entry.label}`}
             type="button"
-            role={entry.checked === undefined ? "menuitem" : "menuitemradio"}
-            aria-checked={entry.checked}
+            {...(entry.checked === undefined
+              ? { role: "menuitem" }
+              : { role: "menuitemradio", "aria-checked": entry.checked })}
             tabIndex={open ? 0 : -1}
             disabled={Boolean(entry.disabledReason)}
             data-disabled-reason={entry.disabledReason}
