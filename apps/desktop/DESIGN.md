@@ -1046,3 +1046,11 @@ pointer-transparent in the dock surface (content opts back in, as it
 already does over the workspace), and the hit test repeats when the
 window resizes under a parked pointer. The e2e clicks with the OS
 pointer, so the click lands wherever the OS says it does.
+
+The same window also moved a few pixels whenever a bubble opened or
+collapsed a chat: clicking the dock focuses the dock, and its resting
+area was read from the focused window, so with the dock in front it
+fell back to the display's edge instead of the workspace's chat region.
+The area now keeps the profile's last workspace window as its anchor
+while the dock itself is the one in focus; only focus leaving the app
+sends the dock to the display's edge.

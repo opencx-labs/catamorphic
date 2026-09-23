@@ -303,16 +303,31 @@ describe("dock modes", () => {
     });
     // A real click in the composer focuses the dock window, as typing would.
     const first = await bounds();
+    await dockRun(
+      `window.__dockPointerDowns = 0;
+       document.addEventListener('pointerdown', () => { window.__dockPointerDowns += 1; }, true);
+       return true;`,
+    );
     await app.clickPointer({
       x: first.dock.x - first.main.x + first.chat.left + 200,
       y: first.dock.y - first.main.y + first.chat.top + first.chat.height - 40,
     });
     await dockWait(
       `return document.hasFocus() && document.activeElement === composer();`,
-      {
-        label: "dock window focused through its composer",
-      },
-    );
+      { label: "dock window focused through its composer" },
+    ).catch(async (error: unknown) => {
+      const state = await dockRun(`return {
+        hasFocus: document.hasFocus(),
+        pointerDowns: window.__dockPointerDowns,
+        active: document.activeElement?.outerHTML.slice(0, 200),
+      };`);
+      throw new Error(`${String(error)}; dock state: ${JSON.stringify(state)}`);
+    });
+    // Focus on the dock window itself keeps it resting in the workspace's
+    // chat region rather than moving it to the display's edge.
+    const focused = await bounds();
+    expect(focused.dock.x).toBe(first.dock.x);
+    expect(focused.dock.y).toBe(first.dock.y);
     await dockRun(
       `setComposer('terminal: sleep 15 && echo through-done'); send(); return true;`,
     );

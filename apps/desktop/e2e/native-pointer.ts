@@ -43,11 +43,9 @@ export async function clickNativePointer(point: { x: number; y: number }) {
   assertIsolatedDesktopTestHost();
   const coordinates = [Math.round(point.x), Math.round(point.y)].map(String);
   if (process.platform === "linux") {
-    await promisify(execFile)(
-      "xdotool",
-      ["mousemove", "--sync", ...coordinates, "click", "1"],
-      { timeout: 10_000 },
-    );
+    // The move handles a pointer that is already there (--sync would hang).
+    await moveNativePointer(point);
+    await promisify(execFile)("xdotool", ["click", "1"], { timeout: 10_000 });
   } else {
     await promisify(execFile)(
       "python3",
