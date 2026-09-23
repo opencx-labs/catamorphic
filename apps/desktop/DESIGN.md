@@ -1033,3 +1033,24 @@ naming the project it was opened in when there was one. The page grows a
 scope menu in its header, "All projects" or one project, a facet rather
 than a filter field, so search stays with the palette. A loose file
 reopens as it opened, as a browser tab.
+
+### 2026-09-23: The detached dock lets the screen through
+
+In its own window the dock is transparent except for what it draws, and
+it hit-tests under the pointer to let clicks through wherever nothing is
+drawn. The app root filled that window and counted as something drawn,
+so the margins around an open chat swallowed every click on the
+workspace behind them, and since those clicks never landed, the window
+never lost focus and the chat never lurked. The root is now
+pointer-transparent in the dock surface (content opts back in, as it
+already does over the workspace), and the hit test repeats when the
+window resizes under a parked pointer. The e2e clicks with the OS
+pointer, so the click lands wherever the OS says it does.
+
+The same window also moved a few pixels whenever a bubble opened or
+collapsed a chat: clicking the dock focuses the dock, and its resting
+area was read from the focused window, so with the dock in front it
+fell back to the display's edge instead of the workspace's chat region.
+The area now keeps the profile's last workspace window as its anchor
+while the dock itself is the one in focus; only focus leaving the app
+sends the dock to the display's edge.

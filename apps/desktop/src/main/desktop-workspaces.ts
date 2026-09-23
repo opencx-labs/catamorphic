@@ -625,18 +625,29 @@ export class DesktopWorkspaces {
   }
 
   /**
-   * Where the dock rests: the focused workspace window's chat region when
-   * one of this profile's windows is in front, else the display's work area.
+   * Where the dock rests: the front workspace window's chat region when
+   * one of this profile's windows is in front, else the display's work
+   * area. Focus on the dock itself (a click on a bubble, typing in the
+   * chat) keeps the workspace it was resting in as the anchor; otherwise
+   * every open or collapse would move the strip between the region's
+   * edge and the display's.
    */
   private dockArea(profileId: string, dock: BrowserWindow) {
     const focused = BrowserWindow.getFocusedWindow();
-    if (focused && focused !== dock && !focused.isDestroyed()) {
-      const region = this.dockRegions.get(focused.webContents.id);
+    const anchor = focused === dock ? this.lastWindows.get(profileId) : focused;
+    if (
+      anchor &&
+      anchor !== dock &&
+      !anchor.isDestroyed() &&
+      anchor.isVisible() &&
+      !anchor.isMinimized()
+    ) {
+      const region = this.dockRegions.get(anchor.webContents.id);
       if (
         region &&
-        this.options.windows.profileFor(focused.webContents) === profileId
+        this.options.windows.profileFor(anchor.webContents) === profileId
       ) {
-        const content = focused.getContentBounds();
+        const content = anchor.getContentBounds();
         return {
           x: Math.round(content.x + region.left),
           y: Math.round(content.y + region.top),
