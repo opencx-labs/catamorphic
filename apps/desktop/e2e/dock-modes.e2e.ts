@@ -276,7 +276,7 @@ describe("dock modes", () => {
     await runWait(`return !!composer();`, { label: "chat back in the window" });
   }, 120_000);
 
-  it("in its own window, empty space lets clicks through to the workspace, and the chat lurks behind them", async () => {
+  it("in its own window, empty space lets clicks through to the workspace, and a click on the workspace lurks the chat", async () => {
     await app.eval(`window.catamorphicDesktop.dockDetach(true)`);
     const dock = await app.connectToFrame("surface=dock");
     const dockHelpers = `${helpers}`;
@@ -286,9 +286,11 @@ describe("dock modes", () => {
       body: string,
       opts?: { timeoutMs?: number; label?: string },
     ) => dock.waitFor<T>(`(() => { ${dockHelpers}\n${body} })()`, opts);
-    await dockWait(`return !!composer();`, {
-      label: "chat in the dock window",
-    });
+    await dockWait(
+      `return !!composer() && !frontDock().getAnimations({ subtree: true }).some((animation) =>
+         animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity);`,
+      { label: "chat open in the dock window" },
+    );
     const bounds = async () => ({
       dock: await dock.eval<{ x: number; y: number }>(
         "window.catamorphicDesktop.devWindow('get').then((state) => state.contentBounds)",
@@ -300,17 +302,69 @@ describe("dock modes", () => {
         `const rect = frontDock().getBoundingClientRect();
          return { left: rect.left, top: rect.top, height: rect.height };`,
       ),
+      composer: await dockRun<{ x: number; y: number }>(
+        `const rect = composer().getBoundingClientRect();
+         return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };`,
+      ),
     });
-    // A real click in the composer focuses the dock window, as typing would.
-    const first = await bounds();
+    // The workspace window records what reaches it.
+    await app.eval(
+      `window.__throughClicks = 0;
+       document.addEventListener('pointerdown', () => { window.__throughClicks += 1; }, true);
+       true`,
+    );
     await dockRun(
       `window.__dockPointerDowns = 0;
        document.addEventListener('pointerdown', () => { window.__dockPointerDowns += 1; }, true);
        return true;`,
     );
+    // The margin beside the chat is empty space in the dock window: the
+    // pointer passes over it, and the click lands on the workspace behind.
+    const first = await bounds();
+    const margin = {
+      x: first.dock.x - first.main.x + Math.floor(first.chat.left / 2),
+      y:
+        first.dock.y -
+        first.main.y +
+        first.chat.top +
+        Math.floor(first.chat.height / 2),
+    };
+    await app.movePointer(margin);
+    // The dock answers the hover by letting the window through; the OS
+    // applies that a moment later, and the click must come after it.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await app.clickPointer(margin);
+    const marginHit = await dockRun<string | null>(
+      `const hit = document.elementFromPoint(${Math.floor(first.chat.left / 2)}, ${first.chat.top + Math.floor(first.chat.height / 2)});
+       return hit ? hit.tagName : null;`,
+    );
+    // The dock reads the margin as empty space (only the body answers).
+    expect(marginHit).toBe("BODY");
+    if (process.platform === "darwin") {
+      // macOS honors the window's mouse-ignore, so the click lands behind
+      // it. The private Linux display's window manager does not apply X11
+      // input shapes, so there the click stays with the dock window.
+      await app
+        .waitFor(`window.__throughClicks > 0`, {
+          label: "click reached the workspace window",
+          timeoutMs: 10_000,
+        })
+        .catch(async (error: unknown) => {
+          const state = await dockRun(`return {
+            hasFocus: document.hasFocus(),
+            dockPointerDowns: window.__dockPointerDowns,
+          };`);
+          throw new Error(
+            `${String(error)}; margin ${JSON.stringify(margin)}; dock state: ${JSON.stringify(state)}`,
+          );
+        });
+    }
+    // A real click in the composer focuses the dock window, as typing would,
+    // and focus on the dock keeps it resting where it was rather than
+    // moving it to the display's edge.
     await app.clickPointer({
-      x: first.dock.x - first.main.x + first.chat.left + 200,
-      y: first.dock.y - first.main.y + first.chat.top + first.chat.height - 40,
+      x: first.dock.x - first.main.x + first.composer.x,
+      y: first.dock.y - first.main.y + first.composer.y,
     });
     await dockWait(
       `return document.hasFocus() && document.activeElement === composer();`,
@@ -323,8 +377,6 @@ describe("dock modes", () => {
       };`);
       throw new Error(`${String(error)}; dock state: ${JSON.stringify(state)}`);
     });
-    // Focus on the dock window itself keeps it resting in the workspace's
-    // chat region rather than moving it to the display's edge.
     const focused = await bounds();
     expect(focused.dock.x).toBe(first.dock.x);
     expect(focused.dock.y).toBe(first.dock.y);
@@ -335,25 +387,10 @@ describe("dock modes", () => {
       `return dockH() > 400 && !frontDock().hasAttribute('data-lurking');`,
       { label: "expanded while the dock window is focused" },
     );
-    // The workspace window records what reaches it.
-    await app.eval(
-      `window.__throughClicks = 0;
-       document.addEventListener('pointerdown', () => { window.__throughClicks += 1; }, true);
-       true`,
-    );
-    // The margin beside the chat is empty space in the dock window: the
-    // pointer passes over it, and the click lands on the workspace behind.
-    const { dock: dockBounds, main, chat } = await bounds();
-    const margin = {
-      x: dockBounds.x - main.x + Math.floor(chat.left / 2),
-      y: dockBounds.y - main.y + chat.top + Math.floor(chat.height / 2),
-    };
-    await app.movePointer(margin);
-    await app.clickPointer(margin);
-    await app.waitFor(`window.__throughClicks > 0`, {
-      label: "click reached the workspace window",
-      timeoutMs: 10_000,
-    });
+    // A click on the workspace takes the focus with it: the chat lurks.
+    const outside = { x: 40, y: 400 };
+    await app.movePointer(outside);
+    await app.clickPointer(outside);
     await dockWait(
       `return frontDock().hasAttribute('data-lurking') && dockH() < 220;`,
       { label: "lurks behind the click", timeoutMs: 10_000 },
