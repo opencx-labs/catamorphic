@@ -707,18 +707,13 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:site-settings-changed", handler);
   },
-  browserRecordHistory: (input: {
-    profileId: string;
-    url: string;
-    title: string;
-  }): Promise<void> => invoke("catamorphic:browser-history-record", input),
+  browserRecordHistory: (input: unknown): Promise<void> =>
+    invoke("catamorphic:browser-history-record", input),
   browserRetitleHistory: (input: {
-    profileId: string;
     url: string;
     title: string;
   }): Promise<void> => invoke("catamorphic:browser-history-retitle", input),
   browserSetHistoryFavicon: (input: {
-    profileId: string;
     url: string;
     faviconUrl: string;
   }): Promise<void> => invoke("catamorphic:browser-history-favicon", input),

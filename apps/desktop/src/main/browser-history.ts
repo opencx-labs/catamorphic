@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   type HistoryEntry,
   type HistoryPage,
+  type HistoryProject,
   type HistoryQuery,
   type HistoryVisit,
   historyEntrySchema,
@@ -20,7 +21,11 @@ export interface HistorySuggestion {
 const MAX_ENTRIES = 50_000;
 const WRITE_DEBOUNCE_MS = 500;
 
-/** Personal desktop history. Project resources and web visits share one store. */
+/**
+ * The profile's history (ADR 0154): web pages, files on this machine and
+ * project resources in one store, each entry naming the project it was
+ * opened in when there was one.
+ */
 export class HistoryStore {
   private cache = new Map<string, HistoryEntry[]>();
   private writes = new Map<string, ReturnType<typeof setTimeout>>();
@@ -39,7 +44,15 @@ export class HistoryStore {
       if (Array.isArray(raw))
         for (const value of raw) {
           const parsed = historyEntrySchema.safeParse(value);
-          if (parsed.success) entries.push(parsed.data);
+          // A project resource always names its project; one without it
+          // predates ADR 0154 and is dropped rather than migrated.
+          if (
+            parsed.success &&
+            (parsed.data.target.kind === "web" ||
+              parsed.data.target.kind === "local" ||
+              parsed.data.project)
+          )
+            entries.push(parsed.data);
         }
     } catch {
       /* A new profile has no history. */
@@ -91,7 +104,10 @@ export class HistoryStore {
     const id = historyIdentity(visit.target);
     const existing = entries.find((entry) => entry.id === id);
     if (existing)
+      // The project is where it was opened last; a visit without one
+      // (a page from the no-project window) clears it.
       Object.assign(existing, visit, {
+        project: visit.project,
         lastVisitAt: revisit ? Date.now() : existing.lastVisitAt,
         visitCount: existing.visitCount + (revisit ? 1 : 0),
       });
@@ -100,10 +116,20 @@ export class HistoryStore {
     else return;
     this.changed(profileId);
   }
-  record(profileId: string, url: string, title: string): void {
+  record({
+    profileId,
+    url,
+    title,
+    project,
+  }: {
+    profileId: string;
+    url: string;
+    title: string;
+    project?: HistoryProject;
+  }): void {
     this.recordVisit({
       profileId,
-      visit: { target: { kind: "web", url }, title: title || url },
+      visit: { target: { kind: "web", url }, title: title || url, project },
     });
   }
   import({
@@ -176,27 +202,38 @@ export class HistoryStore {
   query({
     profileId,
     query = "",
+    projectId,
     offset = 0,
     limit = 100,
   }: HistoryQuery & { profileId: string }): HistoryPage {
     const words = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
-    const entries = this.load(profileId)
-      .filter((entry) => {
-        const target =
-          entry.target.kind === "web"
-            ? entry.target.url
+    const all = [...this.load(profileId)].sort(
+      (a, b) => b.lastVisitAt - a.lastVisitAt,
+    );
+    const entries = all.filter((entry) => {
+      if (projectId && entry.project?.id !== projectId) return false;
+      const target =
+        entry.target.kind === "web"
+          ? entry.target.url
+          : entry.target.kind === "local"
+            ? entry.target.path
             : entry.target.resource;
-        const haystack =
-          `${entry.title} ${target} ${entry.projectName ?? ""} ${entry.target.kind}`.toLocaleLowerCase();
-        return words.every((word) => haystack.includes(word));
-      })
-      .sort((a, b) => b.lastVisitAt - a.lastVisitAt);
+      const haystack =
+        `${entry.title} ${target} ${entry.project?.name ?? ""} ${entry.target.kind}`.toLocaleLowerCase();
+      return words.every((word) => haystack.includes(word));
+    });
+    // Named from the latest visit, so a renamed project reads by its new name.
+    const projects = new Map<string, HistoryProject>();
+    for (const entry of all)
+      if (entry.project && !projects.has(entry.project.id))
+        projects.set(entry.project.id, entry.project);
     return {
       entries: entries.slice(
         Math.max(0, offset),
         Math.max(0, offset) + Math.min(200, Math.max(1, limit)),
       ),
       total: entries.length,
+      projects: [...projects.values()],
     };
   }
   remove({ profileId, id }: { profileId: string; id: string }): void {

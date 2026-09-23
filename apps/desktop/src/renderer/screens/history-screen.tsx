@@ -1,4 +1,4 @@
-import { History, Search, Trash2, X } from "lucide-react";
+import { ChevronDown, History, Search, Trash2, X } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import type { HistoryEntry } from "../../shared/history.js";
 import type { OpenMode } from "../../shared/open-mode.js";
@@ -6,9 +6,10 @@ import { Modal } from "../components/modal.js";
 import { OpenResourceButton } from "../components/open-resource-button.js";
 import { PendingButton } from "../components/pending-button.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
+import { MenuPortal } from "../components/sidebar-item-row.js";
 import { SiteFavicon } from "../components/site-favicon.js";
 import { desktopApi } from "../lib/desktop-api.js";
-import { HISTORY_ICONS, historyDetail, useHistory } from "../lib/history.js";
+import { historyDetail, historyIcon, useHistory } from "../lib/history.js";
 import { useListMotion } from "../lib/list-motion.js";
 import { useWorkspace } from "../lib/workspace-context.js";
 
@@ -26,6 +27,12 @@ function dayLabel(time: number): string {
     year: date.getFullYear() === today.getFullYear() ? undefined : "numeric",
   });
 }
+const ALL_PROJECTS = "";
+/**
+ * The profile's history (ADR 0154), newest first, by day. The scope menu
+ * narrows it to what was opened in one project; search stays with the
+ * palette's history mode.
+ */
 export function HistoryScreen({
   profileId,
   active = true,
@@ -39,8 +46,10 @@ export function HistoryScreen({
 }) {
   const runtime = useWorkspace();
   const [offset, setOffset] = useState(0);
+  const [projectId, setProjectId] = useState(ALL_PROJECTS);
   const history = useHistory({
     profileId,
+    projectId: projectId || undefined,
     offset,
     enabled: runtime.visible && active,
   });
@@ -56,8 +65,21 @@ export function HistoryScreen({
   const [confirmClear, setConfirmClear] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [scopeMenu, setScopeMenu] = useState<{
+    open: boolean;
+    position: { x: number; y: number };
+  } | null>(null);
+  const scopeButton = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
   useListMotion(list, history.entries.map(({ id }) => id).join("\n"));
+  const scope = history.projects.find((project) => project.id === projectId);
+  const scopeEntries = [
+    { action: ALL_PROJECTS, label: "All projects" },
+    ...history.projects.map((project) => ({
+      action: project.id,
+      label: project.name || "Project",
+    })),
+  ].map((entry) => ({ ...entry, checked: entry.action === projectId }));
   const open = async (entry: HistoryEntry, mode: OpenMode) => {
     setError(null);
     try {
@@ -96,6 +118,29 @@ export function HistoryScreen({
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4">
         <History className="size-4 text-fg-muted" />
         <h1 className="min-w-0 flex-1 text-sm font-medium text-fg">History</h1>
+        {history.projects.length > 0 && (
+          <button
+            ref={scopeButton}
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded={Boolean(scopeMenu?.open)}
+            data-testid="history-scope"
+            onClick={() => {
+              const rect = scopeButton.current?.getBoundingClientRect();
+              if (!rect) return;
+              setScopeMenu({
+                open: true,
+                position: { x: rect.right, y: rect.bottom + 4 },
+              });
+            }}
+            className="flex h-7 max-w-56 items-center gap-1 rounded-md px-2 text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+          >
+            <span className="truncate">
+              {scope ? scope.name || "Project" : "All projects"}
+            </span>
+            <ChevronDown className="size-3.5 shrink-0" aria-hidden="true" />
+          </button>
+        )}
         <ShortcutHint label="Search history">
           <button
             type="button"
@@ -109,7 +154,7 @@ export function HistoryScreen({
         <ShortcutHint label="Clear history">
           <button
             type="button"
-            disabled={!history.total}
+            disabled={!history.total && !projectId}
             data-disabled-reason="History is empty"
             aria-label="Clear history"
             onClick={() => setConfirmClear(true)}
@@ -123,7 +168,7 @@ export function HistoryScreen({
         <div ref={list} className="mx-auto max-w-3xl">
           {history.entries.map((entry, index) => {
             const day = dayLabel(entry.lastVisitAt);
-            const Icon = HISTORY_ICONS[entry.target.kind];
+            const Icon = historyIcon(entry);
             return (
               <Fragment key={entry.id}>
                 {(index === 0 ||
@@ -135,6 +180,8 @@ export function HistoryScreen({
                 )}
                 <div
                   data-item-id={entry.id}
+                  data-testid="history-row"
+                  data-kind={entry.target.kind}
                   className="group flex min-w-0 items-center gap-1 rounded-md transition-colors duration-150 hover:bg-bg-overlay focus-within:bg-bg-overlay"
                 >
                   <OpenResourceButton
@@ -158,6 +205,11 @@ export function HistoryScreen({
                         {historyDetail(entry)}
                       </span>
                     </span>
+                    {!projectId && entry.project && (
+                      <span className="hidden max-w-40 shrink-0 truncate text-[11px] text-fg-faint sm:block">
+                        {entry.project.name}
+                      </span>
+                    )}
                     <time
                       dateTime={new Date(entry.lastVisitAt).toISOString()}
                       className="shrink-0 text-[11px] tabular-nums text-fg-faint"
@@ -187,7 +239,9 @@ export function HistoryScreen({
               {history.loading
                 ? "Loading history…"
                 : (history.error ??
-                  "Pages and work you open will appear here.")}
+                  (scope
+                    ? `Nothing opened in ${scope.name || "this project"} yet.`
+                    : "Pages and work you open will appear here."))}
             </p>
           )}
           {(error || history.error) && (
@@ -232,6 +286,22 @@ export function HistoryScreen({
           )}
         </div>
       </div>
+      {scopeMenu && (
+        <MenuPortal
+          open={scopeMenu.open}
+          position={scopeMenu.position}
+          entries={scopeEntries}
+          onPick={(entry) => {
+            setProjectId(entry.action);
+            setOffset(0);
+            setScopeMenu((current) => current && { ...current, open: false });
+          }}
+          onDismiss={() =>
+            setScopeMenu((current) => current && { ...current, open: false })
+          }
+          onExited={() => setScopeMenu(null)}
+        />
+      )}
       <Modal
         open={confirmClear}
         onClose={() => {
@@ -248,8 +318,8 @@ export function HistoryScreen({
             Clear history?
           </h2>
           <p className="mt-2 text-[13px] leading-5 text-fg-muted">
-            Remove this profile's visit history. Your files, projects and
-            browser accounts stay in place.
+            Remove this profile's visit history across every project. Your
+            files, projects and browser accounts stay in place.
           </p>
           <div className="mt-5 flex justify-end gap-2">
             <button

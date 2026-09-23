@@ -50,6 +50,7 @@ import type { WorkspaceNavigation } from "../shared/desktop-workspace.js";
 import { type DownloadRecord, fileUrlFor } from "../shared/downloads.js";
 import {
   type HistoryEntry,
+  type HistoryProject,
   type HistoryVisit,
   historyIdentity,
 } from "../shared/history.js";
@@ -1819,15 +1820,26 @@ export function App({
     return key;
   };
   const openHistory = async (entry: HistoryEntry, mode: CommitMode) => {
-    if (entry.target.kind === "web") {
-      await openUrl(entry.target.url, mode);
+    const { target } = entry;
+    if (target.kind === "web") {
+      await openUrl(target.url, mode);
       return;
     }
-    const ownerId = entry.target.projectId;
+    if (target.kind === "local") {
+      // A file outside any project reopens as it opened: a browser tab
+      // showing what Work can show (ADR 0153).
+      openBrowserTab(localFileUrl(target.path), {
+        title: entry.title,
+        side: mode === "side",
+        floating: mode === "floating",
+      });
+      return;
+    }
+    const ownerId = target.projectId;
     if (!projects.some((project) => project.id === ownerId))
       throw new Error("This project's history is no longer available.");
     if (ownerId === projectId) {
-      await openLinkedSurface(historyDestination(entry), {
+      await openLinkedSurface(historyDestination(target), {
         mode,
         label: entry.title,
       });
@@ -1836,7 +1848,7 @@ export function App({
     await desktopApi.workspaceNavigate({
       projectId: ownerId,
       surface: {
-        url: historyDestination(entry),
+        url: historyDestination(target),
         title: entry.title,
         mode,
         nonce: crypto.randomUUID(),
@@ -1873,6 +1885,11 @@ export function App({
       if (navigation.url === "downloads")
         openTabRef.current(
           { kind: "downloads", name: "downloads", label: "Downloads" },
+          navigation.mode,
+        );
+      else if (navigation.url === "history")
+        openTabRef.current(
+          { kind: "history", name: "history", label: "History" },
           navigation.mode,
         );
       return;
@@ -4525,12 +4542,38 @@ export function App({
     (tab) => tabKey(tab) === workspace.activeTabKey,
   );
 
+  // The workspace's project root, so a file:// tab of one of its files
+  // is recorded as that project's file rather than a loose one.
+  const [projectRoot, setProjectRoot] = useState<string | null>(null);
+  useEffect(() => {
+    let current = true;
+    setProjectRoot(null);
+    if (!projectId) return;
+    void desktopApi
+      .projectRoot(projectId)
+      .then((root) => {
+        if (current) setProjectRoot(root);
+      })
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [projectId]);
   const lastHistoryVisit = useRef<HistoryVisit | null>(null);
   useEffect(() => {
-    if (!runtime.visible || !projectId || !workspaceReady) {
+    if (!runtime.visible || !workspaceReady) {
       lastHistoryVisit.current = null;
       return;
     }
+    const projectName = projectId
+      ? projects.find((item) => item.id === projectId)?.name
+      : undefined;
+    // The project list is still loading: this visit records once it lands.
+    if (projectId && projectName === undefined) return;
+    const project: HistoryProject | undefined =
+      projectId && projectName !== undefined
+        ? { id: projectId, name: projectName }
+        : undefined;
     const key =
       workspace.floatingKey ??
       (focusedChat?.mode === "partial"
@@ -4550,43 +4593,72 @@ export function App({
     const fileSurface = browserUrl?.startsWith("file://")
       ? parseSurfaceLink(browserUrl)
       : null;
-    const projectName = projects.find((item) => item.id === projectId)?.name;
+    // A file:// tab is one of the project's files when it lives under
+    // the project root; anything else is a file on this machine. Until
+    // the root is known the tab waits rather than recording as loose.
+    if (fileSurface?.kind === "file" && project && !projectRoot) return;
+    const fileLocation =
+      fileSurface?.kind === "file" && project && projectRoot
+        ? resolveProjectFileLocation(projectRoot, fileSurface.path)
+        : null;
     const visit: HistoryVisit | null =
       fileSurface?.kind === "file"
         ? {
-            target: { kind: "file", projectId, resource: fileSurface.path },
-            title: browser?.title || fileNameFromPath(fileSurface.path),
-            projectName,
-          }
-        : editor?.filePath
-          ? {
-              target: { kind: "file", projectId, resource: editor.filePath },
-              title: fileNameFromPath(editor.filePath),
-              projectName,
-            }
-          : chat?.sessionId && !chat.incognito
-            ? {
-                target: { kind: "chat", projectId, resource: chat.sessionId },
-                title: sessionsById.get(chat.sessionId)?.title ?? "Chat",
-                projectName,
-              }
-            : tab && ["app", "workflow", "run", "artifact"].includes(tab.kind)
-              ? tab.kind === "app" ||
-                tab.kind === "workflow" ||
-                tab.kind === "run" ||
-                tab.kind === "artifact"
+            target:
+              project &&
+              fileLocation &&
+              fileLocation.relativePath !== fileLocation.absolutePath
                 ? {
-                    target: { kind: tab.kind, projectId, resource: tab.name },
+                    kind: "file",
+                    projectId: project.id,
+                    resource: fileLocation.relativePath,
+                  }
+                : { kind: "local", path: fileSurface.path },
+            title: browser?.title || fileNameFromPath(fileSurface.path),
+            project,
+          }
+        : !project
+          ? null
+          : editor?.filePath
+            ? {
+                target: {
+                  kind: "file",
+                  projectId: project.id,
+                  resource: editor.filePath,
+                },
+                title: fileNameFromPath(editor.filePath),
+                project,
+              }
+            : chat?.sessionId && !chat.incognito
+              ? {
+                  target: {
+                    kind: "chat",
+                    projectId: project.id,
+                    resource: chat.sessionId,
+                  },
+                  title: sessionsById.get(chat.sessionId)?.title ?? "Chat",
+                  project,
+                }
+              : tab &&
+                  (tab.kind === "app" ||
+                    tab.kind === "workflow" ||
+                    tab.kind === "run" ||
+                    tab.kind === "artifact")
+                ? {
+                    target: {
+                      kind: tab.kind,
+                      projectId: project.id,
+                      resource: tab.name,
+                    },
                     title:
                       (tab.kind === "app"
                         ? appMetadata.get(tab.name)?.title
                         : null) ??
                       tab.label ??
                       tab.name,
-                    projectName,
+                    project,
                   }
-                : null
-              : null;
+                : null;
     if (!visit) {
       lastHistoryVisit.current = null;
       return;
@@ -4598,7 +4670,7 @@ export function App({
     if (
       !revisit &&
       previous?.title === visit.title &&
-      previous.projectName === visit.projectName
+      previous.project?.name === visit.project?.name
     )
       return;
     lastHistoryVisit.current = visit;
@@ -4613,6 +4685,7 @@ export function App({
   }, [
     runtime.visible,
     projectId,
+    projectRoot,
     workspaceReady,
     workspace,
     focusedChat,
@@ -5880,6 +5953,9 @@ export function App({
                   <BrowserScreen
                     profileId={browser.profileId}
                     projectId={projectId}
+                    projectName={
+                      projects.find((item) => item.id === projectId)?.name
+                    }
                     // Remounts (project/profile switches) resume at the
                     // last known URL, not the tab's original one.
                     initialUrl={browser.url || browser.initialUrl}

@@ -87,7 +87,7 @@ export interface WorkspaceNavigation {
     nonce: string;
     /**
      * How the url opens: a linked surface (default), an app page named by
-     * the url ("downloads"), or a plain browser tab at the url.
+     * the url ("downloads", "history"), or a plain browser tab at the url.
      */
     open?: "page" | "browser";
   };
