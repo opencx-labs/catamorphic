@@ -1887,6 +1887,11 @@ export function App({
           { kind: "downloads", name: "downloads", label: "Downloads" },
           navigation.mode,
         );
+      else if (navigation.url === "history")
+        openTabRef.current(
+          { kind: "history", name: "history", label: "History" },
+          navigation.mode,
+        );
       return;
     }
     if (navigation.open === "browser") {
@@ -4589,7 +4594,9 @@ export function App({
       ? parseSurfaceLink(browserUrl)
       : null;
     // A file:// tab is one of the project's files when it lives under
-    // the project root; anything else is a file on this machine.
+    // the project root; anything else is a file on this machine. Until
+    // the root is known the tab waits rather than recording as loose.
+    if (fileSurface?.kind === "file" && project && !projectRoot) return;
     const fileLocation =
       fileSurface?.kind === "file" && project && projectRoot
         ? resolveProjectFileLocation(projectRoot, fileSurface.path)

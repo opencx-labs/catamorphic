@@ -14,16 +14,6 @@ let second: { id: string };
 let loosePath: string;
 
 const isMac = `(/Mac/.test(navigator.platform))`;
-const palette = async () => {
-  await app.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {
-    key: 'p', bubbles: true, cancelable: true,
-    ...(${isMac} ? { metaKey: true } : { ctrlKey: true }),
-  })); true`);
-  await app.waitFor(
-    `[...document.querySelectorAll('textarea[aria-label="Search commands, pages, and more"]')].some((el) => document.activeElement === el)`,
-    { label: "palette open" },
-  );
-};
 const rows = `[...document.querySelectorAll('[data-testid="history-row"]')]`;
 const visibleRows = `${rows}.map((row) => row.textContent)`;
 
@@ -55,7 +45,7 @@ afterAll(async () => {
 
 const openIn = async (
   projectId: string,
-  surface: { url: string; title: string; open?: "browser" },
+  surface: { url: string; title: string; open?: "browser" | "page" },
 ) => {
   await app.eval(
     `window.catamorphicDesktop.workspaceNavigate(${JSON.stringify({
@@ -101,17 +91,15 @@ describe("profile history", () => {
   });
 
   it("the History page shows everything and the scope menu narrows it to one project", async () => {
-    await palette();
-    await app.insertText("History");
+    // The palette route to the page is covered by the browser-import suite.
+    await openIn(second.id, { url: "history", title: "History", open: "page" });
     await app.waitFor(
-      `document.activeElement.closest('[role="dialog"]')?.querySelector('[role="option"]')?.textContent.startsWith('History')`,
-      { label: "History row first" },
+      `!!document.querySelector('[data-testid="history-page"]')`,
+      {
+        label: "history page",
+      },
     );
-    await app.press("Enter");
-    await app.waitFor(
-      `!!document.querySelector('[data-testid="history-page"]') && ${rows}.length >= 3`,
-      { label: "history page with every row" },
-    );
+    await app.waitFor(`${rows}.length >= 3`, { label: "every row" });
     expect(await app.eval<string[]>(visibleRows)).toEqual(
       expect.arrayContaining([
         expect.stringContaining("notes.md"),
