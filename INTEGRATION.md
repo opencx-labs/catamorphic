@@ -707,9 +707,11 @@ entries is legitimate:
   `designing-apps` is design doctrine, the seed you most likely swap for
   your own. These defaults also supply the host skill tier; agent turns never
   restore missing or deliberately deleted project skill files.
-- `standingAgentPrompt` — the standing system prompt for coding-agent
-  sessions: omit for the workflow-authoring default, a string to replace,
-  `false` for none.
+- `standingAgentPrompt` — the standing system prompt for agent sessions:
+  omit for the default (`STANDING_AGENT_PROMPT`: general work, audience
+  calibration, skills on demand), a string to replace, `false` for none.
+  Keep it stable; per-turn facts belong in `TurnOptions.context` fragments
+  (ADR 0152), not the system prompt.
 
 ```ts
 export const catamorphic = createCatamorphic({

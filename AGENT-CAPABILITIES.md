@@ -7,11 +7,17 @@ and Allocations remain the source of execution and permission decisions. See
 
 ## Default context
 
-Before each turn, core supplies the current user ID, project ID/name, session,
-Allocation, Environment, runtime host, execution binding/WorkerNode, working
-directory, isolation, declared capabilities, and workspace lifetime. A host can
-supply a display name and time zone through `agentCapabilities.currentUser`.
+Before each turn, core renders a plain-language `session` fragment (ADR 0152):
+the person (display name or ID, time zone), their access (full, or through their
+roles), each role's name and description, the project, where commands and file
+edits run, and the time. Stock memberships describe roles through
+`MembershipsService.describeMember`; a host with its own entitlements supplies
+`roles` (and `displayName`, `timeZone`) through `agentCapabilities.currentUser`.
 Absent profile information stays absent; core does not invent a user directory.
+Infrastructure identifiers (Allocation, Environment, binding, WorkerNode,
+isolation, declared capabilities) stay out of the prompt and are read through
+`context.read`. Write role descriptions for the audience: who holds the role,
+what they do, and how technical they are.
 
 The agent loop's host and its command target are separate fields. For **This
 machine**, the model loop can remain on a server while sandbox commands execute
@@ -23,10 +29,14 @@ actual loop host and working directory. A standalone `context.read` can run on a
 different API instance, so those fields are `null` instead of guessing the loop's
 location from the API server.
 
-Facts are delivered separately from user prose and refreshed on each turn,
-including resumed sessions and retries. Claude uses its preset's appended
-instructions, AI SDK uses turn instructions, and Codex uses developer
-instructions. Descriptive names are data. No credentials, email addresses,
+Facts are `TurnOptions.context` fragments (`{ source, text, trust }`), refreshed
+each turn and delivered beside the user's message through the harness's native
+channel, never inside the message text or the cached system prompt: Claude Code
+uses the `UserPromptSubmit` hook's `additionalContext`, Codex uses
+`turn/start.additionalContext` (observed content as `untrusted`), and the AI SDK
+adapter adds a system message just before the user message. Hosts append their
+own fragments (the desktop adds the screen, private-file placement and peers).
+Descriptive names are data. No credentials, email addresses,
 permission arrays, lease tokens, or other users are injected automatically.
 
 ## Discover and invoke

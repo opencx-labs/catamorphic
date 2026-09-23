@@ -23,7 +23,9 @@ The host creates `accountHome` and owns login or API-key provisioning. Desktop
 resolves a verified pinned executable and its PATH sidecars independently of
 an installed developer toolchain (ADR 0091). Other hosts may provide their own.
 Each host session retains a native app-server process and its MCP children across
-turns. Current cwd, model, effort, and developer context refresh each turn. Changed
+turns. Current cwd, model and effort refresh each turn; session instructions are
+developer instructions and each turn's context rides `turn/start.additionalContext`
+(ADR 0152). Changed
 MCP configuration or policy restarts the process and resumes the durable thread ID.
 Five idle minutes release the process; the next turn resumes with fresh MCP state.
 `interrupt` interrupts the native turn, and disposal closes its process and gateway.
