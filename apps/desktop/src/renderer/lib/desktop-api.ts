@@ -3,6 +3,7 @@ import { shareEvent } from "@catamorphic/app";
 import type { ResourcePreview } from "@catamorphic/react";
 import type { ImportableBrowser } from "../../main/browser-import/types.js";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
+import type { AgentDefaultModelResult } from "../../shared/agent-default-model.js";
 import type { AppPrefs } from "../../shared/app-prefs.js";
 import type { BackgroundCommandView } from "../../shared/background-commands.js";
 import type {
@@ -991,6 +992,17 @@ export interface CatamorphicDesktopApi {
     agentId: string;
     sessionId?: string;
   }) => Promise<AgentCommandsResult>;
+  /**
+   * The model the agent's harness runs in this project when neither the
+   * chat nor the agent pins one (Claude Code settings, Codex config, the
+   * built-in agent's resolved default). Spawns the harness CLI; cached
+   * briefly in main.
+   */
+  agentDefaultModel: (input: {
+    projectId: string;
+    agentId: string;
+    sessionId?: string;
+  }) => Promise<AgentDefaultModelResult>;
   onAgentAuthMaybeChanged: (listener: () => void) => () => void;
   onAgentsChanged: (listener: (data: AgentsData) => void) => () => void;
   onAgentLoginFinished: (

@@ -266,6 +266,7 @@ Framed content previews transition the workspace margins and corner radius over
 | `pane-in-left` / `pane-in-right` (keyboard tab cycling) | 200ms | — (content-changed signal on a persistent wrapper; no exit to pair) |
 | `bubble-ask` (agent question arrival) | 280ms | — (one-shot nudge on a persistent bubble; no exit to pair) |
 | `input-recall-{up,down}-{a,b}` (composer ↑/↓ history) | 150ms | — (transform-only directional content signal; paired names replay rapid same-direction recalls without a classless frame) |
+| `activity-leave` / `activity-arrive` (agent activity line swap) | 150ms / 200ms | — (one beat of the working pulse carries a content swap on a persistent line: the old text dims up and away, the new rises in, then `animate-pulse` resumes) |
 | `title-change` (rename flash) | 1200ms | **sanctioned exception** — the
   one decorative-adjacent signal (see design log 2026-07-31); allowlisted in
   the test's `DURATION_EXCEPTIONS` |
@@ -443,6 +444,30 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-09-23: The chat names its model and moves with its work
+
+A chat with no pinned model said **Automatic**, which answered nothing:
+the harness decides, and nobody knew what it would pick. The chat now asks
+the harness before the first message. Claude Code reports the model its
+effective settings select for that folder (env, user, project and local
+settings, then the account default). Codex reports its config layers'
+model, else its catalog default. The built-in agent names its resolved
+OpenRouter pick. The inspector shows that name with a faint **default**
+tag, and the palette's default row carries it as detail. When a harness
+cannot say, the row names who decides (**Claude Code default**) instead
+of guessing. Each answer spawns the harness CLI, so main caches it for a
+minute per agent and folder, and chats ask only while nothing pins a model.
+
+The activity line breathes while the agent works. A new activity now rides
+one beat of that pulse: the old text dims up and away, the new text rises
+in, and the breathing resumes. Activities that arrive mid-beat collapse
+into the latest one. The line no longer blinks out between sending and the
+turn starting: a send stays "sending" until the session shows what the
+host did with it.
+
+Floating and lurking chats drop the agent icon beside the title. The strip
+is a glance; the title and the activity are what it is for.
+
 ### 2026-09-23: Passwords work like Chrome's
 
 Saving passwords felt broken. Any click in a form offered to save, even

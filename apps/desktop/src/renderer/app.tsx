@@ -5138,6 +5138,7 @@ export function App({
     defaultAgentId: effectiveDefaultAgentId,
     focusedChat: focusedChat
       ? {
+          sessionId: focusedChat.sessionId ?? null,
           agentId: focusedSession?.agentId ?? focusedChat.agentId ?? null,
           model:
             (focusedSession ? focusedSession.model : focusedChat.model) ?? null,

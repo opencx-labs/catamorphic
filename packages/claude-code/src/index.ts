@@ -13,6 +13,8 @@ export {
   listClaudeSlashCommands,
 } from "./list-commands.js";
 export {
+  type ClaudeCodeDefaultModel,
   type ClaudeCodeModel,
   listClaudeCodeModels,
+  resolveClaudeCodeModel,
 } from "./list-models.js";
