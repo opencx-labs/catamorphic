@@ -1,6 +1,10 @@
 import type { AgentSession } from "@catamorphic/react/types";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import {
+  defaultModelLabel,
+  useAgentDefaultModel,
+} from "../lib/agent-default-model.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
 import {
   type AgentInfo,
@@ -62,9 +66,16 @@ export function SidebarSessionInspector({
     enabled: !!agent,
     staleTime: 600_000,
   });
-  const model = session.model || agent?.model || "Automatic";
+  const pinnedModel = session.model || agent?.model;
+  const harnessDefault = useAgentDefaultModel({
+    projectId,
+    agent,
+    sessionId: session.id,
+    enabled: !pinnedModel,
+  });
+  const modelId = pinnedModel || harnessDefault.data?.model?.id;
   const effortModel = catalog.data?.models.find(
-    (entry) => entry.id === model || entry.resolvedId === model,
+    (entry) => entry.id === modelId || entry.resolvedId === modelId,
   );
   const reason = session.running
     ? "Wait for the current work to finish"
@@ -83,7 +94,10 @@ export function SidebarSessionInspector({
         agentName={agentName}
         checkout={checkout}
         incognito={privacy.data ?? false}
-        model={model}
+        model={
+          pinnedModel || defaultModelLabel(agent, harnessDefault.data?.model)
+        }
+        modelIsDefault={!pinnedModel && Boolean(harnessDefault.data?.model)}
         effort={
           effectiveEffort(
             agent,

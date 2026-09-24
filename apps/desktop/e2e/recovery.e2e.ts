@@ -32,7 +32,7 @@ const helpers = `
       el.textContent.trim(),
     );
   const activityLines = () =>
-    $$('[role="log"] .animate-pulse').map((el) => el.textContent.trim());
+    $$('[role="log"] [data-testid="activity-text"]').map((el) => el.textContent.trim());
   const spinnersOn = () => $$('svg.animate-spin').filter((el) => {
     let node = el, opacity = 1;
     while (node && node !== document.body) {

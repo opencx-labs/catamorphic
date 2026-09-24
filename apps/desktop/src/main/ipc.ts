@@ -33,6 +33,7 @@ import {
   type WebContents,
 } from "electron";
 import type { AgentCommandsResult } from "../shared/agent-commands.js";
+import type { AgentDefaultModelResult } from "../shared/agent-default-model.js";
 import type { FilePreviewInput } from "../shared/file-preview.js";
 import type { FileSearchInput } from "../shared/file-search.js";
 import type { GitDiffInput, GitRecordInput } from "../shared/git.js";
@@ -1374,6 +1375,39 @@ export function registerIpcHandlers(
           commands: [],
           error:
             "Could not load agent commands. Check the agent configuration and skill files, then retry.",
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:agent-default-model",
+    async (
+      _event,
+      input: { projectId: string; agentId: string; sessionId?: string },
+    ): Promise<AgentDefaultModelResult> => {
+      try {
+        const server = state.current;
+        if (!server) throw new Error("The project server is not ready.");
+        const workingDirectory = input.sessionId
+          ? (
+              await server.sessionCheckouts.describe({
+                projectId: input.projectId,
+                sessionId: input.sessionId,
+              })
+            ).path
+          : await server.projectRoots.get(input.projectId);
+        if (!workingDirectory)
+          throw new Error("The project folder is unavailable.");
+        return await server.agentRegistry.defaultModel({
+          projectId: input.projectId,
+          agentId: input.agentId,
+          workingDirectory,
+        });
+      } catch {
+        return {
+          model: null,
+          error: "Could not ask the agent which model it uses by default.",
         };
       }
     },

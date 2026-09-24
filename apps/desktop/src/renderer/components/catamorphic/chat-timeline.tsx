@@ -38,6 +38,7 @@ import {
   groupTurns,
   type WorkDisplay,
 } from "../../lib/turn-groups";
+import { ActivityText } from "../activity-text";
 import { ContextPill } from "../context-pill";
 import { ShortcutHint } from "../shortcut-hint";
 import { SessionAttribution } from "./session-attribution.js";
@@ -348,7 +349,7 @@ export function ChatTimeline({
         {activity && (
           <div className="flex items-center gap-2 text-xs text-fg-muted">
             <LoaderCircle className="size-4 animate-spin" />
-            <span className="animate-pulse">{activity}</span>
+            <ActivityText text={activity} />
             {!queue && queuedCount > 0 && (
               <span className="ml-auto text-fg-faint">
                 {queuedCount} queued

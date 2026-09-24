@@ -13,7 +13,6 @@ import { AgentEnvironmentControl } from "@catamorphic/ui";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowUp,
-  Bot,
   Columns2,
   Ghost,
   Globe,
@@ -44,6 +43,11 @@ import type {
   McpAppRef,
 } from "../../shared/chat.js";
 import { modifiersForMode } from "../../shared/open-mode.js";
+import {
+  defaultModelLabel,
+  sameModel,
+  useAgentDefaultModel,
+} from "../lib/agent-default-model.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
 import {
   type AgentInfo,
@@ -67,6 +71,7 @@ import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { classifyPastedText, selectionName, textPill } from "../lib/text-pills";
 import { useWorkDisplay } from "../lib/use-work-display.js";
 import type { ChatMode } from "../lib/workspace-types.js";
+import { ActivityText } from "./activity-text";
 import { AgentQuestionPanel } from "./agent-question-panel";
 import { AuthenticationRequiredCard } from "./authentication-required-card.js";
 import { ChatDeliveryRecovery } from "./catamorphic/agent-chat.js";
@@ -77,7 +82,6 @@ import {
   toTimeline,
 } from "./catamorphic/chat-timeline";
 import { TodoProgress } from "./catamorphic/todo-progress.js";
-import { ChatGlyph } from "./chat-icon";
 import { SurfacesRail } from "./chat-surface-rail.js";
 import { FilePreviewProjectContext } from "./file-preview";
 import { renderResponseLink } from "./response-link";
@@ -978,10 +982,19 @@ function ChatDockContent({
   const selectedModel =
     (chat.session ? chat.session.model : entry.model) || activeAgent?.model;
   const reportedModel = latestReportedModel(chat.messages);
+  // Nothing pinned: the harness runs its own default. Ask it which one, for
+  // a new chat right away (that is when the question matters) and for any
+  // other chat once its inspector opens.
+  const harnessDefault = useAgentDefaultModel({
+    projectId,
+    agent: activeAgent,
+    sessionId: chat.sessionId,
+    enabled: !authority && !selectedModel && (inspected || !chat.sessionId),
+  });
+  const runningModel =
+    selectedModel || harnessDefault.data?.model?.id || reportedModel;
   const effortModel = modelCatalog.data?.models.find(
-    (model) =>
-      model.id === (selectedModel || reportedModel) ||
-      model.resolvedId === (selectedModel || reportedModel),
+    (model) => model.id === runningModel || model.resolvedId === runningModel,
   );
   // Auth failures offer a one-click re-login only for account-auth agents
   // (OpenRouter PKCE, Claude Code / Codex logins); API-key agents are
@@ -2133,16 +2146,7 @@ function ChatDockContent({
             className={`min-w-0 flex-1 overflow-hidden text-xs font-semibold ${presentsAsTab ? "invisible" : ""}`}
             aria-hidden={presentsAsTab}
           >
-            {/* Icon on the left, centered against the two text lines; the
-              project sits under the title, never under the icon. */}
             <span className="flex min-w-0 items-center gap-2">
-              <span className="grid size-6 shrink-0 place-items-center rounded-full border border-border-strong bg-bg-overlay">
-                {chat.session?.icon ? (
-                  <ChatGlyph icon={chat.session.icon} className="size-3.5" />
-                ) : (
-                  <Bot className="size-3.5" />
-                )}
-              </span>
               <span className="flex min-w-0 flex-col leading-tight">
                 <span className="flex min-w-0 items-center gap-2">
                   <span className="truncate">{title}</span>
@@ -2246,8 +2250,20 @@ function ChatDockContent({
                       )?.name ?? "Project agent")
                     : (activeAgent?.name ?? "Default agent")
                 }
-                model={selectedModel || "Automatic"}
-                reportedModel={reportedModel}
+                model={
+                  selectedModel ||
+                  (harnessDefault.data?.model
+                    ? defaultModelLabel(activeAgent, harnessDefault.data.model)
+                    : reportedModel ||
+                      defaultModelLabel(activeAgent, undefined))
+                }
+                modelIsDefault={
+                  !selectedModel &&
+                  Boolean(harnessDefault.data?.model || reportedModel)
+                }
+                reportedModel={
+                  sameModel(reportedModel, runningModel) ? null : reportedModel
+                }
                 onInspect={() => {
                   setInspected(true);
                   setMoveCheckNonce((value) => value + 1);
@@ -2534,9 +2550,10 @@ function ChatDockContent({
                 className="size-4 shrink-0 animate-spin"
                 aria-hidden="true"
               />
-              <span className="truncate animate-pulse">
-                {activity ?? "Working…"}
-              </span>
+              <ActivityText
+                text={activity ?? "Working…"}
+                className="truncate"
+              />
             </div>
           )}
           <ChatDeliveryRecovery chat={chat} />

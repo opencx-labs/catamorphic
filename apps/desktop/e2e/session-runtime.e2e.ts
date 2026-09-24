@@ -86,9 +86,17 @@ describe("session runtime controls", () => {
       `window.__draftAgentDefaults = await window.catamorphicDesktop.agentsList();`,
     );
     await inspector();
+    // Nothing pinned: before the first message, the inspector names the
+    // model the harness itself would run, marked as its default.
+    await wait(
+      `const model = $('[aria-label="Change model"]'); return !!model && model.textContent.includes('Fake Model A') && model.textContent.includes('default');`,
+    );
     await run(`$('[aria-label="Change model"]').click();`);
     await pick("Fake Model B");
     await inspector();
+    await wait(
+      `const model = $('[aria-label="Change model"]'); return !!model && model.textContent.trim() === 'fake-model-b';`,
+    );
     await run(`$('[aria-label="Change reasoning"]').click();`);
     await pick("High effort");
     expect(
@@ -150,7 +158,7 @@ describe("session runtime controls", () => {
     await pick("Agent default");
     await inspector();
     await wait(
-      `const model = $('[aria-label="Change model"]'); return !!model && !model.textContent.includes('fake-model-b');`,
+      `const model = $('[aria-label="Change model"]'); return !!model && model.textContent.includes('Fake Model A') && model.textContent.includes('default');`,
     );
   });
 });

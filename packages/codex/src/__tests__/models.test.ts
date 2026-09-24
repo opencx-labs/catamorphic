@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { listCodexModels } from "../models.js";
+import { listCodexModels, resolveCodexModel } from "../models.js";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -65,5 +65,55 @@ describe("Codex model discovery", () => {
     await expect(
       listCodexModels({ executable: "/nonexistent/codex", timeoutMs: 1000 }),
     ).rejects.toThrow();
+  });
+});
+
+describe("Codex default model", () => {
+  // Answers config/read with the configured model (or none) and a catalog
+  // whose default is "catalog-default"; records the cwd it was asked about.
+  const server = (configured: string | null) =>
+    executable(`
+      const readline = require('node:readline');
+      readline.createInterface({ input: process.stdin }).on('line', line => {
+        const message = JSON.parse(line);
+        if (message.method === 'initialized') return;
+        if (message.method === 'initialize') { console.log(JSON.stringify({id: message.id, result: {}})); return; }
+        if (message.method === 'config/read') {
+          if (message.params.cwd !== '/checkout') process.exit(1);
+          console.log(JSON.stringify({id: message.id, result: {config: {model: ${JSON.stringify(configured)}}, origins: {}, layers: null}}));
+          return;
+        }
+        if (message.method === 'model/list') {
+          console.log(JSON.stringify({id: message.id, result: {data: [
+            {model: 'catalog-default', displayName: 'Catalog Default', isDefault: true, supportedReasoningEfforts: []},
+            {model: 'configured', displayName: 'Configured', isDefault: false, supportedReasoningEfforts: []},
+          ], nextCursor: null}}));
+        }
+      });
+    `);
+
+  it("prefers the model the config layers pin for that folder", async () => {
+    await expect(
+      resolveCodexModel({
+        executable: await server("configured"),
+        workingDirectory: "/checkout",
+      }),
+    ).resolves.toEqual({ id: "configured", name: "Configured" });
+  });
+  it("falls back to the catalog default", async () => {
+    await expect(
+      resolveCodexModel({
+        executable: await server(null),
+        workingDirectory: "/checkout",
+      }),
+    ).resolves.toEqual({ id: "catalog-default", name: "Catalog Default" });
+  });
+  it("keeps a configured model the catalog does not list", async () => {
+    await expect(
+      resolveCodexModel({
+        executable: await server("unlisted"),
+        workingDirectory: "/checkout",
+      }),
+    ).resolves.toEqual({ id: "unlisted" });
   });
 });
