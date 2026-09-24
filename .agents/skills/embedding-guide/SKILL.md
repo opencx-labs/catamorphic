@@ -29,15 +29,11 @@ function MyApp({ projectId, workflowName, files, initialCode }) {
       code={code}
       onCodeChange={setCode}
       onParse={onParse}
-      showMinimap
-      aiEnabled
-      onAIPrompt={async (prompt) => {
-        const result = await myAIService(prompt, code);
-        return result.updatedCode;
-      }}
-      renderInspector={({ code, onCodeChange, readOnly }) => (
-        <HostWorkflowInspector code={code} onCodeChange={onCodeChange} readOnly={readOnly} />
-      )}
+      renderInspector={({ node, close, code, onCodeChange, readOnly }) =>
+        node ? (
+          <HostStepInspector node={node} onClose={close} code={code} onCodeChange={onCodeChange} readOnly={readOnly} />
+        ) : null
+      }
       onRun={(input) => triggerRun.mutateAsync({ input })}
     />
   );
@@ -48,9 +44,9 @@ function MyApp({ projectId, workflowName, files, initialCode }) {
 
 - `code` / `onCodeChange` — controlled code state
 - `onParse` — required code-to-graph callback; normally use `useOnParse`
-- `renderInspector` receives code, onCodeChange, and readOnly for a host-owned inspector
-- `showMinimap` — toggle the React Flow minimap
-- `aiEnabled` / `onAIPrompt` — enable AI bar with custom handler
+- `renderInspector` receives the selected step (`node`), `close` (clears the selection), code, onCodeChange, and readOnly for a host-owned inspector; render it only while there is a subject
+- `renderControls` — replace the canvas's top-right corner controls (defaults: Runs and, with `onRun`, Run)
+- `showMinimap` — show the React Flow minimap (off by default)
 - `executionState` — overlay execution status on nodes
 - `onRun` — callback for the Run button
 - `nodeRenderers` — custom React components for node types

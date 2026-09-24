@@ -100,6 +100,12 @@ export interface ChatDockEntry {
   /** Auto-sent as the first message on mount (palette "Send to agent"). */
   pendingMessage?: PendingChatMessage;
   /**
+   * Started from the surface behind the dock (a workflow change request):
+   * the dock opens folded without taking focus, so that surface stays in
+   * view while the agent works. Consumed on mount.
+   */
+  watchBackdrop?: boolean;
+  /**
    * Agent picked for this chat before its session exists (palette "Switch
    * agent" on a fresh chat). Once a session is live, the session row owns
    * the choice.

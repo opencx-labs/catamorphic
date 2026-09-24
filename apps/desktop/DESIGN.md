@@ -1054,3 +1054,36 @@ fell back to the display's edge instead of the workspace's chat region.
 The area now keeps the profile's last workspace window as its anchor
 while the dock itself is the one in focus; only focus leaving the app
 sends the dock to the display's edge.
+
+### 2026-09-24: A workflow tab is its graph
+
+A workflow tab used to open with its name repeated under the tab strip,
+four header buttons, and an inspector that was always open, with a toggle
+that looked like the window's own right-sidebar button. Now the tab is
+the graph (ADR 0157). The tab, its rail chip and chat links name the
+workflow by its display name. Its state and actions float in the top-right
+corner the way a chat tab's do: a status trigger whose popover is the
+overview (what it does, saved and preview state, inputs, how it starts,
+source, actions), a code toggle, Save only while there is a draft, and Run.
+
+The side panel has a subject or it is closed: the step you selected, the
+code, a run, automatic runs, or a change you are describing. It shows a
+title and a close button, and clicking empty canvas or pressing Escape
+closes it too. "Automate" was on every workflow, even ones with nothing to
+automate. It is now an "Automatic" row in the status popover, shown only
+when the code declares triggers, and both kinds of run lead with one
+Publish action when the workflow is not published yet.
+
+Agent edits are the common way a workflow changes, so they had to read
+well. An inserted step used to take over its neighbor's place and the
+neighbor faded in below, because the graph and its laid-out nodes updated
+on different renders and swapped identities. Identity now comes from each
+node, departures clear before arrivals fade in, and steps added off-screen
+are panned into view. A clean buffer following the disk no longer flashes a
+"changed on disk" conflict on every edit. A change request sends your words
+with the workflow as context pills, and its chat opens folded so you can
+watch the graph while the agent works.
+
+The canvas follows the app's language: neutral nodes on raised surfaces,
+the accent only on the selection, solid still edges instead of marching
+dashes, icons instead of emoji, and a start node labeled Start.

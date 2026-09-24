@@ -3,8 +3,6 @@ export type {
   AgentChatDockProps,
 } from "./agent-chat-dock.js";
 export { AgentChatDock } from "./agent-chat-dock.js";
-export type { AIBarProps } from "./ai-bar.js";
-export { AIBar } from "./ai-bar.js";
 export type { AppMountProps } from "./app-mount.js";
 export { AppMount } from "./app-mount.js";
 export { WorkflowCanvas } from "./canvas.js";
@@ -21,8 +19,10 @@ export {
 } from "./display-utils.js";
 export type { RunsPanelProps } from "./runs-panel.js";
 export { RunDetail, RunsPanel } from "./runs-panel.js";
-export { Toolbar } from "./toolbar.js";
-export type { WorkflowEditorProps } from "./workflow-editor.js";
+export type {
+  WorkflowEditorControls,
+  WorkflowEditorProps,
+} from "./workflow-editor.js";
 export { WorkflowEditor, WorkflowEditorChrome } from "./workflow-editor.js";
 export type { WorkflowEditorScopeProps } from "./workflow-editor-scope.js";
 export {

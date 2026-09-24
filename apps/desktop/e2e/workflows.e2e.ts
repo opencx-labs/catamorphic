@@ -13,7 +13,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await app?.stop();
 });
-const helpers = `const $ = s => document.querySelector(s); const $$ = s => [...document.querySelectorAll(s)]; const button = text => $$('.workflow-workbench button').find(el => !el.closest('[inert]') && el.innerText.trim() === text); ${setReactValueJs}`;
+const helpers = `const $ = s => document.querySelector(s); const $$ = s => [...document.querySelectorAll(s)]; const button = text => $$('.workflow-workbench button').find(el => !el.closest('[inert]') && el.innerText.trim() === text); const status = () => $('[data-testid="workflow-status-trigger"]')?.textContent ?? ''; const title = () => $('[data-testid="workflow-status-trigger"]')?.getAttribute('aria-label')?.split(' status:')[0] ?? ''; const popoverButton = text => $$('[data-testid="workflow-status-content"] button').find(el => el.innerText.trim() === text); const showCode = () => { const toggle = $('button[aria-label="Code"]'); if (toggle.getAttribute('aria-pressed') !== 'true') toggle.click(); }; const tabLabel = () => $('[data-point-key="workflow:linkedWorkflow"]')?.textContent ?? ''; const panel = () => $('.workflow-stage')?.dataset; const node = label => $$('.react-flow__node').find(el => el.textContent.trim() === label); ${setReactValueJs}`;
 const run = <T>(body: string) =>
   app.eval<T>(`(async () => { ${helpers} ${body} })()`);
 const wait = (body: string, label: string) =>
@@ -82,13 +82,22 @@ describe("workflow authoring", { retry: 0 }, () => {
     );
 
     await wait(
-      `return $('.workflow-header h1')?.textContent === 'Weekly report' && $$('.react-flow__node').length === 4;`,
-      "workflow graph",
+      `return tabLabel().includes('Weekly report') && $$('.react-flow__node').length === 4 && !$('.workflow-workbench h1');`,
+      "workflow graph named by its tab",
     );
-    expect(
-      await run(`return $('[data-testid="workflow-details"]').innerText;`),
-    ).toContain("Gather the week's notes");
-    await run(`button('View code').click(); return true;`);
+    // Nothing is open until there is a subject; the overview lives in the
+    // status popover.
+    expect(await run(`return panel().panelOpen;`)).toBe("false");
+    await run(
+      `$('[data-testid="workflow-status-trigger"]').click(); return true;`,
+    );
+    await wait(
+      `return $('[data-testid="workflow-status-content"]')?.innerText.includes("Gather the week's notes");`,
+      "status popover overview",
+    );
+    await run(
+      `$$('[data-testid="workflow-status-content"] button').find(el => el.innerText.trim() === 'View code').click(); return true;`,
+    );
     await wait(
       `return !!$('.workflow-workbench .monaco-editor');`,
       "workflow source editor",
@@ -113,11 +122,8 @@ describe("workflow authoring", { retry: 0 }, () => {
     await app.eval(
       `window.catamorphicDesktop.setTheme({selection:'dark',overrides:{}})`,
     );
-    await run(`button('Details').click(); return true;`);
-    await wait(
-      `return !!$('[data-testid="workflow-details"]');`,
-      "return to overview",
-    );
+    await run(`$('button[aria-label="Close code"]').click(); return true;`);
+    await wait(`return panel().panelOpen === 'false';`, "code closed");
   });
 
   it("fits a workflow restored in a background tab on its first visible measurement", async () => {
@@ -153,25 +159,29 @@ describe("workflow authoring", { retry: 0 }, () => {
     await run(
       `window.workflowCanvas = $('.react-flow'); window.workflowViewport = $('.react-flow__viewport').style.transform; return true;`,
     );
-    await run(
-      `$('button[aria-label="Hide workflow inspector"]').click(); return true;`,
-    );
+    // Selecting a step opens its details; the close button clears both.
+    await run(`node('Gather notes').click(); return true;`);
     await wait(
-      `return $('.workflow-stage').dataset.inspectorOpen === 'false';`,
-      "inspector closed",
+      `return panel().panelOpen === 'true' && panel().panelView === 'step' && $('[data-testid="workflow-details"] h2')?.textContent === 'Gather notes';`,
+      "step details open with selection",
     );
-    await run(
-      `$('button[aria-label="Show workflow inspector"]').click(); return true;`,
+    await run(`$('button[aria-label="Close step"]').click(); return true;`);
+    await wait(
+      `return panel().panelOpen === 'false' && !$('.react-flow__node.selected');`,
+      "details closed with selection",
     );
     expect(await run(`return $('.react-flow')===window.workflowCanvas;`)).toBe(
       true,
+    );
+    await run(
+      `window.workflowViewport = $('.react-flow__viewport').style.transform; return true;`,
     );
     await run(
       `window.workflowSawMotion=false; window.workflowMotionObserver=new MutationObserver(()=>{if($('[data-graph-transitioning="true"]')) window.workflowSawMotion=true;}); window.workflowMotionObserver.observe($('.workflow-graph'),{subtree:true,attributes:true}); return true;`,
     );
     await writeSource(WORKFLOW_EDITOR_EXPANDED_SOURCE);
     await wait(
-      `return $$('.react-flow__node').some(node=>node.textContent.includes('Check notes')) && $('.workflow-header [role="status"]').textContent.includes('Saved');`,
+      `return $$('.react-flow__node').some(node=>node.textContent.includes('Check notes')) && status().includes('Saved');`,
       "live external edit preview",
     );
     await wait(
@@ -187,8 +197,12 @@ describe("workflow authoring", { retry: 0 }, () => {
       retainedCanvas: true,
       viewport: await run(`return window.workflowViewport;`),
     });
+    // A clean buffer follows the disk without ever reporting a conflict.
+    expect(
+      await run(`return !!$('[data-testid="workflow-status-content"]');`),
+    ).toBe(false);
     await run(
-      `window.workflowMotionObserver.disconnect(); button('Write summary').click(); return true;`,
+      `window.workflowMotionObserver.disconnect(); node('Write summary').click(); return true;`,
     );
     await wait(
       `return $('[data-testid="workflow-details"] h2')?.textContent === 'Write summary';`,
@@ -203,22 +217,26 @@ describe("workflow authoring", { retry: 0 }, () => {
     const count = await run<number>(`return $$('.react-flow__node').length;`);
     await writeSource("export const incomplete =");
     await wait(
-      `return $('.workflow-header [role="status"]').textContent.includes('needs attention');`,
+      `return status().includes('Needs attention');`,
       "parse failure status",
     );
     expect(await run(`return $$('.react-flow__node').length;`)).toBe(count);
-    expect(await run(`return $('.workflow-notice').innerText;`)).toContain(
-      "last valid preview",
+    await run(
+      `$('[data-testid="workflow-status-trigger"]').click(); return true;`,
+    );
+    await wait(
+      `return $('[data-testid="workflow-status-content"] [role="alert"]')?.innerText.includes('last valid version');`,
+      "status popover explains the stale preview",
+    );
+    await run(
+      `$('[data-testid="workflow-status-trigger"]').click(); return true;`,
     );
     await writeSource(WORKFLOW_EDITOR_EXPANDED_SOURCE);
-    await wait(
-      `return $('.workflow-header [role="status"]').textContent.includes('Saved');`,
-      "preview recovered",
-    );
+    await wait(`return status().includes('Saved');`, "preview recovered");
   });
 
   it("keeps an unsaved buffer across tab changes and asks before discarding", async () => {
-    await run(`button('Code').click(); return true;`);
+    await run(`showCode(); return true;`);
     await wait(
       `return !!$('.workflow-workbench .monaco-editor [role="textbox"]');`,
       "source input",
@@ -235,7 +253,7 @@ describe("workflow authoring", { retry: 0 }, () => {
       "unsaved workflow",
     );
     await wait(
-      `return $('.workflow-header h1')?.textContent === 'Team report';`,
+      `return title()==='Team report';`,
       "source edit updates preview",
     );
     await app.waitFor(
@@ -244,7 +262,7 @@ describe("workflow authoring", { retry: 0 }, () => {
     );
     await app.reload();
     await wait(
-      `return $('.workflow-header h1')?.textContent==='Team report' && !!button('Save') && !button('Save').disabled;`,
+      `return title()==='Team report' && !!button('Save') && !button('Save').disabled;`,
       "draft restored after reload",
     );
 
@@ -274,18 +292,18 @@ describe("workflow authoring", { retry: 0 }, () => {
     );
     await writeSource(WORKFLOW_EDITOR_SOURCE);
     await wait(
-      `return $('.workflow-notice').innerText.includes('changed on disk') && button('Save')?.disabled;`,
+      `return $('[data-testid="workflow-status-content"] [role="alert"]')?.innerText.includes('changed on disk') && button('Save')?.disabled;`,
       "external conflict preserves draft",
     );
-    await run(`button('Use disk version').click(); return true;`);
+    await run(`popoverButton('Use disk version').click(); return true;`);
     await wait(
-      `return button('Save')?.disabled && $('.workflow-header h1')?.textContent==='Weekly report';`,
+      `return !button('Save') && title()==='Weekly report';`,
       "explicitly discard local draft",
     );
   });
 
   it("saves source edits and clears the restored draft", async () => {
-    await run(`button('Code').click(); return true;`);
+    await run(`showCode(); return true;`);
     await wait(
       `return !!$('.monaco-editor [role="textbox"]');`,
       "source editor",
@@ -298,7 +316,7 @@ describe("workflow authoring", { retry: 0 }, () => {
       WORKFLOW_EDITOR_SOURCE.replace("Weekly report", "Team report"),
     );
     await wait(
-      `return button('Save') && !button('Save').disabled && $('.workflow-header h1')?.textContent==='Team report';`,
+      `return button('Save') && !button('Save').disabled && title()==='Team report';`,
       "edited workflow ready",
     );
     await run(`button('Save').click(); return true;`);
@@ -310,7 +328,7 @@ describe("workflow authoring", { retry: 0 }, () => {
   });
 
   it("does not restore discarded edits when reopening a closed workflow", async () => {
-    await run(`button('Code').click(); return true;`);
+    await run(`showCode(); return true;`);
     await wait(
       `return !!$('.monaco-editor [role="textbox"]');`,
       "source editor",
@@ -323,7 +341,7 @@ describe("workflow authoring", { retry: 0 }, () => {
       WORKFLOW_EDITOR_SOURCE.replace("Weekly report", "Discarded report"),
     );
     await wait(
-      `return $('.workflow-header h1')?.textContent==='Discarded report' && !button('Save')?.disabled;`,
+      `return title()==='Discarded report' && !button('Save')?.disabled;`,
       "draft ready to discard",
     );
     await run(
@@ -338,7 +356,7 @@ describe("workflow authoring", { retry: 0 }, () => {
       `window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),shiftKey:true,bubbles:true,cancelable:true})); return true;`,
     );
     await wait(
-      `return $('.workflow-header h1')?.textContent==='Team report' && button('Save')?.disabled;`,
+      `return title()==='Team report' && !button('Save');`,
       "reopened workflow uses saved source",
     );
   });
@@ -346,24 +364,21 @@ describe("workflow authoring", { retry: 0 }, () => {
   it("explains running and offers contextual agent editing", async () => {
     await run(`button('Run').click(); return true;`);
     await wait(`return !!$('[data-testid="workflow-runs"]');`, "run setup");
-    expect(
-      await run(`return $('[data-testid="workflow-runs"]').innerText;`),
-    ).toContain("published project version");
     await wait(
-      `return !!button('Record changes in Git') && !button('Record changes in Git').disabled;`,
-      "saved files available to record",
+      `return $('[data-testid="workflow-publish"]')?.innerText.includes('published version');`,
+      "runs explain the published version",
     );
-    await run(`button('Record changes in Git').click(); return true;`);
     await wait(
-      `return !!button('Publish project version') && !button('Publish project version').disabled;`,
-      "publishing available",
+      `return !!button('Publish') && !button('Publish').getAttribute('aria-disabled')?.includes('true');`,
+      "saved changes ready to publish",
     );
-    await run(`button('Publish project version').click(); return true;`);
+    await run(`button('Publish').click(); return true;`);
     await wait(
       `return [...$('[data-testid="workflow-runs"]').querySelectorAll('label')].some(el=>el.innerText.includes('Topic'));`,
       "published workflow inputs",
     );
-    await run(`button('Details').click(); return true;`);
+    await run(`node('Write summary').click(); return true;`);
+    await wait(`return !!button('Describe a change');`, "step actions");
     await run(`button('Describe a change').click(); return true;`);
     await wait(`return !!$('.workflow-field textarea');`, "edit request");
     await run(
