@@ -28,25 +28,6 @@ export const collapsedNodeIdsAtom = atom<Set<string>>(new Set<string>());
 
 export const executionStateAtom = atom<Record<string, string>>({});
 
-export type PanelTab = "details" | "code";
-
-export const rightPanelOpenAtom = atom<boolean>(false);
-export const activePanelTabAtom = atom<PanelTab>("details");
-
-export interface PanelVisibility {
-  codeEditor: boolean;
-  runsPanel: boolean;
-  minimap: boolean;
-}
-
-export const panelVisibilityAtom = atom<PanelVisibility>({
-  codeEditor: true,
-  runsPanel: false,
-  minimap: true,
-});
-
-export const aiLoadingAtom = atom<boolean>(false);
-
 export const codeEditorReadOnlyAtom = atom<boolean>(false);
 
 export const showRunDialogAtom = atom<boolean>(false);

@@ -8,21 +8,6 @@
   color: var(--color-fg);
   background: var(--color-bg);
 }
-.workflow-header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  min-height: 52px;
-  padding: 8px 12px 8px 16px;
-  border-bottom: 1px solid var(--color-border);
-}
-.workflow-header-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: end;
-  gap: 6px;
-}
 .workflow-primary,
 .workflow-secondary,
 .workflow-icon-button,
@@ -75,7 +60,8 @@
 .workflow-text-action:hover {
   color: var(--color-fg);
 }
-.workflow-workbench button:disabled {
+.workflow-workbench button:disabled,
+.workflow-workbench button[aria-disabled="true"] {
   opacity: 0.45;
   cursor: default;
 }
@@ -83,19 +69,6 @@
   :is(button, summary, input, select, textarea):focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
-}
-.workflow-notice {
-  display: flex;
-  align-items: start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-bg-raised);
-  color: var(--color-warning);
-  font-size: 12px;
-  line-height: 1.6;
-  overflow-wrap: anywhere;
 }
 .workflow-stage {
   position: relative;
@@ -110,8 +83,70 @@
   flex: 1;
   min-width: 0;
 }
-.workflow-inspector {
-  width: 360px;
+/* Status chrome: the tab names the workflow, so its state and actions float
+   over the canvas's top-right corner, as a chat tab's controls do. */
+.workflow-controls {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-raised);
+  transition: right 220ms var(--ease-standard);
+}
+.workflow-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  color: var(--color-fg-muted);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 150ms var(--ease-standard),
+    color 150ms var(--ease-standard);
+}
+.workflow-control:hover,
+.workflow-control[aria-pressed="true"] {
+  background: var(--color-bg-overlay);
+  color: var(--color-fg);
+}
+.workflow-controls :is(button):focus-visible {
+  outline-offset: -2px;
+}
+.workflow-control-icon {
+  width: 28px;
+  padding: 0;
+}
+.workflow-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  padding: 0 32px;
+  color: var(--color-fg-muted);
+  font-size: 12px;
+  text-align: center;
+  pointer-events: none;
+}
+.workflow-empty button {
+  pointer-events: auto;
+}
+.workflow-panel {
+  width: 380px;
   flex-shrink: 0;
   min-height: 0;
   overflow: hidden;
@@ -123,53 +158,35 @@
     opacity 220ms var(--ease-standard),
     border-color 220ms var(--ease-standard);
 }
-.workflow-stage[data-inspector-view="code"] .workflow-inspector {
+.workflow-stage[data-panel-view="code"] .workflow-panel {
   width: 50%;
 }
-.workflow-stage[data-inspector-open="false"] .workflow-inspector {
+.workflow-stage[data-panel-open="false"] .workflow-panel {
   width: 0;
   opacity: 0;
   border-color: transparent;
 }
-.workflow-inspector-inner {
+.workflow-panel-inner {
   display: flex;
   flex-direction: column;
   height: 100%;
-  min-width: 320px;
+  min-width: 340px;
 }
-.workflow-inspector-tabs {
+.workflow-panel-header {
   display: flex;
   align-items: center;
-  min-height: 40px;
-  padding: 0 8px;
-  gap: 4px;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 8px 0 20px;
   border-bottom: 1px solid var(--color-border);
 }
-.workflow-inspector-tabs > button {
-  position: relative;
-  height: 40px;
-  padding: 0 12px;
+.workflow-panel-header > h2 {
+  flex-shrink: 0;
   font-size: 12px;
+  font-weight: 500;
   color: var(--color-fg-muted);
-  cursor: pointer;
-  transition: color 150ms var(--ease-standard);
 }
-.workflow-inspector-tabs > button[aria-current="page"] {
-  color: var(--color-fg);
-}
-.workflow-inspector-tabs > button::after {
-  content: "";
-  position: absolute;
-  inset: auto 10px -1px;
-  height: 2px;
-  background: var(--color-accent);
-  transform: scaleX(0);
-  transition: transform 200ms var(--ease-standard);
-}
-.workflow-inspector-tabs > button[aria-current="page"]::after {
-  transform: scaleX(1);
-}
-.workflow-inspector-content {
+.workflow-panel-content {
   display: flex;
   flex-direction: column;
   position: relative;
@@ -182,6 +199,20 @@
   font-size: 12px;
   line-height: 1.6;
   overflow-wrap: anywhere;
+}
+.workflow-callout {
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-inset);
+}
+.workflow-callout > h3 {
+  font-size: 12px;
+  font-weight: 600;
+}
+.workflow-callout > p {
+  margin-top: 4px;
+  color: var(--color-fg-muted);
 }
 .workflow-detail-section {
   margin-top: 24px;
@@ -258,15 +289,6 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.workflow-source-header {
-  min-height: 36px;
-  padding: 4px 8px 4px 12px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  border-bottom: 1px solid var(--color-border);
-}
 .workflow-field {
   display: grid;
   gap: 6px;
@@ -297,29 +319,18 @@
   text-align: left;
 }
 @container (max-width: 740px) {
-  .workflow-header {
-    gap: 8px;
-    align-items: start;
-  }
-  .workflow-header-actions {
-    max-width: 190px;
-  }
-  .workflow-inspector,
-  .workflow-stage[data-inspector-view="code"] .workflow-inspector {
+  .workflow-panel,
+  .workflow-stage[data-panel-view="code"] .workflow-panel {
     position: absolute;
     inset: 0 0 0 auto;
-    width: min(360px, 92%);
-    z-index: 10;
+    width: min(380px, 92%);
+    z-index: 20;
   }
-  .workflow-stage[data-inspector-open="false"] .workflow-inspector {
+  .workflow-stage[data-panel-open="false"] .workflow-panel {
     width: 0;
   }
-  .workflow-inspector-inner {
-    min-width: min(320px, 85cqw);
-  }
-  .workflow-notice {
-    flex-direction: column;
-    gap: 4px;
+  .workflow-panel-inner {
+    min-width: min(340px, 85cqw);
   }
 }
 @media (prefers-reduced-motion: reduce) {

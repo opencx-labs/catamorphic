@@ -1381,12 +1381,17 @@ describe("agents and profiles", () => {
       `return !!$('.monaco-editor') && !!$('[data-point-key^="editor:"]') && !!$('[data-split-divider]');`,
       { label: "linked source editor" },
     );
+    // A workflow chip names the workflow, whatever the link text said.
+    await runWait(
+      `return $('a[href="workflow:linkedWorkflow"]')?.textContent.includes('Linked workflow');`,
+      { label: "workflow chip names the workflow" },
+    );
     await run(
-      `byText('a', 'Open linked graph').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform) })); return true;`,
+      `$('a[href="workflow:linkedWorkflow"]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform) })); return true;`,
     );
     await runWait(
-      `return !!$('[data-point-key="workflow:linkedWorkflow"]') && !!$('.react-flow__node');`,
-      { label: "linked workflow graph" },
+      `return !!$('[data-point-key="workflow:linkedWorkflow"]')?.textContent.includes('Linked workflow') && !!$('.react-flow__node');`,
+      { label: "linked workflow graph in a tab named for it" },
     );
 
     await run(

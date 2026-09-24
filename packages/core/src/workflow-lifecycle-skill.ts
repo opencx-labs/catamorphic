@@ -85,8 +85,9 @@ alone is not consent to enable every eligible workflow.
    In the desktop, **Automate** publishes the project's saved changes when the
    workflow is not published yet; say so rather than claiming it is deployed.
 5. Enable through the host's consent flow with the intended owner, Environment,
-   connections, and triggers. In the desktop, the member uses **Automate** and
-   **Enable for me**; someone who manages the project can choose **The team**
+   connections, and triggers. In the desktop, the member opens the workflow's
+   status, chooses **Automatic** (shown when the code declares triggers), and
+   **Enable for me**; someone who manages the project can choose **The project**
    instead. Connecting an account may finish that initiated flow; connecting an
    account by itself never initiates it.
 

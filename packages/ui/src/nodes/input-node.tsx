@@ -1,5 +1,6 @@
 import type { WorkflowNode } from "@catamorphic/parser";
 import { Handle, type NodeProps, Position } from "@xyflow/react";
+import { Zap } from "lucide-react";
 import type { CSSProperties } from "react";
 import { NodeIcon } from "./node-icon.js";
 
@@ -18,9 +19,13 @@ export function InputNode({ data }: NodeProps) {
           data-status={node.executionStatus}
         />
       )}
-      <div className="catamorphic-node-icon">⚡</div>
+      <div className="catamorphic-node-icon">
+        <Zap aria-hidden="true" size={18} strokeWidth={1.8} />
+      </div>
       <div className="catamorphic-node-content">
-        <div className="catamorphic-node-label">{node.label}</div>
+        {/* The workflow's name belongs to its tab or title; the graph's
+          first node is where it starts. */}
+        <div className="catamorphic-node-label">Start</div>
         {bindings.length > 0 && (
           <div className="catamorphic-node-triggers">
             {bindings.map((binding) => (

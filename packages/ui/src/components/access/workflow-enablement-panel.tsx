@@ -217,22 +217,27 @@ export function WorkflowEnablementPanel({
       }
       data-testid="workflow-enablement-panel"
     >
-      <div className="flex h-10 shrink-0 items-center justify-between border-b border-border px-3">
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <ShieldCheck className="size-4 text-accent" />
-          Run automatically
+      {/* Inline, the host panel owns the title and close action. */}
+      {!inline && (
+        <div className="flex h-10 shrink-0 items-center justify-between border-b border-border px-3">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <ShieldCheck className="size-4 text-accent" />
+            Run automatically
+          </div>
+          <button
+            type="button"
+            aria-label="Close workflow enablement"
+            onClick={onClose}
+            className="cursor-pointer rounded p-1 text-fg-muted hover:bg-bg-overlay hover:text-fg"
+          >
+            <X className="size-4" />
+          </button>
         </div>
-        <button
-          type="button"
-          aria-label="Close workflow enablement"
-          onClick={onClose}
-          className="cursor-pointer rounded p-1 text-fg-muted hover:bg-bg-overlay hover:text-fg"
-        >
-          <X className="size-4" />
-        </button>
-      </div>
+      )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-3 text-xs">
+      <div
+        className={`min-h-0 flex-1 overflow-y-auto text-xs ${inline ? "px-5 py-4" : "p-3"}`}
+      >
         <p className="text-fg-muted">
           {canManageTeam
             ? "Choose who this workflow runs for. It uses only the environment and connections shown here."

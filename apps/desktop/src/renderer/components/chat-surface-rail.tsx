@@ -4,12 +4,12 @@ import {
   ChevronUp,
   Columns2,
   FileCode,
-  GitBranch,
   GitFork,
   Globe,
   LayoutGrid,
   LoaderCircle,
   SquareTerminal,
+  Workflow,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -43,7 +43,7 @@ const SURFACE_ICONS = {
   chat: GitFork,
   subagent: Bot,
   app: LayoutGrid,
-  workflow: GitBranch,
+  workflow: Workflow,
   mcpapp: AppWindow,
 } as const;
 

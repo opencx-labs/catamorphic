@@ -987,8 +987,9 @@ function ChatDockContent({
   // the turn expand it for good.
   const sectionRef = useRef<HTMLElement>(null);
   const [dockHovered, setDockHovered] = useState(false);
-  // Starts true: the dock claims focus when it opens.
-  const [dockEngaged, setDockEngaged] = useState(true);
+  // Starts true: the dock claims focus when it opens, unless it was started
+  // to watch the surface behind it.
+  const [dockEngaged, setDockEngaged] = useState(!entry.watchBackdrop);
   // The detached window has no tab behind it; the rest of the screen plays
   // that role. Clicking into another app blurs the window, which lurks the
   // chat while the agent works; clicking the dock brings it back.
@@ -1012,6 +1013,10 @@ function ChatDockContent({
   // this dock's known autofocus calls are excluded from that authority.
   const userInteractionRef = useRef(0);
   const internalAutofocusDepthRef = useRef(0);
+  // A watching dock leaves focus where it is until the person interacts.
+  const watchBackdropInteractionRef = useRef(
+    entry.watchBackdrop ? userInteractionRef.current : null,
+  );
   // When the person last pressed or typed, and last moved the pointer:
   // only signals that follow real input may fold the dock (lurk). Layout
   // moving under a parked pointer, or a row claiming focus as it lands,
@@ -1320,6 +1325,7 @@ function ChatDockContent({
     onEntryChangeRef.current({
       ...entryRef.current,
       pendingMessage: undefined,
+      watchBackdrop: undefined,
     });
   }, []);
 
@@ -1890,6 +1896,8 @@ function ChatDockContent({
   }, []);
   useEffect(() => {
     if (!expanded) return;
+    if (watchBackdropInteractionRef.current === userInteractionRef.current)
+      return;
     const userInteraction = userInteractionRef.current;
     const frame = requestAnimationFrame(() => {
       if (userInteractionRef.current === userInteraction) {

@@ -540,8 +540,12 @@ describe.each([false, true])(
         `return $('[data-testid="workflow-runs"]')?.textContent.includes('store/inventory.txt');`,
         { label: "ordinary root store file is recordable" },
       );
-      await clickWorkflowButton("Record changes in Git");
-      await clickWorkflowButton("Publish project version");
+      // One action records the saved changes and publishes them.
+      await clickWorkflowButton("Publish");
+      await runWait(
+        `return !$('[data-testid="workflow-publish"]') && $('[data-testid="workflow-runs"]')?.textContent.includes('published version');`,
+        { timeoutMs: 60_000, label: "workflow published" },
+      );
       expect(fs.existsSync(path.join(importDir, ".git"))).toBe(true);
       for (const count of [1, 2]) {
         await clickWorkflowButton("Start run");

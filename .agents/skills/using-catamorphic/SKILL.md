@@ -63,7 +63,7 @@ namespaced project permissions. Catamorphic reserves `memberships:manage` and
 and presentation. The host owns membership assignment. Unattended triggers do
 not run from those grants alone:
 each member creates a consent-bound workflow enablement, usually through the
-desktop's **Automate** and **Enable for me** flow. The final connection auth may
+desktop's automatic runs flow (the workflow's status, then **Enable for me**). The final connection auth may
 complete an already-started enablement; account connection by itself never
 bulk-enables workflows.
 
@@ -466,8 +466,6 @@ import {
   graphAtom,
   graphParseStateAtom,
   executionStateAtom,
-  panelVisibilityAtom,
-  rightPanelOpenAtom,
   showRunDialogAtom,
   selectedNodeAtom,
   selectedNodeIdAtom,
@@ -532,14 +530,14 @@ export function WorkflowScreen({
       onParse={onParse}
       triggerParameters={triggerParameters}
       onRun={onRun}
-      showMinimap
-      aiEnabled
-      onAIPrompt={async (prompt) => callHostAI(prompt, code)}
-      renderInspector={({ code, onCodeChange, readOnly }) => (
-        // Your host component owns layout, details, actions, and visibility.
+      renderInspector={({ node, close, code, onCodeChange, readOnly }) =>
+        // Your host component owns layout, details, actions, and motion. It
+        // opens for a subject (here, the selected step) and closes with it.
         // It can mount the registry MonacoCodeEditor with onChange={onCodeChange}.
-        <HostWorkflowInspector code={code} onCodeChange={onCodeChange} readOnly={readOnly} />
-      )}
+        node ? (
+          <HostStepInspector node={node} onClose={close} code={code} onCodeChange={onCodeChange} readOnly={readOnly} />
+        ) : null
+      }
     />
   );
 }
@@ -551,15 +549,17 @@ Key props (see `WorkflowEditorProps` in `@catamorphic/ui`):
 
 - `code` / `onCodeChange` — controlled source string (required)
 - `onParse` — `OnParseCallback` that turns the current source into `{ graph, layoutedNodes, layoutedEdges }`. Use `useOnParse` unless you need custom parsing (different endpoint, project-git draft files, etc.) — in that case import `layoutGraph` from `@catamorphic/parser/layout`, **never** from the `@catamorphic/parser` barrel (it pulls `ts-morph` → `node:fs` into the client bundle).
-- `renderInspector`: the host-owned inspector slot. The host supplies its overview, step details, source editor, actions, and visibility/motion. There is no default sidebar or textarea. Read `rightPanelOpenAtom` and `activePanelTabAtom` when using the shared toolbar. The registry `MonacoCodeEditor` or any editor wired to `useCodeEditorLink` supplies source linking (ADR 0097).
+- `renderInspector`: the host-owned inspector slot. It receives the selected step (`node`, or null) and `close`, which clears the selection. The host supplies its step details, source editor, actions, and motion, and shows it only while it has a subject; there is no panel toggle, default sidebar, or textarea. The registry `MonacoCodeEditor` or any editor wired to `useCodeEditorLink` supplies source linking (ADR 0097, 0157).
+- `renderControls({ run, running, runsOpen, toggleRuns })`: the canvas's top-right corner controls; defaults to Runs and, with `onRun`, Run. Put status and actions here rather than in a toolbar.
+- `showMinimap`: shows the React Flow minimap (off by default).
 - `nodeRenderers` — partial map of `WorkflowNodeType` → component, overrides node visuals
 - `executionState` — `Record<nodeId, "running" | "completed" | "failed">` overlay
 - `onRun(triggerData) => Promise<Run>`: wires the Run dialog and active Run state
 - `triggerParameters` — `ParameterInfo[]` from `@catamorphic/parser` for the Run dialog form
-- `renderRunsPanel`, `renderBanner`, `renderToolbarCenter`: slots for host-owned chrome
+- `renderRunsPanel`, `renderBanner`: slots for host-owned chrome
 - `readOnly` — disables the code editor
 
-Atoms (`codeAtom`, `graphAtom`, `selectedNodeIdAtom`, `selectedNodeAtom`, `panelVisibilityAtom`, `rightPanelOpenAtom`, `showRunDialogAtom`, and others) live in `@catamorphic/react`. The editor's store is scoped by `<WorkflowEditorScope>`. To read or write atoms from host chrome, wrap the editor and your chrome in a shared scope:
+Atoms (`codeAtom`, `graphAtom`, `selectedNodeIdAtom`, `selectedNodeAtom`, `showRunDialogAtom`, and others) live in `@catamorphic/react`. The editor's store is scoped by `<WorkflowEditorScope>`. To read or write atoms from host chrome, wrap the editor and your chrome in a shared scope:
 
 ```tsx
 import { WorkflowEditor, WorkflowEditorScope } from "@catamorphic/ui";
@@ -577,9 +577,10 @@ function Inspector() {
 </WorkflowEditorScope>
 ```
 
-Lower-level pieces such as `WorkflowCanvas`, `RunsPanel`, `Toolbar`,
-`AIBar`, plus `WorkflowEditorChrome` (the inner editor without the scope
-wrapper), are exported too if you want to assemble a custom layout.
+Lower-level pieces such as `WorkflowCanvas`, `RunsPanel`, and
+`WorkflowEditorChrome` (the inner editor without the scope wrapper) are
+exported too if you want to assemble a custom layout. The canvas only selects;
+agent edits to the source animate in place and new steps are panned into view.
 
 The host also owns unsaved-buffer restoration, save/conflict feedback, run setup, and automation actions. `graphParseStateAtom` distinguishes updating, ready, and failed previews; the canvas retains the last valid graph after parse failure. Label stale previews visibly, keep the canvas mounted across inspector changes, and respect reduced motion.
 
@@ -664,7 +665,7 @@ Use cases:
 | `@catamorphic/react` | Frontend | `CatamorphicProvider`, project/run/git/agent/workflow-enablement hooks, archive and attention mutations, atoms, `useWorkflowGraph`, `useProjectGitState`, `CatamorphicError` |
 | `@catamorphic/react/types` | Frontend | OpenAPI-derived domain types (`Project`, `Run`, `RepoStatus`, `BranchInfo`, `ConflictEntry`, `PluginInfo`, `Secret`, `AgentSession`, …) |
 | `@catamorphic/react/workflow-helpers` | Frontend (server-safe) | Pure authoring helpers, no React |
-| `@catamorphic/ui` | Frontend | `WorkflowEditor`, `WorkflowEditorChrome`, `WorkflowEditorScope`, `WorkflowCanvas`, `RunsPanel`, `Toolbar`, `AIBar`, `AppMount`, plus `@catamorphic/ui/styles.css` |
+| `@catamorphic/ui` | Frontend | `WorkflowEditor`, `WorkflowEditorChrome`, `WorkflowEditorScope`, `WorkflowCanvas`, `RunsPanel`, `AppMount`, plus `@catamorphic/ui/styles.css` |
 | `@catamorphic/registry` | Frontend (copy-paste) | shadcn-style registry of pre-wired project, run, git, agent-chat, timeline, session-list, and tool-permission components |
 | `@catamorphic/parser` | Either | `parseWorkflow`, `parseProject`, `layoutGraph`, `WorkflowGraph` types |
 

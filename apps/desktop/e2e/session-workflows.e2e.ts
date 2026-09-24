@@ -51,13 +51,15 @@ it("authors a temporary one-shot, wakes once, stops and links its retained sourc
     "document.querySelector('[data-testid=session-attribution] a[href^=\"run:\"]').click();",
   );
   await wait(
-    "return !!$('[aria-label=\"Run of sessionwake\"]') && document.body.textContent.includes('Run history');",
+    "return $('[aria-label^=\"Run of \"]')?.getAttribute('aria-label').toLowerCase() === 'run of sessionwake' && document.body.textContent.includes('Run history');",
   );
   await app.waitFor(
     `(async()=>{const {url}=await window.catamorphicDesktop.getServerState(); const {items}=await (await fetch(url+'/api/projects')).json(); const state=await window.catamorphicDesktop.workspaceStateGet(items.find(p=>p.name==='Session workflows').id); return state?.tabs?.some(tab=>tab.kind==='run');})()`,
   );
   await app.reload();
-  await wait("return !!$('[aria-label=\"Run of sessionwake\"]');");
+  await wait(
+    "return $('[aria-label^=\"Run of \"]')?.getAttribute('aria-label').toLowerCase() === 'run of sessionwake';",
+  );
   await wait("return !!$('.cat-markdown a[href^=\"artifact:\"]');");
   await run(
     "document.querySelector('.cat-markdown a[href^=\"artifact:\"]').click();",
@@ -109,7 +111,7 @@ it("keeps quiet results inspectable and exposes failed runs with a working stop 
     "[...button('sessionfailure').parentElement.querySelectorAll('button')].find(b=>b.textContent.includes('Last run')).click();",
   );
   await wait(
-    "return !!$('[aria-label=\"Run of sessionfailure\"]') && document.body.textContent.includes('Controlled monitor failure');",
+    "return $('[aria-label^=\"Run of \"]')?.getAttribute('aria-label').toLowerCase() === 'run of sessionfailure' && document.body.textContent.includes('Controlled monitor failure');",
   );
   await run("$('[aria-label=\"Stop watcher sessionfailure\"]').click();");
   await wait(
