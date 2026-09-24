@@ -616,6 +616,38 @@ describeIf("unified RunsService integration", () => {
     });
   });
 
+  it("fails the run with the install error when its deployment cannot be prepared", async () => {
+    // A fresh runtime must be materialized for the install to run at all.
+    await db.deleteFrom("deployment_runtimes").execute();
+    providerOne.installFailure =
+      "error: failed to download @catamorphic/workflow@0.0.3: 404 Not Found";
+    providerOne.sandboxesCreated = 0;
+    const worker = core.runs.startWorker({
+      name: "install-failure",
+      kinds: ["durable_boundary"],
+      pollIntervalMs: 5,
+      leaseSeconds: 5,
+    });
+    try {
+      const run = await core.runs.triggerProduction({
+        identity,
+        projectId,
+        workflowName: "timeoutWorkflow",
+        input: { orderId: "order-install" },
+      });
+      await waitForStatus({ runId: run.id, status: "failed" });
+      const failed = await core.runs.get({ identity, runId: run.id });
+      expect(failed.error).toContain(
+        "Installing the workflow's dependencies failed: error: failed to download @catamorphic/workflow@0.0.3: 404 Not Found",
+      );
+      // One attempt, one sandbox: the job is not requeued onto new ones.
+      expect(providerOne.sandboxesCreated).toBe(1);
+    } finally {
+      await worker.stop();
+      providerOne.installFailure = undefined;
+    }
+  });
+
   it("resolves an overdue explicit resume through the timeout path", async () => {
     const worker = core.runs.startWorker({
       name: "pause-timeout",
@@ -2438,6 +2470,9 @@ class FakeSandboxProvider implements SandboxProvider {
   private readonly failAfterExecution = new Set<string>();
   private readonly alwaysFail = new Set<string>();
   invocationCount = 0;
+  sandboxesCreated = 0;
+  /** When set, every dependency install exits 1 with this output. */
+  installFailure: string | undefined;
 
   readonly deploymentRuntime: DeploymentRuntimeProvider = {
     ensureRuntime: async (args) => ({
@@ -2515,6 +2550,7 @@ class FakeSandboxProvider implements SandboxProvider {
   }
 
   async createSandbox() {
+    this.sandboxesCreated += 1;
     return {
       id: crypto.randomUUID(),
       providerId: `${this.name}-sandbox-${crypto.randomUUID()}`,
@@ -2531,6 +2567,9 @@ class FakeSandboxProvider implements SandboxProvider {
   }
 
   async executeCommand(_sandboxId: string, command: string) {
+    if (this.installFailure && command.includes("bun install")) {
+      return { exitCode: 1, result: this.installFailure };
+    }
     if (command === "bun run harness.ts") {
       return {
         exitCode: 0,

@@ -87,6 +87,7 @@ export class BoundaryExecutionHandler {
         capabilities: WorkflowCapabilities;
         execution: WorkflowExecutionDescriptor;
         permissions: readonly string[];
+        displayName?: string;
       }>;
       /**
        * Execute a host call transition (ADR 0055) as the run's caller. The
@@ -253,6 +254,7 @@ export class BoundaryExecutionHandler {
           capabilities: child.capabilities,
           execution: child.execution,
           permissions: child.permissions,
+          ...(child.displayName ? { displayName: child.displayName } : {}),
           input: toJson(transition.input),
         },
       });

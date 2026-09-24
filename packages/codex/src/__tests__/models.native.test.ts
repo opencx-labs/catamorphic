@@ -34,6 +34,12 @@ it("reads the model a thread in this folder would run from the pinned CLI's conf
     });
     expect(model?.id).toBe("fixture-model");
   } finally {
-    await rm(root, { recursive: true, force: true });
+    // The native process's final writes can race removal.
+    await rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    });
   }
 });

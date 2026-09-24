@@ -3054,6 +3054,7 @@ export interface paths {
                                 }[];
                                 provenance: {
                                     commitSha?: string;
+                                    displayName?: string;
                                 };
                                 artifact?: {
                                     /** Format: uuid */
@@ -3195,6 +3196,7 @@ export interface paths {
                             }[];
                             provenance: {
                                 commitSha?: string;
+                                displayName?: string;
                             };
                             artifact?: {
                                 /** Format: uuid */
@@ -3582,6 +3584,7 @@ export interface paths {
                             }[];
                             provenance: {
                                 commitSha?: string;
+                                displayName?: string;
                             };
                             artifact?: {
                                 /** Format: uuid */
@@ -3743,6 +3746,7 @@ export interface paths {
                             }[];
                             provenance: {
                                 commitSha?: string;
+                                displayName?: string;
                             };
                             artifact?: {
                                 /** Format: uuid */
@@ -5181,6 +5185,7 @@ export interface paths {
                             }[];
                             provenance: {
                                 commitSha?: string;
+                                displayName?: string;
                             };
                             artifact?: {
                                 /** Format: uuid */
@@ -5370,6 +5375,7 @@ export interface paths {
                             }[];
                             provenance: {
                                 commitSha?: string;
+                                displayName?: string;
                             };
                             artifact?: {
                                 /** Format: uuid */
@@ -5523,6 +5529,7 @@ export interface paths {
                             }[];
                             provenance: {
                                 commitSha?: string;
+                                displayName?: string;
                             };
                             artifact?: {
                                 /** Format: uuid */
@@ -5676,6 +5683,7 @@ export interface paths {
                             }[];
                             provenance: {
                                 commitSha?: string;
+                                displayName?: string;
                             };
                             artifact?: {
                                 /** Format: uuid */
@@ -5837,6 +5845,7 @@ export interface paths {
                             }[];
                             provenance: {
                                 commitSha?: string;
+                                displayName?: string;
                             };
                             artifact?: {
                                 /** Format: uuid */
@@ -6582,6 +6591,7 @@ export interface paths {
                                 /** Format: uuid */
                                 runId: string;
                                 workflowName: string;
+                                displayName?: string;
                             } | {
                                 /** @enum {string} */
                                 kind: "watcher";
@@ -7077,6 +7087,7 @@ export interface paths {
                                     /** Format: uuid */
                                     runId: string;
                                     workflowName: string;
+                                    displayName?: string;
                                 } | {
                                     /** @enum {string} */
                                     kind: "watcher";
@@ -10413,6 +10424,7 @@ export interface paths {
                                     /** Format: uuid */
                                     runId: string;
                                     workflowName: string;
+                                    displayName?: string;
                                 } | {
                                     /** @enum {string} */
                                     kind: "watcher";
@@ -13535,6 +13547,7 @@ export interface paths {
                             }[];
                             provenance: {
                                 commitSha?: string;
+                                displayName?: string;
                             };
                             artifact?: {
                                 /** Format: uuid */
@@ -13724,6 +13737,7 @@ export interface paths {
                             }[];
                             provenance: {
                                 commitSha?: string;
+                                displayName?: string;
                             };
                             artifact?: {
                                 /** Format: uuid */
@@ -14715,6 +14729,7 @@ export interface paths {
                             }[];
                             provenance: {
                                 commitSha?: string;
+                                displayName?: string;
                             };
                             artifact?: {
                                 /** Format: uuid */

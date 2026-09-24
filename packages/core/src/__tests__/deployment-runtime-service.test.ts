@@ -11,7 +11,10 @@ import {
   RUNTIME_PROTOCOL_VERSION,
 } from "@catamorphic/sandbox";
 import { describe, expect, it, vi } from "vitest";
-import { DeploymentRuntimeService } from "../services/deployment-runtime-service.js";
+import {
+  DeploymentPreparationError,
+  DeploymentRuntimeService,
+} from "../services/deployment-runtime-service.js";
 import type {
   DeploymentRuntimeRecord,
   DeploymentRuntimeRecordStatus,
@@ -104,6 +107,28 @@ describe("DeploymentRuntimeService lifecycle", () => {
       ).rejects.toThrow(
         failure === "upload" ? "Upload failed" : "Install failed",
       );
+      if (failure === "install") {
+        // A failed install is the invocation's outcome, never a retry.
+        await expect(
+          service.ensure({
+            projectId: "project-1",
+            artifact: {
+              id: "artifact-new",
+              projectId: "project-1",
+              commitSha: "a".repeat(40),
+              artifactDigest: "b".repeat(64),
+              pluginDigest: "c".repeat(64),
+              transformVersion: EXECUTION_TRANSFORM_VERSION,
+              runtimeVersion: DEPLOYMENT_RUNTIME_VERSION,
+              status: "ready",
+              createdAt: old.toISOString(),
+              readyAt: old.toISOString(),
+              lastUsedAt: old.toISOString(),
+            },
+            files: { ".catamorphic/package.json": "{}" },
+          }),
+        ).rejects.toBeInstanceOf(DeploymentPreparationError);
+      }
       if (failure === "install")
         expect(provider.executeCommand).toHaveBeenCalledWith(
           "sandbox-new",

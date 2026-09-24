@@ -27,6 +27,18 @@ import { uploadWorkspace } from "./playground/workspace-upload.js";
 
 const tracer = getTracer("@catamorphic/core");
 
+/**
+ * The deployment could not be prepared: its dependencies did not install,
+ * or its files could not be protected. Retrying the job cannot fix that,
+ * so the step fails with this message (its retry policy still applies).
+ */
+export class DeploymentPreparationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DeploymentPreparationError";
+  }
+}
+
 export class DeploymentRuntimeNotSupportedError extends Error {
   constructor() {
     super("Sandbox provider does not support deployment runtimes");
@@ -92,7 +104,7 @@ export class DeploymentRuntimeService {
       args.artifact.transformVersion !== EXECUTION_TRANSFORM_VERSION ||
       args.artifact.runtimeVersion !== DEPLOYMENT_RUNTIME_VERSION
     ) {
-      throw new Error(
+      throw new DeploymentPreparationError(
         `Deployment artifact '${args.artifact.id}' uses incompatible transform or runtime versions`,
       );
     }
@@ -572,8 +584,14 @@ export class DeploymentRuntimeService {
       );
     }
     if (install.exitCode !== 0) {
-      throw new Error(
-        `Deployment dependency install failed: ${install.result}`,
+      // bun's own banner line says nothing about what went wrong.
+      const output = install.result
+        .split("\n")
+        .filter((line) => !/^bun install v\S+/.test(line.trim()))
+        .join("\n")
+        .trim();
+      throw new DeploymentPreparationError(
+        `Installing the workflow's dependencies failed: ${output}`,
       );
     }
     await uploadPluginPayloads({
@@ -588,7 +606,9 @@ export class DeploymentRuntimeService {
       { cwd: args.projectDirectory, timeout: 30 },
     );
     if (protect.exitCode !== 0) {
-      throw new Error(`Failed to protect deployment files: ${protect.result}`);
+      throw new DeploymentPreparationError(
+        `Failed to protect deployment files: ${protect.result.trim()}`,
+      );
     }
   }
 }

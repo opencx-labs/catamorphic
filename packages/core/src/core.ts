@@ -1069,7 +1069,7 @@ export class CatamorphicCore {
   ) {
     const run = await this.db
       .selectFrom("workflow_runs")
-      .select(["workflow_enablement_id", "input"])
+      .select(["workflow_enablement_id", "input", "provenance"])
       .where("id", "=", context.runId)
       .where("project_id", "=", context.projectId)
       .executeTakeFirstOrThrow();
@@ -1100,6 +1100,12 @@ export class CatamorphicCore {
         kind: "workflow",
         runId: context.runId,
         workflowName: context.workflowName,
+        ...(run.provenance &&
+        typeof run.provenance === "object" &&
+        !Array.isArray(run.provenance) &&
+        typeof run.provenance.displayName === "string"
+          ? { displayName: run.provenance.displayName }
+          : {}),
       };
     return {
       author,

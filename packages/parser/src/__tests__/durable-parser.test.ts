@@ -517,3 +517,63 @@ export const plain = defineWorkflow(({ defineBoundary }) => ({
     expect(() => parseWorkflow(withPermissions("PERMS"))).toThrow();
   });
 });
+
+describe("conditional boundary bodies", () => {
+  const nodesOf = (source: string) => {
+    const graph = parseWorkflow(source);
+    const block = graph.nodes.find((node) => node.type === "if-block");
+    const branches = graph.nodes.filter((node) => node.parentId === block?.id);
+    return {
+      branches,
+      inside: (branchId: string | undefined) =>
+        graph.nodes.filter((node) => node.parentId === branchId),
+    };
+  };
+
+  it("draws a host call in its arm and no box for a value-only else", () => {
+    const { branches, inside } = nodesOf(`
+export const nudge = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<{ sessionId?: string }>) =>
+        input.sessionId
+          ? host["catamorphic.sessions"].deliver({ sessionId: input.sessionId, content: "Hi" })
+          : { skipped: true },
+    }),
+  ],
+}));
+`);
+    expect(branches.map((branch) => branch.label)).toEqual(["input.sessionId"]);
+    expect(inside(branches[0]?.id).map((node) => node.label)).toEqual([
+      "Message a chat",
+    ]);
+  });
+
+  it("draws step calls in both arms", () => {
+    const { branches, inside } = nodesOf(`
+/** @displayname Notify */
+async function notify({ to }: { to: string }) { "use step"; return to; }
+/** @displayname Archive */
+async function archive({ id }: { id: string }) { "use step"; return id; }
+
+export const route = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ input }: BoundaryContext<{ urgent: boolean; id: string }>) =>
+        input.urgent ? notify({ to: input.id }) : archive({ id: input.id }),
+    }),
+  ],
+}));
+`);
+    expect(branches.map((branch) => branch.label)).toEqual([
+      "input.urgent",
+      "Otherwise",
+    ]);
+    expect(inside(branches[0]?.id).map((node) => node.label)).toEqual([
+      "Notify",
+    ]);
+    expect(inside(branches[1]?.id).map((node) => node.label)).toEqual([
+      "Archive",
+    ]);
+  });
+});

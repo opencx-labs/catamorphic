@@ -18,7 +18,7 @@ export function SessionAttribution({
   if (!author || author.kind === "user") return null;
   const actor =
     author.kind === "workflow"
-      ? author.workflowName
+      ? (author.displayName ?? readableName(author.workflowName))
       : author.kind === "watcher"
         ? "Watcher"
         : author.kind === "agent"
@@ -96,6 +96,15 @@ export function SessionAttribution({
       )}
     </div>
   );
+}
+/** `staleChatNudge` reads as "Stale chat nudge" when no display name is known. */
+function readableName(name: string): string {
+  const words = name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[-_.]+/g, " ")
+    .trim()
+    .toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)

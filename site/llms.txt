@@ -85,7 +85,7 @@ embedding architecture.
 
 - `apps/server` is the self-hostable reference host: PGlite by default, PostgreSQL optional, bare git origins, local-process execution, and no required external services.
 - Better Auth provides built-in local username and password sign-in plus optional OAuth and OIDC providers. Desktop, PWA, and MCP clients use authorization code with S256 PKCE and refresh tokens.
-- Project invitations are credential-free locators. Ordinary project roles control admission, membership, and builder access. Initial users and roles are provisioned by a local setup agent through machine-local operator operations, not an admin UI or privileged product user.
+- Project invitations are credential-free locators. Ordinary project roles grant agents, workflows, apps, documents, and read, write or publish permissions. Initial users and roles are provisioned by a local setup agent through machine-local operator operations, not an admin UI or privileged product user.
 
 ## Optional
 

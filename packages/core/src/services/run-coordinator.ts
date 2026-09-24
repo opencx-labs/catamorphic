@@ -5,12 +5,14 @@ import type {
   WorkflowExecutionDescriptor,
   WorkflowExecutionUnitDescriptor,
 } from "@catamorphic/parser";
+import type { RuntimeInvocationReceipt } from "@catamorphic/sandbox";
 import { type Kysely, sql, type Transaction } from "kysely";
 import {
   type Identity,
   intersectProjectPermissions,
   type ProjectPermissionRef,
 } from "../identity.js";
+import { DeploymentPreparationError } from "./deployment-runtime-service.js";
 import type {
   ExecutionJob,
   ExecutionJobsService,
@@ -100,20 +102,31 @@ export class RunCoordinator {
     });
   }
 
-  async invokeRuntime<T>(args: {
+  async invokeRuntime(args: {
     job: ExecutionJob;
     invocationId: string;
-    invoke: () => Promise<T>;
-  }): Promise<T> {
+    invoke: () => Promise<RuntimeInvocationReceipt>;
+  }): Promise<RuntimeInvocationReceipt> {
     if (!(await this.registerInvocation(args))) {
       throw new RuntimeInvocationFencedError(args.invocationId);
     }
-    let result: T;
+    let result: RuntimeInvocationReceipt;
     try {
       result = await args.invoke();
     } catch (error) {
       const owned = await this.unregisterInvocation(args);
       if (!owned) throw new RuntimeInvocationFencedError(args.invocationId);
+      // A deployment that cannot be prepared is the invocation's outcome,
+      // not a worker hiccup: report it like any failed invocation instead
+      // of requeueing the job onto yet another sandbox.
+      if (error instanceof DeploymentPreparationError) {
+        return {
+          runtimeId: "",
+          invocationId: args.invocationId,
+          events: [],
+          terminal: { status: "failed", error: error.message, steps: [] },
+        };
+      }
       throw error;
     }
     const owned = await this.unregisterInvocation(args);
@@ -452,6 +465,8 @@ export class RunCoordinator {
       execution: WorkflowExecutionDescriptor;
       /** The child's declared permissions; it gets what the parent run holds of them. */
       permissions: readonly string[];
+      /** The child's own display name, never the parent's. */
+      displayName?: string;
       input: Json;
     };
   }): Promise<string | null> {
@@ -488,6 +503,7 @@ export class RunCoordinator {
           provenance: jsonColumn(
             toJson({
               ...jsonRecord(parent.provenance),
+              displayName: args.child.displayName,
               capabilities: args.child.capabilities,
             }),
           ),
