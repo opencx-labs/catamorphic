@@ -191,7 +191,6 @@ describe("ProjectInspectorView", () => {
               remoteProjectName: "Alpha",
               lastSyncAt: null,
               capabilities: {
-                builder: false,
                 source: null,
                 permissions: [],
                 agents: ["csm"],

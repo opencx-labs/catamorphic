@@ -105,7 +105,6 @@ export interface RemoteMe {
   identity: { externalUserId: string; root: boolean };
   projects: Array<{
     projectId: string;
-    builder: boolean;
     source: { remoteUrl: string; defaultBranch: string } | null;
     permissions: string[];
     agents: string[];

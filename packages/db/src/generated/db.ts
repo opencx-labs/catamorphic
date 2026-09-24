@@ -113,6 +113,7 @@ export interface AgentSessions {
   authority_revision: Generated<Int8>;
   authority_seen_at: Generated<Timestamp>;
   base_commit_sha: string | null;
+  chat_key: string | null;
   created_at: Generated<Timestamp>;
   environment_name: string | null;
   external_user_id: string;
@@ -137,7 +138,6 @@ export interface AgentSessions {
   title: string | null;
   todos: Generated<Json>;
   updated_at: Generated<Timestamp>;
-  wake_key: string | null;
   work_status: Generated<string>;
 }
 
@@ -966,6 +966,14 @@ export interface Watchers {
   workflow_name: string;
 }
 
+export interface WebhookEndpoints {
+  created_at: Generated<Timestamp>;
+  id: Generated<string>;
+  name: string;
+  project_id: string;
+  token: string;
+}
+
 export interface WorkerNodes {
   authority_id: string;
   capacity: Json | null;
@@ -1010,11 +1018,10 @@ export interface WorkflowEnablements {
   environment_name: string;
   expires_at: Timestamp | null;
   id: Generated<string>;
-  owner_connection_id: string | null;
   owner_external_user_id: string | null;
   owner_identity: Json;
   owner_kind: string;
-  owner_principal_kind: string | null;
+  permissions: Generated<Json>;
   project_id: string;
   remote_branch: Generated<string>;
   revision: Generated<number>;
@@ -1070,6 +1077,7 @@ export interface WorkflowRuns {
   attempt: Generated<number>;
   caller_connection_scope: Json | null;
   caller_execution_scope: Json | null;
+  caller_project_permissions: Json | null;
   caller_scope: Json | null;
   cancel_reason: string | null;
   cancel_requested_at: Timestamp | null;
@@ -1208,6 +1216,7 @@ export interface DB {
   user_notification_events: UserNotificationEvents;
   watcher_runs: WatcherRuns;
   watchers: Watchers;
+  webhook_endpoints: WebhookEndpoints;
   worker_nodes: WorkerNodes;
   workflow_enablement_connections: WorkflowEnablementConnections;
   workflow_enablement_events: WorkflowEnablementEvents;

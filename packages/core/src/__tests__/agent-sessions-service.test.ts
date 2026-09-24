@@ -3,6 +3,8 @@ import { SEED_SKILLS } from "../seeds.js";
 import {
   activityLabel,
   buildAgentSystemPrompt,
+  checkpointMessage,
+  liveStatusLine,
   modelVisibleDelivery,
   parsePorcelain,
 } from "../services/agent-sessions-service.js";
@@ -24,6 +26,20 @@ describe("modelVisibleDelivery", () => {
     ).toBe(
       "[Catamorphic watcher message from watcher-1, run run-1. This message was not written by the user.]\n\nChecks failed",
     );
+  });
+});
+
+describe("liveStatusLine", () => {
+  it("turns an agent's own words into one calm line", () => {
+    expect(liveStatusLine("**Reviewing database migrations**")).toBe(
+      "Reviewing database migrations",
+    );
+    expect(liveStatusLine("Run the test suite.\nThen fix it")).toBe(
+      "Run the test suite. Then fix it",
+    );
+    expect(liveStatusLine("   ")).toBeUndefined();
+    expect(liveStatusLine(undefined)).toBeUndefined();
+    expect(liveStatusLine("x".repeat(200))?.length).toBe(80);
   });
 });
 
@@ -188,5 +204,19 @@ describe("buildAgentSystemPrompt", () => {
       }),
     ).toBe("Use the host's billing plugin.");
     expect(buildAgentSystemPrompt({ standingPrompt: false })).toBe("");
+  });
+});
+
+describe("checkpointMessage", () => {
+  it("names a turn by its request, never the host's provenance header", () => {
+    expect(checkpointMessage("Fix the login page\nIt 500s")).toBe(
+      "Agent: Fix the login page",
+    );
+    expect(
+      checkpointMessage(
+        "[Catamorphic system message: background_command. This message was not written by the user.]\n\nWatch watch-1 (Deploy is live) succeeded on check 3.",
+      ),
+    ).toBe("Agent: Watch watch-1 (Deploy is live) succeeded on check 3.");
+    expect(checkpointMessage("")).toBe("Agent checkpoint");
   });
 });

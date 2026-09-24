@@ -241,7 +241,8 @@ export function visibleSidebarConfig({
           .filter(
             (section) =>
               matchesProjectExperience(section.when, context) &&
-              (context.builder ||
+              (context.root ||
+                context.permissions.includes("program:write") ||
                 !["git"].includes(section.source?.type ?? section.type)),
           )
           .map((section) => ({ ...section, items: items(section.items) })),

@@ -61,8 +61,8 @@ File and proposal lifecycle (ADR 0136): new personal files stay on this device
 by default, including inside company projects. A file's top controls use the
 same status inspector as chat: actual location, Save, Publish, and Propose.
 The Proposals sidebar reuses PR review. Members submit selected files through
-the company host; builders approve or apply the reviewed revision with their
-own repository identity. Worktrees serve independent repository work, not
+the company host; holders of `program:publish` approve or apply the reviewed
+revision with their own repository identity. Worktrees serve independent repository work, not
 ordinary documents, privacy, or the existence of a proposal.
 
 1. **System-first.** New profiles follow the operating system, resolving to
@@ -444,6 +444,23 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-09-24: Permissions replace the builder flag
+
+A remote project used to split people into members and builders, and a
+builder could do everything: edit, publish, set secrets, read every chat.
+The desktop now reads what the person actually holds from `GET /me`
+(ADR 0158). Holding `program:write` is what the builder experience was: the
+project opens as a Git checkout of the program with its files and branches.
+Approving and applying proposals needs `program:publish`, so someone can
+edit without shipping. Inviting and managing members needs
+`memberships:write`. Sidebar items and starting actions target `when: { permissions }`; there is
+no builder switch left to match.
+
+Turning a workflow on shows what it asks to do in plain words: "Post into
+anyone's chat", not `sessions:write`. Only someone holding every listed
+permission can confirm. When an automation stops because its owner lost a
+permission, its status says so in a sentence instead of a reason code.
+
 ### 2026-09-23: The chat names its model and moves with its work
 
 A chat with no pinned model said **Automatic**, which answered nothing:
@@ -1079,6 +1096,50 @@ fell back to the display's edge instead of the workspace's chat region.
 The area now keeps the profile's last workspace window as its anchor
 while the dock itself is the one in focus; only focus leaving the app
 sends the dock to the display's edge.
+
+### 2026-09-23: Long work runs beside the chat, and the agent says what it is doing
+
+A dev server or a slow build used to hold the chat on "Working" or vanish
+when the turn ended. Now an agent starts it with a background command (ADR
+0155): it runs in its own terminal, a chip the person can open, and the chat
+moves on. Its step stays in view and pulses, "Running in background", until
+the process ends; then it reads "Ran command in background" and folds in with
+the other steps, and one quiet line in the chat says it finished while the
+agent picks the result up. Quick commands stay on each agent's own shell.
+
+The line under a working chat says what the agent is doing in its own words:
+a command's description, the in-progress todo, or the heading of its
+reasoning summary. "Working..." is only what it says before it has said
+anything.
+
+### 2026-09-23: Automations run for you or for the project; agents can watch
+
+Turning a workflow on asks one question first, to those who manage the
+project: runs for **Just me** or **The project**. "Project", not "team": a
+project can be one person's brain as much as a company's. A project automation
+runs as the project, not as the person who switched it on, so its consent
+summary says "The project" and its chats are shared: they carry a small
+project mark in the sidebar, the chat header and on mobile, and anyone in the
+project can open one and continue it. A pull request review lands as one
+project chat, not one per person. Members see the project's automations but
+not the controls.
+
+Turning on uses the project's published version. The desktop offers Publish
+above the choice (2026-09-24 entry below). Any other host embedding the panel
+gets the same safety net inside it: when a workflow is only saved, the panel
+says so in plain words and offers **Publish changes and continue** instead of
+a "not found" error, and the consent review follows without starting over.
+
+A workflow that listens on a webhook shows its URL in the same panel, with a
+copy button and a quiet "Replace URL" that asks once before cutting senders
+off. Until the workflow is on, it says "Enable to start receiving" rather than
+pretending the URL works.
+
+An agent waiting for something that is not its own process (a deploy, a
+review, a file) watches it instead of sleeping. The step reads "Watching" and
+pulses like a background command, then settles into "Watched until done" or
+"Stopped watching". The chat wakes with one quiet line when the check passes
+or changes. A laptop that slept through ten checks makes one when it wakes.
 
 ### 2026-09-24: A workflow tab is its graph
 

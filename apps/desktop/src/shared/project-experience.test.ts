@@ -2,42 +2,42 @@ import { describe, expect, it } from "vitest";
 import {
   matchesProjectExperience,
   sanitizeProjectExperienceWhen,
+  writesProgram,
 } from "./project-experience.js";
 
 describe("project experience targeting", () => {
   const maintainer = {
     root: false,
-    builder: false,
-    permissions: ["brain:maintain", "memberships:manage"],
+    permissions: ["brain:maintain", "memberships:write"],
   };
 
-  it("matches builder state and requires every named permission", () => {
+  it("requires every named permission", () => {
     expect(
-      matchesProjectExperience(
-        { builder: false, permissions: ["brain:maintain"] },
-        maintainer,
-      ),
+      matchesProjectExperience({ permissions: ["brain:maintain"] }, maintainer),
     ).toBe(true);
     expect(
       matchesProjectExperience(
-        { permissions: ["brain:maintain", "roles:manage"] },
+        { permissions: ["brain:maintain", "roles:write"] },
         maintainer,
       ),
     ).toBe(false);
-    expect(matchesProjectExperience({ builder: true }, maintainer)).toBe(false);
+    expect(
+      matchesProjectExperience({ permissions: ["program:write"] }, maintainer),
+    ).toBe(false);
   });
 
   it("lets root authority preview every project-authored experience", () => {
     expect(
       matchesProjectExperience(
         { permissions: ["company:anything"] },
-        { root: true, builder: true, permissions: [] },
+        { root: true, permissions: [] },
       ),
     ).toBe(true);
   });
 
-  it("fails closed for malformed or unnamespaced permission predicates", () => {
+  it("fails closed for malformed predicates and the retired builder flag", () => {
     expect(sanitizeProjectExperienceWhen("builder")).toBeNull();
+    expect(sanitizeProjectExperienceWhen({ builder: true })).toBeNull();
     expect(
       sanitizeProjectExperienceWhen({ permission: "brain:maintain" }),
     ).toBeNull();
@@ -46,9 +46,14 @@ describe("project experience targeting", () => {
     ).toBeNull();
     expect(
       sanitizeProjectExperienceWhen({
-        builder: false,
         permissions: ["brain:maintain", "brain:maintain"],
       }),
-    ).toEqual({ builder: false, permissions: ["brain:maintain"] });
+    ).toEqual({ permissions: ["brain:maintain"] });
+  });
+
+  it("a member writes the program only with program:write", () => {
+    expect(writesProgram({ permissions: ["program:write"] })).toBe(true);
+    expect(writesProgram({ permissions: ["program:read"] })).toBe(false);
+    expect(writesProgram(null)).toBe(false);
   });
 });

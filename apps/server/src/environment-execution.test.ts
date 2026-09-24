@@ -155,10 +155,11 @@ it("an embedded host executes each session on its Allocation and rejects revoked
     expect(agent.sessions.get(onA.id)?.sandboxId).not.toBe(
       agent.sessions.get(onB.id)?.sandboxId,
     );
-    // A currently scoped builder no longer has permission to execute on B.
+    // A currently scoped admin no longer has permission to execute on B.
     const revoked: Identity = {
       ...identity,
-      scope: [{ kind: "project", projectId: project.id }],
+      scope: [{ kind: "agent", projectId: project.id, name: "*" }],
+      projectPermissions: [{ projectId: project.id, permission: "*" }],
       executionScope: [{ projectId: project.id, name: "a" }],
     };
     const denied = await sessions.sendMessage(
@@ -300,7 +301,8 @@ it("an authenticated member executes on this machine and loses execution immedia
     )?.bindingId;
     const revoked: Identity = {
       ...identity,
-      scope: [{ kind: "project", projectId: project.id }],
+      scope: [{ kind: "agent", projectId: project.id, name: "*" }],
+      projectPermissions: [{ projectId: project.id, permission: "*" }],
       executionScope: [],
     };
     await expect(

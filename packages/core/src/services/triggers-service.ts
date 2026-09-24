@@ -10,8 +10,14 @@ import {
   renderAppApiTypesModule,
 } from "@catamorphic/parser";
 import type { Kysely } from "kysely";
-import { type Identity, SYSTEM_AUTHOR } from "../identity.js";
+import {
+  hasProjectPermission,
+  type Identity,
+  SYSTEM_AUTHOR,
+} from "../identity.js";
 import { PROJECT_CHECK_SCRIPT, PROJECT_CHECK_SCRIPT_PATH } from "../seeds.js";
+import { assertProjectPermission, resolveScope } from "./artifact-scope.js";
+import { requireTenantProject } from "./projects-service.js";
 import type {
   EnrollmentConflictPolicy,
   RunSuspensionReason,
@@ -233,6 +239,8 @@ export class TriggersService {
     identity: Identity;
     projectId: string;
   }): Promise<{ paths: string[]; updated: boolean }> {
+    await requireTenantProject(this.db, args.identity.tenantId, args.projectId);
+    assertProjectPermission(args.identity, args.projectId, "program:write");
     const repo = await this.deps.projectManager.openDev(
       args.identity.tenantId,
       args.projectId,
@@ -289,10 +297,27 @@ export class TriggersService {
         ...this.registry.keys(),
       ]);
     }
+    await requireTenantProject(this.db, args.identity.tenantId, args.projectId);
     const scan = await this.ensureScan(args);
-    return args.kind
-      ? scan.bindings.filter((binding) => binding.kind === args.kind)
-      : scan.bindings;
+    // Without `program:read`, only the workflows the caller may run.
+    const reachable = hasProjectPermission(
+      args.identity,
+      args.projectId,
+      "program:read",
+    )
+      ? null
+      : ((
+          await resolveScope({
+            db: this.db,
+            identity: args.identity,
+            projectId: args.projectId,
+          })
+        )?.allowedWorkflows ?? null);
+    return scan.bindings.filter(
+      (binding) =>
+        (!args.kind || binding.kind === args.kind) &&
+        (!reachable || reachable.has(binding.workflowName)),
+    );
   }
 
   /**
@@ -902,6 +927,37 @@ export class TriggersService {
             JSON.stringify(workflow.graph.connections),
           ) as Json,
         });
+      }
+    }
+    // One webhook name is one URL with one signature check: workflows that
+    // share a name must agree on it, or the sender could not satisfy both.
+    const webhookChecks = new Map<
+      string,
+      { workflow: string; verify: string }
+    >();
+    for (const binding of bindings) {
+      if (binding.kind !== "webhook") continue;
+      const config = binding.config;
+      if (
+        !config ||
+        typeof config !== "object" ||
+        !("name" in config) ||
+        typeof config.name !== "string"
+      )
+        continue;
+      const verify = JSON.stringify(
+        "verify" in config ? (config.verify ?? null) : null,
+      );
+      const first = webhookChecks.get(config.name);
+      if (!first) {
+        webhookChecks.set(config.name, {
+          workflow: binding.workflowName,
+          verify,
+        });
+      } else if (first.verify !== verify) {
+        errors.push(
+          `Workflows '${first.workflow}' and '${binding.workflowName}' bind webhook '${config.name}' with different verify settings`,
+        );
       }
     }
     // Effective MCP tool names must be unique per project and may not claim

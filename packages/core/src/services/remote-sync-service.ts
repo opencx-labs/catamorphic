@@ -10,7 +10,7 @@ import {
 } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely } from "kysely";
-import { type Identity, isBuilder } from "../identity.js";
+import { hasProjectPermission, type Identity } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import type {
   CodeHost,
@@ -60,7 +60,8 @@ export class RemoteSyncService {
     projectId: string;
   }): Promise<RemoteSyncOutcome> {
     const { identity, projectId } = input;
-    if (!isBuilder(identity, projectId)) throw new AccessDeniedError();
+    if (!hasProjectPermission(identity, projectId, "program:publish"))
+      throw new AccessDeniedError();
     const key = `published:${projectId}`;
     const existing = this.inflight.get(key);
     if (existing) return existing;

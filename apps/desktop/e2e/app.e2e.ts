@@ -1499,35 +1499,47 @@ describe("subagents and background watchers", () => {
     );
   });
 
-  it("a background process gets a persistent watcher chip", async () => {
+  it("a background command pulses until it ends, then wakes the chat", async () => {
     await run(`
       const ta = floatingDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'start a watcher for the dev server');
+      setReactValue(ta, 'background: sleep 6 && echo bg-done');
       ta.closest('form').requestSubmit();
       return true;
     `);
+    // The turn ends at once; the command keeps running: its step stays in
+    // view outside the fold, pulsing, and its terminal chip spins.
     await runWait(
-      `const chip = floatingDock()?.querySelector(
-         '[data-testid="surface-chip"][data-kind="watcher"]');
-       return !!chip && chip.textContent.includes('npm run dev');`,
-      { timeoutMs: 30_000, label: "watcher chip on the rail" },
-    );
-    // Another turn later, the watcher is still there — background work
-    // persists across turns until something ends it.
-    await run(`
-      const ta = floatingDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'thanks');
-      ta.closest('form').requestSubmit();
-      return true;
-    `);
-    await runWait(
-      `return timelineMessages().some((m) => m.text.includes('You said: thanks'));`,
-      { timeoutMs: 30_000, label: "next turn finished" },
+      `const step = floatingDock()?.querySelector(
+         '[data-testid="chat-step"][data-step-kind="background"][data-running]');
+       return !!step &&
+         step.textContent.includes('Running in background') &&
+         step.textContent.includes('Run it in the background') &&
+         !!step.querySelector('.animate-pulse');`,
+      { timeoutMs: 30_000, label: "running background step pulses" },
     );
     await runWait(
       `return !!floatingDock()?.querySelector(
-         '[data-testid="surface-chip"][data-kind="watcher"]');`,
-      { label: "watcher chip persists across turns" },
+         '[data-testid="surface-chip"][data-kind="terminal"][data-active]');`,
+      { label: "its terminal chip spins" },
+    );
+    // When it finishes, the chat gets a quiet notice and the agent answers.
+    await runWait(
+      `const notice = floatingDock()?.querySelector('[data-testid="chat-notice"]');
+       return !!notice && notice.textContent.includes('Run it in the background finished');`,
+      { timeoutMs: 30_000, label: "finish notice in the chat" },
+    );
+    await runWait(
+      `return timelineMessages().some((m) => m.text.includes('bg-done'));`,
+      {
+        timeoutMs: 30_000,
+        label: "the agent read the output it was woken with",
+      },
+    );
+    await runWait(
+      `return !floatingDock()?.querySelector('[data-testid="chat-step"][data-running]') &&
+         [...floatingDock().querySelectorAll('[data-testid="chat-background-status"]')]
+           .some((el) => el.textContent === 'Ran command in background');`,
+      { label: "the step says it ran" },
     );
   });
 });

@@ -4,8 +4,8 @@ import path from "node:path";
 import {
   type ConnectionProvider,
   projectDataDirectory,
+  startEventDispatcher,
   startProjectEventMonitorWorker,
-  startWatcherDispatcher,
   ToolPermissionBroker,
 } from "@catamorphic/core";
 import type { DB } from "@catamorphic/db";
@@ -586,6 +586,22 @@ export async function startEmbeddedServer(
     tenantId: DESKTOP_TENANT_ID,
     externalUserId: DESKTOP_USER_ID,
   };
+  // A finished background command wakes its chat (ADR 0155): a system
+  // message the agent reads, with a plain notice for the person.
+  workspaceBridge?.setBackgroundNotifier(async (input) => {
+    await catamorphic.core.agentSessions?.deliver(
+      desktopIdentity,
+      input.projectId,
+      input.sessionId,
+      {
+        content: input.content,
+        author: { kind: "system", code: "background_command" },
+        mode: input.mode ?? "next_turn",
+        idempotencyKey: input.idempotencyKey,
+        metadata: { notice: input.notice },
+      },
+    );
+  });
   catamorphic.core.agentSessions?.setArchiveResourcesHandler({
     impact: async ({ projectId, sessionIds }) => ({
       activeProcessCount: workspaceBridge
@@ -1202,9 +1218,7 @@ export async function startEmbeddedServer(
     providers: catamorphic.core.projectEventSources,
     placement: "local",
   });
-  const watcherDispatcher = catamorphic.core.watchers
-    ? startWatcherDispatcher({ watchers: catamorphic.core.watchers })
-    : null;
+  const eventDispatcher = startEventDispatcher({ core: catamorphic.core });
   const suspendExecution = async () => {
     await clientRunners.stop();
     const current = worker;
@@ -1305,7 +1319,7 @@ export async function startEmbeddedServer(
           { name: "project events", dispose: () => projectEventWorker.stop() },
           {
             name: "watcher dispatch",
-            dispose: () => watcherDispatcher?.stop(),
+            dispose: () => eventDispatcher.stop(),
           },
           { name: "workflow execution", dispose: suspendExecution },
           { name: "HTTP server", dispose: () => app.close() },

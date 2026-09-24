@@ -2,9 +2,10 @@ import type { DB } from "@catamorphic/db";
 import type { Kysely } from "kysely";
 import {
   type AppRef,
+  EVERY_ARTIFACT,
   hasProjectPermission,
   type Identity,
-  isBuilder,
+  type ProjectPermissionName,
 } from "../identity.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 
@@ -16,42 +17,46 @@ import type { AppPoliciesService } from "./app-policies-service.js";
  * enumerate the project for it.
  */
 export class AccessDeniedError extends Error {
-  constructor() {
-    super("Not authorized to perform that operation");
+  constructor(message = "Not authorized to perform that operation") {
+    super(message);
     this.name = "AccessDeniedError";
   }
 }
 
 /**
  * Rejects every scoped identity. Only tenant-wide operations that no
- * project ref can cover (creating projects) call this: everything else is
- * per project and uses {@link assertBuilder}.
+ * project grant can cover (creating projects) call this: everything else is
+ * per project and uses {@link assertProjectPermission}.
  */
 export function assertRootIdentity(identity: Identity): void {
   if (identity.scope !== undefined) throw new AccessDeniedError();
 }
 
 /**
- * Rejects identities that may not edit the project's program (ADR 0055):
- * every project-surface operation (files, deploys, secrets, agent
- * definitions, app builds, run controls, run drill-downs) calls this. A
- * viewer reaches catamorphic only through an artifact, and an artifact only
- * through its own surface.
+ * Rejects identities without a project permission (ADR 0158): every
+ * project-surface operation beyond using an artifact (the program, secrets,
+ * automations, other people's runs and chats…) names the one it needs.
  */
-export function assertBuilder(identity: Identity, projectId: string): void {
-  if (!isBuilder(identity, projectId)) throw new AccessDeniedError();
+export function assertProjectPermission(
+  identity: Identity,
+  projectId: string,
+  permission: ProjectPermissionName,
+): void {
+  if (!hasProjectPermission(identity, projectId, permission))
+    throw new AccessDeniedError();
 }
 
-/** Role policy is protected even from ordinary project builders. */
+/**
+ * Role files are access policy: changing one, by writing, committing or
+ * publishing it, takes `roles:write` on top of `program:write`.
+ */
 export function assertMayManageRolePolicy(
   identity: Identity,
   projectId: string,
   paths: readonly string[],
 ): void {
   if (!paths.some(isRolePolicyPath)) return;
-  if (!hasProjectPermission(identity, projectId, "roles:manage")) {
-    throw new AccessDeniedError();
-  }
+  assertProjectPermission(identity, projectId, "roles:write");
 }
 
 export function isRolePolicyPath(path: string): boolean {
@@ -77,16 +82,15 @@ export interface ResolvedScope {
 
 /**
  * Resolves what a scoped identity may call in a project. Returns null for
- * identities that build the project (root, or holding its `project` ref):
- * they may call everything.
+ * identities that may call everything: root, or a `workflows: ["*"]` grant.
  *
  * App refs resolve to the app's *currently active published* version and its
  * frozen workflow set — a retired version cannot be named by a ref, so its
  * (possibly wider) old set can never be reached. The one exception is a
  * `dev` ref, which resolves to the latest ready build made by this same
- * user (the builder opening the build they are working on) and to nothing
+ * user (the author opening the build they are working on) and to nothing
  * for anyone else; that never widens access either, since a `dev` ref only
- * arises by narrowing the builder's own full identity.
+ * arises by narrowing the author's own full identity.
  *
  * Tenant policy applies to app refs: the `apps_enabled` kill switch denies
  * them outright and `workflow_allowlist` intersects with (only ever narrows)
@@ -99,7 +103,15 @@ export async function resolveScope(args: {
   policies?: AppPoliciesService;
 }): Promise<ResolvedScope | null> {
   const scope = args.identity.scope;
-  if (scope === undefined || isBuilder(args.identity, args.projectId)) {
+  if (
+    scope === undefined ||
+    scope.some(
+      (ref) =>
+        ref.kind === "workflow" &&
+        ref.projectId === args.projectId &&
+        ref.name === EVERY_ARTIFACT,
+    )
+  ) {
     return null;
   }
 

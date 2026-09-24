@@ -23,6 +23,8 @@ export interface AppConfig {
   identity: IdentityResolver;
   /** Host feature switches; see `CatamorphicPluginOptions.features`. */
   features?: CatamorphicPluginOptions["features"];
+  /** See `CatamorphicPluginOptions.publicApiBase`. */
+  publicApiBase?: string;
 }
 
 /**
@@ -85,6 +87,7 @@ export function createApp(config: AppConfig) {
     core: config.core,
     identity: config.identity,
     ...(config.features ? { features: config.features } : {}),
+    ...(config.publicApiBase ? { publicApiBase: config.publicApiBase } : {}),
     prefix: "/api",
   });
 

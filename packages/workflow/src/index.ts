@@ -36,6 +36,11 @@ export {
   validateKeyedBatchOutcomes,
 } from "./batch.js";
 export type { Hole } from "./holes.js";
+export {
+  PROJECT_PERMISSIONS,
+  type ProjectPermissionName,
+  type WorkflowPermission,
+} from "./permissions.js";
 export type {
   SecretDeclaration,
   SecretDeclarations,
@@ -151,7 +156,7 @@ export function trigger<Kind extends TriggerKindName>(
   return new TriggerBindingImpl({ kind, config: args[0] ?? {} });
 }
 
-export const WORKFLOW_PACKAGE_VERSION = "0.0.3";
+export const WORKFLOW_PACKAGE_VERSION = "0.0.4";
 
 export type {
   SessionHistoryMessage,

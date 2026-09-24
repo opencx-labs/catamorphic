@@ -98,7 +98,7 @@ describe.skipIf(!chromeBinary())("pwa against the stock server", () => {
                   definition: {
                     version: 1,
                     name: "Manager",
-                    permissions: ["memberships:manage", "roles:manage"],
+                    permissions: ["memberships:write", "roles:write"],
                   },
                 },
               ],

@@ -9,7 +9,6 @@ import {
   ChevronRight,
   LoaderCircle,
   Pencil,
-  Radio,
   RotateCcw,
   SquareTerminal,
   Wrench,
@@ -450,7 +449,7 @@ function Message({
 
 /** One row of a turn's expandable event log. */
 interface TurnStep {
-  kind: "command" | "file_edit" | "tool" | "subagent" | "background";
+  kind: "command" | "file_edit" | "tool" | "subagent";
   /** Row header — the technical detail lives here, not on the live line. */
   label: string;
   /** Monospace label (commands, paths, unrecognized tool names). */
@@ -468,7 +467,6 @@ const STEP_ICONS = {
   file_edit: Pencil,
   tool: Wrench,
   subagent: Bot,
-  background: Radio,
 } as const;
 
 /**
@@ -505,9 +503,11 @@ const TOOL_STEP_LABELS: Record<string, string> = {
   TaskStop: "Stopped a background task",
   KillShell: "Stopped a background task",
   // Workspace tools (the host bridge; same names on every harness).
-  run_terminal: "Ran a command",
-  read_terminal: "Read the terminal",
-  write_terminal: "Typed into the terminal",
+  run_background_command: "Ran command in background",
+  read_background_output: "Checked a background command",
+  stop_background_command: "Stopped background work",
+  watch_command: "Watched for a change",
+  write_terminal: "Typed into a terminal",
   workspace_overview: "Looked at the workspace",
   read_tab: "Read a tab",
   open_browser: "Opened a page",
@@ -557,8 +557,10 @@ const DESKTOP_STEP_TOOLS = new Set([
   "open_browser",
   "browser_snapshot",
   "browser_act",
-  "run_terminal",
-  "read_terminal",
+  "run_background_command",
+  "read_background_output",
+  "stop_background_command",
+  "watch_command",
   "write_terminal",
   "sync_project",
   "create_pull_request",
@@ -772,14 +774,17 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
     if (!event) continue;
     const content = typeof event.content === "string" ? event.content : "";
     const firstLine = content.split("\n", 1)[0]?.trim() ?? "";
+    const description =
+      typeof event.description === "string" ? event.description.trim() : "";
     if (event.type === "command") {
+      // The agent's own words lead; the command itself is one click away.
       steps.push({
         kind: "command",
-        label: `$ ${firstLine || "(command)"}`,
-        mono: true,
+        label: description || `$ ${firstLine || "(command)"}`,
+        mono: !description,
         detail: stepDetailText(
           [
-            content.includes("\n") ? content : undefined,
+            description || content.includes("\n") ? content : undefined,
             stepDetailText(event.toolResult),
           ]
             .filter(Boolean)
@@ -811,11 +816,6 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
       steps.push({
         kind: "subagent",
         label: `Subagent: ${firstLine || "delegated work"}`,
-      });
-    } else if (event.type === "background" && event.status !== "ended") {
-      steps.push({
-        kind: "background",
-        label: `Background: ${firstLine || "process"}`,
       });
     }
   }

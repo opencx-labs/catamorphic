@@ -113,9 +113,10 @@ instead of pretending two writers have one history. Incognito desktop chats
 stay local and are never mirrored.
 
 Projects can shape the shared experience without hard-coding company personas
-into the app. Committed role files grant scoped artifacts and namespaced
-capabilities; the shared sidebar and up to six New Tab starting actions can
-target the caller's resolved builder state and permissions. If a project does
+into the app. Committed role files grant scoped artifacts and project
+permissions such as `program:write` or `sessions:read`; the shared sidebar and
+up to six New Tab starting actions can target the caller's resolved
+permissions. If a project does
 not configure an action, the desktop adds no placeholder or empty surface.
 (ADR [0092](docs/decisions/0092-project-owned-capability-experiences.md))
 

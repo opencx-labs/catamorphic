@@ -1040,13 +1040,13 @@ describe("agents and profiles", () => {
 
     // The agent's terminal is BACKGROUND: a chip on the rail, but no
     // workspace tab (strip tabs carry their key as data-point-key) —
-    // run_terminal must not move the user's view.
+    // a background command must not move the user's view.
     await run(`
       const keys = $$('[data-point-key]')
         .map((el) => el.getAttribute('data-point-key') ?? '')
         .filter((key) => key.startsWith('terminal:'));
       if (keys.length > 0) {
-        throw new Error('run_terminal opened a workspace tab: ' + keys.join(' | '));
+        throw new Error('a background command opened a workspace tab: ' + keys.join(' | '));
       }
       return true;
     `);
@@ -1093,41 +1093,6 @@ describe("agents and profiles", () => {
       `return !!visibleDock().querySelector('[data-testid="surface-chip"]');`,
       { timeoutMs: 15_000, label: "new chat still gets its terminal chip" },
     );
-  });
-
-  it("agents can target an existing terminal by id", async () => {
-    // Reuse the terminal from the previous message instead of opening
-    // another tab: extract its id from the tool result in the timeline.
-    const terminalId = await run<string | null>(`
-      const texts = $$('[role="log"] article').map((el) => el.textContent);
-      for (const text of texts.reverse()) {
-        const match = /"terminalId":"([0-9a-f-]+)"/.exec(text);
-        if (match) return match[1];
-      }
-      return null;
-    `);
-    if (!terminalId) throw new Error("no terminalId in prior tool results");
-    const tabsBefore = await run<number>(
-      `return $$('[data-testid="surface-chip"]').length;`,
-    );
-    await run(`
-      const ta = visibleDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'terminal @${terminalId}: echo targeted-run');
-      ta.closest('form').requestSubmit();
-      return true;
-    `);
-    await runWait(
-      `return $$('[role="log"] article')
-        .some((el) => el.textContent.includes('targeted-run') &&
-                      el.textContent.includes('terminal result'));`,
-      { timeoutMs: 30_000, label: "targeted run returned output" },
-    );
-    const tabsAfter = await run<number>(
-      `return $$('[data-testid="surface-chip"]').length;`,
-    );
-    if (tabsAfter > tabsBefore) {
-      throw new Error("targeting an existing terminal opened a new one");
-    }
   });
 
   it("marks agent switches in the transcript", async () => {

@@ -9,6 +9,10 @@ export { WorkflowCanvas } from "./canvas.js";
 export { AgentEnvironmentControl } from "./components/access/agent-environment-control.js";
 export { AuthenticationRequiredCard } from "./components/access/authentication-required-card.js";
 export { PendingButton } from "./components/access/pending-button.js";
+export {
+  describeAutomationPause,
+  describeProjectPermission,
+} from "./components/access/permission-words.js";
 export { ProjectWorkflows } from "./components/access/project-workflows.js";
 export { WorkflowEnablementPanel } from "./components/access/workflow-enablement-panel.js";
 export { WorkflowReview } from "./components/access/workflow-review.js";

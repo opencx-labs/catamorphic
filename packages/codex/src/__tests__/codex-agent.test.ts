@@ -21,7 +21,7 @@ vi.mock("../app-server.js", () => ({
   },
 }));
 
-import { CodexAgent, isDaemonizingCommand } from "../codex-agent.js";
+import { CodexAgent } from "../codex-agent.js";
 
 const session: ProviderSession = {
   providerSessionId: "thread-1",
@@ -52,24 +52,6 @@ async function collect(
   }
   return events;
 }
-
-describe("isDaemonizingCommand", () => {
-  it.each([
-    ["npm run dev &", true],
-    ["nohup python server.py", true],
-    ["cd app && nohup ./serve.sh", true],
-    ["docker run -d postgres", true],
-    ["docker compose up -d", true],
-    ["pm2 start api", true],
-    ["tmux new-session -d -s watch 'npm run dev'", true],
-    ["npm run build", false],
-    ["git status && git diff", false],
-    ["grep -r 'a & b' src", false],
-    ["docker run --rm node:22 node -v", false],
-  ])("%s → %s", (command, expected) => {
-    expect(isDaemonizingCommand(command)).toBe(expected);
-  });
-});
 
 describe("CodexAgent", () => {
   beforeEach(() => {
@@ -232,69 +214,28 @@ describe("CodexAgent", () => {
     await expect(access(imagePath ?? "")).rejects.toThrow();
   });
 
-  it("flags daemonizing commands as detected background processes", async () => {
+  it("turns reasoning summary headings into the live status", async () => {
     resumeThread.mockReturnValueOnce(
       scriptedThread([
         {
           type: "item.completed",
           item: {
-            id: "item_1",
-            type: "command_execution",
-            command: "npm run dev &",
-            aggregated_output: "[1] 4242",
-            exit_code: 0,
-            status: "completed",
+            id: "reasoning_1",
+            type: "reasoning",
+            text: "**Reviewing database migrations**\n\nI should read the schema first.",
           },
         },
         { type: "turn.completed", usage: dummyUsage() },
       ]),
     );
-    const events = await collect(new CodexAgent(), "start the dev server");
-
-    expect(events).toContainEqual({
-      type: "background",
-      status: "detected",
-      backgroundId: "codex-daemon-item_1",
-      content: "npm run dev &",
-    });
-  });
-
-  it("flags commands still running when the turn ends", async () => {
-    resumeThread.mockReturnValueOnce(
-      scriptedThread([
-        {
-          type: "item.started",
-          item: {
-            id: "item_2",
-            type: "command_execution",
-            command: "npm run watch",
-            aggregated_output: "",
-            status: "in_progress",
-          },
-        },
-        { type: "turn.completed", usage: dummyUsage() },
-      ]),
-    );
-    const events = await collect(new CodexAgent(), "watch the build");
-
+    const events = await collect(new CodexAgent(), "check the migrations");
     expect(events[0]).toEqual({
-      type: "command",
-      content: "npm run watch",
-      status: "started",
-      toolUseId: "item_2",
+      type: "status",
+      content: "Reviewing database migrations",
     });
-
-    expect(events).toContainEqual({
-      type: "background",
-      status: "detected",
-      backgroundId: "codex-exec-item_2",
-      content: "npm run watch",
-    });
-    // Ends with the ordinary turn completion.
-    expect(events.at(-1)).toEqual({ type: "done" });
   });
 
-  it("does not flag commands that completed normally", async () => {
+  it("reports command start and end on the same step", async () => {
     resumeThread.mockReturnValueOnce(
       scriptedThread([
         {
@@ -322,8 +263,20 @@ describe("CodexAgent", () => {
       ]),
     );
     const events = await collect(new CodexAgent(), "run tests");
-
-    expect(events.some((event) => event.type === "background")).toBe(false);
+    expect(events.slice(0, 2)).toEqual([
+      {
+        type: "command",
+        content: "bun test",
+        status: "started",
+        toolUseId: "item_3",
+      },
+      {
+        type: "command",
+        content: "bun test\nok",
+        status: "ended",
+        toolUseId: "item_3",
+      },
+    ]);
   });
 
   const turnDone = () =>

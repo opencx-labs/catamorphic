@@ -13,13 +13,14 @@ import {
   authorFor,
   type Identity,
   mayUseProject,
+  type ProjectPermissionName,
   SYSTEM_AUTHOR,
 } from "../identity.js";
 import { SEED_SKILLS } from "../seeds.js";
 import {
   AccessDeniedError,
-  assertBuilder,
   assertMayManageRolePolicy,
+  assertProjectPermission,
   assertRootIdentity,
 } from "./artifact-scope.js";
 import { listLocalDocuments } from "./local-document-files.js";
@@ -102,7 +103,7 @@ export class ProjectNotFoundError extends Error {
  * The one "this project exists in this tenant" check every service runs
  * before touching a project. Throws {@link ProjectNotFoundError}; says
  * nothing about what the identity may DO there — callers gate that
- * separately (assertBuilder, scope refs, …).
+ * separately (assertProjectPermission, scope refs, …).
  */
 export async function requireTenantProject(
   db: Kysely<DB> | Transaction<DB>,
@@ -331,13 +332,20 @@ export class ProjectsService {
     const limit = input.limit ?? 50;
     const offset = input.offset ?? 0;
 
-    // A scoped identity lists the projects its scope names in any capacity
-    // (builder, agent, app, document…): what it may open. Metadata only —
-    // every project surface still gates on its own ref.
+    // A scoped identity lists the projects it holds anything on (an agent,
+    // an app, a document, a permission…): what it may open. Metadata only;
+    // every project surface still gates on its own grant.
     const visible =
       identity.scope === undefined
         ? null
-        : [...new Set(identity.scope.map((ref) => ref.projectId))];
+        : [
+            ...new Set([
+              ...identity.scope.map((ref) => ref.projectId),
+              ...(identity.projectPermissions ?? []).map(
+                (ref) => ref.projectId,
+              ),
+            ]),
+          ];
     if (visible && visible.length === 0) return { items: [], total: 0 };
 
     let query = this.db
@@ -360,8 +368,9 @@ export class ProjectsService {
     return { items: rows.map(mapProject), total };
   }
 
+  /** The project with its program settings (`program:read`). */
   async get(identity: Identity, projectId: string): Promise<Project> {
-    const row = await this.getRow(identity, projectId);
+    const row = await this.getRow(identity, projectId, "program:read");
     return mapProject(row);
   }
 
@@ -398,7 +407,12 @@ export class ProjectsService {
         },
       },
       async () => {
-        const existing = await this.getRow(identity, projectId);
+        // The name is everyone's: renaming publishes.
+        const existing = await this.getRow(
+          identity,
+          projectId,
+          "program:publish",
+        );
 
         const updated = await this.db
           .updateTable("projects")
@@ -428,7 +442,9 @@ export class ProjectsService {
         },
       },
       async () => {
-        const row = await this.getRow(identity, projectId);
+        // A project's lifecycle is the tenant's, like creating one.
+        assertRootIdentity(identity);
+        const row = await this.getRow(identity, projectId, "program:read");
         const project = mapProject(row);
 
         // Deprovisioning hooks run before anything is deleted: a throw aborts
@@ -471,7 +487,7 @@ export class ProjectsService {
         },
       },
       async () => {
-        await this.requireExists(identity, projectId);
+        await this.requireExists(identity, projectId, "program:read");
         return this.withDev(identity, projectId, async (repo) => {
           const root = await this.projectManager.localPath({
             tenantId: identity.tenantId,
@@ -509,7 +525,7 @@ export class ProjectsService {
         },
       },
       async () => {
-        await this.requireExists(identity, projectId);
+        await this.requireExists(identity, projectId, "program:read");
         return this.withDev(identity, projectId, async (repo) => {
           try {
             if (
@@ -555,7 +571,7 @@ export class ProjectsService {
         },
       },
       async () => {
-        await this.requireExists(identity, projectId);
+        await this.requireExists(identity, projectId, "program:read");
         return this.withDev(identity, projectId, (repo) => repo.readAllFiles());
       },
     );
@@ -585,7 +601,7 @@ export class ProjectsService {
         },
       },
       async () => {
-        await this.requireExists(identity, projectId);
+        await this.requireExists(identity, projectId, "program:write");
         const repo = await this.projectManager.openDev(
           identity.tenantId,
           projectId,
@@ -594,6 +610,12 @@ export class ProjectsService {
         try {
           const status = await repo.status();
           if (!status.dirty) return await repo.resolveRef("HEAD");
+          // Committing a role file is changing access policy.
+          assertMayManageRolePolicy(
+            identity,
+            projectId,
+            opts?.paths ?? status.modifiedFiles,
+          );
           return await repo.commit(message, author, opts);
         } finally {
           await repo.dispose();
@@ -619,7 +641,7 @@ export class ProjectsService {
         },
       },
       async () => {
-        await this.requireExists(identity, projectId);
+        await this.requireExists(identity, projectId, "program:write");
         assertMayManageRolePolicy(identity, projectId, [filePath]);
         return this.withDev(identity, projectId, async (repo) => {
           if (
@@ -657,8 +679,9 @@ export class ProjectsService {
   private async getRow(
     identity: Identity,
     projectId: string,
+    permission: ProjectPermissionName,
   ): Promise<ProjectRow> {
-    assertBuilder(identity, projectId);
+    assertProjectPermission(identity, projectId, permission);
     const row = await this.db
       .selectFrom("projects")
       .where("id", "=", projectId)
@@ -672,8 +695,9 @@ export class ProjectsService {
   private async requireExists(
     identity: Identity,
     projectId: string,
+    permission: ProjectPermissionName,
   ): Promise<void> {
-    assertBuilder(identity, projectId);
+    assertProjectPermission(identity, projectId, permission);
     const row = await this.db
       .selectFrom("projects")
       .where("id", "=", projectId)

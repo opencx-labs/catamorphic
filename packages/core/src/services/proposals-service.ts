@@ -27,13 +27,13 @@ import { ProjectNotFoundError } from "./projects-service.js";
 
 /**
  * Propose a change to the program (ADR 0055): a member who cannot commit
- * — no GitHub access, no builder ref — asks for a doc fix, a new template,
+ * — no GitHub access, no `program:write` — asks for a doc fix, a new template,
  * a workflow tweak. Their agent (or the HTTP surface) hands us the files;
  * we commit them on a fresh branch from the shared `main`, authored as the
  * member, and open a pull request through the code host on the HOST's
  * credential ("on behalf of <member>"). Admins review as usual. Without a
- * code host the branch still lands on the project origin, where builders
- * see it in the desktop.
+ * code host the branch still lands on the project origin, where program
+ * writers see it in the desktop.
  *
  * Only program paths are proposable: `store/…` changes ship directly.
  */
@@ -402,7 +402,7 @@ export class ProposalsService {
   }
 }
 
-/** Anyone who uses the project may propose: builders and members alike. */
+/** Anyone who uses the project may propose, whatever they hold. */
 export const mayPropose = mayUseProject;
 
 /** `proposals/<user>/<title-slug>-<yyyymmdd-hhmmss>` */

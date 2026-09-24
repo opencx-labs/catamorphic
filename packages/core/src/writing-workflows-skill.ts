@@ -87,6 +87,17 @@ concrete input type to define that part of the schema; do not use \`any\` or
 If every kind is rejected as \`never\`, refresh types through the host rather than
 fabricating a registry or editing generated declarations.
 
+Webhooks use \`trigger("webhook", { name: "github" })\`: a lowercase name that
+becomes the project's URL segment. The server stores each request durably and
+answers 202 before the workflow runs, so a redelivery (same delivery id header) runs
+once. The payload's \`payload\` holds \`{ name, headers, contentType, body }\`,
+with JSON and form bodies parsed. Add \`verify: { secret: "GITHUB_WEBHOOK_SECRET",
+header: "x-hub-signature-256", prefix: "sha256=" }\` for senders that sign with
+HMAC-SHA256; the secret is a project secret, and unsigned requests are rejected.
+Every workflow on one webhook name must declare the same verify. People who manage
+the project copy the URL from the workflow's **Automatic** view after enabling it.
+Webhooks reach servers that are online, so enable them on a brain server.
+
 Schedules use either \`{ at: "an absolute ISO timestamp with offset" }\` or
 \`{ cron: "0 8 * * 1-5", timezone: "Asia/Amman" }\`. Their payload is
 \`{ activationId: string; scheduledFor: string; firedAt: string }\`. Use
@@ -97,9 +108,20 @@ Declare required provider aliases, principal policy, and actions in an inline
 \`connections\` array. Roles and the host's enablement flow resolve access and
 credentials; see \`workflow-lifecycle\`. Brokered calls such as
 \`context.connections.gmail.search(...)\` are returned host transitions, not
-ordinary promises. Session notifications use \`deliver\` with \`attention: "required"\`;
-\`mode: "message_only"\` alerts without invoking a model. Use \`wake\` when a workflow
-needs a stable member session to perform agent work, not just display a reminder.
+ordinary promises. Chats are reached with one operation, \`deliver\`: by \`sessionId\`
+for a known chat, or by \`key\` for the chat this workflow keeps for that key,
+started on first use (the enabling member's chat, or for a project enablement a
+project chat; see \`session-workflows\`). \`mode: "message_only"\` with
+\`attention: "required"\` alerts without invoking a model; \`next_turn\` (the
+default) has the agent do work.
+
+A run holds no project permission it does not declare. Name the ones it needs
+in an inline \`permissions\` array, such as \`permissions: ["sessions:write"]\`
+to deliver into other people's chats by \`sessionId\`, or \`["sessions:read"]\`
+to list them. Turning the workflow on shows the list, and only someone who
+holds every permission can turn it on. A member's automation keeps them only
+while that member does; a project automation keeps what was consented to.
+Declare the fewest that work; see \`workflow-lifecycle\`.
 
 ## App contracts and secrets
 

@@ -62,8 +62,11 @@ export interface CreateSandboxOpts {
 
 export interface ExecOpts {
   cwd?: string;
+  /** Seconds. */
   timeout?: number;
   env?: Record<string, string>;
+  /** Cancels the command; providers stop its whole process tree. */
+  signal?: AbortSignal;
 }
 
 export interface ExecResult {
@@ -369,7 +372,7 @@ export interface AgentEvent {
     | "title"
     | "session"
     | "subagent"
-    | "background"
+    | "status"
     | "diagnostic"
     | "usage"
     | "error"
@@ -409,17 +412,19 @@ export interface AgentEvent {
   /** On "subagent" events: the harness's agent-type name, when known. */
   subagentType?: string;
   /**
-   * On "background" events: stable id for the background process/watcher
-   * (harness task id, or a synthesized id for detected daemonizations).
+   * Lifecycle marker on "subagent" events, and on "command" events from
+   * harnesses that report when a command finishes (same toolUseId).
    */
-  backgroundId?: string;
+  status?: "started" | "ended";
   /**
-   * Lifecycle marker on "subagent"/"background" events. "detected" flags a
-   * background process the harness cannot manage (a command the agent
-   * daemonized out of the harness's sight) — surfaced, but with no live
-   * running state to track.
+   * A few human words for what a "command"/"tool_call" does, when the
+   * agent wrote one (Claude Code's Bash description, host tools'
+   * `description`). Hosts show it as the step's label and as the turn's
+   * live status. "status" events carry their line in `content`: the
+   * harness's own summary of what the agent is doing right now (a
+   * reasoning summary's heading), never turn content.
    */
-  status?: "started" | "ended" | "detected";
+  description?: string;
   /**
    * Set on "usage" events: the turn's accounting snapshot. At most one per
    * turn, emitted just before "done". Hosts persist it beside the reply;

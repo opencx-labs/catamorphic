@@ -20,6 +20,7 @@ const base = {
     },
   ],
   capabilities: ["messages.search", "messages.read"],
+  permissions: ["sessions:write"],
 };
 
 describe("workflowEnablementConsentDigest", () => {
@@ -53,6 +54,18 @@ describe("workflowEnablementConsentDigest", () => {
         ...base,
         deploymentArtifactDigest: "new-artifact",
       }),
+    ).not.toBe(workflowEnablementConsentDigest(base));
+  });
+
+  it("changes when the declared permissions change (ADR 0158)", () => {
+    expect(
+      workflowEnablementConsentDigest({
+        ...base,
+        permissions: ["sessions:write", "runs:read"],
+      }),
+    ).not.toBe(workflowEnablementConsentDigest(base));
+    expect(
+      workflowEnablementConsentDigest({ ...base, permissions: [] }),
     ).not.toBe(workflowEnablementConsentDigest(base));
   });
 });

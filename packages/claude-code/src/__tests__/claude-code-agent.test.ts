@@ -236,79 +236,37 @@ describe("ClaudeCodeAgent", () => {
     });
   });
 
-  it("redirects denied shell tools to the workspace terminals", async () => {
-    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
-    const agent = new ClaudeCodeAgent();
-    await collect(agent, "Hello");
-
-    const canUseTool = lastQueryOptions().canUseTool;
-    if (!canUseTool) throw new Error("canUseTool was not passed to query");
-    const decision = await canUseTool(
-      "Bash",
-      { command: "ls" },
-      {
-        signal: new AbortController().signal,
-        toolUseID: "toolu_bash",
-        requestId: "req_1",
-      },
-    );
-
-    if (!decision) throw new Error("expected a permission decision");
-    expect(decision.behavior).toBe("deny");
-    expect("message" in decision ? decision.message : "").toContain(
-      "run_terminal",
-    );
-  });
-
-  it("swaps built-in shell tools for workspace terminals per-turn", async () => {
+  it("hands background commands to the host and keeps native Bash", async () => {
     const agent = new ClaudeCodeAgent({
-      disableBash: true,
       extraTools: [
         {
-          name: "run_terminal",
-          description: "Run a command in a workspace terminal",
+          name: "run_background_command",
+          description: "Run a long-lived command in the background",
           parameters: {},
           execute: async () => "ok",
         },
       ],
     });
+    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
 
-    // A session started with host context mounts the workspace server, so
-    // the built-in shell tools are removed from the model's context.
-    const started = await agent.startSession({
-      projectId: "project-1",
-      userId: "user-1",
-      sandboxId: "sandbox-1",
-      sessionId: "chat-1",
-      workingDirectory: "/workspace/project",
-    });
-    const startedId = started.providerSessionId;
-    if (!startedId) throw new Error("expected a chosen session id");
-    queryMock.mockReturnValueOnce(
-      scriptedQuery([
-        initMessage(startedId),
-        { ...successResult, session_id: startedId },
+    await collect(agent, "Start the dev server");
+
+    const options = lastQueryOptions();
+    // Foreground commands stay on Claude Code's own shell.
+    expect(options.allowedTools).toContain("Bash");
+    expect(options.disallowedTools).not.toContain("Bash");
+    // Native backgrounding would die with the per-turn CLI process.
+    expect(options.env?.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe("1");
+    expect(options.disallowedTools).toEqual(
+      expect.arrayContaining([
+        "TaskOutput",
+        "TaskStop",
+        "BashOutput",
+        "KillShell",
       ]),
     );
-    for await (const _event of agent.sendMessage(started, "First step")) {
-      // drain
-    }
-    let options = lastQueryOptions();
-    expect(options.allowedTools).toContain("mcp__workspace__run_terminal");
-    expect(options.allowedTools).not.toContain("Bash");
-    expect(options.disallowedTools).toEqual(
-      expect.arrayContaining(["Bash", "PowerShell"]),
-    );
-
-    // A session resurrected after a host restart reconstructs its workspace
-    // context from ProviderSession, so it keeps the same terminal surface.
-    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
-    await collect(agent, "Continue");
-    options = lastQueryOptions();
-    expect(options.allowedTools).toContain("mcp__workspace__run_terminal");
-    expect(options.allowedTools).not.toContain("Bash");
-    expect(options.disallowedTools).toEqual(
-      expect.arrayContaining(["Bash", "PowerShell"]),
+    expect(options.allowedTools).toContain(
+      "mcp__workspace__run_background_command",
     );
   });
 
@@ -501,69 +459,35 @@ describe("ClaudeCodeAgent", () => {
     ]);
   });
 
-  it("emits background events from the PostToolUse hooks", async () => {
-    queryMock.mockReturnValueOnce(scriptedQuery([successResult]));
-    const agent = new ClaudeCodeAgent();
-    await collect(agent, "Start the dev server");
-
-    const hooks = lastQueryOptions().hooks?.PostToolUse ?? [];
-    const bashMatcher = hooks.find((entry) => entry.matcher === "Bash");
-    const stopMatcher = hooks.find(
-      (entry) => entry.matcher === "TaskStop|KillShell",
+  it("labels Bash steps with the agent's own description", async () => {
+    queryMock.mockReturnValueOnce(
+      scriptedQuery([
+        {
+          type: "assistant",
+          parent_tool_use_id: null,
+          message: {
+            content: [
+              {
+                type: "tool_use",
+                id: "toolu_1",
+                name: "Bash",
+                input: {
+                  command: "bun run db:migrate",
+                  description: "Apply database migrations",
+                },
+              },
+            ],
+          },
+        },
+        successResult,
+      ]),
     );
-    if (!bashMatcher || !stopMatcher) {
-      throw new Error("background hooks were not registered");
-    }
-
-    // Second turn drains what the hooks captured during the stream.
-    queryMock.mockImplementationOnce((params) => {
-      return (async function* () {
-        const context = {
-          signal: new AbortController().signal,
-        };
-        await params.options?.hooks?.PostToolUse?.[0]?.hooks[0]?.(
-          {
-            hook_event_name: "PostToolUse",
-            session_id: "sess-1",
-            transcript_path: "/tmp/t",
-            cwd: "/workspace/project",
-            tool_name: "Bash",
-            tool_use_id: "toolu_bg",
-            tool_input: { command: "npm run dev", run_in_background: true },
-            tool_response: { backgroundTaskId: "bash_1" },
-          } as never,
-          "toolu_bg",
-          context,
-        );
-        await params.options?.hooks?.PostToolUse?.[1]?.hooks[0]?.(
-          {
-            hook_event_name: "PostToolUse",
-            session_id: "sess-1",
-            transcript_path: "/tmp/t",
-            cwd: "/workspace/project",
-            tool_name: "TaskStop",
-            tool_use_id: "toolu_stop",
-            tool_input: { task_id: "bash_1" },
-            tool_response: {},
-          } as never,
-          "toolu_stop",
-          context,
-        );
-        yield successResult;
-      })() as unknown as ReturnType<typeof query>;
+    const events = await collect(new ClaudeCodeAgent(), "migrate");
+    expect(events).toContainEqual({
+      type: "command",
+      content: "bun run db:migrate",
+      description: "Apply database migrations",
     });
-    const events = await collect(agent, "and stop it");
-
-    expect(events).toEqual([
-      {
-        type: "background",
-        status: "started",
-        backgroundId: "bash_1",
-        content: "npm run dev",
-      },
-      { type: "background", status: "ended", backgroundId: "bash_1" },
-      { type: "done" },
-    ]);
   });
 
   it("passes external MCP servers and plugins through to query()", async () => {

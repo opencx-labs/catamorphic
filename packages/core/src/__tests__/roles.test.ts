@@ -77,51 +77,61 @@ describe("roles as files (ADR 0055): expansion", () => {
     ).toEqual([{ kind: "document", projectId: "p1", path: "docs/**" }]);
   });
 
-  it("builder: true is a project ref; store access is still by document refs only", () => {
+  it("an admin role is plain grants: `*` artifacts, `*` permissions, store by document refs", () => {
     const admin = validateRoleDefinition({
       version: 1,
       name: "Admin",
-      builder: true,
+      agents: ["*"],
+      workflows: ["*"],
+      apps: ["*"],
+      permissions: ["*"],
       documents: ["store/**"],
     });
     if ("error" in admin) throw new Error(admin.error);
     expect(expandRole(admin.definition, "p1", {})).toEqual([
-      { kind: "project", projectId: "p1" },
+      { kind: "agent", projectId: "p1", name: "*" },
+      { kind: "workflow", projectId: "p1", name: "*" },
+      { kind: "app", projectId: "p1", name: "*" },
       { kind: "document", projectId: "p1", path: "store/**" },
     ]);
-    const engineer = validateRoleDefinition({
-      version: 1,
-      name: "Engineer",
-      builder: true,
-    });
-    if ("error" in engineer) throw new Error(engineer.error);
-    // An admin who may not see the store gets no document refs at all.
-    expect(expandRole(engineer.definition, "p1", {})).toEqual([
-      { kind: "project", projectId: "p1" },
+    expect(expandRolePermissions(admin.definition, "p1")).toEqual([
+      { projectId: "p1", permission: "*" },
     ]);
   });
 
-  it("expands project administration independently from builder access", () => {
+  it("expands permissions as granted: concrete, `thing:*`, and embedder names", () => {
     const teamAdmin = validateRoleDefinition({
       version: 1,
       name: "Team admin",
-      permissions: ["memberships:manage", "roles:manage", "brain:maintain"],
+      permissions: ["memberships:write", "roles:*", "brain:maintain"],
     });
     if ("error" in teamAdmin) throw new Error(teamAdmin.error);
     expect(expandRole(teamAdmin.definition, "p1", {})).toEqual([]);
     expect(expandRolePermissions(teamAdmin.definition, "p1")).toEqual([
-      { projectId: "p1", permission: "memberships:manage" },
-      { projectId: "p1", permission: "roles:manage" },
+      { projectId: "p1", permission: "memberships:write" },
+      { projectId: "p1", permission: "roles:*" },
       { projectId: "p1", permission: "brain:maintain" },
     ]);
+  });
 
-    const builder = validateRoleDefinition({
-      version: 1,
-      name: "Builder",
-      builder: true,
-    });
-    if ("error" in builder) throw new Error(builder.error);
-    expect(expandRolePermissions(builder.definition, "p1")).toEqual([]);
+  it("rejects the retired builder flag and malformed permissions", () => {
+    expect(
+      validateRoleDefinition({ version: 1, name: "Old", builder: true }),
+    ).toMatchObject({ error: expect.stringMatching(/builder/) });
+    for (const permission of [
+      "program",
+      "Program:read",
+      "program:read:x",
+      "*:read",
+    ]) {
+      expect(
+        validateRoleDefinition({
+          version: 1,
+          name: "x",
+          permissions: [permission],
+        }),
+      ).toMatchObject({ error: expect.stringMatching(/permission/i) });
+    }
   });
 
   it("rejects unsupported versions and malformed files with a readable error", () => {

@@ -173,13 +173,69 @@ function lookupStepMetadata(
     };
   }
   const fn = ctx.stepFunctions.get(fnName);
-  if (!fn) return { metadata: {} };
+  if (!fn) {
+    const host = hostCallLabel(fnName);
+    return host
+      ? { displayName: host.label, metadata: { icon: host.icon } }
+      : { metadata: {} };
+  }
   const jsdoc = extractJsDocMetadata(fn.metadataSource ?? fn.fn);
   return {
     displayName: jsdoc.displayName,
     description: jsdoc.description,
     metadata: { ...jsdoc.tags, ...fn.batchMetadata },
   };
+}
+
+/** Chat operations a workflow asks the host for (catamorphic.sessions). */
+const SESSION_OPERATION_LABELS: Record<string, string> = {
+  deliver: "Message a chat",
+  create: "Start a chat",
+  fork: "Fork a chat",
+  spawn: "Start a subsession",
+  inspect: "Look at a chat",
+  list: "List chats",
+  history: "Read a chat",
+  archive: "Archive a chat",
+  unarchive: "Restore a chat",
+  interrupt: "Interrupt a chat",
+  complete: "Mark a chat's work done",
+  reopen: "Reopen a chat's work",
+  stopWatcher: "Stop a watcher",
+  stop: "Stop this automation",
+};
+
+/**
+ * A readable label for a host call such as
+ * `context.host["catamorphic.sessions"].deliver` or
+ * `context.connections.gmail.search`, so the canvas never shows code.
+ */
+function hostCallLabel(
+  fnName: string,
+): { label: string; icon: string } | undefined {
+  const sessions = /host\[\s*["'`]catamorphic\.sessions["'`]\s*\]\.(\w+)$/.exec(
+    fnName,
+  );
+  if (sessions?.[1])
+    return {
+      label: SESSION_OPERATION_LABELS[sessions[1]] ?? humanize(sessions[1]),
+      icon: "message-square",
+    };
+  const connection = /connections\.(\w+)\.(\w+)$/.exec(fnName);
+  if (connection?.[1] && connection[2])
+    return {
+      label: `${humanize(connection[1])}: ${humanize(connection[2]).toLowerCase()}`,
+      icon: "plug",
+    };
+  return undefined;
+}
+
+function humanize(name: string): string {
+  const words = name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 function lookupStepParams(ctx: ParseContext, fnName: string) {
@@ -2466,6 +2522,7 @@ function buildDefinedWorkflowGraph(
     outputSchema,
     triggers: triggerBindings,
     connections: parseWorkflowConnections(definition.config),
+    permissions: parseWorkflowPermissions(definition.config),
     canSuspend,
     nodes: ctx.nodes,
     edges: ctx.edges,
@@ -2539,6 +2596,36 @@ function parseWorkflowConnections(
       ...(typeof optional === "boolean" ? { optional } : {}),
     };
   });
+}
+
+/** A concrete `thing:action` permission; wildcards are for roles only. */
+const WORKFLOW_PERMISSION = /^[a-z][a-z0-9._-]*:[a-z][a-z0-9._-]*$/;
+
+function parseWorkflowPermissions(config: ObjectLiteralExpression): string[] {
+  const property = config.getProperty("permissions");
+  if (!property) return [];
+  if (!Node.isPropertyAssignment(property)) {
+    throw new Error("Workflow 'permissions' must be a constant array property");
+  }
+  const initializer = property.getInitializer();
+  const value = initializer
+    ? workflowConnectionLiteral(initializer)
+    : undefined;
+  if (!Array.isArray(value)) {
+    throw new Error("Workflow 'permissions' must be a constant array");
+  }
+  const permissions = value.map((permission) => {
+    if (
+      typeof permission !== "string" ||
+      !WORKFLOW_PERMISSION.test(permission)
+    ) {
+      throw new Error(
+        `Workflow permission '${String(permission)}' must name one permission, such as sessions:write`,
+      );
+    }
+    return permission;
+  });
+  return [...new Set(permissions)].sort();
 }
 
 function assertWorkflowConnectionAlias(alias: string): void {

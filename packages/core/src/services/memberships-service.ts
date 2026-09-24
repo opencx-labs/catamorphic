@@ -3,6 +3,7 @@ import type { Kysely } from "kysely";
 import {
   hasProjectPermission,
   type Identity,
+  type ProjectPermissionName,
   type ProjectPermissionRef,
 } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
@@ -29,7 +30,7 @@ export interface Membership {
 }
 
 export interface GrantMembershipInput {
-  /** A builder of the project (admins invite). */
+  /** Needs `memberships:write`, plus `roles:write` for a role carrying permissions. */
   identity: Identity;
   projectId: string;
   externalUserId: string;
@@ -48,18 +49,18 @@ export class MembershipsService {
     assertProjectPermission(
       input.identity,
       input.projectId,
-      "memberships:manage",
+      "memberships:write",
     );
     await this.requireProject(input.identity.tenantId, input.projectId);
     const roles = [...new Set(input.roles)];
     if (
-      await this.roles.assignedRolesRequireManagement({
+      await this.roles.assignedRolesCarryPermissions({
         tenantId: input.identity.tenantId,
         projectId: input.projectId,
         roles,
       })
     ) {
-      assertProjectPermission(input.identity, input.projectId, "roles:manage");
+      assertProjectPermission(input.identity, input.projectId, "roles:write");
     }
     const grants = normalizeGrants(input.grants);
     const row = await this.db
@@ -91,7 +92,7 @@ export class MembershipsService {
     assertProjectPermission(
       input.identity,
       input.projectId,
-      "memberships:manage",
+      "memberships:write",
     );
     await this.requireProject(input.identity.tenantId, input.projectId);
     const result = await this.db
@@ -109,7 +110,7 @@ export class MembershipsService {
     assertProjectPermission(
       input.identity,
       input.projectId,
-      "memberships:manage",
+      "memberships:read",
     );
     await this.requireProject(input.identity.tenantId, input.projectId);
     const rows = await this.db
@@ -121,7 +122,7 @@ export class MembershipsService {
     return rows.map(mapMembership);
   }
 
-  /** One member's row, for builders — or the member's own. */
+  /** One member's row: the caller's own, or anyone's with `memberships:read`. */
   async get(input: {
     identity: Identity;
     projectId: string;
@@ -131,7 +132,7 @@ export class MembershipsService {
       assertProjectPermission(
         input.identity,
         input.projectId,
-        "memberships:manage",
+        "memberships:read",
       );
     }
     await this.requireProject(input.identity.tenantId, input.projectId);
@@ -249,7 +250,7 @@ export class MembershipsService {
 function assertProjectPermission(
   identity: Identity,
   projectId: string,
-  permission: "memberships:manage" | "roles:manage",
+  permission: ProjectPermissionName,
 ): void {
   if (!hasProjectPermission(identity, projectId, permission)) {
     throw new AccessDeniedError();

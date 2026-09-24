@@ -38,3 +38,30 @@ it("runs in the selected checkout and updates files directly without replacing o
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+it("stops the whole process group when a command times out or is cancelled", async () => {
+  const { runLocalCommand } = await import("./local-agent-workspace.js");
+  const marker = `${os.tmpdir()}/workspace-orphan-${process.pid}-${Date.now()}`;
+  const timedOut = await runLocalCommand(
+    `echo started; (sleep 3 && touch ${marker}) & sleep 30`,
+    { timeout: 1 },
+  );
+  expect(timedOut.exitCode).toBe(124);
+  expect(timedOut.result).toContain("started");
+  expect(timedOut.result).toContain("timed out");
+
+  const controller = new AbortController();
+  const cancelled = runLocalCommand("sleep 30", { signal: controller.signal });
+  controller.abort();
+  expect((await cancelled).exitCode).toBe(130);
+
+  // The backgrounded child died with its group instead of outliving the command.
+  await new Promise((resolve) => setTimeout(resolve, 3_500));
+  await expect(fs.stat(marker)).rejects.toThrow();
+}, 15_000);
+
+it("keeps stdout and stderr in order with the real exit code", async () => {
+  const { runLocalCommand } = await import("./local-agent-workspace.js");
+  const result = await runLocalCommand("echo one; echo two >&2; exit 4");
+  expect(result).toEqual({ exitCode: 4, result: "one\ntwo\n" });
+});

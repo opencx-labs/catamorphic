@@ -7,33 +7,43 @@ export {
 } from "@catamorphic/parser";
 export type { CatamorphicCoreConfig } from "./core.js";
 export { CatamorphicCore, createCatamorphicCore } from "./core.js";
+export { startEventDispatcher } from "./event-dispatcher.js";
 export {
   type AgentRef,
   type AgentRefToolPolicy,
   type AppRef,
   type ArtifactRef,
   authorFor,
-  CORE_PROJECT_PERMISSIONS,
   type ConnectionUseRef,
   type ControlPlanePermission,
+  confineIdentity,
   type DocumentRef,
   documentRefCovers,
+  EVERY_ARTIFACT,
   type ExecutionEnvironmentRef,
   type ExternalUserId,
+  effectiveProjectPermissions,
   hasControlPlanePermission,
   hasProjectPermission,
   type Identity,
   identityCovers,
   identityMayUseConnection,
   identityMayUseEnvironment,
-  isBuilder,
+  intersectProjectPermissions,
+  intersectScope,
+  isProjectPrincipal,
   isScoped,
   mayUseProject,
   narrowIdentity,
+  PROJECT_PERMISSION_GRANT_PATTERN,
   PROJECT_PERMISSION_PATTERN,
+  PROJECT_PERMISSIONS,
+  PROJECT_PRINCIPAL_ID,
   type ProjectPermission,
+  type ProjectPermissionName,
   type ProjectPermissionRef,
-  type ProjectRef,
+  permissionCovers,
+  projectPrincipalIdentity,
   SYSTEM_AUTHOR,
   sameArtifact,
   scopeCovers,
@@ -110,7 +120,6 @@ export {
   type AgentSessionPeer,
   type AgentSessionSource,
   AgentSessionsService,
-  type AgentSessionWakeReceipt,
   type AgentSubsession,
   type AgentTodo,
   type AgentTodoInput,
@@ -163,8 +172,8 @@ export {
 } from "./services/apps-service.js";
 export {
   AccessDeniedError,
-  assertBuilder,
   assertMayManageRolePolicy,
+  assertProjectPermission,
   assertRootIdentity,
   assertScopeAllowsWorkflow,
   isRolePolicyPath,
@@ -588,11 +597,14 @@ export {
   type PushSubscriptionInput,
   UserNotificationsService,
 } from "./services/user-notifications-service.js";
+export { type Watcher, WatchersService } from "./services/watchers-service.js";
 export {
-  startWatcherDispatcher,
-  type Watcher,
-  WatchersService,
-} from "./services/watchers-service.js";
+  WEBHOOK_MAX_BYTES,
+  type WebhookEndpoint,
+  WebhookNotFoundError,
+  WebhookRejectedError,
+  WebhooksService,
+} from "./services/webhooks-service.js";
 export type { WorkerCapacity } from "./services/worker-capacity.js";
 export {
   capacityFits,

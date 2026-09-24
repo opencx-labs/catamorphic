@@ -86,6 +86,7 @@ export class BoundaryExecutionHandler {
       }): Promise<{
         capabilities: WorkflowCapabilities;
         execution: WorkflowExecutionDescriptor;
+        permissions: readonly string[];
       }>;
       /**
        * Execute a host call transition (ADR 0055) as the run's caller. The
@@ -251,6 +252,7 @@ export class BoundaryExecutionHandler {
           workflowName,
           capabilities: child.capabilities,
           execution: child.execution,
+          permissions: child.permissions,
           input: toJson(transition.input),
         },
       });
@@ -466,6 +468,7 @@ export class BoundaryExecutionHandler {
         "workflow_runs.caller_scope",
         "workflow_runs.caller_execution_scope",
         "workflow_runs.caller_connection_scope",
+        "workflow_runs.caller_project_permissions",
         "workflow_runs.allocation_id",
         "workflow_runs.status",
         "workflow_runs.deployment_artifact_id",
@@ -507,6 +510,13 @@ export class BoundaryExecutionHandler {
           ? {
               connectionScope:
                 row.caller_connection_scope as unknown as Identity["connectionScope"],
+            }
+          : {}),
+        // What the caller held of the workflow's declared permissions.
+        ...(Array.isArray(row.caller_project_permissions)
+          ? {
+              projectPermissions:
+                row.caller_project_permissions as unknown as Identity["projectPermissions"],
             }
           : {}),
       },

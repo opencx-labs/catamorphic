@@ -1,7 +1,7 @@
 import type { DB } from "@catamorphic/db";
 import type { Kysely } from "kysely";
 import type { Identity } from "../identity.js";
-import { assertBuilder } from "./artifact-scope.js";
+import { assertProjectPermission } from "./artifact-scope.js";
 import {
   type PluginsService,
   UndeclaredSecretError,
@@ -36,6 +36,8 @@ interface DeclaredSecretEntry {
 export type ProjectSecretDeclarationsReader = (args: {
   identity: Identity;
   projectId: string;
+  /** `run`: injecting into a run the caller may start, not managing values. */
+  purpose: "manage" | "run";
 }) => Promise<
   readonly {
     name: string;
@@ -66,6 +68,7 @@ export class SecretsService {
   private async declaredSecrets(args: {
     identity: Identity;
     projectId: string;
+    purpose?: "manage" | "run";
   }): Promise<Map<string, DeclaredSecretEntry>> {
     const { identity, projectId } = args;
     const declared = new Map<string, DeclaredSecretEntry>();
@@ -73,6 +76,7 @@ export class SecretsService {
     for (const secret of (await this.projectDeclarations?.({
       identity,
       projectId,
+      purpose: args.purpose ?? "manage",
     })) ?? []) {
       declared.set(secret.name, {
         label: secret.label,
@@ -103,7 +107,7 @@ export class SecretsService {
     projectId: string;
     stage: RunStage;
   }): Promise<SecretStatus[]> {
-    assertBuilder(opts.identity, opts.projectId);
+    assertProjectPermission(opts.identity, opts.projectId, "secrets:read");
     const { identity, projectId, stage } = opts;
     await requireTenantProject(this.db, identity.tenantId, projectId);
     const declared = await this.declaredSecrets({ identity, projectId });
@@ -140,7 +144,7 @@ export class SecretsService {
     name: string;
     value: string;
   }): Promise<SecretStatus> {
-    assertBuilder(opts.identity, opts.projectId);
+    assertProjectPermission(opts.identity, opts.projectId, "secrets:write");
     const { identity, projectId, stage, name, value } = opts;
     await requireTenantProject(this.db, identity.tenantId, projectId);
     const declared = await this.declaredSecrets({ identity, projectId });
@@ -184,7 +188,7 @@ export class SecretsService {
     stage: RunStage;
     name: string;
   }): Promise<boolean> {
-    assertBuilder(opts.identity, opts.projectId);
+    assertProjectPermission(opts.identity, opts.projectId, "secrets:write");
     const { identity, projectId, stage, name } = opts;
     await requireTenantProject(this.db, identity.tenantId, projectId);
     const result = await this.db
@@ -211,7 +215,11 @@ export class SecretsService {
     missingRequired: string[];
   }> {
     const { identity, projectId, stage } = opts;
-    const declared = await this.declaredSecrets({ identity, projectId });
+    const declared = await this.declaredSecrets({
+      identity,
+      projectId,
+      purpose: "run",
+    });
     if (declared.size === 0) {
       return { values: {}, missingRequired: [] };
     }

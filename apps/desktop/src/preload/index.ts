@@ -1,5 +1,6 @@
 import type { ResourcePreview } from "@catamorphic/react";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import type { BackgroundCommandView } from "../shared/background-commands.js";
 
 // Electron prefixes every rejected invoke with "Error invoking remote method
 // '<channel>': Error: ". The renderer shows messages to people and matches
@@ -870,6 +871,17 @@ const api = {
     sessionId: string,
   ): Promise<{ buffer: string } | null> =>
     invoke("catamorphic:terminal-restore-buffer", sessionId),
+  backgroundCommands: (): Promise<BackgroundCommandView[]> =>
+    invoke("catamorphic:background-commands"),
+  onBackgroundCommands: (
+    listener: (commands: BackgroundCommandView[]) => void,
+  ): (() => void) => {
+    const handler = (_event: unknown, commands: BackgroundCommandView[]) =>
+      listener(commands);
+    ipcRenderer.on("catamorphic:background-commands", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:background-commands", handler);
+  },
   onTerminalBusy: (
     listener: (payload: { sessionId: string; busy: boolean }) => void,
   ): (() => void) => {

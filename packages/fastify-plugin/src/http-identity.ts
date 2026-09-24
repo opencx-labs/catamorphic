@@ -7,8 +7,8 @@ import type { FastifyRequest } from "fastify";
  * The one identity mechanism of the HTTP surface. The host supplies a
  * resolver when it registers the plugin; it runs on every request (including
  * iframe navigations to served app documents, which carry the host's own
- * session cookie) and returns the caller's {@link Identity} — full for a
- * builder, scoped for a viewer — or `null` for "not authenticated" (401).
+ * session cookie) and returns the caller's {@link Identity} — root for the
+ * host itself, scoped for a member — or `null` for "not authenticated" (401).
  *
  * There is no default: catamorphic is embed-only and never guesses who is
  * calling. Hosts that terminate auth elsewhere (a proxy, a sidecar behind

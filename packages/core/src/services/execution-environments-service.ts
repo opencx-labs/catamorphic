@@ -11,8 +11,8 @@ import type {
 import { environmentSatisfies } from "@catamorphic/sandbox";
 import type { Identity } from "../identity.js";
 import {
+  hasProjectPermission,
   identityMayUseEnvironment,
-  isBuilder,
   mayUseProject,
 } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
@@ -138,7 +138,11 @@ export class ExecutionEnvironmentsService {
         }
         const policy = await this.projects.list(args);
         if (policy.invalid) throw new Error(policy.invalid.error);
-        const includeDenied = isBuilder(args.identity, args.projectId);
+        const includeDenied = hasProjectPermission(
+          args.identity,
+          args.projectId,
+          "program:read",
+        );
         const items: EnvironmentDiscoveryItem[] = [];
         for (const name of Object.keys(policy.environments).sort()) {
           const granted = identityMayUseEnvironment(

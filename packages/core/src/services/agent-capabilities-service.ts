@@ -13,11 +13,11 @@ import type { Kysely } from "kysely";
 import { z } from "zod";
 import {
   hasControlPlanePermission,
-  hasProjectPermission,
   type Identity,
-  identityCovers,
   identityMayUseConnection,
   identityMayUseEnvironment,
+  intersectProjectPermissions,
+  intersectScope,
 } from "../identity.js";
 import { requireRuntimeSession } from "./agent-runtime-events-service.js";
 import { AccessDeniedError } from "./artifact-scope.js";
@@ -491,7 +491,7 @@ export class AgentCapabilitiesService {
     // Refresh may revoke a grant, but cannot expand a caller's narrowed token.
     return check({
       ...args.identity,
-      scope: args.identity.scope.filter((ref) => identityCovers(identity, ref)),
+      scope: intersectScope(args.identity.scope, identity),
       executionScope: (args.identity.executionScope ?? []).filter((ref) =>
         identityMayUseEnvironment(identity, ref.projectId, ref.name),
       ),
@@ -517,8 +517,9 @@ export class AgentCapabilitiesService {
           },
         ];
       }),
-      projectPermissions: (args.identity.projectPermissions ?? []).filter(
-        (ref) => hasProjectPermission(identity, ref.projectId, ref.permission),
+      projectPermissions: intersectProjectPermissions(
+        args.identity.projectPermissions ?? [],
+        identity,
       ),
       controlPlanePermissions: (
         args.identity.controlPlanePermissions ?? []

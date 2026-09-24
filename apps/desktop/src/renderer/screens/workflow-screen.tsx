@@ -82,7 +82,7 @@ export function WorkflowScreen(props: WorkflowScreenProps) {
 
 function WorkflowScreenContent(props: WorkflowScreenProps) {
   const authority = useRemoteAuthority();
-  if (!(authority ? authority.builder : props.canEdit))
+  if (!(authority ? authority.writesProgram : props.canEdit))
     return (
       <WorkflowReview
         projectId={props.projectId}
@@ -321,10 +321,10 @@ function WorkflowWorkbench({
     triggerCount > 0 ? projectId : undefined,
     workflowName,
   );
-  // Any active enablement means the workflow runs automatically for you.
+  // Any active enablement (yours or the project's) means it runs on its own.
   const enablement =
-    enablements.data?.find((item) => item.status === "active") ??
-    enablements.data?.[0];
+    enablements.data?.items.find((item) => item.status === "active") ??
+    enablements.data?.items[0];
   const automation: WorkflowAutomation =
     triggerCount === 0
       ? { kind: "none" }
@@ -333,11 +333,17 @@ function WorkflowWorkbench({
         : !enablement
           ? { kind: "off" }
           : enablement.status === "active"
-            ? { kind: "on", updateAvailable: enablement.updateAvailable }
+            ? {
+                kind: "on",
+                updateAvailable: enablement.updateAvailable,
+                forProject: enablement.owner.type === "project",
+              }
             : {
                 kind: "paused",
                 reason:
-                  enablement.status === "suspended" ? "Suspended" : "Paused",
+                  enablement.status === "suspended"
+                    ? "Needs attention"
+                    : "Paused",
               };
 
   const problem: WorkflowProblem | undefined = saveError

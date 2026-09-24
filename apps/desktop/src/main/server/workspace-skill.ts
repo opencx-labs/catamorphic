@@ -1,7 +1,7 @@
 /** Replaceable desktop doctrine. Mechanics live in the existing host services. */
 export const DESKTOP_WORKSPACE_SKILL = `---
 name: desktop-workspace
-description: Work with the user's browser, terminals, chats, worktrees, connections and shared project state in Work. Load for desktop interaction or session coordination.
+description: Work with the user's browser, terminals, background commands and watches, chats, worktrees, connections and shared project state in Work. Load for desktop interaction or session coordination.
 ---
 
 # Desktop workspace
@@ -61,17 +61,35 @@ Respect a takeover; reclaim only when the task needs it and without disrupting
 their active work. Release a useful tab when finished; close temporary scaffolding.
 Simply showing a URL uses open_surface and does not need browser control.
 
-## Terminal
+## Commands and terminals
 
-Use native shell for routine execution. Discover run_terminal, read_terminal and
-write_terminal when the user needs a visible persistent desktop terminal, an
-existing terminal's output, or interactive input. These act on the desktop host,
-not a remote sandbox. Reuse terminalId for sequential commands. Long commands
-return commandRunning; wait with read_terminal using sinceOffset and waitForIdleMs
-instead of starting the command again. Raw input uses a carriage return to submit
-and Ctrl+C to interrupt. surface_control releases or closes the terminal. Closing
-a terminal ends its process. Background terminals appear as chat chips; show one
-with open_surface when useful.
+Quick commands (reading, searching, tests and builds that finish in a few
+minutes) use your own shell. Long-running processes use run_background_command:
+dev servers, file watchers, long builds and test runs, anything you would otherwise
+wait on. Each runs in its own terminal, shown as a chip on your chat that the person
+can open to watch. It survives the turn, and this chat receives a message when it
+finishes. Add wake_on_output (a regular expression) to also hear about a line, such
+as a server's "ready" or an "error". Keep working meanwhile. Never loop on sleep.
+read_background_output returns new output since your last read, and wait_seconds
+blocks for news when you have nothing else to do. stop_background_command ends it.
+Stop what you no longer need, and leave a dev server running when the person will
+use it. Open its terminal with open_surface and its key when output is worth their
+attention.
+
+To wait for something that is not your own process (a deploy going live, a PR
+review, a file appearing, a status page), use watch_command with a quick check. With
+until "success" the chat wakes once when the check exits 0; with until "change" it
+wakes whenever the check's output changes, until you stop it. Make the check print
+only the part that matters. Watches survive restarts; checks missed while the
+computer sleeps collapse into one, so tell the person it reports late if this
+computer is off. stop_background_command ends a watch as well. For events a
+project workflow already receives (webhooks, GitHub), prefer a workflow.
+
+write_terminal sends raw input to a terminal: an answer to a prompt, a REPL line,
+or Ctrl+C (\u0003). It also types into the person's own terminal when they ask
+("run this in my terminal"), which marks it as agent-controlled. Read any terminal's
+output with read_tab. surface_control releases or closes a terminal; closing ends
+its process. These act on the desktop host, not a remote sandbox.
 
 ## Sessions, progress and checkouts
 

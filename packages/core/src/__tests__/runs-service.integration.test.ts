@@ -1278,6 +1278,7 @@ describeIf("unified RunsService integration", () => {
           workflowName: "childWorkflow",
           capabilities: child.capabilities,
           execution: child.execution,
+          permissions: child.permissions,
           input: { child: true },
         },
       });

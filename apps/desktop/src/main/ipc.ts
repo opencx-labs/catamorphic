@@ -9,6 +9,7 @@ import {
   formatProjectAgentId,
   isProjectDataPath,
   normalizeDocumentPath,
+  PROJECT_PERMISSIONS,
   type ProjectAgentEntry,
 } from "@catamorphic/core";
 import { isPersonalFile } from "@catamorphic/git";
@@ -41,6 +42,7 @@ import {
   prCommentInputSchema,
   prDecisionInputSchema,
 } from "../shared/pr-details.js";
+import { writesProgram } from "../shared/project-experience.js";
 import type { SettingsPatch, SettingsScope } from "../shared/settings.js";
 import type { UsageSummary, UsageWindowDays } from "../shared/usage.js";
 import type { BindingAuth } from "./agent-bindings-store.js";
@@ -145,8 +147,9 @@ import { createUsageScanner } from "./usage-scan.js";
 import { watchSidebarEdge } from "./window-sidebar-edge.js";
 
 const execFileAsync = promisify(execFile);
+/** A remote root holds every permission; `/me` lists projects only for members. */
 const ROOT_REMOTE_PROJECT_PERMISSIONS: RemoteMe["projects"][number]["permissions"] =
-  ["memberships:manage", "roles:manage"];
+  [...PROJECT_PERMISSIONS];
 
 export interface ServerState {
   current: EmbeddedServer | null;
@@ -377,7 +380,6 @@ export function registerIpcHandlers(
       const capabilities = remote?.link.capabilities;
       return projectStartingActions(root, {
         root: !remote,
-        builder: !remote || capabilities?.builder === true,
         permissions: capabilities?.permissions ?? [],
       }).map((action) => ({
         label: action.label,
@@ -1863,7 +1865,6 @@ export function registerIpcHandlers(
     const me = await client.me();
     const project = me.projects.find((p) => p.projectId === remoteProjectId);
     return {
-      builder: me.identity.root || (project?.builder ?? false),
       source: project?.source ?? null,
       permissions: me.identity.root
         ? [...ROOT_REMOTE_PROJECT_PERMISSIONS]
@@ -1992,7 +1993,9 @@ export function registerIpcHandlers(
       const githubFullName = capabilities.source?.remoteUrl
         ? repoFullNameFromUrl(capabilities.source.remoteUrl)
         : null;
-      const builderCheckout = Boolean(capabilities.builder && githubFullName);
+      const builderCheckout = Boolean(
+        writesProgram(capabilities) && githubFullName,
+      );
       const project = await server.projectRoots.register({
         rootPath: input.rootPath,
         existing: false,
@@ -2123,14 +2126,14 @@ export function registerIpcHandlers(
       const capabilities = await introspect(client, link.remoteProjectId);
       const report = await syncRemoteProject(
         rootPath,
-        capabilities.builder ? storeOnlyDocumentsClient(client) : client,
+        writesProgram(capabilities) ? storeOnlyDocumentsClient(client) : client,
       );
       storesFor(event).remoteProjects.touch(
         projectId,
         new Date().toISOString(),
         capabilities,
       );
-      if (!capabilities.builder) {
+      if (!writesProgram(capabilities)) {
         await checkpointProgramSync(projectId, report);
       }
       notifyGitChanged(projectId);
@@ -2845,8 +2848,10 @@ export function registerIpcHandlers(
       (project) => project.projectId === link?.remoteProjectId,
     );
     if (link) {
-      if (!remoteProject?.builder)
-        throw new Error("Only project builders can approve or apply proposals");
+      if (!remoteProject?.permissions.includes("program:publish"))
+        throw new Error(
+          "Approving or applying a proposal needs the program:publish permission",
+        );
       // Apply the same proposal visibility check used by the review surface.
       await storedRemoteClient(event, input.projectId, link).proposalFiles(
         input.number,

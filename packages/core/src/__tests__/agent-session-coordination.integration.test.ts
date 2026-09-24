@@ -1522,13 +1522,36 @@ describe("agent session coordination", () => {
     provider.switchCheckout = undefined;
   });
 
-  it("reuses a workflow wake session and requests attention when its turn settles", async () => {
+  it("reuses the chat for a workflow key and requests attention when its turn settles", async () => {
     const project = await projects.create(identity, { name: "Daily brief" });
-    const first = await sessions.wake(identity, project.id, {
-      wakeKey: '["gmail-summary","daily"]',
+    const chatKey = '["gmail-summary","daily"]';
+    // What catamorphic.sessions.deliver does for a chat named by key.
+    const deliverToKey = async (input: {
+      content: string;
+      title?: string;
+      notification?: { title?: string; body?: string };
+    }) => {
+      const chat = await sessions.chatForKey(identity, project.id, {
+        chatKey,
+        ...(input.title ? { title: input.title } : {}),
+      });
+      const runId = crypto.randomUUID();
+      const receipt = await sessions.deliver(
+        identity,
+        project.id,
+        chat.sessionId,
+        {
+          content: input.content,
+          author: { kind: "workflow", runId, workflowName: "gmail-summary" },
+          mode: "next_turn",
+          idempotencyKey: `workflow:${runId}:${chatKey}`,
+          metadata: { workflowNotification: input.notification ?? {} },
+        },
+      );
+      return { ...receipt, ...chat };
+    };
+    const first = await deliverToKey({
       content: "Summarize my inbox",
-      workflowName: "gmail-summary",
-      runId: crypto.randomUUID(),
       title: "Daily inbox summary",
       notification: {
         title: "Your inbox summary is ready",
@@ -1559,12 +1582,7 @@ describe("agent session coordination", () => {
     );
     expect(acknowledged.attentionRequired).toBe(false);
 
-    const second = await sessions.wake(identity, project.id, {
-      wakeKey: '["gmail-summary","daily"]',
-      content: "Summarize my inbox again",
-      workflowName: "gmail-summary",
-      runId: crypto.randomUUID(),
-    });
+    const second = await deliverToKey({ content: "Summarize my inbox again" });
     expect(second).toMatchObject({
       sessionId: first.sessionId,
       sessionCreated: false,

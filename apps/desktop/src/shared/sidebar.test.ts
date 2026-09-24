@@ -38,9 +38,9 @@ describe("sidebar presentation", () => {
                   items: [
                     { label: "Public", url: "https://example.test" },
                     {
-                      label: "Builder",
-                      url: "https://example.test/builder",
-                      when: { builder: true },
+                      label: "Maintainers",
+                      url: "https://example.test/maintainers",
+                      when: { permissions: ["brain:maintain"] },
                     },
                   ],
                 },
@@ -52,7 +52,7 @@ describe("sidebar presentation", () => {
     };
     const visible = visibleSidebarConfig({
       config,
-      context: { root: false, builder: false, permissions: [] },
+      context: { root: false, permissions: ["program:read"] },
     });
     expect(visible?.left).toEqual([]);
     expect(sidebarSections(visible).map((section) => section.id)).toEqual([

@@ -26,7 +26,6 @@ describe("project manifest startingActions", () => {
     expect(
       projectStartingActions(projectRoot(), {
         root: false,
-        builder: false,
         permissions: [],
       }),
     ).toEqual([]);
@@ -44,15 +43,12 @@ describe("project manifest startingActions", () => {
             label: "Prepare QBR",
             prompt: "Prepare the QBR",
             agent: "csm",
-            when: {
-              builder: false,
-              permissions: ["brain:maintain"],
-            },
+            when: { permissions: ["brain:maintain"] },
           },
           {
             label: "Review changes",
             prompt: "Review the working tree",
-            when: { builder: true },
+            when: { permissions: ["program:write"] },
           },
           {
             label: "Malformed targeting fails closed",
@@ -67,7 +63,6 @@ describe("project manifest startingActions", () => {
     expect(
       projectStartingActions(root, {
         root: false,
-        builder: false,
         permissions: ["brain:maintain"],
       }),
     ).toEqual([
@@ -77,8 +72,7 @@ describe("project manifest startingActions", () => {
     expect(
       projectStartingActions(root, {
         root: false,
-        builder: true,
-        permissions: [],
+        permissions: ["program:read", "program:write"],
       }),
     ).toEqual([
       { label: "Draft follow-up", prompt: "Draft the follow-up" },

@@ -1,7 +1,7 @@
 import type { CatamorphicCore, Identity } from "@catamorphic/core";
 import {
   AccessDeniedError,
-  isBuilder,
+  EVERY_ARTIFACT,
   mayUseProject,
   projectAgentId,
   resolveScope,
@@ -20,8 +20,8 @@ import { sessionArtifactTool } from "./session-artifact-tools.js";
  * - documents: list / read / search / write / delete / history over the one
  *   path namespace (program + store), each narrowed to the caller's
  *   document refs by `DocumentsService` itself;
- * - skills: list / read, for anyone who may use the project (a builder, or
- *   a member with an agent ref);
+ * - skills: list / read, for anyone who may use the project (with
+ *   `program:read`, or an agent ref);
  * - agents: `ask_agent` — a synchronous chat turn with a project agent the
  *   caller may open sessions on (`AgentSessionsService` enforces the ref).
  *
@@ -446,7 +446,7 @@ export function surfaceTools(
         definition: {
           name: "list_publications",
           description:
-            "The shared URLs you may see (builders: all of the project's; members: your own).",
+            "The shared URLs you may see (all of the project's with publications:read; otherwise your own).",
           inputSchema: { type: "object", properties: {} },
           annotations: READ_ONLY,
         },
@@ -513,11 +513,12 @@ export function surfaceTools(
     const agentNames = (identity.scope ?? [])
       .filter((ref) => ref.kind === "agent" && ref.projectId === projectId)
       .map((ref) => (ref as { name: string }).name);
-    const hint = isBuilder(identity, projectId)
-      ? "any committed project agent (.catamorphic/agents/<slug>.json)"
-      : agentNames.length > 0
-        ? `one of: ${agentNames.join(", ")}`
-        : "none available to you";
+    const hint =
+      agentNames.includes(EVERY_ARTIFACT) || identity.scope === undefined
+        ? "any committed project agent (.catamorphic/agents/<slug>.json)"
+        : agentNames.length > 0
+          ? `one of: ${agentNames.join(", ")}`
+          : "none available to you";
     tools.push({
       definition: {
         name: "ask_agent",
@@ -664,7 +665,7 @@ export function surfaceTools(
           definition: {
             name: "create_watcher",
             description:
-              'Temporarily enable an ordinary TypeScript workflow owned by this session. For periodic monitoring, declare a normal schedule trigger and do the check with workflow IO. For event-driven work, use normalized Project Events already supplied by this host. Stop, expiry, or session close/archive disables future invocations. The source must export the named defineWorkflow and declare one or more inline triggers, for example triggers: [trigger("issue.changed")]. Event triggers receive the normalized Project Event envelope; schedule triggers receive their normal scheduled payload. To notify or wake a session, return context.host["catamorphic.sessions"].deliver({ sessionId, content, mode, idempotencyKey }) from a boundary. Pass source directly; do not write it to the user working tree. The host places it at .catamorphic/workflows/src/artifacts/<id>.ts in an isolated committed-origin checkout, so imports must already exist in that origin. workflowName must be exported by this source. The workflow is committed to an isolated catamorphic/artifacts/<id> ref, pinned, and never merged into project main. This is temporary execution, not private storage. Call stop_watcher when the task is complete. Load the workflow-lifecycle skill for lifetime and publishing guidance.',
+              'Temporarily enable an ordinary TypeScript workflow owned by this session. To repeat a shell check (a URL, a file, a CLI), use the host\'s watch_command when it is offered: it runs where your commands run. For periodic monitoring with workflow IO, declare a normal schedule trigger. For event-driven work, use normalized Project Events already supplied by this host. Stop, expiry, or session close/archive disables future invocations. The source must export the named defineWorkflow and declare one or more inline triggers, for example triggers: [trigger("issue.changed")]. Event triggers receive the normalized Project Event envelope; schedule triggers receive their normal scheduled payload. To notify or wake a session, return context.host["catamorphic.sessions"].deliver({ sessionId, content, mode, idempotencyKey }) from a boundary. Pass source directly; do not write it to the user working tree. The host places it at .catamorphic/workflows/src/artifacts/<id>.ts in an isolated committed-origin checkout, so imports must already exist in that origin. workflowName must be exported by this source. The workflow is committed to an isolated catamorphic/artifacts/<id> ref, pinned, and never merged into project main. This is temporary execution, not private storage. Call stop_watcher when the task is complete. Load the workflow-lifecycle skill for lifetime and publishing guidance.',
             inputSchema: {
               type: "object",
               properties: {

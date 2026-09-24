@@ -448,7 +448,9 @@ Access is enforced by the host from **roles you commit** as
   ]
 }
 // .catamorphic/roles/admin.json
-{ "version": 1, "name": "Admin", "description": "Runs the brain: builds workflows, apps and agents. Comfortable with technical detail.", "builder": true, "documents": ["store/**"] }
+{ "version": 1, "name": "Admin", "description": "Runs the brain: builds workflows, apps and agents. Comfortable with technical detail.", "agents": ["*"], "workflows": ["*"], "apps": ["*"], "environments": ["*"], "permissions": ["*"], "documents": ["store/**"] }
+// .catamorphic/roles/engineer.json
+{ "version": 1, "name": "Engineer", "description": "Builds workflows and apps; ships them after review. Technical.", "agents": ["*"], "workflows": ["*"], "apps": ["*"], "environments": ["local"], "permissions": ["program:write", "runs:read", "secrets:read"] }
 // .catamorphic/roles/brain-maintainer.json
 { "version": 1, "name": "Brain Maintainer", "description": "Keeps the handbook and shared documents current. Edits text, not code.", "permissions": ["brain:maintain"], "agents": ["brain-maintainer"] }
 \`\`\`
@@ -462,23 +464,29 @@ Rules of thumb when authoring roles:
 - \`{param}\` placeholders are filled from each member's grants (the host
   says "alice: customer = acme, globex"); an entry whose placeholder is not
   granted yields nothing — never a wildcard.
-- \`"builder": true\` = may edit the program (files, deploys, secrets,
-  agents). It does NOT grant the store: even admins see only the
-  \`documents\` their role lists. Leave \`store/**\` off an admin role that
-  must not read every customer's data.
+- \`"*"\` in \`agents\`, \`workflows\`, \`apps\` or \`environments\` reaches
+  every one of them. Nothing grants the store but \`documents\`: even an
+  admin sees only the documents their role lists. Leave \`store/**\` off an
+  admin role that must not read every customer's data.
 - Name agents by their file slug (\`.catamorphic/agents/csm-assistant.json\`), workflows by
   their exported name, apps by \`.catamorphic/apps/<name>\`. A role may narrow an agent's
   tools with \`toolPolicies\` (allow / ask / deny per tool, per connector
   server key, or \`catamorphic\` for the project's own workflow tools).
-- \`permissions\` is an extensible namespaced capability list. Catamorphic
-  enforces its documented names (\`memberships:manage\` and \`roles:manage\`);
-  hosts may enforce their own names, such as \`brain:maintain\`. A custom
-  permission does not grant framework authority unless the host implements it.
-  The desktop may use these capabilities in project-authored \`when\` rules.
+- \`permissions\` says what a member may do beyond using those artifacts,
+  as \`thing:action\`. Catamorphic enforces these things, each with \`read\`
+  and \`write\`: \`program\` (the project's source; it also has \`publish\`,
+  making changes live), \`secrets\`, \`automations\`, \`webhooks\`, \`runs\`
+  and \`sessions\` (everyone's, not just the member's own), \`memberships\`,
+  \`roles\` and \`publications\`. \`write\` and \`publish\` include \`read\`;
+  \`program:*\` grants every action on a thing and \`*\` everything. Changing
+  a role file needs \`roles:write\`, however it is edited. Hosts may enforce
+  their own names, such as \`brain:maintain\`; a custom permission grants no
+  framework authority unless the host implements it. The desktop may use
+  permissions in project-authored \`when\` rules.
 - A member sees a workflow only when a role grants its exported name. An
   unattended workflow also needs role grants for its chosen Environment and
   every declared connection alias. Grant the project agent too when the
-  workflow wakes that agent.
+  workflow delivers work to a chat with that agent.
 - Keep roles few and readable; membership (who has which role and grants)
   is the host's, not a file here.
 
@@ -502,7 +510,7 @@ just because a connection returned.
 In the Catamorphic desktop reference host, a project may ship a shared
 \`.catamorphic/sidebar.js\` and up to six New Tab starters in the ordinary
 \`.catamorphic/project.json\` manifest. Both may target resolved authority with
-\`when: { builder?, permissions? }\`; never branch on a role slug. Every declared
+\`when: { permissions }\`; never branch on a role slug. Every declared
 condition must match, invalid conditions fail closed, and omitted configuration
 leaves no empty UI behind.
 
@@ -533,7 +541,7 @@ module.exports = {
       when: { permissions: ["brain:maintain"] },
       items: [{ label: "Handbook", url: "https://handbook.example.com" }],
     },
-    { id: "changes", type: "git", title: "Changes", when: { builder: true } },
+    { id: "changes", type: "git", title: "Changes", when: { permissions: ["program:write"] } },
   ] }],
   right: [],
 };
@@ -1177,8 +1185,7 @@ already shows an origin, or the project was imported from GitHub, use the
 sync_project / create_pull_request tools instead — and never replace an
 existing remote without asking.
 
-Run everything below in a terminal at the project root (run_terminal, or
-your own shell if you have one).
+Run everything below with your shell at the project root.
 
 ## 1. Preflight
 
@@ -1196,9 +1203,10 @@ your own shell if you have one).
 
 - \`gh auth status\` — already logged in? Continue.
 - If not: tell the user you are starting GitHub login, then run
-  \`gh auth login --web --git-protocol https\` in a visible terminal. It
-  prints a one-time code and opens the browser; the user finishes there.
-  Wait for the command to exit, then re-check \`gh auth status\`.
+  \`gh auth login --web --git-protocol https\` in a terminal they can see
+  (in Work: run_background_command, then open its terminal with
+  open_surface). It prints a one-time code and opens the browser; the user
+  finishes there. When it exits, re-check \`gh auth status\`.
 - Never ask the user to paste tokens or passwords into the chat.
 
 ## 3. Confirm before pushing

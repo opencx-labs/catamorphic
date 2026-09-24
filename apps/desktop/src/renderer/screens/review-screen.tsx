@@ -43,7 +43,9 @@ export function ReviewScreen({
   const companyProject = Boolean(access.data);
   const allowExternalLinks =
     access.isSuccess &&
-    (!companyProject || access.data?.capabilities?.builder === true);
+    (!companyProject ||
+      access.data?.capabilities?.permissions.includes("program:publish") ===
+        true);
   const reviewRef = useRef<HTMLElement>(null);
   const [details, setDetails] = useState<PrDetails | null>(null);
   const [detailsError, setDetailsError] = useState<string | null>(null);

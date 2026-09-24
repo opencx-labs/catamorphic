@@ -45,22 +45,30 @@ Every scoped call needs two ids:
   durable ownership, membership, or audit attribution requires it, but never
   references the host's user table.
 
-In the SDK this is bound via `cat.forTenant({ tenantId }).forUser({ externalUserId, scope? })`. Over HTTP the fastify-plugin's **required `identity` resolver** turns each request (your session cookie, JWT, …) into an identity — there is no default and no headers are read unless you pass the stock `identityFromHeaders()` behind your own gateway.
+In the SDK this is bound via `cat.forTenant({ tenantId }).forUser({ externalUserId, scope?, projectPermissions? })`. Over HTTP the fastify-plugin's **required `identity` resolver** turns each request (your session cookie, JWT, …) into an identity — there is no default and no headers are read unless you pass the stock `identityFromHeaders()` behind your own gateway.
 
-An identity with no `scope` is **root** host authority across the tenant. A
-project builder is scoped with `{ kind: "project", projectId }`; members get
-only exact app, workflow, agent, and document refs. Builder access does not
-implicitly grant project-store paths, managed Environments, connection
-aliases, or administrative permissions. Which users receive those refs is
-host policy; Catamorphic enforces the resolved result. Never hardcode ids or
-use missing scope as an ordinary builder shortcut.
+An identity with no `scope` is **root** host authority across the tenant.
+Everyone else is scoped: `scope` lists the app, workflow, agent, and document
+refs they may use (`name: "*"` for every app, workflow or agent), and
+`projectPermissions: [{ projectId, permission }]` lists what they may do to
+the project (ADR 0158). Permissions are `thing:action`: `program` (read,
+write, publish), `secrets`, `automations`, `webhooks`, `runs`, `sessions`,
+`memberships`, `roles`, and `publications` (read, write). `write` and
+`publish` imply `read` on the same thing and nothing else; grants may be
+`thing:*` or `*`. No permission grants project-store paths, managed
+Environments, or connection aliases. Which users receive what is host policy;
+Catamorphic enforces the resolved result. Never hardcode ids or use missing
+scope as a shortcut for people who edit the program.
 
 For company-brain hosts, commit reusable access policy as
 `.catamorphic/roles/<slug>.json`. A role grants workflow names, project-agent slugs,
 Environment names, provider-neutral connection aliases, document paths, and
-namespaced project permissions. Catamorphic reserves `memberships:manage` and
-`roles:manage`; embedders may interpret additional names in their own services
-and presentation. The host owns membership assignment. Unattended triggers do
+project permissions. Catamorphic enforces its own `thing:action` names;
+embedders may interpret additional namespaced names (`brain:maintain`) in
+their own services and presentation. An admin role is plain grants:
+`"agents": ["*"], "workflows": ["*"], "apps": ["*"], "environments": ["*"],
+"permissions": ["*"]`, plus `"documents": ["store/**"]` for the store.
+Changing any `.catamorphic/roles/*.json` needs `roles:write`. The host owns membership assignment. Unattended triggers do
 not run from those grants alone:
 each member creates a consent-bound workflow enablement, usually through the
 desktop's automatic runs flow (the workflow's status, then **Enable for me**). The final connection auth may
@@ -68,9 +76,10 @@ complete an already-started enablement; account connection by itself never
 bulk-enables workflows.
 
 Project-authored presentation targets resolved authority, never role names.
-The desktop understands `when: { builder?, permissions? }` on shared sidebar
+The desktop understands `when: { permissions }` on shared sidebar
 sections/items and on up to six `.catamorphic/project.json` `startingActions`.
-Every condition must match; invalid conditions fail closed; absent config
+Every listed permission must be held (`program:write` targets the people who
+edit the program); invalid conditions fail closed; absent config
 leaves no trace. Treat this as reference-host behavior, not a framework JSON
 contract that embedders must adopt.
 
@@ -235,14 +244,17 @@ There is one Workflow model and one Run model:
 Workflow and Run capabilities determine available controls. Do not add a public
 stage concept or separate API, SDK, hook, or UI families for these mechanics.
 
-A member-owned workflow can call
-`context.host["catamorphic.sessions"].wake({ key, agentSlug, content, title?,
-notification? })`. Core reuses one active session per member, workflow, and
-stable key, queues the normal agent turn, and requests durable attention when
-it settles. Clients poll the ordinary session list, render
+A workflow reaches chats with one operation,
+`context.host["catamorphic.sessions"].deliver(...)`: `{ sessionId }` for a
+known chat, or `{ key, agentSlug?, title?, audience?, notification? }` for the
+chat it keeps for that key. Core reuses one active chat per owner, workflow,
+and key (starting it on first use), queues the normal agent turn, and requests
+durable attention when a keyed chat's turn settles. The owner follows the
+enablement: a member's automation reaches that member; a project automation
+reaches a project chat (`AgentSession.owner === "project"`) or a named member
+(`audience: { member }`). Clients poll the ordinary session list, render
 `attentionRequired`, and acknowledge it through the generated API. Web Push
 is optional transport to the same session, not a separate notification inbox.
-Service-owned enablements cannot infer a human recipient and fail closed.
 
 Delegated work is represented by ordinary durable child sessions. Keep
 `parentSessionId` (hierarchy), `forkedFromSessionId` (transcript lineage), and
@@ -279,7 +291,15 @@ const app = createApp({
     if (!session) return null; // 401
     const base = { tenantId: session.orgId, externalUserId: session.userId };
     return session.isEmployee
-      ? { ...base, scope: [{ kind: "project", projectId: BRAIN_PROJECT_ID }] }
+      ? {
+          ...base,
+          scope: [
+            { kind: "agent", projectId: BRAIN_PROJECT_ID, name: "*" },
+            { kind: "workflow", projectId: BRAIN_PROJECT_ID, name: "*" },
+            { kind: "app", projectId: BRAIN_PROJECT_ID, name: "*" },
+          ],
+          projectPermissions: [{ projectId: BRAIN_PROJECT_ID, permission: "program:write" }],
+        }
       : { ...base, scope: await entitlementsFor(session.userId) };
   },
 });

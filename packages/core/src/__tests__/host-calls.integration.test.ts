@@ -50,6 +50,7 @@ export const briefCustomer = defineWorkflow(({ defineBoundary }) => ({
 }));
 
 export const lookupAccount = defineWorkflow(({ defineBoundary }) => ({
+  permissions: ["sessions:write"],
   steps: [
     defineBoundary({
       run: ({ input, host }: BoundaryContext<{ id: string }>) =>
@@ -356,6 +357,10 @@ describeIf("host calls from workflows (ADR 0055)", () => {
       externalUserId: "bob",
       executionScope: [{ projectId, name: "local" }],
       scope: [{ kind: "workflow", projectId, name: "lookupAccount" }],
+      projectPermissions: [
+        { projectId, permission: "sessions:*" },
+        { projectId, permission: "secrets:write" },
+      ],
     };
     const outcome = await core.runs.call({
       identity: bob,
@@ -372,6 +377,8 @@ describeIf("host calls from workflows (ADR 0055)", () => {
         externalUserId: "bob",
         scope: bob.scope,
         executionScope: bob.executionScope,
+        // Only what the workflow declares, of what Bob holds (ADR 0158).
+        projectPermissions: [{ projectId, permission: "sessions:write" }],
       },
       args: { id: "A-1" },
     });

@@ -7,10 +7,10 @@ import {
   type ConnectionUseRef,
   type ExecutionEnvironmentRef,
   type Identity,
-  PROJECT_PERMISSION_PATTERN,
+  PROJECT_PERMISSION_GRANT_PATTERN,
   type ProjectPermissionRef,
 } from "../identity.js";
-import { assertBuilder } from "./artifact-scope.js";
+import { assertProjectPermission } from "./artifact-scope.js";
 import {
   forgetProgramFetch,
   readProgramFiles,
@@ -21,9 +21,9 @@ import { requireTenantProject } from "./projects-service.js";
 /**
  * Roles as committed files (ADR 0055): `.catamorphic/roles/<name>.json`, next to
  * `.catamorphic/agents/`. A role is a reviewable, agent-authorable statement of what a
- * class of member may reach — agents, workflows, apps, documents, and
- * whether they build the program — expressed in the one enforcement
- * vocabulary core has (`Identity.scope`). Membership (which user has which
+ * class of member may reach (agents, workflows, apps, documents,
+ * Environments, connections) and do (`permissions`, ADR 0158), expanded into
+ * the one enforcement vocabulary core has (`Identity`). Membership (which user has which
  * roles, with which grants) is the host's, or the stock
  * `MembershipsService`; core stores no policy.
  *
@@ -65,25 +65,29 @@ const ConnectionEntrySchema = z.object({
 });
 
 /**
- * Core reserves the names it enforces, while embedders and projects may add
- * namespaced capabilities for their own services and presentation rules.
+ * Core enforces the names in `PROJECT_PERMISSIONS`; embedders and projects
+ * may add namespaced capabilities for their own services and presentation
+ * rules. `thing:*` grants every action on a thing and `*` everything.
  */
 const ProjectPermissionSchema = z
   .string()
   .regex(
-    PROJECT_PERMISSION_PATTERN,
-    "Expected a namespaced capability such as memberships:manage",
+    PROJECT_PERMISSION_GRANT_PATTERN,
+    "Expected a permission such as program:read, program:*, or *",
   );
 
-/** The committed `.catamorphic/roles/<name>.json` schema, version 1. */
-export const RoleDefinitionSchema = z.object({
+/**
+ * The committed `.catamorphic/roles/<name>.json` schema, version 1. Strict:
+ * an unknown key (a typo, or the retired `builder`) is an error rather than
+ * a silently ignored grant. App, workflow, agent and Environment lists take
+ * `*` for every one.
+ */
+export const RoleDefinitionSchema = z.strictObject({
   version: z.literal(1),
   /** Display name. */
   name: z.string().min(1),
   description: z.string().optional(),
-  /** Full program access to the project (a `project` ref). */
-  builder: z.boolean().optional(),
-  /** Namespaced project capabilities, independent from builder access. */
+  /** What the member may do beyond using the listed artifacts (ADR 0158). */
   permissions: z.array(ProjectPermissionSchema).optional(),
   agents: z.array(AgentEntrySchema).optional(),
   workflows: z.array(z.string().min(1)).optional(),
@@ -165,7 +169,6 @@ export function expandRole(
   grants: RoleGrants,
 ): ArtifactRef[] {
   const refs: ArtifactRef[] = [];
-  if (definition.builder) refs.push({ kind: "project", projectId });
   for (const entry of definition.agents ?? []) {
     const name = typeof entry === "string" ? entry : entry.name;
     const toolPolicies =
@@ -350,12 +353,12 @@ export class RolesService {
     this.ttlMs = opts?.ttlMs ?? DEFAULT_TTL_MS;
   }
 
-  /** The project's roles, for its builders (the admin surface). */
+  /** The project's roles, for those who may read them (`roles:read`). */
   async list(
     identity: Identity,
     projectId: string,
   ): Promise<ProjectRoleEntry[]> {
-    assertBuilder(identity, projectId);
+    assertProjectPermission(identity, projectId, "roles:read");
     await this.requireProject(identity.tenantId, projectId);
     return this.load(identity.tenantId, projectId, { fresh: true });
   }
@@ -441,7 +444,7 @@ export class RolesService {
     });
   }
 
-  async assignedRolesRequireManagement(input: {
+  async assignedRolesCarryPermissions(input: {
     tenantId: string;
     projectId: string;
     roles: readonly string[];

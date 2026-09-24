@@ -42,7 +42,6 @@ export interface ChatSurface {
     | "editor"
     | "chat"
     | "subagent"
-    | "watcher"
     | "app"
     | "workflow"
     | "mcpapp";
@@ -66,7 +65,7 @@ export interface ChatSurface {
   /**
    * Detail lines opened in an upward popover on click. Chips with `info`
    * aren't workspace tabs — the popover IS their surface (a subagent's
-   * activity feed, a watcher's command).
+   * activity feed).
    */
   info?: string[];
   /** MCP app chips: the view to open when clicked. */

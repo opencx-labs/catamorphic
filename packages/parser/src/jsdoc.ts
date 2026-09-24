@@ -32,7 +32,7 @@ export function extractJsDocMetadata(source: JsDocSource): JsDocMetadata {
   const jsDocs = source.getJsDocs();
 
   for (const doc of jsDocs) {
-    const desc = doc.getDescription().trim();
+    const desc = reflow(doc.getDescription());
     if (desc) {
       result.description = desc;
     }
@@ -180,4 +180,29 @@ export function extractParameterInfo(
   }
 
   return result;
+}
+
+/**
+ * Source comments wrap at the code's line width; a person reads prose. Join
+ * wrapped lines, keep paragraph breaks and list items on their own lines.
+ */
+function reflow(text: string): string {
+  return text
+    .trim()
+    .split(/\n\s*\n/)
+    .map((paragraph) =>
+      paragraph
+        .split("\n")
+        .map((line) => line.trim())
+        .reduce(
+          (joined, line) =>
+            !joined
+              ? line
+              : /^([-*•]|\d+[.)])\s/.test(line)
+                ? `${joined}\n${line}`
+                : `${joined} ${line}`,
+          "",
+        ),
+    )
+    .join("\n\n");
 }

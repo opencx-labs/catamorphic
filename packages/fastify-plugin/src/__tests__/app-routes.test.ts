@@ -533,10 +533,13 @@ describe("app-originated execution (structural narrowing)", () => {
     });
     // Full identity in, app-scoped identity out — the bundle never inherits
     // the builder's project access.
-    expect(seen[0]).toEqual({
+    expect(seen[0]).toMatchObject({
       tenantId: "tenant-1",
       externalUserId: "builder",
       scope: [appRef],
+      // No project permission survives into the bundle (ADR 0158).
+      projectPermissions: [],
+      controlPlanePermissions: [],
     });
   });
 
@@ -553,10 +556,11 @@ describe("app-originated execution (structural narrowing)", () => {
       },
       payload: { input: {} },
     });
-    expect(seen[0]).toEqual({
+    expect(seen[0]).toMatchObject({
       tenantId: "tenant-1",
       externalUserId: "builder",
       scope: [{ ...appRef, channel: "dev" }],
+      projectPermissions: [],
     });
   });
 
@@ -581,7 +585,7 @@ describe("app-originated execution (structural narrowing)", () => {
         headers: { "x-user": user },
       });
     }
-    expect(seen).toEqual([
+    expect(seen).toMatchObject([
       { tenantId: "tenant-1", externalUserId: "customer-a", scope: [appRef] },
       { tenantId: "tenant-1", externalUserId: "customer-b", scope: [] },
     ]);

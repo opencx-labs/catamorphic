@@ -10,6 +10,7 @@ import type {
   JsonValue,
   WorkflowTypeError,
 } from "./json.js";
+import type { WorkflowPermission } from "./permissions.js";
 import type { SessionHostOperations } from "./session-operations.js";
 
 export interface RetryBackoff {
@@ -133,17 +134,20 @@ class WorkflowDefinitionImpl<Input, Output, Steps extends readonly unknown[]> {
   readonly controls?: WorkflowControls;
   readonly triggers?: readonly TriggerBinding<unknown>[];
   readonly connections?: readonly (string | WorkflowConnectionRequirement)[];
+  readonly permissions?: readonly WorkflowPermission[];
 
   constructor(args: {
     steps: Steps;
     controls?: WorkflowControls;
     triggers?: readonly TriggerBinding<unknown>[];
     connections?: readonly (string | WorkflowConnectionRequirement)[];
+    permissions?: readonly WorkflowPermission[];
   }) {
     this.steps = args.steps;
     this.controls = args.controls;
     this.triggers = args.triggers;
     this.connections = args.connections;
+    this.permissions = args.permissions;
     Object.defineProperty(this, "kind", { value: "durable-workflow" });
   }
 }
@@ -508,6 +512,12 @@ export function defineWorkflow<
     readonly controls?: WorkflowControls;
     readonly triggers?: Triggers;
     readonly connections?: readonly (string | WorkflowConnectionRequirement)[];
+    /**
+     * Project permissions this workflow's runs need (ADR 0158), shown when
+     * it is turned on: e.g. `sessions:read` to read everyone's chats. A run
+     * gets only what it declares, and only while its owner may grant it.
+     */
+    readonly permissions?: readonly WorkflowPermission[];
   } & ValidateSteps<Steps> &
     ValidateTriggers<
       Triggers,
@@ -525,5 +535,6 @@ export function defineWorkflow<
     controls: definition.controls,
     triggers: definition.triggers,
     connections: definition.connections,
+    permissions: definition.permissions,
   });
 }

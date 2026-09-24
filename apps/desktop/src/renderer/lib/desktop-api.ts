@@ -5,6 +5,7 @@ import type { ImportableBrowser } from "../../main/browser-import/types.js";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
 import type { AgentDefaultModelResult } from "../../shared/agent-default-model.js";
 import type { AppPrefs } from "../../shared/app-prefs.js";
+import type { BackgroundCommandView } from "../../shared/background-commands.js";
 import type {
   BookmarkMove,
   BookmarkPlacement,
@@ -462,7 +463,6 @@ export interface ConnectLink {
   invitationId?: string;
 }
 export interface RemoteCapabilities {
-  builder: boolean;
   source: { remoteUrl: string; defaultBranch: string } | null;
   permissions: string[];
   agents: string[];
@@ -1177,6 +1177,10 @@ export interface CatamorphicDesktopApi {
   terminalRestoreBuffer: (
     sessionId: string,
   ) => Promise<{ buffer: string } | null>;
+  backgroundCommands: () => Promise<BackgroundCommandView[]>;
+  onBackgroundCommands: (
+    listener: (commands: BackgroundCommandView[]) => void,
+  ) => () => void;
   onTerminalBusy: (
     listener: (payload: { sessionId: string; busy: boolean }) => void,
   ) => () => void;

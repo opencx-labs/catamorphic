@@ -21,10 +21,12 @@ import {
 } from "@catamorphic/sandbox";
 import type { Kysely, Selectable } from "kysely";
 import {
+  confineIdentity,
   type ExecutionEnvironmentRef,
   type Identity,
   identityCovers,
   narrowIdentity,
+  type ProjectPermissionName,
 } from "../identity.js";
 import {
   type AppBundleStore,
@@ -36,7 +38,7 @@ import {
   type AppPoliciesService,
   AppsDisabledError,
 } from "./app-policies-service.js";
-import { assertBuilder } from "./artifact-scope.js";
+import { assertProjectPermission } from "./artifact-scope.js";
 import type { DevSandboxService } from "./dev-sandbox-service.js";
 import { requireTenantProject } from "./projects-service.js";
 import type { SessionArtifactsService } from "./session-artifacts-service.js";
@@ -270,11 +272,10 @@ export class AppsService {
           artifactId: row.session_artifact_id,
         });
       } catch {
-        return { ...args.identity, scope: [] };
+        return confineIdentity(args.identity, []);
       }
       return this.widenForAccess({
-        ...args.identity,
-        scope: [{ ...ref, channel: "dev" }],
+        ...confineIdentity(args.identity, [{ ...ref, channel: "dev" }]),
         executionScope,
       });
     }
@@ -366,7 +367,7 @@ export class AppsService {
     identity: Identity;
     projectId: string;
   }): Promise<AppSummary[]> {
-    await this.requireProject(args.identity, args.projectId);
+    await this.requireProject(args.identity, args.projectId, "program:read");
     const names = await this.appNamesFromRepo(args);
     if (names.length === 0) return [];
 
@@ -459,7 +460,7 @@ export class AppsService {
     )
       throw new AppNotFoundError(args.appName);
     if (!row) {
-      await this.requireProject(args.identity, args.projectId);
+      await this.requireProject(args.identity, args.projectId, "program:read");
       if (!(await this.appNamesFromRepo(args)).includes(args.appName))
         throw new AppNotFoundError(args.appName);
     }
@@ -509,7 +510,11 @@ export class AppsService {
             artifactId: row.session_artifact_id,
           });
         } else {
-          await this.requireProject(args.identity, args.projectId);
+          await this.requireProject(
+            args.identity,
+            args.projectId,
+            "program:write",
+          );
         }
         const appId = row?.id ?? (await this.ensureAppRow(args));
         await this.db.transaction().execute(async (trx) => {
@@ -591,7 +596,12 @@ export class AppsService {
           throw new AppPublishStateError(
             "Save session source to the project before publishing",
           );
-        if (!artifact) await this.requireProject(args.identity, args.projectId);
+        if (!artifact)
+          await this.requireProject(
+            args.identity,
+            args.projectId,
+            args.kind === "preview" ? "program:write" : "program:publish",
+          );
         assertAppName(args.appName);
         const policy = await this.deps.policies.get(args.identity.tenantId);
         if (!policy.appsEnabled) {
@@ -787,7 +797,11 @@ export class AppsService {
         },
       },
       async () => {
-        await this.requireProject(args.identity, args.projectId);
+        await this.requireProject(
+          args.identity,
+          args.projectId,
+          "program:write",
+        );
         await this.deps.devSandboxes.syncBack({
           identity: args.identity,
           projectId: args.projectId,
@@ -828,7 +842,11 @@ export class AppsService {
         },
       },
       async () => {
-        await this.requireProject(args.identity, args.projectId);
+        await this.requireProject(
+          args.identity,
+          args.projectId,
+          "program:publish",
+        );
         const policy = await this.deps.policies.get(args.identity.tenantId);
         if (!policy.appsEnabled) {
           throw new AppsDisabledError(args.identity.tenantId);
@@ -872,7 +890,7 @@ export class AppsService {
     projectId: string;
     appName: string;
   }): Promise<AppVersion[]> {
-    await this.requireProject(args.identity, args.projectId);
+    await this.requireProject(args.identity, args.projectId, "program:read");
     const rows = await this.db
       .selectFrom("app_versions")
       .innerJoin("apps", "apps.id", "app_versions.app_id")
@@ -898,7 +916,7 @@ export class AppsService {
     projectId: string;
     versionId: string;
   }): Promise<void> {
-    await this.requireProject(args.identity, args.projectId);
+    await this.requireProject(args.identity, args.projectId, "program:read");
     const version = await this.db
       .selectFrom("app_versions")
       .innerJoin("apps", "apps.id", "app_versions.app_id")
@@ -975,7 +993,7 @@ export class AppsService {
     /**
      * "published" (default) serves the active published version — what
      * external viewers see. "dev" serves the newest ready build this same
-     * user made, so a builder can open the version being developed right
+     * user made, so its author can open the version being developed right
      * now (mirrors the `dev` app ref in `resolveScope`).
      */
     channel?: "published" | "dev";
@@ -997,7 +1015,7 @@ export class AppsService {
         allowedNetworkOrigins: string[];
       }
   > {
-    // Deliberately NOT assertBuilder: viewers land here. Tenant scoping
+    // Deliberately NOT a permission check: viewers land here. Tenant scoping
     // still applies through the project join below, and a scoped identity
     // must cover this very app.
     if (
@@ -1376,8 +1394,9 @@ export class AppsService {
   private async requireProject(
     identity: Identity,
     projectId: string,
+    permission: ProjectPermissionName,
   ): Promise<void> {
-    assertBuilder(identity, projectId);
+    assertProjectPermission(identity, projectId, permission);
     await requireTenantProject(this.db, identity.tenantId, projectId);
   }
 }

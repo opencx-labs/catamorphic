@@ -32,8 +32,12 @@ describe("workspace coordination tools", () => {
         .sort(),
     ).toEqual([
       "open_surface",
+      "read_background_output",
       "read_tab",
+      "run_background_command",
+      "stop_background_command",
       "update_todo_list",
+      "watch_command",
       "workspace_overview",
     ]);
     expect(workPlaybook({ hasTools: true }).length).toBeLessThan(2000);
@@ -53,7 +57,9 @@ describe("workspace coordination tools", () => {
         ),
       ),
     }));
-    expect(Buffer.byteLength(JSON.stringify(wire))).toBeLessThan(6000);
+    // Background execution and watches are core needs for every harness
+    // (ADR 0155, 0156).
+    expect(Buffer.byteLength(JSON.stringify(wire))).toBeLessThan(8300);
     expect(
       toolkit.tools.every(
         (tool) =>
@@ -265,25 +271,17 @@ describe("workspace coordination tools", () => {
   it("changes checkout only through explicit tools", async () => {
     const terminalDirectories: Array<string | undefined> = [];
     const toolkit = buildWorkspaceToolkit({
-      runTerminal: async (
-        _projectId,
-        _sessionId,
-        _command,
-        _terminalId,
-        _timeoutMs,
-        workingDirectory,
-      ) => {
+      startBackgroundCommand: async ({ workingDirectory }) => {
         terminalDirectories.push(workingDirectory);
         return {
+          id: "test",
           key: "terminal:test",
-          terminalId: "test",
-          output: "",
-          commandRunning: false,
+          status: "finished",
           exitCode: 0,
-          offset: 0,
+          output: "",
         };
       },
-    } as WorkspaceBridge);
+    } as Partial<WorkspaceBridge> as WorkspaceBridge);
     const checkoutContext: ExtraToolContext = {
       ...context,
       workingDirectory: "/primary",
@@ -311,8 +309,8 @@ describe("workspace coordination tools", () => {
         ?.execute({}, checkoutContext),
     ).toMatchObject({ kind: "managed", path: "/managed" });
     await toolkit.tools
-      .find((tool) => tool.name === "run_terminal")
-      ?.execute({ command: "pwd" }, checkoutContext);
+      .find((tool) => tool.name === "run_background_command")
+      ?.execute({ command: "pwd", description: "Print it" }, checkoutContext);
     expect(terminalDirectories).toEqual(["/managed"]);
     expect(
       await toolkit.tools
@@ -320,8 +318,8 @@ describe("workspace coordination tools", () => {
         ?.execute({ path: "/external" }, checkoutContext),
     ).toMatchObject({ kind: "external", path: "/external" });
     await toolkit.tools
-      .find((tool) => tool.name === "run_terminal")
-      ?.execute({ command: "pwd" }, checkoutContext);
+      .find((tool) => tool.name === "run_background_command")
+      ?.execute({ command: "pwd", description: "Print it" }, checkoutContext);
     expect(terminalDirectories).toEqual(["/managed", "/external"]);
     expect(
       await toolkit.tools
@@ -329,8 +327,8 @@ describe("workspace coordination tools", () => {
         ?.execute({ path: null }, checkoutContext),
     ).toMatchObject({ kind: "primary" });
     await toolkit.tools
-      .find((tool) => tool.name === "run_terminal")
-      ?.execute({ command: "pwd" }, checkoutContext);
+      .find((tool) => tool.name === "run_background_command")
+      ?.execute({ command: "pwd", description: "Print it" }, checkoutContext);
     expect(terminalDirectories).toEqual(["/managed", "/external", "/primary"]);
   });
 

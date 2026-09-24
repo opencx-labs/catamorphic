@@ -2,7 +2,7 @@
 
 For GitHub-backed company proposals, configure `CATAMORPHIC_GITHUB_CLIENT_ID`
 and `CATAMORPHIC_GITHUB_TOKEN` on the server. Use a service account with access
-only to the company repositories, separate from the builders who review its
+only to the company repositories, separate from the people who review its
 PRs. Members never receive this token. The stock host validates the account at
 boot and supplies the existing `GithubService` and proposal bot identity.
 Tokens that need rotation are replaced in the deployment environment.
@@ -55,7 +55,7 @@ ordinary reviewed project files. `.catamorphic/roles/*.json` grants artifacts,
 Environments, connection aliases, document paths, and namespaced permissions;
 `.catamorphic/agents/*` defines the project agents; `.catamorphic/sidebar.js` and
 `.catamorphic/project.json` can shape the desktop sidebar and starting actions
-from resolved builder state and permissions. There is no parallel stock-server
+from resolved permissions. There is no parallel stock-server
 bootstrap config.
 
 Invitations are credential-free project locators. Desktop, PWA, and MCP clients
@@ -90,6 +90,12 @@ their connection providers when embedding `buildStockServer`. Service accounts
 are explicit project or tenant service connections and are never inferred from
 a member login. Unattended workflows use the connections authorized by their
 explicit enablement, including member connections for member-owned enablements.
+Project enablements use only project and tenant service connections.
+
+Workflows can start from webhooks: `trigger("webhook", { name })` gives each
+name a public URL under `CATAMORPHIC_PUBLIC_URL` (`/api/hooks/...`), shown to
+holders of `webhooks:read` in the workflow's **Automatic** view, with a replace
+control for holders of `webhooks:write`.
 
 ## Remote development resources
 

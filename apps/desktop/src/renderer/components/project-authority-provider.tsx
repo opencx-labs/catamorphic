@@ -13,7 +13,8 @@ import { desktopApi } from "../lib/desktop-api.js";
 const RemoteAuthority = createContext<{
   remoteProjectId: string;
   serverUrl: string;
-  builder: boolean;
+  /** The member edits the program (`program:write`, ADR 0158). */
+  writesProgram: boolean;
 } | null>(null);
 export const useRemoteAuthority = () => useContext(RemoteAuthority);
 const authorityCaches = new Map<string, QueryClient>();
@@ -119,10 +120,11 @@ export function ProjectAuthorityProvider({
       <RemoteAuthority.Provider
         value={{
           ...remote,
-          builder:
+          writesProgram:
             member.data?.projects.some(
               (project) =>
-                project.projectId === remote.remoteProjectId && project.builder,
+                project.projectId === remote.remoteProjectId &&
+                project.permissions.includes("program:write"),
             ) ?? false,
         }}
       >

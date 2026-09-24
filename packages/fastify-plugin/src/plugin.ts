@@ -1,6 +1,7 @@
 import type { CatamorphicCore } from "@catamorphic/core";
 import {
   AccessDeniedError,
+  ProjectNotFoundError,
   SessionArtifactConflictError,
   SessionArtifactNotFoundError,
   SessionArtifactValidationError,
@@ -38,6 +39,7 @@ import { registerSessionArtifactRoutes } from "./routes/session-artifacts.js";
 import { registerSessionMailboxRoutes } from "./routes/session-mailboxes.js";
 import { registerTriggerRoutes } from "./routes/triggers.js";
 import { registerWatcherRoutes } from "./routes/watchers.js";
+import { registerWebhookRoutes } from "./routes/webhooks.js";
 import { registerWorkflowEnablementRoutes } from "./routes/workflow-enablements.js";
 import { registerWorkflowRoutes } from "./routes/workflows.js";
 
@@ -49,9 +51,9 @@ export interface CatamorphicPluginOptions {
    */
   core?: CatamorphicCore;
   /**
-   * Who is calling. Runs on every request before any route; returns a full
-   * identity for a builder, a scoped identity for a viewer (an app user, a
-   * customer), or `null` for 401. Typically a few lines that read the host's
+   * Who is calling. Runs on every request before any route; returns the root
+   * identity for the host itself, a scoped identity with project permissions
+   * for a member (an admin, an app user, a customer), or `null` for 401. Typically a few lines that read the host's
    * own session and its entitlement table:
    *
    * ```ts
@@ -76,6 +78,12 @@ export interface CatamorphicPluginOptions {
    * things a host decides for everyone.
    */
   features?: Partial<HostFeatures>;
+  /**
+   * The API base outsiders reach this plugin at (e.g.
+   * `https://brain.acme.com/api`), for URLs handed to other services such
+   * as webhook URLs. Defaults to the request's own origin and mount prefix.
+   */
+  publicApiBase?: string;
 }
 
 /** What a host enables for all callers; defaults are the most permissive. */
@@ -100,6 +108,7 @@ export const DEFAULT_HOST_FEATURES: HostFeatures = {
 export interface RouteContext {
   core?: CatamorphicCore;
   features: HostFeatures;
+  publicApiBase?: string;
 }
 
 /**
@@ -140,6 +149,9 @@ export const catamorphicPlugin: FastifyPluginAsync<
     if (err instanceof AccessDeniedError) {
       return reply.status(403).send({ error: err.message });
     }
+    if (err instanceof ProjectNotFoundError) {
+      return reply.status(404).send({ error: "Project not found" });
+    }
     app.log.error(err);
     return reply.send(err);
   });
@@ -176,6 +188,9 @@ export const catamorphicPlugin: FastifyPluginAsync<
 
   const ctx: RouteContext = {
     core: opts.core,
+    ...(opts.publicApiBase
+      ? { publicApiBase: opts.publicApiBase.replace(/\/$/, "") }
+      : {}),
     // Explicit `undefined` from a host (a field computed from env) must not
     // erase the default.
     features: {
@@ -203,6 +218,7 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerMembershipRoutes(app, ctx);
   registerDocumentRoutes(app, ctx);
   registerPublicationRoutes(app, ctx);
+  registerWebhookRoutes(app, ctx);
   registerAppRoutes(app, ctx);
   registerSessionArtifactRoutes(app, ctx);
   registerAppsMcpRoutes(app, ctx);

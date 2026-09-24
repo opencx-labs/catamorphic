@@ -1,7 +1,11 @@
 import type { DB } from "@catamorphic/db";
 import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
 import type { Kysely } from "kysely";
-import { type Identity, isBuilder, mayUseProject } from "../identity.js";
+import {
+  hasProjectPermission,
+  type Identity,
+  mayUseProject,
+} from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import { readProgramFiles, withProgram } from "./program-reader.js";
 import { requireTenantProject } from "./projects-service.js";
@@ -69,7 +73,7 @@ export class SkillsService {
   ) {}
 
   async list(identity: Identity, projectId: string): Promise<ProjectSkill[]> {
-    if (!isBuilder(identity, projectId))
+    if (!hasProjectPermission(identity, projectId, "program:read"))
       return this.listShared(identity, projectId);
     await this.requireProject(identity, projectId);
     const projectSkills = await this.withDev(identity, projectId, (repo) =>
@@ -100,7 +104,7 @@ export class SkillsService {
     projectId: string,
     name: string,
   ): Promise<{ skill: ProjectSkill; content: string } | null> {
-    if (!isBuilder(identity, projectId))
+    if (!hasProjectPermission(identity, projectId, "program:read"))
       return this.readShared(identity, projectId, name);
     await this.requireProject(identity, projectId);
     const fromProject = await this.withDev(
@@ -132,7 +136,7 @@ export class SkillsService {
    * The skills as shared (ADR 0055): the program at origin main plus the
    * host tier, read without a caller working copy — what the project MCP
    * endpoint serves to members whose only relationship to the project is
-   * using it. Callers gate access (builder or agent ref) before calling.
+   * using it. Callers gate access (`program:read` or an agent ref) before calling.
    */
   async listShared(
     identity: Identity,

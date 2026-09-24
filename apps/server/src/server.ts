@@ -6,7 +6,7 @@ import {
   type ConnectionProvider,
   DurableToolPermissionBroker,
   type Identity,
-  startWatcherDispatcher,
+  startEventDispatcher,
 } from "@catamorphic/core";
 import {
   createDatabase,
@@ -27,11 +27,13 @@ import {
   EncryptedCredentialVault,
   FsBackend,
   FsBundleStore,
+  GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
   ObjectRemoteBackend,
   PostgresObjectStore,
   ProjectManager,
   SESSION_TRIGGER_KINDS,
   schedule,
+  webhook,
 } from "@catamorphic/server-sdk";
 import { createPushTransport } from "@catamorphic/server-sdk/web-push";
 import { PGlite } from "@electric-sql/pglite";
@@ -307,7 +309,12 @@ async function buildStockServerInner(
     documentBlobStore:
       objectStore ?? new FsBundleStore(path.join(data, "document-blobs")),
     toolPermissions,
-    triggerKinds: [schedule, ...SESSION_TRIGGER_KINDS],
+    triggerKinds: [
+      schedule,
+      webhook,
+      ...SESSION_TRIGGER_KINDS,
+      ...GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
+    ],
     projectSeeds: (defaults) => ({
       ...defaults,
       ".catamorphic/agents/assistant.json": JSON.stringify({
@@ -350,12 +357,10 @@ async function buildStockServerInner(
   });
   disposers.push(() => worker.stop());
   const core = catamorphic.core;
-  const watcherWorker = core.watchers
-    ? startWatcherDispatcher({ watchers: core.watchers })
-    : undefined;
-  disposers.push(async () => {
-    await watcherWorker?.stop();
-  });
+  // Webhooks, chat and GitHub events start workflows whether or not
+  // coding agents are configured.
+  const eventDispatcher = startEventDispatcher({ core });
+  disposers.push(() => eventDispatcher.stop());
   if (github && core.github) {
     await core.github.connect(github.identity, {
       accessToken: github.accessToken,
@@ -496,6 +501,11 @@ async function buildStockServerInner(
       });
     }),
     features: { publications: "members" },
+    // Webhook URLs name the public origin when one is configured; without
+    // one they follow the address the builder reached the server on.
+    ...(isLoopbackBase(publicBase)
+      ? {}
+      : { publicApiBase: `${publicBase}/api` }),
   });
   disposers.push(() => app.close());
   app.addHook("onSend", (request, reply, payload, done) => {
@@ -707,3 +717,10 @@ const LANDING_PAGE = `<!doctype html>
 <p style="color:#9a9aa3;font-size:.9rem;margin:0">Running. Sign in here or connect from the desktop app or MCP client.</p>
 </div>
 `;
+
+function isLoopbackBase(base: string): boolean {
+  const { hostname } = new URL(base);
+  return (
+    hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]"
+  );
+}

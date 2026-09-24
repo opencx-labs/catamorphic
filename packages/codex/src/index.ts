@@ -1,8 +1,4 @@
-export {
-  CodexAgent,
-  type CodexAgentOpts,
-  isDaemonizingCommand,
-} from "./codex-agent.js";
+export { CodexAgent, type CodexAgentOpts } from "./codex-agent.js";
 
 export {
   type CodexDefaultModel,

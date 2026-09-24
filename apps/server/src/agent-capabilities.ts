@@ -34,7 +34,7 @@ export function stockAgentCapabilities(args: {
       nextCursor: z.string().optional(),
     }),
     authorize: ({ identity, projectId }) =>
-      hasProjectPermission(identity, projectId, "memberships:manage"),
+      hasProjectPermission(identity, projectId, "memberships:read"),
     execute: async ({ identity, projectId }, input) => {
       const members = await args
         .core()

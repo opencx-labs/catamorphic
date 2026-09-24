@@ -138,8 +138,26 @@ export interface AgentQuestion {
   options: AgentQuestionOption[];
 }
 
+/**
+ * A background command's live state (ADR 0155): the host's view of the
+ * process a `run_background_command` step started.
+ */
+export interface ChatBackgroundCommand {
+  /** A background command, or a command watch (ADR 0156). */
+  kind: "command" | "watch";
+  command: string;
+  description: string;
+  status: "running" | "finished" | "stopped";
+  exitCode: number | null;
+}
+
 export interface ChatTimelineProps {
   focusMessageId?: string;
+  /**
+   * This chat's background commands, oldest first: their steps pulse while
+   * they run and say how they ended.
+   */
+  backgroundCommands?: ChatBackgroundCommand[];
   /** Persisted + optimistic messages, in order. */
   messages: ChatTimelineMessage[];
   /** Live activity line ("Thinking...", tool progress) shown under messages. */
@@ -243,6 +261,7 @@ export interface ChatTimelineProps {
  */
 export function ChatTimeline({
   focusMessageId,
+  backgroundCommands,
   messages,
   activity,
   queuedCount = 0,
@@ -279,124 +298,130 @@ export function ChatTimeline({
   // Retry re-runs the conversation's last user turn; a timeline with no
   // user turn at all has nothing to re-run (the button would be dead).
   const hasRetryableTurn = messages.some((message) => message.role === "user");
+  const backgroundStates = assignBackgroundCommands(
+    messages,
+    backgroundCommands ?? [],
+  );
   return (
-    <StickToBottom
-      className={`relative overflow-hidden ${className}`}
-      initial="smooth"
-      resize="smooth"
-      role="log"
-    >
-      <StickToBottom.Content
-        className={`flex min-h-full flex-col gap-3 p-5 ${contentClassName}`}
+    <BackgroundStates.Provider value={backgroundStates}>
+      <StickToBottom
+        className={`relative overflow-hidden ${className}`}
+        initial="smooth"
+        resize="smooth"
+        role="log"
       >
-        {messages.length === 0 && !activity && (
-          <div className="m-auto max-w-sm text-center text-sm leading-6 text-fg-muted">
-            {emptyState}
-          </div>
-        )}
-        {(() => {
-          const keys = timelineKeys(messages);
-          const keyOf = new Map(
-            messages.map((message, index) => [message, keys[index]]),
-          );
-          const row = (
-            message: ChatTimelineMessage,
-            foldedWork?: ChatTimelineMessage[],
-          ) => (
-            <div
-              key={keyOf.get(message)}
-              data-message-id={message.id}
-              tabIndex={-1}
-              className={
-                message.id === focusMessageId
-                  ? "rounded-md outline outline-1 outline-accent/50"
-                  : "contents"
-              }
-            >
-              <Message
-                message={message}
-                foldedWork={foldedWork}
-                // A focused note inside the fold has to be on screen.
-                openWork={foldedWork?.some(
-                  (folded) => folded.id === focusMessageId,
-                )}
-                isLast={message.id === lastConversationId}
-                resolveAgentName={resolveAgentName}
-                onLinkClick={onLinkClick}
-                renderLink={renderLink}
-                onFileClick={onFileClick}
-                resolveToolIcon={resolveToolIcon}
-                // Retry re-runs the last user turn; without one there is
-                // nothing to re-run — hide the button, never show a dead one.
-                onRetry={hasRetryableTurn ? onRetry : undefined}
-                onReauth={onReauth}
-                reauthLabel={reauthLabel}
-                onFork={onFork}
-              />
+        <StickToBottom.Content
+          className={`flex min-h-full flex-col gap-3 p-5 ${contentClassName}`}
+        >
+          {messages.length === 0 && !activity && (
+            <div className="m-auto max-w-sm text-center text-sm leading-6 text-fg-muted">
+              {emptyState}
             </div>
-          );
-          return groupTurns(messages, {
-            working: working ?? Boolean(activity),
-            display: workDisplay,
-          }).flatMap((item) =>
-            item.kind === "message"
-              ? [row(item.message)]
-              : item.shown.map((message, index) =>
-                  row(message, index === 0 ? item.folded : undefined),
-                ),
-          );
-        })()}
-        {activity && (
-          <div className="flex items-center gap-2 text-xs text-fg-muted">
-            <LoaderCircle className="size-4 animate-spin" />
-            <ActivityText text={activity} />
-            {!queue && queuedCount > 0 && (
-              <span className="ml-auto text-fg-faint">
-                {queuedCount} queued
-              </span>
-            )}
-          </div>
-        )}
-        {queue && queue.length > 0 && (
-          <ChatQueue
-            queue={queue}
-            onUpdate={onUpdateQueued}
-            onRemove={onRemoveQueued}
-            onSendNow={onSendQueuedNow}
-            onHold={onHoldQueued}
-            Hint={ShortcutHint}
-            renderContent={(queued) => (
-              <InlineMessage
-                content={queued.content}
-                attachments={queued.attachments}
-              />
-            )}
-            renderAttachments={(queued) => (
-              <AttachmentStrip
-                attachments={queued.attachments.slice(
-                  inlineMarkerCount(queued.content, queued.attachments),
-                )}
-              />
-            )}
+          )}
+          {(() => {
+            const keys = timelineKeys(messages);
+            const keyOf = new Map(
+              messages.map((message, index) => [message, keys[index]]),
+            );
+            const row = (
+              message: ChatTimelineMessage,
+              foldedWork?: ChatTimelineMessage[],
+            ) => (
+              <div
+                key={keyOf.get(message)}
+                data-message-id={message.id}
+                tabIndex={-1}
+                className={
+                  message.id === focusMessageId
+                    ? "rounded-md outline outline-1 outline-accent/50"
+                    : "contents"
+                }
+              >
+                <Message
+                  message={message}
+                  foldedWork={foldedWork}
+                  // A focused note inside the fold has to be on screen.
+                  openWork={foldedWork?.some(
+                    (folded) => folded.id === focusMessageId,
+                  )}
+                  isLast={message.id === lastConversationId}
+                  resolveAgentName={resolveAgentName}
+                  onLinkClick={onLinkClick}
+                  renderLink={renderLink}
+                  onFileClick={onFileClick}
+                  resolveToolIcon={resolveToolIcon}
+                  // Retry re-runs the last user turn; without one there is
+                  // nothing to re-run — hide the button, never show a dead one.
+                  onRetry={hasRetryableTurn ? onRetry : undefined}
+                  onReauth={onReauth}
+                  reauthLabel={reauthLabel}
+                  onFork={onFork}
+                />
+              </div>
+            );
+            return groupTurns(messages, {
+              working: working ?? Boolean(activity),
+              display: workDisplay,
+            }).flatMap((item) =>
+              item.kind === "message"
+                ? [row(item.message)]
+                : item.shown.map((message, index) =>
+                    row(message, index === 0 ? item.folded : undefined),
+                  ),
+            );
+          })()}
+          {activity && (
+            <div className="flex items-center gap-2 text-xs text-fg-muted">
+              <LoaderCircle className="size-4 animate-spin" />
+              <ActivityText text={activity} />
+              {!queue && queuedCount > 0 && (
+                <span className="ml-auto text-fg-faint">
+                  {queuedCount} queued
+                </span>
+              )}
+            </div>
+          )}
+          {queue && queue.length > 0 && (
+            <ChatQueue
+              queue={queue}
+              onUpdate={onUpdateQueued}
+              onRemove={onRemoveQueued}
+              onSendNow={onSendQueuedNow}
+              onHold={onHoldQueued}
+              Hint={ShortcutHint}
+              renderContent={(queued) => (
+                <InlineMessage
+                  content={queued.content}
+                  attachments={queued.attachments}
+                />
+              )}
+              renderAttachments={(queued) => (
+                <AttachmentStrip
+                  attachments={queued.attachments.slice(
+                    inlineMarkerCount(queued.content, queued.attachments),
+                  )}
+                />
+              )}
+            />
+          )}
+          {error && (
+            <div className="rounded-lg border border-danger/50 bg-danger/10 px-3 py-2 text-xs text-danger">
+              {error}
+            </div>
+          )}
+        </StickToBottom.Content>
+        {hasUserMessages && (
+          <JumpToPreviousUserMessage
+            register={registerJumpToPreviousUserMessage}
           />
         )}
-        {error && (
-          <div className="rounded-lg border border-danger/50 bg-danger/10 px-3 py-2 text-xs text-danger">
-            {error}
-          </div>
-        )}
-      </StickToBottom.Content>
-      {hasUserMessages && (
-        <JumpToPreviousUserMessage
-          register={registerJumpToPreviousUserMessage}
+        <FocusMessage
+          messageId={focusMessageId}
+          ready={messages.some((message) => message.id === focusMessageId)}
         />
-      )}
-      <FocusMessage
-        messageId={focusMessageId}
-        ready={messages.some((message) => message.id === focusMessageId)}
-      />
-      <ScrollToLatest />
-    </StickToBottom>
+        <ScrollToLatest />
+      </StickToBottom>
+    </BackgroundStates.Provider>
   );
 }
 
@@ -606,6 +631,22 @@ function MessageImpl({
         <span className="h-px flex-1 bg-border" />
         <span>{text}</span>
         <span className="h-px flex-1 bg-border" />
+      </div>
+    );
+  }
+
+  // Host notices (a background command finished) read as one quiet line;
+  // the agent gets the full message and answers below it.
+  const notice =
+    typeof metadata?.notice === "string" ? metadata.notice : undefined;
+  if (message.author?.kind === "system" && notice) {
+    return (
+      <div
+        className="flex items-center justify-center gap-1.5 text-center text-xs text-fg-faint"
+        data-testid="chat-notice"
+      >
+        <Radio className="size-3 shrink-0" />
+        <span className="truncate">{notice}</span>
       </div>
     );
   }
@@ -824,6 +865,12 @@ interface TurnStep {
   detail?: string;
   /** Technical payloads use mono; host-tool summaries read as normal prose. */
   detailMono?: boolean;
+  /** A background command's or watch's step: its key into the live states, and its words. */
+  background?: {
+    ref: string;
+    kind: ChatBackgroundCommand["kind"];
+    description: string;
+  };
 }
 
 const STEP_ICONS = {
@@ -869,9 +916,9 @@ const TOOL_STEP_LABELS: Record<string, string> = {
   TaskStop: "Stopped a background task",
   KillShell: "Stopped a background task",
   // Workspace tools (the host bridge; same names on every harness).
-  run_terminal: "Ran a command",
-  read_terminal: "Read the terminal",
-  write_terminal: "Typed into the terminal",
+  read_background_output: "Checked a background command",
+  stop_background_command: "Stopped background work",
+  write_terminal: "Typed into a terminal",
   workspace_overview: "Looked at the workspace",
   read_tab: "Read a tab",
   open_browser: "Opened a page",
@@ -921,8 +968,8 @@ const DESKTOP_STEP_TOOLS = new Set([
   "open_browser",
   "browser_snapshot",
   "browser_act",
-  "run_terminal",
-  "read_terminal",
+  "read_background_output",
+  "stop_background_command",
   "write_terminal",
   "sync_project",
   "create_pull_request",
@@ -1131,19 +1178,22 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
   const events = asRecord(message.metadata)?.events;
   if (!Array.isArray(events)) return [];
   const steps: TurnStep[] = [];
-  for (const entry of events) {
+  for (const [index, entry] of events.entries()) {
     const event = asRecord(entry);
     if (!event) continue;
     const content = typeof event.content === "string" ? event.content : "";
     const firstLine = content.split("\n", 1)[0]?.trim() ?? "";
+    const description =
+      typeof event.description === "string" ? event.description.trim() : "";
     if (event.type === "command") {
+      // The agent's own words lead; the command itself is one click away.
       steps.push({
         kind: "command",
-        label: `$ ${firstLine || "(command)"}`,
-        mono: true,
+        label: description || `$ ${firstLine || "(command)"}`,
+        mono: !description,
         detail: stepDetailText(
           [
-            content.includes("\n") ? content : undefined,
+            description || content.includes("\n") ? content : undefined,
             stepDetailText(event.toolResult),
           ]
             .filter(Boolean)
@@ -1163,6 +1213,17 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
       const toolName =
         typeof event.toolName === "string" ? event.toolName : "tool";
       if (HIDDEN_STEP_TOOLS.has(toolName)) continue;
+      const started = backgroundStart(event);
+      if (started) {
+        steps.push({
+          kind: "background",
+          label: started.description,
+          background: { ref: `${message.id}:${index}`, ...started },
+          detail: started.command,
+          detailMono: true,
+        });
+        continue;
+      }
       const pretty = toolStepLabel(toolName, event.toolInput);
       steps.push({
         kind: "tool",
@@ -1177,14 +1238,88 @@ function turnSteps(message: ChatTimelineMessage): TurnStep[] {
         kind: "subagent",
         label: `Subagent: ${firstLine || "delegated work"}`,
       });
-    } else if (event.type === "background" && event.status !== "ended") {
-      steps.push({
-        kind: "background",
-        label: `Background: ${firstLine || "process"}`,
-      });
     }
   }
   return steps;
+}
+
+/** A run_background_command or watch_command call's command and words. */
+function backgroundStart(event: Record<string, unknown>):
+  | {
+      kind: ChatBackgroundCommand["kind"];
+      command: string;
+      description: string;
+    }
+  | undefined {
+  if (event.type !== "tool_call") return undefined;
+  const name = typeof event.toolName === "string" ? event.toolName : "";
+  const tool = name.slice(name.lastIndexOf("/") + 1);
+  const kind =
+    tool === "run_background_command"
+      ? "command"
+      : tool === "watch_command"
+        ? "watch"
+        : undefined;
+  if (!kind) return undefined;
+  const input = asRecord(event.toolInput);
+  // Normalized the way the host records the process, so the two pair up.
+  const command =
+    typeof input?.command === "string" ? input.command.trim() : "";
+  if (!command) return undefined;
+  const description =
+    (typeof input?.description === "string"
+      ? input.description.replace(/\s+/g, " ").trim()
+      : "") || command.replace(/\s+/g, " ").slice(0, 80);
+  return { kind, command, description };
+}
+
+/**
+ * Pairs each background step with the process it started: the n-th step
+ * for a command and description matches the n-th process for them.
+ */
+function assignBackgroundCommands(
+  messages: ChatTimelineMessage[],
+  commands: ChatBackgroundCommand[],
+): Map<string, ChatBackgroundCommand> {
+  const assigned = new Map<string, ChatBackgroundCommand>();
+  if (commands.length === 0) return assigned;
+  const queues = new Map<string, ChatBackgroundCommand[]>();
+  for (const command of commands) {
+    const key = `${command.kind}\u0000${command.command}\u0000${command.description}`;
+    queues.set(key, [...(queues.get(key) ?? []), command]);
+  }
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const step of turnSteps(message)) {
+      if (!step.background || !step.detail) continue;
+      const key = `${step.background.kind}\u0000${step.detail}\u0000${step.background.description}`;
+      const match = queues.get(key)?.shift();
+      if (match) assigned.set(step.background.ref, match);
+    }
+  }
+  return assigned;
+}
+
+const BackgroundStates = createContext<Map<string, ChatBackgroundCommand>>(
+  new Map(),
+);
+
+/** What a background step says: running pulses, then how it ended. */
+function backgroundLabel(
+  kind: ChatBackgroundCommand["kind"],
+  state: ChatBackgroundCommand | undefined,
+): string {
+  if (kind === "watch") {
+    if (state?.status === "running") return "Watching";
+    if (state?.status === "finished") return "Watched until done";
+    if (state?.status === "stopped") return "Stopped watching";
+    return "Watched";
+  }
+  if (state?.status === "running") return "Running in background";
+  if (state?.status === "stopped") return "Stopped command in background";
+  if (state?.exitCode)
+    return `Command failed in background (exit ${state.exitCode})`;
+  return "Ran command in background";
 }
 
 /** A note the agent wrote mid-turn, as a row of the turn's steps. */
@@ -1231,10 +1366,19 @@ function TurnSteps({
   ) => void;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
+  const backgroundStates = useContext(BackgroundStates);
   useEffect(() => {
     if (defaultExpanded) setExpanded(true);
   }, [defaultExpanded]);
   if (steps.length === 0) return null;
+  // A command still running in the background stays in view, outside the
+  // fold, until it ends; then it folds in with the rest.
+  const running = steps.filter(
+    (step) =>
+      step.background &&
+      backgroundStates.get(step.background.ref)?.status === "running",
+  );
+  const folded = steps.filter((step) => !running.includes(step));
   return (
     // Steps are chrome around the conversation, not part of its text: a
     // drag across several replies selects the prose and skips these rows.
@@ -1252,6 +1396,17 @@ function TurnSteps({
         />
         {steps.length === 1 ? "1 step" : `${steps.length} steps`}
       </button>
+      {running.length > 0 && (
+        <div className="mt-1 flex flex-col gap-0.5 border-l border-border pl-2.5">
+          {running.map((step) => (
+            <StepRow
+              key={step.background?.ref}
+              step={step}
+              onFileClick={onFileClick}
+            />
+          ))}
+        </div>
+      )}
       {/* Grid-rows tween (the SidebarSection pattern): the list stays
           mounted, so the collapse mirrors the expansion exactly. */}
       <div
@@ -1261,7 +1416,7 @@ function TurnSteps({
       >
         <div className="overflow-hidden">
           <div className="mt-1 flex flex-col gap-0.5 border-l border-border pl-2.5">
-            {steps.map((step, index) => (
+            {folded.map((step, index) => (
               <StepRow
                 // Steps are append-only within a message; index is stable.
                 // biome-ignore lint/suspicious/noArrayIndexKey: static list
@@ -1298,6 +1453,11 @@ function StepRow({
   ) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const backgroundStates = useContext(BackgroundStates);
+  const background = step.background
+    ? backgroundStates.get(step.background.ref)
+    : undefined;
+  const pulsing = background?.status === "running";
   const Icon = STEP_ICONS[step.kind];
   const expandable = Boolean(step.detail);
   // Edited-file rows click through to the file in an editor surface.
@@ -1307,6 +1467,7 @@ function StepRow({
     <div
       data-testid="chat-step"
       data-step-kind={step.kind}
+      data-running={pulsing || undefined}
       data-file-path={step.filePath}
       data-message-id={step.messageId}
     >
@@ -1335,13 +1496,27 @@ function StepRow({
         {iconUrl ? (
           <img src={iconUrl} alt="" className="size-3.5 shrink-0 rounded-sm" />
         ) : (
-          <Icon className="size-3.5 shrink-0 text-fg-faint" />
+          <Icon
+            className={`size-3.5 shrink-0 ${pulsing ? "animate-pulse text-accent" : "text-fg-faint"}`}
+          />
         )}
-        <span
-          className={`min-w-0 flex-1 truncate ${step.mono ? "font-mono" : ""}`}
-        >
-          {step.label}
-        </span>
+        {step.background ? (
+          <span className="flex min-w-0 flex-1 items-baseline gap-1.5 truncate">
+            <span
+              className={pulsing ? "animate-pulse text-fg" : undefined}
+              data-testid="chat-background-status"
+            >
+              {backgroundLabel(step.background.kind, background)}
+            </span>
+            <span className="truncate text-fg-faint">{step.label}</span>
+          </span>
+        ) : (
+          <span
+            className={`min-w-0 flex-1 truncate ${step.mono ? "font-mono" : ""}`}
+          >
+            {step.label}
+          </span>
+        )}
         {expandable && (
           <ChevronRight
             className={`size-3 shrink-0 text-fg-faint transition-transform duration-150 ${open ? "rotate-90" : ""}`}
@@ -1602,8 +1777,12 @@ function pendingQuestions(
 
 function isConversationMessage(message: ChatTimelineMessage): boolean {
   if (message.role === "system") {
-    // Only marker rows render; other system rows are plumbing.
-    return asRecord(asRecord(message.metadata)?.marker) !== undefined;
+    // Markers and host notices render; other system rows are plumbing.
+    const metadata = asRecord(message.metadata);
+    return (
+      asRecord(metadata?.marker) !== undefined ||
+      typeof metadata?.notice === "string"
+    );
   }
   if (message.role !== "assistant") return true;
   if (asRecord(message.metadata)?.status === "in_progress") return false;

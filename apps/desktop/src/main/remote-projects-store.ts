@@ -12,7 +12,6 @@ import type { RemoteOAuthCredentials } from "./remote-oauth.js";
  */
 /** What the server said this member may do (`GET /me`, ADR 0055). */
 export interface RemoteCapabilities {
-  builder: boolean;
   source: { remoteUrl: string; defaultBranch: string } | null;
   permissions: string[];
   agents: string[];

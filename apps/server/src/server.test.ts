@@ -182,9 +182,10 @@ const MEMBER_ROLE = {
 const MANAGER_ROLE = {
   version: 1,
   name: "Manager",
-  builder: true,
-  permissions: ["memberships:manage", "roles:manage"],
-  agents: ["assistant"],
+  permissions: ["program:*", "memberships:write", "roles:write"],
+  agents: ["*"],
+  workflows: ["*"],
+  apps: ["*"],
   environments: ["local"],
   documents: [{ path: "store/**", access: "write" }],
 };
@@ -254,6 +255,26 @@ describe("stock server", () => {
     expect(invalid.headers["www-authenticate"]).toContain(
       'error="invalid_token"',
     );
+  });
+
+  it("receives webhooks without an account and runs project automations (ADR 0156)", async () => {
+    const kinds = server.catamorphic.core.triggers
+      .listKinds()
+      .map((kind) => kind.name);
+    expect(kinds).toEqual(
+      expect.arrayContaining(["webhook", "schedule", "github.pull_request"]),
+    );
+    // The intake is public: a sender has no account, only the URL.
+    const unknown = await server.app.inject({
+      method: "POST",
+      url: "/api/hooks/00000000-0000-4000-8000-000000000001/support/token",
+      headers: { "content-type": "application/json" },
+      payload: "{}",
+    });
+    expect(unknown.statusCode).toBe(404);
+    expect(unknown.json()).toEqual({
+      error: "No workflow listens on this webhook",
+    });
   });
 
   it("resolves an OAuth access token to the current authenticated user", async () => {
@@ -399,12 +420,12 @@ describe("stock server", () => {
     });
     expect(me.projects).toHaveLength(1);
     expect(me.projects[0].projectId).toBe(projectId);
-    expect(me.projects[0].builder).toBe(false);
+    expect(me.projects[0].permissions).toEqual([]);
     expect(me.projects[0].agents).toEqual(["assistant"]);
     expect(me.features.agentSessions).toBe(true);
   });
 
-  it("the member sees project metadata without builder files", async () => {
+  it("the member sees project metadata without program files", async () => {
     const list = await inject("GET", "/api/projects", memberToken);
     expect(list.statusCode).toBe(200);
     expect(list.json().items.map((p: { id: string }) => p.id)).toEqual([

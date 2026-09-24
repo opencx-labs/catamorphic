@@ -171,6 +171,46 @@ inline until the workflow's first durable wait, then detaches with an honest
 workspace (`syncTypes`). A trigger firing starts ordinary Runs — no new run
 family. See `docs/decisions/0039-custom-trigger-kinds.md`.
 
+Project Events (webhooks, chat events, GitHub) reach workflows through the
+event dispatcher. Start it once per server, whether or not coding agents are
+configured, and stop it on shutdown:
+
+```ts
+import { startEventDispatcher } from "@catamorphic/core";
+const events = startEventDispatcher({ core: catamorphic.core });
+// on shutdown: await events.stop();
+```
+
+Webhooks are a built-in trigger kind: register `webhook` from
+`@catamorphic/server-sdk` in `triggerKinds`, and pass `publicApiBase` (the
+public URL of the mounted API, including its prefix) to `catamorphicPlugin` or
+`createApp` so the webhook URLs people copy point at the reachable host.
+`POST <api>/hooks/:projectId/:name/:token` is public; the token and the
+optional HMAC check are its credential. Holders of `webhooks:read` list URLs with
+`GET <api>/projects/:projectId/webhooks`, and holders of `webhooks:write`
+rotate one with `POST <api>/projects/:projectId/webhooks/:name/rotate`. See
+ADR 0156.
+
+Enablements belong to a member or to the project (`owner: { type: "project"
+}`). A project enablement runs as the project principal with shared
+connections. Workflows reach chats with one operation,
+`catamorphic.sessions.deliver`, naming the chat by `sessionId` or by a `key`
+that starts the chat on first use; a project automation's keyed chats are
+project chats every member of the agent's role sees (`AgentSession.owner ===
+"project"`), or one member's with `audience: { member }`.
+
+A workflow that acts beyond its own caller declares the project permissions
+its runs need: `defineWorkflow(({ defineBoundary }) => ({ permissions:
+["sessions:read", "sessions:write"], steps: [...] }))`. A run holds only the
+declared permissions its caller also holds. Only someone holding every
+declared permission can turn the workflow on, and the consent lists them. A
+member's automation keeps them only while the member does; a lost permission
+suspends it with `permission_revoked`. A project automation, turned on by a
+holder of `automations:write`, runs as the project principal with the
+consented permissions. That is how a permitted workflow lists other people's
+chats (`sessions:read`) or delivers into them by `sessionId`
+(`sessions:write`). See ADR 0158.
+
 ### Observability
 
 Catamorphic libraries use only the OpenTelemetry APIs (`@opentelemetry/api`
@@ -232,24 +272,32 @@ The plugin is fully encapsulated (its Zod compilers and error handler don't leak
 
 **There is no default identity.** The `identity` resolver is required and the plugin reads no headers on its own. Hosts whose auth terminates *in front of* the plugin (a gateway or proxy route that already verified the session) can pass the stock header resolver, `identityFromHeaders()`, which reads `X-Catamorphic-Tenant-Id` (host org id) and `X-External-User-Id` (host user id) — but a plugin mounted with it must never be reachable by browsers directly, since anyone could then claim any identity.
 
-### Root, builders and viewers: identity scope
+### Root and scoped identities: artifacts and permissions
 
-An identity is either **root** (`scope` absent: every project of the tenant, every surface — the desktop's own local projects, a host's service identity) or **scoped** (exactly the listed artifact refs and nothing else). Refs name artifacts by `(projectId, name|path)`:
+An identity is either **root** (`scope` absent: every project of the tenant, every surface, every permission: the desktop's own local projects, a host's service identity) or **scoped**. A scoped identity carries two lists: `scope`, the artifacts it may use, and `projectPermissions` (`[{ projectId, permission }]`), what it may do to the project beyond using them. Refs name artifacts by `(projectId, name|path)`; an `app`, `workflow` or `agent` ref may name `"*"` for every one of that kind:
 
 | Ref | Grants |
 | --- | --- |
-| `{ kind: "project", projectId }` | **Builder** of that project: files, deploys, secrets, agent definitions, every workflow, app and agent — the whole program surface (not the store, see below). |
 | `{ kind: "app", projectId, name }` | The app's served document plus, transitively, the workflows frozen into its *active published* version. |
 | `{ kind: "workflow", projectId, name }` | One workflow directly (a per-customer MCP tool, a host-triggered action). |
 | `{ kind: "agent", projectId, name, toolPolicies? }` | Chat sessions on the committed project agent `.catamorphic/agents/<name>.json` (ADR 0050). Inside those sessions the caller's scope intersects the agent's tool policy: the project's tools server is narrowed to the caller's workflow refs, and `toolPolicies` (per connector server key, ADR 0054's shape) is one more narrowing layer. Own sessions only. |
-| `{ kind: "document", projectId, path, access? }` | A file (`docs/handbook.md`) or subtree (`store/customers/acme/**`) of the project's path namespace; `access` defaults to `read`, `write` implies read. Git paths are read-only through this ref; `store/…` paths are the project store, reachable ONLY through document refs — builders included. |
+| `{ kind: "document", projectId, path, access? }` | A file (`docs/handbook.md`) or subtree (`store/customers/acme/**`) of the project's path namespace; `access` defaults to `read`, `write` implies read. Git paths are read-only through this ref; `store/…` paths are the project store, reachable ONLY through document refs, whatever permissions the identity holds. |
 
 ```ts
 identity: async (request) => {
   const session = await verifySession(request);
   if (!session) return null;
   const base = { tenantId: session.orgId, externalUserId: session.userId };
-  if (session.isAdmin) return { ...base, scope: [{ kind: "project", projectId: BRAIN }] };
+  if (session.isAdmin)
+    return {
+      ...base,
+      scope: [
+        { kind: "agent", projectId: BRAIN, name: "*" },
+        { kind: "workflow", projectId: BRAIN, name: "*" },
+        { kind: "app", projectId: BRAIN, name: "*" },
+      ],
+      projectPermissions: [{ projectId: BRAIN, permission: "*" }],
+    };
   // A CSM: the CSM agent, its workflows, and their own customers' subtree.
   return {
     ...base,
@@ -262,7 +310,23 @@ identity: async (request) => {
 }
 ```
 
-Which users are builders and which artifacts each viewer gets is host policy (a role file, an entitlement table); catamorphic only enforces the result. Enforcement lives in core, so `server-sdk` callers get it too: `catamorphic.forTenant({ tenantId }).forUser({ externalUserId, scope })`. Scoped agent sessions hand the harness the caller (`StartSessionOpts.caller`, forwarded on `ExtraToolContext.caller`) and the caller's policy layers (`StartSessionOpts.toolPolicies`, refreshed on every `TurnOptions.toolPolicies`) — a hosting backend uses `caller` in `mcpServersForSession` to mint the project MCP endpoint's credentials for that user, so the endpoint enforces the same scope structurally. See [`docs/decisions/0053-identity-scope-and-app-routes.md`](docs/decisions/0053-identity-scope-and-app-routes.md) and [`0055`](docs/decisions/0055-company-brain-roles-store-and-change-loop.md).
+Project permissions are `thing:action`. Catamorphic enforces these:
+
+| Thing | `read` | `write` | `publish` |
+| --- | --- | --- | --- |
+| `program` | source, history, definitions | edit the working copy, branches, app builds | make it live: deploy, plugins, app versions, rename |
+| `secrets` | which secrets exist | set and delete values | |
+| `automations` | everyone's automations | turn project automations on, pause, update | |
+| `webhooks` | webhook URLs (credentials) | replace them | |
+| `runs` | everyone's runs | cancel, pause, resume, signal anyone's | |
+| `sessions` | everyone's chats | deliver into, interrupt, archive anyone's | |
+| `memberships` | the member list | invite, grant, revoke | |
+| `roles` | the role files | change them; assign roles that carry permissions | |
+| `publications` | everyone's publications | revoke anyone's | |
+
+`write` and `publish` each imply `read` on the same thing; nothing else implies anything, so `program:publish` does not include `program:write`. A grant may be `thing:*` or `*`. Deleting a project is a tenant operation for the root identity only.
+
+Which artifacts and permissions each user gets is host policy (a role file, an entitlement table); catamorphic only enforces the result. Enforcement lives in core, so `server-sdk` callers get it too: `catamorphic.forTenant({ tenantId }).forUser({ externalUserId, scope, projectPermissions })`. Scoped agent sessions hand the harness the caller (`StartSessionOpts.caller`, forwarded on `ExtraToolContext.caller`) and the caller's policy layers (`StartSessionOpts.toolPolicies`, refreshed on every `TurnOptions.toolPolicies`) — a hosting backend uses `caller` in `mcpServersForSession` to mint the project MCP endpoint's credentials for that user, so the endpoint enforces the same scope structurally. See [`docs/decisions/0053-identity-scope-and-app-routes.md`](docs/decisions/0053-identity-scope-and-app-routes.md) and [`0055`](docs/decisions/0055-company-brain-roles-store-and-change-loop.md).
 
 ### Roles as files, memberships as the stock source (ADR 0055)
 
@@ -279,12 +343,12 @@ Most hosts do not want to hand-write scopes. Commit roles into the project — `
   "documents": ["docs/**", { "path": "store/customers/{customer}/**", "access": "write" }]
 }
 // .catamorphic/roles/admin.json
-{ "version": 1, "name": "Admin", "builder": true, "documents": ["store/**"] }
+{ "version": 1, "name": "Admin", "agents": ["*"], "workflows": ["*"], "apps": ["*"], "environments": ["*"], "permissions": ["*"], "documents": ["store/**"] }
 // .catamorphic/roles/brain-maintainer.json
 { "version": 1, "name": "Brain Maintainer", "permissions": ["brain:maintain"], "agents": ["brain-maintainer"] }
 ```
 
-`{param}` placeholders are filled from per-user **grants** (`{ customer: ["acme", "globex"] }`), one ref per value; an entry whose placeholder has no grant yields nothing. `builder: true` emits the `project` ref; an admin who may not see the whole store simply lists less. Role files are read from the shared origin `main` (a project without a remote reads its working tree), cached briefly (`rolesCacheTtlMs`, default 10s), and never throw: a broken file is reported by `GET /projects/:id/roles` and contributes nothing.
+`{param}` placeholders are filled from per-user **grants** (`{ customer: ["acme", "globex"] }`), one ref per value; an entry whose placeholder has no grant yields nothing. `permissions` become the identity's `projectPermissions`; an admin who may not see the whole store simply lists fewer documents. Writing, committing or publishing any `.catamorphic/roles/*.json` needs `roles:write`, whoever made the edit. Role files are read from the shared origin `main` (a project without a remote reads its working tree), cached briefly (`rolesCacheTtlMs`, default 10s), and never throw: a broken file is reported by `GET /projects/:id/roles` and contributes nothing.
 
 Two ways to turn a verified user into an identity:
 
@@ -299,21 +363,21 @@ identity: async (req) => {
   const u = await verifySession(req);
   return u && catamorphic.core.memberships.identityFor({ tenantId: ORG, projectId: BRAIN, externalUserId: u.id });  // null = not a member
 }
-// An invite is one call (builder-only), plus whatever link you send:
+// An invite is one call (needs memberships:write), plus whatever link you send:
 await catamorphic.core.memberships.grant({ identity: adminIdentity, projectId: BRAIN, externalUserId: "alice", roles: ["csm"], grants: { customer: ["acme"] } });
 ```
 
 The plugin serves the same as HTTP for project administration: `GET /projects/:id/roles`, `GET|PUT|DELETE /projects/:id/memberships[/:externalUserId]` (`PUT` body `{ roles, grants? }`). Members arriving with a bearer credential from the host's login flow use `identityFromBearer(verify)`: the host's `verify(token)` returns the identity (typically via `memberships.identityFor`) or `null`. Every request re-resolves membership, so revocation is immediate.
 
-Role `permissions` are an extensible, namespaced capability vocabulary. Core
-reserves and enforces the documented names (`memberships:manage` and
-`roles:manage`); an embedder may define and enforce names such as
-`acme:approve_deals`. Unknown names do not grant framework authority by
-themselves, but are preserved in identity and `GET /me` for host services and
-project-owned presentation. Desktop projects can target sidebar sections,
-custom items, and New Tab starting actions with
-`when: { builder?: boolean, permissions?: string[] }`; all declared conditions
-must match. Omit `when` to show an item to everyone.
+Role `permissions` are an extensible, namespaced vocabulary. Core enforces
+the `thing:action` names in the table above; an embedder may define and
+enforce names such as `acme:approve_deals`. Unknown names do not grant
+framework authority by themselves, but are preserved in identity and `GET /me`
+for host services and project-owned presentation. Desktop projects can target
+sidebar sections, custom items, and New Tab starting actions with
+`when: { permissions: string[] }`; every listed permission must be held. Use
+`permissions: ["program:write"]` for the people who edit the program. Omit
+`when` to show an item to everyone.
 
 In the desktop reference host, shared navigation lives in
 `.catamorphic/sidebar.js`. New Tab actions live in the ordinary project
@@ -339,7 +403,7 @@ stock-server bootstrap file.
 
 ### Feature switches and introspection
 
-Scope is how a host says "may not"; a few coarse switches say what the whole instance offers: `app.register(catamorphicPlugin, { …, features: { publications: "public" | "members" | false, proposals, mcp, storeUploadMaxBytes } })`. They are enforced by the routes concerned (403 / 404 / 413) *and* advertised on **`GET /me`**, together with the caller's own summary — `{ version: 1, identity: { externalUserId, root }, projects: [{ projectId, builder, source, permissions, agents, workflows, apps, documents: [{ path, access }] }], features: { publications, proposals, proposalsOpenPullRequests, mcp, agentSessions, storeUploadMaxBytes } }` — so a client (the desktop, a member's own agent) shows what is possible instead of discovering it by 403. `source` contains the Git remote and default branch for builders and is `null` for other members.
+Scope is how a host says "may not"; a few coarse switches say what the whole instance offers: `app.register(catamorphicPlugin, { …, features: { publications: "public" | "members" | false, proposals, mcp, storeUploadMaxBytes } })`. They are enforced by the routes concerned (403 / 404 / 413) *and* advertised on **`GET /me`**, together with the caller's own summary (`{ version: 1, identity: { externalUserId, root }, projects: [{ projectId, source, permissions, agents, workflows, apps, documents: [{ path, access }], roles }], features: { publications, proposals, proposalsOpenPullRequests, mcp, agentSessions, storeUploadMaxBytes } }`), so a client (the desktop, a member's own agent) shows what is possible instead of discovering it by 403. `permissions` are effective: wildcards and implications expanded. `source` contains the Git remote and default branch for holders of `program:read` and is `null` for other members.
 
 **Remote login.** Connect links are credential-free locators: `work://connect?server=…&project=…&invitation=…`. A compatible host publishes OAuth protected-resource and authorization-server metadata. The desktop and PWA dynamically register public clients, use authorization code with S256 PKCE, keep refreshable credentials in local protected storage, and redeem admission after sign-in. A 401 changes the connection state to "Sign in again" and reruns the same OAuth path. Embedders may implement that contract with their existing identity system; Catamorphic's framework packages remain auth-neutral.
 
@@ -375,7 +439,7 @@ All execution uses one Runs route family:
 - `GET /api/projects/:projectId/workflows/:name/runs` lists Runs.
 - `GET /api/runs/:runId` and `/api/runs/:runId/*` expose detail and capability-specific controls.
 
-Apps have their own execution routes — `POST /api/projects/:id/apps/:name/calls/:workflow`, `POST …/apps/:name/runs/:workflow`, `GET …/apps/:name/runs/:runId` — which the `AppMount` component uses. The URL names the app, so the plugin narrows whoever arrives to that app structurally (a builder is confined to the app while inside it; a viewer must be entitled to it) before the server re-authorizes against the frozen workflow set. Nothing is claimed by the client.
+Apps have their own execution routes — `POST /api/projects/:id/apps/:name/calls/:workflow`, `POST …/apps/:name/runs/:workflow`, `GET …/apps/:name/runs/:runId` — which the `AppMount` component uses. The URL names the app, so the plugin narrows whoever arrives to that app structurally (an admin is confined to the app while inside it; a viewer must be entitled to it) before the server re-authorizes against the frozen workflow set. Nothing is claimed by the client.
 
 Every Run executes an immutable deployed commit and retains that provenance;
 there is no mutable-source or test mode.
@@ -671,8 +735,8 @@ files remain available as original bytes through the documents surface or on dis
 
 Two more members' surfaces, both enforced by core and served by the plugin:
 
-- **Propose a change** — `POST /projects/:id/proposals` `{ title, body?, changes: [{ path, content } | { path, delete: true }] }` (also the MCP tool `propose_change`). Program paths only (store paths ship directly). Core commits the files on a fresh `proposals/<member>/<title>-<stamp>` branch from the shared `main`, authored as the member, and — when the project is linked to a code host and you configured `proposalBot` (the identity whose GitHub connection acts for members) — pushes it and opens a pull request "Proposed by <member> via Catamorphic". Without a bot the branch lands on the project origin, where builders see it. Anyone who may use the project may propose.
-- **Publications** — `POST /projects/:id/publications` `{ path, audience: "public" | "members", slug? }` → `{ slug, url, … }`; `GET` lists (builders all, members their own), `DELETE …/:slug` revokes. Builders publish what they may read; members what they may write (their own store documents). Serving: `GET /projects/:id/publications/:slug` for members (host auth) and `GET /public/:id/:slug` for `public` — the one route the identity hook lets through unauthenticated (route config `public: true`); it reads the document as an anonymous identity scoped to exactly that document, so nothing else is reachable. Unknown, revoked and not-for-you are one uniform 404.
+- **Propose a change** — `POST /projects/:id/proposals` `{ title, body?, changes: [{ path, content } | { path, delete: true }] }` (also the MCP tool `propose_change`). Program paths only (store paths ship directly). Core commits the files on a fresh `proposals/<member>/<title>-<stamp>` branch from the shared `main`, authored as the member, and — when the project is linked to a code host and you configured `proposalBot` (the identity whose GitHub connection acts for members) — pushes it and opens a pull request "Proposed by <member> via Catamorphic". Without a bot the branch lands on the project origin, where holders of `program:read` see it. Approving and applying a proposal needs `program:publish`. Anyone who may use the project may propose.
+- **Publications** — `POST /projects/:id/publications` `{ path, audience: "public" | "members", slug? }` → `{ slug, url, … }`; `GET` lists your own, or everyone's with `publications:read`; `DELETE …/:slug` revokes your own, or anyone's with `publications:write`. Publishing a program path needs `program:publish`; members publish what they may write (their own store documents). Serving: `GET /projects/:id/publications/:slug` for members (host auth) and `GET /public/:id/:slug` for `public` — the one route the identity hook lets through unauthenticated (route config `public: true`); it reads the document as an anonymous identity scoped to exactly that document, so nothing else is reachable. Unknown, revoked and not-for-you are one uniform 404.
 
 ### Reference architecture: a database per project
 
@@ -806,17 +870,19 @@ does not perform lossy alias normalization, so one alias always maps to one MCP
 server and policy key.
 
 Roles grant Environments and logical connection aliases separately. Project
-builder access does not imply managed-compute or connection access. Projects
-cannot declare physical endpoints, OAuth clients, credential values, or
-service identities.
+permissions such as `program:write` do not imply managed-compute or
+connection access. Projects cannot declare physical endpoints, OAuth clients,
+credential values, or service identities.
 
 Member connections use the authorization flow supported by the provider.
 Project and tenant service connections are created only by a host identity
-with `connections:manage_service`. An Environment binding chooses allowed
-principal kinds, capabilities, and any assigned service connection. A trigger
+with `connections:write` (`connections:read` reads them and their audit).
+These are host-issued; project roles cannot grant `connections:*`. An
+Environment binding chooses allowed principal kinds, capabilities, and any assigned service connection. A trigger
 scan is the unattended enablement boundary: it must resolve every required
 alias to an assigned service connection, then freezes those ids for dispatch.
-Member connections are never eligible for schedules or webhooks. To prevent a
+Member connections are never eligible for project automations (schedules,
+webhooks and events that run while nobody is present). To prevent a
 privileged service action from running in a local Environment, do not create
 that alias binding there and grant it only in the managed Environment.
 

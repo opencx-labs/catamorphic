@@ -17,7 +17,7 @@ import { context, trace } from "@opentelemetry/api";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { Identity } from "../identity.js";
+import { type Identity, projectPrincipalIdentity } from "../identity.js";
 import { AgentSessionsService } from "../services/agent-sessions-service.js";
 import { AgentTurnsService } from "../services/agent-turns-service.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
@@ -26,6 +26,7 @@ import { ExecutionAllocationsService } from "../services/execution-allocations-s
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
+import { projectAdmin } from "./project-admin.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /**
@@ -182,7 +183,7 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
       ...root,
       externalUserId: "admin-bob",
       executionScope: [{ projectId, name: "local" }],
-      scope: [{ kind: "project", projectId }],
+      ...projectAdmin(projectId),
     };
   });
 
@@ -288,7 +289,7 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     );
   });
 
-  it("a builder (project ref) uses any agent, and sees every session", async () => {
+  it("an admin (`*` grants) uses any agent, and sees every session", async () => {
     await sessions.create(admin, projectId, { agentId: salesAgentId });
     await sessions.create(admin, projectId);
     const all = await sessions.list(admin, projectId);
@@ -537,7 +538,7 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     expect(csm.turns.at(-1)?.toolPolicies).toEqual(start.toolPolicies);
   });
 
-  it("builders get no caller layers (nothing to narrow)", async () => {
+  it("an admin with no tool narrowing gets empty caller layers", async () => {
     const session = await sessions.create(admin, projectId, {
       agentId: salesAgentId,
     });
@@ -665,5 +666,102 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     await expect(
       sessions.sendMessage(revoked, projectId, session.id, "still there?"),
     ).rejects.toThrow(AccessDeniedError);
+  });
+
+  it("a project chat is shared with everyone whose role reaches its agent (ADR 0156)", async () => {
+    const project = projectPrincipalIdentity({
+      tenantId: root.tenantId,
+      projectId,
+      environment: "local",
+    });
+    const shared = await sessions.create(project, projectId, {
+      agentId: csmAgentId,
+    });
+    expect(shared.owner).toBe("project");
+    const carol: Identity = { ...viewer, externalUserId: "csm-carol" };
+    for (const member of [viewer, carol]) {
+      const listed = await sessions.list(member, projectId);
+      expect(listed.items.find((item) => item.id === shared.id)?.owner).toBe(
+        "project",
+      );
+      expect((await sessions.get(member, projectId, shared.id)).id).toBe(
+        shared.id,
+      );
+    }
+    // Teammates continue it, and nobody's own chats leak through it.
+    await sessions.deliver(carol, projectId, shared.id, {
+      content: "Picking this up",
+      author: { kind: "user", externalUserId: carol.externalUserId },
+      mode: "message_only",
+      idempotencyKey: "project-note",
+    });
+    expect(
+      (await sessions.list(carol, projectId)).items.every(
+        (item) =>
+          item.owner === "project" || item.externalUserId === "csm-carol",
+      ),
+    ).toBe(true);
+    // A role that does not reach the agent does not see the project chat.
+    const salesViewer: Identity = {
+      ...viewer,
+      externalUserId: "sales-dan",
+      scope: [{ kind: "agent", projectId, name: "sales" }],
+    };
+    expect(
+      (await sessions.list(salesViewer, projectId)).items.some(
+        (item) => item.id === shared.id,
+      ),
+    ).toBe(false);
+    await expect(
+      sessions.get(salesViewer, projectId, shared.id),
+    ).rejects.toThrow(AccessDeniedError);
+  });
+
+  it("sessions:read reads everyone's chats and sessions:write acts on them (ADR 0158)", async () => {
+    const alices = await sessions.create(viewer, projectId);
+    // `agents: ["*"]` reaches every agent, but only the caller's own chats.
+    const everyAgent: Identity = {
+      ...viewer,
+      externalUserId: "ops-erin",
+      scope: [{ kind: "agent", projectId, name: "*" }],
+    };
+    expect(
+      (await sessions.list(everyAgent, projectId)).items.some(
+        (item) => item.id === alices.id,
+      ),
+    ).toBe(false);
+    await expect(
+      sessions.get(everyAgent, projectId, alices.id),
+    ).rejects.toThrow(AccessDeniedError);
+
+    const reader: Identity = {
+      ...everyAgent,
+      projectPermissions: [{ projectId, permission: "sessions:read" }],
+    };
+    expect(
+      (await sessions.list(reader, projectId)).items.some(
+        (item) => item.id === alices.id,
+      ),
+    ).toBe(true);
+    expect((await sessions.get(reader, projectId, alices.id)).id).toBe(
+      alices.id,
+    );
+    const note = {
+      content: "Reviewed",
+      author: { kind: "user" as const, externalUserId: "ops-erin" },
+      mode: "message_only" as const,
+      idempotencyKey: "ops-review",
+    };
+    await expect(
+      sessions.deliver(reader, projectId, alices.id, note),
+    ).rejects.toThrow(AccessDeniedError);
+
+    const writer: Identity = {
+      ...everyAgent,
+      projectPermissions: [{ projectId, permission: "sessions:write" }],
+    };
+    await expect(
+      sessions.deliver(writer, projectId, alices.id, note),
+    ).resolves.toMatchObject({});
   });
 });

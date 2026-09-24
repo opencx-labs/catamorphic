@@ -14,6 +14,7 @@ import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
 import { resolveRoles } from "../services/roles-service.js";
+import { projectAdmin } from "./project-admin.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /**
@@ -76,10 +77,15 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
     });
     const project = await core.projects.create(root, { name: "brain" });
     projectId = project.id;
+    // Edits and publishes the program, but holds no say over roles.
     builder = {
       ...root,
       externalUserId: "builder",
-      scope: [{ kind: "project", projectId }],
+      scope: projectAdmin(projectId).scope,
+      projectPermissions: [
+        { projectId, permission: "program:*" },
+        { projectId, permission: "roles:read" },
+      ],
     };
 
     await commitRoles({
@@ -97,14 +103,16 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
       ".catamorphic/roles/admin.json": JSON.stringify({
         version: 1,
         name: "Admin",
-        builder: true,
-        permissions: ["memberships:manage", "roles:manage"],
+        agents: ["*"],
+        workflows: ["*"],
+        apps: ["*"],
+        permissions: ["program:*", "memberships:write", "roles:write"],
         documents: ["store/**"],
       }),
       ".catamorphic/roles/membership-manager.json": JSON.stringify({
         version: 1,
         name: "Membership manager",
-        permissions: ["memberships:manage"],
+        permissions: ["memberships:write"],
       }),
       ".catamorphic/roles/broken.json": "{ nope",
     });
@@ -411,7 +419,7 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
     expect(carol?.scope?.some((r) => r.kind === "document")).toBe(false);
   });
 
-  it("protects committed role policy from ordinary builders", async () => {
+  it("protects committed role policy from program writers without roles:write", async () => {
     await expect(
       core.projects.writeFile(
         builder,

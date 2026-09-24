@@ -39,7 +39,7 @@ function loaderWith(args: {
   const resolver = {
     listPluginFiles: async () => ({ "package.json": "{}" }),
   } as unknown as PluginResolver;
-  return new RunPluginsLoader(plugins, secrets, resolver, args.registry);
+  return new RunPluginsLoader(secrets, { plugins, resolver }, args.registry);
 }
 
 describe("RunPluginsLoader bindings chain", () => {
@@ -139,5 +139,22 @@ describe("RunPluginsLoader bindings chain", () => {
       stage: "production",
     });
     expect(bundle.secrets).toEqual({ KEY: "v" });
+  });
+
+  it("hands declared secrets to runs on hosts without plugin support", async () => {
+    const secrets = {
+      loadForRun: async () => ({
+        values: { GITHUB_WEBHOOK_SECRET: "key" },
+        missingRequired: ["SLACK_TOKEN"],
+      }),
+    } as unknown as SecretsService;
+    const bundle = await new RunPluginsLoader(secrets).load({
+      identity,
+      projectId: "p1",
+      stage: "production",
+    });
+    expect(bundle.plugins).toEqual([]);
+    expect(bundle.secrets).toEqual({ GITHUB_WEBHOOK_SECRET: "key" });
+    expect(bundle.missingRequiredSecrets).toEqual(["SLACK_TOKEN"]);
   });
 });

@@ -1,6 +1,7 @@
 import type { ProjectSummary } from "@catamorphic/react/types";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { writesProgram } from "../../shared/project-experience.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
@@ -36,8 +37,7 @@ export function DeleteProjectModal({
         .remoteStatus(projectId)
         .then((status) => {
           if (cancelled) return;
-          const member =
-            status !== null && status.capabilities?.builder !== true;
+          const member = status !== null && !writesProgram(status.capabilities);
           setRemoteMember(member);
           if (member) setAlsoTrash(true);
         })

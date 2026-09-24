@@ -23,6 +23,7 @@ import {
   documentAccessAllowed,
   normalizeDocumentPath,
 } from "../services/documents-service.js";
+import { projectAdmin } from "./project-admin.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /**
@@ -62,7 +63,7 @@ describe("document paths (pure)", () => {
     const p = "p1";
     const admin: Identity = {
       ...root,
-      scope: [{ kind: "project", projectId: p }],
+      ...projectAdmin(p),
     };
     expect(documentAccessAllowed(root, p, "store/x", "write")).toBe(true);
     expect(documentAccessAllowed(admin, p, "docs/a.md", "read")).toBe(true);
@@ -138,7 +139,7 @@ describeIf("DocumentsService (ADR 0055)", () => {
     admin = {
       ...root,
       externalUserId: "admin",
-      scope: [{ kind: "project", projectId }],
+      ...projectAdmin(projectId),
     };
     csm = {
       ...root,
@@ -297,7 +298,7 @@ describeIf("DocumentsService (ADR 0055)", () => {
     ).toMatchObject({ location: "device", uploadIsExplicit: true });
     const restricted = {
       ...root,
-      scope: [{ kind: "project" as const, projectId: project.id }],
+      ...projectAdmin(project.id),
     };
     expect(
       await local.documents.list({

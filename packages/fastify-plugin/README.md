@@ -66,24 +66,35 @@ app.register(catamorphicPlugin, {
     const session = await verifySession(request);
     if (!session) return null;
     const base = { tenantId: session.orgId, externalUserId: session.userId };
-    if (session.isEmployee) return { ...base, scope: [{ kind: "project", projectId: BRAIN }] }; // builder
+    if (session.isEmployee)
+      return {
+        ...base,
+        scope: [
+          { kind: "agent", projectId: BRAIN, name: "*" },
+          { kind: "workflow", projectId: BRAIN, name: "*" },
+          { kind: "app", projectId: BRAIN, name: "*" },
+        ],
+        projectPermissions: [{ projectId: BRAIN, permission: "program:write" }],
+      };
     return { ...base, scope: await entitlementsFor(session.userId) }; // viewer
   },
 });
 ```
 
 - A **root** identity (no `scope`) reaches every project and surface — a host's service calls, the desktop's own local projects.
-- A **scoped** identity may reach exactly the listed artifacts — `{ kind: "project", projectId }` (a builder: the whole program surface), `{ kind: "app", projectId, name }` (the app's document plus its active version's frozen workflow set), `{ kind: "workflow", projectId, name }`, `{ kind: "agent", projectId, name, toolPolicies? }` (chat sessions on a committed project agent) or `{ kind: "document", projectId, path, access? }` (a file or `dir/**` subtree; the project store is reachable only this way) — and nothing else. Denials are a uniform 403.
+- A **scoped** identity may reach exactly the listed artifacts: `{ kind: "app", projectId, name }` (the app's document plus its active version's frozen workflow set), `{ kind: "workflow", projectId, name }`, `{ kind: "agent", projectId, name, toolPolicies? }` (chat sessions on a committed project agent) or `{ kind: "document", projectId, path, access? }` (a file or `dir/**` subtree; the project store is reachable only this way), and nothing else. An `app`, `workflow` or `agent` ref may name `"*"` for every one. Denials are a uniform 403.
+- What a scoped identity may do beyond using artifacts is `projectPermissions: [{ projectId, permission }]`: `thing:action` names over `program` (read, write, publish), `secrets`, `automations`, `webhooks`, `runs`, `sessions`, `memberships`, `roles` and `publications` (read, write). `write` and `publish` imply `read` on the same thing; grants may be `thing:*` or `*`. See INTEGRATION.md for the full table.
 - Most hosts do not hand-write scopes: commit `.catamorphic/roles/<slug>.json` in the project and resolve members through `core.memberships.identityFor(...)` (the stock table) or `resolveRoles(core, { roles, grants })`; members with a host-issued token use `identityFromBearer(verify)`. See INTEGRATION.md "Roles as files".
-- Role permissions use the namespaced `domain:capability` form. Core reserves
-  `memberships:manage` and `roles:manage`; unknown valid names grant no
+- Role permissions use the namespaced `thing:action` form. Core enforces its
+  own names (ADR 0158); unknown valid names such as `brain:maintain` grant no
   framework authority but remain available to explicit embedder policy and
   project-authored presentation.
 - Hosts whose auth terminates in front of the plugin (gateway, proxy) can pass `identityFromHeaders()`, which reads `X-Catamorphic-Tenant-Id` and `X-External-User-Id`. Never expose such a mount to browsers directly.
 
 `GET /api/me` is the client capability document. It returns the current
-identity summary, each visible project's builder state, source, permissions,
-artifact refs, and the host's enabled feature switches. Clients should shape
+identity summary, each visible project's effective permissions (wildcards and
+implications expanded), source (for holders of `program:read`), artifact refs
+and roles, and the host's enabled feature switches. Clients should shape
 their UI from this response rather than probing forbidden routes.
 
 ## Agent sessions
@@ -109,7 +120,7 @@ bulk-enable compatible workflows.
 
 Viewer-facing app routes (`view-state`, `guest`, `storage`, `calls/:workflow`,
 `runs/:workflow`, `runs/:runId`) narrow the caller to that app structurally —
-the URL names it — so a builder is confined to the app while inside it and a
+the URL names it, so an admin is confined to the app while inside it and a
 viewer must be entitled to it. `AppMount` in `@catamorphic/ui` uses these
 routes; nothing is claimed by the client.
 

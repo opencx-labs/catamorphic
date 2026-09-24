@@ -11,6 +11,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { writesProgram } from "../../shared/project-experience.js";
 import {
   desktopApi,
   type GitOverview,
@@ -18,7 +19,6 @@ import {
   type RemoteProjectStatus,
   type SessionCheckoutInfo,
 } from "../lib/desktop-api";
-
 import { LazyList } from "./lazy-list";
 
 export interface ProjectInspectorSnapshot {
@@ -62,7 +62,7 @@ export function ProjectInspector({
       .remoteStatus(project.id)
       .then(async (remote) => {
         if (!alive) return;
-        if (remote && remote.capabilities?.builder !== true) {
+        if (remote && !writesProgram(remote.capabilities)) {
           setSnapshot({ ...EMPTY_SNAPSHOT, remote });
           setLoading(false);
           return;
@@ -157,8 +157,7 @@ export function ProjectInspectorView({
   );
   const builder =
     !loading &&
-    (snapshot.remote === null ||
-      snapshot.remote?.capabilities?.builder === true);
+    (snapshot.remote === null || writesProgram(snapshot.remote?.capabilities));
 
   return (
     <div className="text-[12px] text-fg-muted" data-testid="project-inspector">

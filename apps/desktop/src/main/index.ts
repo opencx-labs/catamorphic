@@ -695,6 +695,11 @@ app.whenReady().then(async () => {
   agentBridge = registerAgentBridge(
     terminalSupport.agentTerminals,
     (projectId) => desktopWorkspaces?.target(projectId),
+    {
+      file: path.join(paths.root, "..", "command-watches.json"),
+      env: async () =>
+        (await state.current?.agentRegistry.nativeToolchainEnvironment()) ?? {},
+    },
   );
   ipcMain.handle("catamorphic:webview-preload", () =>
     path.join(import.meta.dirname, "../preload/webview.cjs"),

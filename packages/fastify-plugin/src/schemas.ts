@@ -190,11 +190,7 @@ export const TriggerBindingInfoSchema = z.object({
 
 export const WorkflowEnablementOwnerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("member"), externalUserId: z.string().min(1) }),
-  z.object({
-    type: z.literal("service"),
-    principalKind: z.enum(["project_service", "tenant_service"]),
-    connectionId: z.string().uuid(),
-  }),
+  z.object({ type: z.literal("project") }),
 ]);
 
 export const WorkflowEnablementConnectionSchema = z.object({
@@ -224,6 +220,8 @@ const WorkflowEnablementTargetSchema = z.object({
   owner: WorkflowEnablementOwnerSchema,
   connections: z.array(WorkflowEnablementConnectionSchema),
   capabilities: z.array(z.string()),
+  /** Project permissions the workflow declares (ADR 0158). */
+  permissions: z.array(z.string()),
   consentDigest: z.string().length(64),
 });
 
@@ -400,6 +398,7 @@ export const WorkflowGraphSchema = z.object({
       optional: z.boolean().optional(),
     }),
   ),
+  permissions: z.array(z.string()),
   canSuspend: z.boolean(),
   nodes: z.array(WorkflowNodeSchema),
   edges: z.array(WorkflowEdgeSchema),
@@ -1017,6 +1016,7 @@ export const AgentSessionSchema = z.object({
   id: z.string().uuid(),
   projectId: z.string().uuid(),
   externalUserId: z.string(),
+  owner: z.enum(["member", "project"]),
   provider: z.string(),
   source: AgentSessionSourceSchema,
   providerSessionId: z.string().nullable(),
@@ -1770,7 +1770,6 @@ export const MeSchema = z.object({
   projects: z.array(
     z.object({
       projectId: z.string(),
-      builder: z.boolean(),
       source: z
         .object({
           remoteUrl: z.string(),

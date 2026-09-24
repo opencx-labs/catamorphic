@@ -75,9 +75,6 @@
                           "projectId": {
                             "type": "string"
                           },
-                          "builder": {
-                            "type": "boolean"
-                          },
                           "source": {
                             "nullable": true,
                             "type": "object",
@@ -153,7 +150,6 @@
                         },
                         "required": [
                           "projectId",
-                          "builder",
                           "source",
                           "permissions",
                           "agents",
@@ -4944,6 +4940,12 @@
                         "additionalProperties": false
                       }
                     },
+                    "permissions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
                     "canSuspend": {
                       "type": "boolean"
                     },
@@ -5215,6 +5217,7 @@
                     "outputSchema",
                     "triggers",
                     "connections",
+                    "permissions",
                     "canSuspend",
                     "nodes",
                     "edges",
@@ -7518,233 +7521,237 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "projectId": {
-                        "type": "string",
-                        "format": "uuid",
-                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                      },
-                      "workflowName": {
-                        "type": "string"
-                      },
-                      "deploymentArtifactId": {
-                        "type": "string",
-                        "format": "uuid",
-                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                      },
-                      "commitSha": {
-                        "type": "string"
-                      },
-                      "remoteBranch": {
-                        "type": "string"
-                      },
-                      "environment": {
-                        "type": "string"
-                      },
-                      "owner": {
-                        "oneOf": [
-                          {
-                            "type": "object",
-                            "properties": {
-                              "type": {
-                                "type": "string",
-                                "enum": ["member"]
-                              },
-                              "externalUserId": {
-                                "type": "string",
-                                "minLength": 1
-                              }
-                            },
-                            "required": ["type", "externalUserId"],
-                            "additionalProperties": false
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "projectId": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                           },
-                          {
-                            "type": "object",
-                            "properties": {
-                              "type": {
-                                "type": "string",
-                                "enum": ["service"]
+                          "workflowName": {
+                            "type": "string"
+                          },
+                          "deploymentArtifactId": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "commitSha": {
+                            "type": "string"
+                          },
+                          "remoteBranch": {
+                            "type": "string"
+                          },
+                          "environment": {
+                            "type": "string"
+                          },
+                          "owner": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "enum": ["member"]
+                                  },
+                                  "externalUserId": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": ["type", "externalUserId"],
+                                "additionalProperties": false
                               },
-                              "principalKind": {
-                                "type": "string",
-                                "enum": ["project_service", "tenant_service"]
-                              },
-                              "connectionId": {
-                                "type": "string",
-                                "format": "uuid",
-                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "enum": ["project"]
+                                  }
+                                },
+                                "required": ["type"],
+                                "additionalProperties": false
                               }
-                            },
-                            "required": [
-                              "type",
-                              "principalKind",
-                              "connectionId"
-                            ],
-                            "additionalProperties": false
+                            ]
+                          },
+                          "connections": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "alias": {
+                                  "type": "string"
+                                },
+                                "bindingId": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "connectionId": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "providerKind": {
+                                  "type": "string"
+                                },
+                                "principalKind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "member",
+                                    "project_service",
+                                    "tenant_service"
+                                  ]
+                                },
+                                "capabilities": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "required": [
+                                "alias",
+                                "bindingId",
+                                "connectionId",
+                                "providerKind",
+                                "principalKind",
+                                "capabilities"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "capabilities": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "permissions": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "consentDigest": {
+                            "type": "string",
+                            "minLength": 64,
+                            "maxLength": 64
+                          },
+                          "id": {
+                            "type": "string",
+                            "format": "uuid",
+                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": ["active", "suspended", "disabled"]
+                          },
+                          "suspensionReason": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "updateAvailable": {
+                            "type": "boolean"
+                          },
+                          "temporary": {
+                            "type": "boolean"
+                          },
+                          "expiresAt": {
+                            "nullable": true,
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                          },
+                          "revision": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "exclusiveMinimum": true,
+                            "maximum": 9007199254740991
+                          },
+                          "triggers": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "definitionId": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "kind": {
+                                  "type": "string"
+                                },
+                                "config": {},
+                                "status": {
+                                  "type": "string",
+                                  "enum": ["active", "paused"]
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "definitionId",
+                                "kind",
+                                "config",
+                                "status"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                          },
+                          "updatedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
                           }
-                        ]
-                      },
-                      "connections": {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "properties": {
-                            "alias": {
-                              "type": "string"
-                            },
-                            "bindingId": {
-                              "type": "string",
-                              "format": "uuid",
-                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                            },
-                            "connectionId": {
-                              "type": "string",
-                              "format": "uuid",
-                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                            },
-                            "providerKind": {
-                              "type": "string"
-                            },
-                            "principalKind": {
-                              "type": "string",
-                              "enum": [
-                                "member",
-                                "project_service",
-                                "tenant_service"
-                              ]
-                            },
-                            "capabilities": {
-                              "type": "array",
-                              "items": {
-                                "type": "string"
-                              }
-                            }
-                          },
-                          "required": [
-                            "alias",
-                            "bindingId",
-                            "connectionId",
-                            "providerKind",
-                            "principalKind",
-                            "capabilities"
-                          ],
-                          "additionalProperties": false
-                        }
-                      },
-                      "capabilities": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        }
-                      },
-                      "consentDigest": {
-                        "type": "string",
-                        "minLength": 64,
-                        "maxLength": 64
-                      },
-                      "id": {
-                        "type": "string",
-                        "format": "uuid",
-                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                      },
-                      "status": {
-                        "type": "string",
-                        "enum": ["active", "suspended", "disabled"]
-                      },
-                      "suspensionReason": {
-                        "nullable": true,
-                        "type": "string"
-                      },
-                      "updateAvailable": {
-                        "type": "boolean"
-                      },
-                      "temporary": {
-                        "type": "boolean"
-                      },
-                      "expiresAt": {
-                        "nullable": true,
-                        "type": "string",
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
-                      },
-                      "revision": {
-                        "type": "integer",
-                        "minimum": 0,
-                        "exclusiveMinimum": true,
-                        "maximum": 9007199254740991
-                      },
-                      "triggers": {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "properties": {
-                            "id": {
-                              "type": "string",
-                              "format": "uuid",
-                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                            },
-                            "definitionId": {
-                              "type": "string",
-                              "format": "uuid",
-                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                            },
-                            "kind": {
-                              "type": "string"
-                            },
-                            "config": {},
-                            "status": {
-                              "type": "string",
-                              "enum": ["active", "paused"]
-                            }
-                          },
-                          "required": [
-                            "id",
-                            "definitionId",
-                            "kind",
-                            "config",
-                            "status"
-                          ],
-                          "additionalProperties": false
-                        }
-                      },
-                      "createdAt": {
-                        "type": "string",
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
-                      },
-                      "updatedAt": {
-                        "type": "string",
-                        "format": "date-time",
-                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                        },
+                        "required": [
+                          "projectId",
+                          "workflowName",
+                          "deploymentArtifactId",
+                          "commitSha",
+                          "remoteBranch",
+                          "environment",
+                          "owner",
+                          "connections",
+                          "capabilities",
+                          "permissions",
+                          "consentDigest",
+                          "id",
+                          "status",
+                          "suspensionReason",
+                          "updateAvailable",
+                          "temporary",
+                          "expiresAt",
+                          "revision",
+                          "triggers",
+                          "createdAt",
+                          "updatedAt"
+                        ],
+                        "additionalProperties": false
                       }
                     },
-                    "required": [
-                      "projectId",
-                      "workflowName",
-                      "deploymentArtifactId",
-                      "commitSha",
-                      "remoteBranch",
-                      "environment",
-                      "owner",
-                      "connections",
-                      "capabilities",
-                      "consentDigest",
-                      "id",
-                      "status",
-                      "suspensionReason",
-                      "updateAvailable",
-                      "temporary",
-                      "expiresAt",
-                      "revision",
-                      "triggers",
-                      "createdAt",
-                      "updatedAt"
-                    ],
-                    "additionalProperties": false
-                  }
+                    "canManageProjectAutomations": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["items", "canManageProjectAutomations"],
+                  "additionalProperties": false
                 }
               }
             }
@@ -7805,19 +7812,10 @@
                         "properties": {
                           "type": {
                             "type": "string",
-                            "enum": ["service"]
-                          },
-                          "principalKind": {
-                            "type": "string",
-                            "enum": ["project_service", "tenant_service"]
-                          },
-                          "connectionId": {
-                            "type": "string",
-                            "format": "uuid",
-                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            "enum": ["project"]
                           }
                         },
-                        "required": ["type", "principalKind", "connectionId"]
+                        "required": ["type"]
                       }
                     ]
                   },
@@ -7904,19 +7902,10 @@
                           "properties": {
                             "type": {
                               "type": "string",
-                              "enum": ["service"]
-                            },
-                            "principalKind": {
-                              "type": "string",
-                              "enum": ["project_service", "tenant_service"]
-                            },
-                            "connectionId": {
-                              "type": "string",
-                              "format": "uuid",
-                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              "enum": ["project"]
                             }
                           },
-                          "required": ["type", "principalKind", "connectionId"],
+                          "required": ["type"],
                           "additionalProperties": false
                         }
                       ]
@@ -7969,6 +7958,12 @@
                       }
                     },
                     "capabilities": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "permissions": {
                       "type": "array",
                       "items": {
                         "type": "string"
@@ -8065,6 +8060,7 @@
                     "owner",
                     "connections",
                     "capabilities",
+                    "permissions",
                     "consentDigest",
                     "id",
                     "status",
@@ -8104,14 +8100,32 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": ["not_published"]
+                        }
+                      },
+                      "required": ["error", "reason"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["error"],
+                      "additionalProperties": false
                     }
-                  },
-                  "required": ["error"],
-                  "additionalProperties": false
+                  ]
                 }
               }
             }
@@ -8225,19 +8239,10 @@
                         "properties": {
                           "type": {
                             "type": "string",
-                            "enum": ["service"]
-                          },
-                          "principalKind": {
-                            "type": "string",
-                            "enum": ["project_service", "tenant_service"]
-                          },
-                          "connectionId": {
-                            "type": "string",
-                            "format": "uuid",
-                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            "enum": ["project"]
                           }
                         },
-                        "required": ["type", "principalKind", "connectionId"]
+                        "required": ["type"]
                       }
                     ]
                   },
@@ -8319,19 +8324,10 @@
                           "properties": {
                             "type": {
                               "type": "string",
-                              "enum": ["service"]
-                            },
-                            "principalKind": {
-                              "type": "string",
-                              "enum": ["project_service", "tenant_service"]
-                            },
-                            "connectionId": {
-                              "type": "string",
-                              "format": "uuid",
-                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              "enum": ["project"]
                             }
                           },
-                          "required": ["type", "principalKind", "connectionId"],
+                          "required": ["type"],
                           "additionalProperties": false
                         }
                       ]
@@ -8389,6 +8385,12 @@
                         "type": "string"
                       }
                     },
+                    "permissions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
                     "consentDigest": {
                       "type": "string",
                       "minLength": 64,
@@ -8433,6 +8435,7 @@
                     "owner",
                     "connections",
                     "capabilities",
+                    "permissions",
                     "consentDigest",
                     "deploymentArtifactDigest",
                     "triggerCount",
@@ -8466,14 +8469,32 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": ["not_published"]
+                        }
+                      },
+                      "required": ["error", "reason"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["error"],
+                      "additionalProperties": false
                     }
-                  },
-                  "required": ["error"],
-                  "additionalProperties": false
+                  ]
                 }
               }
             }
@@ -8625,19 +8646,10 @@
                           "properties": {
                             "type": {
                               "type": "string",
-                              "enum": ["service"]
-                            },
-                            "principalKind": {
-                              "type": "string",
-                              "enum": ["project_service", "tenant_service"]
-                            },
-                            "connectionId": {
-                              "type": "string",
-                              "format": "uuid",
-                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              "enum": ["project"]
                             }
                           },
-                          "required": ["type", "principalKind", "connectionId"],
+                          "required": ["type"],
                           "additionalProperties": false
                         }
                       ]
@@ -8690,6 +8702,12 @@
                       }
                     },
                     "capabilities": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "permissions": {
                       "type": "array",
                       "items": {
                         "type": "string"
@@ -8786,6 +8804,7 @@
                     "owner",
                     "connections",
                     "capabilities",
+                    "permissions",
                     "consentDigest",
                     "id",
                     "status",
@@ -8916,19 +8935,10 @@
                           "properties": {
                             "type": {
                               "type": "string",
-                              "enum": ["service"]
-                            },
-                            "principalKind": {
-                              "type": "string",
-                              "enum": ["project_service", "tenant_service"]
-                            },
-                            "connectionId": {
-                              "type": "string",
-                              "format": "uuid",
-                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              "enum": ["project"]
                             }
                           },
-                          "required": ["type", "principalKind", "connectionId"],
+                          "required": ["type"],
                           "additionalProperties": false
                         }
                       ]
@@ -8981,6 +8991,12 @@
                       }
                     },
                     "capabilities": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "permissions": {
                       "type": "array",
                       "items": {
                         "type": "string"
@@ -9077,6 +9093,7 @@
                     "owner",
                     "connections",
                     "capabilities",
+                    "permissions",
                     "consentDigest",
                     "id",
                     "status",
@@ -9133,14 +9150,32 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": ["not_published"]
+                        }
+                      },
+                      "required": ["error", "reason"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["error"],
+                      "additionalProperties": false
                     }
-                  },
-                  "required": ["error"],
-                  "additionalProperties": false
+                  ]
                 }
               }
             }
@@ -9224,19 +9259,10 @@
                           "properties": {
                             "type": {
                               "type": "string",
-                              "enum": ["service"]
-                            },
-                            "principalKind": {
-                              "type": "string",
-                              "enum": ["project_service", "tenant_service"]
-                            },
-                            "connectionId": {
-                              "type": "string",
-                              "format": "uuid",
-                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              "enum": ["project"]
                             }
                           },
-                          "required": ["type", "principalKind", "connectionId"],
+                          "required": ["type"],
                           "additionalProperties": false
                         }
                       ]
@@ -9289,6 +9315,12 @@
                       }
                     },
                     "capabilities": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "permissions": {
                       "type": "array",
                       "items": {
                         "type": "string"
@@ -9385,6 +9417,7 @@
                     "owner",
                     "connections",
                     "capabilities",
+                    "permissions",
                     "consentDigest",
                     "id",
                     "status",
@@ -9441,14 +9474,32 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": ["not_published"]
+                        }
+                      },
+                      "required": ["error", "reason"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["error"],
+                      "additionalProperties": false
                     }
-                  },
-                  "required": ["error"],
-                  "additionalProperties": false
+                  ]
                 }
               }
             }
@@ -9550,19 +9601,10 @@
                           "properties": {
                             "type": {
                               "type": "string",
-                              "enum": ["service"]
-                            },
-                            "principalKind": {
-                              "type": "string",
-                              "enum": ["project_service", "tenant_service"]
-                            },
-                            "connectionId": {
-                              "type": "string",
-                              "format": "uuid",
-                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              "enum": ["project"]
                             }
                           },
-                          "required": ["type", "principalKind", "connectionId"],
+                          "required": ["type"],
                           "additionalProperties": false
                         }
                       ]
@@ -9615,6 +9657,12 @@
                       }
                     },
                     "capabilities": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "permissions": {
                       "type": "array",
                       "items": {
                         "type": "string"
@@ -9711,6 +9759,7 @@
                     "owner",
                     "connections",
                     "capabilities",
+                    "permissions",
                     "consentDigest",
                     "id",
                     "status",
@@ -9767,14 +9816,32 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string",
+                          "enum": ["not_published"]
+                        }
+                      },
+                      "required": ["error", "reason"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["error"],
+                      "additionalProperties": false
                     }
-                  },
-                  "required": ["error"],
-                  "additionalProperties": false
+                  ]
                 }
               }
             }
@@ -13289,6 +13356,10 @@
                     "externalUserId": {
                       "type": "string"
                     },
+                    "owner": {
+                      "type": "string",
+                      "enum": ["member", "project"]
+                    },
                     "provider": {
                       "type": "string"
                     },
@@ -13496,6 +13567,7 @@
                     "id",
                     "projectId",
                     "externalUserId",
+                    "owner",
                     "provider",
                     "source",
                     "providerSessionId",
@@ -13834,6 +13906,10 @@
                           "externalUserId": {
                             "type": "string"
                           },
+                          "owner": {
+                            "type": "string",
+                            "enum": ["member", "project"]
+                          },
                           "provider": {
                             "type": "string"
                           },
@@ -14050,6 +14126,7 @@
                           "id",
                           "projectId",
                           "externalUserId",
+                          "owner",
                           "provider",
                           "source",
                           "providerSessionId",
@@ -14447,6 +14524,10 @@
                     "externalUserId": {
                       "type": "string"
                     },
+                    "owner": {
+                      "type": "string",
+                      "enum": ["member", "project"]
+                    },
                     "provider": {
                       "type": "string"
                     },
@@ -14654,6 +14735,7 @@
                     "id",
                     "projectId",
                     "externalUserId",
+                    "owner",
                     "provider",
                     "source",
                     "providerSessionId",
@@ -14968,6 +15050,10 @@
                     "externalUserId": {
                       "type": "string"
                     },
+                    "owner": {
+                      "type": "string",
+                      "enum": ["member", "project"]
+                    },
                     "provider": {
                       "type": "string"
                     },
@@ -15175,6 +15261,7 @@
                     "id",
                     "projectId",
                     "externalUserId",
+                    "owner",
                     "provider",
                     "source",
                     "providerSessionId",
@@ -15357,6 +15444,10 @@
                     "externalUserId": {
                       "type": "string"
                     },
+                    "owner": {
+                      "type": "string",
+                      "enum": ["member", "project"]
+                    },
                     "provider": {
                       "type": "string"
                     },
@@ -15564,6 +15655,7 @@
                     "id",
                     "projectId",
                     "externalUserId",
+                    "owner",
                     "provider",
                     "source",
                     "providerSessionId",
@@ -15847,6 +15939,10 @@
                     },
                     "externalUserId": {
                       "type": "string"
+                    },
+                    "owner": {
+                      "type": "string",
+                      "enum": ["member", "project"]
                     },
                     "provider": {
                       "type": "string"
@@ -16376,6 +16472,7 @@
                     "id",
                     "projectId",
                     "externalUserId",
+                    "owner",
                     "provider",
                     "source",
                     "providerSessionId",
@@ -16511,6 +16608,10 @@
                     },
                     "externalUserId": {
                       "type": "string"
+                    },
+                    "owner": {
+                      "type": "string",
+                      "enum": ["member", "project"]
                     },
                     "provider": {
                       "type": "string"
@@ -16719,6 +16820,7 @@
                     "id",
                     "projectId",
                     "externalUserId",
+                    "owner",
                     "provider",
                     "source",
                     "providerSessionId",
@@ -16872,6 +16974,10 @@
                     "externalUserId": {
                       "type": "string"
                     },
+                    "owner": {
+                      "type": "string",
+                      "enum": ["member", "project"]
+                    },
                     "provider": {
                       "type": "string"
                     },
@@ -17079,6 +17185,7 @@
                     "id",
                     "projectId",
                     "externalUserId",
+                    "owner",
                     "provider",
                     "source",
                     "providerSessionId",
@@ -17429,6 +17536,10 @@
                         "externalUserId": {
                           "type": "string"
                         },
+                        "owner": {
+                          "type": "string",
+                          "enum": ["member", "project"]
+                        },
                         "provider": {
                           "type": "string"
                         },
@@ -17641,6 +17752,7 @@
                         "id",
                         "projectId",
                         "externalUserId",
+                        "owner",
                         "provider",
                         "source",
                         "providerSessionId",
@@ -17870,6 +17982,10 @@
                           "externalUserId": {
                             "type": "string"
                           },
+                          "owner": {
+                            "type": "string",
+                            "enum": ["member", "project"]
+                          },
                           "provider": {
                             "type": "string"
                           },
@@ -18086,6 +18202,7 @@
                           "id",
                           "projectId",
                           "externalUserId",
+                          "owner",
                           "provider",
                           "source",
                           "providerSessionId",
@@ -18293,6 +18410,10 @@
                           "externalUserId": {
                             "type": "string"
                           },
+                          "owner": {
+                            "type": "string",
+                            "enum": ["member", "project"]
+                          },
                           "provider": {
                             "type": "string"
                           },
@@ -18509,6 +18630,7 @@
                           "id",
                           "projectId",
                           "externalUserId",
+                          "owner",
                           "provider",
                           "source",
                           "providerSessionId",
@@ -18764,6 +18886,10 @@
                     "externalUserId": {
                       "type": "string"
                     },
+                    "owner": {
+                      "type": "string",
+                      "enum": ["member", "project"]
+                    },
                     "provider": {
                       "type": "string"
                     },
@@ -18971,6 +19097,7 @@
                     "id",
                     "projectId",
                     "externalUserId",
+                    "owner",
                     "provider",
                     "source",
                     "providerSessionId",
@@ -19919,6 +20046,10 @@
                     "externalUserId": {
                       "type": "string"
                     },
+                    "owner": {
+                      "type": "string",
+                      "enum": ["member", "project"]
+                    },
                     "provider": {
                       "type": "string"
                     },
@@ -20126,6 +20257,7 @@
                     "id",
                     "projectId",
                     "externalUserId",
+                    "owner",
                     "provider",
                     "source",
                     "providerSessionId",
@@ -20933,6 +21065,10 @@
                           "externalUserId": {
                             "type": "string"
                           },
+                          "owner": {
+                            "type": "string",
+                            "enum": ["member", "project"]
+                          },
                           "provider": {
                             "type": "string"
                           },
@@ -21149,6 +21285,7 @@
                           "id",
                           "projectId",
                           "externalUserId",
+                          "owner",
                           "provider",
                           "source",
                           "providerSessionId",
@@ -21392,6 +21529,10 @@
                       "externalUserId": {
                         "type": "string"
                       },
+                      "owner": {
+                        "type": "string",
+                        "enum": ["member", "project"]
+                      },
                       "provider": {
                         "type": "string"
                       },
@@ -21599,6 +21740,7 @@
                       "id",
                       "projectId",
                       "externalUserId",
+                      "owner",
                       "provider",
                       "source",
                       "providerSessionId",
@@ -23404,6 +23546,10 @@
                       "externalUserId": {
                         "type": "string"
                       },
+                      "owner": {
+                        "type": "string",
+                        "enum": ["member", "project"]
+                      },
                       "provider": {
                         "type": "string"
                       },
@@ -23611,6 +23757,7 @@
                       "id",
                       "projectId",
                       "externalUserId",
+                      "owner",
                       "provider",
                       "source",
                       "providerSessionId",
@@ -24222,14 +24369,11 @@
                           "description": {
                             "type": "string"
                           },
-                          "builder": {
-                            "type": "boolean"
-                          },
                           "permissions": {
                             "type": "array",
                             "items": {
                               "type": "string",
-                              "pattern": "^[a-z][a-z0-9._-]*:[a-z][a-z0-9._-]*$"
+                              "pattern": "^(\\*|[a-z][a-z0-9._-]*:(\\*|[a-z][a-z0-9._-]*))$"
                             }
                           },
                           "agents": {
@@ -26993,6 +27137,181 @@
         "responses": {
           "200": {
             "description": "Default Response"
+          }
+        }
+      }
+    },
+    "/api/projects/{projectId}/webhooks": {
+      "get": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "url": {
+                        "type": "string"
+                      },
+                      "workflows": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "listening": {
+                        "type": "boolean"
+                      },
+                      "verified": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "url",
+                      "workflows",
+                      "listening",
+                      "verified"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{projectId}/webhooks/{name}/rotate": {
+      "post": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "name",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "workflows": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "listening": {
+                      "type": "boolean"
+                    },
+                    "verified": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "url",
+                    "workflows",
+                    "listening",
+                    "verified"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
           }
         }
       }
@@ -33333,6 +33652,12 @@
                         "additionalProperties": false
                       }
                     },
+                    "permissions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
                     "canSuspend": {
                       "type": "boolean"
                     },
@@ -33592,11 +33917,121 @@
                     "outputSchema",
                     "triggers",
                     "connections",
+                    "permissions",
                     "canSuspend",
                     "nodes",
                     "edges",
                     "sourceCode"
                   ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hooks/{projectId}/{name}/{token}": {
+      "post": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 63
+            },
+            "in": "path",
+            "name": "name",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "in": "path",
+            "name": "token",
+            "required": true
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "duplicate": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["id", "duplicate"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
                   "additionalProperties": false
                 }
               }

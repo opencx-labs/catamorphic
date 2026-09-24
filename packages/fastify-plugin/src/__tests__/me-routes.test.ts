@@ -26,10 +26,12 @@ describe("GET /me (ADR 0055 introspection)", () => {
           path: "store/customers/acme/**",
           access: "write",
         },
-        { kind: "project", projectId: "other" },
+        { kind: "agent", projectId: "other", name: "*" },
       ],
       projectPermissions: [
         { projectId: PROJECT_ID, permission: "brain:maintain" },
+        { projectId: PROJECT_ID, permission: "sessions:write" },
+        { projectId: "other", permission: "runs:*" },
       ],
     };
     const app = createApp({
@@ -61,9 +63,9 @@ describe("GET /me (ADR 0055 introspection)", () => {
       projects: [
         {
           projectId: PROJECT_ID,
-          builder: false,
           source: null,
-          permissions: ["brain:maintain"],
+          // Implications expanded, so a client simply tests membership.
+          permissions: ["sessions:read", "sessions:write", "brain:maintain"],
           agents: ["csm"],
           workflows: ["crm.lookup"],
           apps: [],
@@ -77,10 +79,9 @@ describe("GET /me (ADR 0055 introspection)", () => {
         },
         {
           projectId: "other",
-          builder: true,
           source: null,
-          permissions: [],
-          agents: [],
+          permissions: ["runs:read", "runs:write"],
+          agents: ["*"],
           workflows: [],
           apps: [],
           documents: [],
@@ -98,11 +99,14 @@ describe("GET /me (ADR 0055 introspection)", () => {
     });
   });
 
-  it("discloses repository source only to builders", async () => {
+  it("discloses repository source only to program readers", async () => {
     const builder: Identity = {
       tenantId: "t",
       externalUserId: "builder",
-      scope: [{ kind: "project", projectId: PROJECT_ID }],
+      scope: [],
+      projectPermissions: [
+        { projectId: PROJECT_ID, permission: "program:read" },
+      ],
     };
     const app = createApp({
       identity: () => builder,
@@ -143,7 +147,6 @@ describe("GET /me (ADR 0055 introspection)", () => {
       projects: [
         {
           projectId: PROJECT_ID,
-          builder: false,
           source: null,
           permissions: ["not-namespaced"],
           agents: [],

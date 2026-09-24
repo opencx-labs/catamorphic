@@ -20,13 +20,18 @@ import {
   type WorkflowPackagePayload,
 } from "@catamorphic/sandbox";
 import { type Kysely, type Selectable, sql } from "kysely";
-import { type Identity, identityCovers, isBuilder } from "../identity.js";
+import {
+  hasProjectPermission,
+  type Identity,
+  identityCovers,
+  intersectProjectPermissions,
+} from "../identity.js";
 import { assertAgentSessionAccess } from "./agent-session-access.js";
 import { allocationSandboxProvider } from "./allocation-sandbox-provider.js";
 import type { AppPoliciesService } from "./app-policies-service.js";
 import {
   AccessDeniedError,
-  assertBuilder,
+  assertProjectPermission,
   assertScopeAllowsWorkflow,
   resolveScope,
 } from "./artifact-scope.js";
@@ -687,7 +692,7 @@ export class RunsService {
   }
 
   async listItems(args: ListBatchItemsInput): Promise<ListBatchItemsResult> {
-    await this.assertBuilderForRun(args.identity, args.runId);
+    await this.assertRunPermission(args.identity, args.runId, "runs:read");
     await this.requireBatchScope(args);
     const limit = Math.max(1, Math.min(args.limit ?? 100, 500));
     const offset = Math.max(0, args.offset ?? 0);
@@ -736,7 +741,7 @@ export class RunsService {
   }
 
   async listItemSteps(args: ListBatchItemStepsInput): Promise<BatchItemStep[]> {
-    await this.assertBuilderForRun(args.identity, args.runId);
+    await this.assertRunPermission(args.identity, args.runId, "runs:read");
     await this.requireBatchScope(args);
     const item = await this.db
       .selectFrom("batch_items")
@@ -808,7 +813,9 @@ export class RunsService {
       .where("source.owner_external_user_id", "=", args.identity.externalUserId)
       .where(({ or, eb }) =>
         or([
-          eb.val(isBuilder(args.identity, args.projectId)),
+          eb.val(
+            hasProjectPermission(args.identity, args.projectId, "runs:read"),
+          ),
           ...(appNames.length
             ? [
                 sql<boolean>`('session-' || source.id::text) in (${sql.join(appNames)})`,
@@ -1132,7 +1139,7 @@ export class RunsService {
         },
       },
       async () => {
-        await this.assertBuilderForRun(args.identity, args.runId);
+        await this.assertRunPermission(args.identity, args.runId, "runs:write");
         const run = await this.get(args);
         const allocationRuntime = run.allocationId
           ? await this.runtimeForAllocation({
@@ -1165,7 +1172,7 @@ export class RunsService {
         },
       },
       async () => {
-        await this.assertBuilderForRun(args.identity, args.runId);
+        await this.assertRunPermission(args.identity, args.runId, "runs:write");
         const outcome = await this.deps.coordinator.pauseOperator(args);
         if (outcome === "unavailable") {
           throw new RunCapabilityError("pauseProcessing", "pause");
@@ -1187,7 +1194,7 @@ export class RunsService {
         },
       },
       async () => {
-        await this.assertBuilderForRun(args.identity, args.runId);
+        await this.assertRunPermission(args.identity, args.runId, "runs:write");
         const outcome = await this.deps.coordinator.resumeOperator(args);
         if (outcome === "unavailable") {
           throw new RunCapabilityError("resumeProcessing", "resume");
@@ -1209,7 +1216,7 @@ export class RunsService {
         },
       },
       async () => {
-        await this.assertBuilderForRun(args.identity, args.runId);
+        await this.assertRunPermission(args.identity, args.runId, "runs:write");
         await this.deps.coordinator.resumePause(args);
         return this.get(args);
       },
@@ -1233,7 +1240,7 @@ export class RunsService {
     idempotencyKey: string;
     value: Json;
   }): Promise<Run> {
-    assertBuilder(args.identity, args.projectId);
+    assertProjectPermission(args.identity, args.projectId, "runs:write");
     const run = await this.findActiveByKey(args);
     if (!run) {
       throw new RunSignalNotFoundError(
@@ -1280,7 +1287,7 @@ export class RunsService {
     correlationKey: string;
     reason?: string;
   }): Promise<Run | null> {
-    assertBuilder(args.identity, args.projectId);
+    assertProjectPermission(args.identity, args.projectId, "runs:write");
     const run = await this.findActiveByKey(args);
     if (!run) return null;
     return this.cancel({
@@ -1403,6 +1410,7 @@ export class RunsService {
   }): Promise<{
     artifact: DeploymentArtifact;
     requirements: WorkflowGraph["connections"];
+    permissions: WorkflowGraph["permissions"];
   }> {
     await this.requireProject(args.identity, args.projectId);
     const source = await this.prepareProductionSource(args);
@@ -1424,7 +1432,11 @@ export class RunsService {
         workflowPackage: source.workflowPackage,
       }),
     });
-    return { artifact, requirements: source.graph.connections };
+    return {
+      artifact,
+      requirements: source.graph.connections,
+      permissions: source.graph.permissions,
+    };
   }
 
   async resolveArtifactAtCommit(args: {
@@ -1507,11 +1519,13 @@ export class RunsService {
   }): Promise<{
     capabilities: WorkflowCapabilities;
     execution: WorkflowExecutionDescriptor;
+    permissions: readonly string[];
   }> {
     const graph = (await this.prepareProductionSource(args)).graph;
     return {
       capabilities: graph.capabilities,
       execution: graph.execution,
+      permissions: graph.permissions,
     };
   }
 
@@ -1995,7 +2009,7 @@ export class RunsService {
               workflow_enablement_id: args.workflowEnablementId ?? null,
               external_user_id: args.identity.externalUserId,
               // Who triggered the run, as verified by the host (ADR 0055):
-              // the caller's scope, or null for builders/root.
+              // the caller's scope, or null for the root identity.
               caller_scope:
                 args.identity.scope === undefined
                   ? null
@@ -2008,6 +2022,22 @@ export class RunsService {
                 args.identity.connectionScope === undefined
                   ? null
                   : jsonColumn(toJson(args.identity.connectionScope)),
+              // A scoped caller's run acts with only what it holds of the
+              // workflow's declared permissions (ADR 0158).
+              caller_project_permissions:
+                args.identity.scope === undefined
+                  ? null
+                  : jsonColumn(
+                      toJson(
+                        intersectProjectPermissions(
+                          source.graph.permissions.map((permission) => ({
+                            projectId: args.projectId,
+                            permission,
+                          })),
+                          args.identity,
+                        ),
+                      ),
+                    ),
               status: "pending",
               phase:
                 source.graph.execution.steps[0]?.type === "batch"
@@ -2210,13 +2240,15 @@ export class RunsService {
   }
 
   /**
-   * Run controls and drill-downs are builder operations; a run names its
-   * project, so the check goes through the run row (tenant-filtered — a
-   * foreign run id reads as not found, never as a builder-of-nothing pass).
+   * Drill-downs (`runs:read`) and controls (`runs:write`) on one run: your
+   * own runs need no permission, anyone's else do (ADR 0158). A run names
+   * its project, so the check goes through the run row, tenant-filtered: a
+   * foreign run id reads as denied, never as a pass.
    */
-  private async assertBuilderForRun(
+  private async assertRunPermission(
     identity: Identity,
     runId: string,
+    permission: "runs:read" | "runs:write",
   ): Promise<void> {
     if (identity.scope === undefined) return;
     const row = await this.db
@@ -2224,11 +2256,12 @@ export class RunsService {
       .innerJoin("projects", "projects.id", "workflow_runs.project_id")
       .where("workflow_runs.id", "=", runId)
       .where("projects.tenant_id", "=", identity.tenantId)
-      .select("workflow_runs.project_id")
+      .select(["workflow_runs.project_id", "workflow_runs.external_user_id"])
       .executeTakeFirst();
     // Uniform denial: a scoped caller must not learn which run ids exist.
     if (!row) throw new AccessDeniedError();
-    assertBuilder(identity, row.project_id);
+    if (row.external_user_id === identity.externalUserId) return;
+    assertProjectPermission(identity, row.project_id, permission);
   }
 
   private async requireBatchScope(args: {

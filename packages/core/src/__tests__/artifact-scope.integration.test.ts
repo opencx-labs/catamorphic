@@ -5,11 +5,12 @@ import { type Identity, narrowIdentity } from "../identity.js";
 import { AppPoliciesService } from "../services/app-policies-service.js";
 import {
   AccessDeniedError,
-  assertBuilder,
+  assertProjectPermission,
   assertRootIdentity,
   assertScopeAllowsWorkflow,
   resolveScope,
 } from "../services/artifact-scope.js";
+import { projectAdmin } from "./project-admin.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
 const describeIf = connectionString ? describe : describe.skip;
@@ -92,7 +93,9 @@ describeIf("artifact scope enforcement", () => {
 
   it("root identities pass every gate untouched", async () => {
     expect(() => assertRootIdentity(builder)).not.toThrow();
-    expect(() => assertBuilder(builder, projectId)).not.toThrow();
+    expect(() =>
+      assertProjectPermission(builder, projectId, "roles:write"),
+    ).not.toThrow();
     await expect(
       assertScopeAllowsWorkflow({
         db,
@@ -105,26 +108,33 @@ describeIf("artifact scope enforcement", () => {
   });
 
   it("scoped identities are rejected from every project surface", () => {
-    expect(() => assertBuilder(viewer, projectId)).toThrow(AccessDeniedError);
-    // Even an empty scope is a scoped identity — a viewer of nothing is
-    // still not a builder.
-    expect(() => assertBuilder({ ...builder, scope: [] }, projectId)).toThrow(
-      AccessDeniedError,
-    );
+    expect(() =>
+      assertProjectPermission(viewer, projectId, "program:read"),
+    ).toThrow(AccessDeniedError);
+    // Even an empty scope is a scoped identity, holding no permission.
+    expect(() =>
+      assertProjectPermission(
+        { ...builder, scope: [] },
+        projectId,
+        "program:read",
+      ),
+    ).toThrow(AccessDeniedError);
     expect(() => assertRootIdentity(viewer)).toThrow(AccessDeniedError);
   });
 
-  it("a project ref makes a scoped identity a builder of that project only (ADR 0055)", async () => {
+  it("an admin role reaches every artifact of its project only (ADR 0158)", async () => {
     const admin: Identity = {
       ...builder,
       externalUserId: "admin",
-      scope: [{ kind: "project", projectId }],
+      ...projectAdmin(projectId),
     };
-    expect(() => assertBuilder(admin, projectId)).not.toThrow();
-    expect(() => assertBuilder(admin, "some-other-project")).toThrow(
-      AccessDeniedError,
-    );
-    // Builders resolve to "everything" — no allowlist at all.
+    expect(() =>
+      assertProjectPermission(admin, projectId, "program:publish"),
+    ).not.toThrow();
+    expect(() =>
+      assertProjectPermission(admin, "some-other-project", "program:read"),
+    ).toThrow(AccessDeniedError);
+    // `workflows: ["*"]` resolves to "everything": no allowlist at all.
     expect(await resolveScope({ db, identity: admin, projectId })).toBeNull();
     // ...but never to tenant-wide operations.
     expect(() => assertRootIdentity(admin)).toThrow(AccessDeniedError);

@@ -16,6 +16,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Identity } from "../identity.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
+import { projectAdmin } from "./project-admin.js";
 
 const pglite = new PGlite({ extensions: { pgcrypto } });
 const db = new Kysely<DB>({
@@ -99,7 +100,7 @@ describe("project Environment policy persistence", () => {
     const service = new ProjectEnvironmentsService(db, manager);
     const scoped: Identity = {
       ...identity,
-      scope: [{ kind: "project", projectId: project.id }],
+      ...projectAdmin(project.id),
     };
     const manifest = (name: string) =>
       JSON.stringify({

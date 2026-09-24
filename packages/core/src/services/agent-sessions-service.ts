@@ -32,9 +32,11 @@ import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import {
   type AgentRef,
+  EVERY_ARTIFACT,
+  hasProjectPermission,
   type Identity,
-  isBuilder,
-  scopeCovers,
+  isProjectPrincipal,
+  PROJECT_PRINCIPAL_ID,
   scopeCoversSessions,
 } from "../identity.js";
 import type { AgentCapabilitiesService } from "./agent-capabilities-service.js";
@@ -140,6 +142,11 @@ export interface AgentSession {
   id: string;
   projectId: string;
   externalUserId: string;
+  /**
+   * `project`: a shared chat owned by the project (ADR 0156), open to
+   * everyone whose role reaches its agent. `member`: one person's chat.
+   */
+  owner: "member" | "project";
   provider: string;
   /** Surface that first created this conversation; informational, not auth. */
   source: AgentSessionSource;
@@ -201,11 +208,6 @@ export interface AgentSession {
   updatedAt: string;
 }
 
-export interface AgentSessionWakeReceipt extends SessionDeliveryReceipt {
-  sessionId: string;
-  sessionCreated: boolean;
-}
-
 export type AgentTodoStatus = "pending" | "in_progress" | "completed";
 
 export interface AgentTodo {
@@ -216,6 +218,12 @@ export interface AgentTodo {
   /** Important task detail, collapsed by default in the UI. */
   description: string;
   status: AgentTodoStatus;
+  /**
+   * What the agent is doing while this item is in progress, in the
+   * present continuous ("Reviewing database migrations"). Shown as the
+   * turn's live status.
+   */
+  activeForm?: string;
 }
 
 export interface AgentTodoInput {
@@ -224,6 +232,7 @@ export interface AgentTodoInput {
   title: string;
   description: string;
   status: AgentTodoStatus;
+  activeForm?: string;
 }
 
 export interface AgentMessage {
@@ -396,9 +405,16 @@ export function summarizeSessionTask(message: string): string | null {
   return `${normalized.slice(0, SESSION_TASK_SUMMARY_LIMIT - 1)}…`;
 }
 
-/** First line of the user's request, trimmed into a commit subject. */
-function checkpointMessage(userMessage: string): string {
-  const firstLine = userMessage.split("\n", 1)[0]?.trim() ?? "";
+/**
+ * First line of the turn's request, trimmed into a commit subject. A turn a
+ * workflow or the host started drops its provenance header: history reads
+ * "Agent: Deploy is live: done", never the model-facing wrapper.
+ */
+export function checkpointMessage(userMessage: string): string {
+  const request = userMessage
+    .replace(/^\s*\[Catamorphic [^\]\n]*\]\s*/, "")
+    .trimStart();
+  const firstLine = request.split("\n", 1)[0]?.trim() ?? "";
   const subject =
     firstLine.length > 68 ? `${firstLine.slice(0, 67).trimEnd()}…` : firstLine;
   return subject ? `Agent: ${subject}` : "Agent checkpoint";
@@ -421,7 +437,7 @@ Every turn comes with fresh session context beside the person's message: who the
 
 Infer how technical they are from their role, how they write, and what the project holds. For non-technical people, speak in outcomes and plain words: what you made, where to find it, what happens next. Leave out file paths, internal folders such as .catamorphic, Git, commits, branches, deployments, environments, schemas, and the names of tools or skills, unless they ask. For engineers, be precise and keep the technical substance.
 
-Answer what was asked first. Reveal complexity only when it helps the person decide or act. Files you create only to test, check, or run something are yours to clean up; do not mention them.
+Answer what was asked first. Reveal complexity only when it helps the person decide or act. Files you create only to test, check, or run something are yours to clean up; do not mention them. When a tool takes a short description, write one in plain words: the person sees it as what you are doing right now.
 
 ## Build what the work needs
 
@@ -568,6 +584,13 @@ export class AgentSessionsService {
   readonly mailboxes: SessionMailboxesService;
   readonly hostId: string;
   private readonly workerNode?: { id: string; token: string };
+  /**
+   * The line a running turn shows while it works, in the agent's own words:
+   * the latest harness status, step description or in-progress todo. Kept
+   * per session for the life of a turn; generic labels fill in only while
+   * the agent has said nothing.
+   */
+  private readonly liveStatus = new Map<string, string>();
   readonly authorityLeaseMs: number;
   private readonly projectManager: ProjectManager;
   private readonly codingAgents: CodingAgentRegistry;
@@ -772,7 +795,7 @@ export class AgentSessionsService {
       .execute();
     const rows = candidates.filter(
       (row) =>
-        isBuilder(identity, row.project_id) ||
+        this.coversEveryAgent(identity, row.project_id) ||
         scopeCoversSessions(identity, row.project_id) ||
         (row.agent_id !== null &&
           this.coveredAgentIds(identity, row.project_id).includes(
@@ -832,19 +855,36 @@ export class AgentSessionsService {
     const limit = input.limit ?? 50;
     const offset = input.offset ?? 0;
 
-    // A viewer sees only its own conversations, on agents its scope still
-    // covers (a revoked agent's sessions vanish from the list too). A
-    // sessions ref (ADR 0148) covers every agent for that viewer.
+    // Without `sessions:read` a caller sees only its own conversations, on
+    // agents its scope still covers (a revoked agent's sessions vanish from
+    // the list too), plus project chats on those agents. `agents: ["*"]`
+    // and a sessions ref (ADR 0148) cover every agent.
     let query = this.db
       .selectFrom("agent_sessions")
       .where("project_id", "=", projectId);
-    if (!isBuilder(identity, projectId)) {
-      query = query.where("external_user_id", "=", identity.externalUserId);
-      if (!scopeCoversSessions(identity, projectId)) {
-        const agentIds = this.coveredAgentIds(identity, projectId);
-        if (agentIds.length === 0) return { items: [], total: 0 };
-        query = query.where("agent_id", "in", agentIds);
-      }
+    if (!this.readsAllSessions(identity, projectId)) {
+      const agentIds = this.coveredAgentIds(identity, projectId);
+      const anyAgent = this.coversEveryAgent(identity, projectId);
+      const ownOnAnyAgent =
+        anyAgent || scopeCoversSessions(identity, projectId);
+      if (!ownOnAnyAgent && agentIds.length === 0)
+        return { items: [], total: 0 };
+      query = query.where((eb) =>
+        eb.or([
+          eb.and([
+            eb("external_user_id", "=", identity.externalUserId),
+            ...(ownOnAnyAgent ? [] : [eb("agent_id", "in", agentIds)]),
+          ]),
+          ...(anyAgent || agentIds.length
+            ? [
+                eb.and([
+                  eb("external_user_id", "=", PROJECT_PRINCIPAL_ID),
+                  ...(anyAgent ? [] : [eb("agent_id", "in", agentIds)]),
+                ]),
+              ]
+            : []),
+        ]),
+      );
     }
 
     if (input.visibility) {
@@ -886,20 +926,24 @@ export class AgentSessionsService {
                       "agent_sessions.parent_session_id",
                     )
                     .where("ancestor.project_id", "=", projectId)
-                    .$if(!isBuilder(identity, projectId), (parent) =>
-                      parent
-                        .where(
-                          "ancestor.external_user_id",
-                          "=",
-                          identity.externalUserId,
-                        )
-                        .$if(!scopeCoversSessions(identity, projectId), (own) =>
-                          own.where(
-                            "ancestor.agent_id",
-                            "in",
-                            this.coveredAgentIds(identity, projectId),
+                    .$if(
+                      !this.readsAllSessions(identity, projectId),
+                      (parent) =>
+                        parent
+                          .where(
+                            "ancestor.external_user_id",
+                            "=",
+                            identity.externalUserId,
+                          )
+                          .$if(
+                            !this.ownOnAnyAgent(identity, projectId),
+                            (own) =>
+                              own.where(
+                                "ancestor.agent_id",
+                                "in",
+                                this.coveredAgentIds(identity, projectId),
+                              ),
                           ),
-                        ),
                     )
                     .where((parent) =>
                       parent(
@@ -975,10 +1019,10 @@ export class AgentSessionsService {
             "in",
             rows.map((row) => row.id),
           )
-          .$if(!isBuilder(identity, projectId), (builder) =>
-            builder
+          .$if(!this.readsAllSessions(identity, projectId), (visible) =>
+            visible
               .where("external_user_id", "=", identity.externalUserId)
-              .$if(!scopeCoversSessions(identity, projectId), (own) =>
+              .$if(!this.ownOnAnyAgent(identity, projectId), (own) =>
                 own.where(
                   "agent_id",
                   "in",
@@ -1027,11 +1071,11 @@ export class AgentSessionsService {
       .selectFrom("agent_sessions")
       .where("project_id", "=", projectId)
       .where("id", "!=", ownSessionId);
-    if (!isBuilder(identity, projectId)) {
+    if (!this.readsAllSessions(identity, projectId)) {
       if (scopeCoversSessions(identity, projectId)) {
         // An app reading the viewer's chats sees the viewer's own peers.
         query = query.where("external_user_id", "=", identity.externalUserId);
-      } else {
+      } else if (!this.coversEveryAgent(identity, projectId)) {
         const agentIds = this.coveredAgentIds(identity, projectId);
         if (agentIds.length === 0) return [];
         query = query.where("agent_id", "in", agentIds);
@@ -1149,7 +1193,14 @@ export class AgentSessionsService {
       const id = requestedId || randomUUID();
       if (usedIds.has(id)) throw new Error(`Duplicate todo id: ${id}`);
       usedIds.add(id);
-      return { id, title, description, status: item.status };
+      const activeForm = liveStatusLine(item.activeForm);
+      return {
+        id,
+        title,
+        description,
+        status: item.status,
+        ...(activeForm ? { activeForm } : {}),
+      };
     });
     await this.db
       .updateTable("agent_sessions")
@@ -1159,6 +1210,18 @@ export class AgentSessionsService {
       })
       .where("id", "=", sessionId)
       .execute();
+    // The in-progress item is the agent's live line, shown at once even when
+    // the next harness event is a long command away.
+    const current = todos.find((item) => item.status === "in_progress");
+    if (current?.activeForm) {
+      this.liveStatus.set(sessionId, current.activeForm);
+      await this.db
+        .updateTable("agent_turns")
+        .set({ activity: current.activeForm, activity_at: sql`now()` })
+        .where("session_id", "=", sessionId)
+        .where("status", "=", "running")
+        .execute();
+    }
     return todos;
   }
 
@@ -1584,7 +1647,7 @@ export class AgentSessionsService {
       effort?: AgentEffort;
       environment?: string;
       title?: string;
-      wakeKey?: string;
+      chatKey?: string;
       source?: AgentSessionSource;
       parentSessionId?: string;
       forkedFromSessionId?: string;
@@ -1634,7 +1697,7 @@ export class AgentSessionsService {
       effort?: AgentEffort;
       environment?: string;
       title?: string;
-      wakeKey?: string;
+      chatKey?: string;
       source?: AgentSessionSource;
       parentSessionId?: string;
       forkedFromSessionId?: string;
@@ -1763,7 +1826,7 @@ export class AgentSessionsService {
             environment_name: admitted.environmentName,
             status: "active",
             title: input.title ?? null,
-            wake_key: input.wakeKey ?? null,
+            chat_key: input.chatKey ?? null,
             parent_session_id: input.parentSessionId ?? null,
             forked_from_session_id: input.forkedFromSessionId ?? null,
             base_commit_sha: null,
@@ -1788,26 +1851,21 @@ export class AgentSessionsService {
   }
 
   /**
-   * Create or reuse one stable session for a workflow and queue a turn in it.
-   * The queued message asks clients to surface the session only after the turn
-   * settles, so a scheduled agent never steals focus while it is working.
+   * The chat a workflow keeps for a key: the active one with that key, or a
+   * new one started for it. Concurrent first deliveries converge on one chat
+   * through the partial unique index on `chat_key`.
    */
-  async wake(
+  async chatForKey(
     identity: Identity,
     projectId: string,
     input: {
+      chatKey: string;
       origin?: SessionOperationOrigin;
-      wakeKey: string;
-      content: string;
-      workflowName: string;
-      runId: string;
       agentSlug?: string;
       environment?: string;
       title?: string;
-      mode?: "next_turn" | "interrupt";
-      notification?: { title?: string; body?: string };
     },
-  ): Promise<AgentSessionWakeReceipt> {
+  ): Promise<{ sessionId: string; sessionCreated: boolean }> {
     await this.requireProject(identity, projectId);
     const agentId = input.agentSlug
       ? formatProjectAgentId(projectId, input.agentSlug)
@@ -1818,7 +1876,7 @@ export class AgentSessionsService {
         .selectAll()
         .where("project_id", "=", projectId)
         .where("external_user_id", "=", identity.externalUserId)
-        .where("wake_key", "=", input.wakeKey)
+        .where("chat_key", "=", input.chatKey)
         .where("status", "=", "active")
         .executeTakeFirst();
 
@@ -1830,7 +1888,7 @@ export class AgentSessionsService {
           ...(agentId ? { agentId } : {}),
           ...(input.environment ? { environment: input.environment } : {}),
           ...(input.title ? { title: input.title } : {}),
-          wakeKey: input.wakeKey,
+          chatKey: input.chatKey,
           origin: input.origin,
         });
         row = await this.db
@@ -1840,7 +1898,7 @@ export class AgentSessionsService {
           .executeTakeFirstOrThrow();
         sessionCreated = true;
       } catch (error) {
-        // Concurrent retries may race the partial unique wake-key index. The
+        // Concurrent retries may race the partial unique key index. The
         // winning session is the one both calls must use; any other failure
         // remains visible.
         row = await findExisting();
@@ -1850,32 +1908,10 @@ export class AgentSessionsService {
     await this.requireSession(identity, projectId, row.id);
     if (agentId && row.agent_id !== agentId) {
       throw new Error(
-        `Wake key '${input.wakeKey}' already belongs to a different agent`,
+        `The chat for key ${input.chatKey} already belongs to a different agent`,
       );
     }
-    const receipt = await this.deliver(identity, projectId, row.id, {
-      content: input.content,
-      author: {
-        kind: "workflow",
-        runId: input.runId,
-        workflowName: input.workflowName,
-      },
-      mode: input.mode ?? "next_turn",
-      idempotencyKey: `workflow-wake:${input.runId}:${input.wakeKey}`,
-      metadata: {
-        causation: input.origin?.causation ?? [],
-        provenance: input.origin?.provenance ?? {},
-        workflowNotification: {
-          ...(input.notification?.title
-            ? { title: input.notification.title }
-            : {}),
-          ...(input.notification?.body
-            ? { body: input.notification.body }
-            : {}),
-        },
-      },
-    });
-    return { ...receipt, sessionId: row.id, sessionCreated };
+    return { sessionId: row.id, sessionCreated };
   }
 
   /** Acknowledgement-by-interaction shared by desktop and PWA clients. */
@@ -2026,8 +2062,7 @@ export class AgentSessionsService {
       const preferred = formatProjectAgentId(projectId, agentSlug);
       const usable =
         this.codingAgents.get(preferred) !== undefined &&
-        (isBuilder(identity, projectId) ||
-          this.coveringAgentRef(identity, projectId, preferred) !== undefined);
+        this.coveringAgentRef(identity, projectId, preferred) !== undefined;
       if (usable) return preferred;
     }
     return this.codingAgents.defaultAgentId(projectId) ?? null;
@@ -3988,8 +4023,7 @@ export class AgentSessionsService {
           event.type === "tool_call" ||
           event.type === "command" ||
           event.type === "file_edit" ||
-          event.type === "subagent" ||
-          event.type === "background";
+          event.type === "subagent";
 
         try {
           const agent = await this.resolveAgent(session.agent_id, projectId);
@@ -4212,6 +4246,7 @@ export class AgentSessionsService {
             throw new Error(
               "Execution ownership was lost. Check the last actions before retrying.",
             );
+          this.liveStatus.delete(sessionId);
           const preparationOwned = await this.turns.progress({
             turnId: extras.turnId,
             leaseToken: extras.leaseToken,
@@ -4272,6 +4307,29 @@ export class AgentSessionsService {
               }
               continue;
             }
+            // A status is the agent's live line, never turn content.
+            const said = liveStatusLine(
+              event.type === "status" ? event.content : event.description,
+            );
+            if (said) this.liveStatus.set(sessionId, said);
+            const activity =
+              this.liveStatus.get(sessionId) ?? activityLabel(event);
+            if (event.type === "status") {
+              const owned = await this.turns.progress({
+                turnId: extras.turnId,
+                leaseToken: extras.leaseToken,
+                phase: blockingQuestions.size > 0 ? "waiting" : "working",
+                activity:
+                  blockingQuestions.size > 0
+                    ? "Waiting for your answer"
+                    : activity,
+              });
+              if (!owned)
+                throw new Error(
+                  "Execution ownership was lost. Check the last actions before retrying.",
+                );
+              continue;
+            }
             if (continuesTurn(event)) await flushHeldText();
             if (event.type === "error" && !event.errorKind && event.content) {
               event.errorKind = connectionFailureKind(event.content);
@@ -4289,7 +4347,9 @@ export class AgentSessionsService {
                 activity:
                   blockingQuestions.size > 0
                     ? "Waiting for your answer"
-                    : activityLabel(event),
+                    : event.type === "question" || event.type === "error"
+                      ? activityLabel(event)
+                      : activity,
               });
               if (!owned)
                 throw new Error(
@@ -4306,7 +4366,7 @@ export class AgentSessionsService {
                 trx
                   .updateTable("agent_messages")
                   .set({
-                    content: activityLabel(event),
+                    content: activity,
                     metadata: progressMetadata(segmentEvents),
                   })
                   .where("id", "=", assistantMessageId)
@@ -4329,6 +4389,7 @@ export class AgentSessionsService {
           }
           // A bookkeeping failure after completion must not replay agent actions.
           providerFinished = true;
+          this.liveStatus.delete(sessionId);
           const savingOwned = await this.turns.progress({
             turnId: extras.turnId,
             leaseToken: extras.leaseToken,
@@ -5225,10 +5286,7 @@ export class AgentSessionsService {
             prompt: z.string().min(1).max(20000),
             agent: z.string().optional(),
             when: z
-              .object({
-                builder: z.boolean().optional(),
-                permissions: z.array(z.string()).optional(),
-              })
+              .object({ permissions: z.array(z.string()).optional() })
               .strict()
               .optional(),
           })
@@ -5236,19 +5294,9 @@ export class AgentSessionsService {
         if (!action.success) return [];
         const { when, ...value } = action.data;
         if (
-          when?.builder !== undefined &&
-          when.builder !== isBuilder(args.identity, args.projectId)
-        )
-          return [];
-        if (
           when?.permissions?.some(
             (permission) =>
-              args.identity.scope !== undefined &&
-              !args.identity.projectPermissions?.some(
-                (grant) =>
-                  grant.projectId === args.projectId &&
-                  grant.permission === permission,
-              ),
+              !hasProjectPermission(args.identity, args.projectId, permission),
           )
         )
           return [];
@@ -5979,16 +6027,18 @@ export class AgentSessionsService {
   }
 
   /**
-   * The session surface admits builders and — ADR 0055 — scoped callers
-   * whose scope names at least one of this project's agents. Everything
-   * such a caller does is then checked against those agent refs.
+   * The session surface admits `sessions:read` holders and scoped callers
+   * whose scope reaches at least one of this project's agents (ADR 0055,
+   * 0158). Everything such a caller does is then checked against those
+   * agent refs.
    */
   private async requireProject(
     identity: Identity,
     projectId: string,
   ): Promise<void> {
     if (
-      !isBuilder(identity, projectId) &&
+      !this.readsAllSessions(identity, projectId) &&
+      !this.coversEveryAgent(identity, projectId) &&
       !scopeCoversSessions(identity, projectId) &&
       this.coveredAgentIds(identity, projectId).length === 0
     ) {
@@ -5997,14 +6047,42 @@ export class AgentSessionsService {
     await requireTenantProject(this.db, identity.tenantId, projectId);
   }
 
-  /** Registry ids of the project agents a scoped identity's refs name. */
+  /** Named project agents the scope covers (`*` is `coversEveryAgent`). */
   private coveredAgentIds(identity: Identity, projectId: string): string[] {
     return (identity.scope ?? [])
       .filter(
         (ref): ref is AgentRef =>
-          ref.kind === "agent" && ref.projectId === projectId,
+          ref.kind === "agent" &&
+          ref.projectId === projectId &&
+          ref.name !== EVERY_ARTIFACT,
       )
       .map((ref) => `project:${projectId}:${ref.name}`);
+  }
+
+  /** Root, or `agents: ["*"]`: every agent the project offers. */
+  private coversEveryAgent(identity: Identity, projectId: string): boolean {
+    return (
+      identity.scope === undefined ||
+      identity.scope.some(
+        (ref) =>
+          ref.kind === "agent" &&
+          ref.projectId === projectId &&
+          ref.name === EVERY_ARTIFACT,
+      )
+    );
+  }
+
+  /** The caller's own chats on every agent. */
+  private ownOnAnyAgent(identity: Identity, projectId: string): boolean {
+    return (
+      this.coversEveryAgent(identity, projectId) ||
+      scopeCoversSessions(identity, projectId)
+    );
+  }
+
+  /** Everyone's chats (`sessions:read`, ADR 0158). */
+  private readsAllSessions(identity: Identity, projectId: string): boolean {
+    return hasProjectPermission(identity, projectId, "sessions:read");
   }
 
   /** Every scope entry that covers this agent id, for a scoped caller. */
@@ -6013,17 +6091,26 @@ export class AgentSessionsService {
     projectId: string,
     agentId: string | null,
   ): AgentRef[] {
-    if (!agentId || !identity.scope) return [];
-    const parsed = parseProjectAgentId(agentId);
-    if (!parsed || parsed.projectId !== projectId) return [];
-    const ref: AgentRef = { kind: "agent", projectId, name: parsed.slug };
-    if (!scopeCovers(identity.scope, ref)) return [];
-    return identity.scope.filter(
+    if (!identity.scope) return [];
+    const every = identity.scope.filter(
       (entry): entry is AgentRef =>
         entry.kind === "agent" &&
         entry.projectId === projectId &&
-        entry.name === parsed.slug,
+        entry.name === EVERY_ARTIFACT,
     );
+    const parsed = agentId ? parseProjectAgentId(agentId) : undefined;
+    // `*` also reaches the host's own agents (and an unset agent).
+    if (!parsed) return every;
+    if (parsed.projectId !== projectId) return [];
+    return [
+      ...identity.scope.filter(
+        (entry): entry is AgentRef =>
+          entry.kind === "agent" &&
+          entry.projectId === projectId &&
+          entry.name === parsed.slug,
+      ),
+      ...every,
+    ];
   }
 
   private coveringAgentRef(
@@ -6035,7 +6122,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * A builder may use any agent; a scoped caller only a project agent its
+   * The root identity may use any agent; a scoped caller only an agent its
    * scope names — never the host's default or personal agents (a
    * `null` agent id), which are not project artifacts.
    */
@@ -6048,7 +6135,7 @@ export class AgentSessionsService {
     if (projectAgent && projectAgent.projectId !== projectId) {
       throw new AccessDeniedError();
     }
-    if (isBuilder(identity, projectId)) return;
+    if (identity.scope === undefined) return;
     if (!this.coveringAgentRef(identity, projectId, agentId)) {
       throw new AccessDeniedError();
     }
@@ -6056,7 +6143,7 @@ export class AgentSessionsService {
 
   /**
    * The caller's tool-policy layers for a session (ADR 0055), or undefined
-   * for builders. Two sources, both narrowing only:
+   * for the root identity. Two sources, both narrowing only:
    *  - the project's tools server (`catamorphic`): everything off except
    *    the tools whose workflows the caller's scope resolves to (plus the
    *    shared poll tool — run reads are scope-checked at the endpoint);
@@ -6070,7 +6157,7 @@ export class AgentSessionsService {
     projectId: string,
     agentId: string | null,
   ): Promise<Record<string, McpToolPolicyLayers> | undefined> {
-    if (isBuilder(identity, projectId)) return undefined;
+    if (identity.scope === undefined) return undefined;
     const refs = this.coveringAgentRefs(identity, projectId, agentId);
     if (refs.length === 0) throw new AccessDeniedError();
     const layers: Record<string, McpToolPolicyLayers> = {};
@@ -6157,8 +6244,8 @@ export class AgentSessionsService {
       projectId,
       agentId,
     );
-    // Builders send an EMPTY map, not none: a turn's layers replace the
-    // session's, so a builder continuing a viewer's session sheds the
+    // The root identity sends an EMPTY map, not none: a turn's layers replace the
+    // session's, so the root continuing a viewer's session sheds the
     // viewer's narrowing instead of inheriting it.
     return { caller: identity, toolPolicies: toolPolicies ?? {} };
   }
@@ -6507,6 +6594,17 @@ function progressMetadata(events: AgentEvent[]): JsonObject {
  * (ADR 0057) — stamped on the settled message as `metadata.usage`, never
  * rendered as activity rows — so they are filtered out here.
  */
+/** One calm line from an agent-written status: no newlines, no trailing period, bounded. */
+export function liveStatusLine(value: string | undefined): string | undefined {
+  const line = value
+    ?.replace(/[*_`#]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[.:]+$/, "");
+  if (!line) return undefined;
+  return line.length > 80 ? `${line.slice(0, 79).trimEnd()}…` : line;
+}
+
 function stepLogEvents(events: AgentEvent[]): JsonObject[] {
   const steps: AgentEvent[] = [];
   const invocations = new Map<string, number>();
@@ -6549,12 +6647,6 @@ export function activityLabel(event: AgentEvent): string {
     return event.content
       ? `Delegating: ${event.content}`
       : "Delegating to a subagent...";
-  }
-  if (event.type === "background") {
-    if (event.status === "ended") return "Stopped a background process...";
-    return event.content
-      ? `Running in background: ${event.content}`
-      : "Started a background process...";
   }
   if (event.type === "question") return "Waiting for your answer...";
   if (event.type === "title") return "Thinking...";
@@ -6685,6 +6777,7 @@ function mapSession(
     id: row.id,
     projectId: row.project_id,
     externalUserId: row.external_user_id,
+    owner: isProjectPrincipal(row.external_user_id) ? "project" : "member",
     provider: row.provider,
     source: parseSessionSource(row.source),
     providerSessionId: row.provider_session_id,
@@ -6858,6 +6951,9 @@ function agentTodos(value: unknown): AgentTodo[] {
         title: item.title,
         description: item.description,
         status: item.status,
+        ...(typeof item.activeForm === "string" && item.activeForm
+          ? { activeForm: item.activeForm }
+          : {}),
       },
     ];
   });

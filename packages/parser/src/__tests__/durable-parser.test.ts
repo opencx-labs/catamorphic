@@ -433,3 +433,87 @@ it("projects step descriptions and identifies the first boundary input correctly
     stepLabel: "Starting information",
   });
 });
+
+describe("host call labels", () => {
+  it("names chat and connection calls in words, never code", () => {
+    const graph = parseWorkflow(`
+export const triage = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ input, connections }: BoundaryContext<{ q: string }>) =>
+        connections.gmail.searchThreads({ query: input.q }),
+    }),
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<{ id: string }>) =>
+        host["catamorphic.sessions"].deliver({ key: input.id, content: "Triage" }),
+    }),
+  ],
+}));
+`);
+    const labels = graph.nodes
+      .filter((node) => node.type === "step")
+      .map((node) => node.label);
+    expect(labels).toEqual(["Gmail: search threads", "Message a chat"]);
+  });
+});
+
+describe("descriptions", () => {
+  it("reads wrapped JSDoc as prose and keeps paragraphs", () => {
+    const graph = parseWorkflow(`
+/**
+ * Triage an inbound request in a chat the whole
+ * project can see.
+ *
+ * The form posts to the support webhook.
+ * @displayname Triage
+ */
+export const triage = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: ({ input }: BoundaryContext<{ a: string }>) => input })],
+}));
+`);
+    expect(graph.description).toBe(
+      "Triage an inbound request in a chat the whole project can see.\n\nThe form posts to the support webhook.",
+    );
+  });
+});
+
+describe("declared permissions (ADR 0158)", () => {
+  const withPermissions = (value: string) => `
+export const review = defineWorkflow(({ defineBoundary }) => ({
+  permissions: ${value},
+  steps: [defineBoundary({ run: () => ({}) })],
+}));
+`;
+
+  it("reads a constant list, sorted and unique", () => {
+    expect(
+      parseWorkflow(
+        withPermissions('["sessions:write", "runs:read", "sessions:write"]'),
+      ).permissions,
+    ).toEqual(["runs:read", "sessions:write"]);
+    expect(parseWorkflow(withPermissions("[]")).permissions).toEqual([]);
+  });
+
+  it("declares nothing when the property is absent", () => {
+    expect(
+      parseWorkflow(`
+export const plain = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: () => ({}) })],
+}));
+`).permissions,
+    ).toEqual([]);
+  });
+
+  it("rejects wildcards, bad names and computed lists", () => {
+    expect(() => parseWorkflow(withPermissions('["sessions:*"]'))).toThrow(
+      "must name one permission",
+    );
+    expect(() => parseWorkflow(withPermissions('["*"]'))).toThrow(
+      "must name one permission",
+    );
+    expect(() => parseWorkflow(withPermissions('["sessions"]'))).toThrow(
+      "must name one permission",
+    );
+    expect(() => parseWorkflow(withPermissions("PERMS"))).toThrow();
+  });
+});

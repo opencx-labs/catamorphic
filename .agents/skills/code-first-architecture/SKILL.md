@@ -42,8 +42,9 @@ server-owned workflow enablements record each member's consent to an exact
 deployment. Do not encode either policy layer into a generated graph or a new
 workflow DSL.
 
-`context.host["catamorphic.sessions"].wake(...)` is a durable host transition,
-not a step-side effect. Its stable key selects a reusable member session; the
+`context.host["catamorphic.sessions"].deliver(...)` is a durable host
+transition, not a step-side effect. It names a chat by `sessionId` or by a
+stable `key` that selects (or starts) the chat this workflow keeps for it; the
 agent's work proceeds through the normal session queue after the workflow call
 returns.
 

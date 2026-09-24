@@ -27,7 +27,9 @@ export function ProposalInspector({
   const [result, setResult] = useState<string | null>(null);
   const builder =
     access.isSuccess &&
-    (!access.data || access.data.capabilities?.builder === true);
+    (!access.data ||
+      access.data.capabilities?.permissions.includes("program:publish") ===
+        true);
   const decide = async (decision: PrDecisionInput["decision"]) => {
     if (!proposal.headSha) return;
     setPending(true);
