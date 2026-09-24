@@ -254,6 +254,7 @@ export {
   DeploymentArtifactsService,
 } from "./services/deployment-artifacts-service.js";
 export {
+  DeploymentPreparationError,
   type DeploymentRuntimeCleanupResult,
   type DeploymentRuntimeHealthResult,
   DeploymentRuntimeNotSupportedError,

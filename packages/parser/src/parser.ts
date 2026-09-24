@@ -879,6 +879,44 @@ function parseWorkflowCallTarget(opts: {
   };
 }
 
+/**
+ * An expression a boundary returns: a transition (pause, child workflow, a
+ * conditional of either) or one step or host call. Returns whether it drew
+ * anything.
+ */
+function parseBoundaryExpression(
+  ctx: ParseContext,
+  expression: Node,
+  previousIds: string[],
+  parentId?: string,
+): boolean {
+  if (parseDurableTransitionExpression(ctx, expression, previousIds, parentId))
+    return true;
+  const unwrapped = unwrapExpression(expression);
+  const call = Node.isAwaitExpression(unwrapped)
+    ? unwrapExpression(unwrapped.getExpression())
+    : unwrapped;
+  if (!Node.isCallExpression(call)) return false;
+  const fnName = getCallName(call);
+  validateStepCall(ctx, fnName);
+  const stepMeta = lookupStepMetadata(ctx, fnName);
+  const stepNodeId = nextId();
+  ctx.nodes.push({
+    id: stepNodeId,
+    type: "step",
+    label: stepMeta.displayName ?? fnName,
+    sourceRange: getSourceRange(call),
+    metadata: stepMeta.metadata,
+    description: stepMeta.description,
+    functionName: fnName,
+    parameters: lookupStepParams(ctx, fnName),
+    arguments: extractCallArguments(call, ctx, fnName),
+    parentId,
+  });
+  addEdgesFromPrevious(ctx, previousIds, stepNodeId);
+  return true;
+}
+
 function parseDurableTransitionExpression(
   ctx: ParseContext,
   expression: Node,
@@ -924,7 +962,16 @@ function parseDurableTransitionExpression(
         parentId: ifBlockId,
       });
       addEdgesFromPrevious(ctx, previousIds, branchId);
-      parseDurableTransitionExpression(ctx, arm.expression, [], branchId);
+      const drawn = parseBoundaryExpression(ctx, arm.expression, [], branchId);
+      // `cond ? act() : { skipped: true }`: a value-only else draws nothing,
+      // so it gets no empty box.
+      if (!drawn && arm.branchType === "else") {
+        ctx.nodes.splice(
+          ctx.nodes.findIndex((node) => node.id === branchId),
+          1,
+        );
+        ctx.edges = ctx.edges.filter((edge) => edge.target !== branchId);
+      }
     }
     return true;
   }
@@ -2163,30 +2210,7 @@ function parseWorkflowSteps(opts: {
     if (Node.isBlock(body)) {
       parseStatements(opts.ctx, body.getStatements(), [], boundaryId);
     } else if (body) {
-      const parsedTransition = parseDurableTransitionExpression(
-        opts.ctx,
-        body,
-        [],
-        boundaryId,
-      );
-      const expression = unwrapExpression(body);
-      if (!parsedTransition && Node.isCallExpression(expression)) {
-        const fnName = getCallName(expression);
-        validateStepCall(opts.ctx, fnName);
-        const stepMeta = lookupStepMetadata(opts.ctx, fnName);
-        opts.ctx.nodes.push({
-          id: nextId(),
-          type: "step",
-          label: stepMeta.displayName ?? fnName,
-          sourceRange: getSourceRange(expression),
-          metadata: stepMeta.metadata,
-          description: stepMeta.description,
-          functionName: fnName,
-          parameters: lookupStepParams(opts.ctx, fnName),
-          arguments: extractCallArguments(expression, opts.ctx, fnName),
-          parentId: boundaryId,
-        });
-      }
+      parseBoundaryExpression(opts.ctx, body, [], boundaryId);
     }
     opts.ctx.statementMode = previousMode;
     descriptors.push({

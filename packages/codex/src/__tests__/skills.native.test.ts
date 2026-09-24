@@ -44,6 +44,12 @@ it("discovers native skills from the requested checkout and refreshes file edits
     });
   } finally {
     server.close();
-    await rm(root, { recursive: true, force: true });
+    // The native process's final writes can race removal.
+    await rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    });
   }
 });

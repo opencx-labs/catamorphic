@@ -496,6 +496,8 @@ export const RunSchema = z.object({
   batchScopes: z.array(BatchProgressSchema),
   provenance: z.object({
     commitSha: z.string().optional(),
+    /** The workflow's display name at that commit. */
+    displayName: z.string().optional(),
   }),
   artifact: z.object({ deploymentArtifactId: z.string().uuid() }).optional(),
   initiatedBy: z.string().nullable(),
@@ -1182,6 +1184,7 @@ export const SessionMessageAuthorSchema = z.discriminatedUnion("kind", [
     kind: z.literal("workflow"),
     runId: z.string().uuid(),
     workflowName: z.string(),
+    displayName: z.string().optional(),
   }),
   z.object({
     kind: z.literal("watcher"),

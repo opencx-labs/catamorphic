@@ -397,6 +397,10 @@ describe("floating surfaces", () => {
     await run(
       "[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Add macro').click()",
     );
+    // The editor renders after the click; a slow runner would fill nothing.
+    await app.waitFor(
+      "!!document.querySelector('[name=macroName]') && !!document.querySelector('[name=macroCommand]')",
+    );
     await run(
       "setReactValue($('[name=macroName]'),'Working directory');setReactValue($('[name=macroCommand]'),'pwd')",
     );

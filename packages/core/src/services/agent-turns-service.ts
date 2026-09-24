@@ -10,7 +10,13 @@ export type SessionDeliveryMode = "message_only" | "next_turn" | "interrupt";
 export type SessionMessageAuthor =
   | { kind: "user"; externalUserId: string }
   | { kind: "agent"; sessionId: string; agentId: string | null }
-  | { kind: "workflow"; runId: string; workflowName: string }
+  | {
+      kind: "workflow";
+      runId: string;
+      workflowName: string;
+      /** The workflow's `@displayname`, for people; `workflowName` is code. */
+      displayName?: string;
+    }
   | { kind: "watcher"; watcherId: string; runId?: string }
   | { kind: "system"; code: string };
 
@@ -904,6 +910,9 @@ export function parseSessionMessageAuthor(
       kind: "workflow",
       runId: author.runId,
       workflowName: author.workflowName,
+      ...(typeof author.displayName === "string"
+        ? { displayName: author.displayName }
+        : {}),
     };
   }
   if (

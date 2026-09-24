@@ -1627,6 +1627,7 @@ describe("agent session coordination", () => {
     const author = {
       kind: "workflow" as const,
       workflowName: "review",
+      displayName: "Review pull requests",
       runId: crypto.randomUUID(),
     };
     const delivery = {
@@ -1638,6 +1639,12 @@ describe("agent session coordination", () => {
     };
     await sessions.deliver(identity, project.id, session.id, delivery);
     await sessions.deliver(identity, project.id, session.id, delivery);
+    // The display name travels with the message for people to read.
+    expect(
+      (await sessions.get(identity, project.id, session.id)).messages.find(
+        (message) => message.content === "A durable observation",
+      )?.author,
+    ).toEqual(author);
     const events = await sessions.exportEvents({
       identity,
       projectId: project.id,

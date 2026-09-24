@@ -7042,6 +7042,9 @@ function parseMessageAuthor(row: MessageRow): SessionMessageAuthor {
       kind: "workflow",
       runId: payload.runId,
       workflowName: payload.workflowName,
+      ...(typeof payload.displayName === "string"
+        ? { displayName: payload.displayName }
+        : {}),
     };
   }
   if (

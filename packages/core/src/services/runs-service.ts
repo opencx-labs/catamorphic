@@ -91,6 +91,8 @@ export type StepStatus =
 
 export interface RunProvenance {
   commitSha?: string;
+  /** The workflow's `@displayname` at that commit, when it declares one. */
+  displayName?: string;
 }
 
 export interface RunArtifact {
@@ -1520,12 +1522,14 @@ export class RunsService {
     capabilities: WorkflowCapabilities;
     execution: WorkflowExecutionDescriptor;
     permissions: readonly string[];
+    displayName?: string;
   }> {
     const graph = (await this.prepareProductionSource(args)).graph;
     return {
       capabilities: graph.capabilities,
       execution: graph.execution,
       permissions: graph.permissions,
+      ...(graph.displayName ? { displayName: graph.displayName } : {}),
     };
   }
 
@@ -1905,7 +1909,12 @@ export class RunsService {
         : [];
     if (!source.commitSha)
       throw new ProductionDeploymentNotFoundError(args.projectId);
-    const provenance: RunProvenance = { commitSha: source.commitSha };
+    const provenance: RunProvenance = {
+      commitSha: source.commitSha,
+      ...(source.graph.displayName
+        ? { displayName: source.graph.displayName }
+        : {}),
+    };
     {
       const artifact = await this.deps.deploymentArtifacts.ensure({
         tenantId: args.identity.tenantId,
@@ -2435,6 +2444,9 @@ function mapRun(args: {
     provenance: {
       ...(typeof provenance.commitSha === "string"
         ? { commitSha: provenance.commitSha }
+        : {}),
+      ...(typeof provenance.displayName === "string"
+        ? { displayName: provenance.displayName }
         : {}),
     },
     ...(args.row.deployment_artifact_id

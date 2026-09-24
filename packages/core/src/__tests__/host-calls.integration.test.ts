@@ -62,6 +62,7 @@ export const lookupAccount = defineWorkflow(({ defineBoundary }) => ({
   ],
 }));
 
+/** @displayname Who am I */
 export const whoAmI = defineWorkflow(({ defineBoundary }) => ({
   steps: [
     defineBoundary({
@@ -301,6 +302,10 @@ describeIf("host calls from workflows (ADR 0055)", () => {
     });
     if (asRoot.status !== "completed") throw new Error(asRoot.status);
     expect(asRoot.output).toEqual({ caller: { externalUserId: "root" } });
+    // The run remembers the name people know the workflow by.
+    expect(
+      (await core.runs.get({ identity: root, runId: asRoot.runId })).provenance,
+    ).toMatchObject({ displayName: "Who am I" });
   });
 
   it("context.documents runs as the caller: a covered path reads, an uncovered one fails the step", async () => {

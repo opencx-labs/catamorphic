@@ -192,7 +192,13 @@ it.each([false, true])(
       await run.catch(() => {});
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      await rm(home, { recursive: true, force: true });
+      // The native process's final writes can race removal.
+      await rm(home, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 100,
+      });
     }
   },
   30000,
