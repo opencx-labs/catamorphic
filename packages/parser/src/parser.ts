@@ -2522,6 +2522,7 @@ function buildDefinedWorkflowGraph(
     outputSchema,
     triggers: triggerBindings,
     connections: parseWorkflowConnections(definition.config),
+    permissions: parseWorkflowPermissions(definition.config),
     canSuspend,
     nodes: ctx.nodes,
     edges: ctx.edges,
@@ -2595,6 +2596,36 @@ function parseWorkflowConnections(
       ...(typeof optional === "boolean" ? { optional } : {}),
     };
   });
+}
+
+/** A concrete `thing:action` permission; wildcards are for roles only. */
+const WORKFLOW_PERMISSION = /^[a-z][a-z0-9._-]*:[a-z][a-z0-9._-]*$/;
+
+function parseWorkflowPermissions(config: ObjectLiteralExpression): string[] {
+  const property = config.getProperty("permissions");
+  if (!property) return [];
+  if (!Node.isPropertyAssignment(property)) {
+    throw new Error("Workflow 'permissions' must be a constant array property");
+  }
+  const initializer = property.getInitializer();
+  const value = initializer
+    ? workflowConnectionLiteral(initializer)
+    : undefined;
+  if (!Array.isArray(value)) {
+    throw new Error("Workflow 'permissions' must be a constant array");
+  }
+  const permissions = value.map((permission) => {
+    if (
+      typeof permission !== "string" ||
+      !WORKFLOW_PERMISSION.test(permission)
+    ) {
+      throw new Error(
+        `Workflow permission '${String(permission)}' must name one permission, such as sessions:write`,
+      );
+    }
+    return permission;
+  });
+  return [...new Set(permissions)].sort();
 }
 
 function assertWorkflowConnectionAlias(alias: string): void {

@@ -76,7 +76,7 @@ it("never publishes mutable data as program files or deploys it with source", ()
   expect(Object.keys(files)).toEqual([".catamorphic/workflows/src/main.ts"]);
   const scopes: Array<Identity["scope"]> = [
     undefined,
-    [{ kind: "project", projectId: "project" }],
+    [{ kind: "workflow", projectId: "project", name: "*" }],
   ];
   for (const scope of scopes) {
     expect(

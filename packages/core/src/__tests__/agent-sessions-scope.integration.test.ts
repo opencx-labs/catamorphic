@@ -26,6 +26,7 @@ import { ExecutionAllocationsService } from "../services/execution-allocations-s
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
+import { projectAdmin } from "./project-admin.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /**
@@ -182,7 +183,7 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
       ...root,
       externalUserId: "admin-bob",
       executionScope: [{ projectId, name: "local" }],
-      scope: [{ kind: "project", projectId }],
+      ...projectAdmin(projectId),
     };
   });
 
@@ -288,7 +289,7 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     );
   });
 
-  it("a builder (project ref) uses any agent, and sees every session", async () => {
+  it("an admin (`*` grants) uses any agent, and sees every session", async () => {
     await sessions.create(admin, projectId, { agentId: salesAgentId });
     await sessions.create(admin, projectId);
     const all = await sessions.list(admin, projectId);
@@ -537,7 +538,7 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     expect(csm.turns.at(-1)?.toolPolicies).toEqual(start.toolPolicies);
   });
 
-  it("builders get no caller layers (nothing to narrow)", async () => {
+  it("an admin with no tool narrowing gets empty caller layers", async () => {
     const session = await sessions.create(admin, projectId, {
       agentId: salesAgentId,
     });
@@ -714,5 +715,53 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     await expect(
       sessions.get(salesViewer, projectId, shared.id),
     ).rejects.toThrow(AccessDeniedError);
+  });
+
+  it("sessions:read reads everyone's chats and sessions:write acts on them (ADR 0158)", async () => {
+    const alices = await sessions.create(viewer, projectId);
+    // `agents: ["*"]` reaches every agent, but only the caller's own chats.
+    const everyAgent: Identity = {
+      ...viewer,
+      externalUserId: "ops-erin",
+      scope: [{ kind: "agent", projectId, name: "*" }],
+    };
+    expect(
+      (await sessions.list(everyAgent, projectId)).items.some(
+        (item) => item.id === alices.id,
+      ),
+    ).toBe(false);
+    await expect(
+      sessions.get(everyAgent, projectId, alices.id),
+    ).rejects.toThrow(AccessDeniedError);
+
+    const reader: Identity = {
+      ...everyAgent,
+      projectPermissions: [{ projectId, permission: "sessions:read" }],
+    };
+    expect(
+      (await sessions.list(reader, projectId)).items.some(
+        (item) => item.id === alices.id,
+      ),
+    ).toBe(true);
+    expect((await sessions.get(reader, projectId, alices.id)).id).toBe(
+      alices.id,
+    );
+    const note = {
+      content: "Reviewed",
+      author: { kind: "user" as const, externalUserId: "ops-erin" },
+      mode: "message_only" as const,
+      idempotencyKey: "ops-review",
+    };
+    await expect(
+      sessions.deliver(reader, projectId, alices.id, note),
+    ).rejects.toThrow(AccessDeniedError);
+
+    const writer: Identity = {
+      ...everyAgent,
+      projectPermissions: [{ projectId, permission: "sessions:write" }],
+    };
+    await expect(
+      sessions.deliver(writer, projectId, alices.id, note),
+    ).resolves.toMatchObject({});
   });
 });

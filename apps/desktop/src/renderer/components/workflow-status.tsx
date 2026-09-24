@@ -1,5 +1,5 @@
 import type { WorkflowGraph } from "@catamorphic/react/types";
-import { friendlyParamName } from "@catamorphic/ui";
+import { describeProjectPermission, friendlyParamName } from "@catamorphic/ui";
 import {
   ChevronRight,
   CircleDot,
@@ -203,6 +203,14 @@ export function WorkflowStatus({
                   value={graph.connections
                     .map((connection) => friendlyParamName(connection.alias))
                     .join(", ")}
+                />
+              ) : null}
+              {graph?.permissions.length ? (
+                <Row
+                  label="Permissions"
+                  value={graph.permissions
+                    .map(describeProjectPermission)
+                    .join("; ")}
                 />
               ) : null}
               <Row

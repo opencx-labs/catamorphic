@@ -1,10 +1,11 @@
 import {
+  assertProjectPermission,
   PluginNotAttachedError,
   UndeclaredSecretError,
   UnfulfilledCapabilityError,
 } from "@catamorphic/core";
 import { PluginResolutionError } from "@catamorphic/plugins";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
 import type { RouteContext } from "../app.js";
@@ -24,6 +25,12 @@ import {
 
 export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
   const typed = app.withTypeProvider<ZodTypeProvider>();
+
+  async function requirePublish(request: FastifyRequest, projectId: string) {
+    const identity = resolveIdentity(request);
+    await ctx.core?.projects.get(identity, projectId);
+    assertProjectPermission(identity, projectId, "program:publish");
+  }
 
   typed.route({
     method: "GET",
@@ -55,6 +62,11 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core?.plugins)
         return reply.status(503).send({ error: "Plugins not configured" });
+      // Reading the project's plugins is reading its program.
+      await ctx.core.projects.get(
+        resolveIdentity(request),
+        request.params.projectId,
+      );
       const attached = await ctx.core.plugins.listAttached(
         request.params.projectId,
       );
@@ -78,6 +90,8 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core?.plugins)
         return reply.status(503).send({ error: "Plugins not configured" });
+      // Attached plugins reach live runs at once: publishing the program.
+      await requirePublish(request, request.params.projectId);
       try {
         const attached = await ctx.core.plugins.attach(
           request.params.projectId,
@@ -112,6 +126,7 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       if (!ctx.core?.plugins)
         return reply.status(503).send({ error: "Plugins not configured" });
+      await requirePublish(request, request.params.projectId);
       const ok = await ctx.core.plugins.detach(
         request.params.projectId,
         decodeURIComponent(request.params.packageName),

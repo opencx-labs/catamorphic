@@ -182,9 +182,10 @@ const MEMBER_ROLE = {
 const MANAGER_ROLE = {
   version: 1,
   name: "Manager",
-  builder: true,
-  permissions: ["memberships:manage", "roles:manage"],
-  agents: ["assistant"],
+  permissions: ["program:*", "memberships:write", "roles:write"],
+  agents: ["*"],
+  workflows: ["*"],
+  apps: ["*"],
   environments: ["local"],
   documents: [{ path: "store/**", access: "write" }],
 };
@@ -419,12 +420,12 @@ describe("stock server", () => {
     });
     expect(me.projects).toHaveLength(1);
     expect(me.projects[0].projectId).toBe(projectId);
-    expect(me.projects[0].builder).toBe(false);
+    expect(me.projects[0].permissions).toEqual([]);
     expect(me.projects[0].agents).toEqual(["assistant"]);
     expect(me.features.agentSessions).toBe(true);
   });
 
-  it("the member sees project metadata without builder files", async () => {
+  it("the member sees project metadata without program files", async () => {
     const list = await inject("GET", "/api/projects", memberToken);
     expect(list.statusCode).toBe(200);
     expect(list.json().items.map((p: { id: string }) => p.id)).toEqual([

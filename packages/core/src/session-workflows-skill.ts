@@ -256,7 +256,11 @@ export const reviewPullRequests = defineWorkflow(({ defineBoundary }) => ({
   or one member's chat with audience: { member: "<id>" } (a current member; use
   an id from an event or a lookup, never a guess). A project chat runs as the
   project, with the enablement's connections, not as any person. Grant the
-  project agent and its required connections/Environment.
+  project agent and its required connections/Environment. Reaching a chat that
+  is not the run's own (another member's by sessionId or audience) needs
+  \`sessions:write\` in the workflow's \`permissions\`; the project chat from a
+  member's automation needs \`automations:write\`. Listing everyone's chats
+  needs \`sessions:read\`.
 - spawn respects the source agent's configured delegation routes. Fresh context
   is the default. fork explicitly copies transcript history; create makes an
   independent conversation. Do not simulate children as untracked shell agents.

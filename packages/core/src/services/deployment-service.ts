@@ -21,6 +21,16 @@ const REMOTE_BRANCH = "main";
  * push, and AI-assisted pull/merge. Stateless: every call opens its own
  * per-user dev repo.
  */
+export interface DeployOptions {
+  message?: string;
+  files?: Record<string, string>;
+  /**
+   * Checks every path the publish would change against the live program
+   * and throws to refuse it. Runs before anything is published.
+   */
+  guardPublishedPaths?: (paths: readonly string[]) => void;
+}
+
 export class DeploymentService {
   constructor(
     private readonly projectManager: ProjectManager,
@@ -193,7 +203,7 @@ export class DeploymentService {
     tenantId: string,
     projectId: string,
     externalUserId: string,
-    opts?: { message?: string; files?: Record<string, string> },
+    opts?: DeployOptions,
   ) {
     return withSpan(
       {
@@ -212,9 +222,31 @@ export class DeploymentService {
     tenantId: string,
     projectId: string,
     externalUserId: string,
-    opts?: { message?: string; files?: Record<string, string> },
+    opts?: DeployOptions,
   ) {
     return this.withDev(tenantId, projectId, externalUserId, async (repo) => {
+      const remote = requireRemote(this.projectManager);
+      // Every path the publish changes against what is live, for the
+      // caller's guard (role files need `roles:write`, ADR 0158).
+      const guard = async (sha: string) => {
+        if (!opts?.guardPublishedPaths) return;
+        await fetchRemote({
+          dev: repo,
+          remote,
+          tenantId,
+          projectId,
+          remoteBranch: REMOTE_BRANCH,
+        }).catch(() => null);
+        const live = await repo
+          .resolveRef(`refs/catamorphic/published/${REMOTE_BRANCH}`)
+          .catch(() => null);
+        const paths = live
+          ? (await repo.diff({ base: live, head: sha })).map(
+              (entry) => entry.path,
+            )
+          : Object.keys(await repo.readAllFilesAtRef(sha));
+        opts.guardPublishedPaths(paths);
+      };
       if (
         opts?.files &&
         (await this.projectManager.localPath({ tenantId, projectId }))
@@ -244,7 +276,7 @@ export class DeploymentService {
             conflicts: [],
           };
         const publishedSha = status.baseCommit;
-        const remote = requireRemote(this.projectManager);
+        await guard(publishedSha);
         await remote.withOrigin(tenantId, projectId, async (origin) => {
           await origin.updateRef({
             ref: "refs/heads/main",
@@ -281,7 +313,6 @@ export class DeploymentService {
         );
       }
 
-      const remote = requireRemote(this.projectManager);
       await fetchRemote({
         dev: repo,
         remote,
@@ -337,6 +368,7 @@ export class DeploymentService {
         await repo.checkout("main");
       }
 
+      await guard(commitSha);
       try {
         const result = await push({
           dev: repo,

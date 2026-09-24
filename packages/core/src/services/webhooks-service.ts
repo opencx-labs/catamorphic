@@ -3,7 +3,7 @@ import type { DB, Json, JsonObject } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely } from "kysely";
 import { sql } from "kysely";
-import { type Identity, isBuilder } from "../identity.js";
+import { hasProjectPermission, type Identity } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import type { ProjectEventsService } from "./project-events-service.js";
 
@@ -145,14 +145,14 @@ export class WebhooksService {
 
   /**
    * The project's webhooks: every name the latest deployment binds or an
-   * active enablement listens on, with its URL path. Builders only; the URL
-   * is the sender's credential.
+   * active enablement listens on, with its URL path. Needs `webhooks:read`:
+   * the URL is the sender's credential.
    */
   async list(input: {
     identity: Identity;
     projectId: string;
   }): Promise<WebhookEndpoint[]> {
-    if (!isBuilder(input.identity, input.projectId))
+    if (!hasProjectPermission(input.identity, input.projectId, "webhooks:read"))
       throw new AccessDeniedError();
     const latest = await this.db
       .selectFrom("trigger_definition_scans")
@@ -221,7 +221,9 @@ export class WebhooksService {
     projectId: string;
     name: string;
   }): Promise<WebhookEndpoint> {
-    if (!isBuilder(input.identity, input.projectId))
+    if (
+      !hasProjectPermission(input.identity, input.projectId, "webhooks:write")
+    )
       throw new AccessDeniedError();
     await this.db
       .updateTable("webhook_endpoints")

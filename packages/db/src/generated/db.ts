@@ -1021,6 +1021,7 @@ export interface WorkflowEnablements {
   owner_external_user_id: string | null;
   owner_identity: Json;
   owner_kind: string;
+  permissions: Generated<Json>;
   project_id: string;
   remote_branch: Generated<string>;
   revision: Generated<number>;
@@ -1076,6 +1077,7 @@ export interface WorkflowRuns {
   attempt: Generated<number>;
   caller_connection_scope: Json | null;
   caller_execution_scope: Json | null;
+  caller_project_permissions: Json | null;
   caller_scope: Json | null;
   cancel_reason: string | null;
   cancel_requested_at: Timestamp | null;

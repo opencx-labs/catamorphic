@@ -36,6 +36,11 @@ export {
   validateKeyedBatchOutcomes,
 } from "./batch.js";
 export type { Hole } from "./holes.js";
+export {
+  PROJECT_PERMISSIONS,
+  type ProjectPermissionName,
+  type WorkflowPermission,
+} from "./permissions.js";
 export type {
   SecretDeclaration,
   SecretDeclarations,

@@ -46,8 +46,8 @@ Execution has two distinct purposes, but not every agent uses a sandbox:
   execute these mutable files; every Run executes a deployed commit.
 
 Logical project Environments and immutable Allocations select the execution
-provider, resources, and connection grants. Project builder scope does not
-imply Environment or connection authority.
+provider, resources, and connection grants. Project permissions such as
+`program:write` do not imply Environment or connection authority.
 
 For local/remote placement, read
 [ADR 0098](../../../docs/decisions/0098-project-authorized-local-and-remote-agents.md).

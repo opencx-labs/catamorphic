@@ -13,6 +13,7 @@ import {
   WebhookRejectedError,
   WebhooksService,
 } from "../services/webhooks-service.js";
+import { projectAdmin } from "./project-admin.js";
 
 const pglite = new PGlite({ extensions: { pgcrypto } });
 const schema = "catamorphic_webhooks";
@@ -26,7 +27,7 @@ const commitSha = "c".repeat(40);
 const builder: Identity = {
   tenantId,
   externalUserId: "builder",
-  scope: [{ kind: "project", projectId }],
+  ...projectAdmin(projectId),
 };
 const member: Identity = {
   tenantId,

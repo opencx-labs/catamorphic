@@ -24,7 +24,7 @@ export function useSidebarAppCollections({
   onOpenUrl,
   granted,
   surface,
-  builder,
+  writesProgram,
   onOpenSession,
   onOpenTab,
   onOpenFile,
@@ -36,7 +36,8 @@ export function useSidebarAppCollections({
   onOpenUrl: (url: string, mode?: OpenMode) => void;
   granted?: string[];
   surface: SidebarSurface;
-  builder: boolean;
+  /** Whether the viewer edits the program (`program:write`): Git sources and program files. */
+  writesProgram: boolean;
   onOpenSession: (session: AgentSession, mode?: OpenMode) => void;
   onOpenTab: (tab: WorkspaceTab, mode?: OpenMode) => void;
   onOpenFile: (path: string, mode?: OpenMode) => void;
@@ -79,7 +80,7 @@ export function useSidebarAppCollections({
     const admitted = new Map<string, Map<string, AppCollectionItem>>();
     const loadedParents = new Map<string, Set<string | null>>();
     const requireSource = (source: string) => {
-      if (!allowed.has(source) || (!builder && ["git"].includes(source)))
+      if (!allowed.has(source) || (!writesProgram && ["git"].includes(source)))
         throw new Error(`Source ${source} is not granted to this widget`);
     };
     const result: AppCollections = {
@@ -164,7 +165,7 @@ export function useSidebarAppCollections({
           const tree = buildTree(
             files
               .map((file) => file.path)
-              .filter((path) => isVisibleProjectFile(path, !builder)),
+              .filter((path) => isVisibleProjectFile(path, !writesProgram)),
           );
           const all: AppCollectionItem[] = [];
           const visit = (
@@ -480,6 +481,6 @@ export function useSidebarAppCollections({
     profileId,
     grantedKey,
     surface.sessionId,
-    builder,
+    writesProgram,
   ]);
 }

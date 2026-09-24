@@ -47,7 +47,7 @@ describe("provisionStockProject", () => {
             definition: {
               version: 1,
               name: "Manager",
-              permissions: ["memberships:manage", "roles:manage"],
+              permissions: ["memberships:write", "roles:write"],
             },
           },
         ],

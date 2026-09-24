@@ -60,7 +60,10 @@ import {
   type OpenModifiers,
   openModeFromEvent,
 } from "../shared/open-mode.js";
-import type { ProjectExperienceContext } from "../shared/project-experience.js";
+import {
+  type ProjectExperienceContext,
+  writesProgram,
+} from "../shared/project-experience.js";
 import {
   type SidebarSurface,
   sidebarSections,
@@ -741,10 +744,9 @@ export function App({
   const memberShell = !remoteSurfaceResolved
     ? true
     : remoteSurfaceStatus !== null &&
-      remoteSurfaceStatus.capabilities?.builder !== true;
+      !writesProgram(remoteSurfaceStatus.capabilities);
   const projectExperienceContext: ProjectExperienceContext = {
     root: remoteSurfaceResolved && remoteSurfaceStatus === null,
-    builder: !memberShell,
     permissions: remoteSurfaceStatus?.capabilities?.permissions ?? [],
   };
   const visibleSidebars = visibleSidebarConfig({

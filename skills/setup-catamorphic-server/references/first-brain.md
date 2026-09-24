@@ -33,9 +33,12 @@ so run these from inside it. The image has bun and git, not curl; `bun -e`
 with `fetch` is the request tool. The operator secret is
 `/data/operator-secret` (owner-only). Read it into a variable; do not echo it.
 
-Project with one explicit role and invitation-only admission. `environments:
-["local"]` is what lets the role run agents on the server itself; builder
-status alone grants no execution.
+Project with two roles and invitation-only admission. `admin` is for the
+owner: every agent, workflow, and app plus every project permission (`"*"`).
+`member` is the admission default: it chats with the project's agents and
+nothing more, so a later invitation never hands out administration.
+`environments: ["local"]` is what lets a role run agents on the server
+itself; permissions alone grant no execution.
 
 ```bash
 docker exec work-brain bun -e '
@@ -45,15 +48,18 @@ const r = await fetch("http://127.0.0.1:4701/_catamorphic/operator/projects", {
   headers: { authorization: "Bearer " + secret, "content-type": "application/json" },
   body: JSON.stringify({
     name: "Company brain",
-    roles: [{ slug: "member", definition: { version: 1, name: "Member", builder: true, environments: ["local"] } }],
+    roles: [
+      { slug: "admin", definition: { version: 1, name: "Admin", agents: ["*"], workflows: ["*"], apps: ["*"], permissions: ["*"], environments: ["local"] } },
+      { slug: "member", definition: { version: 1, name: "Member", agents: ["*"], environments: ["local"] } },
+    ],
     admission: { mode: "invitation_only", defaultRole: "member" },
   }),
 });
 console.log(r.status, await r.text());'
 ```
 
-The response carries the project id. Then the first ordinary user, bound to
-that role (local username and password; offer a configured OAuth provider
+The response carries the project id. Then the first person, the owner, bound
+to `admin` (local username and password; offer a configured OAuth provider
 first when one exists):
 
 ```bash
@@ -64,7 +70,7 @@ const r = await fetch("http://127.0.0.1:4701/_catamorphic/operator/users", {
   headers: { authorization: "Bearer " + secret, "content-type": "application/json" },
   body: JSON.stringify({
     username: "USERNAME", name: "Full Name", password: "PASSWORD",
-    memberships: [{ projectId: "PROJECT_ID", roles: ["member"] }],
+    memberships: [{ projectId: "PROJECT_ID", roles: ["admin"] }],
   }),
 });
 console.log(r.status, await r.text());'

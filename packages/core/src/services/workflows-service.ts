@@ -10,13 +10,15 @@ import {
   type WorkflowGraph,
   type WorkflowTriggerBinding,
 } from "@catamorphic/parser";
-import { type Identity, isBuilder, mayUseProject } from "../identity.js";
-import { AccessDeniedError, assertBuilder } from "./artifact-scope.js";
-import { withProgram } from "./program-reader.js";
 import {
-  ProjectNotFoundError,
-  type ProjectsService,
-} from "./projects-service.js";
+  hasProjectPermission,
+  type Identity,
+  identityCovers,
+  mayUseProject,
+} from "../identity.js";
+import { AccessDeniedError } from "./artifact-scope.js";
+import { withProgram } from "./program-reader.js";
+import type { ProjectsService } from "./projects-service.js";
 import { workflowSourceFiles } from "./workflow-source-files.js";
 
 export interface WorkflowSummary {
@@ -101,10 +103,20 @@ export class WorkflowsService {
 
       return {
         ...graph,
-        projectFiles: isBuilder(args.identity, args.projectId)
+        projectFiles: hasProjectPermission(
+          args.identity,
+          args.projectId,
+          "program:read",
+        )
           ? Object.keys(allFiles)
           : [],
-        allFiles: isBuilder(args.identity, args.projectId) ? allFiles : {},
+        allFiles: hasProjectPermission(
+          args.identity,
+          args.projectId,
+          "program:read",
+        )
+          ? allFiles
+          : {},
       };
     });
   }
@@ -121,14 +133,20 @@ export class WorkflowsService {
     projectId: string;
     ref?: string;
   }): Promise<DeclaredSecret[]> {
-    await this.requireProject(args.identity, args.projectId);
+    // Declarations are program source; the secrets page reads them too.
+    if (
+      !hasProjectPermission(args.identity, args.projectId, "program:read") &&
+      !hasProjectPermission(args.identity, args.projectId, "secrets:read")
+    )
+      throw new AccessDeniedError();
+    await this.projects.getOverview(args);
     return this.readDeclaredSecrets(args);
   }
 
   /**
    * The secrets a run needs. A run's caller may be any member allowed to run
    * the workflow (or the project principal); the declarations belong to the
-   * program, so reading them for injection is not a builder operation.
+   * program, so reading them for injection needs no `program:read`.
    */
   async declaredSecretsForRun(args: {
     identity: Identity;
@@ -165,15 +183,12 @@ export class WorkflowsService {
     workflowName: string,
   ): boolean {
     return (
-      isBuilder(identity, projectId) ||
-      Boolean(
-        identity.scope?.some(
-          (ref) =>
-            ref.projectId === projectId &&
-            ref.kind === "workflow" &&
-            ref.name === workflowName,
-        ),
-      )
+      hasProjectPermission(identity, projectId, "program:read") ||
+      identityCovers(identity, {
+        kind: "workflow",
+        projectId,
+        name: workflowName,
+      })
     );
   }
 
@@ -181,7 +196,7 @@ export class WorkflowsService {
     args: { identity: Identity; projectId: string; ref?: string },
     read: (files: Record<string, string>) => Promise<T>,
   ): Promise<T> {
-    if (isBuilder(args.identity, args.projectId)) {
+    if (hasProjectPermission(args.identity, args.projectId, "program:read")) {
       return this.withDev(args.identity, args.projectId, async (repo) =>
         read(await workflowSourceFiles(repo, args.ref)),
       );
@@ -201,20 +216,6 @@ export class WorkflowsService {
   }
 
   private readonly declaredSecretsCache = new Map<string, DeclaredSecret[]>();
-
-  private async requireProject(
-    identity: Identity,
-    projectId: string,
-  ): Promise<void> {
-    assertBuilder(identity, projectId);
-    // Delegates to ProjectsService so "project exists" logic lives in one place.
-    try {
-      await this.projects.get(identity, projectId);
-    } catch (err) {
-      if (err instanceof ProjectNotFoundError) throw err;
-      throw err;
-    }
-  }
 
   private async withDev<T>(
     identity: Identity,

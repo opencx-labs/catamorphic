@@ -35,7 +35,6 @@ export interface paths {
                             };
                             projects: {
                                 projectId: string;
-                                builder: boolean;
                                 source: {
                                     remoteUrl: string;
                                     defaultBranch: string;
@@ -2853,6 +2852,7 @@ export interface paths {
                                 capabilities?: string[];
                                 optional?: boolean;
                             }[];
+                            permissions: string[];
                             canSuspend: boolean;
                             nodes: {
                                 id: string;
@@ -3860,6 +3860,7 @@ export interface paths {
                                     capabilities: string[];
                                 }[];
                                 capabilities: string[];
+                                permissions: string[];
                                 consentDigest: string;
                                 /** Format: uuid */
                                 id: string;
@@ -3969,6 +3970,7 @@ export interface paths {
                                 capabilities: string[];
                             }[];
                             capabilities: string[];
+                            permissions: string[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -4134,6 +4136,7 @@ export interface paths {
                                 capabilities: string[];
                             }[];
                             capabilities: string[];
+                            permissions: string[];
                             consentDigest: string;
                             deploymentArtifactDigest: string;
                             triggerCount: number;
@@ -4265,6 +4268,7 @@ export interface paths {
                                 capabilities: string[];
                             }[];
                             capabilities: string[];
+                            permissions: string[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -4381,6 +4385,7 @@ export interface paths {
                                 capabilities: string[];
                             }[];
                             capabilities: string[];
+                            permissions: string[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -4510,6 +4515,7 @@ export interface paths {
                                 capabilities: string[];
                             }[];
                             capabilities: string[];
+                            permissions: string[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -4645,6 +4651,7 @@ export interface paths {
                                 capabilities: string[];
                             }[];
                             capabilities: string[];
+                            permissions: string[];
                             consentDigest: string;
                             /** Format: uuid */
                             id: string;
@@ -11000,7 +11007,6 @@ export interface paths {
                                 version: 1;
                                 name: string;
                                 description?: string;
-                                builder?: boolean;
                                 permissions?: string[];
                                 agents?: (string | {
                                     name: string;
@@ -16027,6 +16033,7 @@ export interface paths {
                                 capabilities?: string[];
                                 optional?: boolean;
                             }[];
+                            permissions: string[];
                             canSuspend: boolean;
                             nodes: {
                                 id: string;

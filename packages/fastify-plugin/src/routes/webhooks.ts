@@ -21,7 +21,8 @@ const WebhookSchema = z.object({
 /**
  * Project webhooks (ADR 0156). The intake is public: the token in its path
  * is the sender's credential, checked with the declared signature before
- * anything is stored. Builders list the URLs and rotate their tokens.
+ * anything is stored. `webhooks:read` lists the URLs; `webhooks:write`
+ * rotates their tokens.
  */
 export function registerWebhookRoutes(
   app: FastifyInstance,

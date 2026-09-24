@@ -515,7 +515,11 @@ it("refreshes member authority without treating host root identities as members"
   expect(identityResolutions).toBe(0);
   const scoped: Identity = {
     ...alice,
-    scope: [{ kind: "project", projectId }],
+    scope: [
+      { kind: "agent", projectId, name: "*" },
+      { kind: "workflow", projectId, name: "*" },
+    ],
+    projectPermissions: [{ projectId, permission: "*" }],
     executionScope: [{ projectId, name: "local" }],
   };
   memberIdentity = scoped;
@@ -529,7 +533,12 @@ it("refreshes member authority without treating host root identities as members"
     (await memberGateway.discover({ query: "context" })).items,
   ).toHaveLength(1);
   expect(identityResolutions).toBe(1);
-  memberIdentity = { ...scoped, scope: [], executionScope: [] };
+  memberIdentity = {
+    ...scoped,
+    scope: [],
+    executionScope: [],
+    projectPermissions: [],
+  };
   await expect(
     memberGateway.invoke({
       name: "context.read",
@@ -542,7 +551,11 @@ it("refreshes member authority without treating host root identities as members"
 it("never widens a narrowed caller when membership refresh returns broader grants", async () => {
   const scoped: Identity = {
     ...alice,
-    scope: [{ kind: "project", projectId }],
+    scope: [
+      { kind: "agent", projectId, name: "*" },
+      { kind: "workflow", projectId, name: "*" },
+    ],
+    projectPermissions: [{ projectId, permission: "*" }],
     executionScope: [],
   };
   memberIdentity = alice;

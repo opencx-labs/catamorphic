@@ -21,9 +21,10 @@ person's files or localhost.
 
 **An enablement belongs to a member or to the project.** `owner: { type:
 "project" }` replaces the service owner. A project enablement runs as the
-project principal (`catamorphic:project`): project scope, the enablement's
-Environment, and its non-member connections (unattended admission already
-refuses personal ones). Builders and holders of `connections:manage_service`
+project principal (`catamorphic:project`): its own workflow, every project
+agent, the enablement's Environment, its non-member connections (unattended
+admission already refuses personal ones), and the permissions the workflow
+declares ([0158](0158-project-permissions.md)). Holders of `automations:write`
 enable and manage project automations; every member sees them. The list reports
 `canManageProjectAutomations` so a host offers the choice only to those who may
 use it. "Project", not "team": a project may be one person's brain as well as a
@@ -43,8 +44,9 @@ workflows harder to write.
 member's chat. A project automation reaches a **project chat** by default: a
 session owned by the project principal that everyone whose role reaches its
 agent can read and continue, or one member's chat with `audience: { member }`.
-A run started by hand reaches its caller, or the project chat when the caller
-is a builder. Project chats carry `owner: "project"` so clients mark them.
+A member's automation or a run started by hand reaches its caller; the
+project chat with `automations:write`, or another member's chat with
+`sessions:write`, each declared by the workflow (0158). Project chats carry `owner: "project"` so clients mark them.
 Alternatives: per-member fan-out (N copies of one PR review, no shared thread)
 and a notification inbox (0087 rejected it) both lost.
 

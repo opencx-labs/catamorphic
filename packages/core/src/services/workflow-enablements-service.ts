@@ -4,8 +4,7 @@ import type { WorkflowGraph } from "@catamorphic/parser";
 import type { Kysely, Selectable, Transaction } from "kysely";
 import type { Identity } from "../identity.js";
 import {
-  hasControlPlanePermission,
-  isBuilder,
+  hasProjectPermission,
   mayUseProject,
   projectPrincipalIdentity,
 } from "../identity.js";
@@ -37,6 +36,7 @@ const tracer = getTracer("@catamorphic/core");
 interface WorkflowTarget {
   artifact: DeploymentArtifact;
   requirements: WorkflowGraph["connections"];
+  permissions: WorkflowGraph["permissions"];
 }
 
 interface WorkflowEnablementsDeps {
@@ -133,6 +133,18 @@ export class WorkflowEnablementsService {
       workflowName: input.workflowName,
     });
     const target = await this.deps.resolveTarget(input);
+    // Only someone who holds a permission can hand it to a workflow: a
+    // member's runs keep it only while they do; a project automation's
+    // runs keep what was consented to (ADR 0158).
+    const missing = target.permissions.filter(
+      (permission) =>
+        !hasProjectPermission(input.identity, input.projectId, permission),
+    );
+    if (missing.length > 0) {
+      throw new AccessDeniedError(
+        `This workflow needs permissions you do not have: ${missing.join(", ")}`,
+      );
+    }
     const admission = await this.deps.executionEnvironments.admit({
       identity: input.identity,
       projectId: input.projectId,
@@ -176,6 +188,7 @@ export class WorkflowEnablementsService {
       owner,
       connections,
       capabilities,
+      permissions: [...target.permissions],
       consentDigest: "",
       triggerCount: 0,
     };
@@ -267,6 +280,7 @@ export class WorkflowEnablementsService {
                     : null,
                 owner_identity: toJson(input.identity),
                 capabilities: toJson(preview.capabilities),
+                permissions: toJson(preview.permissions),
                 consent_digest: preview.consentDigest,
                 temporary: input.temporary ?? false,
                 expires_at: input.expiresAt ?? null,
@@ -341,7 +355,7 @@ export class WorkflowEnablementsService {
     }
     if (
       !input.includeAll ||
-      !hasControlPlanePermission(input.identity, "connections:manage_service")
+      !hasProjectPermission(input.identity, input.projectId, "automations:read")
     ) {
       // Everyone in the project sees its project automations; of members'
       // automations, only their own.
@@ -368,11 +382,14 @@ export class WorkflowEnablementsService {
       input.enablementId,
       input.identity.tenantId,
     );
-    const readsProject =
-      row.owner_kind === "project" &&
-      mayUseProject(input.identity, row.project_id);
-    if (!readsProject)
-      this.assertMayManage(input.identity, row.project_id, ownerFromRow(row));
+    // The project's automations are visible to everyone in it; anyone's to
+    // `automations:read`; a member's own to them.
+    const readable =
+      (row.owner_kind === "project" &&
+        mayUseProject(input.identity, row.project_id)) ||
+      row.owner_external_user_id === input.identity.externalUserId ||
+      hasProjectPermission(input.identity, row.project_id, "automations:read");
+    if (!readable) throw new AccessDeniedError();
     return this.hydrate(row);
   }
 
@@ -432,6 +449,7 @@ export class WorkflowEnablementsService {
           remote_branch: preview.remoteBranch,
           consent_digest: preview.consentDigest,
           capabilities: toJson(preview.capabilities),
+          permissions: toJson(preview.permissions),
           update_available: false,
           status: "active",
           suspension_reason: null,
@@ -527,7 +545,8 @@ export class WorkflowEnablementsService {
     }
     const storedIdentity = row.owner_identity as unknown as Identity;
     const connections = await this.connectionRows(row.id);
-    // A project automation never runs as the builder who enabled it: it
+    const permissions = stringArray(row.permissions);
+    // A project automation never runs as the person who enabled it: it
     // runs as the project principal, allowed exactly what was consented to.
     const ownerIdentity =
       row.owner_kind === "project"
@@ -535,7 +554,9 @@ export class WorkflowEnablementsService {
             tenantId: row.tenant_id,
             projectId: row.project_id,
             environment: row.environment_name,
+            workflowName: row.workflow_name,
             connections,
+            permissions,
           })
         : storedIdentity.scope !== undefined && this.deps.resolveMemberIdentity
           ? await this.deps.resolveMemberIdentity({
@@ -546,6 +567,16 @@ export class WorkflowEnablementsService {
           : storedIdentity;
     if (!ownerIdentity) {
       return this.failRevalidation(row, input.identity, "member_removed");
+    }
+    // A member's automation runs with their declared permissions only while
+    // the member still holds every one.
+    if (
+      permissions.some(
+        (permission) =>
+          !hasProjectPermission(ownerIdentity, row.project_id, permission),
+      )
+    ) {
+      return this.failRevalidation(row, input.identity, "permission_revoked");
     }
     try {
       await this.deps.assertWorkflowAccess({
@@ -733,18 +764,22 @@ export class WorkflowEnablementsService {
     return this.get(input);
   }
 
-  /** Whether this identity may enable, pause and update project automations. */
+  /**
+   * Whether this identity may turn project automations on, pause and update
+   * them, and pause anyone's (`automations:write`, ADR 0158).
+   */
   mayManageProjectAutomations(input: {
     identity: Identity;
     projectId: string;
   }): boolean {
-    return (
-      isBuilder(input.identity, input.projectId) ||
-      hasControlPlanePermission(input.identity, "connections:manage_service")
+    return hasProjectPermission(
+      input.identity,
+      input.projectId,
+      "automations:write",
     );
   }
 
-  /** A member manages their own; the project's are managed by its builders. */
+  /** A member manages their own; everything else takes `automations:write`. */
   private assertMayManage(
     identity: Identity,
     projectId: string,
@@ -826,6 +861,7 @@ export class WorkflowEnablementsService {
       owner: ownerFromRow(row),
       connections: connections.map(mapResolvedConnection),
       capabilities: stringArray(row.capabilities),
+      permissions: stringArray(row.permissions),
       consentDigest: row.consent_digest,
       status: row.status as WorkflowEnablementStatus,
       suspensionReason: row.suspension_reason,

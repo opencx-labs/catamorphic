@@ -115,6 +115,14 @@ project chat; see \`session-workflows\`). \`mode: "message_only"\` with
 \`attention: "required"\` alerts without invoking a model; \`next_turn\` (the
 default) has the agent do work.
 
+A run holds no project permission it does not declare. Name the ones it needs
+in an inline \`permissions\` array, such as \`permissions: ["sessions:write"]\`
+to deliver into other people's chats by \`sessionId\`, or \`["sessions:read"]\`
+to list them. Turning the workflow on shows the list, and only someone who
+holds every permission can turn it on. A member's automation keeps them only
+while that member does; a project automation keeps what was consented to.
+Declare the fewest that work; see \`workflow-lifecycle\`.
+
 ## App contracts and secrets
 
 Expose only intended workflows from \`.catamorphic/workflows/src/app-api.ts\`; use \`building-apps\`

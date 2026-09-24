@@ -42,3 +42,10 @@ CREATE TABLE webhook_endpoints (
 ALTER TABLE agent_sessions RENAME COLUMN wake_key TO chat_key;
 ALTER INDEX uq_agent_sessions_active_wake_key
   RENAME TO uq_agent_sessions_active_chat_key;
+
+-- Declared permissions (ADR 0158): a workflow names the project permissions
+-- its runs need. An enablement records the set consented to; a run records
+-- what its caller holds of the set, and host calls act with exactly that.
+ALTER TABLE workflow_enablements
+  ADD COLUMN permissions jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE workflow_runs ADD COLUMN caller_project_permissions jsonb;

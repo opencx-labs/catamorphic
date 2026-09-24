@@ -30,16 +30,22 @@ Ask only those not answered in the visible app or deployment.
 ## Roles and operators
 
 Roles live in `.catamorphic/roles/<slug>.json` and are reviewed with the project. Memberships
-bind a stable external user id to those roles and grants. Builder access,
-membership management, and protected role-policy management are separate
-capabilities; do not make every builder an administrator by accident.
+bind a stable external user id to those roles and grants. Editing the program
+(`program:write`), making it live (`program:publish`), membership management
+(`memberships:write`), and role-policy management (`roles:write`) are separate
+permissions; do not make everyone who edits the program an administrator by
+accident. Changing any `.catamorphic/roles/*.json` needs `roles:write`.
 
-Role `permissions` use the namespaced `domain:capability` form. Core enforces
-`memberships:manage` and `roles:manage`; other valid names survive identity
+Role `permissions` use the `thing:action` form (ADR 0158). Core enforces
+`program` (read, write, publish) and `secrets`, `automations`, `webhooks`,
+`runs`, `sessions`, `memberships`, `roles`, and `publications` (read, write).
+`write` and `publish` imply `read` on the same thing; a role may grant
+`thing:*` or `*`. Other valid names, such as `brain:maintain`, survive identity
 resolution for an embedder's services and project-authored presentation but
-grant no framework authority on their own. Desktop presentation may match
-resolved `builder` and `permissions` on shared sidebar items and project
-starting actions. It must not branch on role names.
+grant no framework authority on their own. Service connections are governed by
+the host-issued `connections:read` and `connections:write`, which project roles
+cannot grant. Desktop presentation may match resolved `permissions` on shared
+sidebar items and project starting actions. It must not branch on role names.
 
 Machine/database authority is outside this model. There is no server-owner or
 super-admin user. A setup agent with deployment access may provision the first

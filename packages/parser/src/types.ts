@@ -320,6 +320,11 @@ export interface WorkflowGraph {
   triggers: WorkflowTriggerBinding[];
   connections: WorkflowConnectionRequirement[];
   /**
+   * Project permissions the workflow declares (ADR 0158): its runs get only
+   * these, and turning it on needs someone who holds them. Sorted, unique.
+   */
+  permissions: string[];
+  /**
    * Whether any execution path can leave the run waiting on the clock or the
    * queue — a pause, a retry policy, a rate limit, a batch, or a child
    * workflow call. `false` is a hard guarantee that a sync trigger firing

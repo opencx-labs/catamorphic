@@ -10,6 +10,7 @@ import {
   defaultDeliveryKey,
   parseChatDelivery,
 } from "../services/chat-delivery.js";
+import { projectAdmin } from "./project-admin.js";
 
 const projectId = "00000000-0000-4000-8000-000000000001";
 const tenantId = "tenant";
@@ -18,10 +19,10 @@ const alice: Identity = {
   externalUserId: "alice",
   scope: [{ kind: "agent", projectId, name: "assistant" }],
 };
-const builder: Identity = {
+const admin: Identity = {
   tenantId,
-  externalUserId: "builder",
-  scope: [{ kind: "project", projectId }],
+  externalUserId: "admin",
+  ...projectAdmin(projectId),
 };
 const bob: Identity = { ...alice, externalUserId: "bob" };
 const projectCaller = projectPrincipalIdentity({
@@ -88,7 +89,7 @@ describe("parseChatDelivery", () => {
 });
 
 describe("chatOwner", () => {
-  it("a member's automation reaches only that member", async () => {
+  it("a member's automation reaches that member; others take declared permissions", async () => {
     const enablement = {
       owner_kind: "member",
       owner_external_user_id: "alice",
@@ -101,10 +102,25 @@ describe("chatOwner", () => {
     ).resolves.toBe(alice);
     await expect(
       owner({ caller: alice, audience: "project", enablement }),
-    ).rejects.toThrow("enable it for the project");
+    ).rejects.toThrow("automations:write");
     await expect(
       owner({ caller: alice, audience: { member: "bob" }, enablement }),
-    ).rejects.toThrow("only that member's chat");
+    ).rejects.toThrow("sessions:write");
+    // The run holds sessions:write because the workflow declared it.
+    const declaring: Identity = {
+      ...alice,
+      projectPermissions: [{ projectId, permission: "sessions:write" }],
+    };
+    await expect(
+      owner({ caller: declaring, audience: { member: "bob" }, enablement }),
+    ).resolves.toBe(bob);
+    await expect(
+      owner({
+        caller: declaring,
+        audience: { member: "mallory" },
+        enablement,
+      }),
+    ).rejects.toThrow("mallory is not a member");
   });
 
   it("a project automation reaches the project chat with its connections, or a named member", async () => {
@@ -127,7 +143,7 @@ describe("chatOwner", () => {
     ).rejects.toThrow("mallory is not a member");
   });
 
-  it("a hand-started run reaches its caller; only a builder reaches the project chat", async () => {
+  it("a hand-started run reaches its caller; the project chat takes automations:write", async () => {
     await expect(
       owner({ caller: alice, audience: undefined, enablement: undefined }),
     ).resolves.toBe(alice);
@@ -140,13 +156,14 @@ describe("chatOwner", () => {
         audience: { member: "bob" },
         enablement: undefined,
       }),
-    ).rejects.toThrow("only its caller's chat");
+    ).rejects.toBeInstanceOf(AccessDeniedError);
     await expect(
-      owner({ caller: builder, audience: "project", enablement: undefined }),
+      owner({ caller: admin, audience: "project", enablement: undefined }),
     ).resolves.toMatchObject({
       externalUserId: PROJECT_PRINCIPAL_ID,
-      scope: [{ kind: "project", projectId }],
+      scope: [{ kind: "agent", projectId, name: "*" }],
       executionScope: [{ projectId, name: "production" }],
+      projectPermissions: [],
     });
   });
 });

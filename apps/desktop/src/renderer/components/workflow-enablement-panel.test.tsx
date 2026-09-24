@@ -24,6 +24,7 @@ const memberEnablement = {
   owner: { type: "member", externalUserId: "alice" },
   connections: [],
   capabilities: [],
+  permissions: [],
   consentDigest: "c".repeat(64),
   status: "active",
   suspensionReason: null,
@@ -157,6 +158,7 @@ describe("WorkflowEnablementPanel", () => {
       owner: { type: "member", externalUserId: "alice" },
       connections: [],
       capabilities: ["messages.search"],
+      permissions: [],
       consentDigest: "d".repeat(64),
       triggerCount: 1,
       triggers: [{ kind: "schedule", config: { cron: "0 9 * * *" } }],
@@ -228,6 +230,7 @@ it("returns to exact consent review after account authorization without enabling
     ],
     connectionLabels: { account: "Alice at Company" },
     capabilities: ["messages.search"],
+    permissions: ["sessions:write"],
     triggers: [{ kind: "schedule", config: { cron: "0 9 * * *" } }],
     consentDigest: "reviewed-digest",
   });
@@ -254,6 +257,10 @@ it("returns to exact consent review after account authorization without enabling
   );
   expect(container.textContent).toContain("Alice at Company");
   expect(container.textContent).toContain("eeeeeeeeeeee");
+  // Declared permissions read as plain words in the consent (ADR 0158).
+  expect(
+    container.querySelector('[data-testid="consent-permissions"]')?.textContent,
+  ).toBe("Post into anyone's chat");
   expect(create).not.toHaveBeenCalled();
   expect(update).not.toHaveBeenCalled();
   await act(async () => button("Confirm update")?.click());
@@ -264,7 +271,7 @@ it("returns to exact consent review after account authorization without enabling
   });
 });
 
-it("enables a workflow for the project and shows its webhook URL to builders", async () => {
+it("enables a workflow for the project and shows its webhook URL to automation managers", async () => {
   canManageProjectAutomations = true;
   enablementItems = [];
   preview.mockResolvedValueOnce({
@@ -276,6 +283,7 @@ it("enables a workflow for the project and shows its webhook URL to builders", a
     connections: [],
     connectionLabels: {},
     capabilities: [],
+    permissions: [],
     triggers: [
       {
         kind: "webhook",
@@ -370,6 +378,7 @@ it("offers to publish a saved workflow before turning it on", async () => {
     connections: [],
     connectionLabels: {},
     capabilities: [],
+    permissions: [],
     triggers: [],
     consentDigest: "after-publish",
   });

@@ -53,7 +53,7 @@ it("checks grants and advertised item actions, forwards open modes, and updates 
       surface: { kind: "chat", sessionId: "parent" },
       tabs,
       granted: ["chats", "tabs"],
-      builder: false,
+      writesProgram: false,
       onOpenSession: mocks.open,
       onOpenTab: mocks.open,
       onOpenFile: mocks.open,

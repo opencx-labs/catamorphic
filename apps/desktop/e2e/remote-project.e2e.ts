@@ -158,7 +158,6 @@ function startFakeServer(): Promise<void> {
         projects: [
           {
             projectId: "remote-1",
-            builder: false,
             source: null,
             permissions: [],
             agents: ["csm"],

@@ -19,6 +19,7 @@ import {
 } from "@catamorphic/github";
 import type { Kysely } from "kysely";
 import type { Identity } from "../identity.js";
+import { assertProjectPermission } from "./artifact-scope.js";
 import type { CodeHost } from "./code-host.js";
 import type { ProjectEventsService } from "./project-events-service.js";
 import type { ProjectsService } from "./projects-service.js";
@@ -401,6 +402,7 @@ export class GithubService {
    * caller's possibly-stale working copy) to the linked GitHub repository.
    */
   async pushProject(identity: Identity, projectId: string): Promise<void> {
+    assertProjectPermission(identity, projectId, "program:publish");
     const row = await this.db
       .selectFrom("projects")
       .where("id", "=", projectId)

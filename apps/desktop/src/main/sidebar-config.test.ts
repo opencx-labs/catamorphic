@@ -198,7 +198,12 @@ describe("resolveSidebarConfig", () => {
             {
               label: "Changes",
               url: "https://example.test/changes",
-              when: { builder: false, permissions: ["changes:author"] },
+              when: { permissions: ["changes:author"] },
+            },
+            {
+              label: "Retired builder flag",
+              url: "https://example.test/builder",
+              when: { builder: true },
             },
             {
               label: "Leaky",
@@ -218,10 +223,7 @@ describe("resolveSidebarConfig", () => {
     expect(section?.items).toEqual([
       expect.objectContaining({
         label: "Changes",
-        when: {
-          builder: false,
-          permissions: ["changes:author"],
-        },
+        when: { permissions: ["changes:author"] },
       }),
     ]);
   });

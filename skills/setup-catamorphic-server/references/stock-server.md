@@ -72,10 +72,11 @@ reviewers. Pass `githubRepository: "owner/repository"` to project provisioning
 with the requested roles and admission policy. This imports source and pushes
 the role configuration. Never give this credential to invited members. Their
 normal company sign-in authorizes proposal submission and scoped proposal reads;
-builders review and apply PRs using their own repository credentials.
+people who edit the program review and apply PRs using their own repository
+credentials.
 
 Grant each role the intended execution environments as well as its agents.
-Builder status alone does not grant execution. For the default stock-server
+Project permissions alone do not grant execution. For the default stock-server
 environment, include `environments: ["local"]` in the role definition. Here
 `local` means the server's machine. A member-device target requires a declared
 environment with `binding: "this-machine"`, a role grant for that environment,
@@ -92,11 +93,13 @@ the error rather than force-pushing one over the other.
 The stock server receives webhooks for project workflows and runs project
 automations while nobody is signed in. Set `CATAMORPHIC_PUBLIC_URL` to the
 HTTPS origin senders reach; webhook URLs use it (without it they follow the
-address a builder used, which a sender outside the LAN cannot reach). A builder
-copies a workflow's URL from its **Automatic** view after enabling it for the
-project, and configures signed senders with a project secret named in the
-workflow's `verify`. Requests are answered 202 once stored; a failing workflow
-shows in its runs, not to the sender. See ADR 0156.
+address the viewer used, which a sender outside the LAN cannot reach). A holder
+of `webhooks:read` copies a workflow's URL from its **Automatic** view after
+enabling it for the project (which needs `automations:write` plus every
+permission the workflow declares), and configures signed senders with a
+project secret named in the workflow's `verify`. Requests are answered 202 once
+stored; a failing workflow shows in its runs, not to the sender. See ADRs 0156
+and 0158.
 
 ## Boundaries
 

@@ -40,13 +40,13 @@ expired leases alone never free capacity.
   roles, admission, and ordinary Better Auth users. They are not a human CLI,
   product UI, user role, or server-owner identity.
 - Project managers use their ordinary OAuth identity and committed
-  `memberships:manage` or `roles:manage` permissions for admission and
-  membership APIs under `/api/projects/:projectId`.
+  `memberships:read|write` or `roles:read|write` permissions (ADR 0158) for
+  admission and membership APIs under `/api/projects/:projectId`.
 - Ongoing company-brain configuration is project code: `.catamorphic/roles/*.json`,
   `.catamorphic/agents/*`, `.catamorphic/sidebar.js`, and
   `.catamorphic/project.json`. The stock server must not grow a parallel
-  bootstrap configuration file. Role presentation targets resolved builder
-  state and namespaced permissions, never hard-coded role names.
+  bootstrap configuration file. Role presentation targets resolved
+  permissions, never hard-coded role names.
 
 ## Shape rules
 

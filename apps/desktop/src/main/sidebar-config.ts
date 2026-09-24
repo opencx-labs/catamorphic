@@ -237,7 +237,6 @@ function sanitizeSidebarWhen(value: unknown): SidebarWhen | null | undefined {
     Object.keys(value).some(
       (key) =>
         ![
-          "builder",
           "permissions",
           "surface",
           "session",
@@ -248,7 +247,6 @@ function sanitizeSidebarWhen(value: unknown): SidebarWhen | null | undefined {
   )
     return null;
   const authority = sanitizeProjectExperienceWhen({
-    ...(value.builder !== undefined ? { builder: value.builder } : {}),
     ...(value.permissions !== undefined
       ? { permissions: value.permissions }
       : {}),

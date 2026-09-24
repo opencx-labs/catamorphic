@@ -32,11 +32,11 @@ import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 import { z } from "zod";
 import {
   type AgentRef,
+  EVERY_ARTIFACT,
+  hasProjectPermission,
   type Identity,
-  isBuilder,
   isProjectPrincipal,
   PROJECT_PRINCIPAL_ID,
-  scopeCovers,
   scopeCoversSessions,
 } from "../identity.js";
 import type { AgentCapabilitiesService } from "./agent-capabilities-service.js";
@@ -795,7 +795,7 @@ export class AgentSessionsService {
       .execute();
     const rows = candidates.filter(
       (row) =>
-        isBuilder(identity, row.project_id) ||
+        this.coversEveryAgent(identity, row.project_id) ||
         scopeCoversSessions(identity, row.project_id) ||
         (row.agent_id !== null &&
           this.coveredAgentIds(identity, row.project_id).includes(
@@ -855,30 +855,31 @@ export class AgentSessionsService {
     const limit = input.limit ?? 50;
     const offset = input.offset ?? 0;
 
-    // A viewer sees only its own conversations, on agents its scope still
-    // covers (a revoked agent's sessions vanish from the list too). A
-    // sessions ref (ADR 0148) covers every agent for that viewer.
+    // Without `sessions:read` a caller sees only its own conversations, on
+    // agents its scope still covers (a revoked agent's sessions vanish from
+    // the list too), plus project chats on those agents. `agents: ["*"]`
+    // and a sessions ref (ADR 0148) cover every agent.
     let query = this.db
       .selectFrom("agent_sessions")
       .where("project_id", "=", projectId);
-    if (!isBuilder(identity, projectId)) {
+    if (!this.readsAllSessions(identity, projectId)) {
       const agentIds = this.coveredAgentIds(identity, projectId);
-      // A sessions ref reads the caller's own chats on every agent;
-      // otherwise only on the agents their role reaches.
-      const everyAgent = scopeCoversSessions(identity, projectId);
-      if (!everyAgent && agentIds.length === 0) return { items: [], total: 0 };
-      // Their own chats, plus project chats on agents their role reaches.
+      const anyAgent = this.coversEveryAgent(identity, projectId);
+      const ownOnAnyAgent =
+        anyAgent || scopeCoversSessions(identity, projectId);
+      if (!ownOnAnyAgent && agentIds.length === 0)
+        return { items: [], total: 0 };
       query = query.where((eb) =>
         eb.or([
           eb.and([
             eb("external_user_id", "=", identity.externalUserId),
-            ...(everyAgent ? [] : [eb("agent_id", "in", agentIds)]),
+            ...(ownOnAnyAgent ? [] : [eb("agent_id", "in", agentIds)]),
           ]),
-          ...(agentIds.length
+          ...(anyAgent || agentIds.length
             ? [
                 eb.and([
                   eb("external_user_id", "=", PROJECT_PRINCIPAL_ID),
-                  eb("agent_id", "in", agentIds),
+                  ...(anyAgent ? [] : [eb("agent_id", "in", agentIds)]),
                 ]),
               ]
             : []),
@@ -925,20 +926,24 @@ export class AgentSessionsService {
                       "agent_sessions.parent_session_id",
                     )
                     .where("ancestor.project_id", "=", projectId)
-                    .$if(!isBuilder(identity, projectId), (parent) =>
-                      parent
-                        .where(
-                          "ancestor.external_user_id",
-                          "=",
-                          identity.externalUserId,
-                        )
-                        .$if(!scopeCoversSessions(identity, projectId), (own) =>
-                          own.where(
-                            "ancestor.agent_id",
-                            "in",
-                            this.coveredAgentIds(identity, projectId),
+                    .$if(
+                      !this.readsAllSessions(identity, projectId),
+                      (parent) =>
+                        parent
+                          .where(
+                            "ancestor.external_user_id",
+                            "=",
+                            identity.externalUserId,
+                          )
+                          .$if(
+                            !this.ownOnAnyAgent(identity, projectId),
+                            (own) =>
+                              own.where(
+                                "ancestor.agent_id",
+                                "in",
+                                this.coveredAgentIds(identity, projectId),
+                              ),
                           ),
-                        ),
                     )
                     .where((parent) =>
                       parent(
@@ -1014,10 +1019,10 @@ export class AgentSessionsService {
             "in",
             rows.map((row) => row.id),
           )
-          .$if(!isBuilder(identity, projectId), (builder) =>
-            builder
+          .$if(!this.readsAllSessions(identity, projectId), (visible) =>
+            visible
               .where("external_user_id", "=", identity.externalUserId)
-              .$if(!scopeCoversSessions(identity, projectId), (own) =>
+              .$if(!this.ownOnAnyAgent(identity, projectId), (own) =>
                 own.where(
                   "agent_id",
                   "in",
@@ -1066,11 +1071,11 @@ export class AgentSessionsService {
       .selectFrom("agent_sessions")
       .where("project_id", "=", projectId)
       .where("id", "!=", ownSessionId);
-    if (!isBuilder(identity, projectId)) {
+    if (!this.readsAllSessions(identity, projectId)) {
       if (scopeCoversSessions(identity, projectId)) {
         // An app reading the viewer's chats sees the viewer's own peers.
         query = query.where("external_user_id", "=", identity.externalUserId);
-      } else {
+      } else if (!this.coversEveryAgent(identity, projectId)) {
         const agentIds = this.coveredAgentIds(identity, projectId);
         if (agentIds.length === 0) return [];
         query = query.where("agent_id", "in", agentIds);
@@ -2057,8 +2062,7 @@ export class AgentSessionsService {
       const preferred = formatProjectAgentId(projectId, agentSlug);
       const usable =
         this.codingAgents.get(preferred) !== undefined &&
-        (isBuilder(identity, projectId) ||
-          this.coveringAgentRef(identity, projectId, preferred) !== undefined);
+        this.coveringAgentRef(identity, projectId, preferred) !== undefined;
       if (usable) return preferred;
     }
     return this.codingAgents.defaultAgentId(projectId) ?? null;
@@ -5282,10 +5286,7 @@ export class AgentSessionsService {
             prompt: z.string().min(1).max(20000),
             agent: z.string().optional(),
             when: z
-              .object({
-                builder: z.boolean().optional(),
-                permissions: z.array(z.string()).optional(),
-              })
+              .object({ permissions: z.array(z.string()).optional() })
               .strict()
               .optional(),
           })
@@ -5293,19 +5294,9 @@ export class AgentSessionsService {
         if (!action.success) return [];
         const { when, ...value } = action.data;
         if (
-          when?.builder !== undefined &&
-          when.builder !== isBuilder(args.identity, args.projectId)
-        )
-          return [];
-        if (
           when?.permissions?.some(
             (permission) =>
-              args.identity.scope !== undefined &&
-              !args.identity.projectPermissions?.some(
-                (grant) =>
-                  grant.projectId === args.projectId &&
-                  grant.permission === permission,
-              ),
+              !hasProjectPermission(args.identity, args.projectId, permission),
           )
         )
           return [];
@@ -6036,16 +6027,18 @@ export class AgentSessionsService {
   }
 
   /**
-   * The session surface admits builders and — ADR 0055 — scoped callers
-   * whose scope names at least one of this project's agents. Everything
-   * such a caller does is then checked against those agent refs.
+   * The session surface admits `sessions:read` holders and scoped callers
+   * whose scope reaches at least one of this project's agents (ADR 0055,
+   * 0158). Everything such a caller does is then checked against those
+   * agent refs.
    */
   private async requireProject(
     identity: Identity,
     projectId: string,
   ): Promise<void> {
     if (
-      !isBuilder(identity, projectId) &&
+      !this.readsAllSessions(identity, projectId) &&
+      !this.coversEveryAgent(identity, projectId) &&
       !scopeCoversSessions(identity, projectId) &&
       this.coveredAgentIds(identity, projectId).length === 0
     ) {
@@ -6054,14 +6047,42 @@ export class AgentSessionsService {
     await requireTenantProject(this.db, identity.tenantId, projectId);
   }
 
-  /** Registry ids of the project agents a scoped identity's refs name. */
+  /** Named project agents the scope covers (`*` is `coversEveryAgent`). */
   private coveredAgentIds(identity: Identity, projectId: string): string[] {
     return (identity.scope ?? [])
       .filter(
         (ref): ref is AgentRef =>
-          ref.kind === "agent" && ref.projectId === projectId,
+          ref.kind === "agent" &&
+          ref.projectId === projectId &&
+          ref.name !== EVERY_ARTIFACT,
       )
       .map((ref) => `project:${projectId}:${ref.name}`);
+  }
+
+  /** Root, or `agents: ["*"]`: every agent the project offers. */
+  private coversEveryAgent(identity: Identity, projectId: string): boolean {
+    return (
+      identity.scope === undefined ||
+      identity.scope.some(
+        (ref) =>
+          ref.kind === "agent" &&
+          ref.projectId === projectId &&
+          ref.name === EVERY_ARTIFACT,
+      )
+    );
+  }
+
+  /** The caller's own chats on every agent. */
+  private ownOnAnyAgent(identity: Identity, projectId: string): boolean {
+    return (
+      this.coversEveryAgent(identity, projectId) ||
+      scopeCoversSessions(identity, projectId)
+    );
+  }
+
+  /** Everyone's chats (`sessions:read`, ADR 0158). */
+  private readsAllSessions(identity: Identity, projectId: string): boolean {
+    return hasProjectPermission(identity, projectId, "sessions:read");
   }
 
   /** Every scope entry that covers this agent id, for a scoped caller. */
@@ -6070,17 +6091,26 @@ export class AgentSessionsService {
     projectId: string,
     agentId: string | null,
   ): AgentRef[] {
-    if (!agentId || !identity.scope) return [];
-    const parsed = parseProjectAgentId(agentId);
-    if (!parsed || parsed.projectId !== projectId) return [];
-    const ref: AgentRef = { kind: "agent", projectId, name: parsed.slug };
-    if (!scopeCovers(identity.scope, ref)) return [];
-    return identity.scope.filter(
+    if (!identity.scope) return [];
+    const every = identity.scope.filter(
       (entry): entry is AgentRef =>
         entry.kind === "agent" &&
         entry.projectId === projectId &&
-        entry.name === parsed.slug,
+        entry.name === EVERY_ARTIFACT,
     );
+    const parsed = agentId ? parseProjectAgentId(agentId) : undefined;
+    // `*` also reaches the host's own agents (and an unset agent).
+    if (!parsed) return every;
+    if (parsed.projectId !== projectId) return [];
+    return [
+      ...identity.scope.filter(
+        (entry): entry is AgentRef =>
+          entry.kind === "agent" &&
+          entry.projectId === projectId &&
+          entry.name === parsed.slug,
+      ),
+      ...every,
+    ];
   }
 
   private coveringAgentRef(
@@ -6092,7 +6122,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * A builder may use any agent; a scoped caller only a project agent its
+   * The root identity may use any agent; a scoped caller only an agent its
    * scope names — never the host's default or personal agents (a
    * `null` agent id), which are not project artifacts.
    */
@@ -6105,7 +6135,7 @@ export class AgentSessionsService {
     if (projectAgent && projectAgent.projectId !== projectId) {
       throw new AccessDeniedError();
     }
-    if (isBuilder(identity, projectId)) return;
+    if (identity.scope === undefined) return;
     if (!this.coveringAgentRef(identity, projectId, agentId)) {
       throw new AccessDeniedError();
     }
@@ -6113,7 +6143,7 @@ export class AgentSessionsService {
 
   /**
    * The caller's tool-policy layers for a session (ADR 0055), or undefined
-   * for builders. Two sources, both narrowing only:
+   * for the root identity. Two sources, both narrowing only:
    *  - the project's tools server (`catamorphic`): everything off except
    *    the tools whose workflows the caller's scope resolves to (plus the
    *    shared poll tool — run reads are scope-checked at the endpoint);
@@ -6127,7 +6157,7 @@ export class AgentSessionsService {
     projectId: string,
     agentId: string | null,
   ): Promise<Record<string, McpToolPolicyLayers> | undefined> {
-    if (isBuilder(identity, projectId)) return undefined;
+    if (identity.scope === undefined) return undefined;
     const refs = this.coveringAgentRefs(identity, projectId, agentId);
     if (refs.length === 0) throw new AccessDeniedError();
     const layers: Record<string, McpToolPolicyLayers> = {};
@@ -6214,8 +6244,8 @@ export class AgentSessionsService {
       projectId,
       agentId,
     );
-    // Builders send an EMPTY map, not none: a turn's layers replace the
-    // session's, so a builder continuing a viewer's session sheds the
+    // The root identity sends an EMPTY map, not none: a turn's layers replace the
+    // session's, so the root continuing a viewer's session sheds the
     // viewer's narrowing instead of inheriting it.
     return { caller: identity, toolPolicies: toolPolicies ?? {} };
   }

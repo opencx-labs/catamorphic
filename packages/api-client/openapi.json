@@ -75,9 +75,6 @@
                           "projectId": {
                             "type": "string"
                           },
-                          "builder": {
-                            "type": "boolean"
-                          },
                           "source": {
                             "nullable": true,
                             "type": "object",
@@ -153,7 +150,6 @@
                         },
                         "required": [
                           "projectId",
-                          "builder",
                           "source",
                           "permissions",
                           "agents",
@@ -4944,6 +4940,12 @@
                         "additionalProperties": false
                       }
                     },
+                    "permissions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
                     "canSuspend": {
                       "type": "boolean"
                     },
@@ -5215,6 +5217,7 @@
                     "outputSchema",
                     "triggers",
                     "connections",
+                    "permissions",
                     "canSuspend",
                     "nodes",
                     "edges",
@@ -7630,6 +7633,12 @@
                               "type": "string"
                             }
                           },
+                          "permissions": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
                           "consentDigest": {
                             "type": "string",
                             "minLength": 64,
@@ -7721,6 +7730,7 @@
                           "owner",
                           "connections",
                           "capabilities",
+                          "permissions",
                           "consentDigest",
                           "id",
                           "status",
@@ -7953,6 +7963,12 @@
                         "type": "string"
                       }
                     },
+                    "permissions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
                     "consentDigest": {
                       "type": "string",
                       "minLength": 64,
@@ -8044,6 +8060,7 @@
                     "owner",
                     "connections",
                     "capabilities",
+                    "permissions",
                     "consentDigest",
                     "id",
                     "status",
@@ -8368,6 +8385,12 @@
                         "type": "string"
                       }
                     },
+                    "permissions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
                     "consentDigest": {
                       "type": "string",
                       "minLength": 64,
@@ -8412,6 +8435,7 @@
                     "owner",
                     "connections",
                     "capabilities",
+                    "permissions",
                     "consentDigest",
                     "deploymentArtifactDigest",
                     "triggerCount",
@@ -8683,6 +8707,12 @@
                         "type": "string"
                       }
                     },
+                    "permissions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
                     "consentDigest": {
                       "type": "string",
                       "minLength": 64,
@@ -8774,6 +8804,7 @@
                     "owner",
                     "connections",
                     "capabilities",
+                    "permissions",
                     "consentDigest",
                     "id",
                     "status",
@@ -8965,6 +8996,12 @@
                         "type": "string"
                       }
                     },
+                    "permissions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
                     "consentDigest": {
                       "type": "string",
                       "minLength": 64,
@@ -9056,6 +9093,7 @@
                     "owner",
                     "connections",
                     "capabilities",
+                    "permissions",
                     "consentDigest",
                     "id",
                     "status",
@@ -9282,6 +9320,12 @@
                         "type": "string"
                       }
                     },
+                    "permissions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
                     "consentDigest": {
                       "type": "string",
                       "minLength": 64,
@@ -9373,6 +9417,7 @@
                     "owner",
                     "connections",
                     "capabilities",
+                    "permissions",
                     "consentDigest",
                     "id",
                     "status",
@@ -9617,6 +9662,12 @@
                         "type": "string"
                       }
                     },
+                    "permissions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
                     "consentDigest": {
                       "type": "string",
                       "minLength": 64,
@@ -9708,6 +9759,7 @@
                     "owner",
                     "connections",
                     "capabilities",
+                    "permissions",
                     "consentDigest",
                     "id",
                     "status",
@@ -24317,14 +24369,11 @@
                           "description": {
                             "type": "string"
                           },
-                          "builder": {
-                            "type": "boolean"
-                          },
                           "permissions": {
                             "type": "array",
                             "items": {
                               "type": "string",
-                              "pattern": "^[a-z][a-z0-9._-]*:[a-z][a-z0-9._-]*$"
+                              "pattern": "^(\\*|[a-z][a-z0-9._-]*:(\\*|[a-z][a-z0-9._-]*))$"
                             }
                           },
                           "agents": {
@@ -33603,6 +33652,12 @@
                         "additionalProperties": false
                       }
                     },
+                    "permissions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
                     "canSuspend": {
                       "type": "boolean"
                     },
@@ -33862,6 +33917,7 @@
                     "outputSchema",
                     "triggers",
                     "connections",
+                    "permissions",
                     "canSuspend",
                     "nodes",
                     "edges",

@@ -1,6 +1,7 @@
 import type { CatamorphicCore } from "@catamorphic/core";
 import {
   AccessDeniedError,
+  ProjectNotFoundError,
   SessionArtifactConflictError,
   SessionArtifactNotFoundError,
   SessionArtifactValidationError,
@@ -50,9 +51,9 @@ export interface CatamorphicPluginOptions {
    */
   core?: CatamorphicCore;
   /**
-   * Who is calling. Runs on every request before any route; returns a full
-   * identity for a builder, a scoped identity for a viewer (an app user, a
-   * customer), or `null` for 401. Typically a few lines that read the host's
+   * Who is calling. Runs on every request before any route; returns the root
+   * identity for the host itself, a scoped identity with project permissions
+   * for a member (an admin, an app user, a customer), or `null` for 401. Typically a few lines that read the host's
    * own session and its entitlement table:
    *
    * ```ts
@@ -147,6 +148,9 @@ export const catamorphicPlugin: FastifyPluginAsync<
     }
     if (err instanceof AccessDeniedError) {
       return reply.status(403).send({ error: err.message });
+    }
+    if (err instanceof ProjectNotFoundError) {
+      return reply.status(404).send({ error: "Project not found" });
     }
     app.log.error(err);
     return reply.send(err);

@@ -50,8 +50,10 @@ current source when documentation and the installed version differ.
 - Authentication identifies a person. Committed project roles and
   memberships authorize them.
 - Roles grant provider-neutral workflow, project-agent, Environment, and
-  connection references, document paths, and namespaced project permissions.
-  Catamorphic reserves `memberships:manage` and `roles:manage`; host-specific
+  connection references, document paths, and project permissions.
+  Catamorphic enforces `thing:action` names such as `program:write`,
+  `sessions:read`, and `memberships:write` (ADR 0158); an admin role grants
+  `"*"` for agents, workflows, apps, environments, and permissions. Host-specific
   permissions remain inert unless that host or its UI explicitly interprets
   them. Each member separately enables unattended workflows after reviewing
   the deployed commit and authenticating every required member connection.
@@ -93,8 +95,8 @@ current source when documentation and the installed version differ.
 - Treating account authentication as consent to enable every compatible
   workflow, or reaching one member's personal chat from a project automation
   without naming that member.
-- Targeting project presentation by role slug instead of resolved builder
-  state and namespaced permissions.
+- Targeting project presentation by role slug instead of resolved
+  permissions.
 - Writing Better Auth password hashes or rows directly.
 - Turning setup guidance into a rigid stack recipe.
 

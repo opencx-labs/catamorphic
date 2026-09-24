@@ -22,6 +22,7 @@ import type {
   PauseRunInput,
   Project,
   ProjectFileEntry,
+  ProjectPermissionRef,
   ResumeRunInput,
   ResumeRunPauseInput,
   Run,
@@ -511,18 +512,23 @@ export class TenantScopedClient {
   ) {}
 
   /**
-   * Binds the user. Omit `scope` only for a host-root identity; pass a project
-   * ref for builder access or exact artifact refs for a scoped member
-   * (ADRs 0053 and 0055).
+   * Binds the user. Omit `scope` only for a host-root identity; a scoped
+   * member passes the artifacts it reaches (`*` for every one of a kind) and
+   * the project permissions it holds (ADRs 0053, 0055 and 0158). Hosts with
+   * committed roles use `core.memberships.identityFor` instead.
    */
   forUser(args: {
     externalUserId: string;
     scope?: readonly ArtifactRef[];
+    projectPermissions?: readonly ProjectPermissionRef[];
   }): ScopedClient {
     return new ScopedClient(this.core, {
       tenantId: this.tenantId,
       externalUserId: args.externalUserId,
       ...(args.scope === undefined ? {} : { scope: args.scope }),
+      ...(args.projectPermissions === undefined
+        ? {}
+        : { projectPermissions: args.projectPermissions }),
     });
   }
 }

@@ -463,7 +463,6 @@ export interface ConnectLink {
   invitationId?: string;
 }
 export interface RemoteCapabilities {
-  builder: boolean;
   source: { remoteUrl: string; defaultBranch: string } | null;
   permissions: string[];
   agents: string[];

@@ -1,7 +1,7 @@
 import type { CatamorphicCore, Identity } from "@catamorphic/core";
 import {
   AccessDeniedError,
-  isBuilder,
+  EVERY_ARTIFACT,
   mayUseProject,
   projectAgentId,
   resolveScope,
@@ -20,8 +20,8 @@ import { sessionArtifactTool } from "./session-artifact-tools.js";
  * - documents: list / read / search / write / delete / history over the one
  *   path namespace (program + store), each narrowed to the caller's
  *   document refs by `DocumentsService` itself;
- * - skills: list / read, for anyone who may use the project (a builder, or
- *   a member with an agent ref);
+ * - skills: list / read, for anyone who may use the project (with
+ *   `program:read`, or an agent ref);
  * - agents: `ask_agent` — a synchronous chat turn with a project agent the
  *   caller may open sessions on (`AgentSessionsService` enforces the ref).
  *
@@ -446,7 +446,7 @@ export function surfaceTools(
         definition: {
           name: "list_publications",
           description:
-            "The shared URLs you may see (builders: all of the project's; members: your own).",
+            "The shared URLs you may see (all of the project's with publications:read; otherwise your own).",
           inputSchema: { type: "object", properties: {} },
           annotations: READ_ONLY,
         },
@@ -513,11 +513,12 @@ export function surfaceTools(
     const agentNames = (identity.scope ?? [])
       .filter((ref) => ref.kind === "agent" && ref.projectId === projectId)
       .map((ref) => (ref as { name: string }).name);
-    const hint = isBuilder(identity, projectId)
-      ? "any committed project agent (.catamorphic/agents/<slug>.json)"
-      : agentNames.length > 0
-        ? `one of: ${agentNames.join(", ")}`
-        : "none available to you";
+    const hint =
+      agentNames.includes(EVERY_ARTIFACT) || identity.scope === undefined
+        ? "any committed project agent (.catamorphic/agents/<slug>.json)"
+        : agentNames.length > 0
+          ? `one of: ${agentNames.join(", ")}`
+          : "none available to you";
     tools.push({
       definition: {
         name: "ask_agent",

@@ -22,6 +22,7 @@ const enablement = {
     externalUserId: TEST_IDENTITY.externalUserId,
   },
   connections: [],
+  permissions: [],
   capabilities: [],
   consentDigest: "d".repeat(64),
   status: "active" as const,

@@ -2,7 +2,7 @@
 
 > Project filesystem locations in this ADR are superseded by [ADR 0142](0142-contained-project-workspace.md). Capability source and configuration now live under `.catamorphic/`.
 
-- **Status:** Accepted
+- **Status:** Accepted (`memberships:manage` / `roles:manage` superseded by `memberships:*` / `roles:*` in [0158](0158-project-permissions.md))
 - **Date:** 2026-08-26
 - **Supersedes:** Remote authentication, invite, and privileged-user portions of 0055, 0059, 0060, and 0061
 

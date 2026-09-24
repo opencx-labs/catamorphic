@@ -386,7 +386,7 @@ export class ConnectionsService {
     await requireTenantProject(this.db, args.identity.tenantId, args.projectId);
     if (
       args.principalKind !== "member" &&
-      !hasControlPlanePermission(args.identity, "connections:manage_service")
+      !hasControlPlanePermission(args.identity, "connections:write")
     ) {
       throw new ConnectionPermissionDeniedError();
     }
@@ -446,9 +446,7 @@ export class ConnectionsService {
         ]),
       );
     }
-    if (
-      !hasControlPlanePermission(args.identity, "connections:manage_service")
-    ) {
+    if (!hasControlPlanePermission(args.identity, "connections:read")) {
       query = query
         .where("principal_kind", "=", "member")
         .where("owner_external_user_id", "=", args.identity.externalUserId);
@@ -463,9 +461,7 @@ export class ConnectionsService {
     connectionId: string;
     material: Uint8Array;
   }): Promise<ConnectionRecord> {
-    if (
-      !hasControlPlanePermission(args.identity, "connections:manage_service")
-    ) {
+    if (!hasControlPlanePermission(args.identity, "connections:write")) {
       throw new ConnectionPermissionDeniedError();
     }
     const current = await this.requireConnection(
@@ -594,9 +590,7 @@ export class ConnectionsService {
     serviceConnectionId?: string;
     capabilities?: readonly string[];
   }): Promise<EnvironmentConnectionBinding> {
-    if (
-      !hasControlPlanePermission(args.identity, "connections:manage_service")
-    ) {
+    if (!hasControlPlanePermission(args.identity, "connections:write")) {
       throw new ConnectionPermissionDeniedError();
     }
     assertConnectionAlias(args.alias);
@@ -663,7 +657,7 @@ export class ConnectionsService {
     const rows = await query.orderBy("alias").selectAll().execute();
     const mayManage = hasControlPlanePermission(
       args.identity,
-      "connections:manage_service",
+      "connections:read",
     );
     const visible = rows.filter(
       (row) =>
@@ -1063,7 +1057,7 @@ export class ConnectionsService {
       connection.owner_external_user_id === args.identity.externalUserId;
     if (
       !owns &&
-      !hasControlPlanePermission(args.identity, "connections:manage_service")
+      !hasControlPlanePermission(args.identity, "connections:write")
     ) {
       throw new ConnectionPermissionDeniedError();
     }
@@ -1290,7 +1284,7 @@ export class ConnectionsService {
     projectId?: string;
     limit?: number;
   }): Promise<ConnectionAuditEvent[]> {
-    if (!hasControlPlanePermission(args.identity, "connections:view_audit")) {
+    if (!hasControlPlanePermission(args.identity, "connections:read")) {
       throw new ConnectionPermissionDeniedError();
     }
     let query = this.db

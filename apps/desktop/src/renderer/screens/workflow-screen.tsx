@@ -82,7 +82,7 @@ export function WorkflowScreen(props: WorkflowScreenProps) {
 
 function WorkflowScreenContent(props: WorkflowScreenProps) {
   const authority = useRemoteAuthority();
-  if (!(authority ? authority.builder : props.canEdit))
+  if (!(authority ? authority.writesProgram : props.canEdit))
     return (
       <WorkflowReview
         projectId={props.projectId}
@@ -341,7 +341,9 @@ function WorkflowWorkbench({
             : {
                 kind: "paused",
                 reason:
-                  enablement.status === "suspended" ? "Suspended" : "Paused",
+                  enablement.status === "suspended"
+                    ? "Needs attention"
+                    : "Paused",
               };
 
   const problem: WorkflowProblem | undefined = saveError

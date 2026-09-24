@@ -4,7 +4,7 @@ import type { ProjectManager, ProjectRepo } from "@catamorphic/git";
 import type { EnvironmentRequirements } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
 import { z } from "zod";
-import { type Identity, isBuilder } from "../identity.js";
+import { hasProjectPermission, type Identity } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import {
   CONNECTION_ALIAS_PATTERN,
@@ -574,7 +574,8 @@ export class AgentDefinitionsService {
   }
 
   private requireProject(identity: Identity, projectId: string) {
-    if (!isBuilder(identity, projectId)) throw new AccessDeniedError();
+    if (!hasProjectPermission(identity, projectId, "program:read"))
+      throw new AccessDeniedError();
     return requireTenantProject(this.db, identity.tenantId, projectId);
   }
 

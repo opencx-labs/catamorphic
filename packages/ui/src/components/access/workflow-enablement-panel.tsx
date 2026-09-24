@@ -26,6 +26,10 @@ import {
 import { useEffect, useState } from "react";
 import { AuthenticationRequiredCard } from "./authentication-required-card.js";
 import { PendingButton } from "./pending-button.js";
+import {
+  describeAutomationPause,
+  describeProjectPermission,
+} from "./permission-words.js";
 
 type Requirement = AgentAuthenticationRequired["requirements"][number];
 type Audience = "member" | "project";
@@ -243,8 +247,8 @@ export function WorkflowEnablementPanel({
       >
         <p className="text-fg-muted">
           {canManageProjectAutomations
-            ? "Choose who this workflow runs for. It uses only the environment and connections shown here."
-            : "Enable this reviewed workflow for your account. It uses only the environment and connections shown here."}
+            ? "Choose who this workflow runs for. It uses only the environment, connections and permissions shown here."
+            : "Enable this reviewed workflow for your account. It uses only the environment, connections and permissions shown here."}
         </p>
 
         {canManageProjectAutomations && (
@@ -398,6 +402,12 @@ export function WorkflowEnablementPanel({
                       .join(", ")
                   : "None"}
               </dd>
+              <dt>Permissions</dt>
+              <dd className="text-fg" data-testid="consent-permissions">
+                {review.permissions.length
+                  ? review.permissions.map(describeProjectPermission).join("; ")
+                  : "None"}
+              </dd>
               <dt>Actions</dt>
               <dd className="text-fg">
                 {review.capabilities.length
@@ -413,7 +423,7 @@ export function WorkflowEnablementPanel({
             </dl>
             <p className="mt-3 text-fg-muted">
               {reviewingProject
-                ? "This workflow runs for the project whenever it is triggered, including when nobody is online. Anyone who manages the project can pause it. Changes to its deployment or access require review."
+                ? "This workflow runs for the project whenever it is triggered, including when nobody is online. Anyone who manages the project's automations can pause it. Changes to its deployment or access require review."
                 : "This workflow may run when you are away. You can pause it at any time. Changes to its deployment or access require review. Access is checked before every run and connection action."}
             </p>
             <div className="mt-3 flex gap-2">
@@ -511,8 +521,17 @@ export function WorkflowEnablementPanel({
                     {item.commitSha.slice(0, 12)}
                     {item.updateAvailable ? " · update available" : ""}
                   </p>
+                  {item.permissions.length > 0 && (
+                    <p className="mt-1 text-fg-muted">
+                      {item.permissions
+                        .map(describeProjectPermission)
+                        .join("; ")}
+                    </p>
+                  )}
                   {item.suspensionReason && (
-                    <p className="mt-1 text-warning">{item.suspensionReason}</p>
+                    <p className="mt-1 text-warning">
+                      {describeAutomationPause(item.suspensionReason)}
+                    </p>
                   )}
                   {manageable && (
                     <div className="mt-2 flex flex-wrap gap-2">

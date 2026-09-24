@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import {
+  hasProjectPermission,
   type Identity,
-  isBuilder,
   isProjectPrincipal,
   projectPrincipalIdentity,
 } from "../identity.js";
@@ -153,10 +153,11 @@ export function defaultDeliveryKey(input: {
 }
 
 /**
- * Whose keyed chat a workflow reaches (ADR 0156). A member's automation
- * reaches its member's chat. A project automation reaches the project chat,
- * or a named member's. A run started by hand acts for its caller, and only
- * a builder may reach the project chat from one.
+ * Whose keyed chat a workflow reaches (ADR 0156, 0158). A project
+ * automation reaches the project chat, or a named member's. Any other run
+ * acts for its caller: the caller's own chat, the project chat with
+ * `automations:write`, or another member's with `sessions:write`, each a
+ * permission the workflow declares (the run holds nothing else).
  */
 export async function chatOwner(input: {
   /** The run's caller: the enablement's owner, or whoever started it. */
@@ -174,9 +175,27 @@ export async function chatOwner(input: {
   }): Promise<Identity | null>;
 }): Promise<Identity> {
   const { caller, audience, enablement } = input;
-  const project = () => {
+  const member = async (externalUserId: string) => {
+    const found = await input.resolveMember({
+      tenantId: caller.tenantId,
+      projectId: input.projectId,
+      externalUserId,
+    });
+    if (!found)
+      throw new Error(`${externalUserId} is not a member of this project`);
+    return found;
+  };
+  if (enablement?.owner_kind === "project") {
     // A project automation's run already acts as the project, with its
-    // consented connections; a builder's hand-started run gets a bare one.
+    // consented connections.
+    if (!audience || audience === "project") return caller;
+    return member(audience.member);
+  }
+  if (audience === "project") {
+    if (!hasProjectPermission(caller, input.projectId, "automations:write"))
+      throw new AccessDeniedError(
+        "Reaching the project chat needs the automations:write permission; turn the workflow on for the project instead",
+      );
     if (isProjectPrincipal(caller.externalUserId)) return caller;
     if (!input.environment)
       throw new Error("A project chat needs an Environment to run in");
@@ -185,33 +204,11 @@ export async function chatOwner(input: {
       projectId: input.projectId,
       environment: input.environment,
     });
-  };
-  if (enablement?.owner_kind === "member") {
-    if (
-      audience === "project" ||
-      (audience && audience.member !== enablement.owner_external_user_id)
-    )
-      throw new Error(
-        "A member's automation reaches only that member's chat; enable it for the project to reach others",
-      );
-    return caller;
   }
-  if (enablement?.owner_kind === "project") {
-    if (!audience || audience === "project") return project();
-    const member = await input.resolveMember({
-      tenantId: caller.tenantId,
-      projectId: input.projectId,
-      externalUserId: audience.member,
-    });
-    if (!member)
-      throw new Error(`${audience.member} is not a member of this project`);
-    return member;
-  }
-  if (audience === "project") {
-    if (!isBuilder(caller, input.projectId)) throw new AccessDeniedError();
-    return project();
-  }
-  if (audience && audience.member !== caller.externalUserId)
-    throw new Error("A run started by hand reaches only its caller's chat");
-  return caller;
+  if (!audience || audience.member === caller.externalUserId) return caller;
+  if (!hasProjectPermission(caller, input.projectId, "sessions:write"))
+    throw new AccessDeniedError(
+      `Reaching ${audience.member}'s chat needs the sessions:write permission`,
+    );
+  return member(audience.member);
 }

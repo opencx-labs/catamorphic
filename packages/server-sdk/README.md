@@ -2,7 +2,7 @@
 
 The core SDK for embedding Catamorphic inside a host application's Node/Bun backend.
 
-The host hands it a Postgres connection (or `pg.Pool`) and a storage location; Catamorphic manages its own tables inside a dedicated schema (default `catamorphic`) and exposes projects, files, git, agents, apps, workflows, connections, and execution. Identity is bound per request via `catamorphic.forTenant({ tenantId }).forUser({ externalUserId, scope? })`; no sidecar HTTP server is required.
+The host hands it a Postgres connection (or `pg.Pool`) and a storage location; Catamorphic manages its own tables inside a dedicated schema (default `catamorphic`) and exposes projects, files, git, agents, apps, workflows, connections, and execution. Identity is bound per request via `catamorphic.forTenant({ tenantId }).forUser({ externalUserId, scope?, projectPermissions? })`; no sidecar HTTP server is required.
 
 ## Usage
 
@@ -189,10 +189,12 @@ Plugins, secrets, and git ops (deploy/pull/diff) remain available through `catam
 
 - `tenantId` = host's org id. Auto-upserts `catamorphic.tenants(id)` on first project create, so hosts never need to pre-register orgs.
 - `externalUserId` = host's stable user id. Catamorphic stores it where durable ownership, membership, or audit attribution requires it, but never references the host's user table.
-- Omitting `scope` creates a host-root identity across the tenant. Ordinary
-  builders receive `{ kind: "project", projectId }`; members receive exact
-  artifact refs plus separate Environment, connection, and project-permission
-  grants. Do not use root as a builder shortcut.
+- Omitting `scope` creates a host-root identity across the tenant. Everyone
+  else is scoped: `forUser({ externalUserId, scope, projectPermissions })`
+  with artifact refs (`name: "*"` for every app, workflow or agent) plus
+  separate Environment, connection, and project-permission grants such as
+  `program:write` (ADR 0158). Do not use root as a shortcut for people who
+  edit the program.
 
 Host can safely `JOIN host.orgs.id = catamorphic.projects.tenant_id` from its own side. Catamorphic never references host tables.
 

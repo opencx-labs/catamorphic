@@ -19,7 +19,7 @@ the host's actual capabilities and schemas; a skill does not enable a missing to
 | Remind me, follow up in this chat, or watch Project Events | Pass TypeScript directly to \`create_watcher\` or \`create_github_watcher\`. The host retains an isolated revision with this session. | Session-owned, with no default expiry. See \`session-workflows\` for time, attention, and cancellation. |
 | Save reusable automation for the project | Use \`.catamorphic/workflows/src/<name>.ts\`. | Deploy an immutable revision, then enable it for unattended execution. |
 | Run a reviewed workflow for one member | Reuse committed project source. | A member-owned enablement uses that member's authorized connections and Environment. |
-| Run it for the whole project (webhooks, PR reviews, shared inboxes) | Reuse committed project source. | A project enablement, turned on by someone who manages the project, runs as the project with shared connections. Its chats are project chats. |
+| Run it for the whole project (webhooks, PR reviews, shared inboxes) | Reuse committed project source. | A project enablement, turned on by someone with \`automations:write\`, runs as the project with shared connections and the permissions consented to. Its chats are project chats. |
 | Keep workflow source private | Use a private artifact capability only if this host provides one. | Follow that capability's execution support. An unpushed branch or incognito chat is not private source storage. |
 
 Personal execution does not make source private. The desktop reserves
@@ -71,6 +71,12 @@ Environment, and any project agent it wakes. Credentials and concrete connection
 ids belong to the host's reviewed connection flow, never the source. Authentication
 alone is not consent to enable every eligible workflow.
 
+Declare the project permissions its runs need in \`permissions\` (for example
+\`sessions:write\`). A run holds nothing else, whoever started it. Only someone
+who holds every declared permission can turn the workflow on; a member's
+automation pauses when its member loses one, and a project automation keeps
+what was consented to.
+
 ## Saving, sharing, deploying, and enabling
 
 1. Validate source, imports, trigger payloads, and generated app contracts with
@@ -88,8 +94,8 @@ alone is not consent to enable every eligible workflow.
 5. Enable through the host's consent flow with the intended owner, Environment,
    connections, and triggers. In the desktop, the member opens the workflow's
    status, chooses **Automatic** (shown when the code declares triggers), and
-   **Enable for me**; someone who manages the project can choose **The project**
-   instead. Connecting an account may finish that initiated flow; connecting an
+   **Enable for me**; someone with \`automations:write\` can choose **The project**
+   instead. The consent lists the declared permissions. Connecting an account may finish that initiated flow; connecting an
    account by itself never initiates it.
 
 To keep a successful session check, copy its selected source into project code

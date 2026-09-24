@@ -476,3 +476,44 @@ export const triage = defineWorkflow(({ defineBoundary }) => ({
     );
   });
 });
+
+describe("declared permissions (ADR 0158)", () => {
+  const withPermissions = (value: string) => `
+export const review = defineWorkflow(({ defineBoundary }) => ({
+  permissions: ${value},
+  steps: [defineBoundary({ run: () => ({}) })],
+}));
+`;
+
+  it("reads a constant list, sorted and unique", () => {
+    expect(
+      parseWorkflow(
+        withPermissions('["sessions:write", "runs:read", "sessions:write"]'),
+      ).permissions,
+    ).toEqual(["runs:read", "sessions:write"]);
+    expect(parseWorkflow(withPermissions("[]")).permissions).toEqual([]);
+  });
+
+  it("declares nothing when the property is absent", () => {
+    expect(
+      parseWorkflow(`
+export const plain = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: () => ({}) })],
+}));
+`).permissions,
+    ).toEqual([]);
+  });
+
+  it("rejects wildcards, bad names and computed lists", () => {
+    expect(() => parseWorkflow(withPermissions('["sessions:*"]'))).toThrow(
+      "must name one permission",
+    );
+    expect(() => parseWorkflow(withPermissions('["*"]'))).toThrow(
+      "must name one permission",
+    );
+    expect(() => parseWorkflow(withPermissions('["sessions"]'))).toThrow(
+      "must name one permission",
+    );
+    expect(() => parseWorkflow(withPermissions("PERMS"))).toThrow();
+  });
+});

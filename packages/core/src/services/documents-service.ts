@@ -6,8 +6,8 @@ import { getTracer, withSpan } from "@catamorphic/otel";
 import { type Kysely, type Selectable, sql } from "kysely";
 import {
   type DocumentRef,
+  hasProjectPermission,
   type Identity,
-  isBuilder,
   scopeCovers,
 } from "../identity.js";
 import type { AppBundleStore } from "./app-bundle-store.js";
@@ -30,15 +30,14 @@ import { requireTenantProject } from "./projects-service.js";
  * The documents surface (ADR 0055): one path namespace, two backings.
  *
  * - Paths outside `store/` are the **program** — git, read at the shared
- *   origin `main` (the working tree on single-machine hosts). Builders read
- *   all of it; viewers exactly the document refs their scope grants.
+ *   origin `main` (the working tree on single-machine hosts). `program:read`
+ *   reads all of it; viewers exactly the document refs their scope grants.
  *   Read-only through this surface (the program changes by checkpoint,
  *   push and PR).
  * - Paths under `store/` are the **project store** — audience-partitioned
  *   data (customer notes, contracts, generated decks), versioned per write,
- *   never deployed. Reachable ONLY through document refs, builders included:
- *   "admin" is program access, not a licence to read every customer's
- *   contract. The root identity (a host's service calls, the desktop's own
+ *   never deployed. Reachable ONLY through document refs, admins included:
+ *   a permission is not a licence to read every customer's contract. The root identity (a host's service calls, the desktop's own
  *   local projects) sees everything.
  *
  * Every store write is stamped with the caller. Search is the tree
@@ -237,9 +236,9 @@ function textOf(bytes: Uint8Array, contentType: string): string | undefined {
 
 /**
  * Whether an identity may reach a path with the given access. Root: yes.
- * Program paths: builders read; viewers need a covering read ref; nobody
- * writes through this surface. Store paths: a covering document ref, for
- * everyone — a builder's project ref does not count.
+ * Program paths: `program:read` reads; viewers need a covering read ref;
+ * nobody writes through this surface. Store paths: a covering document ref,
+ * for everyone; no permission counts.
  */
 export function documentAccessAllowed(
   identity: Identity,
@@ -252,7 +251,7 @@ export function documentAccessAllowed(
   const store = isStorePath(path);
   if (!store) {
     if (access === "write") return false;
-    if (isBuilder(identity, projectId)) return true;
+    if (hasProjectPermission(identity, projectId, "program:read")) return true;
   }
   const ref: DocumentRef = { kind: "document", projectId, path, access };
   return scopeCovers(identity.scope, ref);
@@ -1046,7 +1045,7 @@ export class DocumentsService {
 
   /**
    * Cheap pre-check for listing/search: a scoped identity with no document
-   * ref (and no builder ref, for program prefixes) under this prefix gets
+   * ref (and no `program:read`, for program prefixes) under this prefix gets
    * an empty answer without touching git or the store.
    */
   private mayReadAnythingUnder(
@@ -1057,7 +1056,7 @@ export class DocumentsService {
     if (identity.scope === undefined) return true;
     if (
       !isStorePath(prefix.replace(/\/$/, "")) &&
-      isBuilder(identity, projectId)
+      hasProjectPermission(identity, projectId, "program:read")
     ) {
       return true;
     }

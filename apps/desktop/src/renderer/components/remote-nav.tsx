@@ -123,7 +123,7 @@ export function RemoteNav({
   const canPublish = features ? features.publications !== false : true;
   const canPropose = features ? features.proposals : true;
   const canManageMembers =
-    status.capabilities?.permissions.includes("memberships:manage") ?? false;
+    status.capabilities?.permissions.includes("memberships:write") ?? false;
   const reconnectNeeded =
     status.connection.state === "sign_in_required" ||
     status.connection.state === "access_removed" ||

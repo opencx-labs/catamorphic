@@ -61,8 +61,8 @@ File and proposal lifecycle (ADR 0136): new personal files stay on this device
 by default, including inside company projects. A file's top controls use the
 same status inspector as chat: actual location, Save, Publish, and Propose.
 The Proposals sidebar reuses PR review. Members submit selected files through
-the company host; builders approve or apply the reviewed revision with their
-own repository identity. Worktrees serve independent repository work, not
+the company host; holders of `program:publish` approve or apply the reviewed
+revision with their own repository identity. Worktrees serve independent repository work, not
 ordinary documents, privacy, or the existence of a proposal.
 
 1. **System-first.** New profiles follow the operating system, resolving to
@@ -444,6 +444,23 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-09-24: Permissions replace the builder flag
+
+A remote project used to split people into members and builders, and a
+builder could do everything: edit, publish, set secrets, read every chat.
+The desktop now reads what the person actually holds from `GET /me`
+(ADR 0158). Holding `program:write` is what the builder experience was: the
+project opens as a Git checkout of the program with its files and branches.
+Approving and applying proposals needs `program:publish`, so someone can
+edit without shipping. Inviting and managing members needs
+`memberships:write`. Sidebar items and starting actions target `when: { permissions }`; there is
+no builder switch left to match.
+
+Turning a workflow on shows what it asks to do in plain words: "Post into
+anyone's chat", not `sessions:write`. Only someone holding every listed
+permission can confirm. When an automation stops because its owner lost a
+permission, its status says so in a sentence instead of a reason code.
+
 ### 2026-09-23: The chat names its model and moves with its work
 
 A chat with no pinned model said **Automatic**, which answered nothing:

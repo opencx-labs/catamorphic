@@ -5,8 +5,9 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  type ArtifactRef,
+  EVERY_ARTIFACT,
   type Identity,
+  identityCovers,
   PROJECT_PRINCIPAL_ID,
 } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
@@ -17,6 +18,7 @@ import {
   WorkflowEnablementSuspendedError,
   WorkflowEnablementsService,
 } from "../services/workflow-enablements-service.js";
+import { projectAdmin } from "./project-admin.js";
 
 const pglite = new PGlite({ extensions: { pgcrypto } });
 const schema = "catamorphic_workflow_enablements";
@@ -51,6 +53,8 @@ let artifact = {
 };
 let service: WorkflowEnablementsService;
 let resolvedMemberA: Identity | null = memberA;
+/** What the workflow under test declares in `permissions`. */
+let declared: string[] = [];
 
 beforeAll(async () => {
   await migrateToLatest({ db, schema });
@@ -64,17 +68,19 @@ beforeAll(async () => {
     executionEnvironments: {
       admit: vi.fn(async () => ({ environmentName: "local" })),
     } as unknown as ExecutionEnvironmentsService,
-    resolveTarget: vi.fn(async () => ({ artifact, requirements: [] })),
+    resolveTarget: vi.fn(async () => ({
+      artifact,
+      requirements: [],
+      permissions: declared,
+    })),
     ensureTriggerDefinitions: vi.fn(async () => undefined),
     assertWorkflowAccess: vi.fn(async ({ identity, workflowName }) => {
       if (
-        identity.scope !== undefined &&
-        !identity.scope.some(
-          (ref: ArtifactRef) =>
-            (ref.kind === "project" ||
-              (ref.kind === "workflow" && ref.name === workflowName)) &&
-            ref.projectId === projectId,
-        )
+        !identityCovers(identity, {
+          kind: "workflow",
+          projectId,
+          name: workflowName,
+        })
       ) {
         throw new AccessDeniedError();
       }
@@ -251,11 +257,11 @@ describe("WorkflowEnablementsService", () => {
     ).toMatchObject({ status: "active", suspensionReason: null });
   });
 
-  it("project automations: builders enable them, members see them, runs are the project's", async () => {
+  it("project automations: admins enable them, members see them, runs are the project's", async () => {
     const builder: Identity = {
       tenantId,
       externalUserId: "builder",
-      scope: [{ kind: "project", projectId }],
+      ...projectAdmin(projectId),
       executionScope: [{ projectId, name: "local" }],
     };
     const forProject = { type: "project" as const };
@@ -301,18 +307,119 @@ describe("WorkflowEnablementsService", () => {
       service.disable({ identity: memberA, enablementId: created.id }),
     ).rejects.toBeInstanceOf(AccessDeniedError);
 
-    // It runs as the project, never as the builder who switched it on.
+    // It runs as the project, never as the admin who switched it on.
     const revalidated = await service.revalidate({
       identity: builder,
       enablementId: created.id,
     });
-    expect(revalidated.ownerIdentity).toMatchObject({
+    expect(revalidated.ownerIdentity).toEqual({
+      tenantId,
       externalUserId: PROJECT_PRINCIPAL_ID,
-      scope: [{ kind: "project", projectId }],
+      scope: [
+        { kind: "workflow", projectId, name: "watchInbox" },
+        { kind: "agent", projectId, name: EVERY_ARTIFACT },
+      ],
       executionScope: [{ projectId, name: "local" }],
+      projectPermissions: [],
+      connectionScope: [],
     });
     expect(
       await service.disable({ identity: builder, enablementId: created.id }),
     ).toMatchObject({ status: "disabled" });
+  });
+
+  it("declared permissions: only a holder turns it on, and a member's runs keep them only while held", async () => {
+    declared = ["sessions:write"];
+    try {
+      const holder: Identity = {
+        ...memberA,
+        externalUserId: "holder",
+        projectPermissions: [{ projectId, permission: "sessions:*" }],
+      };
+      await expect(
+        service.preview({
+          identity: memberA,
+          projectId,
+          workflowName: "watchInbox",
+        }),
+      ).rejects.toThrow("permissions you do not have: sessions:write");
+
+      const preview = await service.preview({
+        identity: holder,
+        projectId,
+        workflowName: "watchInbox",
+      });
+      expect(preview.permissions).toEqual(["sessions:write"]);
+      const created = await service.create({
+        identity: holder,
+        projectId,
+        workflowName: "watchInbox",
+        consentDigest: preview.consentDigest,
+      });
+      expect(created.permissions).toEqual(["sessions:write"]);
+
+      // Still held: the run is admitted.
+      let current: Identity = holder;
+      const resolving = new WorkflowEnablementsService(db, {
+        executionEnvironments: {
+          admit: vi.fn(async () => ({ environmentName: "local" })),
+        } as unknown as ExecutionEnvironmentsService,
+        resolveTarget: vi.fn(async () => ({
+          artifact,
+          requirements: [],
+          permissions: declared,
+        })),
+        ensureTriggerDefinitions: vi.fn(async () => undefined),
+        assertWorkflowAccess: vi.fn(async () => undefined),
+        resolveMemberIdentity: vi.fn(async () => current),
+      });
+      await expect(
+        resolving.revalidate({ identity: holder, enablementId: created.id }),
+      ).resolves.toMatchObject({ ownerIdentity: holder });
+
+      // The member's role lost it: the automation suspends.
+      current = { ...holder, projectPermissions: [] };
+      await expect(
+        resolving.revalidate({ identity: holder, enablementId: created.id }),
+      ).rejects.toBeInstanceOf(WorkflowEnablementSuspendedError);
+      expect(
+        await resolving.get({ identity: holder, enablementId: created.id }),
+      ).toMatchObject({
+        status: "suspended",
+        suspensionReason: "permission_revoked",
+      });
+
+      // A project automation keeps what was consented, not tied to the enabler.
+      const admin: Identity = {
+        tenantId,
+        externalUserId: "admin",
+        ...projectAdmin(projectId),
+        executionScope: [{ projectId, name: "local" }],
+      };
+      const projectPreview = await service.preview({
+        identity: admin,
+        projectId,
+        workflowName: "triageRequests",
+        owner: { type: "project" },
+        environment: "local",
+      });
+      const project = await service.create({
+        identity: admin,
+        projectId,
+        workflowName: "triageRequests",
+        owner: { type: "project" },
+        environment: "local",
+        consentDigest: projectPreview.consentDigest,
+      });
+      const run = await service.revalidate({
+        identity: admin,
+        enablementId: project.id,
+      });
+      expect(run.ownerIdentity.projectPermissions).toEqual([
+        { projectId, permission: "sessions:write" },
+      ]);
+    } finally {
+      declared = [];
+    }
   });
 });

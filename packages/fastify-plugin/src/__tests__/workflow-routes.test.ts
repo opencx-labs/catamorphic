@@ -74,6 +74,7 @@ describe("workflow route contracts", () => {
       outputSchema: {},
       triggers: [],
       connections: [],
+      permissions: [],
       canSuspend: true,
       nodes: [
         {
@@ -145,6 +146,7 @@ describe("workflow route contracts", () => {
       outputSchema: {},
       triggers: [],
       connections: [],
+      permissions: [],
       canSuspend: false,
       nodes: [],
       edges: [],

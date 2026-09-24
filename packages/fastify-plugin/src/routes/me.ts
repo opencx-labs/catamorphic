@@ -1,23 +1,15 @@
-import {
-  CORE_PROJECT_PERMISSIONS,
-  isBuilder,
-  type ProjectPermission,
-} from "@catamorphic/core";
+import { effectiveProjectPermissions } from "@catamorphic/core";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import type { RouteContext } from "../app.js";
 import { resolveIdentity } from "../http-identity.js";
 import { MeSchema } from "../schemas.js";
 
-const ROOT_PROJECT_PERMISSIONS: ProjectPermission[] = [
-  ...CORE_PROJECT_PERMISSIONS,
-];
-
 /**
  * Introspection (ADR 0055): what THIS caller may do, and what THIS host
  * enables — so a client shows the possible instead of discovering it by
  * 403. Two halves: the identity as resolved (root or scope), summarised
- * per project (builder? which agents? any writable store subtree?), and
+ * per project (which permissions? which agents? which store subtrees?), and
  * the host's feature switches. Versioned so an older host degrades to
  * "assume everything" on a newer client.
  */
@@ -30,16 +22,19 @@ export function registerMeRoutes(app: FastifyInstance, ctx: RouteContext) {
     handler: async (request, reply) => {
       const identity = resolveIdentity(request);
       const projectIds = [
-        ...new Set((identity.scope ?? []).map((ref) => ref.projectId)),
+        ...new Set([
+          ...(identity.scope ?? []).map((ref) => ref.projectId),
+          ...(identity.projectPermissions ?? []).map((ref) => ref.projectId),
+        ]),
       ];
       const projects = await Promise.all(
         projectIds.map(async (projectId) => {
           const refs = (identity.scope ?? []).filter(
             (ref) => ref.projectId === projectId,
           );
-          const builder = isBuilder(identity, projectId);
+          const permissions = effectiveProjectPermissions(identity, projectId);
           const project =
-            builder && ctx.core?.projects
+            permissions.includes("program:read") && ctx.core?.projects
               ? await ctx.core.projects.get(identity, projectId)
               : null;
           const roles =
@@ -50,19 +45,13 @@ export function registerMeRoutes(app: FastifyInstance, ctx: RouteContext) {
             })) ?? [];
           return {
             projectId,
-            builder,
             source: project?.remoteUrl
               ? {
                   remoteUrl: project.remoteUrl,
                   defaultBranch: project.defaultBranch,
                 }
               : null,
-            permissions:
-              identity.scope === undefined
-                ? [...ROOT_PROJECT_PERMISSIONS]
-                : (identity.projectPermissions ?? [])
-                    .filter((permission) => permission.projectId === projectId)
-                    .map((permission) => permission.permission),
+            permissions,
             agents: refs
               .filter((ref) => ref.kind === "agent")
               .map((ref) => (ref as { name: string }).name),

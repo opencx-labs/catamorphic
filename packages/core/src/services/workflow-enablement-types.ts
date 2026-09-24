@@ -3,9 +3,10 @@ import type { ConnectionPrincipalKind } from "./connection-types.js";
 export type WorkflowEnablementStatus = "active" | "suspended" | "disabled";
 
 /**
- * Who an enablement acts for (ADR 0156): one member, with their own
- * authority, or the project itself, running as the project principal with
- * the connections a builder consented to.
+ * Who an enablement acts for (ADR 0156, 0158): one member, with what they
+ * hold of the workflow's declared permissions, or the project itself,
+ * running as the project principal with the connections and permissions
+ * consented to when it was turned on.
  */
 export type WorkflowEnablementOwner =
   | { type: "member"; externalUserId: string }
@@ -39,6 +40,8 @@ export interface WorkflowEnablement {
   owner: WorkflowEnablementOwner;
   connections: WorkflowEnablementConnection[];
   capabilities: string[];
+  /** The project permissions the workflow declares, as consented to. */
+  permissions: string[];
   consentDigest: string;
   status: WorkflowEnablementStatus;
   suspensionReason: string | null;
@@ -62,6 +65,8 @@ export interface WorkflowEnablementPreview {
   owner: WorkflowEnablementOwner;
   connections: WorkflowEnablementConnection[];
   capabilities: string[];
+  /** The project permissions the workflow declares (ADR 0158). */
+  permissions: string[];
   consentDigest: string;
   triggerCount: number;
   triggers: Array<{ kind: string; config: unknown }>;
@@ -75,6 +80,7 @@ export type WorkflowEnablementSuspensionReason =
   | "connection_unavailable"
   | "connection_permission_denied"
   | "connection_capability_changed"
+  | "permission_revoked"
   | "expired";
 
 export interface RevalidatedWorkflowEnablement {

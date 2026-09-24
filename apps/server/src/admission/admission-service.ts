@@ -2,6 +2,7 @@ import {
   hasProjectPermission,
   type Identity,
   type Membership,
+  type ProjectPermissionName,
   type ProjectRoleEntry,
 } from "@catamorphic/core";
 import type { DB } from "@catamorphic/db";
@@ -84,7 +85,7 @@ export class StockAdmissionService {
     identity: Identity;
     projectId: string;
   }): Promise<Membership[]> {
-    assertPermission(input.identity, input.projectId, "memberships:manage");
+    assertPermission(input.identity, input.projectId, "memberships:read");
     return this.services.memberships.list(input);
   }
 
@@ -95,7 +96,7 @@ export class StockAdmissionService {
     defaultRole: string;
     approvedDomains: readonly string[];
   }): Promise<void> {
-    assertPermission(input.identity, input.projectId, "memberships:manage");
+    assertPermission(input.identity, input.projectId, "memberships:write");
     await this.validateRoles({
       identity: input.identity,
       projectId: input.projectId,
@@ -136,7 +137,7 @@ export class StockAdmissionService {
     projectName: string;
     expiresAt: string;
   }> {
-    assertPermission(input.identity, input.projectId, "memberships:manage");
+    assertPermission(input.identity, input.projectId, "memberships:write");
     const policy = await this.requirePolicy(input.projectId);
     const project = await this.services.db
       .selectFrom("projects")
@@ -331,7 +332,7 @@ export class StockAdmissionService {
       requestedAt: string;
     }>
   > {
-    assertPermission(input.identity, input.projectId, "memberships:manage");
+    assertPermission(input.identity, input.projectId, "memberships:read");
     const rows = await this.services.db
       .selectFrom("stock_project_access_requests")
       .where("project_id", "=", input.projectId)
@@ -367,7 +368,7 @@ export class StockAdmissionService {
       .selectAll()
       .executeTakeFirst();
     if (!request) throw new Error("This access request does not exist");
-    assertPermission(input.identity, request.project_id, "memberships:manage");
+    assertPermission(input.identity, request.project_id, "memberships:write");
     if (request.status === "approved" && input.decision === "approved") {
       return { id: request.id, status: request.status };
     }
@@ -440,7 +441,7 @@ export class StockAdmissionService {
         );
       }
       if ((entry.definition.permissions?.length ?? 0) > 0) {
-        assertPermission(input.identity, input.projectId, "roles:manage");
+        assertPermission(input.identity, input.projectId, "roles:write");
       }
     }
   }
@@ -475,10 +476,10 @@ export class StockAdmissionService {
 function assertPermission(
   identity: Identity,
   projectId: string,
-  permission: "memberships:manage" | "roles:manage",
+  permission: ProjectPermissionName,
 ): void {
   if (!hasProjectPermission(identity, projectId, permission)) {
-    throw new Error("You do not have permission to manage project access");
+    throw new Error("You do not have permission to change project access");
   }
 }
 

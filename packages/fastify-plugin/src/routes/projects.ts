@@ -1,7 +1,8 @@
 import {
   assertMayManageRolePolicy,
+  assertProjectPermission,
+  hasProjectPermission,
   type Identity,
-  isBuilder,
   type Project,
   ProjectFileConflictError,
   ProjectFileNotFoundError,
@@ -419,6 +420,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
+        assertProjectPermission(identity, projectId, "program:write");
         const result = await ctx.core.deployment.ensureWorkBranch(
           identity.tenantId,
           projectId,
@@ -453,6 +455,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
+        assertProjectPermission(identity, projectId, "program:write");
         const status = await ctx.core.deployment.checkoutBranch(
           identity.tenantId,
           projectId,
@@ -560,16 +563,18 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
-        assertMayManageRolePolicy(
-          identity,
-          projectId,
-          Object.keys(request.body.files ?? {}),
-        );
+        assertProjectPermission(identity, projectId, "program:publish");
         const result = await ctx.core.deployment.deploy(
           identity.tenantId,
           projectId,
           identity.externalUserId,
-          { message: request.body.message, files: request.body.files },
+          {
+            message: request.body.message,
+            files: request.body.files,
+            // Role files change only with `roles:write`, whoever edited them.
+            guardPublishedPaths: (paths) =>
+              assertMayManageRolePolicy(identity, projectId, paths),
+          },
         );
         return reply.send(result);
       } catch (err) {
@@ -600,6 +605,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
+        assertProjectPermission(identity, projectId, "program:write");
         const result = await ctx.core.deployment.pullFromRemote(
           identity.tenantId,
           projectId,
@@ -634,6 +640,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
+        assertProjectPermission(identity, projectId, "program:write");
         const result = await ctx.core.deployment.discardDraft(
           identity.tenantId,
           projectId,
@@ -668,6 +675,7 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
       const { projectId } = request.params;
       try {
         await ctx.core.projects.get(identity, projectId);
+        assertProjectPermission(identity, projectId, "program:write");
         const result = await ctx.core.deployment.resolveConflicts(
           identity.tenantId,
           projectId,
@@ -711,6 +719,11 @@ export function registerProjectRoutes(app: FastifyInstance, ctx: RouteContext) {
       },
     },
     handler: async (request, reply) => {
+      assertProjectPermission(
+        resolveIdentity(request),
+        request.params.projectId,
+        "program:write",
+      );
       // Stub: naive "prefer theirs" resolution until Codex-backed resolver lands.
       // Falls back to ours if theirs is null (file deleted upstream we want to keep).
       const resolutions: Record<string, string> = {};
@@ -772,7 +785,8 @@ async function safeListWorkflows(
 }> {
   try {
     const workflows = await core.workflows.list({ identity, projectId });
-    if (!isBuilder(identity, projectId)) return { workflows, files: [] };
+    if (!hasProjectPermission(identity, projectId, "program:read"))
+      return { workflows, files: [] };
     const allFiles = await core.projects.readAllFiles(identity, projectId);
     return { workflows, files: Object.keys(allFiles) };
   } catch {

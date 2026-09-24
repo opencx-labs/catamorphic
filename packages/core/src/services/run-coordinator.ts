@@ -6,7 +6,11 @@ import type {
   WorkflowExecutionUnitDescriptor,
 } from "@catamorphic/parser";
 import { type Kysely, sql, type Transaction } from "kysely";
-import type { Identity } from "../identity.js";
+import {
+  type Identity,
+  intersectProjectPermissions,
+  type ProjectPermissionRef,
+} from "../identity.js";
 import type {
   ExecutionJob,
   ExecutionJobsService,
@@ -446,6 +450,8 @@ export class RunCoordinator {
       workflowName: string;
       capabilities: WorkflowCapabilities;
       execution: WorkflowExecutionDescriptor;
+      /** The child's declared permissions; it gets what the parent run holds of them. */
+      permissions: readonly string[];
       input: Json;
     };
   }): Promise<string | null> {
@@ -500,6 +506,18 @@ export class RunCoordinator {
             parent.caller_connection_scope === null
               ? null
               : jsonColumn(parent.caller_connection_scope),
+          caller_project_permissions:
+            parent.caller_scope === null
+              ? null
+              : jsonColumn(
+                  toJson(
+                    childPermissions({
+                      projectId: parent.project_id,
+                      held: parent.caller_project_permissions,
+                      declared: args.child.permissions,
+                    }),
+                  ),
+                ),
           status: "pending",
           phase: phaseFor(firstStep),
           input: jsonColumn(args.child.input),
@@ -1715,5 +1733,29 @@ function isActiveRunStatus(status: string): boolean {
 function isTerminalRunStatus(status: string): boolean {
   return TERMINAL_RUN_STATUSES.includes(
     status as (typeof TERMINAL_RUN_STATUSES)[number],
+  );
+}
+
+/** A child run's permissions: what the parent run holds of the child's declared set. */
+function childPermissions(input: {
+  projectId: string;
+  held: Json | null;
+  declared: readonly string[];
+}): ProjectPermissionRef[] {
+  const held = (Array.isArray(input.held) ? input.held : []).flatMap(
+    (entry): ProjectPermissionRef[] => {
+      const ref = jsonRecord(entry);
+      return typeof ref.projectId === "string" &&
+        typeof ref.permission === "string"
+        ? [{ projectId: ref.projectId, permission: ref.permission }]
+        : [];
+    },
+  );
+  return intersectProjectPermissions(
+    input.declared.map((permission) => ({
+      projectId: input.projectId,
+      permission,
+    })),
+    { tenantId: "", externalUserId: "", scope: [], projectPermissions: held },
   );
 }

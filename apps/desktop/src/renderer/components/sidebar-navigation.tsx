@@ -181,7 +181,7 @@ export function ConfiguredSection({
     onOpenUrl: (url, mode) => onOpenUrl(url, mode ?? "replace"),
     granted: section.collections,
     surface,
-    builder: !memberShell,
+    writesProgram: !memberShell,
     onOpenSession,
     onOpenTab,
     onOpenFile,

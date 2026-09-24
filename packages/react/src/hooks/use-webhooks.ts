@@ -23,7 +23,7 @@ export const webhookKeys = {
     ["cat", "project", projectId, "webhooks"] as const,
 };
 
-/** The project's webhook URLs. Builders only: each URL is a credential. */
+/** The project's webhook URLs (`webhooks:read`): each URL is a credential. */
 export function useWebhooks(
   projectId: string | undefined,
   options: { enabled?: boolean } = {},
