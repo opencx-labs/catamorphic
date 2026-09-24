@@ -17,7 +17,7 @@ import { context, trace } from "@opentelemetry/api";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { type Identity, teamIdentity } from "../identity.js";
+import { type Identity, projectPrincipalIdentity } from "../identity.js";
 import { AgentSessionsService } from "../services/agent-sessions-service.js";
 import { AgentTurnsService } from "../services/agent-turns-service.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
@@ -667,21 +667,21 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
     ).rejects.toThrow(AccessDeniedError);
   });
 
-  it("a team chat is shared with everyone whose role reaches its agent (ADR 0156)", async () => {
-    const team = teamIdentity({
+  it("a project chat is shared with everyone whose role reaches its agent (ADR 0156)", async () => {
+    const project = projectPrincipalIdentity({
       tenantId: root.tenantId,
       projectId,
       environment: "local",
     });
-    const shared = await sessions.create(team, projectId, {
+    const shared = await sessions.create(project, projectId, {
       agentId: csmAgentId,
     });
-    expect(shared.owner).toBe("team");
+    expect(shared.owner).toBe("project");
     const carol: Identity = { ...viewer, externalUserId: "csm-carol" };
     for (const member of [viewer, carol]) {
       const listed = await sessions.list(member, projectId);
       expect(listed.items.find((item) => item.id === shared.id)?.owner).toBe(
-        "team",
+        "project",
       );
       expect((await sessions.get(member, projectId, shared.id)).id).toBe(
         shared.id,
@@ -692,14 +692,15 @@ describeIf("scoped agent sessions (ADR 0055)", () => {
       content: "Picking this up",
       author: { kind: "user", externalUserId: carol.externalUserId },
       mode: "message_only",
-      idempotencyKey: "team-note",
+      idempotencyKey: "project-note",
     });
     expect(
       (await sessions.list(carol, projectId)).items.every(
-        (item) => item.owner === "team" || item.externalUserId === "csm-carol",
+        (item) =>
+          item.owner === "project" || item.externalUserId === "csm-carol",
       ),
     ).toBe(true);
-    // A role that does not reach the agent does not see the team's chat.
+    // A role that does not reach the agent does not see the project chat.
     const salesViewer: Identity = {
       ...viewer,
       externalUserId: "sales-dan",

@@ -1070,20 +1070,23 @@ a command's description, the in-progress todo, or the heading of its
 reasoning summary. "Working..." is only what it says before it has said
 anything.
 
-### 2026-09-23: Automations run for you or for the team; agents can watch
+### 2026-09-23: Automations run for you or for the project; agents can watch
 
-The Automate panel asks one question before anything else, to those who
-manage the project: runs for **Just me** or **The team**. A team automation
+Turning a workflow on asks one question first, to those who manage the
+project: runs for **Just me** or **The project**. "Project", not "team": a
+project can be one person's brain as much as a company's. A project automation
 runs as the project, not as the person who switched it on, so its consent
-summary says "The team" and its chats are shared: they carry a small Team
-mark in the sidebar, the chat header and on mobile, and anyone on the project
-can open one and continue it. A pull request review lands as one team chat,
-not one per person. Members see the team's automations but not the controls.
+summary says "The project" and its chats are shared: they carry a small
+project mark in the sidebar, the chat header and on mobile, and anyone in the
+project can open one and continue it. A pull request review lands as one
+project chat, not one per person. Members see the project's automations but
+not the controls.
 
-Turning on uses the project's published version. When a workflow is only
-saved, the panel says so in plain words and offers **Publish changes and
-continue** to those who can publish, instead of a "not found" error; the
-consent review follows without starting over.
+Turning on uses the project's published version. The desktop offers Publish
+above the choice (2026-09-24 entry below). Any other host embedding the panel
+gets the same safety net inside it: when a workflow is only saved, the panel
+says so in plain words and offers **Publish changes and continue** instead of
+a "not found" error, and the consent review follows without starting over.
 
 A workflow that listens on a webhook shows its URL in the same panel, with a
 copy button and a quiet "Replace URL" that asks once before cutting senders

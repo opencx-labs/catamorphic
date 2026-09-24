@@ -333,7 +333,11 @@ function WorkflowWorkbench({
         : !enablement
           ? { kind: "off" }
           : enablement.status === "active"
-            ? { kind: "on", updateAvailable: enablement.updateAvailable }
+            ? {
+                kind: "on",
+                updateAvailable: enablement.updateAvailable,
+                forProject: enablement.owner.type === "project",
+              }
             : {
                 kind: "paused",
                 reason:

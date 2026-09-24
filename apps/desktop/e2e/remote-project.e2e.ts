@@ -142,7 +142,7 @@ function startFakeServer(): Promise<void> {
       req.method === "GET" &&
       url.pathname === "/api/projects/remote-1/workflow-enablements"
     )
-      return send(200, { items: [], canManageTeam: false });
+      return send(200, { items: [], canManageProjectAutomations: false });
     if (
       req.method === "GET" &&
       url.pathname === "/api/projects/remote-1/agent/sessions"

@@ -18,8 +18,8 @@ Discover this host's actual capabilities and schemas before authoring.
 | Remind the user | deliver with mode: "message_only", attention: "required" | One-shot schedule owned by the session, no default expiry |
 | Wake an agent to do work | deliver with mode: "next_turn" | One-shot or conditional monitor; stop when its purpose is complete |
 | Monitor events without noise | Inspect the event/state, then deliver only a meaningful change | Session watcher or explicitly enabled reusable workflow |
-| Have an agent prepare a recurring result in a stable chat | wake with a stable workflow-scoped key | Member or team enablement; reuse the same session |
-| Have an agent handle something for the whole team (a PR review, an inbound request) | wake with the event's key; the team sees one shared chat | Team enablement |
+| Have an agent prepare a recurring result in a stable chat | deliver with a stable key (e.g. "daily") | Member or project enablement; the key reuses the same chat |
+| Have an agent handle something for everyone in the project (a PR review, an inbound request) | deliver with the event's key; the project shares one chat per key | Project enablement |
 
 Neither saving source nor deploying alone turns a trigger on. A workflow return
 ends that run, not its recurring activation.
@@ -65,7 +65,7 @@ and session_reopen for new work. Observe session.work-changed with
 ## Host calls and authoring shape
 
 context.host["catamorphic.sessions"] provides typed inspect, list, history,
-deliver, wake, create, fork, spawn, archive, unarchive, interrupt,
+deliver, create, fork, spawn, archive, unarchive, interrupt,
 complete, reopen, stopWatcher, and stop operations. Every host call is a
 boundary transition: RETURN it. Consume its result as the next boundary's input.
 Do not await it, put it inside a use-step helper, or invoke a second host call
@@ -184,6 +184,58 @@ export const remindUser = defineWorkflow(({ defineBoundary }) => ({
 }));
 \`\`\`
 
+### A chat per pull request
+
+A project automation that reviews each pull request in its own chat, shared with
+everyone in the project. Enable it for the project; the key reuses the chat when
+the same pull request changes again. GitHub events arrive as untyped JSON, so
+read the fields you need and skip events without them.
+
+\`\`\`typescript
+import { type BoundaryContext, defineWorkflow, trigger } from "@catamorphic/workflow";
+type PullRequest = { number: number; title: string; url: string };
+
+/**
+ * @displayname Read the pull request
+ * @param payload - @displayname Event | @description The event GitHub sent
+ */
+async function readPullRequest({ payload }: { payload: unknown }): Promise<PullRequest | null> {
+  "use step";
+  if (!payload || typeof payload !== "object" || !("number" in payload) || !("pull_request" in payload)) return null;
+  const pull = payload.pull_request;
+  if (typeof payload.number !== "number" || !pull || typeof pull !== "object") return null;
+  const title = "title" in pull && typeof pull.title === "string" ? pull.title : "Pull request " + payload.number;
+  const url = "html_url" in pull && typeof pull.html_url === "string" ? pull.html_url : "";
+  return { number: payload.number, title, url };
+}
+
+/** @displayname Review pull requests */
+export const reviewPullRequests = defineWorkflow(({ defineBoundary }) => ({
+  triggers: [trigger("github.pull_request")],
+  steps: [
+    /** @displayname Read the pull request */
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<{ payload: unknown }>) => ({
+        pull: await readPullRequest({ payload: input.payload }),
+      }),
+    }),
+    /** @displayname Ask for a review */
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<{ pull: PullRequest | null }>) => {
+        const pull = input.pull;
+        if (!pull) return { skipped: true };
+        return host["catamorphic.sessions"].deliver({
+          key: "pr-" + pull.number,
+          title: "Review: " + pull.title,
+          content: "Review the changes in " + pull.url + " and summarize risks.",
+          notification: { title: "Review ready", body: pull.title },
+        });
+      },
+    }),
+  ],
+}));
+\`\`\`
+
 ## Session actions and delivery
 
 - inspect/list/history are authorized reads. history is bounded; increase its
@@ -192,16 +244,19 @@ export const remindUser = defineWorkflow(({ defineBoundary }) => ({
   work when idle or queues behind the active turn; interrupt requests a course
   change. The host preserves origin in model input and in visible history.
   Authoring a workflow message does not grant system/developer instruction rank.
-- wake creates/reuses a stable session and requests attention when its agent
-  turn settles. Its optional notification title/body customizes that alert. Who
-  the chat belongs to follows the enablement: a member's enablement wakes that
-  member's own chat; a team enablement wakes a team chat everyone on the project
-  sees and can continue, or one member's chat with audience: { member: "<id>" }
-  (a current member; use an id from an event or a lookup, never a guess). A team
-  chat runs as the team, with the enablement's connections, not as any person.
-  Grant the project agent and its required connections/Environment. Use deliver
-  when the session id is known. Choose a stable wake key to reuse the conversation,
-  such as the pull request number for a review chat.
+- deliver names its chat one of two ways. sessionId reaches that exact chat.
+  key reaches the chat this workflow keeps for the key: the first delivery starts
+  it (with agentSlug, title and environment when given) and later ones reuse it,
+  so "pr-" + number gives one chat per pull request and "daily" one recurring
+  chat. A keyed chat alerts its people when the agent's turn settles; pass
+  notification { title, body } to word that alert, or to alert on a chat named by
+  sessionId. Who a keyed chat belongs to follows the enablement: a member's
+  automation reaches that member's own chat; a project automation reaches a
+  project chat that everyone whose role reaches the agent can read and continue,
+  or one member's chat with audience: { member: "<id>" } (a current member; use
+  an id from an event or a lookup, never a guess). A project chat runs as the
+  project, with the enablement's connections, not as any person. Grant the
+  project agent and its required connections/Environment.
 - spawn respects the source agent's configured delegation routes. Fresh context
   is the default. fork explicitly copies transcript history; create makes an
   independent conversation. Do not simulate children as untracked shell agents.
@@ -215,8 +270,10 @@ export const remindUser = defineWorkflow(({ defineBoundary }) => ({
   preserving readable history. Follow archive preview and confirmStop requirements for stopping live work. Tab closure is
   unrelated. stop stops only the calling temporary activation and retains runs.
 
-Use stable idempotencyKey values for operations that take them; wake uses its
-stable key and the host's run receipts. Reuse the same action key for retries of the
+Use stable idempotencyKey values for operations that take them. deliver
+defaults to one delivery per run, chat and content, so a retried boundary never
+posts twice; pass a key when the same text must arrive twice in one run, or to
+tie delivery to an event. Reuse the same action key for retries of the
 same action; use a different key for a new action. Do not use a fresh random key
 on each boundary retry. Prefer event identity or activationId + scheduledFor.
 Causal chains prevent self-triggering and bounded multi-workflow loops; do not
@@ -237,5 +294,5 @@ Before reporting an automation active, inspect its enabled status, source revisi
 Environment, expiry, and next intended behavior. Check authored source with the
 project checker. Verify one real occurrence or controlled event, including the
 quiet path. Ensure a finite monitor stops itself, and show the user its workflow
-or artifact link. Never introduce permanent polling to satisfy a one-time wake.
+or artifact link. Never introduce permanent polling to satisfy a one-time wakeup.
 `;

@@ -9,8 +9,10 @@ import {
   SEED_SKILLS,
 } from "@catamorphic/core";
 import { expect, it } from "vitest";
+import { GITHUB_PROJECT_EVENT_TRIGGER_KINDS } from "../github-trigger-kinds.js";
 import { schedule } from "../schedule-trigger-kind.js";
 import { SESSION_TRIGGER_KINDS } from "../session-trigger-kinds.js";
+import { webhook } from "../webhook-trigger-kind.js";
 
 it("shipped workflow recipes typecheck against the public API and real host trigger schemas", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "skill-types-"));
@@ -32,10 +34,15 @@ it("shipped workflow recipes typecheck against the public API and real host trig
         );
       }
     }
-    expect(index).toBe(6);
+    expect(index).toBe(7);
     await fs.writeFile(
       path.join(directory, "catamorphic-triggers.d.ts"),
-      renderTriggerTypesModule([schedule, ...SESSION_TRIGGER_KINDS]),
+      renderTriggerTypesModule([
+        schedule,
+        webhook,
+        ...SESSION_TRIGGER_KINDS,
+        ...GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
+      ]),
     );
     await fs.writeFile(
       path.join(directory, "tsconfig.json"),

@@ -172,3 +172,56 @@ it("the reminder alerts without a model turn and keeps its original deadline and
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+it("the shipped pull-request recipe delivers to one keyed chat per pull request", async () => {
+  const recipe = [
+    ...SESSION_WORKFLOWS_SKILL.matchAll(/```typescript\n([\s\S]*?)```/g),
+  ]
+    .map((match) => match[1] ?? "")
+    .find((source) => source.includes("reviewPullRequests"));
+  if (!recipe) throw new Error("Missing pull-request example");
+  expect(parseWorkflow(recipe).nodes.length).toBeGreaterThan(1);
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "session-recipe-"));
+  try {
+    const workflowModule = path.resolve(
+      import.meta.dirname,
+      "../../../workflow/src/index.ts",
+    );
+    await fs.writeFile(
+      path.join(directory, "recipe.ts"),
+      recipe.replace('"@catamorphic/workflow"', JSON.stringify(workflowModule)),
+    );
+    await fs.writeFile(
+      path.join(directory, "verify.ts"),
+      `
+      import { reviewPullRequests } from "./recipe.ts";
+      const host = { "catamorphic.sessions": { deliver: args => ({ operation: "deliver", args }) } };
+      const [read, review] = reviewPullRequests.steps;
+      const event = { payload: { number: 7, pull_request: { title: "Fix login", html_url: "https://github.test/pr/7" } } };
+      const read1 = await read.run({ input: event, host });
+      const call = await review.run({ input: read1, host });
+      const skipped = await review.run({ input: await read.run({ input: { payload: { action: "updated" } }, host }), host });
+      console.log(JSON.stringify([call, skipped]));
+    `,
+    );
+    const result = await promisify(execFile)("bun", ["run", "verify.ts"], {
+      cwd: directory,
+      timeout: 10000,
+    });
+    expect(JSON.parse(result.stdout)).toEqual([
+      {
+        operation: "deliver",
+        args: {
+          key: "pr-7",
+          title: "Review: Fix login",
+          content:
+            "Review the changes in https://github.test/pr/7 and summarize risks.",
+          notification: { title: "Review ready", body: "Fix login" },
+        },
+      },
+      { skipped: true },
+    ]);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});

@@ -11,7 +11,7 @@ const create = vi.fn();
 const update = vi.fn();
 const rotate = vi.fn();
 const deploy = vi.fn();
-let canManageTeam = false;
+let canManageProjectAutomations = false;
 let enablementItems: unknown[] = [];
 const memberEnablement = {
   id: "enablement-1",
@@ -78,11 +78,11 @@ vi.mock("@catamorphic/react", async (importOriginal) => ({
     },
   }),
   useWorkflowEnablements: () => ({
-    data: { items: enablementItems, canManageTeam },
+    data: { items: enablementItems, canManageProjectAutomations },
     isSuccess: true,
   }),
   useWebhooks: () => ({
-    data: canManageTeam
+    data: canManageProjectAutomations
       ? [
           {
             name: "github",
@@ -132,7 +132,7 @@ beforeEach(() => {
   update.mockReset();
   rotate.mockReset();
   deploy.mockReset();
-  canManageTeam = false;
+  canManageProjectAutomations = false;
   enablementItems = [memberEnablement];
   container = document.createElement("div");
   document.body.append(container);
@@ -264,15 +264,15 @@ it("returns to exact consent review after account authorization without enabling
   });
 });
 
-it("enables a workflow for the team and shows its webhook URL to builders", async () => {
-  canManageTeam = true;
+it("enables a workflow for the project and shows its webhook URL to builders", async () => {
+  canManageProjectAutomations = true;
   enablementItems = [];
   preview.mockResolvedValueOnce({
     projectId: "project-1",
     workflowName: "watchInbox",
     commitSha: "f".repeat(40),
     environment: "local",
-    owner: { type: "team" },
+    owner: { type: "project" },
     connections: [],
     connectionLabels: {},
     capabilities: [],
@@ -285,7 +285,7 @@ it("enables a workflow for the team and shows its webhook URL to builders", asyn
         },
       },
     ],
-    consentDigest: "team-digest",
+    consentDigest: "project-digest",
   });
   await act(async () =>
     root.render(
@@ -307,29 +307,29 @@ it("enables a workflow for the team and shows its webhook URL to builders", asyn
   ).toBe("https://brain.example/api/hooks/project-1/github/token");
   expect(container.textContent).toContain("Enable to start receiving");
 
-  await act(async () => button("The team")?.click());
-  await act(async () => button("Enable for the team")?.click());
+  await act(async () => button("The project")?.click());
+  await act(async () => button("Enable for the project")?.click());
   expect(preview).toHaveBeenCalledWith({
     workflowName: "watchInbox",
     environment: "local",
-    owner: { type: "team" },
+    owner: { type: "project" },
   });
-  expect(container.textContent).toContain("The team");
+  expect(container.textContent).toContain("The project");
   expect(container.textContent).toContain("Webhook github (signed)");
 
   await act(async () => button("Confirm and enable")?.click());
   expect(create).toHaveBeenCalledWith({
     workflowName: "watchInbox",
     environment: "local",
-    owner: { type: "team" },
+    owner: { type: "project" },
     connectionSelections: {},
-    consentDigest: "team-digest",
+    consentDigest: "project-digest",
   });
 });
 
-it("shows the team's automation to members without letting them manage it", async () => {
+it("shows the project's automation to members without letting them manage it", async () => {
   enablementItems = [
-    { ...memberEnablement, owner: { type: "team" }, updateAvailable: false },
+    { ...memberEnablement, owner: { type: "project" }, updateAvailable: false },
   ];
   await act(async () =>
     root.render(
@@ -340,8 +340,8 @@ it("shows the team's automation to members without letting them manage it", asyn
       />,
     ),
   );
-  expect(container.textContent).toContain("For the team");
-  expect(container.textContent).not.toContain("The team");
+  expect(container.textContent).toContain("For the project");
+  expect(container.textContent).not.toContain("The project");
   expect(
     [...container.querySelectorAll("button")].some((item) =>
       item.textContent?.startsWith("Pause"),
@@ -351,7 +351,7 @@ it("shows the team's automation to members without letting them manage it", asyn
 });
 
 it("offers to publish a saved workflow before turning it on", async () => {
-  canManageTeam = true;
+  canManageProjectAutomations = true;
   enablementItems = [];
   preview.mockRejectedValueOnce(
     new CatamorphicError({

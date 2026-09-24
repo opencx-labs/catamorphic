@@ -61,8 +61,8 @@ export function registerWorkflowEnablementRoutes(
       response: {
         200: z.object({
           items: z.array(WorkflowEnablementSchema),
-          /** Whether the caller may enable and manage team automations. */
-          canManageTeam: z.boolean(),
+          /** Whether the caller may enable and manage project automations. */
+          canManageProjectAutomations: z.boolean(),
         }),
         503: ErrorSchema,
       },
@@ -82,10 +82,11 @@ export function registerWorkflowEnablementRoutes(
           projectId,
           workflowName: request.query.workflowName,
         }),
-        canManageTeam: workflowEnablements.mayManageTeam({
-          identity,
-          projectId,
-        }),
+        canManageProjectAutomations:
+          workflowEnablements.mayManageProjectAutomations({
+            identity,
+            projectId,
+          }),
       });
     },
   });

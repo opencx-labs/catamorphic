@@ -7569,7 +7569,7 @@
                                 "properties": {
                                   "type": {
                                     "type": "string",
-                                    "enum": ["team"]
+                                    "enum": ["project"]
                                   }
                                 },
                                 "required": ["type"],
@@ -7736,11 +7736,11 @@
                         "additionalProperties": false
                       }
                     },
-                    "canManageTeam": {
+                    "canManageProjectAutomations": {
                       "type": "boolean"
                     }
                   },
-                  "required": ["items", "canManageTeam"],
+                  "required": ["items", "canManageProjectAutomations"],
                   "additionalProperties": false
                 }
               }
@@ -7802,7 +7802,7 @@
                         "properties": {
                           "type": {
                             "type": "string",
-                            "enum": ["team"]
+                            "enum": ["project"]
                           }
                         },
                         "required": ["type"]
@@ -7892,7 +7892,7 @@
                           "properties": {
                             "type": {
                               "type": "string",
-                              "enum": ["team"]
+                              "enum": ["project"]
                             }
                           },
                           "required": ["type"],
@@ -8222,7 +8222,7 @@
                         "properties": {
                           "type": {
                             "type": "string",
-                            "enum": ["team"]
+                            "enum": ["project"]
                           }
                         },
                         "required": ["type"]
@@ -8307,7 +8307,7 @@
                           "properties": {
                             "type": {
                               "type": "string",
-                              "enum": ["team"]
+                              "enum": ["project"]
                             }
                           },
                           "required": ["type"],
@@ -8622,7 +8622,7 @@
                           "properties": {
                             "type": {
                               "type": "string",
-                              "enum": ["team"]
+                              "enum": ["project"]
                             }
                           },
                           "required": ["type"],
@@ -8904,7 +8904,7 @@
                           "properties": {
                             "type": {
                               "type": "string",
-                              "enum": ["team"]
+                              "enum": ["project"]
                             }
                           },
                           "required": ["type"],
@@ -9221,7 +9221,7 @@
                           "properties": {
                             "type": {
                               "type": "string",
-                              "enum": ["team"]
+                              "enum": ["project"]
                             }
                           },
                           "required": ["type"],
@@ -9556,7 +9556,7 @@
                           "properties": {
                             "type": {
                               "type": "string",
-                              "enum": ["team"]
+                              "enum": ["project"]
                             }
                           },
                           "required": ["type"],
@@ -13306,7 +13306,7 @@
                     },
                     "owner": {
                       "type": "string",
-                      "enum": ["member", "team"]
+                      "enum": ["member", "project"]
                     },
                     "provider": {
                       "type": "string"
@@ -13856,7 +13856,7 @@
                           },
                           "owner": {
                             "type": "string",
-                            "enum": ["member", "team"]
+                            "enum": ["member", "project"]
                           },
                           "provider": {
                             "type": "string"
@@ -14474,7 +14474,7 @@
                     },
                     "owner": {
                       "type": "string",
-                      "enum": ["member", "team"]
+                      "enum": ["member", "project"]
                     },
                     "provider": {
                       "type": "string"
@@ -15000,7 +15000,7 @@
                     },
                     "owner": {
                       "type": "string",
-                      "enum": ["member", "team"]
+                      "enum": ["member", "project"]
                     },
                     "provider": {
                       "type": "string"
@@ -15394,7 +15394,7 @@
                     },
                     "owner": {
                       "type": "string",
-                      "enum": ["member", "team"]
+                      "enum": ["member", "project"]
                     },
                     "provider": {
                       "type": "string"
@@ -15890,7 +15890,7 @@
                     },
                     "owner": {
                       "type": "string",
-                      "enum": ["member", "team"]
+                      "enum": ["member", "project"]
                     },
                     "provider": {
                       "type": "string"
@@ -16559,7 +16559,7 @@
                     },
                     "owner": {
                       "type": "string",
-                      "enum": ["member", "team"]
+                      "enum": ["member", "project"]
                     },
                     "provider": {
                       "type": "string"
@@ -16924,7 +16924,7 @@
                     },
                     "owner": {
                       "type": "string",
-                      "enum": ["member", "team"]
+                      "enum": ["member", "project"]
                     },
                     "provider": {
                       "type": "string"
@@ -17486,7 +17486,7 @@
                         },
                         "owner": {
                           "type": "string",
-                          "enum": ["member", "team"]
+                          "enum": ["member", "project"]
                         },
                         "provider": {
                           "type": "string"
@@ -17932,7 +17932,7 @@
                           },
                           "owner": {
                             "type": "string",
-                            "enum": ["member", "team"]
+                            "enum": ["member", "project"]
                           },
                           "provider": {
                             "type": "string"
@@ -18360,7 +18360,7 @@
                           },
                           "owner": {
                             "type": "string",
-                            "enum": ["member", "team"]
+                            "enum": ["member", "project"]
                           },
                           "provider": {
                             "type": "string"
@@ -18836,7 +18836,7 @@
                     },
                     "owner": {
                       "type": "string",
-                      "enum": ["member", "team"]
+                      "enum": ["member", "project"]
                     },
                     "provider": {
                       "type": "string"
@@ -19996,7 +19996,7 @@
                     },
                     "owner": {
                       "type": "string",
-                      "enum": ["member", "team"]
+                      "enum": ["member", "project"]
                     },
                     "provider": {
                       "type": "string"
@@ -21015,7 +21015,7 @@
                           },
                           "owner": {
                             "type": "string",
-                            "enum": ["member", "team"]
+                            "enum": ["member", "project"]
                           },
                           "provider": {
                             "type": "string"
@@ -21479,7 +21479,7 @@
                       },
                       "owner": {
                         "type": "string",
-                        "enum": ["member", "team"]
+                        "enum": ["member", "project"]
                       },
                       "provider": {
                         "type": "string"
@@ -23496,7 +23496,7 @@
                       },
                       "owner": {
                         "type": "string",
-                        "enum": ["member", "team"]
+                        "enum": ["member", "project"]
                       },
                       "provider": {
                         "type": "string"

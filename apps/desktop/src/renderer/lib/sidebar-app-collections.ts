@@ -133,7 +133,7 @@ export function useSidebarAppCollections({
                 description: session.activity ?? undefined,
                 icon: "MessageSquare",
                 badges: [
-                  ...(session.owner === "team" ? ["Team"] : []),
+                  ...(session.owner === "project" ? ["Project"] : []),
                   ...(session.attentionRequired
                     ? ["Needs you"]
                     : session.running

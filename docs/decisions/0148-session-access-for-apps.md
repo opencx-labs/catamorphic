@@ -77,5 +77,5 @@ publication is the builder's approval, as it is for the workflow set.
 - The `sessions` ref only reads. Changing a session (delivering,
   interrupting, archiving, forking) takes the agent ref its chat runs on,
   which no app-widened identity carries. Widening it to other users'
-  sessions is out of scope and would need a new ref. Team chats (ADR 0156)
+  sessions is out of scope and would need a new ref. Project chats (ADR 0156)
   are read and continued through the agent ref, like the member's own.

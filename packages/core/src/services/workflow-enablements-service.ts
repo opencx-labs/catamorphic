@@ -7,7 +7,7 @@ import {
   hasControlPlanePermission,
   isBuilder,
   mayUseProject,
-  teamIdentity,
+  projectPrincipalIdentity,
 } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import type { ConnectionAdmissionService } from "./connection-admission.js";
@@ -148,7 +148,7 @@ export class WorkflowEnablementsService {
           projectId: input.projectId,
           environment: admission.environmentName,
           requirements: target.requirements,
-          unattended: owner.type === "team",
+          unattended: owner.type === "project",
         })
       : [];
     for (const connection of resolved) {
@@ -343,12 +343,12 @@ export class WorkflowEnablementsService {
       !input.includeAll ||
       !hasControlPlanePermission(input.identity, "connections:manage_service")
     ) {
-      // Everyone on the project sees the team's automations; of members'
+      // Everyone in the project sees its project automations; of members'
       // automations, only their own.
-      const seesTeam = mayUseProject(input.identity, input.projectId);
+      const seesProject = mayUseProject(input.identity, input.projectId);
       query = query.where((eb) =>
         eb.or([
-          ...(seesTeam ? [eb("owner_kind", "=", "team")] : []),
+          ...(seesProject ? [eb("owner_kind", "=", "project")] : []),
           eb("owner_external_user_id", "=", input.identity.externalUserId),
         ]),
       );
@@ -368,10 +368,10 @@ export class WorkflowEnablementsService {
       input.enablementId,
       input.identity.tenantId,
     );
-    const readsTeam =
-      row.owner_kind === "team" &&
+    const readsProject =
+      row.owner_kind === "project" &&
       mayUseProject(input.identity, row.project_id);
-    if (!readsTeam)
+    if (!readsProject)
       this.assertMayManage(input.identity, row.project_id, ownerFromRow(row));
     return this.hydrate(row);
   }
@@ -527,11 +527,11 @@ export class WorkflowEnablementsService {
     }
     const storedIdentity = row.owner_identity as unknown as Identity;
     const connections = await this.connectionRows(row.id);
-    // A team automation never runs as the builder who enabled it: it runs
-    // as the team principal, allowed exactly what was consented to.
+    // A project automation never runs as the builder who enabled it: it
+    // runs as the project principal, allowed exactly what was consented to.
     const ownerIdentity =
-      row.owner_kind === "team"
-        ? teamIdentity({
+      row.owner_kind === "project"
+        ? projectPrincipalIdentity({
             tenantId: row.tenant_id,
             projectId: row.project_id,
             environment: row.environment_name,
@@ -733,15 +733,18 @@ export class WorkflowEnablementsService {
     return this.get(input);
   }
 
-  /** Whether this identity may enable, pause and update team automations. */
-  mayManageTeam(input: { identity: Identity; projectId: string }): boolean {
+  /** Whether this identity may enable, pause and update project automations. */
+  mayManageProjectAutomations(input: {
+    identity: Identity;
+    projectId: string;
+  }): boolean {
     return (
       isBuilder(input.identity, input.projectId) ||
       hasControlPlanePermission(input.identity, "connections:manage_service")
     );
   }
 
-  /** A member manages their own; the team's are managed by its builders. */
+  /** A member manages their own; the project's are managed by its builders. */
   private assertMayManage(
     identity: Identity,
     projectId: string,
@@ -753,7 +756,7 @@ export class WorkflowEnablementsService {
     ) {
       return;
     }
-    if (this.mayManageTeam({ identity, projectId })) return;
+    if (this.mayManageProjectAutomations({ identity, projectId })) return;
     throw new AccessDeniedError();
   }
 
@@ -869,7 +872,7 @@ function ownerFromRow(
 ): WorkflowEnablementOwner {
   return row.owner_kind === "member"
     ? { type: "member", externalUserId: row.owner_external_user_id! }
-    : { type: "team" };
+    : { type: "project" };
 }
 
 function mapResolvedConnection(

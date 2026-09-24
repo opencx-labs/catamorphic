@@ -14,6 +14,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   ArrowUp,
   Bot,
+  Box,
   Columns2,
   Ghost,
   Globe,
@@ -23,7 +24,6 @@ import {
   Paperclip,
   PictureInPicture2,
   Radio,
-  Users,
   X,
 } from "lucide-react";
 import {
@@ -2133,14 +2133,14 @@ function ChatDockContent({
                       Incognito
                     </span>
                   )}
-                  {chat.session?.owner === "team" && (
-                    <ShortcutHint label="Team chat: everyone on the project sees and continues it">
+                  {chat.session?.owner === "project" && (
+                    <ShortcutHint label="Project chat: everyone in the project can see and continue it">
                       <span
                         className="flex shrink-0 items-center gap-1 rounded-full border border-border-strong bg-bg-inset px-1.5 py-0.5 text-[10px] font-medium text-fg-muted"
-                        data-testid="chat-team-badge"
+                        data-testid="chat-project-badge"
                       >
-                        <Users className="size-3" />
-                        Team
+                        <Box className="size-3" />
+                        Project
                       </span>
                     </ShortcutHint>
                   )}

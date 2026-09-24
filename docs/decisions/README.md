@@ -99,7 +99,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0084](0084-first-release-database-baseline.md) | First-release database schema baseline | Accepted |
 | [0085](0085-desktop-stable-and-preview-channels.md) | Desktop Stable and Preview release channels | Accepted |
 | [0086](0086-provider-neutral-workflow-enablement-connections.md) | Provider-neutral workflow enablement connections | Accepted |
-| [0087](0087-workflow-woken-session-attention.md) | Workflow-woken sessions are the notification record | Superseded by 0156 (who a wake reaches) |
+| [0087](0087-workflow-woken-session-attention.md) | Workflow-woken sessions are the notification record | Superseded by 0156 (who a workflow's chat reaches) |
 | [0088](0088-desktop-web-links-stay-in-workspace.md) | Desktop web links stay in the workspace | Accepted |
 | [0089](0089-project-shaped-member-shell.md) | Project-shaped member shell and durable session provenance | Accepted |
 | [0090](0090-first-class-subsessions-and-delegation.md) | First-class subsessions and explicit delegation grants | Accepted |
@@ -170,5 +170,5 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0153](0153-downloads-in-the-dock.md) | Downloads in the dock: no save dialog, a dock button with progress, a Downloads page | Accepted |
 | [0154](0154-profile-history.md) | History belongs to the profile: loose files, the project as an attribute, a project scope on the page | Accepted |
 | [0155](0155-shells-background-commands-and-live-status.md) | Native shells, host background commands, and the agent's live status | Accepted |
-| [0156](0156-team-automations-webhooks-and-command-watches.md) | Team automations, webhooks, and command watches | Accepted |
+| [0156](0156-project-automations-webhooks-and-command-watches.md) | Project automations, one deliver, webhooks, and command watches | Accepted |
 | [0157](0157-workflow-status-chrome.md) | Workflow tabs: status chrome and a panel that follows its subject | Accepted |

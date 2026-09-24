@@ -478,7 +478,7 @@ Rules of thumb when authoring roles:
 - A member sees a workflow only when a role grants its exported name. An
   unattended workflow also needs role grants for its chosen Environment and
   every declared connection alias. Grant the project agent too when the
-  workflow wakes that agent.
+  workflow delivers work to a chat with that agent.
 - Keep roles few and readable; membership (who has which role and grants)
   is the host's, not a file here.
 

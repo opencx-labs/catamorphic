@@ -113,6 +113,7 @@ export interface AgentSessions {
   authority_revision: Generated<Int8>;
   authority_seen_at: Generated<Timestamp>;
   base_commit_sha: string | null;
+  chat_key: string | null;
   created_at: Generated<Timestamp>;
   environment_name: string | null;
   external_user_id: string;
@@ -137,7 +138,6 @@ export interface AgentSessions {
   title: string | null;
   todos: Generated<Json>;
   updated_at: Generated<Timestamp>;
-  wake_key: string | null;
   work_status: Generated<string>;
 }
 

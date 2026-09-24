@@ -298,6 +298,33 @@ defineWorkflow(({ defineBoundary }) => ({
   ],
 }));
 
+// An object or null is JSON: a boundary may hand "nothing found" onward.
+defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ input }: BoundaryContext<OrderInput>) => ({
+        order: input.orderId ? { id: input.orderId, lines: [1, 2] } : null,
+      }),
+    }),
+    defineBoundary({
+      run: ({
+        input,
+      }: BoundaryContext<{ order: { id: string; lines: number[] } | null }>) =>
+        input.order?.id ?? "none",
+    }),
+  ],
+}));
+
+defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    // @ts-expect-error A Date or null is still not JSON-compatible.
+    defineBoundary({
+      run: ({ input }: BoundaryContext<{ createdAt: Date | null }>) =>
+        input.createdAt?.toISOString() ?? "",
+    }),
+  ],
+}));
+
 defineWorkflow(({ defineBoundary }) => ({
   steps: [
     // @ts-expect-error Boundary outputs must be JSON-compatible.

@@ -190,10 +190,13 @@ optional HMAC check are its credential. Builders list URLs with
 `GET <api>/projects/:projectId/webhooks` and rotate one with
 `POST <api>/projects/:projectId/webhooks/:name/rotate`. See ADR 0156.
 
-Enablements belong to a member or to the team (`owner: { type: "team" }`). A
-team enablement runs as the project's team principal with shared connections,
-and its `wake` calls reach a team chat every member of the agent's role sees
-(`AgentSession.owner === "team"`), or one member with `audience: { member }`.
+Enablements belong to a member or to the project (`owner: { type: "project"
+}`). A project enablement runs as the project principal with shared
+connections. Workflows reach chats with one operation,
+`catamorphic.sessions.deliver`, naming the chat by `sessionId` or by a `key`
+that starts the chat on first use; a project automation's keyed chats are
+project chats every member of the agent's role sees (`AgentSession.owner ===
+"project"`), or one member's with `audience: { member }`.
 
 ### Observability
 
@@ -840,7 +843,7 @@ with `connections:manage_service`. An Environment binding chooses allowed
 principal kinds, capabilities, and any assigned service connection. A trigger
 scan is the unattended enablement boundary: it must resolve every required
 alias to an assigned service connection, then freezes those ids for dispatch.
-Member connections are never eligible for team automations (schedules,
+Member connections are never eligible for project automations (schedules,
 webhooks and events that run while nobody is present). To prevent a
 privileged service action from running in a local Environment, do not create
 that alias binding there and grant it only in the managed Environment.

@@ -15,12 +15,12 @@ import {
   type WorkflowEnablementPreview,
 } from "@catamorphic/react";
 import {
+  Box,
   Check,
   CircleAlert,
   Copy,
   RefreshCw,
   ShieldCheck,
-  Users,
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -28,7 +28,7 @@ import { AuthenticationRequiredCard } from "./authentication-required-card.js";
 import { PendingButton } from "./pending-button.js";
 
 type Requirement = AgentAuthenticationRequired["requirements"][number];
-type Audience = "member" | "team";
+type Audience = "member" | "project";
 
 /** The preview refused because the workflow is only saved, not published. */
 function notPublished(error: unknown): boolean {
@@ -83,8 +83,11 @@ export function WorkflowEnablementPanel({
   const [publishNote, setPublishNote] = useState<string | null>(null);
   /** Why enabling waits on publishing, when it does. */
   const [unpublished, setUnpublished] = useState<string | null>(null);
-  const canManageTeam = enablements.data?.canManageTeam ?? false;
-  const webhooks = useWebhooks(projectId, { enabled: canManageTeam });
+  const canManageProjectAutomations =
+    enablements.data?.canManageProjectAutomations ?? false;
+  const webhooks = useWebhooks(projectId, {
+    enabled: canManageProjectAutomations,
+  });
   const workflowWebhooks =
     webhooks.data?.filter((item) => item.workflows.includes(workflowName)) ??
     [];
@@ -174,7 +177,7 @@ export function WorkflowEnablementPanel({
   const items = enablements.data?.items ?? [];
   const environmentLabel = (name: string) =>
     environments.data?.items.find((item) => item.name === name)?.label ?? name;
-  const reviewingTeam = review?.owner.type === "team";
+  const reviewingProject = review?.owner.type === "project";
   const resetReview = () => {
     setReview(null);
     setRequirements([]);
@@ -239,16 +242,16 @@ export function WorkflowEnablementPanel({
         className={`min-h-0 flex-1 overflow-y-auto text-xs ${inline ? "px-5 py-4" : "p-3"}`}
       >
         <p className="text-fg-muted">
-          {canManageTeam
+          {canManageProjectAutomations
             ? "Choose who this workflow runs for. It uses only the environment and connections shown here."
             : "Enable this reviewed workflow for your account. It uses only the environment and connections shown here."}
         </p>
 
-        {canManageTeam && (
+        {canManageProjectAutomations && (
           <fieldset className="mt-4">
             <legend className="mb-1 block font-medium">Runs for</legend>
             <div className="grid grid-cols-2 gap-1 rounded-md border border-border bg-bg-inset p-0.5">
-              {(["member", "team"] as const).map((option) => (
+              {(["member", "project"] as const).map((option) => (
                 <button
                   key={option}
                   type="button"
@@ -264,13 +267,13 @@ export function WorkflowEnablementPanel({
                       : "text-fg-muted hover:text-fg"
                   }`}
                 >
-                  {option === "member" ? "Just me" : "The team"}
+                  {option === "member" ? "Just me" : "The project"}
                 </button>
               ))}
             </div>
             <p className="mt-1.5 text-fg-muted">
-              {audience === "team"
-                ? "Runs for the whole project, not as you. Chats it starts are shared with the team."
+              {audience === "project"
+                ? "Runs for the whole project, not as you. Chats it starts are shared with everyone in the project."
                 : "Runs as you, with your connections. Chats it starts are yours."}
             </p>
           </fieldset>
@@ -340,12 +343,16 @@ export function WorkflowEnablementPanel({
                 void prepare({
                   workflowName,
                   ...(environment ? { environment } : {}),
-                  ...(audience === "team" ? { owner: { type: "team" } } : {}),
+                  ...(audience === "project"
+                    ? { owner: { type: "project" } }
+                    : {}),
                 });
               }}
               className="mt-3 h-8 cursor-pointer rounded-md bg-accent px-3 font-medium text-accent-fg disabled:opacity-50"
             >
-              {audience === "team" ? "Enable for the team" : "Enable for me"}
+              {audience === "project"
+                ? "Enable for the project"
+                : "Enable for me"}
             </PendingButton>
           )}
 
@@ -369,7 +376,9 @@ export function WorkflowEnablementPanel({
             </div>
             <dl className="mt-3 grid grid-cols-[88px_1fr] gap-x-2 gap-y-1.5 text-fg-muted">
               <dt>Owner</dt>
-              <dd className="text-fg">{reviewingTeam ? "The team" : "You"}</dd>
+              <dd className="text-fg">
+                {reviewingProject ? "The project" : "You"}
+              </dd>
               <dt>Environment</dt>
               <dd className="text-fg">
                 {environmentLabel(review.environment)}
@@ -403,8 +412,8 @@ export function WorkflowEnablementPanel({
               </dd>
             </dl>
             <p className="mt-3 text-fg-muted">
-              {reviewingTeam
-                ? "This workflow runs for the team whenever it is triggered, including when nobody is online. Anyone who manages the project can pause it. Changes to its deployment or access require review."
+              {reviewingProject
+                ? "This workflow runs for the project whenever it is triggered, including when nobody is online. Anyone who manages the project can pause it. Changes to its deployment or access require review."
                 : "This workflow may run when you are away. You can pause it at any time. Changes to its deployment or access require review. Access is checked before every run and connection action."}
             </p>
             <div className="mt-3 flex gap-2">
@@ -435,7 +444,7 @@ export function WorkflowEnablementPanel({
           >
             <p>{unpublished}</p>
             {publishNote && <p className="mt-2 text-warning">{publishNote}</p>}
-            {canManageTeam ? (
+            {canManageProjectAutomations ? (
               <PendingButton
                 type="button"
                 pending={publish.isPending || preview.isPending}
@@ -473,8 +482,8 @@ export function WorkflowEnablementPanel({
           <h3 className="font-medium">Enabled</h3>
           <div className="mt-2 space-y-2">
             {items.map((item) => {
-              const team = item.owner.type === "team";
-              const manageable = !team || canManageTeam;
+              const forProject = item.owner.type === "project";
+              const manageable = !forProject || canManageProjectAutomations;
               return (
                 <div
                   key={item.id}
@@ -483,8 +492,8 @@ export function WorkflowEnablementPanel({
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="flex items-center gap-1.5 font-medium">
-                      {team && <Users className="size-3.5 text-fg-muted" />}
-                      {team ? "For the team" : "For you"}
+                      {forProject && <Box className="size-3.5 text-fg-muted" />}
+                      {forProject ? "For the project" : "For you"}
                       <span className="font-normal text-fg-muted">
                         ·{" "}
                         {item.status === "active"
@@ -622,7 +631,7 @@ function WebhookUrl({
       </div>
       <p className="mt-1.5 text-fg-muted">
         {onlyThisComputer(webhook.url)
-          ? "This address only works on this computer. To receive requests from other services, enable the workflow on your team's server."
+          ? "This address only works on this computer. To receive requests from other services, enable the workflow on your project's server."
           : `Anyone with this URL can send requests${webhook.verified ? " signed with the project's secret" : ""}. Keep it private.`}
       </p>
       {confirmRotate ? (

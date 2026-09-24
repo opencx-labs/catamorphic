@@ -38,6 +38,24 @@ export interface QueuedSessionAction {
   created: boolean;
 }
 type Target = { sessionId: string; expectedStateRevision?: number };
+/** A chat by id, or the chat this workflow keeps for a key. */
+type DeliverTarget =
+  | { sessionId: string; key?: never }
+  | {
+      key: string;
+      sessionId?: never;
+      /**
+       * Whose chat a keyed chat is (ADR 0156). A member's automation reaches
+       * only that member; a project automation reaches the project chat,
+       * open to everyone whose role reaches the agent, unless it names a
+       * member.
+       */
+      audience?: "project" | { member: string };
+      /** The project agent that answers in a new chat. */
+      agentSlug?: string;
+      title?: string;
+      environment?: string;
+    };
 type Action = Target & { idempotencyKey: string };
 type Call<Input, Output = unknown> = (
   input: Input,
@@ -52,35 +70,37 @@ export interface SessionHostOperations {
     Target & { limit?: number },
     { sessionId: string; messages: SessionHistoryMessage[] }
   >;
+  /**
+   * Send a message to a chat. Name it by `sessionId`, or by `key`: the chat
+   * this workflow keeps for that key, started on first use and reused after
+   * (one per pull request, one per day). `mode` decides what the agent does:
+   * `next_turn` (default) starts or queues its work, `message_only` only
+   * records the message, `interrupt` redirects work in progress.
+   */
   deliver: Call<
+    DeliverTarget & {
+      content: string;
+      mode?: "message_only" | "next_turn" | "interrupt";
+      /** Flag this message itself for the person's attention. */
+      attention?: "required" | "none";
+      /**
+       * Alert the chat's people when the agent's turn settles. A chat named
+       * by `key` always does; pass this to customize it, or to alert on a
+       * chat named by `sessionId`.
+       */
+      notification?: { title?: string; body?: string };
+      /** Defaults to one delivery per run, chat and content. */
+      idempotencyKey?: string;
+    },
     {
       sessionId: string;
-      content: string;
-      mode: "message_only" | "next_turn" | "interrupt";
-      attention?: "required" | "none";
-      idempotencyKey: string;
-    },
-    { messageId: string; turnId: string | null; created: boolean }
-  >;
-  /**
-   * Start or continue the chat for `key`, and deliver `content` to its
-   * agent. `audience` says whose chat it is (ADR 0156): the whole team's
-   * (shared with everyone whose role reaches the agent), or one member's.
-   * A member's automation wakes that member's chat; a team automation
-   * wakes the team's chat unless it names a member.
-   */
-  wake: Call<
-    {
-      key: string;
-      audience?: "team" | { member: string };
-      agentSlug?: string;
-      mode?: "next_turn" | "interrupt";
-      notification?: { title?: string; body?: string };
-      content: string;
-      environment?: string;
-      title?: string;
-    },
-    { sessionId: string }
+      /** A chat named by `key` was started by this delivery. */
+      sessionCreated: boolean;
+      messageId: string;
+      turnId: string | null;
+      /** False when an earlier delivery with the same idempotency key won. */
+      created: boolean;
+    }
   >;
   create: Call<
     Action & { agentId?: string; title?: string },

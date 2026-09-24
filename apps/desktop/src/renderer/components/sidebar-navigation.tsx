@@ -3,13 +3,13 @@ import { useWorkflows } from "@catamorphic/react";
 import type { AgentSession } from "@catamorphic/react/types";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  Box,
   ChevronRight,
   GitBranch,
   LoaderCircle,
   PanelRight,
   Plus,
   Search,
-  Users,
 } from "lucide-react";
 import {
   type ReactNode,
@@ -1130,11 +1130,11 @@ function SessionsNav({
               labelContent={
                 <>
                   <AnimatedTitle text={sessionLabel(session)} />
-                  {session.owner === "team" && (
-                    <Users
+                  {session.owner === "project" && (
+                    <Box
                       className="ml-1.5 size-3 shrink-0 text-fg-faint"
-                      aria-label="Team chat"
-                      data-testid="sidebar-team-chat"
+                      aria-label="Project chat"
+                      data-testid="sidebar-project-chat"
                     />
                   )}
                   {session.attentionRequired ? (
@@ -1153,8 +1153,8 @@ function SessionsNav({
                 description: session.activity ?? undefined,
                 metadata: [
                   { label: "Agent", value: agentName },
-                  ...(session.owner === "team"
-                    ? [{ label: "Belongs to", value: "The team" }]
+                  ...(session.owner === "project"
+                    ? [{ label: "Belongs to", value: "The project" }]
                     : []),
                   {
                     label: "Environment",

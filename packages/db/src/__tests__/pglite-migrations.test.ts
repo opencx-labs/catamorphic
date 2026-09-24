@@ -56,7 +56,7 @@ describe("PGlite migrations", () => {
       "016_app_icons.sql",
       "017_session_workflow_events.sql",
       "018_session_actions.sql",
-      "019_team_automations.sql",
+      "019_project_automations.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

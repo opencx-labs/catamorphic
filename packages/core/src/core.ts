@@ -32,6 +32,11 @@ import {
   type CapabilityProviderRuntime,
   CapabilityRegistry,
 } from "./services/capability-providers.js";
+import {
+  chatOwner,
+  defaultDeliveryKey,
+  parseChatDelivery,
+} from "./services/chat-delivery.js";
 import { ClientRunnersService } from "./services/client-runners-service.js";
 import {
   type CodingAgentRegistry,
@@ -112,7 +117,6 @@ import {
   type PushNotificationTransport,
   UserNotificationsService,
 } from "./services/user-notifications-service.js";
-import { wakeAudience } from "./services/wake-audience.js";
 import { WatchersService } from "./services/watchers-service.js";
 import { WebhooksService } from "./services/webhooks-service.js";
 import { WorkflowEnablementsService } from "./services/workflow-enablements-service.js";
@@ -460,7 +464,7 @@ export class CatamorphicCore {
     const sessionDeliveryCapability: CapabilityProviderRuntime = {
       name: "catamorphic.sessions",
       description:
-        "Deliver to an existing agent session or wake a stable member session",
+        "Read and act on chats; deliver messages to a chat by id or by a workflow key",
       calls: {
         ...Object.fromEntries(
           Object.keys(SESSION_ACTION_SCHEMAS).map((operation) => [
@@ -506,11 +510,47 @@ export class CatamorphicCore {
             },
           });
         },
-        wake: async (context, args) => {
+        deliver: async (context, args) => {
           if (!this.agentSessions) {
             throw new Error("Coding agents are not configured");
           }
-          const input = sessionWakeArgs(args);
+          const input = parseChatDelivery(args);
+          const origin = await this.workflowSessionOrigin(context);
+          const idempotencyKey =
+            input.idempotencyKey ??
+            defaultDeliveryKey({
+              runId: context.runId,
+              chat: "sessionId" in input ? input.sessionId : input.key,
+              content: input.content,
+            });
+          const message = {
+            content: input.content,
+            author: origin.author,
+            mode: input.mode,
+            ...(input.attention ? { attention: input.attention } : {}),
+            idempotencyKey,
+            metadata: {
+              provenance: origin.provenance,
+              causation: origin.causation,
+              ...(input.notification || "key" in input
+                ? { workflowNotification: input.notification ?? {} }
+                : {}),
+            },
+          };
+          if ("sessionId" in input) {
+            const receipt = await this.agentSessions.deliver(
+              context.caller,
+              context.projectId,
+              input.sessionId,
+              message,
+            );
+            return {
+              ...receipt,
+              sessionId: input.sessionId,
+              sessionCreated: false,
+            };
+          }
+          // A chat named by key belongs to whoever the automation serves.
           const run = await this.db
             .selectFrom("workflow_runs")
             .select(["workflow_enablement_id", "environment_name"])
@@ -532,7 +572,7 @@ export class CatamorphicCore {
             input.environment ??
             run?.environment_name ??
             undefined;
-          const owner = await wakeAudience({
+          const owner = await chatOwner({
             caller: context.caller,
             projectId: context.projectId,
             audience: input.audience,
@@ -540,37 +580,24 @@ export class CatamorphicCore {
             environment,
             resolveMember: this.resolveMember,
           });
-          return this.agentSessions.wake(owner, context.projectId, {
-            ...input,
-            wakeKey: JSON.stringify([context.workflowName, input.key]),
-            origin: await this.workflowSessionOrigin(context),
-            ...(environment ? { environment } : {}),
-            workflowName: context.workflowName,
-            runId: context.runId,
-          });
-        },
-        deliver: async (context, args) => {
-          if (!this.agentSessions) {
-            throw new Error("Coding agents are not configured");
-          }
-          const input = sessionDeliveryArgs(args);
-          const origin = await this.workflowSessionOrigin(context);
-          return this.agentSessions.deliver(
-            context.caller,
+          const chat = await this.agentSessions.chatForKey(
+            owner,
             context.projectId,
-            input.sessionId,
             {
-              content: input.content,
-              author: origin.author,
-              metadata: {
-                provenance: origin.provenance,
-                causation: origin.causation,
-              },
-              mode: input.mode,
-              attention: input.attention,
-              idempotencyKey: input.idempotencyKey,
+              chatKey: JSON.stringify([context.workflowName, input.key]),
+              ...(input.agentSlug ? { agentSlug: input.agentSlug } : {}),
+              ...(environment ? { environment } : {}),
+              ...(input.title ? { title: input.title } : {}),
+              origin,
             },
           );
+          const receipt = await this.agentSessions.deliver(
+            owner,
+            context.projectId,
+            chat.sessionId,
+            message,
+          );
+          return { ...receipt, ...chat };
         },
       },
     };
@@ -1115,152 +1142,4 @@ function requireAllocationId(allocationId: string | null): string {
     throw new Error("Workflow execution requires an Environment Allocation");
   }
   return allocationId;
-}
-
-function sessionDeliveryArgs(value: unknown): {
-  sessionId: string;
-  content: string;
-  mode: "message_only" | "next_turn" | "interrupt";
-  attention?: "required" | "none";
-  idempotencyKey?: string;
-} {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("catamorphic.sessions.deliver expects an object");
-  }
-  const input = value as Record<string, unknown>;
-  if (typeof input.sessionId !== "string" || !input.sessionId) {
-    throw new Error("sessionId must be a non-empty string");
-  }
-  if (typeof input.content !== "string" || !input.content.trim()) {
-    throw new Error("content must be a non-empty string");
-  }
-  if (
-    input.mode !== "message_only" &&
-    input.mode !== "next_turn" &&
-    input.mode !== "interrupt"
-  ) {
-    throw new Error("mode must be message_only, next_turn, or interrupt");
-  }
-  if (
-    input.idempotencyKey !== undefined &&
-    typeof input.idempotencyKey !== "string"
-  ) {
-    throw new Error("idempotencyKey must be a string");
-  }
-  if (
-    input.attention !== undefined &&
-    input.attention !== "none" &&
-    input.attention !== "required"
-  )
-    throw new Error("attention must be none or required");
-  return {
-    attention: input.attention,
-    sessionId: input.sessionId,
-    content: input.content,
-    mode: input.mode,
-    ...(typeof input.idempotencyKey === "string"
-      ? { idempotencyKey: input.idempotencyKey }
-      : {}),
-  };
-}
-
-/** Who a wake reaches: the team's chat, or one member's (ADR 0156). */
-function wakeAudienceArg(
-  value: unknown,
-): "team" | { member: string } | undefined {
-  if (value === undefined) return undefined;
-  if (value === "team") return "team";
-  if (
-    value &&
-    typeof value === "object" &&
-    "member" in value &&
-    typeof value.member === "string" &&
-    value.member.trim()
-  )
-    return { member: value.member.trim() };
-  throw new Error('audience must be "team" or { member: "<user id>" }');
-}
-
-function sessionWakeArgs(value: unknown): {
-  key: string;
-  audience?: "team" | { member: string };
-  content: string;
-  agentSlug?: string;
-  environment?: string;
-  title?: string;
-  mode?: "next_turn" | "interrupt";
-  notification?: { title?: string; body?: string };
-} {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("catamorphic.sessions.wake expects an object");
-  }
-  const input = value as Record<string, unknown>;
-  const requiredString = (name: "key" | "content") => {
-    const item = input[name];
-    if (typeof item !== "string" || !item.trim()) {
-      throw new Error(`${name} must be a non-empty string`);
-    }
-    return item.trim();
-  };
-  const optionalString = (name: string, max: number) => {
-    const item = input[name];
-    if (item === undefined) return undefined;
-    if (typeof item !== "string" || !item.trim() || item.length > max) {
-      throw new Error(
-        `${name} must be a non-empty string up to ${max} characters`,
-      );
-    }
-    return item.trim();
-  };
-  const key = requiredString("key");
-  if (key.length > 200) throw new Error("key must be 200 characters or fewer");
-  const mode = input.mode;
-  if (mode !== undefined && mode !== "next_turn" && mode !== "interrupt") {
-    throw new Error("mode must be next_turn or interrupt");
-  }
-  const notification = input.notification;
-  if (
-    notification !== undefined &&
-    (!notification ||
-      typeof notification !== "object" ||
-      Array.isArray(notification))
-  ) {
-    throw new Error("notification must be an object");
-  }
-  const notificationRecord = notification as
-    | Record<string, unknown>
-    | undefined;
-  const notificationString = (name: "title" | "body", max: number) => {
-    const item = notificationRecord?.[name];
-    if (item === undefined) return undefined;
-    if (typeof item !== "string" || !item.trim() || item.length > max) {
-      throw new Error(
-        `notification.${name} must be a non-empty string up to ${max} characters`,
-      );
-    }
-    return item.trim();
-  };
-  const notificationTitle = notificationString("title", 200);
-  const notificationBody = notificationString("body", 500);
-  const agentSlug = optionalString("agentSlug", 255);
-  const environment = optionalString("environment", 255);
-  const title = optionalString("title", 500);
-  const audience = wakeAudienceArg(input.audience);
-  return {
-    key,
-    ...(audience ? { audience } : {}),
-    content: requiredString("content"),
-    ...(agentSlug ? { agentSlug } : {}),
-    ...(environment ? { environment } : {}),
-    ...(title ? { title } : {}),
-    ...(mode ? { mode } : {}),
-    ...(notificationTitle || notificationBody
-      ? {
-          notification: {
-            ...(notificationTitle ? { title: notificationTitle } : {}),
-            ...(notificationBody ? { body: notificationBody } : {}),
-          },
-        }
-      : {}),
-  };
 }

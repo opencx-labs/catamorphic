@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   type ArtifactRef,
   type Identity,
-  TEAM_PRINCIPAL_ID,
+  PROJECT_PRINCIPAL_ID,
 } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
 import type { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
@@ -251,22 +251,26 @@ describe("WorkflowEnablementsService", () => {
     ).toMatchObject({ status: "active", suspensionReason: null });
   });
 
-  it("team automations: builders enable them, members see them, runs are the team's", async () => {
+  it("project automations: builders enable them, members see them, runs are the project's", async () => {
     const builder: Identity = {
       tenantId,
       externalUserId: "builder",
       scope: [{ kind: "project", projectId }],
       executionScope: [{ projectId, name: "local" }],
     };
-    const team = { type: "team" as const };
-    expect(service.mayManageTeam({ identity: memberA, projectId })).toBe(false);
-    expect(service.mayManageTeam({ identity: builder, projectId })).toBe(true);
+    const forProject = { type: "project" as const };
+    expect(
+      service.mayManageProjectAutomations({ identity: memberA, projectId }),
+    ).toBe(false);
+    expect(
+      service.mayManageProjectAutomations({ identity: builder, projectId }),
+    ).toBe(true);
     await expect(
       service.preview({
         identity: memberA,
         projectId,
         workflowName: "watchInbox",
-        owner: team,
+        owner: forProject,
       }),
     ).rejects.toBeInstanceOf(AccessDeniedError);
 
@@ -274,18 +278,18 @@ describe("WorkflowEnablementsService", () => {
       identity: builder,
       projectId,
       workflowName: "watchInbox",
-      owner: team,
+      owner: forProject,
     });
     const created = await service.create({
       identity: builder,
       projectId,
       workflowName: "watchInbox",
-      owner: team,
+      owner: forProject,
       consentDigest: preview.consentDigest,
     });
-    expect(created.owner).toEqual(team);
+    expect(created.owner).toEqual(forProject);
 
-    // Everyone sees the team's automation; only its managers change it.
+    // Everyone sees the project's automation; only its managers change it.
     for (const member of [memberA, memberB]) {
       expect(
         (await service.list({ identity: member, projectId })).map(
@@ -297,13 +301,13 @@ describe("WorkflowEnablementsService", () => {
       service.disable({ identity: memberA, enablementId: created.id }),
     ).rejects.toBeInstanceOf(AccessDeniedError);
 
-    // It runs as the team, never as the builder who switched it on.
+    // It runs as the project, never as the builder who switched it on.
     const revalidated = await service.revalidate({
       identity: builder,
       enablementId: created.id,
     });
     expect(revalidated.ownerIdentity).toMatchObject({
-      externalUserId: TEAM_PRINCIPAL_ID,
+      externalUserId: PROJECT_PRINCIPAL_ID,
       scope: [{ kind: "project", projectId }],
       executionScope: [{ projectId, name: "local" }],
     });

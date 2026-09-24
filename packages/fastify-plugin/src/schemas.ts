@@ -190,7 +190,7 @@ export const TriggerBindingInfoSchema = z.object({
 
 export const WorkflowEnablementOwnerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("member"), externalUserId: z.string().min(1) }),
-  z.object({ type: z.literal("team") }),
+  z.object({ type: z.literal("project") }),
 ]);
 
 export const WorkflowEnablementConnectionSchema = z.object({
@@ -1013,7 +1013,7 @@ export const AgentSessionSchema = z.object({
   id: z.string().uuid(),
   projectId: z.string().uuid(),
   externalUserId: z.string(),
-  owner: z.enum(["member", "team"]),
+  owner: z.enum(["member", "project"]),
   provider: z.string(),
   source: AgentSessionSourceSchema,
   providerSessionId: z.string().nullable(),

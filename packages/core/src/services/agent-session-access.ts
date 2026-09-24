@@ -2,7 +2,7 @@ import type { Identity } from "../identity.js";
 import {
   type AgentRef,
   isBuilder,
-  isTeamPrincipal,
+  isProjectPrincipal,
   scopeCovers,
   scopeCoversSessions,
 } from "../identity.js";
@@ -20,7 +20,7 @@ import { AccessDeniedError } from "./artifact-scope.js";
  * a session (delivering, interrupting, archiving, forking) takes the agent
  * ref its chat runs on, which no app-widened identity carries.
  *
- * A team chat (owned by the team principal, ADR 0156) is shared: anyone
+ * A project chat (owned by the project principal, ADR 0156) is shared: anyone
  * whose role reaches its agent reads it and works in it.
  */
 export function assertAgentSessionAccess(args: {
@@ -31,7 +31,7 @@ export function assertAgentSessionAccess(args: {
   intent: "read" | "change";
 }): void {
   if (isBuilder(args.identity, args.projectId)) return;
-  if (isTeamPrincipal(args.externalUserId)) {
+  if (isProjectPrincipal(args.externalUserId)) {
     if (coveringProjectAgentRef(args)) return;
     throw new AccessDeniedError();
   }

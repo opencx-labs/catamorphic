@@ -235,14 +235,17 @@ There is one Workflow model and one Run model:
 Workflow and Run capabilities determine available controls. Do not add a public
 stage concept or separate API, SDK, hook, or UI families for these mechanics.
 
-A member-owned workflow can call
-`context.host["catamorphic.sessions"].wake({ key, agentSlug, content, title?,
-notification? })`. Core reuses one active session per member, workflow, and
-stable key, queues the normal agent turn, and requests durable attention when
-it settles. Clients poll the ordinary session list, render
+A workflow reaches chats with one operation,
+`context.host["catamorphic.sessions"].deliver(...)`: `{ sessionId }` for a
+known chat, or `{ key, agentSlug?, title?, audience?, notification? }` for the
+chat it keeps for that key. Core reuses one active chat per owner, workflow,
+and key (starting it on first use), queues the normal agent turn, and requests
+durable attention when a keyed chat's turn settles. The owner follows the
+enablement: a member's automation reaches that member; a project automation
+reaches a project chat (`AgentSession.owner === "project"`) or a named member
+(`audience: { member }`). Clients poll the ordinary session list, render
 `attentionRequired`, and acknowledge it through the generated API. Web Push
 is optional transport to the same session, not a separate notification inbox.
-Service-owned enablements cannot infer a human recipient and fail closed.
 
 Delegated work is represented by ordinary durable child sessions. Keep
 `parentSessionId` (hierarchy), `forkedFromSessionId` (transcript lineage), and

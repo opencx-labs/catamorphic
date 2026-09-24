@@ -90,11 +90,11 @@ their connection providers when embedding `buildStockServer`. Service accounts
 are explicit project or tenant service connections and are never inferred from
 a member login. Unattended workflows use the connections authorized by their
 explicit enablement, including member connections for member-owned enablements.
-Team enablements use only project and tenant service connections.
+Project enablements use only project and tenant service connections.
 
 Workflows can start from webhooks: `trigger("webhook", { name })` gives each
 name a public URL under `CATAMORPHIC_PUBLIC_URL` (`/api/hooks/...`), shown to
-builders in the workflow's Automate panel with copy and replace controls.
+builders in the workflow's **Automatic** view with copy and replace controls.
 
 ## Remote development resources
 

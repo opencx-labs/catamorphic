@@ -91,7 +91,7 @@ current source when documentation and the installed version differ.
   checking the installed version.
 - Treating login as project access or assigning a silent default role.
 - Treating account authentication as consent to enable every compatible
-  workflow, or waking one member's personal chat from a team automation
+  workflow, or reaching one member's personal chat from a project automation
   without naming that member.
 - Targeting project presentation by role slug instead of resolved builder
   state and namespaced permissions.

@@ -189,7 +189,6 @@ function lookupStepMetadata(
 
 /** Chat operations a workflow asks the host for (catamorphic.sessions). */
 const SESSION_OPERATION_LABELS: Record<string, string> = {
-  wake: "Wake a chat",
   deliver: "Message a chat",
   create: "Start a chat",
   fork: "Fork a chat",
@@ -208,7 +207,7 @@ const SESSION_OPERATION_LABELS: Record<string, string> = {
 
 /**
  * A readable label for a host call such as
- * `context.host["catamorphic.sessions"].wake` or
+ * `context.host["catamorphic.sessions"].deliver` or
  * `context.connections.gmail.search`, so the canvas never shows code.
  */
 function hostCallLabel(

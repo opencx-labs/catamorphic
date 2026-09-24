@@ -445,7 +445,7 @@ export const triage = defineWorkflow(({ defineBoundary }) => ({
     }),
     defineBoundary({
       run: ({ input, host }: BoundaryContext<{ id: string }>) =>
-        host["catamorphic.sessions"].wake({ key: input.id, content: "Triage" }),
+        host["catamorphic.sessions"].deliver({ key: input.id, content: "Triage" }),
     }),
   ],
 }));
@@ -453,7 +453,7 @@ export const triage = defineWorkflow(({ defineBoundary }) => ({
     const labels = graph.nodes
       .filter((node) => node.type === "step")
       .map((node) => node.label);
-    expect(labels).toEqual(["Gmail: search threads", "Wake a chat"]);
+    expect(labels).toEqual(["Gmail: search threads", "Message a chat"]);
   });
 });
 
@@ -462,7 +462,7 @@ describe("descriptions", () => {
     const graph = parseWorkflow(`
 /**
  * Triage an inbound request in a chat the whole
- * team can see.
+ * project can see.
  *
  * The form posts to the support webhook.
  * @displayname Triage
@@ -472,7 +472,7 @@ export const triage = defineWorkflow(({ defineBoundary }) => ({
 }));
 `);
     expect(graph.description).toBe(
-      "Triage an inbound request in a chat the whole team can see.\n\nThe form posts to the support webhook.",
+      "Triage an inbound request in a chat the whole project can see.\n\nThe form posts to the support webhook.",
     );
   });
 });

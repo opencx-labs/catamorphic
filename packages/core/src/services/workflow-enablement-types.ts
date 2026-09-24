@@ -4,12 +4,12 @@ export type WorkflowEnablementStatus = "active" | "suspended" | "disabled";
 
 /**
  * Who an enablement acts for (ADR 0156): one member, with their own
- * authority, or the project's team, running as the team principal with
+ * authority, or the project itself, running as the project principal with
  * the connections a builder consented to.
  */
 export type WorkflowEnablementOwner =
   | { type: "member"; externalUserId: string }
-  | { type: "team" };
+  | { type: "project" };
 
 export interface WorkflowEnablementConnection {
   alias: string;

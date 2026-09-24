@@ -256,7 +256,7 @@ describe("stock server", () => {
     );
   });
 
-  it("receives webhooks without an account and runs team automations (ADR 0156)", async () => {
+  it("receives webhooks without an account and runs project automations (ADR 0156)", async () => {
     const kinds = server.catamorphic.core.triggers
       .listKinds()
       .map((kind) => kind.name);

@@ -19,7 +19,12 @@ export type WorkflowAutomation =
   | { kind: "none" }
   | { kind: "loading" }
   | { kind: "off" }
-  | { kind: "on"; updateAvailable: boolean }
+  | {
+      kind: "on";
+      updateAvailable: boolean;
+      /** Whose automation it is: yours, or the whole project's. */
+      forProject: boolean;
+    }
   | { kind: "paused"; reason?: string | null };
 
 export interface WorkflowProblem {
@@ -181,7 +186,9 @@ export function WorkflowStatus({
                       : automation.kind === "on"
                         ? automation.updateAvailable
                           ? "On, update available"
-                          : "On for you"
+                          : automation.forProject
+                            ? "On for the project"
+                            : "On for you"
                         : automation.kind === "paused"
                           ? (automation.reason ?? "Paused")
                           : "Off"

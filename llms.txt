@@ -40,7 +40,7 @@ We built Work because we believe one well-built piece of software can replace mo
 - Chats float over whatever you are doing (a page, a document, a terminal) and can be minimized to a dock. Agents see the workspace context you give them: the page, the file, the terminal.
 - Agents can be Claude Code, Codex, or API models (multi-harness), with per-agent mode, memory, skills, instructions and effort. Connectors (MCP) attach to profiles and agents.
 - Agents write durable workflows (TypeScript, run in sandboxes, resumable) and apps (small React screens built from Work's component kit). An app can read your own chats in a project after you allow it once; it never sees anyone else's.
-- Automations run for you or for the whole team. A workflow starts from a schedule, a chat event, GitHub, or a webhook sent to your server, and can wake your chat or a shared team chat that anyone on the project can continue (a pull request review, an inbound request).
+- Automations run for you or for the whole project. A workflow starts from a schedule, a chat event, GitHub, or a webhook sent to your server, and can message your chat or a shared project chat that anyone in the project can continue (one per pull request review, one per inbound request).
 - Agents run long commands in the background and can watch a command (a deploy, a file, a status page); the chat wakes when it finishes, succeeds or changes, including after the computer sleeps.
 - The mobile companion (a PWA) pairs with the desktop by QR code over your LAN, or connects to your server, so a chat can continue from your phone.
 - Privacy: incognito chats stay on the device and are never mirrored; a project's private working files are separate from shared project source.

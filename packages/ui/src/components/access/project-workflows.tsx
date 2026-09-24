@@ -63,8 +63,8 @@ export function ProjectWorkflows({ projectId }: { projectId: string }) {
             ? "Update to review"
             : settings.some((item) => item.status === "suspended")
               ? "Needs attention"
-              : active.some((item) => item.owner.type === "team")
-                ? "Runs for the team"
+              : active.some((item) => item.owner.type === "project")
+                ? "Runs for the project"
                 : active.length
                   ? "Enabled"
                   : "Not enabled";

@@ -6,7 +6,7 @@ import {
 } from "@catamorphic/react";
 import { ProjectWorkflows } from "@catamorphic/ui";
 import type { QueryClient } from "@tanstack/react-query";
-import { CirclePause, MessageSquarePlus, Users } from "lucide-react";
+import { Box, CirclePause, MessageSquarePlus } from "lucide-react";
 import { useState } from "react";
 import { ChatGlyph } from "../components/chat-glyph.js";
 import { ConnectionTrouble } from "../components/connection-trouble.js";
@@ -242,16 +242,13 @@ function SessionsList({
                             </span>
                           ) : (
                             <>
-                              {session.owner === "team" && (
+                              {session.owner === "project" && (
                                 <span
                                   className="inline-flex items-center gap-1 font-medium text-fg-muted"
-                                  data-testid="session-team"
+                                  data-testid="session-project"
                                 >
-                                  <Users
-                                    className="size-3"
-                                    aria-hidden="true"
-                                  />
-                                  Team ·
+                                  <Box className="size-3" aria-hidden="true" />
+                                  Project ·
                                 </span>
                               )}
                               {relativeTime(session.updatedAt)}

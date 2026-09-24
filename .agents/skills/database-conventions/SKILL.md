@@ -93,8 +93,8 @@ and identified by `(projectId, workflowName)`. Every invocation uses
 `workflow_runs`; capability-specific state is keyed by Run and workflow-step
 attempt rather than a separate Run table.
 
-Workflow-woken conversations use `agent_sessions.wake_key` with one partial
-unique index over active `(project_id, external_user_id, wake_key)` rows.
+Chats a workflow names by key use `agent_sessions.chat_key` with one partial
+unique index over active `(project_id, external_user_id, chat_key)` rows.
 Attention is a monotonic revision pair on that same session, not a notification
 inbox table: settlement increments `attention_revision`; opening copies it to
 `attention_seen_revision`. Preserve the check that seen never exceeds current

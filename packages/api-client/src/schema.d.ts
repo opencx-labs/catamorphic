@@ -3846,7 +3846,7 @@ export interface paths {
                                     externalUserId: string;
                                 } | {
                                     /** @enum {string} */
-                                    type: "team";
+                                    type: "project";
                                 };
                                 connections: {
                                     alias: string;
@@ -3886,7 +3886,7 @@ export interface paths {
                                 /** Format: date-time */
                                 updatedAt: string;
                             }[];
-                            canManageTeam: boolean;
+                            canManageProjectAutomations: boolean;
                         };
                     };
                 };
@@ -3924,7 +3924,7 @@ export interface paths {
                             externalUserId: string;
                         } | {
                             /** @enum {string} */
-                            type: "team";
+                            type: "project";
                         };
                         connectionSelections?: {
                             [key: string]: string;
@@ -3955,7 +3955,7 @@ export interface paths {
                                 externalUserId: string;
                             } | {
                                 /** @enum {string} */
-                                type: "team";
+                                type: "project";
                             };
                             connections: {
                                 alias: string;
@@ -4090,7 +4090,7 @@ export interface paths {
                             externalUserId: string;
                         } | {
                             /** @enum {string} */
-                            type: "team";
+                            type: "project";
                         };
                         connectionSelections?: {
                             [key: string]: string;
@@ -4120,7 +4120,7 @@ export interface paths {
                                 externalUserId: string;
                             } | {
                                 /** @enum {string} */
-                                type: "team";
+                                type: "project";
                             };
                             connections: {
                                 alias: string;
@@ -4251,7 +4251,7 @@ export interface paths {
                                 externalUserId: string;
                             } | {
                                 /** @enum {string} */
-                                type: "team";
+                                type: "project";
                             };
                             connections: {
                                 alias: string;
@@ -4367,7 +4367,7 @@ export interface paths {
                                 externalUserId: string;
                             } | {
                                 /** @enum {string} */
-                                type: "team";
+                                type: "project";
                             };
                             connections: {
                                 alias: string;
@@ -4496,7 +4496,7 @@ export interface paths {
                                 externalUserId: string;
                             } | {
                                 /** @enum {string} */
-                                type: "team";
+                                type: "project";
                             };
                             connections: {
                                 alias: string;
@@ -4631,7 +4631,7 @@ export interface paths {
                                 externalUserId: string;
                             } | {
                                 /** @enum {string} */
-                                type: "team";
+                                type: "project";
                             };
                             connections: {
                                 alias: string;
@@ -6210,7 +6210,7 @@ export interface paths {
                                 projectId: string;
                                 externalUserId: string;
                                 /** @enum {string} */
-                                owner: "member" | "team";
+                                owner: "member" | "project";
                                 provider: string;
                                 /** @enum {string} */
                                 source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -6333,7 +6333,7 @@ export interface paths {
                             projectId: string;
                             externalUserId: string;
                             /** @enum {string} */
-                            owner: "member" | "team";
+                            owner: "member" | "project";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -6614,7 +6614,7 @@ export interface paths {
                             projectId: string;
                             externalUserId: string;
                             /** @enum {string} */
-                            owner: "member" | "team";
+                            owner: "member" | "project";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -6815,7 +6815,7 @@ export interface paths {
                             projectId: string;
                             externalUserId: string;
                             /** @enum {string} */
-                            owner: "member" | "team";
+                            owner: "member" | "project";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -6955,7 +6955,7 @@ export interface paths {
                             projectId: string;
                             externalUserId: string;
                             /** @enum {string} */
-                            owner: "member" | "team";
+                            owner: "member" | "project";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -7162,7 +7162,7 @@ export interface paths {
                             projectId: string;
                             externalUserId: string;
                             /** @enum {string} */
-                            owner: "member" | "team";
+                            owner: "member" | "project";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -7290,7 +7290,7 @@ export interface paths {
                             projectId: string;
                             externalUserId: string;
                             /** @enum {string} */
-                            owner: "member" | "team";
+                            owner: "member" | "project";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -7492,7 +7492,7 @@ export interface paths {
                             projectId: string;
                             externalUserId: string;
                             /** @enum {string} */
-                            owner: "member" | "team";
+                            owner: "member" | "project";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -7711,7 +7711,7 @@ export interface paths {
                                 projectId: string;
                                 externalUserId: string;
                                 /** @enum {string} */
-                                owner: "member" | "team";
+                                owner: "member" | "project";
                                 provider: string;
                                 /** @enum {string} */
                                 source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -7850,7 +7850,7 @@ export interface paths {
                                 projectId: string;
                                 externalUserId: string;
                                 /** @enum {string} */
-                                owner: "member" | "team";
+                                owner: "member" | "project";
                                 provider: string;
                                 /** @enum {string} */
                                 source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -8032,7 +8032,7 @@ export interface paths {
                                 projectId: string;
                                 externalUserId: string;
                                 /** @enum {string} */
-                                owner: "member" | "team";
+                                owner: "member" | "project";
                                 provider: string;
                                 /** @enum {string} */
                                 source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -8239,7 +8239,7 @@ export interface paths {
                             projectId: string;
                             externalUserId: string;
                             /** @enum {string} */
-                            owner: "member" | "team";
+                            owner: "member" | "project";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -8821,7 +8821,7 @@ export interface paths {
                             projectId: string;
                             externalUserId: string;
                             /** @enum {string} */
-                            owner: "member" | "team";
+                            owner: "member" | "project";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -9332,7 +9332,7 @@ export interface paths {
                                 projectId: string;
                                 externalUserId: string;
                                 /** @enum {string} */
-                                owner: "member" | "team";
+                                owner: "member" | "project";
                                 provider: string;
                                 /** @enum {string} */
                                 source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -9493,7 +9493,7 @@ export interface paths {
                             projectId: string;
                             externalUserId: string;
                             /** @enum {string} */
-                            owner: "member" | "team";
+                            owner: "member" | "project";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";
@@ -10553,7 +10553,7 @@ export interface paths {
                             projectId: string;
                             externalUserId: string;
                             /** @enum {string} */
-                            owner: "member" | "team";
+                            owner: "member" | "project";
                             provider: string;
                             /** @enum {string} */
                             source: "desktop" | "mobile" | "slack" | "claude" | "mcp" | "api";

@@ -34,10 +34,10 @@ import {
   type AgentRef,
   type Identity,
   isBuilder,
-  isTeamPrincipal,
+  isProjectPrincipal,
+  PROJECT_PRINCIPAL_ID,
   scopeCovers,
   scopeCoversSessions,
-  TEAM_PRINCIPAL_ID,
 } from "../identity.js";
 import type { AgentCapabilitiesService } from "./agent-capabilities-service.js";
 import {
@@ -143,10 +143,10 @@ export interface AgentSession {
   projectId: string;
   externalUserId: string;
   /**
-   * `team`: a shared chat owned by the project's team (ADR 0156), open to
+   * `project`: a shared chat owned by the project (ADR 0156), open to
    * everyone whose role reaches its agent. `member`: one person's chat.
    */
-  owner: "member" | "team";
+  owner: "member" | "project";
   provider: string;
   /** Surface that first created this conversation; informational, not auth. */
   source: AgentSessionSource;
@@ -206,11 +206,6 @@ export interface AgentSession {
   baseCommitSha: string | null;
   createdAt: string;
   updatedAt: string;
-}
-
-export interface AgentSessionWakeReceipt extends SessionDeliveryReceipt {
-  sessionId: string;
-  sessionCreated: boolean;
 }
 
 export type AgentTodoStatus = "pending" | "in_progress" | "completed";
@@ -872,7 +867,7 @@ export class AgentSessionsService {
       // otherwise only on the agents their role reaches.
       const everyAgent = scopeCoversSessions(identity, projectId);
       if (!everyAgent && agentIds.length === 0) return { items: [], total: 0 };
-      // Their own chats, plus the team's chats on agents their role reaches.
+      // Their own chats, plus project chats on agents their role reaches.
       query = query.where((eb) =>
         eb.or([
           eb.and([
@@ -882,7 +877,7 @@ export class AgentSessionsService {
           ...(agentIds.length
             ? [
                 eb.and([
-                  eb("external_user_id", "=", TEAM_PRINCIPAL_ID),
+                  eb("external_user_id", "=", PROJECT_PRINCIPAL_ID),
                   eb("agent_id", "in", agentIds),
                 ]),
               ]
@@ -1647,7 +1642,7 @@ export class AgentSessionsService {
       effort?: AgentEffort;
       environment?: string;
       title?: string;
-      wakeKey?: string;
+      chatKey?: string;
       source?: AgentSessionSource;
       parentSessionId?: string;
       forkedFromSessionId?: string;
@@ -1697,7 +1692,7 @@ export class AgentSessionsService {
       effort?: AgentEffort;
       environment?: string;
       title?: string;
-      wakeKey?: string;
+      chatKey?: string;
       source?: AgentSessionSource;
       parentSessionId?: string;
       forkedFromSessionId?: string;
@@ -1826,7 +1821,7 @@ export class AgentSessionsService {
             environment_name: admitted.environmentName,
             status: "active",
             title: input.title ?? null,
-            wake_key: input.wakeKey ?? null,
+            chat_key: input.chatKey ?? null,
             parent_session_id: input.parentSessionId ?? null,
             forked_from_session_id: input.forkedFromSessionId ?? null,
             base_commit_sha: null,
@@ -1851,26 +1846,21 @@ export class AgentSessionsService {
   }
 
   /**
-   * Create or reuse one stable session for a workflow and queue a turn in it.
-   * The queued message asks clients to surface the session only after the turn
-   * settles, so a scheduled agent never steals focus while it is working.
+   * The chat a workflow keeps for a key: the active one with that key, or a
+   * new one started for it. Concurrent first deliveries converge on one chat
+   * through the partial unique index on `chat_key`.
    */
-  async wake(
+  async chatForKey(
     identity: Identity,
     projectId: string,
     input: {
+      chatKey: string;
       origin?: SessionOperationOrigin;
-      wakeKey: string;
-      content: string;
-      workflowName: string;
-      runId: string;
       agentSlug?: string;
       environment?: string;
       title?: string;
-      mode?: "next_turn" | "interrupt";
-      notification?: { title?: string; body?: string };
     },
-  ): Promise<AgentSessionWakeReceipt> {
+  ): Promise<{ sessionId: string; sessionCreated: boolean }> {
     await this.requireProject(identity, projectId);
     const agentId = input.agentSlug
       ? formatProjectAgentId(projectId, input.agentSlug)
@@ -1881,7 +1871,7 @@ export class AgentSessionsService {
         .selectAll()
         .where("project_id", "=", projectId)
         .where("external_user_id", "=", identity.externalUserId)
-        .where("wake_key", "=", input.wakeKey)
+        .where("chat_key", "=", input.chatKey)
         .where("status", "=", "active")
         .executeTakeFirst();
 
@@ -1893,7 +1883,7 @@ export class AgentSessionsService {
           ...(agentId ? { agentId } : {}),
           ...(input.environment ? { environment: input.environment } : {}),
           ...(input.title ? { title: input.title } : {}),
-          wakeKey: input.wakeKey,
+          chatKey: input.chatKey,
           origin: input.origin,
         });
         row = await this.db
@@ -1903,7 +1893,7 @@ export class AgentSessionsService {
           .executeTakeFirstOrThrow();
         sessionCreated = true;
       } catch (error) {
-        // Concurrent retries may race the partial unique wake-key index. The
+        // Concurrent retries may race the partial unique key index. The
         // winning session is the one both calls must use; any other failure
         // remains visible.
         row = await findExisting();
@@ -1913,32 +1903,10 @@ export class AgentSessionsService {
     await this.requireSession(identity, projectId, row.id);
     if (agentId && row.agent_id !== agentId) {
       throw new Error(
-        `Wake key '${input.wakeKey}' already belongs to a different agent`,
+        `The chat for key ${input.chatKey} already belongs to a different agent`,
       );
     }
-    const receipt = await this.deliver(identity, projectId, row.id, {
-      content: input.content,
-      author: {
-        kind: "workflow",
-        runId: input.runId,
-        workflowName: input.workflowName,
-      },
-      mode: input.mode ?? "next_turn",
-      idempotencyKey: `workflow-wake:${input.runId}:${input.wakeKey}`,
-      metadata: {
-        causation: input.origin?.causation ?? [],
-        provenance: input.origin?.provenance ?? {},
-        workflowNotification: {
-          ...(input.notification?.title
-            ? { title: input.notification.title }
-            : {}),
-          ...(input.notification?.body
-            ? { body: input.notification.body }
-            : {}),
-        },
-      },
-    });
-    return { ...receipt, sessionId: row.id, sessionCreated };
+    return { sessionId: row.id, sessionCreated };
   }
 
   /** Acknowledgement-by-interaction shared by desktop and PWA clients. */
@@ -6779,7 +6747,7 @@ function mapSession(
     id: row.id,
     projectId: row.project_id,
     externalUserId: row.external_user_id,
-    owner: isTeamPrincipal(row.external_user_id) ? "team" : "member",
+    owner: isProjectPrincipal(row.external_user_id) ? "project" : "member",
     provider: row.provider,
     source: parseSessionSource(row.source),
     providerSessionId: row.provider_session_id,

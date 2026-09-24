@@ -127,7 +127,7 @@ export class WorkflowsService {
 
   /**
    * The secrets a run needs. A run's caller may be any member allowed to run
-   * the workflow (or the team principal); the declarations belong to the
+   * the workflow (or the project principal); the declarations belong to the
    * program, so reading them for injection is not a builder operation.
    */
   async declaredSecretsForRun(args: {

@@ -101,7 +101,7 @@ async function bind(input: {
       deployment_artifact_id: artifactId,
       commit_sha: commitSha,
       environment_name: "local",
-      owner_kind: "team",
+      owner_kind: "project",
       owner_external_user_id: null,
       owner_identity: JSON.stringify(builder),
       consent_digest: "d".repeat(64),

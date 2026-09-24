@@ -105,7 +105,7 @@ export function SidebarActivity({
             resource
             description={session.activity ?? undefined}
             badges={[
-              ...(session.owner === "team" ? ["Team"] : []),
+              ...(session.owner === "project" ? ["Project"] : []),
               session.attentionRequired ? "Needs you" : "Working",
             ]}
             onOpen={(mode) => onOpenSession(session, mode)}
