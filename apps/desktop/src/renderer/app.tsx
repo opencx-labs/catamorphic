@@ -8,6 +8,7 @@ import {
   useProjects,
   useUnarchiveAgentSession,
   useUpdateAgentSession,
+  useWorkflows,
   workflowKeys,
 } from "@catamorphic/react";
 import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
@@ -2338,12 +2339,14 @@ export function App({
     message: string | PendingChatMessage,
     mode: "float" | "tab",
     agentId?: string,
+    options: { watchBackdrop?: boolean } = {},
   ) => {
     if (!requireAgents()) return;
     const entry: ChatDockEntry = {
       ...newChatEntry(mode === "tab" ? "tab" : "partial"),
       pendingMessage: typeof message === "string" ? { text: message } : message,
       ...(agentId ? { agentId } : {}),
+      ...(options.watchBackdrop ? { watchBackdrop: true } : {}),
     };
     updateWorkspace((ws) => {
       return {
@@ -4532,7 +4535,28 @@ export function App({
       query.data ? [[query.data.name, query.data] as const] : [],
     ),
   );
+  // Workflow tabs and chips read the workflow's display name, never the
+  // export identifier, whichever way the tab was opened.
+  const needsWorkflowTitles =
+    workspace.tabs.some((tab) => tab.kind === "workflow") ||
+    Object.values(chipAttention)
+      .flat()
+      .some((key) => key.startsWith("workflow:"));
+  const workflowSummaries = useWorkflows(
+    needsWorkflowTitles ? projectId : undefined,
+  );
+  const workflowTitles = new Map(
+    (workflowSummaries.data ?? []).flatMap((workflow) =>
+      workflow.displayName
+        ? [[workflow.name, workflow.displayName] as const]
+        : [],
+    ),
+  );
   const presentedTabs = workspace.tabs.map((tab) => {
+    if (tab.kind === "workflow") {
+      const title = workflowTitles.get(tab.name);
+      return title ? { ...tab, label: title } : tab;
+    }
     const metadata = tab.kind === "app" ? appMetadata.get(tab.name) : undefined;
     return tab.kind === "app" && metadata
       ? { ...tab, label: metadata.title, appIcon: metadata.icon }
@@ -4902,6 +4926,14 @@ export function App({
         key,
         kind: "chat",
         label: chatLabels[key.slice("chat:".length)] ?? "Chat",
+      };
+    }
+    if (key.startsWith("workflow:")) {
+      const name = key.slice("workflow:".length);
+      return {
+        key,
+        kind: "workflow",
+        label: workflowTitles.get(name) ?? name,
       };
     }
     const tab = presentedTabs.find((candidate) => tabKey(candidate) === key);
@@ -5812,7 +5844,9 @@ export function App({
                             runtime.visible && Boolean(viewSlots[tabKey(tab)])
                           }
                           onAskAgent={(message) =>
-                            sendToAgent(message, "float")
+                            sendToAgent(message, "float", undefined, {
+                              watchBackdrop: true,
+                            })
                           }
                           onOpenSource={(path, line, column) => {
                             void openLinkedSurface(

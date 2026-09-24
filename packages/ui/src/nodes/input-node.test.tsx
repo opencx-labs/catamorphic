@@ -41,7 +41,8 @@ describe("input node trigger badges", () => {
       </ReactFlowProvider>,
     );
 
-    expect(screen.getByText("Order Received")).toBeInTheDocument();
+    expect(screen.getByText("Start")).toBeInTheDocument();
+    expect(screen.queryByText("Order Received")).not.toBeInTheDocument();
     expect(screen.getByText("Webhook")).toBeInTheDocument();
     expect(screen.getByText("cron")).toBeInTheDocument();
   });
@@ -49,7 +50,7 @@ describe("input node trigger badges", () => {
   it("renders no badge row without bindings", () => {
     const { container } = render(
       <ReactFlowProvider>
-        <InputNode {...nodeProps({ label: "Start", metadata: {} })} />
+        <InputNode {...nodeProps({ label: "Weekly report", metadata: {} })} />
       </ReactFlowProvider>,
     );
 

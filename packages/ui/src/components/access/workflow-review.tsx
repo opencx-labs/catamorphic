@@ -21,6 +21,8 @@ export function WorkflowReview(props: {
   projectId: string;
   workflowName: string;
   onClose?: () => void;
+  /** Hosts whose tab or title already names the workflow pass false. */
+  showTitle?: boolean;
 }) {
   return (
     <WorkflowEditorScope>
@@ -33,10 +35,12 @@ function WorkflowReviewContent({
   projectId,
   workflowName,
   onClose,
+  showTitle = true,
 }: {
   projectId: string;
   workflowName: string;
   onClose?: () => void;
+  showTitle?: boolean;
 }) {
   const workflow = useWorkflow(projectId, workflowName);
   const environments = useEnvironments(projectId, { workload: "workflow" });
@@ -80,72 +84,14 @@ function WorkflowReviewContent({
         </button>
       </div>
     );
+  const triggers =
+    workflow.data?.nodes.find((node) => node.type === "input")
+      ?.triggerBindings ?? [];
   return (
     <section
       className="relative flex h-full min-h-[400px] flex-1 flex-col"
       aria-label="Workflow review"
     >
-      <header className="flex flex-wrap items-center gap-3 border-b border-border p-3">
-        {onClose && (
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-sm text-fg-muted"
-          >
-            Back
-          </button>
-        )}
-        <div className="min-w-0 flex-1">
-          <h2 className="font-medium">
-            {workflow.data?.displayName ?? workflowName}
-          </h2>
-          <p className="text-sm text-fg-muted">{workflow.data?.description}</p>
-        </div>
-        <label className="text-sm">
-          Run on{" "}
-          <select
-            value={environment ?? ""}
-            onChange={(event) => setSelected(event.target.value)}
-            className="rounded border border-border bg-bg-inset p-1"
-          >
-            {!environment && <option value="">Choose environment</option>}
-            {environments.data?.items
-              .filter((item) => item.allowed)
-              .map((item) => (
-                <option
-                  key={item.name}
-                  value={item.name}
-                  disabled={!item.available || !item.compatible}
-                >
-                  {item.label}
-                  {item.reasons.length ? ` (${item.reasons.join("; ")})` : ""}
-                </option>
-              ))}
-          </select>
-        </label>
-        <button
-          type="button"
-          disabled={!available}
-          className="rounded border border-border px-3 py-1 text-sm disabled:opacity-50"
-          onClick={() => setRunOpen(true)}
-        >
-          Run now
-        </button>
-        <button
-          type="button"
-          className="text-sm underline"
-          onClick={() => setRunsOpen(!runsOpen)}
-        >
-          Recent runs
-        </button>
-        <button
-          type="button"
-          className="rounded border border-border px-3 py-1 text-sm"
-          onClick={() => setAutomate(true)}
-        >
-          Automatic runs
-        </button>
-      </header>
       {environments.error && (
         <p role="alert" className="p-3 text-sm text-danger">
           {environments.error.message}
@@ -198,13 +144,85 @@ function WorkflowReviewContent({
           <RunsPanel projectId={projectId} workflowName={workflowName} />
         </div>
       )}
-      {!available && (
-        <p className="p-3 text-sm text-fg-muted">
-          No permitted execution environment is ready.
-        </p>
-      )}
       <div className="relative min-h-[300px] flex-1">
         <WorkflowCanvas />
+        {(showTitle || workflow.data?.description) && (
+          <div className="pointer-events-none absolute top-3 left-3 max-w-sm">
+            {showTitle && (
+              <h2 className="text-sm font-medium">
+                {workflow.data?.displayName ?? workflowName}
+              </h2>
+            )}
+            {workflow.data?.description && (
+              <p className="mt-0.5 text-xs leading-relaxed text-fg-muted">
+                {workflow.data.description}
+              </p>
+            )}
+          </div>
+        )}
+        {environments.isSuccess && !available && (
+          <p className="pointer-events-none absolute top-12 right-3 text-xs text-fg-muted">
+            No permitted execution environment is ready.
+          </p>
+        )}
+        <div className="catamorphic-editor-controls">
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="catamorphic-editor-control"
+            >
+              Back
+            </button>
+          )}
+          <select
+            aria-label="Run on"
+            value={environment ?? ""}
+            onChange={(event) => setSelected(event.target.value)}
+            className="catamorphic-editor-control max-w-40"
+          >
+            {!environment && <option value="">Choose environment</option>}
+            {environments.data?.items
+              .filter((item) => item.allowed)
+              .map((item) => (
+                <option
+                  key={item.name}
+                  value={item.name}
+                  disabled={!item.available || !item.compatible}
+                >
+                  {item.label}
+                  {item.reasons.length ? ` (${item.reasons.join("; ")})` : ""}
+                </option>
+              ))}
+          </select>
+          <button
+            type="button"
+            className="catamorphic-editor-control"
+            aria-pressed={runsOpen}
+            onClick={() => setRunsOpen(!runsOpen)}
+          >
+            Runs
+          </button>
+          {triggers.length > 0 && (
+            <button
+              type="button"
+              className="catamorphic-editor-control"
+              aria-pressed={automate}
+              onClick={() => setAutomate(!automate)}
+            >
+              Automatic runs
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={!available}
+            data-disabled-reason="No permitted execution environment is ready"
+            className="catamorphic-editor-control catamorphic-editor-control-primary"
+            onClick={() => setRunOpen(true)}
+          >
+            Run
+          </button>
+        </div>
       </div>
       {automate && (
         <WorkflowEnablementPanel

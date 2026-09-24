@@ -1,13 +1,13 @@
 import {
-  activePanelTabAtom,
   codeAtom,
   graphAtom,
   graphParseStateAtom,
-  rightPanelOpenAtom,
   selectedNodeAtom,
+  selectedNodeIdAtom,
   useOnParse,
   useProjectFile,
   useWorkflow,
+  useWorkflowEnablements,
   useWorkflowGraph,
   useWorkflows,
   useWriteProjectFile,
@@ -19,28 +19,32 @@ import {
   WorkflowEditorScope,
   WorkflowReview,
 } from "@catamorphic/ui";
-import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import {
-  Check,
-  ChevronRight,
-  Code2,
-  LoaderCircle,
-  PanelRight,
-  Play,
-  X,
-} from "lucide-react";
+import { useAtomValue, useSetAtom } from "jotai";
+import { ChevronRight, Code2, ExternalLink, Play, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { PendingChatMessage } from "../../shared/chat.js";
 import { MonacoCodeEditor } from "../components/catamorphic/monaco-editor.js";
-import { Collapsible } from "../components/collapsible.js";
 import { PendingButton } from "../components/pending-button.js";
 import {
   ProjectAuthorityProvider,
   useRemoteAuthority,
 } from "../components/project-authority-provider.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
-import { WorkflowDetails } from "../components/workflow-details.js";
+import {
+  stepKind,
+  WorkflowStepDetails,
+} from "../components/workflow-details.js";
 import { WorkflowEnablementPanel } from "../components/workflow-enablement-panel.js";
+import {
+  useWorkflowPublication,
+  WorkflowPublishCallout,
+} from "../components/workflow-publish.js";
 import { WorkflowRuns } from "../components/workflow-runs.js";
+import {
+  type WorkflowAutomation,
+  type WorkflowProblem,
+  WorkflowStatus,
+} from "../components/workflow-status.js";
 import type { WorkflowDraft } from "../components/workspace-tabs.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { useMonacoTheme } from "../lib/monaco-setup.js";
@@ -52,11 +56,21 @@ interface WorkflowScreenProps {
   workflowName: string;
   canEdit: boolean;
   active: boolean;
-  onAskAgent: (message: string) => void;
+  onAskAgent: (message: PendingChatMessage) => void;
   onOpenSource: (path: string, line?: number, column?: number) => void;
   initialDraft?: WorkflowDraft;
   onDraftChange: (draft: WorkflowDraft | undefined) => void;
 }
+
+/** What the side panel is showing. Nothing is open until there is a subject. */
+type PanelView = "step" | "code" | "runs" | "automation" | "change";
+
+const PANEL_TITLES: Record<Exclude<PanelView, "step">, string> = {
+  code: "Code",
+  runs: "Run",
+  automation: "Automatic runs",
+  change: "Describe a change",
+};
 
 export function WorkflowScreen(props: WorkflowScreenProps) {
   return (
@@ -73,6 +87,7 @@ function WorkflowScreenContent(props: WorkflowScreenProps) {
       <WorkflowReview
         projectId={props.projectId}
         workflowName={props.workflowName}
+        showTitle={false}
       />
     );
   return <WorkflowAuthoringScreen {...props} />;
@@ -113,7 +128,7 @@ function WorkflowAuthoringScreen(props: WorkflowScreenProps) {
           <p>
             {file.error?.message ??
               workflows.error?.message ??
-              `Workflow “${workflowName}” was not found in this project.`}
+              `“${friendlyParamName(workflowName)}” was not found in this project.`}
           </p>
           <button
             type="button"
@@ -168,7 +183,10 @@ function WorkflowWorkbench({
       : { code: diskCode, baseline: diskCode },
   );
   const dirty = buffer.code !== buffer.baseline;
-  const conflict = diskCode !== buffer.baseline && diskCode !== buffer.code;
+  // Only a draft can conflict; a clean buffer follows the disk (the effect
+  // below catches up one render after the file changes).
+  const conflict =
+    dirty && diskCode !== buffer.baseline && diskCode !== buffer.code;
   useEffect(() => {
     setBuffer((current) =>
       current.code === current.baseline || current.code === diskCode
@@ -202,31 +220,49 @@ function WorkflowWorkbench({
   const graph = useAtomValue(graphAtom);
   const parse = useAtomValue(graphParseStateAtom);
   const node = useAtomValue(selectedNodeAtom);
-  const [open, setOpen] = useAtom(rightPanelOpenAtom);
-  const [tab, setTab] = useAtom(activePanelTabAtom);
-  const [extra, setExtra] = useState<"runs" | "automate" | "edit" | null>(null);
-  const [request, setRequest] = useState("");
-  const requestInput = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => {
-    if (extra === "edit") requestInput.current?.focus();
-  }, [extra]);
-  const [editNode, setEditNode] = useState<WorkflowNode>();
+  const select = useSetAtom(selectedNodeIdAtom);
   const write = useWriteProjectFile(projectId);
   const [saveError, setSaveError] = useState<string>();
   const [saved, setSaved] = useState(false);
-  useEffect(() => {
-    setOpen(true);
-  }, [setOpen]);
+  const [statusRequest, setStatusRequest] = useState(0);
   useEffect(() => {
     if (!saved) return;
     const timer = setTimeout(() => setSaved(false), 1500);
     return () => clearTimeout(timer);
   }, [saved]);
-  // Selecting a node from the canvas reveals its details, except while the
-  // user deliberately keeps source code beside the graph.
+
+  // The panel opens for a subject and closes with it. Selecting a step shows
+  // its details, except while code is kept beside the graph: the editor
+  // follows the selection there instead.
+  const [view, setView] = useState<PanelView | null>(null);
+  const [changeNode, setChangeNode] = useState<WorkflowNode>();
+  const lastView = useRef<PanelView>("step");
+  if (view) lastView.current = view;
+  const shownView = view ?? lastView.current;
+  const lastNode = useRef(node);
+  if (node) lastNode.current = node;
+  const shownNode = node ?? lastNode.current;
   useEffect(() => {
-    if (node?.id) setExtra(null);
+    if (node?.id)
+      setView((current) =>
+        current === "code" || current === "change" ? current : "step",
+      );
+    else setView((current) => (current === "step" ? null : current));
   }, [node?.id]);
+  // A change request follows the selection: pick another step to retarget
+  // it, or clear the selection to describe a change to the whole workflow.
+  useEffect(() => {
+    if (view === "change") setChangeNode(node ?? undefined);
+  }, [view, node]);
+  const closePanel = useCallback(() => {
+    setView(null);
+    select(null);
+  }, [select]);
+  const show = (next: PanelView) => {
+    if (next === "runs" || next === "automation") select(null);
+    setView(next);
+  };
+
   const save = useCallback(async () => {
     if (!canEdit || write.isPending || !dirty) return;
     setSaveError(undefined);
@@ -248,10 +284,12 @@ function WorkflowWorkbench({
       setSaveError(
         cause instanceof Error ? cause.message : "Could not save your changes.",
       );
+      setStatusRequest((value) => value + 1);
     }
   }, [buffer, dirty, filePath, refreshFile, write, canEdit]);
-  const viewCode = () => {
-    const source = node?.sourceRange;
+
+  const viewCode = (target?: WorkflowNode | null) => {
+    const source = target?.sourceRange;
     if (
       source?.file &&
       source.file.replace(/^\//, "") !== filePath.replace(/^\//, "")
@@ -259,23 +297,93 @@ function WorkflowWorkbench({
       onOpenSource(source.file, source.startLine, source.startColumn);
       return;
     }
-    setExtra(null);
-    setTab("code");
-    setOpen(true);
+    setView("code");
   };
-  const show = (view: "details" | "code" | "runs" | "automate") => {
-    if (view === "details" || view === "code") {
-      setExtra(null);
-      setTab(view);
-    } else setExtra(view);
-    setOpen(true);
+  const openInEditor = () =>
+    onOpenSource(
+      filePath,
+      node?.sourceRange.startLine,
+      node?.sourceRange.startColumn,
+    );
+  const describeChange = (target?: WorkflowNode) => {
+    setChangeNode(target);
+    if (!target) select(null);
+    show("change");
   };
-  const ask = (selected?: WorkflowNode) => {
-    setEditNode(selected);
-    setExtra("edit");
-    setOpen(true);
-  };
-  const currentView = extra ?? tab;
+
+  // Automatic runs only mean something when the code declares triggers.
+  const triggerCount =
+    graph?.nodes.find((item) => item.type === "input")?.triggerBindings
+      ?.length ??
+    graph?.triggers.length ??
+    0;
+  const enablements = useWorkflowEnablements(
+    triggerCount > 0 ? projectId : undefined,
+    workflowName,
+  );
+  // Any active enablement means the workflow runs automatically for you.
+  const enablement =
+    enablements.data?.find((item) => item.status === "active") ??
+    enablements.data?.[0];
+  const automation: WorkflowAutomation =
+    triggerCount === 0
+      ? { kind: "none" }
+      : enablements.isPending
+        ? { kind: "loading" }
+        : !enablement
+          ? { kind: "off" }
+          : enablement.status === "active"
+            ? { kind: "on", updateAvailable: enablement.updateAvailable }
+            : {
+                kind: "paused",
+                reason:
+                  enablement.status === "suspended" ? "Suspended" : "Paused",
+              };
+
+  const problem: WorkflowProblem | undefined = saveError
+    ? {
+        message: saveError,
+        actions: [{ label: "View code", onClick: () => viewCode() }],
+      }
+    : conflict
+      ? {
+          message:
+            "This file changed on disk while you were editing. Your draft is kept until you choose.",
+          actions: [
+            { label: "View code", onClick: () => viewCode() },
+            {
+              label: "Use disk version",
+              onClick: () => {
+                setBuffer({ code: diskCode, baseline: diskCode });
+                setSaveError(undefined);
+              },
+            },
+          ],
+        }
+      : parse.status === "error"
+        ? {
+            message: `${graph ? "Showing the last valid version. " : ""}${parse.error ?? "Check the workflow code."}`,
+            actions: [
+              { label: "View code", onClick: () => viewCode() },
+              {
+                label: "Retry preview",
+                onClick: () => void buildGraph(buffer.code),
+              },
+            ],
+          }
+        : undefined;
+  // A decision only the user can make (a failed save, a file changed under
+  // the draft) opens the status popover.
+  useEffect(() => {
+    if (conflict) setStatusRequest((value) => value + 1);
+  }, [conflict]);
+
+  const panelTitle =
+    shownView === "step"
+      ? shownNode
+        ? stepKind(shownNode)
+        : "Step"
+      : PANEL_TITLES[shownView];
   return (
     <section
       aria-label="Workflow workspace"
@@ -289,231 +397,186 @@ function WorkflowWorkbench({
           event.preventDefault();
           event.stopPropagation();
           void save();
+          return;
+        }
+        if (
+          event.key === "Escape" &&
+          view &&
+          !(
+            event.target instanceof Element &&
+            event.target.closest("input, textarea, select, .monaco-editor")
+          )
+        ) {
+          event.stopPropagation();
+          closePanel();
         }
       }}
     >
-      <header className="workflow-header">
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate text-[13px] font-semibold">
-            {graph?.displayName ?? friendlyParamName(workflowName)}
-          </h1>
-          <div
-            className="mt-0.5 flex items-center gap-1.5 text-[11px] text-fg-muted"
-            role="status"
-          >
-            {parse.status === "updating" ? (
-              <LoaderCircle className="size-3 animate-spin" />
-            ) : parse.status === "ready" ? (
-              <Check className="size-3" />
-            ) : null}
-            <span>
-              {parse.status === "error"
-                ? "Preview needs attention"
-                : parse.status === "updating"
-                  ? "Updating preview…"
-                  : dirty
-                    ? "Unsaved changes"
-                    : "Saved to project"}
-            </span>
-          </div>
-        </div>
-        <div className="workflow-header-actions">
-          <PendingButton
-            type="button"
-            className="workflow-secondary"
-            pending={write.isPending}
-            done={saved && !dirty}
-            doneLabel="Saved"
-            disabled={!canEdit || !dirty || conflict}
-            data-disabled-reason={
-              !canEdit
-                ? "Only project builders can save workflow changes"
-                : conflict
-                  ? "The file changed on disk. Review it before saving"
-                  : "No unsaved changes"
-            }
-            onClick={() => void save()}
-          >
-            Save
-          </PendingButton>
-          <button
-            type="button"
-            className="workflow-secondary"
-            onClick={() => show("automate")}
-          >
-            Automate
-          </button>
-          <button
-            type="button"
-            className="workflow-primary"
-            onClick={() => show("runs")}
-          >
-            <Play className="size-3.5" /> Run
-          </button>
-          <ShortcutHint
-            label={open ? "Hide workflow inspector" : "Show workflow inspector"}
-          >
-            <button
-              type="button"
-              className="workflow-icon-button"
-              aria-label={
-                open ? "Hide workflow inspector" : "Show workflow inspector"
-              }
-              aria-expanded={open}
-              onClick={() => setOpen(!open)}
-            >
-              <PanelRight className="size-4" />
-            </button>
-          </ShortcutHint>
-        </div>
-      </header>
-      <Collapsible
-        open={parse.status === "error" || Boolean(saveError) || conflict}
-      >
-        <div className="workflow-notice" role="status">
-          <p>
-            {saveError ??
-              (conflict
-                ? "This file changed on disk. Your draft is preserved."
-                : `${graph ? "Showing the last valid preview. " : ""}${parse.error ?? "Check the workflow code."}`)}
-          </p>
-          <div className="flex shrink-0 gap-3">
-            <button
-              type="button"
-              className="workflow-text-action"
-              onClick={viewCode}
-            >
-              View code
-            </button>
-            {conflict ? (
-              <button
-                type="button"
-                className="workflow-text-action"
-                onClick={() => {
-                  setBuffer({ code: diskCode, baseline: diskCode });
-                  setSaveError(undefined);
-                }}
-              >
-                Use disk version
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="workflow-text-action"
-                onClick={() => void buildGraph(buffer.code)}
-              >
-                Retry preview
-              </button>
-            )}
-          </div>
-        </div>
-      </Collapsible>
       <div
         className="workflow-stage"
-        data-inspector-open={open}
-        data-inspector-view={currentView}
+        data-panel-open={Boolean(view)}
+        data-panel-view={shownView}
       >
         <div className="workflow-graph">
           <WorkflowCanvas />
           {!graph && (
-            <div className="pointer-events-none absolute inset-0 grid place-items-center px-8 text-center text-xs text-fg-muted">
+            <div className="workflow-empty">
               <p>
-                {parse.status === "updating"
-                  ? "Preparing your workflow preview…"
-                  : "Open Code to create or repair this workflow."}
+                {parse.status === "error"
+                  ? "This workflow can’t be shown yet."
+                  : "Preparing the workflow…"}
               </p>
-            </div>
-          )}
-        </div>
-        <aside
-          className="workflow-inspector"
-          aria-label="Workflow inspector"
-          aria-hidden={!open}
-          inert={!open}
-        >
-          <div className="workflow-inspector-inner">
-            <nav
-              className="workflow-inspector-tabs"
-              aria-label="Workflow views"
-            >
-              {(["details", "code", "runs"] as const).map((view) => (
+              {parse.status === "error" && (
                 <button
                   type="button"
-                  key={view}
-                  aria-current={currentView === view ? "page" : undefined}
-                  onClick={() => show(view)}
+                  className="workflow-secondary"
+                  onClick={() => viewCode()}
                 >
-                  {view === "details"
-                    ? "Details"
-                    : view === "code"
-                      ? "Code"
-                      : "Runs"}
+                  <Code2 className="size-3.5" /> View code
                 </button>
-              ))}
-              <span className="ml-auto">
-                <ShortcutHint label="Close inspector">
-                  <button
-                    type="button"
-                    className="workflow-icon-button"
-                    aria-label="Close inspector"
-                    onClick={() => setOpen(false)}
-                  >
-                    <X className="size-3.5" />
-                  </button>
-                </ShortcutHint>
-              </span>
-            </nav>
-            <div className="workflow-inspector-content">
-              {currentView === "details" && (
-                <WorkflowDetails
+              )}
+            </div>
+          )}
+          <div
+            className="workflow-controls"
+            data-testid="workflow-status-controls"
+          >
+            <WorkflowStatus
+              graph={graph}
+              workflowName={workflowName}
+              filePath={filePath}
+              saving={write.isPending}
+              dirty={dirty}
+              conflict={conflict}
+              preview={parse.status}
+              problem={problem}
+              automation={automation}
+              canEdit={canEdit}
+              openRequest={statusRequest || undefined}
+              onDescribeChange={() => describeChange()}
+              onCode={() => viewCode()}
+              onOpenInEditor={openInEditor}
+              openInEditorDisabledReason={
+                dirty
+                  ? "Save your draft before opening it in another editor"
+                  : undefined
+              }
+              onRuns={() => show("runs")}
+              onAutomation={() => show("automation")}
+            />
+            {(dirty || (saved && !dirty)) && (
+              <PendingButton
+                type="button"
+                className="workflow-control"
+                pending={write.isPending}
+                done={saved && !dirty}
+                doneLabel="Saved"
+                disabled={!canEdit || !dirty || conflict}
+                data-disabled-reason={
+                  !canEdit
+                    ? "Only project builders can save workflow changes"
+                    : conflict
+                      ? "The file changed on disk. Review it before saving"
+                      : "No unsaved changes"
+                }
+                onClick={() => void save()}
+              >
+                Save
+              </PendingButton>
+            )}
+            <ShortcutHint label={view === "code" ? "Hide code" : "Show code"}>
+              <button
+                type="button"
+                className="workflow-control workflow-control-icon"
+                aria-label="Code"
+                aria-pressed={view === "code"}
+                onClick={() => (view === "code" ? closePanel() : viewCode())}
+              >
+                <Code2 className="size-3.5" />
+              </button>
+            </ShortcutHint>
+            <button
+              type="button"
+              className="workflow-control"
+              aria-pressed={view === "runs"}
+              onClick={() => (view === "runs" ? closePanel() : show("runs"))}
+            >
+              <Play className="size-3" /> Run
+            </button>
+          </div>
+        </div>
+        <aside
+          className="workflow-panel"
+          aria-label={panelTitle}
+          aria-hidden={!view}
+          inert={!view}
+          data-testid="workflow-panel"
+        >
+          <div className="workflow-panel-inner">
+            <header className="workflow-panel-header">
+              <h2>{panelTitle}</h2>
+              {shownView === "code" && (
+                <>
+                  <span className="min-w-0 truncate font-mono text-[11px] text-fg-faint">
+                    {filePath}
+                  </span>
+                  <ShortcutHint label="Open in editor">
+                    <button
+                      type="button"
+                      className="workflow-icon-button"
+                      aria-label="Open in editor"
+                      aria-disabled={dirty}
+                      data-disabled-reason={
+                        dirty
+                          ? "Save your draft before opening it in another editor"
+                          : undefined
+                      }
+                      onClick={() => {
+                        if (!dirty) openInEditor();
+                      }}
+                    >
+                      <ExternalLink className="size-3.5" />
+                    </button>
+                  </ShortcutHint>
+                </>
+              )}
+              <span className="flex-1" />
+              <ShortcutHint label="Close" shortcut="Esc">
+                <button
+                  type="button"
+                  className="workflow-icon-button"
+                  aria-label={`Close ${panelTitle.toLowerCase()}`}
+                  onClick={closePanel}
+                >
+                  <X className="size-3.5" />
+                </button>
+              </ShortcutHint>
+            </header>
+            <div className="workflow-panel-content">
+              {shownView === "step" && shownNode && (
+                <WorkflowStepDetails
+                  node={shownNode}
                   canEdit={canEdit}
-                  filePath={filePath}
-                  onCode={viewCode}
-                  onAskAgent={ask}
-                  onAutomate={() => show("automate")}
+                  onCode={() => viewCode(shownNode)}
+                  onAskAgent={describeChange}
                 />
               )}
-              {currentView === "code" && (
-                <div className="flex min-h-0 flex-1 flex-col">
-                  <div className="workflow-source-header">
-                    <span className="truncate font-mono text-[11px] text-fg-muted">
-                      {filePath}
-                    </span>
-                    <ShortcutHint label="Open source in editor">
-                      <button
-                        type="button"
-                        className="workflow-icon-button"
-                        aria-label="Open source in editor"
-                        disabled={dirty}
-                        data-disabled-reason="Save your draft before opening it in another editor"
-                        onClick={() =>
-                          onOpenSource(
-                            filePath,
-                            node?.sourceRange.startLine,
-                            node?.sourceRange.startColumn,
-                          )
-                        }
-                      >
-                        <Code2 className="size-3.5" />
-                      </button>
-                    </ShortcutHint>
-                  </div>
-                  <div className="min-h-0 flex-1">
-                    <MonacoCodeEditor
-                      code={buffer.code}
-                      readOnly={!canEdit}
-                      onChange={(code) => {
-                        setSaved(false);
-                        setBuffer((current) => ({ ...current, code }));
-                      }}
-                      path={`file:///${projectId}/${filePath}`}
-                      fontFamily={theme?.fonts.mono}
-                      theme={editorTheme}
-                    />
-                  </div>
+              {shownView === "code" && (
+                <div className="min-h-0 flex-1">
+                  <MonacoCodeEditor
+                    code={buffer.code}
+                    readOnly={!canEdit}
+                    onChange={(code) => {
+                      setSaved(false);
+                      setBuffer((current) => ({ ...current, code }));
+                    }}
+                    path={`file:///${projectId}/${filePath}`}
+                    fontFamily={theme?.fonts.mono}
+                    theme={editorTheme}
+                  />
                 </div>
               )}
-              {currentView === "runs" && (
+              {shownView === "runs" && (
                 <WorkflowRuns
                   projectId={projectId}
                   workflowName={workflowName}
@@ -521,79 +584,172 @@ function WorkflowWorkbench({
                   canPublish={canEdit}
                 />
               )}
-              {currentView === "automate" && (
-                <WorkflowEnablementPanel
+              {shownView === "automation" && (
+                <AutomaticRuns
                   projectId={projectId}
                   workflowName={workflowName}
-                  onClose={() => show("details")}
-                  inline
+                  dirty={dirty}
+                  canPublish={canEdit}
                 />
               )}
-              {currentView === "edit" && (
-                <form
-                  className="workflow-detail-body"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    if (!request.trim() || dirty) return;
-                    onAskAgent(
-                      `Edit workflow ${workflowName} in ${filePath}.${editNode ? ` Focus on the step “${editNode.label}” near line ${editNode.sourceRange.startLine}.` : ""}\n\n${request.trim()}\n\nKeep TypeScript as the source of truth and return a [workflow link](workflow:${workflowName}) when ready.`,
-                    );
-                    setRequest("");
-                    show("details");
+              {shownView === "change" && (
+                <ChangeRequest
+                  open={view === "change"}
+                  node={changeNode}
+                  dirty={dirty}
+                  onCancel={closePanel}
+                  onSubmit={(request) => {
+                    const title =
+                      graph?.displayName ?? friendlyParamName(workflowName);
+                    onAskAgent({
+                      text: request,
+                      attachments: [
+                        {
+                          kind: "text",
+                          name: filePath.split("/").at(-1) ?? filePath,
+                          source: { type: "path", path: filePath },
+                          text: filePath,
+                        },
+                        {
+                          kind: "text",
+                          name: changeNode
+                            ? `${title}: ${changeNode.label}`
+                            : title,
+                          source: { type: "paste" },
+                          text: [
+                            `Change the workflow “${title}” (export \`${workflowName}\`) in ${filePath}.`,
+                            changeNode
+                              ? `Focus on the step “${changeNode.label}” near line ${changeNode.sourceRange.startLine}.`
+                              : "",
+                            `Keep TypeScript as the source of truth. The open workflow tab updates its graph as you save. When the change is ready, link it as [${title}](workflow:${workflowName}).`,
+                          ]
+                            .filter(Boolean)
+                            .join(" "),
+                        },
+                      ],
+                    });
+                    closePanel();
                   }}
-                >
-                  <h2 className="text-base font-semibold">Describe a change</h2>
-                  <p className="mt-2 text-[13px] text-fg-muted leading-relaxed">
-                    {editNode
-                      ? `Your agent will work on “${editNode.label}” in this workflow.`
-                      : "Your agent will edit the workflow code. Follow the changes here as the graph updates."}
-                  </p>
-                  <label className="workflow-field mt-5">
-                    <span>What should change?</span>
-                    <textarea
-                      ref={requestInput}
-                      rows={6}
-                      placeholder="For example, ask for approval before sending the report."
-                      value={request}
-                      onChange={(event) => setRequest(event.target.value)}
-                    />
-                  </label>
-                  {dirty && (
-                    <p className="mt-3 text-xs text-fg-muted">
-                      Save your edits before asking the agent to change this
-                      file.
-                    </p>
-                  )}
-                  <div className="mt-4 flex gap-2">
-                    <PendingButton
-                      pending={false}
-                      type="submit"
-                      className="workflow-primary"
-                      disabled={!request.trim() || dirty}
-                      data-disabled-reason={
-                        dirty
-                          ? "Save your edits first"
-                          : "Describe the change first"
-                      }
-                    >
-                      <span className="inline-flex items-center gap-1.5">
-                        Ask agent <ChevronRight className="size-3.5" />
-                      </span>
-                    </PendingButton>
-                    <button
-                      type="button"
-                      className="workflow-secondary"
-                      onClick={() => show("details")}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </form>
+                />
               )}
             </div>
           </div>
         </aside>
       </div>
     </section>
+  );
+}
+
+/** Automatic runs start the published version, so publishing comes first. */
+function AutomaticRuns({
+  projectId,
+  workflowName,
+  dirty,
+  canPublish,
+}: {
+  projectId: string;
+  workflowName: string;
+  dirty: boolean;
+  canPublish: boolean;
+}) {
+  const publication = useWorkflowPublication({
+    projectId,
+    workflowName,
+    dirty,
+    canPublish,
+  });
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {(publication.missing || publication.unpublished) && (
+        <div className="px-5 pt-5">
+          <WorkflowPublishCallout
+            publication={publication}
+            purpose="automatic"
+          />
+        </div>
+      )}
+      {!publication.missing && (
+        <WorkflowEnablementPanel
+          projectId={projectId}
+          workflowName={workflowName}
+          onClose={() => {}}
+          inline
+        />
+      )}
+    </div>
+  );
+}
+
+function ChangeRequest({
+  open,
+  node,
+  dirty,
+  onCancel,
+  onSubmit,
+}: {
+  open: boolean;
+  node?: WorkflowNode;
+  dirty: boolean;
+  onCancel: () => void;
+  onSubmit: (request: string) => void;
+}) {
+  const [request, setRequest] = useState("");
+  const input = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (open) input.current?.focus();
+  }, [open]);
+  const blocked = dirty
+    ? "Save your edits before asking the agent to change this file"
+    : !request.trim()
+      ? "Describe the change first"
+      : undefined;
+  return (
+    <form
+      className="workflow-detail-body"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!blocked) onSubmit(request.trim());
+      }}
+    >
+      <p className="text-[13px] leading-relaxed text-fg-muted">
+        {node
+          ? `Your agent will change “${node.label}” and the graph will update here as it works.`
+          : "Your agent will change this workflow and the graph will update here as it works."}
+      </p>
+      <label className="workflow-field mt-5">
+        <span>What should change?</span>
+        <textarea
+          ref={input}
+          rows={6}
+          placeholder="For example, ask for approval before sending the report."
+          value={request}
+          onChange={(event) => setRequest(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault();
+              if (!blocked) onSubmit(request.trim());
+            }
+          }}
+        />
+      </label>
+      {dirty && (
+        <p className="mt-3 text-xs text-fg-muted">
+          Save your edits before asking the agent to change this file.
+        </p>
+      )}
+      <div className="mt-4 flex gap-2">
+        <button
+          type="submit"
+          className="workflow-primary"
+          aria-disabled={Boolean(blocked)}
+          data-disabled-reason={blocked}
+        >
+          Ask agent <ChevronRight className="size-3.5" />
+        </button>
+        <button type="button" className="workflow-secondary" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </form>
   );
 }

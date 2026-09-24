@@ -1,5 +1,6 @@
 import type { WorkflowNode } from "@catamorphic/parser";
 import { Handle, type NodeProps, Position } from "@xyflow/react";
+import { Timer } from "lucide-react";
 
 export function DelayNode({ data }: NodeProps) {
   const node = data as unknown as WorkflowNode & { executionStatus?: string };
@@ -16,7 +17,9 @@ export function DelayNode({ data }: NodeProps) {
           data-status={node.executionStatus}
         />
       )}
-      <div className="catamorphic-node-icon">⏱️</div>
+      <div className="catamorphic-node-icon">
+        <Timer aria-hidden="true" size={18} strokeWidth={1.8} />
+      </div>
       <div className="catamorphic-node-content">
         <div className="catamorphic-node-label">
           {node.duration ?? node.label}

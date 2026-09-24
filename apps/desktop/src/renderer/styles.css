@@ -1504,12 +1504,7 @@ kbd {
    of the full or right pane. Keep that corner clear of content actions. */
 [data-header-placement="sidebar"]
   :is([data-workspace-slot="full"], [data-workspace-slot="right"])
-  :is(
-    [data-editor-toolbar],
-    [data-browser-toolbar],
-    .workflow-header,
-    [data-settings] > header
-  ) {
+  :is([data-editor-toolbar], [data-browser-toolbar], [data-settings] > header) {
   padding-right: 52px;
 }
 
@@ -1520,12 +1515,31 @@ kbd {
 }
 
 [data-floating-surface] [data-browser-toolbar],
-[data-floating-surface] [data-editor-toolbar],
-[data-floating-surface] .workflow-header {
+[data-floating-surface] [data-editor-toolbar] {
   padding-right: 148px;
 }
 [data-floating-surface] [data-terminal-appearance] {
   padding-top: 44px;
+}
+
+/* A workflow's status controls float in its canvas corner. Keep them clear
+   of the sidebar toggle and of a floating surface's own controls; an open
+   workflow panel takes that corner instead, its header making the room. */
+[data-header-placement="sidebar"]
+  :where([data-workspace-slot="full"], [data-workspace-slot="right"])
+  .workflow-controls {
+  right: 52px;
+}
+[data-floating-surface] .workflow-stage .workflow-controls {
+  right: 148px;
+}
+[data-floating-surface]
+  .workflow-stage[data-panel-open="true"]
+  .workflow-controls {
+  right: 8px;
+}
+[data-floating-surface] .workflow-panel-header {
+  padding-right: 148px;
 }
 
 /* Native non-overlay scrollbars reduce the tab row's height on Linux and

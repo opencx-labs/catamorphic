@@ -1,5 +1,6 @@
 import type { WorkflowNode } from "@catamorphic/parser";
 import { Handle, type NodeProps, Position } from "@xyflow/react";
+import { Flag } from "lucide-react";
 
 export function ReturnNode({ data }: NodeProps) {
   const node = data as unknown as WorkflowNode & { executionStatus?: string };
@@ -16,7 +17,9 @@ export function ReturnNode({ data }: NodeProps) {
           data-status={node.executionStatus}
         />
       )}
-      <div className="catamorphic-node-icon">🏁</div>
+      <div className="catamorphic-node-icon">
+        <Flag aria-hidden="true" size={18} strokeWidth={1.8} />
+      </div>
       <div className="catamorphic-node-content">
         <div className="catamorphic-node-label">{node.label}</div>
       </div>

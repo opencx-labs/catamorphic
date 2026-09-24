@@ -10,7 +10,6 @@ export function CallWorkflowNode({ data }: NodeProps) {
     hasChildren?: boolean;
   };
   const nestLevel = Math.min(node.depth ?? 0, 3);
-  const borderOpacity = 0.48 + nestLevel * 0.1;
   const collapsed = node.collapsed ?? false;
 
   return (
@@ -19,8 +18,8 @@ export function CallWorkflowNode({ data }: NodeProps) {
       style={{
         width: "100%",
         height: "100%",
-        borderColor: `rgba(99, 102, 241, ${borderOpacity})`,
       }}
+      data-depth={nestLevel}
       data-collapsed={collapsed}
     >
       <Handle type="target" position={Position.Top} />

@@ -1,10 +1,11 @@
+import { useWorkflows } from "@catamorphic/react";
 import { AppWindow, FileText, Workflow } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useContext } from "react";
 import type { ChatSurface } from "../../shared/chat";
 import type { OpenModifiers } from "../../shared/open-mode";
 import { parseSurfaceLink } from "../../shared/surface-link";
 import { PILL_SURFACE } from "./context-pill";
-import { FilePreview } from "./file-preview";
+import { FilePreview, FilePreviewProjectContext } from "./file-preview";
 import { ResourceInspector } from "./resource-inspector";
 import { SurfacePreview } from "./surface-preview";
 import { WebPreview } from "./web-preview";
@@ -21,8 +22,20 @@ export function ResponseLink({
   onOpen: (href: string, modifiers: OpenModifiers) => void;
 }) {
   const target = parseSurfaceLink(href);
+  // A workflow chip names the workflow as its tab does, whatever the agent
+  // wrote as link text.
+  const projectId = useContext(FilePreviewProjectContext);
+  const workflows = useWorkflows(
+    target?.kind === "workflow" ? projectId : undefined,
+  );
+  const workflowTitle =
+    target?.kind === "workflow"
+      ? workflows.data?.find((workflow) => workflow.name === target.name)
+          ?.displayName
+      : undefined;
   if (target?.kind === "workflow" || target?.kind === "app") {
     const Icon = target.kind === "workflow" ? Workflow : AppWindow;
+    const label = workflowTitle ?? children;
     return (
       <ResourceInspector<HTMLAnchorElement>
         label={`${target.kind === "workflow" ? "Workflow" : "App"} preview`}
@@ -31,7 +44,9 @@ export function ResponseLink({
             surface={{
               key: `${target.kind}:${target.name}`,
               kind: target.kind,
-              label: typeof children === "string" ? children : target.name,
+              label:
+                workflowTitle ??
+                (typeof children === "string" ? children : target.name),
             }}
           />
         }
@@ -49,7 +64,7 @@ export function ResponseLink({
             }}
           >
             <Icon className="size-3 shrink-0 self-center" />
-            {children}
+            {label}
             <span className="text-[10px] text-fg-muted">
               {target.kind === "workflow" ? "Workflow" : "App"}
             </span>

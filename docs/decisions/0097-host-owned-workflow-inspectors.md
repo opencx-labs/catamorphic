@@ -1,6 +1,7 @@
 # 0097: Hosts own workflow inspectors and authoring actions
 
-- **Status:** Accepted
+- **Status:** Accepted (layout and packaged toolbar amended by
+  [0157](0157-workflow-status-chrome.md))
 - **Date:** 2026-09-07
 
 ## Context
