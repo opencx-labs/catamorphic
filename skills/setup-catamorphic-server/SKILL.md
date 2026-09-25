@@ -1,104 +1,90 @@
 ---
 name: setup-catamorphic-server
-description: Use when installing the stock Catamorphic server, adding machines or execution Environments, setting up a shared-Postgres cluster or multiple server instances, embedding Catamorphic in an existing application, connecting host authentication and identity, configuring Postgres or PGlite, or provisioning initial users and project access.
+description: Use when installing or operating the stock Catamorphic server, provisioning its first project and user, adding machines or execution Environments, running several instances on shared Postgres, embedding Catamorphic in an existing application, mapping host authentication to Catamorphic identity, or configuring Postgres or PGlite.
 ---
 
-# Setting Up Catamorphic
+# Setting up Catamorphic
 
-## Core principle
+Catamorphic ships as libraries a host mounts. The stock server (`apps/server`,
+also a Docker image) is one such host; a custom application is another. Adapt
+to what is already there: existing auth, users, organizations, databases,
+deployment, and code hosts are inputs, not things to replace.
 
-Adapt Catamorphic to the application that is actually present. Inspect before
-asking questions or choosing infrastructure. Existing auth, users,
-organizations, databases, deployment, code hosts, and design systems are
-inputs, not obstacles to replace.
+## 1. Inspect before asking
 
-## Start with evidence
+Look at the repository and running deployment for:
 
-Inspect the repository and runtime for:
+- the application and HTTP framework, if any;
+- auth middleware, session verification, users, organizations, roles;
+- database clients, migrations, storage, deployment manifests;
+- whether this is `apps/server`, the stock image, or a custom host;
+- how trusted the executed code is, and which clients people will use.
 
-- an existing application and HTTP framework;
-- auth middleware, session verification, users, organizations, and roles;
-- database clients, migrations, storage, and deployment manifests;
-- whether this is `apps/server`, a stock image, or a custom host;
-- execution trust, code-host integration, and user-facing surfaces.
+Summarize what is already decided, then ask only what the evidence does not
+answer. If auth exists, offer to keep and map it. On the stock server, ask
+whether the operator wants an OIDC provider before offering local
+username/password.
 
-Summarize what is already decided. Ask only about choices the visible setup
-does not answer. If auth exists, first offer to preserve and map it. For the
-stock server, ask whether the operator wants a configured provider before
-offering local username/password.
+## 2. Read the matching reference
 
-## Route to the relevant reference
-
-| Observed need | Read |
+| Situation | Read |
 | --- | --- |
-| Nothing installed yet; "a brain on this machine" that an MCP client can reach | [A first brain on one machine](references/first-brain.md) |
+| Nothing installed; "a brain on this machine" an MCP client can reach | [A first brain on one machine](references/first-brain.md) |
 | Stock image or `apps/server` | [Stock server](references/stock-server.md) |
-| New execution machine, Environment enrollment, multiple instances | [Managed machines and clusters](references/cluster-deployment.md) |
+| Another machine, Environment enrollment, several instances | [Managed machines and clusters](references/cluster-deployment.md) |
 | Existing or custom application | [Custom host](references/custom-host.md) |
-| Sessions, OAuth/OIDC, users, invitations, roles | [Auth and identity](references/auth-and-identity.md) |
+| Sign-in, OIDC, invitations, roles, permissions | [Auth and identity](references/auth-and-identity.md) |
 | PGlite, Postgres, migrations, backup | [Database and migrations](references/database-and-migrations.md) |
+| Agent self-context, member directory, host tools | [Agent context and capabilities](references/agent-context-and-capabilities.md) |
 
-Read `INTEGRATION.md` and the relevant package READMEs for mechanics. Read the
-current source when documentation and the installed version differ.
+`INTEGRATION.md` and the package READMEs hold the mechanics. When they
+disagree with the installed source, the source wins.
 
-## Invariants
+## Rules that always hold
 
-- Catamorphic libraries receive verified host identity per request. They do
-  not own a default user, organization, or authentication provider.
-- The stock server is one host implementation. Its auth choices do not become
-  framework contracts.
-- Authentication identifies a person. Committed project roles and
-  memberships authorize them.
-- Roles grant provider-neutral workflow, project-agent, Environment, and
-  connection references, document paths, and project permissions.
-  Catamorphic enforces `thing:action` names such as `program:write`,
-  `sessions:read`, and `memberships:write` (ADR 0158); an admin role grants
-  `"*"` for agents, workflows, apps, environments, and permissions. Host-specific
-  permissions remain inert unless that host or its UI explicitly interprets
-  them. Each member separately enables unattended workflows after reviewing
-  the deployed commit and authenticating every required member connection.
-  Never make this Google Workspace-specific.
-- MCP authorization is sufficient for a workflow or project agent when its
-  server exposes the declared connection actions. Configure providers through
-  the host-injected connection registry and credential vault.
-- A member-owned workflow may call `catamorphic.sessions.wake` to create or
-  reuse a stable agent session and request attention after the turn settles.
-  Clients poll the ordinary session list, pulse rows with
-  `attentionRequired`, and acknowledge on open. Web Push is an optional
-  transport to that session, not a second notification inbox.
-- A deployment operator is not a server-owner or super-admin user.
-- A project has at most one Catamorphic remote. Execution targets beneath it
-  are Environments.
-- Managed machines are server instances of one authority sharing network
-  Postgres and accessible authoritative storage. A member's **This machine**
-  execution uses their authenticated project connection, not database access.
-  Distinguish the accepted architecture from installed capabilities: setting
-  `DATABASE_URL` alone does not establish a working cluster.
-- For remote development, configure microsandbox and explicit machine resource
-  budgets. Agent Environment requirements become sandbox limits. Read the cluster
-  reference for capacity inventory, workspace retirement, and uncertain cleanup
-  recovery; do not treat a live heartbeat as spare capacity.
-- Initial machine provisioning is an operator operation. Ongoing role, agent,
-  sidebar, and starting-action configuration belongs in normal reviewed
-  project files; do not create a parallel stock-server bootstrap config.
-- Keep one behavioral path after credentials are acquired. For example, a
-  GitHub CLI token may feed the regular GitHub service; it does not create a
-  second `gh api` or clone implementation.
+- **Identity comes from the host.** Libraries receive verified identity per
+  request and have no default user, organization, or auth provider. The stock
+  server's auth choices are not framework contracts.
+- **Sign-in identifies; project roles authorize.** Roles are committed files
+  in `.catamorphic/roles/*.json` granting agents, workflows, apps,
+  Environments, connection aliases, documents, and `thing:action` permissions
+  such as `program:write`, `sessions:read`, and `memberships:write`
+  (ADR 0158). An admin role grants `"*"`. Login alone grants no project, and
+  there is no silent default role.
+- **No super-admin.** The operator credential is machine access, not a user.
+  A setup agent provisions the first ordinary user and membership through the
+  server's own operations.
+- **After setup, configuration is project code.** Roles, agents,
+  `.catamorphic/sidebar.js`, and `.catamorphic/project.json` change through
+  ordinary review. Do not create a parallel bootstrap config.
+- **Unattended work needs explicit consent.** Each member reviews and enables
+  a deployed workflow and authorizes its connections. Project automations
+  (`automations:write`) run as the project, not as whoever enabled them
+  (ADR 0156).
+- **Workflows reach chats with `catamorphic.sessions.deliver`**, by session id
+  or by a stable `key`. Clients show `attentionRequired` on the ordinary
+  session list and acknowledge on open. Web Push is an optional transport,
+  not a second inbox.
+- **One remote per project.** Execution targets under it are Environments.
+- **Several machines share one brain** through network Postgres and shared
+  storage. Setting `DATABASE_URL` alone is not a working cluster. A member's
+  **This machine** execution uses their project connection, never database
+  credentials.
+- **Isolation matches trust.** Local-process execution is for trusted
+  single-tenant use. For remote development use microsandbox with explicit
+  budgets; a live heartbeat is not spare capacity.
+- **One code path after credentials.** A GitHub CLI token may feed the regular
+  GitHub service; it does not justify a second clone or API implementation.
 
 ## Common mistakes
 
-- Replacing working host auth with stock auth.
-- Asking the user to repeat facts visible in code or deployment files.
-- Inventing provider environment variables, routes, or commands without
-  checking the installed version.
-- Treating login as project access or assigning a silent default role.
-- Treating account authentication as consent to enable every compatible
-  workflow, or reaching one member's personal chat from a project automation
-  without naming that member.
-- Targeting project presentation by role slug instead of resolved
-  permissions.
+- Replacing working host auth with the stock auth.
+- Asking for facts visible in code or deployment files.
+- Inventing environment variables, routes, or commands without checking the
+  installed version.
+- Treating login as project access, or targeting presentation by role name
+  instead of resolved permissions.
+- Treating one account authorization as consent to enable every workflow.
 - Writing Better Auth password hashes or rows directly.
-- Turning setup guidance into a rigid stack recipe.
-
-For agent self-context, permitted people/assignment inspection, and deferred host
-tools, read [references/agent-context-and-capabilities.md](references/agent-context-and-capabilities.md).
+- Printing the operator secret, a password, or a token.
+- Turning this guidance into a rigid stack recipe.

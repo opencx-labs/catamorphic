@@ -203,36 +203,27 @@ and the host decides what else it shows.
 Every hook rejects with a typed `CatamorphicError` instead of a bare `Error`. Branch on `error.code`, never on `error.message`:
 
 ```tsx
-import {
-  CatamorphicError,
-  isCatamorphicError,
-  useDeployProject,
-} from "@catamorphic/react";
+import { CatamorphicError, useDeployProject } from "@catamorphic/react";
 
 const deploy = useDeployProject(projectId);
 
 try {
   await deploy.mutateAsync();
 } catch (err) {
-  if (isCatamorphicError(err)) {
-    switch (err.code) {
-      case "conflict":
-        return showConflictResolver(err.details);
-      case "unauthorized":
-        return redirectToLogin();
-      case "validation":
-      case "not_found":
-      case "server_error":
-      case "network":
-      case "unknown":
-        return toast(err.message);
-    }
+  if (!(err instanceof CatamorphicError)) throw err;
+  switch (err.code) {
+    case "conflict":
+      return showConflictResolver(err.details);
+    case "unauthorized":
+    case "authentication_required":
+      return redirectToLogin();
+    default:
+      return toast(err.message);
   }
-  throw err;
 }
 ```
 
-`code` is the contract; `message` is the human-readable summary; `details` carries a typed payload (e.g. conflict files for `code: "conflict"`, validation issues for `code: "validation"`).
+`code` is the contract (`unauthorized`, `forbidden`, `not_found`, `conflict`, `validation`, `rate_limited`, `sandbox_unavailable`, `authentication_required`, `network`, `unknown`); `message` is the human-readable summary; `details` is the server's raw payload (for example the conflicting files for `code: "conflict"`).
 
 ## Shared types — `@catamorphic/react/types`
 

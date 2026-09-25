@@ -1,56 +1,40 @@
 ---
-description: Workflow execution architecture — sandbox providers, run lifecycle, and instrumentation constraints
-globs: ["packages/sandbox/**", "packages/runtime/**", "packages/core/src/services/**", "packages/fastify-plugin/src/routes/playground.ts"]
+description: Workflow execution - sandbox providers, run lifecycle, execution placement, step instrumentation, and coding-agent harnesses
+globs: packages/sandbox/**,packages/runtime/**,packages/microsandbox/**,packages/local-process/**,packages/cloudflare/**,packages/daytona/**,packages/core/src/services/run*.ts,packages/core/src/services/*execution*.ts,packages/core/src/services/deployment*.ts,packages/core/src/services/*sandbox*.ts,packages/parser/src/execution-transform.ts
 alwaysApply: false
 ---
 
-# Sandbox & Execution Architecture
+# Sandbox and Execution
 
-## Sandbox Provider Interface
+## Providers are chosen by the host
 
-Execution is abstracted behind `SandboxProvider` / `SandboxManager` so the underlying provider can be swapped. Providers live in **vendor plugin packages** (see `docs/decisions/0008`): `CloudflareSandboxProvider` in `@catamorphic/cloudflare` (the default — see `docs/decisions/0004` and `CLOUDFLARE.md`) and `DaytonaSandboxProvider` in `@catamorphic/daytona`. `@catamorphic/sandbox` holds only the vendor-neutral contracts and must not depend on vendor SDKs. Hosts construct their chosen provider explicitly at boot and pass it to `createCatamorphic({ sandboxProvider })` — there is no env-sniffing selection helper. Never call the Cloudflare or Daytona SDKs directly from routes — go through the service layer.
+- Execution sits behind `SandboxProvider` / `SandboxManager` in `@catamorphic/sandbox`, which holds only vendor-neutral contracts and never depends on a vendor SDK.
+- Implementations are separate packages (ADR 0008): `@catamorphic/cloudflare` (default cloud provider, `CLOUDFLARE.md`), `@catamorphic/daytona`, `@catamorphic/microsandbox` (local microVMs; the desktop default), and `@catamorphic/local-process` (plain subprocesses, trusted single-tenant hosts only, ADR 0047; the stock server default).
+- Hosts construct one at boot and pass `createCatamorphic({ sandboxProvider, environmentProvider })`. Libraries never pick a provider from env. Environments and allocations (ADR 0064, 0099) decide where work runs.
+- Routes never call vendor SDKs; they go through core services.
+- `CatamorphicCore` wraps the provider with `instrumentSandboxProvider`. Do not wrap it again, and keep the wrapper's passthrough of optional methods such as `hydrateWorkspace` when extending the contract.
+- Without a provider, run routes return `503` and the client shows an error rather than crashing.
 
-Providers handed to `CatamorphicCore` are automatically wrapped with `instrumentSandboxProvider` (OpenTelemetry spans for create/exec/upload/etc.) — do not double-wrap, and keep the wrapper's passthrough of the optional `hydrateWorkspace` method intact when extending the provider contract.
+## Run lifecycle
 
-## Execution Model
+1. Every invocation creates one `workflow_runs` row that pins a deployment artifact or session artifact. There is no test mode (ADR 0040).
+2. Triggering enqueues work in Postgres and returns the Run. Hosts start workers explicitly with `catamorphic.startExecutionWorker(...)`; constructing the SDK or plugin never starts one.
+3. The run coordinator advances the ordered boundary and batch scopes on that one Run row.
+4. A boundary is one atomic retry scope. A batch owns paged source, per-item replay and retry, optional `defineBatchStep` coalescing inside `process`, and optional sink finalization.
+5. Deployment runtimes use warm, deployment-scoped supervisors that dispatch isolated Bun Workers. Environment values travel through provider execution options, never shell assignments. Sequenced runtime events update Postgres transactionally.
+6. Public APIs expose capabilities, never execution categories. `stage` and internal job kinds stay private.
 
-1. Every invocation creates one canonical `workflow_runs` row. Every Run retains immutable deployed-commit or session-artifact provenance; there is no mutable-source test mode.
-2. Production triggering enqueues work in Postgres and returns the Run. Hosts explicitly start `catamorphic.startExecutionWorker(...)`; SDK or plugin construction never starts a worker.
-3. Plain Workflows execute as one operation. `defineWorkflow` Runs advance ordered boundary and batch scopes through the same coordinator and Run row.
-4. A boundary is one atomic retry scope. A batch owns paged source, per-item replay/retry, optional physical `defineBatchStep` coalescing inside process, and optional sink finalization.
-5. Runtime invocations use deployment-scoped supervisors with environment values supplied through provider execution options, never shell assignments. Sequenced events update Postgres transactionally.
-6. Public APIs expose capabilities, not execution categories. `stage` and internal runtime work kinds remain private dispatch details.
+## What each execution sees
 
-## Source and execution placement
+- **Deployment runtime:** the immutable, verified capability snapshot under `.catamorphic/` for its artifact (`executionFiles` in `@catamorphic/parser`). Never clone the whole imported repository for execution.
+- **Coding-agent workspace:** the selected checkout or managed allocation with the complete project. Preserve its root files; capability scaffolding stays in `.catamorphic/`.
+- **Project data:** a local host may give its provider `projectDataDirectory`; deployment runtimes then see it as `CATAMORPHIC_APP_DATA_DIR`, separate from immutable source. Build sandboxes do not get this mount, and cloud execution does not imply data sync (ADR 0142, `INTEGRATION.md`).
+- Plugin references and other staging live in host storage; every agent harness accepts the host's `pluginDirectory`.
 
-- **Deployment runtime**: immutable verified capability snapshot beneath
-  `.catamorphic/`, tied to its committed artifact. A warm supervisor dispatches
-  isolated Bun Workers. Never clone the entire imported repository for execution.
-- **Coding-agent workspace**: the selected checkout or managed Allocation holds
-  the complete project the agent is working on. Preserve its root files and
-  instructions; capability scaffolding stays in `.catamorphic/`.
-- **Persistent project data**: a local host may supply `projectDataDirectory` to
-  its provider. Deployment runtimes receive `CATAMORPHIC_APP_DATA_DIR` independently
-  of immutable source. Build sandboxes do not receive this mount. Cloud execution
-  does not imply data synchronization. See ADR 0142 and `INTEGRATION.md`.
-- Keep generated plugin references and other temporary staging in host-managed
-  storage. The three agent harnesses accept the host's `pluginDirectory`.
+## Step instrumentation
 
-## Step Instrumentation Constraints
+`prepareProjectExecution` / `prepareWorkflowExecution` in `packages/parser/src/execution-transform.ts` wraps the exact step call expressions with node ids from the parsed graph. Transform only the disposable execution copy, never user source or step declarations. Do not use regex source rewriting or monkey-patch ES module exports; module bindings are immutable, so patches silently fail.
 
-**Do NOT** use:
-- Regex-based source-level code transformation to inject instrumentation.
-- Global variable / module-level monkey-patching of ES module exports (ES modules are immutable after evaluation — monkey-patching silently fails).
+## Coding agents
 
-`@catamorphic/parser` produces an execution transform that wraps exact step call expressions with the node IDs from the parsed graph. Transform only the disposable execution copy, never user source or step declarations.
-
-## Provider Availability
-
-The server degrades gracefully when **no** provider is configured: Run endpoints return `503 Service Unavailable`. Provider
-selection is host boot code, not env sniffing inside libraries. The client
-surfaces this as a user-visible error, not a crash. Integration tests that
-require a specific provider use the `describeIf` skip pattern.
-
-## Coding Agent
-
-The agent is pluggable behind `CodingAgentProvider` (`docs/decisions/0009`, `0018`). Implementations are vendor plugin packages: `@catamorphic/ai-sdk` (**flagship** — Vercel AI SDK's `ToolLoopAgent` runs in the host server process and drives the dev sandbox through `SandboxProvider`; model keys never enter the sandbox) and `@catamorphic/codex` (Codex SDK). Hosts pass one via `createCatamorphic({ codingAgent })`, which enables `core.agentSessions` and the agent HTTP routes. Sessions persist to `agent_sessions` / `agent_messages` with the git commit SHA at session start; per-project agent skills live in the repo under `.catamorphic/skills/` (ADR 0142). Imported projects receive missing framework guidance through the host skill tier without writes to their checkout.
+Agents implement `CodingAgentProvider`; hosts pass one provider or a `CodingAgentRegistry` as `createCatamorphic({ codingAgent })`, which enables agent sessions and routes (ADR 0038, 0050). Harnesses: `@catamorphic/ai-sdk` (in the host process, any API model; model keys never enter the sandbox), `@catamorphic/claude-code`, and `@catamorphic/codex` (pinned Codex app-server protocol). Sessions record `base_commit_sha`. Project agent definitions and skills live under `.catamorphic/`; imported projects get missing framework skills through the host tier without writes. See `.agents/skills/sandbox-agent-integration/SKILL.md` for details.

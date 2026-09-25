@@ -1,110 +1,50 @@
 ---
-description: Project model, git versioning, and multi-tenancy
-globs: "packages/git/**/*.ts,packages/fastify-plugin/src/routes/projects.ts,packages/db/migrations/*.sql"
+description: Project model, tenancy, git storage backends, the .catamorphic workspace, and database type conventions
+globs: packages/git/**/*.ts,packages/fastify-plugin/src/routes/projects.ts,packages/core/src/services/project*.ts,packages/db/**/*.ts,packages/db/migrations/*.sql
 alwaysApply: false
 ---
 
 # Project Model
 
-## There Is No "Workflow ID"
+## Projects and workflows
 
-A workflow is identified by its **exported function name** inside a project. There is no separate workflow table or workflow UUID. When referencing a workflow, use `(projectId, workflowName)`.
+- A **project** is a folder that can hold any work (ADR 0043), and it is the unit of access control. It may be a Git repository or a plain folder.
+- A **workflow** has no id or table of its own. It is identified by `(projectId, workflowName)`, where `workflowName` is its exported name. Tables that reference workflows (`workflow_runs`, `workflow_enablements`, `trigger_definitions`) store `workflow_name`.
+- Workflows are discovered by parsing source (`packages/parser`). There is no kind field, registry file, or manifest.
 
-A **project** is a general-purpose folder and the unit of access control. It may
-be an existing Git repository or a plain folder. Git is initialized only when a
-requested operation needs history (ADR 0141). Catamorphic capabilities use an
-independent Bun workspace under `.catamorphic/` (ADR 0142); the imported project
-keeps its own package ecosystem and root files.
+## Tenancy and identity
 
-## Multi-Tenancy
+- The hierarchy is tenant, then project, then workflow. There is **no default tenant or user**. `tenantId` is the host's org id from its auth context on every request; the tenant row is upserted on first project create.
+- Permissions follow ADR 0158: `thing:action` grants (`program:write`, `runs:read`, and so on) from role files, with no `builder` flag. Clients read effective permissions from `GET /me`.
 
-The hierarchy is: **tenant → project → workflow**.
+## The `.catamorphic/` workspace (ADR 0142)
 
-- `tenants` table is the top-level isolation boundary.
-- All projects belong to a tenant.
-- **There is no default tenant.** `tenantId` is the host's org id, provided on every request from the host's auth context and upserted into `tenants` on first project create.
-- Multi-tenant APIs pass `tenantId` through the storage backend; path containment checks in `FsBackend` enforce isolation (`<basePath>/<tenantId>/<projectId>`).
+- Workflows, apps, contracts, scripts, project agents, roles, and skills live in `.catamorphic/`, an independent Bun workspace created on first capability use. Paths come from constants in `packages/parser/src/types.ts` (`PROJECT_WORKSPACE_ROOT`, `WORKFLOW_SOURCE_ROOT`, `APP_SOURCE_ROOT`, `CONTRACTS_SOURCE_ROOT`).
+- Never write framework dependencies into the project's root manifest, and preserve root files and owner instructions.
+- Project-owned mutable data lives in `.catamorphic/app-data/`, ignored by `.catamorphic/.gitignore`. Logical `store/...` document addresses map to `app-data/store/...`; a root `store/` is ordinary user content. Preserve owner edits to ignore rules.
+- Profiles, credentials, caches, staging, and managed worktrees stay in host storage, never in the project.
 
-## Git Is the Version Control
+## Git behavior
 
-Git supplies versioned source and immutable execution provenance:
+- **Opening an existing folder is inert** (ADR 0141): no Git init, manifest writes, seeds, installs, or copied history. Initialize Git only for an operation that needs history.
+- New managed projects start with `.catamorphic/project.json`, scoped ignore rules, and host-selected seeds, with no root package manifest. GitHub import clones once and keeps history and the real default branch. New repositories default to `main`.
+- Adopted local checkouts use native Git; portable managed working copies use isomorphic-git.
+- Imported local work is committed and shared explicitly (ADR 0104). A settled agent turn alone never authorizes publishing imported work.
+- Every Run executes an immutable deployment artifact or session artifact; `workflow_runs` records which. There is no run mode.
 
-- Opening an existing folder is inert: no Git initialization, manifest writes,
-  seed installation, dependency installation, or copied history.
-- GitHub import clones once, preserving history and the actual default branch.
-- New managed projects start with `.catamorphic/project.json`, scoped ignore
-  rules, and the host-selected seeds. No root package manifest is scaffolded.
-- Local imported projects use explicit commits and sharing. Hosts may configure
-  checkpointing for managed projects; a settled turn alone does not authorize
-  publishing imported work.
-- Every Run executes an immutable committed deployment or session artifact.
-  There is no mutable-source test mode.
-- Native Git operates on adopted local checkouts; portable managed working
-  copies use isomorphic-git. New repositories default to `main`; preserve
-  imported repository branches.
+## Storage contracts
 
-## Storage Backends
+Two contracts in `packages/git/src/types.ts`:
 
-`StorageBackend` is an interface with pluggable implementations:
+- **`StorageBackend`** (working copies): `FsBackend` (a host-resolved project root folder, or `<basePath>/<tenantId>/<projectId>/dev/<externalUserId>/`) and `DaytonaBackend` (`@catamorphic/daytona`, experimental).
+- **`RemoteBackend`** (bare origins): `FsRemoteBackend`, `ObjectRemoteBackend` over any object store (`S3ObjectStore` from `@catamorphic/s3`, ADR 0012), `ArtifactsRemoteBackend` (`@catamorphic/cloudflare`), and `CheckoutRemoteBackend` for attached local checkouts. Remote sync (`syncWithNetworkRemote`, ADR 0044) fetches, merges, pushes, and keeps rescue branches.
 
-| Backend | Used for |
-|---------|----------|
-| `FsBackend` | Local dev, CI, simple hosts — stores repos under a base path on disk |
-| `S3RemoteBackend` (`@catamorphic/s3`) | Default origin until Artifacts is generally available — direct object/ref storage in R2, S3, MinIO, or a compatible bucket |
-| `DaytonaBackend` (`@catamorphic/daytona`) | Cloud — creates a Daytona sandbox per project, stores the repo inside it |
-| `ArtifactsRemoteBackend` (`@catamorphic/cloudflare`) | Cloudflare Artifacts — remote-first git origins; optional clone credentials hydrate dev checkouts. Deployment runtimes materialize the verified capability snapshot (ADR 0142) |
+Working-copy file APIs reject absolute paths, `..`, and `.git` access. Remote backends isolate by tenant and project key and update refs with compare-and-swap.
 
-Path safety rules are enforced by working-copy backends: no absolute paths, no
-`..`, and no `.git` access through file APIs. Remote backends enforce
-tenant/project key isolation and compare-and-swap ref updates.
+## Database types
 
-## Project Creation
-
-New managed projects may receive host-selected seeds and an initial commit.
-Adopting a local folder or cloning an existing repository skips that path.
-Missing framework skills are exposed through the host tier without being written
-into the imported repository.
-
-Apps, workflows, contracts, tooling, project agents, roles, and project skills
-live under `.catamorphic/`. Create the Bun workspace on first capability use,
-preserving any existing manifests within it. Never merge framework dependencies
-into the imported repository's root manifest.
-
-Project-owned mutable files live under `.catamorphic/app-data/`, ignored by the
-scoped `.catamorphic/.gitignore` by default. Preserve owner edits to ignore rules.
-Logical `store/...` document API addresses map to `app-data/store/...` locally;
-a root `store/` directory is ordinary user content. Personal artifact privacy is
-separately enforced. Host profiles, credentials, caches, staging, and managed
-worktrees remain outside the project. Database exports are not provided.
-
-## Host Frontend Uses the API Only
-
-The host frontend (via `@catamorphic/react` + `@catamorphic/api-client`) must talk to the embed server exclusively. It must **never** import from `packages/db` or query the database directly. All data access goes through API routes.
-
-## Project Discovery
-
-Workflows are discovered at parse time by `packages/parser`. Every Workflow
-is an exported static
-`defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`
-definition; IO lives in `"use step"` functions. There is no kind field,
-registry file, or manifest; TypeScript source is the registry.
-
-## Database Type Conventions
-
-Generated types live in `packages/db/src/generated/db.ts` (a `.ts` source file, not `.d.ts`). Regenerate with:
-
-```bash
-DATABASE_URL="..." kysely-codegen --out-file src/generated/db.ts
-```
-
-When querying with Kysely, use `Selectable<DB["table_name"]>` — never write manual interface duplicates or `as unknown as` casts. Kysely infers row types correctly from the generated file.
-
-JSONB columns (`provenance`, `input`, `result`, `output`, and persisted scope
-state) type as:
-- **Kysely side**: `Json` / `JsonValue` (from `@catamorphic/db`)
-- **Zod schema side**: `z.unknown().nullable()` — not `z.record(z.string(), z.unknown())`, since JSONB can hold any JSON value (arrays, primitives, etc.), not just objects
-
-## Run provenance
-
-Runs have no mode column (dropped in migration 041). Every `workflow_runs`
-row records the deployed commit SHA and artifact it executed.
+- Migrations are forward-only raw SQL in `packages/db/migrations/`, starting from the first-release baseline (ADR 0084). Tables live in the host-chosen schema (default `catamorphic`).
+- After a migration, run `bun run db:migrate && bun run db:codegen`. Generated types land in `packages/db/src/generated/db.ts`; never edit them by hand.
+- Query with Kysely and type rows as `Selectable<DB["table_name"]>`. Never duplicate row interfaces or cast rows.
+- JSONB columns are `Json` / `JsonValue` from `@catamorphic/db` on the Kysely side and `z.unknown()` (nullable where the column is) in Zod, since JSONB can hold any JSON value, not only objects.
+- UI code never imports `@catamorphic/db`; all data access goes through API routes.

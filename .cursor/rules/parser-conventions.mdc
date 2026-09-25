@@ -1,120 +1,71 @@
 ---
-description: Parser and graph structure conventions for workflow AST mapping
-globs: ["packages/parser/**/*.ts"]
+description: How the parser maps workflow TypeScript to WorkflowGraph nodes, edges, source ranges, and provenance
+globs: packages/parser/**/*.ts
 alwaysApply: false
 ---
 
-# Parser — Graph Structure Conventions
+# Parser: Graph Structure Conventions
 
-## Node Types
+`packages/parser/src/parser.ts` turns an exported `defineWorkflow(...)` into a `WorkflowGraph` (types in `types.ts`). Supporting a new language construct is a deliberate change: add it here, render it in `packages/ui/src/nodes/`, and cover it in `src/__tests__/`. The same package also produces the execution transform (`execution-transform.ts`) and powers each project's `.catamorphic/scripts/check.ts` (`check.ts`).
 
-| Type | What it represents | Container? | Children layout |
-|------|--------------------|------------|-----------------|
-| `trigger` | The workflow function itself | No | — |
-| `step` | An `await fn(...)` call to a `"use step"` function | No | — |
-| `delay` | A `sleep(...)` call | No | — |
-| `return` | A `return` statement | No | — |
-| `if-block` | Invisible wrapper around an entire if/else-if/else chain | Yes | Horizontal (branches side by side) |
-| `branch` | One arm of an if-block (if / else-if / else) | Yes | Vertical (steps stacked) |
-| `loop-block` | A for/for-of/for-in/while loop | Yes | Vertical |
-| `parallel-block` | A `Promise.all([...])` call | Yes | Horizontal |
-| `scope-block` | An IIFE or bare `{ }` block | Yes | Vertical |
-| `durable-boundary` | One atomic `defineBoundary` retry scope (internal node type retained for compatibility) | Yes | Vertical |
-| `batch` | One `defineBatch` paged per-item scope | Yes | Vertical |
-| `source` | Batch source initialization/paging | No | — |
-| `sink` | Optional bounded batch sink | No | — |
-| `pause` | A returned persisted `pause(...)` transition | No | — |
-| `call-workflow` | A returned persisted `callWorkflow(...)` transition | No | — |
+## What the parser accepts
 
-## Container Semantics
+- A Workflow is an exported direct `defineWorkflow` call with an inline builder, an inline `steps` array, direct `defineBoundary` / `defineBatch` entries, and inline callbacks. There is no other workflow kind, registry file, or manifest; source is the registry.
+- Batch steps (`defineBatchStep` exports) may be called only inside `defineBatch.process`. Anywhere else is a parse error.
 
-Containers use `parentId` to express nesting. All children of a container have `parentId` set to the container's id.
+## Node types
 
-### if-block
+| Type | Represents | Container |
+|------|-----------|-----------|
+| `input` | The workflow's start, labeled "Start"; carries `triggerBindings` | No |
+| `durable-boundary` | One `defineBoundary` atomic retry scope | Yes |
+| `batch` | One `defineBatch` scope: source, per-item process, optional sink | Yes |
+| `source` / `sink` | Batch paging and optional bounded sink | No |
+| `step` | A call in a boundary or process body (see below) | No |
+| `pause` | A returned `pause(...)` transition | No |
+| `call-workflow` | A returned `callWorkflow(...)`; inlines the child's scopes | Yes |
+| `if-block` | Invisible wrapper around an if/else chain or a ternary | Yes |
+| `branch` | One arm of an `if-block` | Yes |
+| `loop-block` | `for`, `for...of`, `for...in`, `while` | Yes |
+| `parallel-block` | `Promise.all([...])` | Yes |
+| `scope-block` | An IIFE or bare `{ }` block | Yes |
+| `return` | "Item result" of a batch process body | No |
+| `delay` | A call named `sleep(...)` (not a `@catamorphic/workflow` export; durable waits use `pause`) | No |
 
-- The `if-block` node is an invisible structural wrapper — it has no edges TO it from previous nodes. Instead, edges go from previous nodes **directly to each branch** child.
-- Branches are rendered **side by side** (left to right): if → else-if → else.
-- Each branch has `metadata.branchType` set to `"if"`, `"else if"`, or `"else"`.
-- The branch's `label` is the condition text (or `"Otherwise"` for else).
-- **Bypass edge**: If the if-block has no `else` clause and ALL branches' steps end with `return` (empty exit IDs), a bypass edge from the previous node is added so the flow can continue past the if-block.
-- Conditions should be **pretty-printed** where possible (e.g., `===` → `is`, `.includes` → `includes`, `&&` → `and`, `||` → `or`).
+`WorkflowNodeType` also lists `parallel`, which the parser does not emit. `stage` is never a node type or public concept.
 
-### loop-block
+## Steps and host calls
 
-- The loop block is a container. Label is the loop expression (e.g., `"for item of items"`).
-- **No internal edges**: Pass `[]` as `previousIds` to `parseStatements` for the loop body. The loop's nature is shown by the container label and icon, not by edge arrows. Do not create `loop-body` or `loop-back` edges.
-- Returns `[loopId]` so the flow continues from the loop container.
+- Any call statement (awaited or not), awaited variable initializer, or returned call inside a boundary or process body becomes a `step`. A `"use step"` function supplies its JSDoc label, icon, description, and parameters.
+- Host calls get readable labels instead of code: `context.host["catamorphic.sessions"].deliver` reads "Message a chat", `context.connections.gmail.search` reads "Gmail: search". Add new host operations to `SESSION_OPERATION_LABELS` or `hostCallLabel`.
+- A boundary may return a transition or a call directly. A ternary (`cond ? pause(...) : doThing()`) becomes an `if-block` with an "if" and an "else" branch, each drawing its step, host call, `pause`, or `call-workflow`. An else arm that only returns a value is dropped rather than drawn empty.
+- Inside a boundary, a `return` ends the flow without a `return` node. Never add synthetic return nodes after `pause` or `callWorkflow`.
 
-### parallel-block
+## Containers and edges
 
-- Wraps `Promise.all([...])`. Label is `"Parallel"` (or a JSDoc `@displayname`).
-- Children are the individual parallel tasks, laid out horizontally.
-- IIFEs within the array elements are parsed as `scope-block` children.
-- Simple call expressions become direct `step` children.
-- **No internal edges** between children — they run in parallel.
-- Variable bindings from array destructuring (e.g., `const [a, b] = await Promise.all(...)`) are registered for provenance tracking.
+- Children set `parentId` to their container. Container bodies are parsed with `[]` as `previousIds`, so there is no edge from a container to its first child.
+- Root edges connect scopes in `steps` order. Nothing inside a scope connects directly to the next top-level scope.
+- **Boundary:** nameless unless its leading JSDoc has `@displayname`; `sourceRange` spans the whole `defineBoundary(...)` call.
+- **Batch:** `source` leads into the process nodes; physical batch-step calls are marked with metadata (`batchStep`, `batch:*`), never separate workflow nodes.
+- **Call-workflow:** recursively inlines the child workflow's scopes. Detect recursive cycles and stop at the recursive call (`recursiveWorkflow` metadata).
+- **if-block:** edges go from the previous node straight to each branch, never to the wrapper. Branches carry `metadata.branchType` (`"if"`, `"else if"`, `"else"`) and a label of the raw condition, or "Otherwise". Without an `else`, when every branch ends in a return, an edge from the previous node bypasses the block so the flow can continue. The canvas prettifies conditions (`prettyCondition` in `packages/ui`); the parser keeps the source text.
+- **loop-block:** label `for x of items` (or `loop`). No `loop-body` or `loop-back` edges.
+- **parallel-block:** label "Parallel" or a leading `@displayname`. Array elements become `step` children, or `scope-block` children for IIFEs, with no edges between them. Array destructuring registers each binding for provenance.
+- **scope-block:** label from a leading `@displayname`, else "Block".
 
-### scope-block
+Edge types are `sequential` (default), `branch-true`, `branch-false`, and `parallel`. Removed types, do not re-add: `loop-body`, `loop-back`.
 
-- Represents IIFEs (`(async () => { ... })()`) or bare block statements (`{ ... }`).
-- Label comes from a leading JSDoc `@displayname` comment, or defaults to `"Block"`.
-- Children are parsed with `[]` as `previousIds`.
+## Graph metadata
 
-### defineWorkflow scopes
+- `controls: { cancel: true }` sets the `cancellation` capability. Cancellation is a host Run control, not a node.
+- Graphs and discovery results expose `capabilities` (`batchProcessing`, `cancellation`), never a category field.
+- Workflow `permissions` (ADR 0158) and trigger config must be constants; hosts read them without running project code.
 
-- Persisted Workflows are exported direct `defineWorkflow` calls with an inline
-  builder object, inline `steps` array, direct `defineBoundary`/`defineBatch`
-  entries, and inline callbacks.
-- Each boundary is a nameless gray container and an atomic retry unit. Its
-  `sourceRange` spans the complete `defineBoundary(...)` call.
-- JSDoc immediately above `defineBoundary(...)` uses the regular
-  `@displayname`, `@description`, `@icon`, and `@param` contract. A display name
-  adds a boundary header; without one the boundary remains nameless.
-- A `batch` container owns source, process operations, and an optional sink.
-  Calls to exported `defineBatchStep` definitions are valid only inside process
-  and are marked as physical batching metadata, never separate Workflow nodes.
-- Root edges connect boundary and batch containers in `steps` tuple order.
-  Internal edges never connect directly to the next top-level scope.
-- Ordinary calls inside are `step` nodes. Returned `pause` and `callWorkflow`
-  calls are dedicated leaves with exact call ranges. Do not add synthetic
-  return nodes after persisted transitions.
-- Child workflow calls are containers that recursively inline the child
-  workflow's boundaries and operations. Detect recursive call cycles and stop
-  expansion at the recursive call.
-- `controls: { cancel: true }` is graph metadata for a host-issued terminal Run
-  control. Cancellation is not a source node or boundary continuation.
-- Graphs and discovery results expose `capabilities` (`batchProcessing`,
-  `cancellation`) and never a category discriminator. Persisted continuation
-  is universal, not a capability. `stage` is not a public graph node or
-  authoring concept.
+## Source ranges
 
-## Edge Types
+Every node has a `sourceRange` (`start`, `end`, `startLine`, `startColumn`, `endLine`, `endColumn`, optional `file`) built with `getSourceRange`. Ranges drive code and canvas linking, so a leaf's range must be the exact call and a container's range must enclose its children. Container and leaf ranges overlap on purpose: linking prefers the smallest leaf and falls back to the container on structural lines.
 
-| Type | Color | When used |
-|------|-------|-----------|
-| `sequential` | `#737373` (grey) | Default flow between steps |
-| `branch-true` | `#22c55e` (green) | Edge into a truthy branch |
-| `branch-false` | `#ef4444` (red) | Edge into a falsy branch |
-| `parallel` | `#3b82f6` (blue) | Edges in parallel blocks |
+## JSDoc and provenance
 
-Removed types (do not re-add): `loop-body`, `loop-back`.
-
-## Source Ranges
-
-Every node has a `sourceRange` with `start`, `end`, `startLine`, `startColumn`, `endLine`, `endColumn`. These enable bidirectional code ↔ canvas linking. Always extract column information via `sf.getLineAndColumnAtPos()`.
-
-Boundary and child ranges intentionally overlap. Code linking prefers
-the smallest leaf range and falls back to the boundary on structural lines.
-
-## JSDoc Metadata
-
-- `@displayname` — human-readable label shown in UI
-- `@description` — longer description for detail panel
-- `@icon` — icon identifier for the node
-- `@param name - @displayname Label | @description Text` — per-parameter metadata
-- Variables (`const`/`let`) can also have `@displayname` via leading JSDoc comment
-- IIFEs and bare blocks can have `@displayname` via leading JSDoc comment
-
-## Argument Provenance
-
-When parsing step call arguments, trace each argument's value back to its source variable. The `StepArgumentSource` records which variable, its display name, the source step's node ID, and the source step's label. This powers the "where does this value come from?" display in the detail panel.
+- Tags: `@displayname`, `@description`, `@icon`, and `@param name - @displayname Label | @description Text`. Variables, IIFEs, bare blocks, `Promise.all` statements, boundaries, and batches accept a leading `@displayname`.
+- For each step argument, trace the value back to its source variable. `StepArgumentSource` records the variable, its display name, and the producing node's id and label, which powers "where does this value come from?" in the host's inspector.

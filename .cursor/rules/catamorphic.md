@@ -1,27 +1,23 @@
 ---
-description: Catamorphic project conventions
-globs: ["**/*.ts", "**/*.tsx"]
+description: Core Catamorphic conventions for TypeScript changes (digest of AGENTS.md)
+globs: **/*.ts,**/*.tsx
+alwaysApply: false
 ---
 
-# Catamorphic Rules
+# Catamorphic essentials
 
-- **Embeddable framework.** Catamorphic ships as libraries that a host application mounts in-process. There is no standalone product and no default identity (the root `bun run dev` starts the combined desktop and stock-server development environment; the desktop app `apps/desktop` is the in-repo reference host). Every architectural decision should assume the host provides the user model, auth, database connection, and deployment surface. Favor designs that make embedding easier (configurable providers, injectable DB/schema, pluggable auth, no hard-coded env/paths); never re-introduce standalone fallbacks.
-- **Code is the source of truth.** Workflows are TypeScript, never JSON/DSL. The parser (ts-morph) converts AST to WorkflowGraph.
-- **Cloudflare-first infra; Postgres for state.** Cloudflare Sandbox is the default execution provider; run queues, retries, pauses, batch state, and scheduling use the host's Postgres, not new infrastructure.
-- **Instrument with OpenTelemetry.** Use `@catamorphic/otel` (`getTracer` + `withSpan`, `catamorphic.*` attributes) for hot paths; the host owns the OTel SDK.
-- **Record settled design decisions as ADRs** in `docs/decisions/` (see `AGENTS.md` → Design Decisions).
-- All step functions take a single destructured object parameter.
-- There is one Workflow and one Run model. Every workflow is an exported
-  `defineWorkflow` value composing builder-scoped `defineBoundary` and
-  `defineBatch`; IO lives in `"use step"` functions called from boundary
-  bodies; every run executes a deployed commit. `defineBatchStep` only
-  physically coalesces compatible calls inside `defineBatch.process`. Never
-  add a public stage or capability-specific Run family.
-- Use JSDoc tags (@displayname, @icon, @description, @param) for UI metadata.
-- Zod schemas are the single source of truth for API types.
-- After adding API routes, regenerate: `cd packages/fastify-plugin && bun run generate-spec && cd ../api-client && bun run generate`
-- After migration changes: `bun run db:migrate && bun run db:codegen`
-- Always typecheck with `tsgo` after changes.
-- Never commit without explicit user request.
-- Use objects as function parameters, not positional params.
-- Avoid `any` type. Minimize mutable state.
+`AGENTS.md` is the source of truth. This is a digest; when they differ, follow `AGENTS.md`.
+
+- **Embed first.** Catamorphic is libraries a host mounts in-process. The host supplies auth, identity, database, storage, sandbox and LLM credentials. Never add a standalone boot, default tenant, default user, or hard-coded path, port, or env layout. `apps/desktop` is the reference host.
+- **Every dependency is an axis.** Hosts construct providers explicitly at boot: Postgres or PGlite; Cloudflare, Daytona, microsandbox, or local-process execution; S3-compatible or filesystem storage. Libraries never sniff env to pick one.
+- **Postgres for state.** Queues, retries, pauses, batch state and schedules live in the host's Postgres (`SKIP LOCKED`), not new infrastructure.
+- **Code is the source of truth.** Workflows and apps are TypeScript. Never invent a JSON format or DSL for workflow logic.
+- **One Workflow model (ADR 0040).** Every workflow is an exported `defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`. IO lives in `"use step"` functions called from boundary bodies. Every run executes a deployed commit or session artifact. Do not add a public `stage`, a workflow category, or a separate Run family.
+- **Step functions** take one destructured object parameter and carry JSDoc `@displayname` (plus `@icon`, `@description`, per-`@param` metadata).
+- **Project capabilities live in `.catamorphic/` (ADR 0142).** Never write framework files or dependencies into a user project's root.
+- **API types come from Zod.** After route or DTO changes run `(cd packages/fastify-plugin && bun run generate-spec)` then `(cd packages/api-client && bun run generate)`. After migrations run `bun run db:migrate && bun run db:codegen`.
+- **Instrument hot paths** with `@catamorphic/otel` (`getTracer`, `withSpan`, `catamorphic.*` attributes). The host owns the OTel SDK.
+- **Record settled design decisions** as ADRs in `docs/decisions/`.
+- **TypeScript style:** see `typescript-style.mdc`.
+- **Verify** with `bun run lint`, `bun run typecheck`, and `bun run test` while iterating, and `bun run check` before finishing.
+- **Never commit or push** unless the user asks.

@@ -10,7 +10,7 @@ change it. Catamorphic is mounted as libraries in the host process.
 | Verified session | `identity` resolver on `catamorphicPlugin` |
 | Organization or workspace id | `tenantId` |
 | Stable host user id | `externalUserId` |
-| Host entitlements | scoped identity, or roles plus grants resolved by core |
+| Host entitlements | scoped identity (`scope` plus `projectPermissions`), or committed roles plus grants resolved by core |
 | Postgres/PGlite | explicit `database` passed to `createCatamorphic` |
 | Project files | explicit filesystem or remote storage backend |
 | Execution | explicit sandbox/environment provider |

@@ -1,69 +1,62 @@
 ---
 name: api-type-safety
-description: Use when adding or changing Catamorphic Fastify routes, Zod request or response schemas, OpenAPI generation, generated API client types, or typed client calls.
+description: Use when adding or changing Catamorphic Fastify routes, Zod request or response schemas, the generated OpenAPI spec, `@catamorphic/api-client` types, or React hooks and clients that call the API.
 ---
 
-# API Type Safety Pipeline
+# API type safety
 
-## Overview
-
-End-to-end type safety from server to client with zero manual type duplication.
-
-## Pipeline
+One pipeline, no hand-written duplicate types:
 
 ```
-Zod Schemas → Fastify Routes → OpenAPI 3.1 Spec → openapi-typescript → openapi-fetch Client
+Zod schemas -> Fastify routes (fastify-type-provider-zod) -> OpenAPI 3.1
+  -> packages/api-client/openapi.json -> openapi-typescript (src/schema.d.ts)
+  -> openapi-fetch client
 ```
 
-## Adding a New API Route
+## Adding or changing a route
 
-1. Define Zod schemas in `packages/fastify-plugin/src/schemas.ts`
-2. Register the route in the appropriate file under `packages/fastify-plugin/src/routes/` — route URLs are **prefix-relative** (write `/projects`, not `/api/projects`; the plugin is mounted with `prefix: "/api"`)
-3. Regenerate the OpenAPI spec and client types:
+1. Define shared schemas in `packages/fastify-plugin/src/schemas.ts`. A schema
+   used by one route file only may stay local to it (as in `routes/webhooks.ts`).
+2. Add the route under `packages/fastify-plugin/src/routes/` with
+   `app.withTypeProvider<ZodTypeProvider>()`, and register new route files in
+   `src/plugin.ts`. URLs are prefix-relative: write `/projects/...`; the
+   plugin is mounted at `/api`.
+3. Enforce authorization in core services, not only in the route (ADR 0158
+   permissions such as `program:write`, `sessions:read`).
+4. Regenerate from the worktree root and commit both generated files:
 
-```bash
-(cd packages/fastify-plugin && bun run generate-spec)
-(cd packages/api-client && bun run generate)
-```
+   ```bash
+   (cd packages/fastify-plugin && bun run generate-spec)
+   (cd packages/api-client && bun run generate)
+   ```
 
-Run both commands from the worktree root. Each subshell restores the working
-directory before generating the next package.
+   `bun run check` does not diff these artifacts, so a stale spec only shows up
+   as wrong client types later.
+5. Add or update the route test in `packages/fastify-plugin/src/__tests__/`.
 
-4. The client automatically gets full type inference (generated paths include the `/api` prefix):
+Clients get full inference from generated paths, which include `/api`:
 
 ```typescript
+import { createApiClient } from "@catamorphic/api-client";
+
+const client = createApiClient({ baseUrl, fetch: authedFetch });
 const { data, error } = await client.GET("/api/projects/{projectId}", {
-  params: { path: { projectId: "abc" } },
+  params: { path: { projectId } },
 });
-// data is fully typed
 ```
 
-Session notification state is part of the ordinary `AgentSessionSchema`:
-`attentionRevision`, `attentionSeenRevision`, and derived
-`attentionRequired`. User interaction acknowledges the current revision with
-`POST /api/projects/:projectId/agent/sessions/:sessionId/attention/acknowledge`;
-React clients should use `useAcknowledgeAgentSessionAttention` rather than
-hand-writing a fetch.
+## Contracts to keep in the generated schema
 
-Keep all other session lifecycle state in that same generated contract.
-Session provenance is `source`; delegation uses `parentSessionId` plus the
-subsession routes; navigation state is `visibility`; and durable archive uses
-the archive and unarchive routes. Archive can return a typed 409
-`archive_confirmation_required` payload with the exact running sessions and
-counts of Watchers and processes that would be stopped. React clients should use
-`useArchiveAgentSession` and `useUnarchiveAgentSession` so query invalidation
-and that confirmation contract stay centralized.
-
-`GET /api/me` is the client capability document. Its project permissions must
-use the shared `PROJECT_PERMISSION_PATTERN` from `@catamorphic/core`; do not
-weaken the OpenAPI response to arbitrary strings when committed role files
-reject non-namespaced values. When an identity or feature field changes,
-update `/me`, its route tests, the OpenAPI artifact, and consumers together.
-
-## Key Packages
-
-- **zod** — schema definition (single source of truth)
-- **fastify-type-provider-zod** — request/response validation
-- **@fastify/swagger** — OpenAPI spec generation
-- **openapi-typescript** — generates `.d.ts` from spec
-- **openapi-fetch** — type-safe HTTP client
+- **Session state** lives in `AgentSessionSchema`: `source`,
+  `parentSessionId` (delegation, with the subsession routes), `visibility`,
+  and `attentionRevision` / `attentionSeenRevision` / `attentionRequired`.
+  Do not add parallel session state elsewhere.
+- **Archive** can return a typed 409 `archive_confirmation_required` listing
+  the running sessions, Watchers, and processes that would stop. React hosts use
+  `useArchiveAgentSession`, `useUnarchiveAgentSession`, and
+  `useAcknowledgeAgentSessionAttention` from `@catamorphic/react` instead of
+  hand-written fetches.
+- **`GET /api/me`** is the client capability document. Its permissions use
+  `PROJECT_PERMISSION_PATTERN` from `@catamorphic/core`; do not widen them to
+  arbitrary strings. When an identity or feature field changes, update `/me`,
+  its route test, the OpenAPI artifact, and consumers together.

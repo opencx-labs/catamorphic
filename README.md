@@ -325,7 +325,7 @@ Also worth knowing, because it's easy to miss from the package list:
 | `@catamorphic/server-sdk` | The core SDK for your Node/Bun backend. Takes a Postgres connection (or `pg.Pool`), manages its own schema-scoped tables and migrations, and exposes projects, workflows, files, runs, triggers, agent sessions, and GitHub. |
 | `@catamorphic/fastify-plugin` | A mountable Fastify plugin (`app.register(catamorphicPlugin, { core, prefix: "/api" })`) exposing the standard HTTP API for frontends, plus the per-project MCP endpoints. Also exports a standalone `createApp` factory for sidecar deployments. |
 | `@catamorphic/react` | Headless React bindings: `CatamorphicProvider`, TanStack Query hooks, and jotai atoms. Build a fully custom UI on top of these. |
-| `@catamorphic/ui` | Ready-made components: the React Flow workflow canvas, detail panel, Runs panel, AI bar, and `AppMount` (the sandboxed app iframe host). Every piece is opt-in. |
+| `@catamorphic/ui` | Ready-made components: the React Flow workflow canvas, member review and consent, the Runs panel, and `AppMount` (the sandboxed app iframe host). Every piece is opt-in. |
 | `@catamorphic/registry` | shadcn-style copy-paste components for hosts that want to own and customize the component source (project browser, git panel, runs panel, agent chat, Monaco editor). |
 | `@catamorphic/api-client` | Generated OpenAPI types + `openapi-fetch` client for the HTTP API. |
 | `@catamorphic/workflow` | Typed workflow-authoring primitives. Projects opt in directly, or a SaaS can wrap it and re-export only its approved surface. |

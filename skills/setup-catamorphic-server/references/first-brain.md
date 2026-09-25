@@ -1,9 +1,9 @@
 # A first brain on one machine
 
-The shortest honest path from nothing to a Work brain an MCP client can
-connect to, verified end to end on 2026-09-20. Use it when the person wants
+The shortest path from nothing to a Work brain an MCP client can connect
+to, last verified end to end on 2026-09-20. Use it when the person wants
 "a brain on this machine" and nothing exists yet. Adapt to what is present
-(read [Stock server](stock-server.md) first); never print the operator
+(read [Stock server](stock-server.md) first). Never print the operator
 secret or a password.
 
 ## 1. Build and run the stock image
@@ -31,7 +31,8 @@ machine.
 The setup listener is bound to loopback inside the container (port 4701),
 so run these from inside it. The image has bun and git, not curl; `bun -e`
 with `fetch` is the request tool. The operator secret is
-`/data/operator-secret` (owner-only). Read it into a variable; do not echo it.
+`/data/operator-secret` (owner-only) unless the deployment sets
+`CATAMORPHIC_OPERATOR_SECRET`. Read it into a variable; do not echo it.
 
 Project with two roles and invitation-only admission. `admin` is for the
 owner: every agent, workflow, and app plus every project permission (`"*"`).
@@ -93,27 +94,27 @@ and pass them without writing them into shell history or a file.
 - Claude Code: `claude mcp add --transport http work-brain http://127.0.0.1:4700/api/projects/PROJECT_ID/mcp`,
   then `/mcp` to sign in. Other MCP clients: add the same URL as a remote
   (HTTP) server.
-- `tools/list` after sign-in returns the project's documents, sessions,
-  skills, publication and `ask_agent` tools, plus one tool per AI-callable
-  workflow the project declares.
+- `tools/list` after sign-in returns the project's document, skill,
+  publication, proposal, agent (`ask_agent`, `send_agent_message`) and
+  watcher tools the caller's role allows, plus one tool per AI-callable
+  workflow.
 
 ## 4. Hand over
 
 Report the project id, the sign-in address, and the MCP URL. Invitations for
-more people are created with the signed-in user's own identity through
-`POST /api/projects/PROJECT_ID/admission/invitations`; they are
+more people are created by a signed-in member holding `memberships:write`
+through `POST /api/projects/PROJECT_ID/admission/invitations`; they are
 credential-free locators that desktop, PWA and MCP clients redeem after
 signing in. Ongoing configuration (roles, agents, sidebar, starting actions)
 is project code under `.catamorphic/`, changed through ordinary review.
 
-## What went wrong on the first run, so it does not again
+## Gotchas
 
-- The image build failed before any Work code ran: a pinned `node` helper
-  package tried to run npm during `bun install`. The Dockerfile now installs
-  with `--ignore-scripts`; every build in the image runs under bun.
-- `curl` is not in the image; requests to the loopback setup listener go
-  through `bun -e` inside the container.
-- The login form and the OAuth consent form are browser pages: they expect
-  an `Origin` header. Scripts that drive them (a test, not a person) must
-  send one; the token endpoint itself accepts requests without it, as MCP
-  clients send them.
+- Build the image with the repository's Dockerfile as is: it installs with
+  `--ignore-scripts` because a pinned helper package would otherwise try to
+  run npm, and the image has only bun.
+- The image has no `curl`; send setup requests with `bun -e` inside the
+  container.
+- The login and OAuth consent forms are browser pages and expect an `Origin`
+  header. Scripts that drive them (tests, not people) must send one. The
+  token endpoint accepts requests without it, as MCP clients send them.

@@ -1,68 +1,59 @@
 ---
 name: plugin-e2e-integration
-description: Use when integrating, debugging, or documenting discovery, attachment, configuration, sandbox staging, and execution of an external Catamorphic workflow plugin.
+description: Use when integrating, debugging, or documenting how an external workflow plugin package (a package.json with a `catamorphic` manifest) is resolved, attached to a project, given secrets, shipped into a deployment, executed, and described to coding agents.
 ---
 
-# Plugin E2E Integration (Business-Agnostic)
+# Plugin end-to-end integration
 
-## Use This Skill When
+Applies to any plugin package that follows the manifest contract, whatever its
+vendor or domain. Deep reference: `packages/plugins/README.md`. Host wiring:
+`INTEGRATION.md` ("Plugin packages" and "Capabilities, lifecycle hooks, and
+plugin host halves").
 
-Use this skill when you need to integrate, debug, or document how an external workflow plugin package is discovered, attached, configured, and executed end-to-end in Catamorphic.
+## The path a plugin takes
 
-## Scope
+1. **Resolve.** The host passes `createCatamorphic({ pluginResolver })`, for
+   example `new LocalPluginResolver({ rootDir })` (exported by
+   `@catamorphic/server-sdk`). Each immediate subdirectory of `rootDir` is a
+   built package whose `package.json` carries a `catamorphic` field. The
+   resolver never builds packages. Neither in-repo host (desktop, stock
+   server) configures a resolver, so plugins are an embedder feature.
+2. **Attach.** `POST /api/projects/:projectId/plugins` and
+   `DELETE .../plugins/:packageName` need `program:publish`.
+   `GET /api/plugins/catalog` lists what the resolver found.
+3. **Secrets.** Each declared manifest secret is set with
+   `PUT /api/projects/:projectId/secrets/:name` (`secrets:write`), or supplied
+   by a host capability provider for a manifest `requires` entry (ADR 0046).
+   Resolution order per run: capability provider value, stored secret,
+   manifest default. Runs use the `production` secret stage.
+4. **Deploy and run.** Deploy the project commit
+   (`POST /api/projects/:projectId/deploy`), then trigger through the host UI
+   or `POST /api/projects/:projectId/workflows/:name/runs`. `RunPluginsLoader`
+   loads attached payloads per run; they are part of the deployment artifact
+   digest and are uploaded to `node_modules/<packageName>/` in the runtime.
+5. **Agent context.** `GET /api/projects/:projectId/agent-context` returns a
+   prompt suffix for host-side builders. Harnesses stage each plugin's README
+   and types under `<pluginDirectory>/_plugins/<slug>/` with
+   `stagedPluginFiles` and prepend `buildPluginsPreamble()`.
 
-This guide is intentionally domain-neutral. It applies to any plugin package that follows the Catamorphic manifest contract, regardless of vendor or business use case.
+## First debug stops
 
-## Canonical Docs
+| Symptom | Likely cause |
+| --- | --- |
+| `503 Plugins not configured` | No `pluginResolver` passed to `createCatamorphic`. |
+| Plugin missing from the catalog | Invalid manifest (see `packages/plugins/src/manifest.ts`), not built, or not an immediate child of `rootDir`. |
+| `400` naming missing secrets (`PluginSecretsMissingError`) | Required secret has no stored value, default, or capability provider. |
+| Module not found at run time | Package not built, wrong `name`, or payload files missing from the deployment. |
+| Agent invents plugin APIs | Docs or `.d.ts` not staged for the selected harness, or the manifest `docs` paths are wrong. |
 
-- `packages/plugins/README.md` (deep reference and troubleshooting)
-- `INTEGRATION.md` (host integration quick guide)
+## Files to read before changing the flow
 
-## Quick E2E Checklist
-
-1. Ensure the host explicitly configures a `PluginResolver`
-   (`CATAMORPHIC_LOCAL_PLUGINS_DIR` is one reference-host input, not a
-   framework switch).
-2. Ensure plugin package has valid `catamorphic` manifest and built artifacts.
-3. Attach plugin to project.
-4. Save every required declared project secret for the production stage, or
-   configure a host capability provider that supplies it.
-5. Deploy the exact project commit, then trigger the workflow through the host
-   UI or Run API.
-6. Verify the immutable deployment artifact contains the plugin payload and
-   its runtime materializes files under `node_modules/<packageName>/`.
-7. Verify Run events and terminal state persist without missing-secret,
-   capability-resolution, or module-resolution errors.
-
-## First Debug Stops
-
-1. `503 Plugins not configured`:
-   - resolver/services not initialized (check server env and startup wiring).
-2. Plugin missing from catalog:
-   - invalid manifest or plugin not in resolver source path.
-3. Missing required secrets:
-   - secret not set and no default for required manifest entry.
-4. Sandbox module resolution failures:
-   - plugin not built or upload path mismatch.
-5. AI usage mismatch:
-   - plugin docs/types are absent from `AgentContextService` or the selected
-     coding-agent provider's staged plugin context.
-
-## Files To Read Before Changing Integration
-
-- `packages/plugins/src/manifest.ts`
-- `packages/plugins/src/resolver.ts`
-- `packages/plugins/README.md`
+- `packages/plugins/src/manifest.ts`, `packages/plugins/src/resolver.ts`
 - `packages/fastify-plugin/src/routes/plugins.ts`
-- `packages/core/src/services/plugins-service.ts`
-- `packages/core/src/services/secrets-service.ts`
-- `packages/core/src/services/run-plugins-loader.ts`
-- `packages/core/src/services/agent-context-service.ts`
-- `packages/core/src/services/deployment-artifacts-service.ts`
-- `packages/core/src/services/deployment-runtime-service.ts`
-- `packages/core/src/services/execution-worker-service.ts`
-- `packages/sandbox/src/plugin-upload.ts`
-- `packages/sandbox/src/coding-agent/plugin-staging.ts`
-- The selected provider adapter in `packages/ai-sdk`, `packages/claude-code`,
-  or `packages/codex`
-- `INTEGRATION.md`
+- `packages/core/src/services/plugins-service.ts`, `secrets-service.ts`,
+  `run-plugins-loader.ts`, `agent-context-service.ts`,
+  `deployment-artifacts-service.ts`, `deployment-runtime-service.ts`
+- `packages/sandbox/src/plugin-upload.ts`,
+  `packages/sandbox/src/coding-agent/plugin-staging.ts`
+- The harness adapter in `packages/ai-sdk`, `packages/claude-code`, or
+  `packages/codex`
