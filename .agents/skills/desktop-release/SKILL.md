@@ -1,143 +1,134 @@
 ---
 name: desktop-release
-description: Use when preparing, dry-running, publishing, repairing, or verifying a Work Stable or Preview desktop release through GitHub Releases and opencx-labs/homebrew-tap. Do not use for ordinary desktop development or framework package publishing.
+description: Use when preparing, dry-running, publishing, repairing, or verifying a Work desktop Stable or Preview release (macOS, GitHub Releases, and the opencx-labs/homebrew-tap casks and update feeds). Not for ordinary desktop development or for publishing framework npm packages.
 ---
 
-# Desktop Release
+# Desktop release
 
-Publish the macOS desktop app as a signed and notarized release without
-moving public tags, bypassing review, or leaving GitHub Releases and the
-Homebrew Stable and Preview channels out of sync.
+Publish the signed, notarized macOS app from one immutable tag, keeping GitHub
+Releases and the Homebrew Stable and Preview channels in step.
 
-## Load the release contract
+## Read first
 
-Before changing or publishing anything, read these current repository files
-completely:
+Read these completely before changing or publishing anything:
 
-- `apps/desktop/RELEASING.md`
-- `.github/workflows/desktop-prerelease.yml`
-- `scripts/desktop-release.ts`
-- `apps/desktop/package.json`
+- [apps/desktop/RELEASING.md](../../../apps/desktop/RELEASING.md): setup, secrets,
+  dry run, publication steps, channels, and clean-account checks.
+- [.github/workflows/desktop-prerelease.yml](../../../.github/workflows/desktop-prerelease.yml)
+  (workflow name "Desktop release"): tag pushes publish, manual dispatch only
+  builds and verifies.
+- [scripts/desktop-release.ts](../../../scripts/desktop-release.ts): tag, version,
+  cask and feed rules.
+- `apps/desktop/package.json`: the version being released.
 
-Read ADRs 0082, 0083, 0085, and 0091 when changing distribution, update
-behavior, or coding-harness packaging. If the release includes database
-changes, also use the `database-conventions` skill and read ADR 0084 plus the
-new migrations.
+When changing distribution, updates or harness packaging, also read ADRs
+[0082](../../../docs/decisions/0082-desktop-prerelease-distribution.md),
+[0083](../../../docs/decisions/0083-desktop-updates-and-migration-backups.md),
+[0085](../../../docs/decisions/0085-desktop-stable-and-preview-channels.md),
+[0091](../../../docs/decisions/0091-on-demand-desktop-harness-components.md) and
+[0146](../../../docs/decisions/0146-work-application-identity.md). When the release
+carries new migrations, use the `database-conventions` skill and read them; packaged
+apps back up the database before migrating (ADR 0083).
 
-The current workflow supports Apple silicon macOS Stable and Preview releases.
-Stable versions are `x.y.z`; Preview versions are `x.y.z-alpha.n`. Do not
-publish another prerelease identifier, a Nightly build, an Intel build, or
-another platform by weakening its guards. Those require an explicit product
-decision and corresponding release work first.
+Supported today: Apple silicon macOS only. Stable is `x.y.z`, Preview is
+`x.y.z-alpha.n`. Another prerelease name, a nightly, Intel or another platform
+needs a product decision and release work first; never weaken the guards to get one.
 
-## Authority and hard stops
+## Authority
 
-A direct request to "publish a release" authorizes the release-specific code
-change, PR, dry run, annotated tag push, and monitoring and verification of
-the resulting GitHub Release and tap update. It does not authorize bypassing
-required reviewers, force-pushing or moving a public tag, weakening repository
-or environment protections, installing the app on the user's Mac, or exposing
-secret values.
+A direct request to publish a release authorizes the release preparation change
+and PR, the dry run, pushing the annotated tag, and monitoring and verifying the
+result. It does not authorize bypassing required reviewers, moving or force-pushing
+a public tag, weakening repository or environment protections, installing the app
+on the user's Mac, or reading secret values.
 
-If the user did not specify a version or channel, inspect the current package
-version and published releases, propose the next SemVer version for the
-requested channel, and get confirmation before changing the version or
-creating a tag. Never infer Stable versus Preview from the word "release."
+If the user did not name a version and channel, look at the package version and
+published `desktop-v*` releases, propose the next version, and wait for
+confirmation. "Release" alone does not mean Stable.
 
-Stop before tagging when any of these is true:
+## Stop before tagging if
 
-- the release commit is not merged to `main`;
-- CI for that exact commit is not successful;
-- the dry-run workflow for that exact commit did not succeed;
-- the `desktop-release` environment lacks its expected secret names or release
-  protection;
-- the tag or release already exists unexpectedly;
-- the Homebrew tap or its release-writer path is not ready.
+- the release commit is not on `main`, or CI for that exact commit did not pass;
+- the dry run for that exact commit did not succeed;
+- the `desktop-release` environment lacks one of the six secret names in
+  RELEASING.md or its reviewer and branch/tag protection;
+- the tag or a GitHub release for it already exists;
+- the tap or its token is not ready (the dry run checks tap write access).
 
-## Prepare the release
+## 1. Prepare
 
-1. Work in a dedicated worktree and fetch `origin` and tags. Record the exact
-   `origin/main` SHA, the latest `desktop-v*` release, and the intended version.
-2. Inspect release-environment and ruleset metadata through `gh` without ever
-   reading or printing secret values. Confirm the six secret names documented
-   in `apps/desktop/RELEASING.md` exist.
-3. If a version bump or release note change is needed, make it on a
-   `codex/` branch. Keep `apps/desktop/package.json` and `bun.lock` in sync.
-4. Validate the tag/version pair with `scripts/desktop-release.ts`, run its
-   focused tests, then run the complete `bun run check` gate.
-5. If Claude Code or Codex dependencies changed, inspect
-   `apps/desktop/src/main/harness-components.ts`. The platform package version,
-   exact npm tarball URL, and SHA-512 integrity for every supported platform
-   are one release contract. Update and test them together; never publish a
-   floating component version or integrity gap.
-6. Commit and push the release preparation, open or update a PR, wait for its
-   checks, and respect the required human review. Do not merge by bypass.
-7. After merge, fetch again and verify the merged `main` SHA contains exactly
-   the intended version and has successful CI. If `main` moved, repeat the
-   exact-commit checks.
+1. Work in a dedicated worktree. Fetch `origin` with tags. Record the `origin/main`
+   SHA, the latest `desktop-v*` release, and the intended version.
+2. Check environment and ruleset metadata with `gh` (for example
+   `gh secret list --env desktop-release` lists names only). Never print values.
+3. If the version needs a bump, change `apps/desktop/package.json` on a branch and
+   keep `bun.lock` consistent. Check the pair:
+   `bun scripts/desktop-release.ts verify --tag desktop-v<version> --package-version <version>`
+   and `bun run test:file scripts/desktop-release.test.ts`.
+4. If Claude Code or Codex dependencies changed, update
+   `apps/desktop/src/main/harness-components.ts` together: platform package
+   version, tarball URL and SHA-512 integrity for every supported platform. Run
+   its tests. Never ship a floating version or a missing integrity pin.
+5. Run `bun run check`, push, open the PR, wait for checks and the required human
+   review. Never merge by bypass.
+6. After merge, fetch again and confirm `main` has the intended version and green
+   CI. If `main` moved since, repeat the exact-commit checks on the new SHA.
 
-If `main` already contains the intended version and no release preparation is
-needed, do not create an empty release PR.
+If `main` already carries the intended version, skip the PR.
 
-## Dry run the exact commit
+## 2. Dry run the exact commit
 
-Dispatch `desktop-prerelease.yml` manually from `main`, capture its run id, and
-verify the run's `headSha` equals the recorded release SHA. Monitor it to
-completion. A manual dispatch signs, notarizes, verifies, and uploads workflow
-artifacts, but must not create a GitHub Release or modify the tap.
+```sh
+gh workflow run desktop-prerelease.yml --ref main
+gh run list --workflow desktop-prerelease.yml --limit 1 --json databaseId,headSha,status
+```
 
-Inspect the artifact inventory. For the first release, a signing-credential
-change, or a material packaging change, pause for the clean-account installation
-checks in `apps/desktop/RELEASING.md`. Do not claim Gatekeeper, URL-handler, or
-real update UX validation that was not actually performed.
+Confirm the run's `headSha` is the recorded SHA and watch it to completion
+(`gh run watch <id>`). The environment requires reviewer approval, so the run
+waits for a person. A dispatch signs, notarizes, verifies and uploads the DMG,
+ZIP, blockmaps, feed and `SHA256SUMS.txt` as workflow artifacts. It never creates
+a release or touches the tap.
 
-## Publish with an immutable tag
+For a signing-credential change or a material packaging change, pause for the
+clean-account install checks in RELEASING.md. Never claim Gatekeeper, URL-handler,
+harness first-use or update checks you did not perform.
 
-Immediately before tagging, recheck that `origin/main` is still the validated
-SHA and that neither the remote tag nor a GitHub Release exists. Run the
-release verifier once more.
+## 3. Publish with an immutable tag
 
-Create an annotated `desktop-v<version>` tag at that exact SHA and push that
-specific tag ref. Never reuse, move, delete, or force-push a published release
-tag. The tag-triggered workflow is the only publisher. A Preview tag creates a
-GitHub prerelease and advances `work@alpha` plus `alpha-mac.yml`. A
-Stable tag creates the latest normal GitHub release and advances both casks
-plus both update feeds so Preview users converge onto Stable.
+Right before tagging, recheck that `origin/main` is still the validated SHA, that
+the tag and release do not exist, and rerun the verifier. Then:
 
-Monitor the tagged workflow to completion. Do not blindly retry failures. One
-retry is reasonable only for a clearly transient external failure when the
-same immutable tag and workflow are safe to rerun. If code at the tagged commit
-is wrong, keep the tag as history, fix through a new PR, and publish a new
-version. If publication partially succeeds, preserve the partial state and
-report it precisely rather than deleting evidence.
+```sh
+git tag -a desktop-v<version> <sha> -m "Work <version>"
+git push origin refs/tags/desktop-v<version>
+```
 
-## Verify the public release
+The tag workflow is the only publisher. Preview creates a GitHub prerelease and
+advances `Casks/work@alpha.rb` and `updates/alpha-mac.yml`. Stable creates the
+latest release and advances both casks and both feeds (`latest-mac.yml`,
+`alpha-mac.yml`) so Preview users converge on it.
 
-Verify all of the following before reporting success:
+Watch the tag run to completion. Diagnose a failure before rerunning. The
+publication steps are idempotent (assets are replaced, unchanged tap files make no
+commit), so rerunning the same tag's workflow is safe once the cause was transient
+or external. If the tagged code is wrong, keep the tag as history, fix it in a new
+PR, and release a new version. Never move, delete or reuse a published tag. If
+publication partly succeeded, leave the partial state and report it exactly.
 
-- the GitHub release targets the intended tag and its Stable or Preview state
-  is correct;
-- the DMG, ZIP, both blockmaps, channel metadata, and `SHA256SUMS.txt` exist;
-- downloaded assets match the published checksums;
-- a Preview release updates `Casks/work@alpha.rb` and
-  `updates/alpha-mac.yml` only;
-- a Stable release updates `Casks/work.rb`,
-  `Casks/work@alpha.rb`, `updates/latest-mac.yml`, and
-  `updates/alpha-mac.yml` together;
-- each updated cask contains the intended version and DMG checksum;
-- each updated feed points only to assets from the intended GitHub release;
-- the tap commit is newer than the release publication and all applicable tap
-  files advanced together;
-- the release and tagged workflow URLs are recorded for the user.
-- on a clean account without system Claude Code or Codex, each intended
-  harness performs its one-time verified component download, starts, and then
-  starts again from the cached component without network access.
+## 4. Verify the public release
 
-Use a temporary directory for downloads and tap inspection. Do not run
-`brew install`, replace `/Applications/Work.app`, or exercise an updater
-against the user's installed copy without explicit permission.
+Use a temporary directory for downloads and a tap clone. Confirm:
 
-Report any remaining manual checks separately. A first release cannot prove
-the updater path by itself; verify direct DMG and Homebrew installation, then
-use the next release on each channel to test in-app update and `brew upgrade`
-from the previous public version.
+- the release targets the tag, with the right prerelease or latest state;
+- the DMG, ZIP, both blockmaps, the channel feed and `SHA256SUMS.txt` exist, and
+  downloaded assets match the checksums;
+- the tap files for the channel (above) all advanced in one commit made after the
+  release was published, each cask names the version and DMG checksum, and each
+  feed points only at this release's assets;
+- the release and workflow run URLs are recorded for the user.
+
+Do not run `brew install`, replace `/Applications/Work.app`, or run an updater
+against the user's copy without explicit permission. List the manual checks that
+remain: clean-account install, harness first-use download and offline restart, and
+on the next release of each channel, in-app update and `brew upgrade` from the
+previous public version.

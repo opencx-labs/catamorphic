@@ -5,8 +5,7 @@ user to name it again.
 
 ## Stock layout
 
-- Without `DATABASE_URL`, Catamorphic data uses PGlite under the mounted data
-  directory. Stock Better Auth uses a separate `<data>/auth-db` PGlite
+- Without `DATABASE_URL`, Catamorphic data uses PGlite in `<data>/db`. Stock Better Auth uses a separate `<data>/auth-db` PGlite
   database so its migrations do not alter Catamorphic's long-lived session or
   schema search path.
 - With `DATABASE_URL`, Catamorphic uses its dedicated schema and stock Better
@@ -21,16 +20,20 @@ user to name it again.
 
 ## Existing hosts
 
-Use the host's pool, connection string, or Kysely/PGlite instance as supported
-by `createCatamorphic`. The host owns lifecycle for injected pools and database
-instances. Run `catamorphic.migrate()` through the host's normal deployment
-process and keep Catamorphic schema-scoped.
+`createCatamorphic({ database })` accepts `{ pool }` (a host-owned `pg.Pool`),
+`{ connectionString }` (a pool Catamorphic owns and closes), or `{ db }` (a
+Kysely instance already scoped to Catamorphic's schema; this is how PGlite is
+passed, see `apps/server/src/server.ts`). Each takes an optional `schema`
+(default `catamorphic`). The host owns the lifecycle of anything it injects.
+Run `await catamorphic.migrate()` from the host's normal deploy step or boot;
+it is idempotent and touches only Catamorphic's schema.
 
 ## Maintenance checklist
 
 Before a migration, identify the installed version, backend, schema, data
-path, backup mechanism, and rollback/recovery procedure. Run the repository's
-current migration entrypoint, then verify both Catamorphic and host auth can
+path, backup mechanism, and rollback/recovery procedure. The stock server
+migrates both databases at boot; a custom host runs `catamorphic.migrate()`.
+Then verify both Catamorphic and host auth can
 read their tables and authenticate a known non-privileged test user.
 
 When a new backend or breaking migration ships, update this reference in the

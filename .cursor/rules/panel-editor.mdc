@@ -1,61 +1,31 @@
 ---
-description: Detail panel and code editor behavior conventions
-globs: ["apps/desktop/src/renderer/components/workflow-details.tsx", "packages/registry/src/**/monaco-editor.tsx", "packages/ui/src/canvas.tsx", "packages/react/src/atoms.ts", "packages/react/src/hooks/use-code-editor-link.ts", "packages/react/src/lib/find-node-at-position.ts"]
+description: Host-owned workflow inspector, the Monaco code editor, and bidirectional code and canvas linking
+globs: apps/desktop/src/renderer/screens/workflow-screen.tsx,apps/desktop/src/renderer/components/workflow-*.tsx,apps/desktop/src/renderer/components/catamorphic/monaco-editor.tsx,packages/registry/src/monaco-editor/**,packages/react/src/atoms.ts,packages/react/src/hooks/use-code-editor-link.ts,packages/react/src/lib/find-node-at-position.ts
 alwaysApply: false
 ---
 
-# Detail Panel & Code Editor
+# Inspector and Code Editor
 
-## Host-owned inspector
+## The host owns the inspector
 
-Workflow inspectors belong to the host (ADR 0097). `@catamorphic/ui` exports
-no Details/Code sidebar. The desktop owns Details, Code, Runs, and automation
-views in `apps/desktop/src/renderer/screens/workflow-screen.tsx` and its
-`workflow-*` components. Other hosts compose their own views inside
-`WorkflowEditorScope` or provide `WorkflowEditor.renderInspector`.
+Workflow inspectors belong to the host (ADR 0097, amended by 0157). `@catamorphic/ui` ships no Details or Code panel: `WorkflowEditor` passes `renderInspector` the selected node, `close`, the code, and read-only state, and hosts that compose their own chrome mount `WorkflowCanvas` inside a `WorkflowEditorScope`. No framework package depends on Monaco or imposes panel size or action chrome.
 
-Details lead with a human label, description, behavior, and information used.
-Combine parameters and arguments; explain provenance and friendly types.
-Put raw expressions, policies, and trigger configuration behind Technical
-details. Source and agent-edit actions must be easy to find. Empty canvas
-selection returns to the workflow overview. Code uses the registry Monaco
-editor and the existing headless linking hook. No core package depends on
-Monaco or imposes sidebar dimensions or action chrome.
+The desktop implementation is `apps/desktop/src/renderer/screens/workflow-screen.tsx` with its `workflow-*` components:
 
-## Bidirectional Code ↔ Canvas Linking
+- The side panel opens only for a subject (a selected step, code, a run, automatic runs, or a change request) and closes with it. There is no panel toggle and no tab strip.
+- Selecting a step shows its details; clearing the selection or pressing Escape closes them. While code is open, selection moves the editor instead of switching views. A change request follows the selection.
+- Step details lead with a human label, description, behavior, and the information used (parameters merged with arguments, with provenance and friendly types). Raw expressions, policies, and trigger configuration go behind Technical details. Opening the source and asking the agent for a change stay easy to find.
 
-All linking state is headless in `@catamorphic/react`'s `useCodeEditorLink` (`packages/react/src/hooks/use-code-editor-link.ts`). Editors consume the hook inside a `WorkflowEditorScope`; they never read the selection atoms directly.
+## Bidirectional linking
 
-### Canvas → Code
+All linking state lives in `useCodeEditorLink` (`packages/react/src/hooks/use-code-editor-link.ts`). Editors call it inside a `WorkflowEditorScope` and never read the selection atoms directly. The registry Monaco editor (`packages/registry/src/monaco-editor/`, copied into the desktop at `components/catamorphic/monaco-editor.tsx`) is the reference wiring; keep the two in step.
 
-When the selected node changes from outside the editor, the hook emits a `reveal` request (`{ range, key }` — `key` is monotonic so equal ranges still re-reveal). The editor then:
-1. Scrolls to `range.startLine` (via `revealLineInCenter`)
-2. Sets the selection from `(startLine, startColumn)` to `(endLine, endColumn)`
-3. Places the cursor at `(startLine, startColumn)` (reversed Monaco `Selection`)
-4. Focuses the editor
+**Canvas to code.** When the selection changes from outside the editor, the hook emits `reveal: { range, key }`. `key` increases on every new selection so the same range re-reveals. A re-parse that keeps the same node id does not re-reveal. The editor then scrolls `range.startLine` into the center, selects the range with the cursor at its start, and focuses.
 
-### Code → Canvas
+**Code to canvas.** On user cursor moves, the editor calls `handleCursorPositionChange({ line, column })`. `findNodeAtPosition` picks the smallest non-container node whose `sourceRange` contains the cursor, falling back to the smallest container (`CONTAINER_TYPES` in `find-node-at-position.ts`, including `input`, whose range is the whole workflow) on structural lines. Steps and `pause` leaves therefore win over their boundary.
 
-When the cursor moves in the editor (Monaco: `onDidChangeCursorPosition`), the editor calls `handleCursorPositionChange({ line, column })`. The hook runs `findNodeAtPosition` (`packages/react/src/lib/find-node-at-position.ts`) — smallest-span non-container node whose `sourceRange` contains the cursor; containers (including the trigger, whose range is the whole function) win only on structural lines — and selects that node, highlighting it in the canvas.
+**No feedback loops.** The editor sets `programmaticReveal` while applying a reveal so its own cursor move is ignored. The hook sets `cursorDrivenRef` when a cursor move selects a node so that selection does not reveal back into the editor.
 
-`durable-boundary` is a container. `pause` and `call-workflow` are leaves and
-must win selection when their call ranges overlap the enclosing boundary.
+## Monaco
 
-### Preventing Feedback Loops
-
-Two flags prevent infinite loops between programmatic and user-driven changes:
-- `programmaticReveal` (in the editor component) — set while applying a reveal (suppresses the cursor-change handler)
-- `cursorDrivenRef` (inside `useCodeEditorLink`) — set when a cursor move triggers node selection (suppresses the reveal that selection changes would otherwise emit)
-
-## Panel State Behavior
-
-- Clicking a node when the panel is **closed**: opens panel, switches to Details tab.
-- Clicking a node when the panel is **already open**: keeps the **current tab** (Details or Code). Does NOT switch back to Details.
-- Clicking empty canvas: deselects node (panel can stay open).
-- Node selection state is managed via `selectedNodeIdAtom` (Jotai). The canvas synchronizes React Flow's internal `selected` property with this atom via a `useEffect`.
-
-## Monaco Editor Configuration
-
-- TypeScript language with syntax highlighting, inline errors, type-on-hover, completion, and line numbers.
-- Diagnostic 2307 ("Cannot find module") is ignored: only the active workflow file is loaded into the editor model, so cross-file and npm imports can't resolve.
-- `CodeEditorRenderProps` still passes `selectedNode`/`allNodes`/`onSelectNode` for hosts that don't use the hook, but `useCodeEditorLink` is the preferred wiring.
+TypeScript mode with highlighting, inline errors, hover types, completion, and line numbers. Diagnostic 2307 ("Cannot find module") is ignored because only the active workflow file is loaded into the model.

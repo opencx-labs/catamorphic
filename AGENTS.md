@@ -93,7 +93,7 @@ Public developer surface:
 - `packages/server-sdk`: **`@catamorphic/server-sdk`**, the core backend SDK. `createCatamorphic({ database, storage, environmentProvider, sandboxProvider?, github?, triggerKinds?, mcpToolKinds?, plugins?, projectSeeds?, standingAgentPrompt?, ... })`; identity binds per request via `forTenant({ tenantId }).forUser({ externalUserId, scope? })`.
 - `packages/fastify-plugin` — **`@catamorphic/fastify-plugin`**: mountable Fastify plugin (`catamorphicPlugin`) + standalone `createApp` factory with Zod schemas and OpenAPI spec. Also serves the per-project MCP endpoints (`/projects/:id/mcp` — workflow tools + documents + skills + `ask_agent`, narrowed by identity (ADR 0055); `/projects/:id/apps-mcp` MCP Apps) and app guest documents.
 - `packages/react` — headless React bindings (provider, TanStack Query hooks, jotai atoms).
-- `packages/ui` — React Flow editor components (canvas, panels, AI bar) + `AppMount` (sandboxed app iframe host); all opt-in/composable.
+- `packages/ui`: React Flow editor components (canvas, panels, member review) + `AppMount` (sandboxed app iframe host); all opt-in/composable.
 - `packages/registry`: shadcn-style copy-paste component registry (project editor, file explorer, git panel, runs panel, agent chat, Monaco editor, and more).
 - `packages/api-client` — generated OpenAPI types + openapi-fetch client.
 - `packages/workflow` — **`@catamorphic/workflow`**: dependency-light `defineWorkflow`, boundary, batch-scope, pause, child-workflow, trigger-subscription, and physical batch-step authoring primitives; hosts may wrap and selectively re-export this surface.
@@ -281,7 +281,7 @@ Settled decisions — do not deviate without explicit user approval. ADRs in `do
 
 - **Project model, git versioning, DB types** → `project-model.mdc`
 - **Sandbox execution, providers, run lifecycle, instrumentation** → `sandbox-execution.mdc`
-- **Editor UI: Runs panel and state management** → `playground-ui.mdc`
+- **Workflow editor packages: data access, runs, Runs panel, shared state** → `workflow-editor.mdc`
 - **Canvas layout, nodes, edges, read-only behavior** → `graph-design.mdc`
 - **Parser node types, containers, source ranges, provenance** → `parser-conventions.mdc`
 - **Detail panel, code editor, bidirectional linking** → `panel-editor.mdc`

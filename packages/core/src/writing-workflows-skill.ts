@@ -46,9 +46,10 @@ export const prepareGreeting = defineWorkflow(({ defineBoundary }) => ({
   steps: [
     /** @displayname Format greeting */
     defineBoundary({
-      run: async ({ input }: BoundaryContext<{ name: string }>) => ({
-        message: await formatGreeting({ name: input.name }),
-      }),
+      run: async ({ input }: BoundaryContext<{ name: string }>) => {
+        const message = await formatGreeting({ name: input.name });
+        return { message };
+      },
     }),
   ],
 }));
@@ -67,6 +68,9 @@ Use one destructured object parameter for step helpers and explicit
 \`BoundaryContext<Input>\` types for boundary callbacks. A named context parameter
 is also supported for returned host calls. Put IO in \`"use step"\` helpers;
 keep orchestration readable with calls, conditions, loops, and \`Promise.all\`.
+Write each call as its own statement (\`const x = await step(...)\`) or return
+it: a call nested inside an object literal or another call's arguments runs but
+is not drawn on the canvas.
 
 Add \`@displayname\` to UI-facing workflows, boundaries, steps, and parameter
 metadata. Optional \`@description\` and \`@icon\` explain purpose. Place scope JSDoc

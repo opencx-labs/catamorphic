@@ -2,7 +2,7 @@
   "$schema": "https://ui.shadcn.com/schema/registry-item.json",
   "name": "monaco-editor",
   "type": "registry:component",
-  "description": "TypeScript Monaco editor for the workflow Code tab: syntax highlighting, TS diagnostics/completion, line numbers, and bidirectional code <-> canvas linking via useCodeEditorLink. Pass to WorkflowEditor's renderCodeEditor slot.",
+  "description": "TypeScript Monaco editor for the workflow Code tab: syntax highlighting, TS diagnostics/completion, line numbers, and bidirectional code <-> canvas linking via useCodeEditorLink. Mount it from the host's inspector (WorkflowEditor renderInspector) and link it with useCodeEditorLink.",
   "dependencies": [
     "@catamorphic/react",
     "@monaco-editor/react",

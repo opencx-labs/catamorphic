@@ -1,107 +1,42 @@
 ---
-description: Test parallelism, structure, and isolation conventions
-globs: "**/*.test.ts"
+description: How to write and run tests - commands, file naming, isolation, Postgres and external integrations
+globs: **/*.test.ts,**/*.test.tsx,vitest.config.ts,scripts/test*.ts
 alwaysApply: false
 ---
 
 # Testing Conventions
 
-## Parallelism Architecture
-
-Tests run in parallel at two levels:
-
-1. **Package level** — Turbo runs each package's `test` task concurrently. `test.dependsOn` is `["build"]`: tests can import their own package exports as well as upstream packages, so both must be built. PR CI reuses successful content-addressed test tasks (ADR 0131); local commands and main execute tests fresh. Declare every package dependency, including fixture consumers in the Turbo task graph.
-
-2. **File level** — Within each package, Vitest runs test files concurrently using Node.js worker threads (`pool: "threads"`, `fileParallelism: true` in root `vitest.config.ts`). Each package is capped at two Vitest workers so Turbo's two-package limit remains a real bound when multiple worktrees test concurrently. The stock server uses `--pool=forks` to isolate PGlite's WebAssembly runtime in separate Node processes after a V8 JIT allocation crash with concurrent worker threads. It retains the same two-worker limit and assertions.
-
-## Reading Parallel Output
-
-Vitest buffers output per file and flushes it atomically when the file finishes. This means:
-
-- Parallel files will *appear* sequential in the terminal — the fastest file's output prints first, the slowest last.
-- Seeing file A's output followed immediately by file B's output does **not** mean they ran sequentially. Check elapsed time or use `--reporter=verbose` to confirm.
-
-## Test Isolation Requirements
-
-**Unit tests** must be fully isolated. Use `beforeEach` with a fresh temp
-directory per test:
-
-```typescript
-beforeEach(async () => {
-  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "catamorphic-"));
-  manager = new ProjectManager(new FsBackend(tmpDir));
-});
-```
-
-This allows parallel execution without any shared state. Do not reuse a temp
-directory across files, and do not write test output to a fixed path in the
-repository or another worktree.
-
-**Workspace test runs** use one disposable Postgres database per invocation.
-Treat `DATABASE_URL` as invocation-scoped test state, never a shared local
-database. The root runner also places temporary files and Bun, Turbo, and XDG
-caches under its invocation-specific temp root. New tests and helpers must
-preserve that worktree-local output safety rather than adding shared cache,
-log, data, or port paths.
-
-**Integration tests** — may share a single external resource (e.g., one Daytona sandbox) set up once in `beforeAll` for efficiency. Because subsequent tests depend on the side effects of earlier ones, tests within the file run sequentially by Vitest's default. Do **not** mark these `concurrent` — the sequential ordering is intentional and load-bearing.
-
-```typescript
-// ✅ Correct: shared sandbox, sequential tests
-describe("DaytonaProjectRepo (integration)", () => {
-  let repo: DaytonaProjectRepo; // shared, mutated across tests
-
-  beforeAll(async () => {
-    // create sandbox once
-  }, 120_000);
-
-  it("initialises", async () => { … });
-  it("commits after init", async () => { … }); // depends on previous test's side effect
-});
-```
-
-## Optional external integrations
-
-External integrations are opt-in, even when credentials are present. The
-default `bun run test` and merge-gate `bun run check` runs are deterministic
-and must not contact Daytona, Cloudflare, S3, or another credentialed service.
-Run `bun run test:external` only with explicit authority to use those
-services. Integration tests must require
-`CATAMORPHIC_EXTERNAL_INTEGRATIONS=1` as well as their service-specific
-configuration, and otherwise skip:
-
-```typescript
-const describeIf = (condition: boolean) =>
-  condition ? describe : describe.skip;
-
-const EXTERNAL_INTEGRATIONS =
-  process.env.CATAMORPHIC_EXTERNAL_INTEGRATIONS === "1";
-const DAYTONA_API_KEY = process.env.DAYTONA_API_KEY ?? "";
-describeIf(EXTERNAL_INTEGRATIONS && !!DAYTONA_API_KEY)(
-  "DaytonaProjectRepo (integration)",
-  () => { … },
-);
-```
-
-## File Naming
-
-- `*.test.ts` — unit tests, run in CI always.
-- `*.integration.test.ts`: integration tests run only with explicit external authority when they contact a service.
-
 ## Running tests
 
-Docker must be running before `bun run test` or `bun run check`; the runners
-create a disposable Postgres database and remove it after a successful run.
-`bun run dev:infra` is optional shared observability and sandbox-bridge
-infrastructure. It is not test infrastructure and must not be required by
-deterministic tests.
+- `bun run test` runs the deterministic root and workspace tests. It creates one disposable Postgres database per invocation, so **Docker must be running**. It prints `test-postgres container=<name> published-port=<port>` when ready.
+- `bun run check` is the merge gate (lint, typechecks, tests, PWA and desktop checks). Run it before finishing.
+- `bun run test:file <path>` runs one unit test file with Vitest while iterating (it provides no database).
+- `bun run test:external` is the only way to contact Daytona, Cloudflare, S3, Codex, or another credentialed service. Run it only with explicit authority; credentials in the environment are not permission.
+- `bun run dev:infra` is observability and sandbox-bridge infrastructure, not test infrastructure. Tests must never need it.
+- Desktop E2E suites have their own commands and rules in `apps/desktop/AGENTS.md`.
 
-The root test runner caps Turbo at two concurrent package tasks and each
-package's Vitest process at two file workers, so two full runs in independent
-worktrees can coexist on a developer machine without multiplying into dozens
-of worker threads. `bun run test`, `bun run check`, `test:workspace`, and `test:external` bypass
-test caches by default. `bun run test -- --force` remains accepted; the runner
-rejects other passthrough arguments. Only PR CI enables successful test reuse.
-The readiness line reports `test-postgres container=<name>
-published-port=<port>` so concurrent runs can record their own isolation
-evidence without inspecting Docker globally.
+## File naming
+
+- `*.test.ts` / `*.test.tsx`: unit tests, colocated or under `__tests__/`.
+- `*.integration.test.ts`: tests that need Postgres or an external service. Postgres tests gate on `DATABASE_URL`, which `bun run test` always provides. External tests gate on `CATAMORPHIC_EXTERNAL_INTEGRATIONS=1` **and** their own service configuration, and skip otherwise:
+
+```typescript
+const EXTERNAL_INTEGRATIONS =
+  process.env.CATAMORPHIC_EXTERNAL_INTEGRATIONS === "1";
+const DAYTONA_API_KEY = process.env.DAYTONA_API_KEY;
+const describeIf =
+  EXTERNAL_INTEGRATIONS && DAYTONA_API_KEY ? describe : describe.skip;
+```
+
+## Isolation
+
+Tests run in parallel: Turbo runs up to two packages at once and Vitest runs up to two files per package (`pool: "threads"`; the stock server uses `--pool=forks` because PGlite's WebAssembly crashed under worker threads). So:
+
+- Give each unit test its own temp directory in `beforeEach` (`fs.mkdtemp(path.join(os.tmpdir(), "catamorphic-"))`). Never share temp dirs across files or write to a fixed path in the repo or another worktree.
+- Treat `DATABASE_URL` as belonging to this invocation. Do not add shared cache, log, data, or port paths; the runner already scopes temp files and caches per invocation.
+- An integration file may share one expensive resource (such as a sandbox) created in `beforeAll`. Its tests then run in order by design; do not mark them `concurrent`.
+- Parallel output looks sequential because Vitest flushes each file when it finishes. Use elapsed times or `--reporter=verbose` before concluding files ran in order.
+
+## Build and caching
+
+The Turbo `test` task depends on `build`, because packages import each other through `dist/`. Declare every package dependency, including fixture consumers, so the task graph builds them. Local runs and `main` always test fresh; only PR CI reuses successful content-addressed test results (ADR 0131). `bun run test` accepts only `-- --force` as a passthrough.

@@ -26,12 +26,13 @@ keep their own identity, database, runtime bindings, storage, and deployment.
    narrow/prefer it in the relevant `.catamorphic/agents/*.json` definition. Enrollment alone
    grants no member access. The `local` binding selects an available managed
    node at admission; a concrete machine id makes placement explicit.
-7. Use an ordinary member identity to inspect `GET /projects/:id/agent-catalog`
-   and `GET /projects/:id/environments?workload=agent&agentId=...`, then run the
+7. Use an ordinary member identity to inspect `GET /api/projects/:id/agent-catalog`
+   and `GET /api/projects/:id/environments?workload=agent&agentId=...`, then run the
    intended agent. Verify actual execution and connection access on that machine.
 
 The operator can disable a machine with
-`PATCH /_catamorphic/operator/machines/:id` and `{ "enabled": false }`.
+`PATCH /_catamorphic/operator/machines/:id` and `{ "enabled": false }` on that
+same loopback listener.
 Lease fencing blocks new claims and renewal of old execution ownership. Existing
 sessions do not silently move to a different machine. Inspect uncertain actions
 and move a settled session explicitly through its Environment update.
