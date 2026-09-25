@@ -99,14 +99,12 @@ export type WorkflowNodeType =
   | "branch"
   | "if-block"
   | "loop-block"
-  | "parallel"
   | "parallel-block"
   | "scope-block"
   | "durable-boundary"
   | "batch"
   | "pause"
   | "call-workflow"
-  | "delay"
   | "return";
 
 export interface SourceRange {
@@ -188,7 +186,7 @@ export interface WorkflowEdge {
   source: string;
   target: string;
   label?: string;
-  type: "sequential" | "branch-true" | "branch-false" | "parallel";
+  type: "sequential" | "branch-true" | "branch-false";
 }
 
 export interface WorkflowCapabilities {

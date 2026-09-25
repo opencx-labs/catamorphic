@@ -163,6 +163,7 @@ export type {
 } from "@catamorphic/sandbox";
 export { connectionAuthorizationPage } from "./authorization-page.js";
 export type {
+  CatamorphicHostConfig,
   CreateCatamorphicConfig,
   DatabaseConfig,
   StorageConfig,

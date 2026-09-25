@@ -57,6 +57,7 @@ describe("PGlite migrations", () => {
       "017_session_workflow_events.sql",
       "018_session_actions.sql",
       "019_project_automations.sql",
+      "020_single_secret_stage.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

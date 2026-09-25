@@ -23,7 +23,7 @@ import type {
   DeploymentRuntimeRecordStatus,
   DeploymentRuntimeStore,
 } from "./deployment-runtime-store.js";
-import { uploadWorkspace } from "./playground/workspace-upload.js";
+import { uploadWorkspace } from "./workspace-upload.js";
 
 const tracer = getTracer("@catamorphic/core");
 

@@ -61,7 +61,6 @@ describe("RunPluginsLoader bindings chain", () => {
     const bundle = await loader.load({
       identity,
       projectId: "p1",
-      stage: "production",
       workflowName: "welcome",
     });
     expect(bundle.secrets).toEqual({
@@ -90,7 +89,6 @@ describe("RunPluginsLoader bindings chain", () => {
     const bundle = await loader.load({
       identity,
       projectId: "p1",
-      stage: "production",
     });
     expect(bundle.missingRequiredSecrets).toEqual(["STILL_MISSING"]);
     expect(bundle.secrets.DB_URL).toBe("postgres://host-minted");
@@ -114,7 +112,6 @@ describe("RunPluginsLoader bindings chain", () => {
     await loader.load({
       identity,
       projectId: "p1",
-      stage: "production",
       workflowName: "welcome",
     });
     expect(contexts).toEqual([
@@ -122,7 +119,6 @@ describe("RunPluginsLoader bindings chain", () => {
         tenantId: "t1",
         externalUserId: "alice",
         projectId: "p1",
-        stage: "production",
         workflowName: "welcome",
       },
     ]);
@@ -136,7 +132,6 @@ describe("RunPluginsLoader bindings chain", () => {
     const bundle = await loader.load({
       identity,
       projectId: "p1",
-      stage: "production",
     });
     expect(bundle.secrets).toEqual({ KEY: "v" });
   });
@@ -151,7 +146,6 @@ describe("RunPluginsLoader bindings chain", () => {
     const bundle = await new RunPluginsLoader(secrets).load({
       identity,
       projectId: "p1",
-      stage: "production",
     });
     expect(bundle.plugins).toEqual([]);
     expect(bundle.secrets).toEqual({ GITHUB_WEBHOOK_SECRET: "key" });

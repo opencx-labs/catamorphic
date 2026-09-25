@@ -204,9 +204,19 @@ it("releases hidden sources and virtualizes a large file-backed list", async () 
   await app.cdp("Emulation.setEmulatedMedia", {
     features: [{ name: "prefers-reduced-motion", value: "reduce" }],
   });
-  await click('[data-sidebar-source="todos"] [aria-label="Complete"]');
+  // The previous rows ("Plan revised", "Review notes") leave in place as
+  // inert exiting rows above the new ones, which then slide up. Act on the
+  // first new row once the list has settled, not on whichever "Complete"
+  // button comes first in the DOM.
+  await app.waitFor(`(() => {
+    const rows = [...document.querySelectorAll('[data-sidebar-source="todos"] [role="treeitem"]')];
+    return rows.length > 0 && rows.every(row => !row.inert && row.getAnimations().every(a => a.playState !== 'running'));
+  })()`);
+  await click(
+    '[data-sidebar-source="todos"] [data-sidebar-item-id="item-0"] [aria-label="Complete"]',
+  );
   await app.waitFor(
-    `!!document.querySelector('[data-sidebar-source="todos"] [aria-label="Reopen"]')`,
+    `!!document.querySelector('[data-sidebar-source="todos"] [data-sidebar-item-id="item-0"] [aria-label="Reopen"]')`,
   );
   expect(app.getRendererErrors()).toEqual([]);
 });

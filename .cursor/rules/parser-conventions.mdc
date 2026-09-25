@@ -30,9 +30,8 @@ alwaysApply: false
 | `parallel-block` | `Promise.all([...])` | Yes |
 | `scope-block` | An IIFE or bare `{ }` block | Yes |
 | `return` | "Item result" of a batch process body | No |
-| `delay` | A call named `sleep(...)` (not a `@catamorphic/workflow` export; durable waits use `pause`) | No |
 
-`WorkflowNodeType` also lists `parallel`, which the parser does not emit. `stage` is never a node type or public concept.
+`stage` is never a node type or public concept.
 
 ## Steps and host calls
 

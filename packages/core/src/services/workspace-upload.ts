@@ -1,9 +1,9 @@
 /**
- * Upload playground workspace files using hydrateWorkspace when supported,
+ * Upload deployment workspace files using hydrateWorkspace when supported,
  * and fall back to per-file uploads for providers without hydration support.
  */
 import type { SandboxProvider } from "@catamorphic/sandbox";
-import { createTarArchive } from "./tar.js";
+import { createTarArchive } from "./workspace-tar.js";
 
 type HydratableProvider = SandboxProvider & {
   hydrateWorkspace: (sandboxId: string, tar: Uint8Array) => Promise<void>;

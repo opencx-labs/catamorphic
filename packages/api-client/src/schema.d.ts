@@ -2857,7 +2857,7 @@ export interface paths {
                             nodes: {
                                 id: string;
                                 /** @enum {string} */
-                                type: "input" | "source" | "sink" | "step" | "branch" | "if-block" | "loop-block" | "parallel" | "parallel-block" | "scope-block" | "durable-boundary" | "batch" | "pause" | "call-workflow" | "delay" | "return";
+                                type: "input" | "source" | "sink" | "step" | "branch" | "if-block" | "loop-block" | "parallel-block" | "scope-block" | "durable-boundary" | "batch" | "pause" | "call-workflow" | "return";
                                 label: string;
                                 description?: string;
                                 sourceRange: {
@@ -2918,7 +2918,7 @@ export interface paths {
                                 target: string;
                                 label?: string;
                                 /** @enum {string} */
-                                type: "branch-false" | "branch-true" | "parallel" | "sequential";
+                                type: "branch-false" | "branch-true" | "sequential";
                             }[];
                             sourceCode: string;
                             projectFiles: string[];
@@ -15752,9 +15752,7 @@ export interface paths {
         };
         get: {
             parameters: {
-                query?: {
-                    stage?: "test" | "production";
-                };
+                query?: never;
                 header?: never;
                 path: {
                     projectId: string;
@@ -15813,9 +15811,7 @@ export interface paths {
         get?: never;
         put: {
             parameters: {
-                query?: {
-                    stage?: "test" | "production";
-                };
+                query?: never;
                 header?: never;
                 path: {
                     projectId: string;
@@ -15877,9 +15873,7 @@ export interface paths {
         post?: never;
         delete: {
             parameters: {
-                query?: {
-                    stage?: "test" | "production";
-                };
+                query?: never;
                 header?: never;
                 path: {
                     projectId: string;
@@ -15968,7 +15962,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/playground/parse": {
+    "/api/workflows/parse": {
         parameters: {
             query?: never;
             header?: never;
@@ -16053,7 +16047,7 @@ export interface paths {
                             nodes: {
                                 id: string;
                                 /** @enum {string} */
-                                type: "input" | "source" | "sink" | "step" | "branch" | "if-block" | "loop-block" | "parallel" | "parallel-block" | "scope-block" | "durable-boundary" | "batch" | "pause" | "call-workflow" | "delay" | "return";
+                                type: "input" | "source" | "sink" | "step" | "branch" | "if-block" | "loop-block" | "parallel-block" | "scope-block" | "durable-boundary" | "batch" | "pause" | "call-workflow" | "return";
                                 label: string;
                                 description?: string;
                                 sourceRange: {
@@ -16114,7 +16108,7 @@ export interface paths {
                                 target: string;
                                 label?: string;
                                 /** @enum {string} */
-                                type: "branch-false" | "branch-true" | "parallel" | "sequential";
+                                type: "branch-false" | "branch-true" | "sequential";
                             }[];
                             sourceCode: string;
                         } | null;

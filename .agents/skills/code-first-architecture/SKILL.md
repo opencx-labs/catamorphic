@@ -66,8 +66,9 @@ position; users see these through `check`, so keep them specific.
 
 Calls nested inside another expression (an object literal, an argument) are not
 drawn. Write IO as a statement or a returned call so it appears on the canvas.
-`pause` and `callWorkflow` are recognized by their bare names, so destructure
-them from the boundary context; `context.pause(...)` draws as an ordinary step.
+`pause` and `callWorkflow` are recognized destructured (`pause(...)`) or read
+from a named context (`context.pause(...)`); the execution transform uses the
+same rule to hand a child call its target.
 Exported `defineBatchStep` calls are valid only inside `process` and render as
 steps with physical batching metadata, never as separate workflow scopes.
 

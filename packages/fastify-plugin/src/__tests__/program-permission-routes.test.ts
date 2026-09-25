@@ -1,4 +1,4 @@
-import type { Identity } from "@catamorphic/core";
+import { DeploymentBlockedError, type Identity } from "@catamorphic/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 
@@ -138,5 +138,21 @@ describe("program permissions on project routes (ADR 0158)", () => {
     expect(guard).toBeDefined();
     expect(() => guard?.(["docs/a.md"])).not.toThrow();
     expect(() => guard?.([".catamorphic/roles/admin.json"])).toThrow();
+  });
+
+  it("answers 409 when publishing is blocked by unrecorded changes", async () => {
+    const core = fakeCore();
+    core.deployment.deploy.mockRejectedValueOnce(
+      new DeploymentBlockedError(
+        "Record the changes you want to publish in Git first.",
+      ),
+    );
+    const response = await appFor(member("program:publish"), core).inject({
+      method: "POST",
+      url: `/api/projects/${PROJECT_ID}/deploy`,
+      payload: {},
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toContain("Record the changes");
   });
 });

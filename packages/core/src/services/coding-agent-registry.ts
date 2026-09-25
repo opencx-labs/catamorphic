@@ -56,7 +56,7 @@ export interface CodingAgentRegistry {
 
 /**
  * Wrap one sandbox-execution provider as a one-entry registry — the shape
- * hosts with a single flagship agent (playground, tests) pass to core.
+ * hosts with a single flagship agent (and tests) pass to core.
  */
 export function singleAgentRegistry(
   provider: CodingAgentProvider,

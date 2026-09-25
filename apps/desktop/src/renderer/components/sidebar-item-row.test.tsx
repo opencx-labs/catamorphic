@@ -193,6 +193,32 @@ describe("SidebarItemRow menu motion", () => {
     expect(document.querySelector('[role="menu"]')).toBeNull();
   });
 
+  it("stays open while something else scrolls, and closes when its row scrolls", () => {
+    vi.useFakeTimers();
+    const { container } = mountMenuRow();
+    const row = container.firstElementChild;
+    if (!(row instanceof HTMLElement)) throw new Error("row did not mount");
+    const elsewhere = document.createElement("div");
+    document.body.append(elsewhere);
+    containers.push(elsewhere);
+
+    act(() => {
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, clientX: 200 }),
+      );
+    });
+    const panel = document.querySelector('[role="menu"]')?.firstElementChild;
+    if (!(panel instanceof HTMLElement)) throw new Error("menu did not open");
+
+    // A chat timeline following its output scrolls somewhere else.
+    act(() => elsewhere.dispatchEvent(new Event("scroll")));
+    expect(panel.classList).not.toContain("animate-pop-out");
+
+    // The sidebar scrolling carries the row away from its menu.
+    act(() => container.dispatchEvent(new Event("scroll")));
+    expect(panel.classList).toContain("animate-pop-out");
+  });
+
   it("applies a selected action only after its exit finishes", () => {
     vi.useFakeTimers();
     const { container, onAction } = mountMenuRow();

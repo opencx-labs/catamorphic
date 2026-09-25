@@ -267,7 +267,10 @@ export {
   type DeploymentRuntimeStore,
   KyselyDeploymentRuntimeStore,
 } from "./services/deployment-runtime-store.js";
-export { DeploymentService } from "./services/deployment-service.js";
+export {
+  DeploymentBlockedError,
+  DeploymentService,
+} from "./services/deployment-service.js";
 export {
   DevSandboxService,
   type PreparedDevSandbox,
@@ -494,7 +497,6 @@ export {
 } from "./services/runs-service.js";
 export { SchedulesService } from "./services/schedules-service.js";
 export {
-  type RunStage,
   type SecretStatus,
   SecretsService,
 } from "./services/secrets-service.js";

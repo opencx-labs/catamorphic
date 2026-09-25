@@ -24,6 +24,7 @@ import {
   jsonSchemaFromType,
   WORKFLOW_STUB_DTS,
 } from "./schema-extract.js";
+import { transitionCallName } from "./transition-calls.js";
 import type {
   AppApiEntry,
   AppApiSurface,
@@ -655,24 +656,6 @@ function parseStatements(
         continue;
       }
 
-      if (callNode.getExpression().getText() === "sleep") {
-        const args = callNode.getArguments();
-        const duration = args[0]?.getText().replace(/['"]/g, "") ?? "unknown";
-        const nodeId = nextId();
-        ctx.nodes.push({
-          id: nodeId,
-          type: "delay",
-          label: `Sleep ${duration}`,
-          sourceRange: getSourceRange(stmt),
-          metadata: {},
-          duration,
-          parentId,
-        });
-        addEdgesFromPrevious(ctx, currentIds, nodeId);
-        currentIds = [nodeId];
-        continue;
-      }
-
       const fnName = getCallName(callNode);
       validateStepCall(ctx, fnName);
       const stepMeta = lookupStepMetadata(ctx, fnName);
@@ -765,10 +748,7 @@ function durableTransitionKind(
   const unwrapped = unwrapExpression(expression);
   if (Node.isConditionalExpression(unwrapped)) return "conditional";
   if (!Node.isCallExpression(unwrapped)) return undefined;
-  const callName = getCallName(unwrapped);
-  return callName === "pause" || callName === "callWorkflow"
-    ? callName
-    : undefined;
+  return transitionCallName(unwrapped);
 }
 
 function workflowCallLabel(ctx: ParseContext, workflowName: string): string {
@@ -2517,10 +2497,7 @@ function buildDefinedWorkflowGraph(
           step.config.getProperty("rateLimits") !== undefined),
     ) ||
     ctx.nodes.some(
-      (node) =>
-        node.type === "pause" ||
-        node.type === "call-workflow" ||
-        node.type === "delay",
+      (node) => node.type === "pause" || node.type === "call-workflow",
     );
 
   return {

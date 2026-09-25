@@ -13,8 +13,7 @@ next to themselves, and raw frames run to gigabytes. Each scene is one
 
 Known script quirks:
 
-- `render.py` loads `Inter.ttf` from the folder above the scripts even though it
-  draws no text; put a copy there. It needs Pillow (a venv is fine) and `ffmpeg`.
+- `render.py` needs Pillow (a venv is fine) and `ffmpeg`.
 - `delprobe.mjs` must run from inside the repository, never from the film folder:
   copy it into `apps/desktop/` (which depends on the desktop's PGlite version),
   run it, and delete the copy. Outside a project bun installs the newest PGlite.
