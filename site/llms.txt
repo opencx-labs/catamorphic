@@ -49,7 +49,7 @@ embedding architecture.
 
 ## Integration references
 
-- [Setup skill](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/skills/setup-catamorphic-server/SKILL.md): use for the stock server or an existing/custom host; it inspects visible auth, database, deployment, and application structure before routing to focused references
+- [Setup skill](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/skills/setup-work-server/SKILL.md): use for the stock server or an existing/custom host; it inspects visible auth, database, deployment, and application structure before routing to focused references
 - [Integration guide](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/INTEGRATION.md): the canonical end-to-end wiring reference: server-sdk boot, identity mapping, Fastify plugin, React hooks, UI components, plugins and capability providers, custom trigger kinds, doctrine hooks, operational notes
 - [README](https://raw.githubusercontent.com/opencx-labs/catamorphic/main/README.md): the capability map, use cases, package map, workflow code format, local development
 

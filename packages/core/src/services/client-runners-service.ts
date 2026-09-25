@@ -111,6 +111,49 @@ export const ClientRunnerResultSchema = z.union([
   z.object({ exitCode: z.number(), result: z.string() }),
 ]);
 
+/**
+ * A sandbox provider whose every operation is executed elsewhere: by a
+ * member's desktop runner or by a remote worker (ADR 0164). `call` delivers
+ * one operation and resolves with the runner's response.
+ */
+export function forwardingSandboxProvider(args: {
+  workspaceRoot: string;
+  call: (operation: ClientRunnerOperation) => Promise<unknown>;
+}): SandboxProvider {
+  const { call } = args;
+  return {
+    workspaceRoot: args.workspaceRoot,
+    createSandbox: async (options) =>
+      handleSchema.parse(await call({ kind: "create", options })),
+    startSandbox: async (sandboxId) => {
+      await call({ kind: "start", sandboxId });
+    },
+    stopSandbox: async (sandboxId) => {
+      await call({ kind: "stop", sandboxId });
+    },
+    destroySandbox: async (sandboxId) => {
+      await call({ kind: "destroy", sandboxId });
+    },
+    getSandboxStatus: async (sandboxId) =>
+      statusSchema.parse(await call({ kind: "status", sandboxId })),
+    executeCommand: async (sandboxId, command, options) =>
+      z
+        .object({ exitCode: z.number(), result: z.string() })
+        .parse(await call({ kind: "execute", sandboxId, command, options })),
+    uploadFiles: async (sandboxId, files, basePath) => {
+      await call({ kind: "upload", sandboxId, files, basePath });
+    },
+    downloadFile: async (sandboxId, path) =>
+      z.string().parse(await call({ kind: "download", sandboxId, path })),
+    gitClone: async (sandboxId, url, path, options) => {
+      await call({ kind: "clone", sandboxId, url, path, options });
+    },
+    gitCheckout: async (sandboxId, path, ref) => {
+      await call({ kind: "checkout", sandboxId, path, ref });
+    },
+  };
+}
+
 /** Authenticated member clients provide execution, never database access. */
 export class ClientRunnersService {
   constructor(
@@ -387,37 +430,10 @@ export class ClientRunnersService {
           );
         },
       );
-    const provider: SandboxProvider = {
+    const provider = forwardingSandboxProvider({
       workspaceRoot: runner.workspace_root,
-      createSandbox: async (options) =>
-        handleSchema.parse(await call({ kind: "create", options })),
-      startSandbox: async (sandboxId) => {
-        await call({ kind: "start", sandboxId });
-      },
-      stopSandbox: async (sandboxId) => {
-        await call({ kind: "stop", sandboxId });
-      },
-      destroySandbox: async (sandboxId) => {
-        await call({ kind: "destroy", sandboxId });
-      },
-      getSandboxStatus: async (sandboxId) =>
-        statusSchema.parse(await call({ kind: "status", sandboxId })),
-      executeCommand: async (sandboxId, command, options) =>
-        z
-          .object({ exitCode: z.number(), result: z.string() })
-          .parse(await call({ kind: "execute", sandboxId, command, options })),
-      uploadFiles: async (sandboxId, files, basePath) => {
-        await call({ kind: "upload", sandboxId, files, basePath });
-      },
-      downloadFile: async (sandboxId, path) =>
-        z.string().parse(await call({ kind: "download", sandboxId, path })),
-      gitClone: async (sandboxId, url, path, options) => {
-        await call({ kind: "clone", sandboxId, url, path, options });
-      },
-      gitCheckout: async (sandboxId, path, ref) => {
-        await call({ kind: "checkout", sandboxId, path, ref });
-      },
-    };
+      call,
+    });
     return {
       descriptor: {
         id: `client:${runner.id}:${runner.lease_token}`,

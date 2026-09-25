@@ -55,10 +55,12 @@ Catamorphic service.
 
 ### Self-hosted server
 
-The stock server ([`apps/server`](apps/server)) gives a personal or company
-brain an always-on home. It serves the mobile PWA, remote agents, project apps,
+The Work server ([`apps/server`](apps/server)) gives a personal or company
+brain an always-on home. Every release publishes it as a multi-architecture
+`work-server` image to the GitHub Container Registry, next to the desktop
+release. It serves the mobile PWA, remote agents, project apps,
 and MCP endpoints. Desktop and mobile clients sign in through OAuth with PKCE;
-the stock host supports local credentials and configured OAuth or OIDC
+the Work server supports local credentials and configured OAuth or OIDC
 providers. Invitations grant admission after sign-in, and committed project
 roles decide what each member and agent may do.
 
@@ -67,11 +69,11 @@ under one data directory. A deployment can opt into real Postgres as it grows.
 The accepted multi-machine architecture uses server instances sharing one
 Postgres and one authority, with machines exposed as permitted Environments.
 Postgres mode shares origins, artifacts, credentials, auth, and leased execution. See
-[the machine setup and recovery model](skills/setup-catamorphic-server/references/cluster-deployment.md).
-The stock host is single-tenant because its local-process execution can access
+[the machine setup and recovery model](skills/setup-work-server/references/cluster-deployment.md).
+The Work server is single-tenant because its local-process execution can access
 the host machine. Run one trusted organization or household per deployment.
 See [the server guide](apps/server/README.md) or give an agent
-[`skills/setup-catamorphic-server`](skills/setup-catamorphic-server/SKILL.md)
+[`skills/setup-work-server`](skills/setup-work-server/SKILL.md)
 to provision it.
 
 ### Embeddable framework
@@ -88,11 +90,14 @@ UI. See [`INTEGRATION.md`](INTEGRATION.md).
 ## Personal and company brains
 
 - **A personal brain.** Keep notes, research, code, recurring work, and small
-  tools in projects on your Mac. Add a stock server when you want the same
+  tools in projects on your Mac. Add a Work server when you want the same
   projects and conversations from your phone or while the Mac is asleep.
 - **A company brain.** Put shared knowledge, automations, apps, and tuned agent
   roles in one reviewable project program. Members sign in with their own
-  identity and receive only the roles and project store paths they need. The
+  identity (a company's Google Workspace, with access revoked within minutes
+  when someone leaves) and receive only the roles and project store paths they
+  need. Customers get sign-in links to exactly the documents, folders, or
+  apps shared with them. The
   same brain is available from desktop, the hosted PWA, an MCP client, or an
   embedded product surface.
 - **A daily-driver dev shell.** Import a monorepo with its existing agent
@@ -308,7 +313,7 @@ Also worth knowing, because it's easy to miss from the package list:
   building split into mechanics (`building-apps`) and replaceable design
   doctrine (`designing-apps`). Coding agents learn Catamorphic's authoring
   model at the moment they need it. The public
-  [`skills/setup-catamorphic-server`](skills/setup-catamorphic-server/SKILL.md)
+  [`skills/setup-work-server`](skills/setup-work-server/SKILL.md)
   skill extends the same idea to stock-server setup and integrating
   Catamorphic into an existing app without replacing its auth or deployment.
 - **One Run model.** Boundary and batch workflows all share the same Runs

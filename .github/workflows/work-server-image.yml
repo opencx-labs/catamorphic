@@ -1,0 +1,221 @@
+name: Work server image
+
+# Every Work release publishes the matching Work server image (ADR 0159).
+# Release tags keep their existing `desktop-v*` contract; the image carries
+# the same version. Manual runs build and smoke-test both architectures
+# without publishing.
+on:
+  push:
+    tags:
+      - "desktop-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: work-server-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Resolve release identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      release_kind: ${{ steps.release.outputs.release_kind }}
+      image: ${{ steps.release.outputs.image }}
+      publish: ${{ steps.release.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - id: release
+        name: Verify release identity
+        shell: bash
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          package_version="$(bun -e 'const value = await Bun.file("apps/desktop/package.json").json(); console.log(value.version)')"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            release_tag="${GITHUB_REF_NAME}"
+            publish=true
+          else
+            release_tag="desktop-v${package_version}"
+            publish=false
+          fi
+          version="$(bun scripts/desktop-release.ts verify --tag "${release_tag}" --package-version "${package_version}")"
+          release_kind="$(bun scripts/desktop-release.ts release-kind --version "${version}")"
+          {
+            echo "version=${version}"
+            echo "release_kind=${release_kind}"
+            echo "image=ghcr.io/${OWNER,,}/work-server"
+            echo "publish=${publish}"
+          } >> "${GITHUB_OUTPUT}"
+
+  build:
+    name: Build and smoke-test ${{ matrix.platform }}
+    needs: release
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v3
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ needs.release.outputs.image }}
+          labels: |
+            org.opencontainers.image.title=Work server
+            org.opencontainers.image.description=The self-hosted Work server
+            org.opencontainers.image.version=${{ needs.release.outputs.version }}
+
+      - name: Build for smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/server/Dockerfile
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          load: true
+          tags: work-server:smoke
+          cache-from: type=gha,scope=work-server-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=work-server-${{ matrix.arch }}
+
+      - name: Smoke-test the image
+        shell: bash
+        run: |
+          docker run -d --name work-server-smoke -p 4700:4700 \
+            -e WORK_FAKE_AGENT=1 -e WORK_MDNS=off work-server:smoke
+          for _ in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:4700/healthz >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:4700/healthz | tee /dev/stderr | grep -q '"ok":true'
+          curl -fsS http://127.0.0.1:4700/.well-known/oauth-authorization-server >/dev/null
+          test "$(docker exec work-server-smoke id -u)" != "0"
+          docker logs work-server-smoke 2>&1 | grep -q "Work server is up."
+
+      - name: Show server logs
+        if: failure()
+        run: docker logs work-server-smoke || true
+
+      - uses: docker/login-action@v3
+        if: needs.release.outputs.publish == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - id: push
+        name: Push by digest
+        if: needs.release.outputs.publish == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/server/Dockerfile
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ needs.release.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=work-server-${{ matrix.arch }}
+
+      - name: Record digest
+        if: needs.release.outputs.publish == 'true'
+        shell: bash
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/digests"
+          touch "${RUNNER_TEMP}/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        if: needs.release.outputs.publish == 'true'
+        with:
+          name: work-server-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish multi-architecture image
+    needs: [release, build]
+    if: needs.release.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: work-server-digest-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - id: manifest
+        name: Create tags
+        shell: bash
+        env:
+          IMAGE: ${{ needs.release.outputs.image }}
+          VERSION: ${{ needs.release.outputs.version }}
+          RELEASE_KIND: ${{ needs.release.outputs.release_kind }}
+        run: |
+          # Channels mirror the desktop: every release moves `alpha`; only a
+          # Stable release moves `latest`.
+          tags=(-t "${IMAGE}:${VERSION}" -t "${IMAGE}:alpha")
+          if [[ "${RELEASE_KIND}" == "stable" ]]; then
+            tags+=(-t "${IMAGE}:latest")
+          fi
+          sources=()
+          for digest in "${RUNNER_TEMP}"/digests/*; do
+            sources+=("${IMAGE}@sha256:$(basename "${digest}")")
+          done
+          docker buildx imagetools create "${tags[@]}" "${sources[@]}"
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}"
+          digest="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" --format '{{json .Manifest}}' | jq -r .digest)"
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ needs.release.outputs.image }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
+          push-to-registry: true
+
+      - name: Summarize
+        shell: bash
+        env:
+          IMAGE: ${{ needs.release.outputs.image }}
+          VERSION: ${{ needs.release.outputs.version }}
+          DIGEST: ${{ steps.manifest.outputs.digest }}
+        run: |
+          {
+            echo "### Work server ${VERSION}"
+            echo
+            echo "\`docker pull ${IMAGE}:${VERSION}\`"
+            echo
+            echo "Digest: \`${DIGEST}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"

@@ -111,7 +111,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0096](0096-desktop-resource-link-routing.md) | Desktop resource links use workspace targets | Accepted |
 | [0097](0097-host-owned-workflow-inspectors.md) | Host-owned workflow inspectors | Accepted (layout and packaged toolbar amended by 0157) |
 | [0098](0098-project-authorized-local-and-remote-agents.md) | Project-authorized local and remote agent execution | Accepted |
-| [0099](0099-shared-postgres-server-environments.md) | Shared-Postgres server instances as managed Environments | Accepted |
+| [0099](0099-shared-postgres-server-environments.md) | Shared-Postgres server instances as managed Environments | Accepted (execution machines superseded by 0164) |
 | [0100](0100-workspace-resource-admission.md) | Workspace reservations and provider-enforced resource limits | Accepted |
 | [0101](0101-harness-capabilities-and-session-monitors.md) | Harness capabilities and session monitors | Accepted |
 | [0102](0102-tabbed-sidebars-and-app-widgets.md) | Tabbed sidebars and compact app widgets | Accepted (refined by 0107) |
@@ -173,3 +173,10 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0156](0156-project-automations-webhooks-and-command-watches.md) | Project automations, one deliver, webhooks, and command watches | Accepted |
 | [0157](0157-workflow-status-chrome.md) | Workflow tabs: status chrome and a panel that follows its subject | Accepted |
 | [0158](0158-project-permissions.md) | Project permissions: read, write, publish, and what workflows declare | Accepted |
+| [0159](0159-work-server-identity-and-image.md) | The Work server: product identity and a published image | Accepted |
+| [0160](0160-work-server-package.md) | The Work server is a package with typed hooks | Accepted |
+| [0161](0161-company-identity-and-deprovisioning.md) | Company identity: Google Workspace sign-in and deprovisioning | Accepted |
+| [0162](0162-connection-gateway-guards-and-sealed-secrets.md) | The connection gateway: guards, sealed secrets, separate vault keys | Accepted |
+| [0163](0163-database-gateway-and-reviewed-queries.md) | Production databases through the gateway, with reviewed queries | Accepted |
+| [0164](0164-control-plane-and-enrolled-workers.md) | A control plane and enrolled workers without credentials | Accepted |
+| [0165](0165-guests-and-shares.md) | Guests and shares for people outside the company | Accepted |

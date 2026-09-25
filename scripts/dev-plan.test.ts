@@ -120,11 +120,11 @@ describe("createDevPlan", () => {
       CATAMORPHIC_DESKTOP_CDP_PORT: "9311",
       CATAMORPHIC_SANDBOX_HOST_NETWORK: "1",
       CATAMORPHIC_DESKTOP_VITE_PORT: "5178",
-      CATAMORPHIC_DATA_DIR: "/home/test/.catamorphic/dev/qa/server",
+      WORK_DATA_DIR: "/home/test/.catamorphic/dev/qa/server",
       PORT: "4705",
-      CATAMORPHIC_OPERATOR_PORT: "4706",
-      CATAMORPHIC_PUBLIC_URL: "http://127.0.0.1:4705",
-      CATAMORPHIC_MDNS: "off",
+      WORK_OPERATOR_PORT: "4706",
+      WORK_PUBLIC_URL: "http://127.0.0.1:4705",
+      WORK_MDNS: "off",
     });
   });
 });

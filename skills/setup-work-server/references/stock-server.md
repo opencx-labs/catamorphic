@@ -1,0 +1,118 @@
+# Work server
+
+The Work server is the prebuilt, self-hostable server (`apps/server`, published
+as the `work-server` image with every release). Its configuration variables use
+the `WORK_` prefix. Use this path only when the repository or deployment
+actually uses `apps/server` or that image. Inspect its version, `apps/server/AGENTS.md`,
+`apps/server/README.md`, Docker configuration, and mounted data directory
+before proposing commands.
+
+For added machines or multiple instances, first read
+[Managed machines and clusters](cluster-deployment.md). Determine whether this
+version implements enrollment and coordinated execution before treating a new
+server as an Environment of an existing brain.
+
+## Resolve choices from the deployment
+
+1. Identify image/source version, public HTTPS URL, data mount, database mode,
+   and model credentials.
+2. Inspect configured auth providers. If none are configured, ask whether the
+   operator wants Google Workspace, another OAuth/OIDC provider, or local
+   username/password. Do not assume local credentials. A company brain should
+   use [company identity](company-identity.md): Workspace-only sign-in,
+   directory checks, and automatic deprovisioning.
+3. Inspect existing projects and committed `.catamorphic/roles/*.json`. Never invent a role
+   name or silently write authorization policy.
+4. Confirm how invited members will reach the server: desktop, PWA, MCP, or a
+   combination.
+
+The credential-free invitation is the common onboarding object. Desktop and
+PWA clients use it to discover OAuth, sign in, and redeem project admission.
+An MCP client uses the same protected-resource discovery and member identity;
+do not mint a separate token or add permanent "Use in Claude" chrome inside
+the desktop.
+
+## Local agent operation
+
+The running server owns its Better Auth connection and exposes small,
+machine-local operator operations for project bootstrap and local user
+provisioning on a separate listener bound only to loopback (port 4701 by
+default). The public listener does not register these routes. These are
+building blocks for an AI setup agent, not a human CLI or product setup flow.
+
+Inspect `packages/work-server/src/server.ts`, the schemas under
+`packages/work-server/src/setup`, and the running deployment before acting. The setup
+agent should:
+
+1. Resolve the desired auth method, explicit project roles, admission policy,
+   and first ordinary manager with the user.
+2. Read the owner-only operator credential from the mounted data directory or
+   deployment secret without displaying it.
+3. Invoke the project operation on the dedicated loopback listener with
+   explicit committed role definitions and admission policy.
+4. If local username/password is selected, invoke the user operation and bind
+   that stable auth user to an explicit project role.
+5. Verify sign-in, OAuth discovery, project membership, and revocation through
+   the normal application paths.
+
+After that first provisioning, change roles, project agents,
+`.catamorphic/sidebar.js`, and `.catamorphic/project.json` through the ordinary
+reviewed project change loop. The stock server has no second bootstrap JSON
+file whose policy can drift from the project.
+
+Adapt the transport to the deployment. An agent in a source checkout may call
+the loopback operations directly. An agent managing a container must execute a
+small request from inside the container because the operator port is not
+published. Do not require one shell tool, echo
+credentials into history, open PGlite concurrently, hash a password, or
+construct Better Auth rows.
+
+Before provisioning, verify that the installed server exposes both its
+machine-local operator operations and its intended human sign-in routes.
+
+For a GitHub-backed brain, configure the host's `WORK_GITHUB_CLIENT_ID`
+and `WORK_GITHUB_TOKEN`, using a service account distinct from human
+reviewers. Pass `githubRepository: "owner/repository"` to project provisioning
+with the requested roles and admission policy. This imports source and pushes
+the role configuration. Never give this credential to invited members. Their
+normal company sign-in authorizes proposal submission and scoped proposal reads;
+people who edit the program review and apply PRs using their own repository
+credentials.
+
+Grant each role the intended execution environments as well as its agents.
+Project permissions alone do not grant execution. For the default stock-server
+environment, include `environments: ["local"]` in the role definition. Here
+`local` means the server's machine. A member-device target requires a declared
+environment with `binding: "this-machine"`, a role grant for that environment,
+and a connected desktop runner. Never describe server-side output as a file
+saved on the member's device.
+
+The stock host checks the linked repository every minute and brings published
+changes into its shared origin. An accepted PR reaches members through their
+normal project download. If sync fails, preserve both histories and resolve
+the error rather than force-pushing one over the other.
+
+## Webhooks and project automations
+
+The stock server receives webhooks for project workflows and runs project
+automations while nobody is signed in. Set `WORK_PUBLIC_URL` to the
+HTTPS origin senders reach; webhook URLs use it (without it they follow the
+address the viewer used, which a sender outside the LAN cannot reach). A holder
+of `webhooks:read` copies a workflow's URL from its **Automatic** view after
+enabling it for the project (which needs `automations:write` plus every
+permission the workflow declares), and configures signed senders with a
+project secret named in the workflow's `verify`. Requests are answered 202 once
+stored; a failing workflow shows in its runs, not to the sender. See ADRs 0156
+and 0158.
+
+## Boundaries
+
+- The operational credential proves machine access. It is not a Work
+  user, role, session, invitation, or server owner.
+- Local auth does not grow an admin UI, first-run wizard, password reset
+  service, MFA system, or
+  custom hashing path. If the installed implementation does, stop and simplify.
+- Provider configuration belongs to the stock host. Inspect current supported
+  provider configuration rather than inventing environment variable names.
+- Do not distribute signing or operational secrets and do not print them at
+  boot.

@@ -46,6 +46,7 @@ import {
 import { ConnectionAdmissionService } from "./services/connection-admission.js";
 import { ConnectionBroker } from "./services/connection-broker.js";
 import { ConnectionCapabilityGrantsService } from "./services/connection-capability-grants.js";
+import type { ConnectionActionGuard } from "./services/connection-guards.js";
 import {
   type ConnectionProvider,
   ConnectionProviderRegistry,
@@ -129,6 +130,12 @@ export interface CatamorphicCoreConfig {
   /** Distinct leased execution instance beneath the logical host authority. */
   workerNode?: { id: string; token: string };
   /**
+   * Every node lease this process currently holds: its own plus remote
+   * workers it serves (ADR 0164). Agent sessions placed on any of them run
+   * their controller loop here. Defaults to `workerNode` alone.
+   */
+  heldWorkerNodes?: () => readonly { id: string; token: string }[];
+  /**
    * How long a project's parsed `.catamorphic/roles/*.json` set is trusted before it is
    * re-read from the shared origin (ADR 0055). Role *definitions* may lag
    * by this much; membership is read fresh on every resolve. Default 10s.
@@ -166,6 +173,11 @@ export interface CatamorphicCoreConfig {
   credentialVault?: CredentialVault;
   /** Host-side external-system drivers. Requires `credentialVault`. */
   connectionProviders?: readonly ConnectionProvider[];
+  /**
+   * Checks every brokered connection action from agents and workflows (ADR
+   * 0162). Escalations ask the agent session's person via `toolPermissions`.
+   */
+  connectionGuards?: readonly ConnectionActionGuard[];
   /** Re-resolve current member authority for workflow dispatch and agent capabilities. */
   resolveMemberIdentity?: (args: {
     tenantId: string;
@@ -614,16 +626,21 @@ export class CatamorphicCore {
     this.projectEvents = new ProjectEventsService(this.db);
     this.webhooks = new WebhooksService(this.db, {
       events: this.projectEvents,
-      secretValue: async ({ projectId, name }) =>
-        (
-          await this.db
-            .selectFrom("project_secrets")
-            .select("value")
-            .where("project_id", "=", projectId)
-            .where("stage", "=", "production")
-            .where("name", "=", name)
-            .executeTakeFirst()
-        )?.value,
+      secretValue: async ({ projectId, name }) => {
+        const project = await this.db
+          .selectFrom("projects")
+          .select("tenant_id")
+          .where("id", "=", projectId)
+          .executeTakeFirst();
+        return project && this.secrets
+          ? this.secrets.value({
+              tenantId: project.tenant_id,
+              projectId,
+              stage: "production",
+              name,
+            })
+          : undefined;
+      },
     });
     this.projectEventMonitors = new ProjectEventMonitorsService(this.db);
     this.appStorage = new AppStorageService(this.db);
@@ -717,6 +734,20 @@ export class CatamorphicCore {
         providers,
         this.executionAllocations,
         () => this.workflowEnablements,
+        {
+          guards: config.connectionGuards ?? [],
+          ...(config.toolPermissions
+            ? { approvals: config.toolPermissions }
+            : {}),
+          sessionOwner: async (sessionId) =>
+            (
+              await this.db
+                .selectFrom("agent_sessions")
+                .select("external_user_id")
+                .where("id", "=", sessionId)
+                .executeTakeFirst()
+            )?.external_user_id,
+        },
       );
       this.connectionGrants = new ConnectionCapabilityGrantsService(
         this.db,
@@ -762,10 +793,14 @@ export class CatamorphicCore {
     }
     // Secrets exist independently of plugins: a project declares its own with
     // `defineSecrets` in code, and plugins may declare additional ones.
-    this.secrets = new SecretsService(this.db, this.plugins, (args) =>
-      args.purpose === "run"
-        ? this.workflows.declaredSecretsForRun(args)
-        : this.workflows.listDeclaredSecrets(args),
+    this.secrets = new SecretsService(
+      this.db,
+      this.plugins,
+      (args) =>
+        args.purpose === "run"
+          ? this.workflows.declaredSecretsForRun(args)
+          : this.workflows.listDeclaredSecrets(args),
+      config.credentialVault,
     );
     this.runPluginsLoader = new RunPluginsLoader(
       this.secrets,
@@ -835,6 +870,7 @@ export class CatamorphicCore {
                 alias: args.alias,
                 action: args.action,
                 input: args.input,
+                caller: "workflow",
               }),
             parkConnectionCall: (args: {
               caller: Identity;
@@ -956,6 +992,9 @@ export class CatamorphicCore {
         agentCapabilities: this.agentCapabilities,
         hostId: config.hostId,
         workerNode: config.workerNode,
+        ...(config.heldWorkerNodes
+          ? { heldWorkerNodes: config.heldWorkerNodes }
+          : {}),
         projectManager: this.projectManager,
         codingAgents,
         nativeAgentCheckout: config.nativeAgentCheckout,

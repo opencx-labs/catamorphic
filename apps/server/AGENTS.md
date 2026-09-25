@@ -1,24 +1,41 @@
-# Stock server
+# Work server
 
-The self-hostable Catamorphic server (ADR 0059): zero external services,
+The Work server is the prebuilt, self-hostable Catamorphic host (ADRs 0059,
+0159). Product-facing names say Work: the `work-server` image, `WORK_*`
+configuration, `work-<id>.local`, and the sign-in pages. Framework contracts
+(`@catamorphic/*`, `.catamorphic/`, the database schemas, key-derivation
+labels) keep the Catamorphic name. The release workflow
+`.github/workflows/work-server-image.yml` builds, smoke-tests, and publishes
+the image for every `desktop-v*` release tag.
+
+The server itself lives in `packages/work-server` (`@catamorphic/work-server`,
+ADR 0160): `createWorkServer({ config, hooks })` plus
+`workServerConfigFromEnv`. This app is only the image's process: env parsing,
+mDNS, listening, signals. Add server behavior to the package, configuration to
+`WorkServerConfig`, and extension points to `WorkServerHooks`. Host tables use
+the `work_` prefix.
+
+It has zero external services,
 everything under one data dir: PGlite database, bare git origins,
 local-process execution (the container IS the sandbox; single-tenant
-ONLY, per ADR 0047), and mDNS so the LAN reaches the server. The new stock
+ONLY, per ADR 0047), and mDNS so the LAN reaches the server. Its
 Better Auth, OAuth, admission, and agent-driven setup path are the only remote
 identity model. Do not reintroduce token files or privileged product users.
 
-The paragraph above describes the current standalone implementation. The accepted
-managed deployment model is multiple server instances sharing network Postgres
-and one authority, with enrolled machines exposed through Environment bindings
-([ADR 0099](../../docs/decisions/0099-shared-postgres-server-environments.md)).
-Postgres mode shares authoritative objects, encrypted credentials, auth, approvals,
-and leased execution. Every machine has its own node identity and local working
-state. Follow the [cluster setup reference](../../skills/setup-catamorphic-server/references/cluster-deployment.md)
-and keep its enrollment and recovery instructions accurate. Preserve the local-process single-tenant boundary. For isolated remote development,
-configure `CATAMORPHIC_SANDBOX=microsandbox` and the machine workspace/CPU/memory
-budgets. Follow ADR 0100: an Allocation reserves a workspace until physical
-teardown, including idle development sessions. Operator inventory reports usage;
-expired leases alone never free capacity.
+Beyond one machine (ADR 0164): control-plane replicas share network Postgres,
+object storage, `WORK_SECRET`, and `WORK_VAULT_KEY` for availability.
+Execution capacity comes from enrolled workers (`bun apps/server/src/worker.ts`)
+that hold only a machine credential and dial out to the control plane; the
+replica a worker connects to holds its node lease and forwards sandbox
+operations. Workflow runs and credentials stay on the control plane. Never
+give a worker database, vault, or sign-in secrets, and never add a replica for
+capacity. A Postgres control plane refuses plain-subprocess agents unless
+microsandbox or `WORK_TRUST_CONTROL_PLANE_AGENTS=1`. Follow the
+[machines reference](../../skills/setup-work-server/references/cluster-deployment.md)
+and keep its enrollment and recovery instructions accurate. Preserve the
+local-process single-tenant boundary. Follow ADR 0100 for workspace budgets:
+an Allocation reserves a workspace until physical teardown; expired leases
+alone never free capacity.
 
 ## Run
 
@@ -26,15 +43,15 @@ expired leases alone never free capacity.
   stock-server manual environment. `bun run dev:server` is the stock-server
   focused variant of the same development orchestrator. The orchestrator
   assigns worktree-local data directories and loopback ports; do not set
-  `CATAMORPHIC_DATA_DIR` manually for development.
+  `WORK_DATA_DIR` manually for development.
 - Docker: see `Dockerfile` header. `--network host` for mDNS on Linux.
 - Chat needs one of `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` /
-  `OPENAI_API_KEY` (`CATAMORPHIC_MODEL` overrides; anthropic defaults to
-  claude-opus-5). `CATAMORPHIC_FAKE_AGENT=1` = deterministic echo agent.
+  `OPENAI_API_KEY` (`WORK_MODEL` overrides; anthropic defaults to
+  claude-opus-5). `WORK_FAKE_AGENT=1` = deterministic echo agent.
 - Boot prints public API, documentation, and sign-in locations, never a
   credential.
-- Local setup agents inspect the schemas under `src/setup` and call the
-  `/_catamorphic/operator/*` operations on the dedicated loopback-only setup
+- Local setup agents inspect the schemas under `packages/work-server/src/setup` and call the
+  `/_work/operator/*` operations on the dedicated loopback-only setup
   listener (port 4701 by default) using the owner-only machine credential
   under the data directory. These operations bootstrap explicit
   roles, admission, and ordinary Better Auth users. They are not a human CLI,
@@ -58,7 +75,7 @@ expired leases alone never free capacity.
   the registry serves that id and the bare `assistant` (root callers).
 - Never expose this server multi-tenant: local-process execution gives
   processes the host filesystem and network (ADR 0047).
-- `/_catamorphic/operator/*` is machine-local setup authority on a separate
+- `/_work/operator/*` is machine-local setup authority on a separate
   Fastify listener bound to `127.0.0.1`. Never register those routes on the
   public app or expose the setup port from the container. `/healthz` and the
   hosted PWA are public. Application administration belongs under `/api` and

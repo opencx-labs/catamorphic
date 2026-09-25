@@ -179,7 +179,7 @@ Verify current-user context, cross-user/cross-project denial, directory field
 filtering, permission changes after discovery and approval, cancellation,
 Allocation changes, output validation, and both HTTP and subprocess MCP. Keep
 infrastructure setup in the host's existing provisioning/access/update workflow;
-see the [cluster setup reference](skills/setup-catamorphic-server/references/cluster-deployment.md).
+see the [cluster setup reference](skills/setup-work-server/references/cluster-deployment.md).
 
 ## Media-producing host tools
 

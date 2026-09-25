@@ -5,7 +5,10 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
-import { ConnectionBroker } from "../services/connection-broker.js";
+import {
+  ConnectionActionDeniedError,
+  ConnectionBroker,
+} from "../services/connection-broker.js";
 import { ConnectionCapabilityGrantsService } from "../services/connection-capability-grants.js";
 import {
   type ConnectionProvider,
@@ -353,6 +356,137 @@ describe("credential connections", () => {
     expect(deniedInvocation).not.toHaveProperty("input");
     expect(allowedInvocation).not.toHaveProperty("arguments");
     expect(deniedInvocation).not.toHaveProperty("arguments");
+  });
+
+  it("reviews every action through the gateway's guards and audits each decision", async () => {
+    let answer: "allow" | "deny" = "allow";
+    const asked: string[] = [];
+    const guarded = new ConnectionBroker(
+      connections,
+      providers,
+      allocations,
+      undefined,
+      {
+        guards: [
+          {
+            name: "other-kind",
+            kinds: ["elsewhere"],
+            review: async () => ({ verdict: "deny", reason: "never runs" }),
+          },
+          {
+            name: "policy",
+            kinds: ["fake"],
+            review: async (context) => {
+              const page =
+                typeof context.input === "object" &&
+                context.input !== null &&
+                !Array.isArray(context.input)
+                  ? context.input.page
+                  : undefined;
+              if (page === 666) return { verdict: "deny", reason: "too broad" };
+              if (page === 7) return { verdict: "escalate", reason: "unusual" };
+              if (page === 13) throw new Error("classifier crashed");
+              return { verdict: "allow" };
+            },
+          },
+        ],
+        approvals: {
+          handlerFor: () => async (request) => {
+            asked.push(`${request.sessionId}:${request.description}`);
+            return { decision: answer };
+          },
+          list: () => [],
+          get: () => undefined,
+          answer: () => false,
+        },
+        sessionOwner: async () => "member",
+      },
+    );
+    const [resolved] = await connections.resolve({
+      identity: member,
+      projectId,
+      environment: "company",
+      aliases: ["directory"],
+      principalsByAlias: { directory: "service" },
+    });
+    const allocation = await allocations.create({
+      identity: member,
+      projectId,
+      environmentName: "company",
+      workloadKind: "agent",
+      rootWorkloadId: crypto.randomUUID(),
+      policy: {
+        binding: {
+          id: "managed",
+          label: "Managed",
+          trust: "managed",
+          isolation: "sandbox",
+          workloads: ["agent"],
+          agentTopologies: ["controller"],
+          capabilities: ["network.egress"],
+          resources: {},
+        },
+        requirements: { workload: "agent", topology: "controller" },
+        connections: [resolved!],
+      },
+    });
+    const call = (page: number, caller: "agent" | "workflow" = "agent") =>
+      guarded.invoke({
+        identity: {
+          tenantId,
+          externalUserId: `connection-grant:${allocation.id}`,
+          connectionScope: member.connectionScope,
+          executionScope: member.executionScope,
+          scope: member.scope,
+        },
+        allocationId: allocation.id,
+        alias: "directory",
+        action: "users.list",
+        input: { page },
+        caller,
+        ...(caller === "agent" ? { agentSessionId: "session-1" } : {}),
+      });
+
+    await expect(call(1)).resolves.toEqual({ action: "users.list", ok: true });
+    await expect(call(666)).rejects.toBeInstanceOf(ConnectionActionDeniedError);
+    await expect(call(666)).rejects.toThrow("too broad");
+    await expect(call(13)).rejects.toThrow("policy failed");
+
+    await expect(call(7)).resolves.toEqual({ action: "users.list", ok: true });
+    expect(asked).toEqual(["session-1:Needs your approval: unusual"]);
+    answer = "deny";
+    await expect(call(7)).rejects.toThrow("not approved");
+    // A workflow cannot wait for a person mid-step; escalation refuses it.
+    await expect(call(7, "workflow")).rejects.toThrow(
+      "requires human approval",
+    );
+    expect(asked).toHaveLength(2);
+
+    const audit = (
+      await connections.listAudit({ identity: admin, projectId })
+    ).filter(
+      (event) =>
+        event.eventType === "connection.invoked" &&
+        event.allocationId === allocation.id,
+    );
+    const metadata = audit.map((event) => event.metadata);
+    expect(metadata).toContainEqual({
+      actor: "member",
+      caller: "agent",
+      guards: [{ guard: "policy", verdict: "deny", reason: "too broad" }],
+    });
+    expect(metadata).toContainEqual({
+      actor: "member",
+      caller: "agent",
+      guards: [{ guard: "policy", verdict: "escalate", reason: "unusual" }],
+      approval: "approved",
+    });
+    expect(metadata).toContainEqual({
+      actor: `connection-grant:${allocation.id}`,
+      caller: "workflow",
+      guards: [{ guard: "policy", verdict: "escalate", reason: "unusual" }],
+      approval: "unavailable",
+    });
   });
 
   it("revalidates an enablement before every brokered action", async () => {

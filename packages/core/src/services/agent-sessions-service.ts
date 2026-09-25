@@ -499,6 +499,8 @@ interface AgentSessionsDeps {
   /** Stable, host-owned identity used to fence cross-host session delivery. */
   hostId: string;
   workerNode?: { id: string; token: string };
+  /** All node leases this process holds; defaults to `workerNode` alone. */
+  heldWorkerNodes?: () => readonly { id: string; token: string }[];
   /** Source-host presence window before a mirrored session is shown paused. */
   authorityLeaseMs?: number;
   projectManager: ProjectManager;
@@ -584,6 +586,10 @@ export class AgentSessionsService {
   readonly mailboxes: SessionMailboxesService;
   readonly hostId: string;
   private readonly workerNode?: { id: string; token: string };
+  private readonly heldWorkerNodes: () => readonly {
+    id: string;
+    token: string;
+  }[];
   /**
    * The line a running turn shows while it works, in the agent's own words:
    * the latest harness status, step description or in-progress todo. Kept
@@ -649,7 +655,10 @@ export class AgentSessionsService {
               selectFrom("execution_allocations")
                 .select("id")
                 .whereRef("id", "=", "agent_sessions.allocation_id")
-                .where("worker_node_id", "=", this.workerNode?.id ?? ""),
+                .where("worker_node_id", "in", [
+                  "",
+                  ...this.heldWorkerNodes().map((node) => node.id),
+                ]),
             ),
           ),
         )
@@ -745,6 +754,9 @@ export class AgentSessionsService {
     this.turns = new AgentTurnsService(db);
     this.hostId = deps.hostId;
     this.workerNode = deps.workerNode;
+    this.heldWorkerNodes =
+      deps.heldWorkerNodes ??
+      (() => (deps.workerNode ? [deps.workerNode] : []));
     this.authorityLeaseMs = deps.authorityLeaseMs ?? 90_000;
     this.mailboxes = new SessionMailboxesService(db, deps.hostId);
     this.projectManager = deps.projectManager;
@@ -3477,11 +3489,19 @@ export class AgentSessionsService {
             allocationId: session.allocation_id,
           })
         : undefined;
-      if (allocation?.workerNodeId !== (this.workerNode?.id ?? null)) return;
+      // The controller loop runs where the allocation's node lease is held:
+      // this instance's own node or a remote worker it serves (ADR 0164).
+      const nodeLease = this.workerNode
+        ? this.heldWorkerNodes().find(
+            (node) => node.id === allocation?.workerNodeId,
+          )
+        : undefined;
+      if (this.workerNode ? !nodeLease : allocation?.workerNodeId !== null)
+        return;
       const turn = await this.turns.claimNextForSession({
         workerId: this.turnWorkerId,
         sessionId,
-        workerNode: this.workerNode,
+        ...(nodeLease ? { workerNode: nodeLease } : {}),
       });
       if (!turn) return;
       if (!turn.leaseToken) throw new Error("Claimed turn has no lease token");
@@ -3517,12 +3537,12 @@ export class AgentSessionsService {
       };
       const heartbeat = startAgentLeaseHeartbeat({
         renew: async () => {
-          if (this.workerNode) {
+          if (nodeLease) {
             const owned = await this.db
               .selectFrom("worker_nodes")
               .select("id")
-              .where("id", "=", this.workerNode.id)
-              .where("lease_token", "=", this.workerNode.token)
+              .where("id", "=", nodeLease.id)
+              .where("lease_token", "=", nodeLease.token)
               .where("enabled", "=", true)
               .where("lease_expires_at", ">", sql<Date>`now()`)
               .executeTakeFirst();

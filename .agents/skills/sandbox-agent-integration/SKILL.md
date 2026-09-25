@@ -60,7 +60,7 @@ execution authenticated to the authority without distributing Postgres credentia
 Stock nodes register renewable leases; their session branches persist before turn
 completion. The SDK client runner executes sandbox operations on a member device
 while the model and credential broker remain server-side. Never advertise native
-CLI support through this controller transport. Follow the [setup reference](../../../skills/setup-catamorphic-server/references/cluster-deployment.md).
+CLI support through this controller transport. Follow the [setup reference](../../../skills/setup-work-server/references/cluster-deployment.md).
 
 ## Package Structure
 

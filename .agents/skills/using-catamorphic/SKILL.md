@@ -32,7 +32,7 @@ Choose **one** backend integration; the React/UI layer is the same in both.
 Frontend is always `@catamorphic/react` (+ optionally `@catamorphic/ui`) talking through `@catamorphic/api-client` to whichever backend surface is live.
 
 For operator provisioning, machine enrollment, or multi-instance deployment,
-use the [setup skill](../../../skills/setup-catamorphic-server/SKILL.md).
+use the [setup skill](../../../skills/setup-work-server/SKILL.md).
 The construction examples below are in-process integrations, not proof of
 cluster support. Read its cluster reference before adding replicas.
 
@@ -721,7 +721,7 @@ Bind query caches to the authenticated authority/account. Pass the right
 account authorization returns to a separate host. A remote member's local runner
 uses `clientExecution` and the SDK `startClientRunner` transport; it does not use
 the desktop's root identity or receive a database connection. See
-[cluster setup](../../../skills/setup-catamorphic-server/references/cluster-deployment.md)
+[cluster setup](../../../skills/setup-work-server/references/cluster-deployment.md)
 for the stock host's deployment choices; custom hosts keep their own policy.
 
 ## Common Pitfalls

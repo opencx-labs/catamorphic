@@ -15,16 +15,28 @@ export interface ClientRunnerTransport {
   disconnect(): Promise<void>;
 }
 
-/** Runs only operations admitted by the remote authority for this member. */
+/**
+ * Runs only operations the remote authority admitted for this runner. A
+ * member's desktop runner stops its sandboxes when the connection ends; a
+ * remote worker (ADR 0164) passes `sandboxes` to keep ownership across
+ * control-plane reconnects and `keepSandboxes` so relocation stays possible.
+ */
 export function startClientRunner(args: {
   provider: SandboxProvider;
   transport: ClientRunnerTransport;
   onError?: (error: unknown) => void;
+  sandboxes?: Set<string>;
+  keepSandboxes?: boolean;
+  /** Most sandboxes this runner may hold at once. */
+  maxSandboxes?: number;
+  /** Delay between empty polls; a long-polling transport can pass 0. */
+  idleDelayMs?: number;
 }) {
   let stopped = false;
   let renewing = false;
-  const ownedSandboxes = new Set<string>();
+  const ownedSandboxes = args.sandboxes ?? new Set<string>();
   const stopSandboxes = async () => {
+    if (args.keepSandboxes) return;
     await Promise.allSettled(
       [...ownedSandboxes].map((id) => args.provider.stopSandbox(id)),
     );
@@ -49,7 +61,9 @@ export function startClientRunner(args: {
       const job = await args.transport.poll();
       if (stopped) break;
       if (!job) {
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await new Promise((resolve) =>
+          setTimeout(resolve, args.idleDelayMs ?? 200),
+        );
         continue;
       }
       let receipt: { jobId: string; response?: unknown; error?: string };
@@ -61,6 +75,12 @@ export function startClientRunner(args: {
           !ownedSandboxes.has(operation.sandboxId)
         )
           throw new Error("Sandbox does not belong to this runner connection");
+        if (
+          operation.kind === "create" &&
+          args.maxSandboxes !== undefined &&
+          ownedSandboxes.size >= args.maxSandboxes
+        )
+          throw new Error("This worker has no free workspace");
         const response = await executeClientOperation({
           provider: args.provider,
           operation,

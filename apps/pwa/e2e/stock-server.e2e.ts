@@ -58,10 +58,10 @@ describe.skipIf(!chromeBinary())("pwa against the stock server", () => {
           // Shared-Postgres concurrency is covered by the cluster integration.
           DATABASE_URL: "",
           PORT: String(apiPort),
-          CATAMORPHIC_OPERATOR_PORT: String(operatorPort),
-          CATAMORPHIC_DATA_DIR: dataDir,
-          CATAMORPHIC_FAKE_AGENT: "1",
-          CATAMORPHIC_MDNS: "off",
+          WORK_OPERATOR_PORT: String(operatorPort),
+          WORK_DATA_DIR: dataDir,
+          WORK_FAKE_AGENT: "1",
+          WORK_MDNS: "off",
         },
       }),
       mintLink: async (apiBase, operatorBase) => {
@@ -74,7 +74,7 @@ describe.skipIf(!chromeBinary())("pwa against the stock server", () => {
           "content-type": "application/json",
         };
         const projectResponse = await fetch(
-          `${operatorBase}/_catamorphic/operator/projects`,
+          `${operatorBase}/_work/operator/projects`,
           {
             method: "POST",
             headers: operatorHeaders,
@@ -131,14 +131,11 @@ describe.skipIf(!chromeBinary())("pwa against the stock server", () => {
             password: "member password for browser test",
           },
         ]) {
-          const response = await fetch(
-            `${operatorBase}/_catamorphic/operator/users`,
-            {
-              method: "POST",
-              headers: operatorHeaders,
-              body: JSON.stringify(user),
-            },
-          );
+          const response = await fetch(`${operatorBase}/_work/operator/users`, {
+            method: "POST",
+            headers: operatorHeaders,
+            body: JSON.stringify(user),
+          });
           if (!response.ok) {
             throw new Error(`User setup failed (${response.status})`);
           }

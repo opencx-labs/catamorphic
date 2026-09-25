@@ -5,6 +5,9 @@ export type {
   BatchProgress,
   CancelRunInput,
   CatamorphicCore,
+  ConnectionActionContext,
+  ConnectionActionGuard,
+  ConnectionGuardVerdict,
   ConnectionProvider,
   ConnectionRequirement,
   CreateProjectInput,
@@ -53,6 +56,7 @@ export type {
 export {
   AccessDeniedError,
   appScaffold,
+  ConnectionActionDeniedError,
   createCatamorphicCore,
   GithubNotConnectedError,
   GithubTokenExpiredError,
@@ -193,6 +197,15 @@ export {
   githubPullRequestReview,
   githubWorkflowRun,
 } from "./github-trigger-kinds.js";
+export {
+  defineHttpApiConnectionProvider,
+  type HttpApiConnectionOptions,
+} from "./http-connection-provider.js";
+export {
+  definePostgresConnectionProvider,
+  type PostgresConnectionLimits,
+  type PostgresConnectionOptions,
+} from "./postgres-connection-provider.js";
 export { PostgresObjectStore } from "./postgres-object-store.js";
 export { schedule } from "./schedule-trigger-kind.js";
 export type {

@@ -21,7 +21,7 @@ standalone, never concurrently opened as a shared cluster database. Durable
 coordination belongs in the same schema-scoped Postgres using claims, leases,
 and fencing. Distinguish shared authority from individual instance identity.
 Database configuration alone does not coordinate files, vaults, or live runtimes;
-see the [cluster setup reference](../../../skills/setup-catamorphic-server/references/cluster-deployment.md)
+see the [cluster setup reference](../../../skills/setup-work-server/references/cluster-deployment.md)
 for current gaps. Verify migration coordination before concurrent replica boot.
 
 Two supported shapes (see `docs/decisions/0003`):

@@ -1,6 +1,6 @@
 ---
 name: desktop-release
-description: Use when preparing, dry-running, publishing, repairing, or verifying a Work Stable or Preview desktop release through GitHub Releases and opencx-labs/homebrew-tap. Do not use for ordinary desktop development or framework package publishing.
+description: Use when preparing, dry-running, publishing, repairing, or verifying a Work Stable or Preview release (the macOS desktop through GitHub Releases and opencx-labs/homebrew-tap, and the matching Work server image). Do not use for ordinary desktop development or framework package publishing.
 ---
 
 # Desktop Release
@@ -16,6 +16,7 @@ completely:
 
 - `apps/desktop/RELEASING.md`
 - `.github/workflows/desktop-prerelease.yml`
+- `.github/workflows/work-server-image.yml`
 - `scripts/desktop-release.ts`
 - `apps/desktop/package.json`
 
@@ -81,10 +82,12 @@ needed, do not create an empty release PR.
 
 ## Dry run the exact commit
 
-Dispatch `desktop-prerelease.yml` manually from `main`, capture its run id, and
+Dispatch `desktop-prerelease.yml` and `work-server-image.yml` manually from
+`main`, capture both run ids, and
 verify the run's `headSha` equals the recorded release SHA. Monitor it to
 completion. A manual dispatch signs, notarizes, verifies, and uploads workflow
-artifacts, but must not create a GitHub Release or modify the tap.
+artifacts, but must not create a GitHub Release or modify the tap. The server
+image dispatch builds and smoke-tests both architectures but must not push.
 
 Inspect the artifact inventory. For the first release, a signing-credential
 change, or a material packaging change, pause for the clean-account installation
@@ -128,6 +131,9 @@ Verify all of the following before reporting success:
 - each updated feed points only to assets from the intended GitHub release;
 - the tap commit is newer than the release publication and all applicable tap
   files advanced together;
+- the `work-server` image has the release version and `alpha` tags (plus
+  `latest` for Stable), both `linux/amd64` and `linux/arm64` manifests, and a
+  provenance attestation that `gh attestation verify` accepts;
 - the release and tagged workflow URLs are recorded for the user.
 - on a clean account without system Claude Code or Codex, each intended
   harness performs its one-time verified component download, starts, and then

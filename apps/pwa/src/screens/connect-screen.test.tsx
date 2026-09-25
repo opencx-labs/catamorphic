@@ -50,7 +50,7 @@ describe("ConnectScreen", () => {
     ).toContain("Sign in");
   });
 
-  it("offers direct sign-in when the PWA is served by a Catamorphic server", async () => {
+  it("offers direct sign-in when the PWA is served by a Work server", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {

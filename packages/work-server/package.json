@@ -1,0 +1,48 @@
+{
+  "name": "@catamorphic/work-server",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "dev": "tsup --watch --no-clean",
+    "typecheck": "tsgo --project ./tsconfig.json",
+    "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/work-server --config ../../vitest.config.ts --pool=forks"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.52",
+    "@ai-sdk/openai": "^4.0.65",
+    "@catamorphic/ai-sdk": "workspace:*",
+    "@catamorphic/app": "workspace:*",
+    "@catamorphic/core": "workspace:*",
+    "@catamorphic/db": "workspace:*",
+    "@catamorphic/fastify-plugin": "workspace:*",
+    "@catamorphic/local-process": "workspace:*",
+    "@catamorphic/mcp": "workspace:*",
+    "@catamorphic/microsandbox": "workspace:*",
+    "@catamorphic/otel": "workspace:*",
+    "@catamorphic/sandbox": "workspace:*",
+    "@catamorphic/server-sdk": "workspace:*",
+    "@electric-sql/pglite": "^0.5.4",
+    "ai": "^7.0.97",
+    "better-auth": "1.6.26",
+    "fastify": "^5.10.0",
+    "kysely": "^0.29.3",
+    "micromark": "^4.0.2",
+    "pg": "8.16.3",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/pg": "8.15.5"
+  }
+}
