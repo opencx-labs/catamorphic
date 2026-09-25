@@ -32,7 +32,14 @@ it("workflow graph reads exclude large media and other repositories before loadi
       "workflows/unrelated.ts",
       'import { defineWorkflow } from "@catamorphic/workflow"; export const unrelated = defineWorkflow(({ defineBoundary }) => ({ steps: [defineBoundary({ run: () => true })] }));',
     );
-    await repo.writeFile("nested/.git/HEAD", "ref: refs/heads/main");
+    // A nested repository on disk (the file APIs refuse .git paths).
+    await fs.mkdir(path.join(repo.repoPath, "nested/.git"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(repo.repoPath, "nested/.git/HEAD"),
+      "ref: refs/heads/main",
+    );
     await repo.writeFile(
       "nested/workflows/unrelated.ts",
       "export const unrelated = 1;",
