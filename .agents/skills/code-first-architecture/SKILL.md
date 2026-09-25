@@ -1,76 +1,87 @@
 ---
 name: code-first-architecture
-description: Use when designing or changing Catamorphic workflow authoring, AST parsing, graph rendering, visual editing, or the boundary between workflow code and generated representations.
+description: Use when changing how Catamorphic reads workflow source, including the parser, the WorkflowGraph and its projections (schemas, triggers, connections, permissions), canvas rendering, or anything that could make a derived artifact compete with the TypeScript source.
 ---
 
-# Code-First Architecture
+# Code-first architecture
 
-## Core Principle
+Workflow TypeScript is the only definition. Everything else is derived from it
+statically and can be regenerated at any time. Keep it that way:
 
-TypeScript code is the single source of truth for workflow definitions. There is no JSON intermediate representation, no drag-and-drop graph builder, no visual-first editing. Code drives everything.
+- No JSON intermediate format, workflow DSL, or graph that is stored and edited
+  as the source. The canvas is a projection; a change made from the canvas goes
+  through code, written by an agent or in the editor.
+- The parser never executes project code. Hosts introspect graphs, triggers,
+  connections, and permissions without a sandbox, which is why those values
+  must be inline constants.
+- Authorization is not part of a definition. A workflow declares what it needs
+  (`connections`, `permissions`, `triggers`). Committed `.catamorphic/roles/*.json`
+  files and server-side workflow enablements decide who may reach or turn it on
+  ([ADR 0158](../../../docs/decisions/0158-project-permissions.md)). Never fold
+  either into the graph.
 
-## How It Works
+For the authoring API and its guidance, use
+[workflow-code-conventions](../workflow-code-conventions/SKILL.md).
 
-1. User writes TypeScript workflow code (or AI generates it)
-2. `@catamorphic/parser` uses ts-morph to parse the AST into a `WorkflowGraph`
-3. `@catamorphic/ui` renders the graph using React Flow
-4. Code changes → re-parse → visual update (unidirectional)
-5. Visual edits happen through AI: user describes the change → AI modifies code → re-parse
+## Pipeline
 
-## Workflow Authoring
+1. Source lives in `.catamorphic/workflows/src/` of a project
+   ([ADR 0142](../../../docs/decisions/0142-contained-project-workspace.md)).
+2. `@catamorphic/parser` (ts-morph) turns it into a `WorkflowGraph`: nodes and
+   edges, an execution descriptor, `inputSchema`/`outputSchema`, `triggers`,
+   `connections`, `permissions`, and `canSuspend`
+   ([types](../../../packages/parser/src/types.ts)).
+3. `layoutGraph` positions it and `@catamorphic/ui` renders it with React Flow.
+4. The same package drives execution (`prepareWorkflowExecution`), generated app
+   API types ([ADR 0041](../../../docs/decisions/0041-generated-projections.md)),
+   and `checkProject`, the engine behind each project's
+   `bun run --cwd .catamorphic check`.
 
-- Every Workflow is an exported
-  `defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`
-  value with persisted continuation.
-- `"use step"` marks a visual step function holding IO, called from boundary
-  run bodies and batch process callbacks.
-- `defineBoundary` is an atomic retry scope whose callback operations retry
-  together.
-- `defineBatch` is finite paged per-item processing with an optional sink.
-- Package-level `defineBatchStep` physically coalesces compatible calls only
-  inside `defineBatch.process`.
+Code change, re-parse, re-render. The direction never reverses.
 
-There is no public stage construct. All definitions remain exported TypeScript
-and the parser never executes author code.
+## What the parser accepts
 
-Top-level `connections` and inline `triggers` are also authored in the
-TypeScript definition and parsed as constant metadata. They describe what a
-workflow needs and what can wake it, not who is authorized. Committed
-`.catamorphic/roles/*.json` grant workflow, app, agent, document, Environment, connection,
-and namespaced project-permission refs;
-server-owned workflow enablements record each member's consent to an exact
-deployment. Do not encode either policy layer into a generated graph or a new
-workflow DSL.
+A workflow is an exported variable initialized by a direct `defineWorkflow` call
+whose builder returns an object literal with an inline `steps` array of direct
+`defineBoundary`/`defineBatch` calls with inline callbacks. `triggers` must be
+inline `trigger("kind", constant)` calls; `connections` and `permissions` must be
+constant arrays, and permissions must be concrete `thing:action` names (wildcards
+belong to roles). Anything else is a parse error that names the workflow and
+position; users see these through `check`, so keep them specific.
 
-`context.host["catamorphic.sessions"].deliver(...)` is a durable host
-transition, not a step-side effect. It names a chat by `sessionId` or by a
-stable `key` that selects (or starts) the chat this workflow keeps for it; the
-agent's work proceeds through the normal session queue after the workflow call
-returns.
+| Source | Graph node |
+| --- | --- |
+| The exported `defineWorkflow` declaration | `input` (JSDoc label, `@param` metadata, trigger bindings) |
+| `defineBoundary({ run })` | `durable-boundary` container |
+| `defineBatch({ source, process, sink? })` | `batch` container with `source`, `sink`, and an "Item result" `return` |
+| Call statement, `const x = await call()`, or a returned call | `step` (label from the callee's JSDoc `@displayname`) |
+| Returned `context.host[...]` or `context.connections.*` call | `step` with a readable host label |
+| `if` / `else if` / `else` | `if-block` with `branch` children |
+| Returned `cond ? a : b` | `if-block`; each arm draws its step or transition, a value-only else draws nothing |
+| `for`, `for...of`, `for...in`, `while` | `loop-block` |
+| `await Promise.all([...])` | `parallel-block` |
+| Async IIFE or bare `{ }` block | `scope-block` |
+| Returned `pause(...)` | `pause` |
+| Returned `callWorkflow(child, { input })` | `call-workflow`, with the child's graph nested |
 
-## AST-to-Graph Mapping
+Calls nested inside another expression (an object literal, an argument) are not
+drawn. Write IO as a statement or a returned call so it appears on the canvas.
+`pause` and `callWorkflow` are recognized by their bare names, so destructure
+them from the boundary context; `context.pause(...)` draws as an ordinary step.
+Exported `defineBatchStep` calls are valid only inside `process` and render as
+steps with physical batching metadata, never as separate workflow scopes.
 
-| TypeScript Construct | Graph Node |
-|---------------------|------------|
-| `defineWorkflow` export's input parameters | Input node |
-| `await fn(args)` | Step node |
-| `if (cond) { ... } else { ... }` | Condition node + branches |
-| `for`/`for...of`/`while` | Loop node |
-| `Promise.all([...])` | Parallel fork + join |
-| `sleep(duration)` | Delay node |
-| `return value` | Return node |
-| `defineBoundary({ run })` | Boundary container |
-| `defineBatch({ source, process, sink? })` | Batch container with source/process/sink detail |
-| returned `pause(...)` | Pause node |
-| returned `callWorkflow(...)` | Child Workflow node |
+Detailed container, edge, and layout rules live in
+[parser-conventions](../../../.cursor/rules/parser-conventions.mdc) and
+[graph-design](../../../.cursor/rules/graph-design.mdc).
 
-## Why Code-First
+## Changing the parser or graph
 
-- Code is diffable, versionable, reviewable
-- Full TypeScript type safety and IDE support
-- The graph faithfully projects supported source semantics and exposes Workflow
-  capabilities rather than kind discriminators.
-- Persisted boundaries, pauses, child calls, batch progress, retries, and
-  cancellation execute through the canonical Runs service and Postgres state.
-- AI agents are excellent at writing and modifying code
-- Embedding in SaaS: host app controls the code, UI is a view layer
+- Add a construct only when it expresses an existing runtime semantic. The
+  graph must not promise behavior the runtime does not have, and the runtime
+  must not gain behavior the graph cannot show.
+- Canvas nodes show an icon and a human label, never code. Put expressions and
+  policies in the inspector's technical details.
+- Update together: parser tests in `packages/parser/src/__tests__/`, the
+  execution transform when semantics change, the `.cursor/rules` parser and
+  graph docs, and any seeded skill example the change affects.

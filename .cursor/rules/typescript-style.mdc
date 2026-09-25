@@ -1,42 +1,41 @@
 ---
-description: TypeScript coding style — type safety and parameter conventions
-globs: "**/*.{ts,tsx}"
+description: TypeScript style for Catamorphic - object parameters, no any, no as casts, few lets
+globs: **/*.ts,**/*.tsx
 alwaysApply: false
 ---
 
 # TypeScript Style
 
-## Object (named) parameters over positional
+Biome (`bun run lint`) enforces formatting and its recommended rules. These conventions go beyond it.
 
-Prefer a single destructured object parameter so call sites are self-documenting and order-independent.
+## One keyed object parameter
+
+Every public service, SDK, hook, and route helper takes a single object parameter, so call sites name their arguments and new options don't reorder anything.
 
 ```typescript
-// ❌ BAD — positional params
-function createUser(name: string, email: string, isAdmin: boolean) { … }
-createUser("Ada", "ada@example.com", true); // what is `true`?
+// Avoid
+createProject(tenantId, "Acme", true);
 
-// ✅ GOOD — named params
-function createUser({ name, email, isAdmin }: { name: string; email: string; isAdmin: boolean }) { … }
-createUser({ name: "Ada", email: "ada@example.com", isAdmin: true });
+// Prefer
+createProject({ tenantId, name: "Acme", seed: true });
 ```
 
-Exception: single-argument helpers where meaning is unambiguous (e.g., `slugify(text)`).
+This matches the public surface: `forTenant({ tenantId }).forUser({ externalUserId })`, `useRuns({ projectId, workflowName })`, `findNodeAtPosition({ nodes, position })`. A private helper whose single argument is obvious (`slugify(text)`) may stay positional. Step functions always take one destructured object (see `AGENTS.md`).
 
-## No `any`, no unnecessary `as` casts
+## No `any`
 
-- Never use `any`. Use `unknown` when the type is truly unknown, then narrow.
-- Avoid `as` type assertions. Prefer Zod `.parse()`, type guards, or generics.
+Use `unknown` for untrusted or unknown values and narrow it with a Zod schema, a type guard, or `typeof`/`in` checks.
 
 ```typescript
-// ❌ BAD
-const data = JSON.parse(raw) as Order;
-function handle(input: any) { … }
-
-// ✅ GOOD
-const data = OrderSchema.parse(JSON.parse(raw));
-function handle(input: unknown) {
-  const order = OrderSchema.parse(input);
+function readOrder(input: unknown): Order {
+  return OrderSchema.parse(input);
 }
 ```
 
-`as const` and `as` in test fixtures where the type system can't infer are acceptable exceptions.
+## No `as` casts
+
+Let inference, generics, `satisfies`, and narrowing produce the type. `as const` is fine. Test fixtures may cast when building a partial object is the point of the test. When a library boundary genuinely erases a type (for example React Flow's `NodeProps.data`), keep the one cast at that boundary instead of spreading it. Never cast Kysely rows; use the generated `DB` types (see `project-model.mdc`).
+
+## Few `let`s and little mutable state
+
+Prefer `const` with expressions (ternaries, `map`, `filter`, early returns) over a `let` assigned in branches. Keep mutable state local to the function that owns it.

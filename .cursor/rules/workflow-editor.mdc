@@ -1,0 +1,38 @@
+---
+description: Embeddable workflow editor packages - data access, running workflows, the Runs panel, and shared editor state
+globs: packages/ui/src/workflow-editor.tsx,packages/ui/src/workflow-editor-scope.tsx,packages/ui/src/runs-panel.tsx,packages/ui/src/run-trigger-dialog.tsx,packages/react/src/**,packages/registry/src/**
+alwaysApply: false
+---
+
+# Workflow Editor Packages
+
+The editor ships as `@catamorphic/ui` (canvas, `WorkflowEditor`, `RunsPanel`, `AppMount`), `@catamorphic/react` (provider, TanStack Query hooks, jotai atoms), and `@catamorphic/registry` (copy-paste components such as the Monaco editor and runs panel). There is no standalone playground; hosts mount these pieces, and `apps/desktop` is the reference host. See `graph-design.mdc` for the canvas and `panel-editor.mdc` for the inspector and code linking.
+
+## Data access
+
+- Components reach data only through the mounted Fastify API (`@catamorphic/api-client` via `@catamorphic/react` hooks) or a host adapter over `@catamorphic/server-sdk`. Never import `@catamorphic/db` or query the database from UI code.
+- Server records (projects, runs, sessions, enablements) stay in TanStack Query. Do not copy them into jotai or browser storage.
+
+## Running a workflow
+
+1. The Run control opens `RunTriggerDialog`, whose form comes from `triggerParameters` or the parsed graph's input.
+2. The host's `onRun(input)` starts one Run of the deployed commit and returns its `Run` DTO. There is no test or mutable-source mode (ADR 0040).
+3. The editor remembers the input in `lastTriggerDataAtom`, closes the dialog, keeps the Run as local `activeRun`, and opens the Runs pane.
+4. `renderRunsPanel({ activeRun })` mounts the host's Runs UI. Without it the pane shows a "not connected" placeholder and fetches nothing.
+
+## Runs panel
+
+- One `RunsPanel` serves every workflow. Run `capabilities` decide which controls appear: cancel, pause and resume processing, submit input to an active pause, batch progress, and item inspection.
+- `RunsPanel` keeps its selected Run locally; list and detail data come from `useRuns` and `useRun`.
+- Batch items page with explicit Previous and Next. A batch scope is identified by `workflowStepAttemptId`, which includes earlier failed or canceled attempts.
+
+## Editor chrome
+
+- `WorkflowEditor` wraps `WorkflowEditorChrome` in an idempotent `WorkflowEditorScope`. Hosts that add their own chrome place the scope higher and share it.
+- Corner controls come from `renderControls`, which receives `run`, `running`, `runsOpen`, and `toggleRuns`. The Runs pane's open state is local to the editor.
+- `useEditorKeyboard({ onEscape })` lets the Runs pane close first; otherwise Escape clears the selection, which closes a selection-driven inspector (ADR 0157).
+- `Toolbar`, `AIBar`, `aiLoadingAtom`, and the panel atoms were removed by ADR 0157. Agent edits go through the agent chat, not an editor AI bar.
+
+## Shared editor state
+
+Jotai atoms in `packages/react/src/atoms.ts` hold local editor state only: source, parsed graph and parse status, selection, React Flow nodes and edges, collapsed containers, execution overlay, read-only state, Run dialog visibility, and the last trigger input. They live inside `WorkflowEditorScope`, so host chrome must share that scope to read them.

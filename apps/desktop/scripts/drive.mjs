@@ -10,11 +10,16 @@
 //   key <Enter|Escape|Tab>     - press a key
 //   eval <js>                  - evaluate JS in the page, print JSON result
 //   text <selector>            - print element innerText
+//   hover <selector>           - move the pointer over an element
+//   wheel <selector> [deltaY]  - scroll the wheel over an element
+//   drag <selector> <dx> <dy>  - drag an element by an offset
 //   window <maximize|unmaximize|minimize|restore> - window state (dev IPC)
 //   window setSize <w> <h>     - resize the window
 //
 // Default test viewport: run `window maximize` before screenshotting.
-// CDP_TARGET=surface=dock drives the detached dock window instead.
+// Screenshots are in device pixels; divide by devicePixelRatio for CSS
+// coordinates. CDP_TARGET=main picks the workspace window and
+// CDP_TARGET=surface=dock the detached dock (unset, the first page wins).
 
 const PORT = process.env.CDP_PORT ?? "9333";
 

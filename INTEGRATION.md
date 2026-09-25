@@ -96,8 +96,10 @@ export const catamorphic = createCatamorphic({
     projectsPath: process.env.CATAMORPHIC_PROJECTS_PATH!,
     remotesPath: process.env.CATAMORPHIC_REMOTES_PATH!,
   },
-  // Sandbox backends are vendor plugin packages: @catamorphic/cloudflare
-  // (default) or @catamorphic/daytona. Omit for read-only embeds.
+  // Sandbox backends are packages the host constructs: @catamorphic/cloudflare
+  // or @catamorphic/daytona in the cloud, @catamorphic/microsandbox locally,
+  // or @catamorphic/local-process (trusted single tenant). Omit for read-only
+  // embeds.
   sandboxProvider,
   environmentProvider,
 });
@@ -120,7 +122,7 @@ const scoped = catamorphic
 const project = await scoped.projects.create({ name: "onboarding" });
 await scoped.files.write({
   projectId: project.id,
-  path: "src/welcome.ts",
+  path: ".catamorphic/workflows/src/welcome.ts",
   content: welcomeTs,
   commitMessage: "Add welcome workflow",
 });
@@ -501,7 +503,7 @@ Hooks shipped:
 - **Agent sessions**: `useAgentSessions`, `useAgentSession`, `useCreateAgentSession`, `useSendAgentMessage`, `useAcknowledgeAgentSessionAttention`, `useArchiveAgentSession`, `useUnarchiveAgentSession`.
 - **Workflow enablement**: `useWorkflowEnablements`, `usePreviewWorkflowEnablement`, `useCreateWorkflowEnablement`, `useUpdateWorkflowEnablement`.
 
-All hooks reject with the typed `CatamorphicError` envelope (discriminated by `code`: `unauthorized`, `not_found`, `validation`, `conflict`, `server_error`, `network`, `unknown`). Use `isCatamorphicError(err)` and switch on `err.code`; never branch on `err.message`. Shared OpenAPI-derived domain types (`Project`, `Run`, `RepoStatus`, `BranchInfo`, `ConflictEntry`, `PluginInfo`, `Secret`, `AgentSession`, …) live behind a single `@catamorphic/react/types` barrel.
+All hooks reject with the typed `CatamorphicError` envelope (discriminated by `code`: `unauthorized`, `forbidden`, `not_found`, `conflict`, `validation`, `rate_limited`, `sandbox_unavailable`, `authentication_required`, `network`, `unknown`). Check `err instanceof CatamorphicError` and switch on `err.code`; never branch on `err.message`. Shared OpenAPI-derived domain types (`Project`, `Run`, `RepoStatus`, `BranchInfo`, `ConflictEntry`, `PluginInfo`, `Secret`, `AgentSession`, …) live behind a single `@catamorphic/react/types` barrel.
 
 ## Agent tool permissions for hosts (ADR 0054)
 
@@ -530,7 +532,7 @@ supplies two things:
 
 ## Ready-made components: `@catamorphic/ui`
 
-`@catamorphic/ui` ships the workflow canvas (`WorkflowEditor`, `WorkflowCanvas`), member workflow review and consent, Runs panel, toolbar, AI bar, and `AppMount` as composable React components built on `@catamorphic/react`. Everything is opt-in: use `WorkflowEditor` for the full experience, or compose `WorkflowCanvas` + your own chrome. Code editors are plugged in via render props (bring your own Monaco/CodeMirror). Import `@catamorphic/ui/styles.css` once.
+`@catamorphic/ui` ships the workflow canvas (`WorkflowEditor`, `WorkflowCanvas`), member workflow review and consent, the Runs panel, and `AppMount` as composable React components built on `@catamorphic/react`. Everything is opt-in: use `WorkflowEditor` for the full experience, or compose `WorkflowCanvas` + your own chrome. Hosts supply their own inspector (`renderInspector`) and code editor, linked to the canvas with `useCodeEditorLink`. Import `@catamorphic/ui/styles.css` once.
 
 `AppMount` also accepts `display={{ mode: "compact", visible }}` and
 `viewportHeight={320}` for sidebar/widget slots. The same app bundle, storage,
@@ -555,11 +557,12 @@ headless hooks remain independent of Tailwind.
 
 ## Component registry: `@catamorphic/registry`
 
-`@catamorphic/registry` is a shadcn-style copy-paste registry for hosts that want to own the component source. Items are JSON manifests that inline a single React component file; consumers run `npx shadcn add <path-or-url>/r/<item>.json` and the component drops into `components/catamorphic/`. The component then imports hooks from `@catamorphic/react` and primitives from `@catamorphic/ui` only: there's no runtime dependency on the registry itself.
+`@catamorphic/registry` is a shadcn-style copy-paste registry for hosts that want to own the component source. Items are JSON manifests that inline their React component files; consumers run `npx shadcn add <path-or-url>/r/<item>.json` and the component drops into `components/catamorphic/`. The component then imports hooks from `@catamorphic/react` and primitives from `@catamorphic/ui` only: there's no runtime dependency on the registry itself.
 
 Items shipped: `catamorphic-provider`, `project-editor`, `file-explorer`,
 `git-panel`, `diff-drawer`, `runs-panel`, `plugins-settings`, `monaco-editor`,
-`agent-chat`, `chat-timeline`, `sessions-list`, `todo-progress`, and
+`agent-chat`, `agent-question-panel`, `chat-queue`, `chat-timeline`,
+`code-review`, `resource-preview`, `sessions-list`, `todo-progress`, and
 `tool-permission-card`.
 
 Catamorphic doesn't host the registry itself. After `bun run build`, the built manifests live at `packages/registry/dist/r/<name>.json`; hosts install them from `./node_modules/@catamorphic/registry/dist/r/<name>.json` or from a URL the host serves. To add a new item: drop a `src/<name>/<name>.tsx` + `registry-item.json` under `packages/registry/src/`, run `bun run build`, and re-install it in the host.

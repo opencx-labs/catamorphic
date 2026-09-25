@@ -73,8 +73,10 @@ bun run --cwd apps/desktop test:e2e
 
 The complete Electron suite is required before a commit. Suite membership lives in
 [vitest.e2e.config.ts](vitest.e2e.config.ts), not a manually copied list here.
-Build changed packages first; desktop resolves them through `dist`. Main-process
-changes require a relaunch; renderer changes hot-reload.
+The Docker e2e builds workspace packages inside its image. Native launches (the
+dev app, film scripts) resolve packages through `dist`, so build changed
+packages first there. Main-process changes require a relaunch; renderer changes
+hot-reload.
 
 E2E uses isolated temporary data and a prompt-keyed fake agent, with no provider
 calls. Extend [e2e-fakes.ts](src/main/server/e2e-fakes.ts) for deterministic failure
@@ -109,8 +111,9 @@ UI changes also require inspecting the running app:
 ```sh
 bun run dev:desktop
 # Use the CDP port printed by the orchestrator:
-CDP_PORT="<port>" bun apps/desktop/scripts/drive.mjs window maximize
-CDP_PORT="<port>" bun apps/desktop/scripts/drive.mjs shot /tmp/app.png
+# CDP_TARGET=main picks the workspace window, never the detached dock.
+CDP_PORT="<port>" CDP_TARGET=main node apps/desktop/scripts/drive.mjs window maximize
+CDP_PORT="<port>" CDP_TARGET=main node apps/desktop/scripts/drive.mjs shot /tmp/app.png
 ```
 
 For credential-free manual checks, use `CATAMORPHIC_E2E_FAKE_AGENT=1` when launching.

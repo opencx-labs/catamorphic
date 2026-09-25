@@ -1,328 +1,199 @@
 ---
 name: sandbox-agent-integration
-description: Use when changing Catamorphic sandbox providers, workflow execution sandboxes, coding-agent providers, Environment placement, server instance enrollment, dev sandbox lifecycle, sandbox instrumentation, or agent file staging.
+description: Use when changing sandbox providers, workflow execution runtimes, coding-agent harnesses (ai-sdk, claude-code, codex), the coding-agent registry, Environment placement and Allocations, managed-machine enrollment, dev sandboxes, workspace resource admission, sandbox instrumentation, or plugin/agent file staging.
 ---
 
-# Sandbox & Agent Integration
+# Sandbox and agent integration
 
-## Overview
+Two vendor-neutral contracts live in `@catamorphic/sandbox` (no vendor SDKs):
 
-`@catamorphic/sandbox` provides two core capabilities:
+- `SandboxProvider` (`src/types.ts`): where workflow code and controller-agent
+  commands execute.
+- `CodingAgentProvider` (`src/coding-agent/types.ts`): a coding-agent harness.
 
-1. **Workflow execution**: runs workflow code through an injected sandbox or
-   trusted local-process provider with persisted Run state and step-level
-   observability.
-2. **Coding-agent contract**: the vendor-neutral `CodingAgentProvider`
-   interface. Implementations include `@catamorphic/ai-sdk`,
-   `@catamorphic/claude-code`, and `@catamorphic/codex`. Hosts expose one
-   provider or a dynamic `CodingAgentRegistry`.
+Hosts construct concrete providers explicitly at boot and pass them to
+`createCatamorphic`. There is no env-var switch inside the libraries.
 
-## Provider Selection
+## Where things live
 
-Providers live in vendor plugin packages (see `docs/decisions/0004`, `0008`, and `CLOUDFLARE.md`); the host constructs its chosen backend explicitly at boot:
+| Concern | Path |
+| --- | --- |
+| Provider, runtime, resource types | `packages/sandbox/src/types.ts`, `execution-environment.ts` |
+| OTel wrapper | `packages/sandbox/src/instrumented-provider.ts` |
+| Warm deployment runtimes | `packages/sandbox/src/command-deployment-runtime.ts` (HTTP supervisor), `stdio-deployment-runtime.ts` |
+| Harness contract and helpers | `packages/sandbox/src/coding-agent/` (`types.ts`, `plugin-staging.ts`, `tool-policy.ts`, `runtime-provider.ts`, `runtime-conformance.ts`) |
+| Supervisor inside the runtime | `packages/runtime/src/` (`supervisor-http.ts`, `supervisor-stdio.ts`, `supervisor-dispatcher.ts`, `bun-worker.ts`) |
+| Core services | `packages/core/src/services/`: `deployment-runtime-service.ts`, `execution-worker-service.ts`, `dev-sandbox-service.ts`, `execution-environments-service.ts`, `execution-allocations-service.ts`, `worker-nodes-service.ts`, `client-runners-service.ts`, `coding-agent-registry.ts`, `agent-sessions-service.ts`, `agent-capabilities-service.ts` |
+| Harnesses | `packages/ai-sdk` (`AiSdkCodingAgent`), `packages/claude-code` (`ClaudeCodeAgent`), `packages/codex` (`CodexAgent`) |
+| Providers | `packages/microsandbox` (desktop default), `packages/local-process` (trusted single-tenant, ADR 0047), `packages/cloudflare` (+ `packages/cloudflare-sandbox-bridge` Worker), `packages/daytona` |
 
-```typescript
-import { CloudflareSandboxProvider } from "@catamorphic/cloudflare";
-// Alternatives: @catamorphic/microsandbox, @catamorphic/daytona, or
-// @catamorphic/local-process for a trusted single-tenant host.
-
-const provider = new CloudflareSandboxProvider({
-  apiUrl: process.env.CLOUDFLARE_SANDBOX_API_URL!,
-  apiKey: process.env.CLOUDFLARE_SANDBOX_API_KEY,
-});
-```
-
-Providers handed to `CatamorphicCore` are automatically wrapped with `instrumentSandboxProvider` (OpenTelemetry spans: `sandbox.create`, `sandbox.exec`, `sandbox.upload_files`, …). The wrapper preserves the optional `hydrateWorkspace` method (tar-based upload) that the Cloudflare provider exposes.
-
-## Sandbox Model
-
-Execution has two distinct purposes, but not every agent uses a sandbox:
-
-- **Production deployment runtime** — Immutable code pinned to deployed
-  `origin/main`; a warm supervisor accepts queued invocations for the artifact.
-- **Agent checkout**: mutable project code selected per session. Controller
-  agents edit a dev sandbox; native Claude Code or Codex agents can use a
-  host-resolved local checkout through `nativeAgentCheckout`. Runs never
-  execute these mutable files; every Run executes a deployed commit.
-
-Logical project Environments and immutable Allocations select the execution
-provider, resources, and connection grants. Project permissions such as
-`program:write` do not imply Environment or connection authority.
-
-For local/remote placement, read
-[ADR 0098](../../../docs/decisions/0098-project-authorized-local-and-remote-agents.md).
-Managed machines are instances of one shared-Postgres authority under
-[ADR 0099](../../../docs/decisions/0099-shared-postgres-server-environments.md).
-Instance ownership is distinct from authority identity. An Allocation must select
-the actual process, workspace, tools, and recovery owner; recording an Environment
-without routing execution does not implement placement. Keep member-device
-execution authenticated to the authority without distributing Postgres credentials.
-Stock nodes register renewable leases; their session branches persist before turn
-completion. The SDK client runner executes sandbox operations on a member device
-while the model and credential broker remain server-side. Never advertise native
-CLI support through this controller transport. Follow the [setup reference](../../../skills/setup-work-server/references/cluster-deployment.md).
-
-## Package Structure
-
-```
-packages/sandbox/src/               -- vendor-neutral, no vendor SDKs
-  types.ts                 -- provider, runtime, and coding-agent shared types
-  instrumented-provider.ts -- instrumentSandboxProvider (OTel wrapper)
-  sandbox-manager.ts       -- dev-sandbox lifecycle helper
-  plugin-upload.ts         -- attached plugin materialization helper
-  coding-agent/
-    types.ts               -- CodingAgentProvider interface (extensible)
-    plugin-staging.ts      -- stagedPluginFiles / buildPluginsPreamble helpers
-
-packages/core/src/services/
-  deployment-runtime-service.ts -- immutable warm execution runtimes
-  execution-worker-service.ts   -- queued Run leasing and dispatch
-
-packages/ai-sdk/src/                -- @catamorphic/ai-sdk coding-agent plugin (flagship)
-  ai-sdk-agent.ts          -- AiSdkCodingAgent + sandbox-backed tools
-
-packages/claude-code/src/            -- @catamorphic/claude-code harness
-  claude-code-agent.ts      -- Claude Agent SDK adapter
-
-packages/codex/src/                 -- @catamorphic/codex coding-agent plugin
-  codex-agent.ts           -- CodexAgent (pinned Codex app-server adapter)
-
-packages/microsandbox/src/           -- local sandbox provider
-packages/local-process/src/          -- trusted sandboxless subprocess provider
-
-packages/cloudflare/src/            -- @catamorphic/cloudflare plugin
-  sandbox-provider.ts      -- CloudflareSandboxProvider (HTTP client to the Bridge Worker)
-  artifacts-client.ts      -- ArtifactsClient (Artifacts REST: repos + scoped tokens)
-  artifacts-remote-backend.ts -- ArtifactsRemoteBackend (RemoteBackend + getCloneSource)
-
-packages/daytona/src/               -- @catamorphic/daytona plugin
-  sandbox-provider.ts      -- DaytonaSandboxProvider (Daytona SDK wrapper)
-  storage-backend.ts       -- DaytonaBackend (StorageBackend using Daytona sandboxes)
-  project-repo.ts          -- DaytonaProjectRepo (ProjectRepo using Daytona's git/fs APIs)
-
-packages/cloudflare-sandbox-bridge/  -- deployable Worker the Cloudflare provider talks to
-
-packages/runtime/src/
-  supervisor-protocol.ts   -- Deployment invocation and event protocol
-  supervisor-http.ts       -- Warm runtime HTTP supervisor
-  supervisor-worker.ts     -- Per-invocation Bun Worker execution
-  supervisor-dispatcher.ts -- Workflow/boundary/batch dispatch
-```
-
-## Sandbox Manager
+## Sandbox providers
 
 ```typescript
-import { SandboxManagerImpl } from "@catamorphic/sandbox";
+import { MicrosandboxSandboxProvider } from "@catamorphic/microsandbox";
+// or LocalProcessSandboxProvider, CloudflareSandboxProvider, DaytonaSandboxProvider
 
-const manager = new SandboxManagerImpl({ provider, store: dbStore });
-
-// Deployment runtime sandbox for a specific commit
-const execSandbox = await manager.ensureExecSandbox({
-  projectId: "...",
-  commitSha: "abc123...",
-});
-
-// Dev sandbox for a user
-const devSandbox = await manager.ensureDevSandbox({
-  projectId: "...",
-  userId: "...",
-});
+const sandboxProvider = new MicrosandboxSandboxProvider({ image: "oven/bun" });
+createCatamorphic({ sandboxProvider, environmentProvider, /* ... */ });
 ```
 
-## Coding Agent
+- `CatamorphicCore` wraps every provider with `instrumentSandboxProvider`
+  (`sandbox.create`, `sandbox.exec`, `sandbox.runtime.*`, ...). Never wrap it
+  yourself. The wrapper forwards `workspaceRoot`, `isolation`,
+  `resourceLimits`, `deploymentRuntime`, and the optional `hydrateWorkspace`
+  (Cloudflare tar upload); forward any new optional member the same way.
+- `deploymentRuntime` is the warm-runtime capability. Cloudflare and Daytona
+  use `CommandDeploymentRuntimeProvider`; local-process and microsandbox use
+  `StdioDeploymentRuntimeProvider`.
+- A new provider reports its real `isolation` (`none | process | sandbox`) and
+  lists enforceable `resourceLimits`. It must reject `CreateSandboxOpts.resources`
+  it cannot enforce rather than ignore them.
+- `environmentProvider` is required. `defineStaticEnvironments` (server-sdk)
+  maps Environment descriptors to providers; see `INTEGRATION.md`.
 
-The host passes one provider or a `CodingAgentRegistry` to
-`createCatamorphic({ hostId, codingAgent, sandboxProvider,
-environmentProvider, nativeAgentCheckout? })`. A registry entry owns a stable
-id, provider, topology, privilege ceiling, defaults, connection requirements,
-and explicit delegation policy. Session orchestration, persistence, checkout
-selection, serialized delivery, and checkpointing remain vendor-neutral in
-`AgentSessionsService`.
+## Workflow execution
+
+- Every Run executes an immutable deployed commit. There is no mutable-source
+  or test mode.
+- The deployment runtime materializes the verified `.catamorphic/` capability
+  snapshot (ADR 0142), installs its workspace dependencies, and applies the
+  parser transform to that copy only. Plugin payloads land under
+  `node_modules/<packageName>/` via `uploadPluginPayloads`.
+- Runs are queued in Postgres. The host starts
+  `catamorphic.startExecutionWorker(...)` explicitly. Postgres stays
+  authoritative for retries, pauses, child Runs, batch items, cancellation,
+  and terminal state; the supervisor only reports sequenced events.
+- The supervisor forks one Bun child per invocation (`bun-worker.ts`) with
+  `CATAMORPHIC_RUN_ID`, `CATAMORPHIC_WORKFLOW_NAME`, `CATAMORPHIC_WORKFLOW_FILE`,
+  and `CATAMORPHIC_TRIGGER_DATA`. Providers that support persistent local data
+  set `CATAMORPHIC_APP_DATA_DIR`; it is absent otherwise.
+- Tables: `workflow_runs` (one per invocation), `workflow_run_states`,
+  `workflow_step_attempts`, `workflow_pauses`, `workflow_run_steps`,
+  `workflow_run_events`, `execution_jobs`, plus batch item/sink tables.
+
+## Agent checkouts
+
+Agents edit mutable code that Runs never execute. Controller agents
+(ai-sdk) edit a dev sandbox managed by `DevSandboxService` (which uses
+`SandboxManagerImpl` internally). Native harnesses (Claude Code, Codex) can use a
+host-resolved local checkout through `createCatamorphic({ nativeAgentCheckout })`.
+
+## Coding-agent harnesses
+
+`createCatamorphic({ hostId, codingAgent })` accepts one `CodingAgentProvider`
+or a `CodingAgentRegistry` (`packages/core/src/services/coding-agent-registry.ts`).
+`hostId` is required when `codingAgent` is set; without `codingAgent`, session
+routes answer 503. A `RegisteredCodingAgent` carries `id`, `provider`,
+`topology`, `privilege`, `environment`, `connectionRequirements`, `defaults`,
+`systemPrompt`, and `delegation`. Session orchestration, persistence, checkout
+selection, serialized delivery, and checkpointing stay in
+`AgentSessionsService`, never in a harness.
 
 ```typescript
-import { anthropic } from "@ai-sdk/anthropic";
-import { AiSdkCodingAgent } from "@catamorphic/ai-sdk"; // flagship
-// or: import { CodexAgent } from "@catamorphic/codex";
+import { AiSdkCodingAgent } from "@catamorphic/ai-sdk";
 
-const agent = new AiSdkCodingAgent({
-  model: anthropic("claude-sonnet-4-5"),
-  sandboxProvider: provider, // tool loop runs on the host, edits happen in the sandbox
-});
+const agent = new AiSdkCodingAgent({ model, sandboxProvider, resolveModel });
 ```
 
-Do not model first-class delegated work with provider-only subagent events.
-Agent definitions declare exact or constrained delegation routes and a child
-concurrency limit. Core creates ordinary child sessions, keeps hierarchy
-separate from fork lineage, and exposes spawn/list/wait/interrupt/attention
-operations. Native provider delegation is only an adapter optimization when it
-preserves that contract.
+To add a harness, implement `CodingAgentProvider`: `startSession` (no model
+call), `sendMessage` (an `AsyncIterable<AgentEvent>`), `dispose`, and optionally
+`interrupt`, `hasSession`, `retryTurn`. Stage plugin docs with
+`stagedPluginFiles` / `buildPluginsPreamble`.
 
-Per-project skills live in the project repo under `.catamorphic/skills/<name>/SKILL.md` (Agent Skills layout, ADR 0142); the agent reads relevant skills from the sandbox checkout with its filesystem tools. `core.skills.list(...)` / `GET /api/projects/:id/skills` enumerate them.
+**Runtime cutover in progress.** ADRs 0067 and 0095 accept
+`AgentRuntimeProvider` (`coding-agent/runtime-provider.ts`: sequenced events,
+resumable sessions, `AgentLoopPlacement` instead of topology).
+`AiSdkAgentRuntime` and `ClaudeCodeAgentRuntime` implement it and
+`runtime-conformance.ts` tests it, but core still drives sessions through
+`CodingAgentProvider`. When you change harness behavior, keep both paths
+consistent.
 
-Project agents may declare provider-neutral connection requirements in
-`.catamorphic/agents/<slug>.json`. A workflow that delivers work to that agent should also declare the
-same aliases in its own `connections` array so the member reviews and
-authenticates everything needed before enabling unattended execution. MCP
-credentials use the same connection broker and are sufficient when the server
-exposes the required actions.
+Rules that hold across harnesses:
 
-`catamorphic.sessions.wake` creates or reuses a stable member-owned session,
-then queues a normal agent turn through `AgentSessionsService`; it does not run
-an agent inside the workflow sandbox. The session still receives ordinary
-Environment admission, allocation, connection admission, tool-policy
-narrowing, serialized turn delivery, and checkpointing. A settled requested
-turn increments server-owned attention state. Opening it calls
-`POST /api/projects/:projectId/agent/sessions/:sessionId/attention/acknowledge`.
+- **Delegation** is first-class: agent definitions declare routes and a child
+  concurrency limit; core creates ordinary child sessions (hierarchy separate
+  from fork lineage). A native subagent is only an optimization when it keeps
+  that contract.
+- **Skills** live in `.catamorphic/skills/<name>/SKILL.md`; agents read them
+  from their checkout. `GET /api/projects/:projectId/skills` lists them.
+- **Connections**: project agents declare aliases in
+  `.catamorphic/agents/<slug>.json`. A workflow that delivers to that agent
+  declares the same aliases in its `connections` so the member authorizes them
+  before enabling it.
+- **Reaching a chat from a workflow** is `catamorphic.sessions.deliver`, by
+  `sessionId` or by `key` (ADR 0156). It queues an ordinary turn through
+  `AgentSessionsService` with normal Environment admission, connection checks,
+  and tool-policy narrowing; it never runs an agent inside the workflow sandbox.
+- **Model catalogs** are discovered on demand: Claude Code via
+  `listClaudeCodeModels` (`supportedModels`), Codex via `listCodexModels`
+  (app-server `model/list`). Never hardcode a catalog or call
+  `codex debug models`. Bound process lifetime, follow pagination, filter
+  hidden models, and report errors without starting a turn.
+- **Codex** keeps its app-server process and MCP children alive for the
+  session and closes them on disposal, transport failure, or an abandoned
+  stream. Pending approvals are cancelled when their turn ends (ADR 0112).
 
-## Runtime Harness
+## Placement, Environments, and machines
 
-Deployment runtimes materialize the verified `.catamorphic/` capability snapshot
-and install its workspace dependencies independently of the imported repository.
-The parser transforms only this execution copy. The warm deployment supervisor
-executes immutable committed source through isolated Bun Workers; it never runs
-mutable dev files as a separate kind of Run.
+- Environments and immutable Allocations select provider, resources, and
+  connection grants (ADR 0064). Project permissions such as `program:write`
+  never imply Environment or connection authority; roles grant `environments`.
+- An Allocation must route the actual process, workspace, tools, and recovery
+  owner. Recording an Environment without routing execution is not placement.
+- Managed machines are server instances sharing network Postgres and one
+  authority (ADR 0099). Nodes hold renewable leases; session branches persist
+  before a turn completes. A member's **This machine** (`binding:
+  "this-machine"`) runs sandbox operations on the member device through the
+  SDK client runner while the model loop and credential broker stay on the
+  server, with no Postgres credentials (ADR 0098). Do not advertise native CLI
+  execution over that transport.
+- Keep the public [cluster reference](../../../skills/setup-work-server/references/cluster-deployment.md)
+  accurate when these behaviors change.
 
-Production Runs are enqueued in Postgres. A host explicitly starts
-`catamorphic.startExecutionWorker(...)`; the worker advances the canonical Run
-through plain execution or ordered `defineBoundary`/`defineBatch` scopes. The
-deployment supervisor reports sequenced events, while Postgres remains
-authoritative for retries, pauses, child Runs, batch items, cancellation, and
-terminal state.
+## Resource admission (ADR 0100)
 
-Environment variables:
-- `CATAMORPHIC_RUN_ID` — Run ID
-- `CATAMORPHIC_WORKFLOW_NAME` — Function name to execute
-- `CATAMORPHIC_WORKFLOW_FILE` — Project-relative workflow source path
-- `CATAMORPHIC_TRIGGER_DATA` — JSON trigger payload
-- `CATAMORPHIC_APP_DATA_DIR` — optional host-provided persistent local data directory, separate from source and absent when that storage is unavailable
+- Managed Allocations reserve a workspace slot plus CPU/memory atomically
+  under a node row lock and own one sandbox each.
+- Capacity returns only after physical cleanup succeeds. Heartbeat expiry is
+  never proof that a VM stopped; keep cleanup independent of heartbeats and
+  keep the operator recovery path for ambiguous create/destroy outcomes.
+- Requested limits must reach sandbox creation, including through client
+  runner RPC. Native CLI paths do not gain limits by declaring them.
+- Verify real VM CPU/memory, concurrent admission races, cleanup failures,
+  archive/restore, and worker fencing.
 
-## Database Tables
+## Harness capabilities and monitors (ADR 0101, 0156)
 
-Every invocation persists one canonical `workflow_runs` row. Supporting tables
-include `workflow_run_states`, `workflow_step_attempts`, `workflow_pauses`,
-`workflow_run_steps`, `workflow_run_events`, `execution_jobs`, and batch-scope
-item/sink tables keyed by Run and workflow-step attempt. Agent sessions,
-messages, hierarchy, delegation, archive visibility, attention, and ownership
-are durable database state keyed by the host's stable `external_user_id`;
-there is no Catamorphic users table or foreign key to a host user table.
+- Keep native file, shell, and media tools within the permission mode. Replace
+  private todos, delegation, and monitors only where the host provides the
+  session equivalent.
+- When changing CLI flags, tool names, skill discovery, cwd, or resume, verify
+  the pinned executable against a loopback model/MCP fixture. SDK type comments
+  are not evidence of CLI behavior. Never use real model credentials in a
+  deterministic protocol test.
+- Shell polling is `watch_command` (host background work). Session watchers
+  (`create_watcher`) cover Project Events and workflow IO. Author temporary
+  watcher source with `ProjectManager.openEphemeral`, never a user's `openDev`.
+  Dispose checkouts on failure, stop activations on close/archive/expiry, and
+  abort and join polling before closing the database.
 
-## API Routes
+## Agent context and host capabilities (ADR 0103, 0152)
 
-- `POST /api/projects/:projectId/workflows/:name/runs` — Trigger a run (every run executes the deployed commit)
-- `GET /api/projects/:projectId/workflows/:name/runs` — List runs for a Workflow
-- `GET /api/runs/:runId` — Fetch run + steps
-- `/api/runs/:runId/*` — Capability-driven cancel, processing pause/resume,
-  input submission, and batch-scope item inspection
-- `POST/GET/DELETE /api/projects/:projectId/agent/sessions[...]` — Agent sessions + messages (503 when no `codingAgent` configured)
-- `POST|GET /api/projects/:projectId/agent/sessions/:sessionId/subsessions[...]`: Create, list, wait for, and interrupt first-class delegated sessions
-- `POST /api/projects/:projectId/agent/sessions/:sessionId/archive|unarchive`: Recursively archive or restore a session tree; archive returns typed impact and may require confirmation
-- `POST /api/projects/:projectId/agent/sessions/:sessionId/attention/acknowledge` — Clear the current workflow-requested attention revision
-- `GET /api/projects/:projectId/skills` — List per-project agent skills
+Read [AGENT-CAPABILITIES.md](../../../AGENT-CAPABILITIES.md) first. Reuse
+`AgentCapabilitiesService`, `defineAgentCapability`, and the existing discovery
+and invocation adapters; do not add a permanent tool family or an admin agent
+role. Pin gateways to the current Allocation, refresh identity through
+`resolveMemberIdentity`, and enforce access inside the owning service. Test
+revocation after discovery, stale Allocation denial, cancellation, and parity
+across HTTP, MCP, and in-process invocation. Context and schemas are hints,
+never authorization.
 
-## Adding a New Coding Agent Provider
+## Storage backends
 
-Implement the `CodingAgentProvider` interface:
+Chosen by the host through `createCatamorphic({ storage })`: `{ projectsPath,
+remotesPath }` uses `FsBackend`/`FsRemoteBackend` from `@catamorphic/git`;
+`{ projectManager }` takes custom wiring such as `ObjectRemoteBackend` with
+`S3ObjectStore` (`@catamorphic/s3`, ADR 0012), `ArtifactsRemoteBackend`
+(`@catamorphic/cloudflare`), or the experimental `DaytonaBackend`.
 
-```typescript
-interface CodingAgentProvider {
-  readonly name: string;
-  startSession(opts: StartSessionOpts): Promise<ProviderSession>;
-  sendMessage(
-    session: ProviderSession,
-    message: string,
-    opts?: TurnOptions,
-  ): AsyncIterable<AgentEvent>;
-  interrupt?(providerSessionId: string): void;
-  hasSession?(providerSessionId: string): boolean;
-  retryTurn?(
-    session: ProviderSession,
-    opts?: TurnOptions & { sanitizeReasoning?: boolean },
-  ): AsyncIterable<AgentEvent>;
-  dispose(session: ProviderSession): Promise<void>;
-}
-```
-
-## Storage Backend Selection
-
-- `FsBackend` / `FsRemoteBackend` (`@catamorphic/git`) — Local dev, CI, tests, simple hosts (default)
-- `ArtifactsRemoteBackend` (`@catamorphic/cloudflare`) — Cloudflare Artifacts remotes; may provide `getCloneSource()` for dev checkout hydration. Deployment runtimes receive only the verified `.catamorphic/` capability snapshot
-- `DaytonaBackend` (`@catamorphic/daytona`) — Uses Daytona sandboxes as Git repo storage (experimental)
-- `ObjectRemoteBackend` (`@catamorphic/git`) with `S3ObjectStore` (`@catamorphic/s3`) — Default git origin for R2, S3,
-  MinIO, and compatible stores until Artifacts is generally available
-
-The host chooses by constructing the backend it wants and passing it via `createCatamorphic({ storage })` — there is no env-var switch.
-
-## Native harness transport and model catalogs
-
-Codex turns use the pinned executable's app-server protocol. Keep its process
-and MCP children alive across turns within the session; close them on disposal,
-transport failure, or an abandoned event stream. Pending approval callbacks
-must receive cancellation when their turn ends or disconnects. Browser input,
-native computer access, tool images, and consent follow
-[ADR 0112](../../../docs/decisions/0112-browser-control-and-tool-media.md).
-
-The desktop discovers models on demand through the selected harness and its
-credential context. Claude Code uses `supportedModels`; Codex uses
-`@catamorphic/codex`'s `listCodexModels` over the installed executable's
-app-server `initialize` / `model/list` protocol. The TypeScript turn SDK has no
-model-list method. Do not invoke the unsupported `codex debug models` command
-or maintain a hardcoded model catalog. Discovery must bound process lifetime,
-follow pagination, filter hidden models, clean up listeners/processes, and
-report errors in the picker without starting a turn.
-
-## Resource admission and lifecycle
-
-Follow [ADR 0100](../../../docs/decisions/0100-workspace-resource-admission.md).
-Managed allocations reserve workspace slots and CPU/memory atomically under a
-node row lock. They own one sandbox each. Never return capacity until physical
-cleanup succeeds, and never treat heartbeat expiry as proof that a VM stopped.
-Keep cleanup independent of heartbeat renewal. Preserve the operator recovery
-path for ambiguous creation/destruction outcomes.
-
-`CreateSandboxOpts.resources` contains hard limits. Providers advertise
-`resourceLimits` and reject unsupported limits; passing admission without passing
-limits to creation is a bug. Resource requirements also travel through client
-runner RPC. Report the real provider isolation, including on member devices.
-Controller model loops run outside their sandbox and require host headroom.
-Native CLI paths do not acquire sandbox limits by declaring them in JSON.
-
-Check the public cluster reference when provisioning: microsandbox for isolated
-remote development, subprocesses only for trusted single-tenant work. Confirm
-actual VM CPU/memory, concurrent admission races, cleanup failures, session
-archive/restore, and worker fencing. Preserve per-allocation files and credentials
-when reviewing warm-runtime reuse.
-
-## Harness and monitor lifecycle
-
-For harness capability changes, follow [ADR 0101](../../../docs/decisions/0101-harness-capabilities-and-session-monitors.md).
-Retain native file/shell/media capabilities within the selected permission mode;
-replace private todos, delegation, and monitors only when the host provides the
-corresponding session tools. Audit both provider adapters and AgentRuntime paths.
-Verify the pinned executable with a loopback model/MCP fixture when changing CLI
-flags, tool names, skill discovery, cwd, or resume behavior. SDK type comments are
-not sufficient evidence of the CLI's error/retry behavior. Never use real model
-credentials for a deterministic protocol test.
-
-Use ordinary scheduled workflow IO for a temporary periodic check. Use a Monitor
-provider when a shared external source should emit normalized Project Events.
-Watcher source must be authored in `ProjectManager.openEphemeral`, never a fake
-user's `openDev`: a host path resolver can map all users to the same real folder.
-Dispose temporary checkouts and media on failure as well as success. Stop future
-activations at session close/archive or expiry, retain refs needed by live runs,
-and abort and join polling before closing the database.
-
-## Agent context and deferred capabilities
-
-Read [AGENT-CAPABILITIES.md](../../../AGENT-CAPABILITIES.md) when changing agent
-self-context or host tool discovery. Core refreshes compact facts per turn;
-other users and infrastructure inventory remain authorized capabilities. Reuse
-`AgentCapabilitiesService`, `defineAgentCapability`, and the portable discovery /
-invocation adapters. Do not add a permanent tool family or an owner/admin agent
-role. Distinguish the agent loop's host from its Allocation's command target.
-
-Pin executing gateways to the current Allocation, refresh member identity through
-`resolveMemberIdentity`, and enforce resource access inside the owning service.
-Keep remote credentials scoped to the session and refresh them per call. Test
-revocation after discovery/approval, stale Allocation denial, cancellation, typed
-outputs, and parity between HTTP, MCP, and in-process invocation. Context and
-schemas are descriptive hints, never authorization.
+Run, session, and delegation routes are listed in `INTEGRATION.md`.

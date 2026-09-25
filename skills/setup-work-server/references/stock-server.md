@@ -1,118 +1,139 @@
 # Work server
 
-The Work server is the prebuilt, self-hostable server (`apps/server`, published
-as the `work-server` image with every release). Its configuration variables use
-the `WORK_` prefix. Use this path only when the repository or deployment
-actually uses `apps/server` or that image. Inspect its version, `apps/server/AGENTS.md`,
-`apps/server/README.md`, Docker configuration, and mounted data directory
-before proposing commands.
+The Work server is the prebuilt server: `apps/server`, published as the
+`work-server` image with every release, built on `@catamorphic/work-server`.
+Use this only when the deployment actually runs `apps/server` or its image.
+Read `apps/server/AGENTS.md`, `apps/server/README.md`, the `Dockerfile`
+header, and the mounted data directory before proposing commands. For a first
+install from nothing, follow [A first brain on one machine](first-brain.md).
+For more than one machine, read [Machines: control plane, replicas, and workers](cluster-deployment.md).
 
-For added machines or multiple instances, first read
-[Managed machines and clusters](cluster-deployment.md). Determine whether this
-version implements enrollment and coordinated execution before treating a new
-server as an Environment of an existing brain.
+## What it is
 
-## Resolve choices from the deployment
+One process, zero external services by default: PGlite, bare Git origins,
+and local-process execution under one data directory (`/data` in the image).
+It is **single-tenant only**: local-process execution gives processes the
+host's filesystem and network (ADR 0047). It serves the API at `/api`, sign-in
+at `/login`, the mobile PWA at `/`, and `/healthz`.
 
-1. Identify image/source version, public HTTPS URL, data mount, database mode,
-   and model credentials.
-2. Inspect configured auth providers. If none are configured, ask whether the
-   operator wants Google Workspace, another OAuth/OIDC provider, or local
-   username/password. Do not assume local credentials. A company brain should
-   use [company identity](company-identity.md): Workspace-only sign-in,
-   directory checks, and automatic deprovisioning.
-3. Inspect existing projects and committed `.catamorphic/roles/*.json`. Never invent a role
-   name or silently write authorization policy.
-4. Confirm how invited members will reach the server: desktop, PWA, MCP, or a
-   combination.
+## Configuration
 
-The credential-free invitation is the common onboarding object. Desktop and
-PWA clients use it to discover OAuth, sign in, and redeem project admission.
-An MCP client uses the same protected-resource discovery and member identity;
-do not mint a separate token or add permanent "Use in Claude" chrome inside
-the desktop.
+Environment variables parsed by `workServerConfigFromEnv` in
+`packages/work-server/src/config.ts` (verify against the installed version):
 
-## Local agent operation
+| Variable | Purpose |
+| --- | --- |
+| `PORT` | Public listener (default 4700). |
+| `WORK_DATA_DIR` | Data directory (default `/data`). Back up all of it. |
+| `WORK_PUBLIC_URL` | Public origin for OAuth, invitations, and webhook URLs. Must be HTTPS unless loopback. |
+| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `OPENROUTER_API_KEY` | Model for the built-in agent. `WORK_MODEL`, `WORK_EFFORT` tune it. `WORK_FAKE_AGENT=1` runs a deterministic echo agent. |
+| `WORK_AUTH_CONFIG` | Path to the auth config (default `<data>/auth-config.json`). |
+| `WORK_OPERATOR_PORT` | Loopback-only setup listener (default 4701). |
+| `WORK_OPERATOR_SECRET` | Supplies the operator credential instead of the generated `<data>/operator-secret`. |
+| `WORK_MDNS` | `off`, or a hostname (default a unique `work-<id>.local`). |
+| `DATABASE_URL` | Network Postgres instead of PGlite; then `WORK_SECRET`, `WORK_VAULT_KEY`, and a public URL are required. |
+| `WORK_SECRET` | Deployment secret for sign-in state. Generated under the data directory when absent (PGlite only). |
+| `WORK_VAULT_KEY`, `WORK_VAULT_PREVIOUS_KEYS` | Credential vault keys (32 bytes, base64); see [secrets and the gateway](secrets-and-gateway.md). |
+| `WORK_GITHUB_CLIENT_ID`, `WORK_GITHUB_TOKEN` | Service account for GitHub-backed projects. |
+| `WORK_GATEWAY_CONFIG` | Connections (MCP, HTTP APIs, databases) and the guards that review them; see [secrets and the gateway](secrets-and-gateway.md). |
+| `WORK_SANDBOX` and budget variables | `local-process` (default) or `microsandbox`; see the machines reference. |
+| `WORK_CONTROL_PLANE_WORKLOADS` | What the server runs itself: `agent,workflow` (default), `workflow`, or empty. Agents then run on enrolled workers. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Telemetry export (`OBSERVABILITY.md`). |
 
-The running server owns its Better Auth connection and exposes small,
-machine-local operator operations for project bootstrap and local user
-provisioning on a separate listener bound only to loopback (port 4701 by
-default). The public listener does not register these routes. These are
-building blocks for an AI setup agent, not a human CLI or product setup flow.
+### Sign-in methods
 
-Inspect `packages/work-server/src/server.ts`, the schemas under
-`packages/work-server/src/setup`, and the running deployment before acting. The setup
-agent should:
+The auth config is JSON. Local username/password is on unless disabled;
+OIDC providers are listed explicitly. For a company, use the
+`google-workspace` kind described in [company identity](company-identity.md);
+providers with `"audience": "guests"` sign customers in to shares only
+([sharing](sharing.md)). A generic provider:
 
-1. Resolve the desired auth method, explicit project roles, admission policy,
-   and first ordinary manager with the user.
-2. Read the owner-only operator credential from the mounted data directory or
-   deployment secret without displaying it.
-3. Invoke the project operation on the dedicated loopback listener with
-   explicit committed role definitions and admission policy.
-4. If local username/password is selected, invoke the user operation and bind
-   that stable auth user to an explicit project role.
-5. Verify sign-in, OAuth discovery, project membership, and revocation through
-   the normal application paths.
+```json
+{
+  "local": { "enabled": false },
+  "providers": [
+    {
+      "id": "google",
+      "label": "Google",
+      "discoveryUrl": "https://accounts.google.com/.well-known/openid-configuration",
+      "clientId": "...",
+      "clientSecret": "...",
+      "allowedDomains": ["example.com"]
+    }
+  ]
+}
+```
 
-After that first provisioning, change roles, project agents,
-`.catamorphic/sidebar.js`, and `.catamorphic/project.json` through the ordinary
-reviewed project change loop. The stock server has no second bootstrap JSON
-file whose policy can drift from the project.
+Register the provider's redirect URI as
+`<WORK_PUBLIC_URL>/api/auth/oauth2/callback/<id>`. `scopes` defaults to
+`openid email profile`. Keep client secrets out of the repository.
 
-Adapt the transport to the deployment. An agent in a source checkout may call
-the loopback operations directly. An agent managing a container must execute a
-small request from inside the container because the operator port is not
-published. Do not require one shell tool, echo
-credentials into history, open PGlite concurrently, hash a password, or
-construct Better Auth rows.
+## Provisioning the first project and person
 
-Before provisioning, verify that the installed server exposes both its
-machine-local operator operations and its intended human sign-in routes.
+The server exposes machine-local operations on a separate listener bound to
+`127.0.0.1` (port 4701). The public listener never registers them, and the
+image does not publish that port. They are building blocks for a setup agent,
+not a human CLI.
 
-For a GitHub-backed brain, configure the host's `WORK_GITHUB_CLIENT_ID`
-and `WORK_GITHUB_TOKEN`, using a service account distinct from human
-reviewers. Pass `githubRepository: "owner/repository"` to project provisioning
-with the requested roles and admission policy. This imports source and pushes
-the role configuration. Never give this credential to invited members. Their
-normal company sign-in authorizes proposal submission and scoped proposal reads;
-people who edit the program review and apply PRs using their own repository
-credentials.
+1. Settle with the person: sign-in method, explicit role definitions,
+   admission policy, and the first ordinary member.
+2. Read the operator credential without displaying it.
+3. `POST /_work/operator/projects` with `name`, `roles`
+   (`[{ slug, definition }]`), `admission` (`mode`: `invitation_only`,
+   `approved_domain`, `request`, or `open`; `defaultRole`;
+   `approvedDomains`), and optionally `githubRepository: "owner/repo"`.
+4. For local sign-in, `POST /_work/operator/users` with `username`,
+   `name`, `password`, optional `email`, and `memberships`
+   (`[{ projectId, roles, grants? }]`).
+5. Verify sign-in, OAuth discovery, membership, and revocation through the
+   normal application paths.
 
-Grant each role the intended execution environments as well as its agents.
-Project permissions alone do not grant execution. For the default stock-server
-environment, include `environments: ["local"]` in the role definition. Here
-`local` means the server's machine. A member-device target requires a declared
-environment with `binding: "this-machine"`, a role grant for that environment,
-and a connected desktop runner. Never describe server-side output as a file
-saved on the member's device.
+Schemas live in `packages/work-server/src/setup/`. With company sign-in and
+no local passwords, map an administrators directory group to the managing role
+in `admission.directoryRoles`, or grant a signed-in person by email with
+`POST /_work/operator/memberships` (`{ email, projectId, roles }`). Inside a container, run the request
+from inside it (`docker exec ... bun -e` with `fetch`; the image has no curl).
+Never echo credentials into history, open PGlite from a second process, hash
+a password, or write Better Auth rows.
 
-The stock host checks the linked repository every minute and brings published
-changes into its shared origin. An accepted PR reaches members through their
-normal project download. If sync fails, preserve both histories and resolve
-the error rather than force-pushing one over the other.
+Grant execution as well as agents: a role needs `environments: ["local"]` to
+run agents on the server itself. Permissions alone grant no execution. A
+member-device target needs an Environment with `binding: "this-machine"`, a
+role grant for it, and a connected desktop. Never describe server-side output
+as a file saved on the member's device.
+
+## Clients and invitations
+
+A credential-free invitation is the onboarding object. Members with
+`memberships:write` create them with
+`POST /api/projects/:projectId/admission/invitations`. Desktop and PWA
+clients discover OAuth, sign in with PKCE, and redeem it. MCP clients use the
+same protected-resource discovery against
+`/api/projects/:projectId/mcp`. Do not mint separate tokens.
+
+## GitHub-backed projects
+
+Use a service account distinct from human reviewers and never give its token
+to members. Provisioning with `githubRepository` imports the source and
+pushes the role files. The server syncs the linked repository every minute,
+so merged PRs reach members through their normal download. If sync fails,
+preserve both histories and resolve; never force-push one over the other.
 
 ## Webhooks and project automations
 
-The stock server receives webhooks for project workflows and runs project
-automations while nobody is signed in. Set `WORK_PUBLIC_URL` to the
-HTTPS origin senders reach; webhook URLs use it (without it they follow the
-address the viewer used, which a sender outside the LAN cannot reach). A holder
-of `webhooks:read` copies a workflow's URL from its **Automatic** view after
-enabling it for the project (which needs `automations:write` plus every
-permission the workflow declares), and configures signed senders with a
-project secret named in the workflow's `verify`. Requests are answered 202 once
-stored; a failing workflow shows in its runs, not to the sender. See ADRs 0156
-and 0158.
+The stock server receives webhooks and runs project automations while nobody
+is signed in (ADR 0156). Set `WORK_PUBLIC_URL` to an origin senders can
+reach; webhook URLs are `/api/hooks/<projectId>/<name>/<token>` under it.
+Someone with `automations:write` plus every permission the workflow declares
+enables it for the project; holders of `webhooks:read` copy its URL from the
+workflow's **Automatic** view, and `webhooks:write` rotates it. Signed senders
+use a project secret named in the trigger's `verify`. Requests are answered
+202 once stored; failures show in the workflow's runs.
 
 ## Boundaries
 
-- The operational credential proves machine access. It is not a Work
-  user, role, session, invitation, or server owner.
-- Local auth does not grow an admin UI, first-run wizard, password reset
-  service, MFA system, or
-  custom hashing path. If the installed implementation does, stop and simplify.
-- Provider configuration belongs to the stock host. Inspect current supported
-  provider configuration rather than inventing environment variable names.
-- Do not distribute signing or operational secrets and do not print them at
-  boot.
+- The operator credential proves machine access. It is not a user, role,
+  session, or invitation.
+- Local auth does not grow an admin UI, first-run wizard, password reset, MFA,
+  or custom hashing. If the installed version has one, stop and simplify.
+- Never expose the setup port, distribute signing secrets, or print them.

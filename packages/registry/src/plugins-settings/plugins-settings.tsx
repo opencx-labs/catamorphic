@@ -103,11 +103,8 @@ export function PluginsSettings({ projectId }: Props) {
         <div className="mb-4 rounded border border-border p-4">
           {available.length === 0 ? (
             <p className="text-sm text-fg-muted">
-              No plugins found in the local catalog. Set
-              <code className="ml-1 rounded bg-bg-overlay px-1">
-                CATAMORPHIC_LOCAL_PLUGINS_DIR
-              </code>{" "}
-              on the server and drop plugin packages in that directory.
+              No plugins in this host's catalog. The host adds them through its
+              plugin resolver.
             </p>
           ) : (
             <ul className="grid gap-2">
