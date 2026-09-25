@@ -57,6 +57,7 @@ export {
   AccessDeniedError,
   appScaffold,
   ConnectionActionDeniedError,
+  ConnectionActionRefusedError,
   createCatamorphicCore,
   GithubNotConnectedError,
   GithubTokenExpiredError,
@@ -165,6 +166,7 @@ export type {
   EnvironmentRuntimeBinding,
   SandboxProvider,
 } from "@catamorphic/sandbox";
+export { aiToolCall, aiToolKind } from "./ai-tool-trigger-kind.js";
 export { connectionAuthorizationPage } from "./authorization-page.js";
 export type {
   CatamorphicHostConfig,

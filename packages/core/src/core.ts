@@ -674,17 +674,19 @@ export class CatamorphicCore {
     this.clientRunners = config.clientExecution
       ? new ClientRunnersService(this.db, this.projectEnvironments)
       : undefined;
+    const clientRunners = this.clientRunners;
     this.executionEnvironments = new ExecutionEnvironmentsService(
       this.projectEnvironments,
-      {
-        get: (args) =>
-          args.bindingId === "this-machine" && this.clientRunners
-            ? this.clientRunners.binding({
+      config.environmentProvider,
+      clientRunners
+        ? {
+            get: (args) =>
+              clientRunners.binding({
                 ...args,
                 workerNodeId: args.workerNodeId ?? config.workerNode?.id,
-              })
-            : config.environmentProvider.get(args),
-      },
+              }),
+          }
+        : undefined,
     );
     this.agentCapabilities = new AgentCapabilitiesService({
       db: this.db,

@@ -329,7 +329,7 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
           version: 1,
           name: "Viewer",
           workflows: ["reports"],
-          environments: ["local"],
+          environments: ["default"],
         }),
       );
       await secondRepo.commit("roles", {
@@ -378,7 +378,7 @@ describeIf("RolesService + MembershipsService (ADR 0055)", () => {
     });
     expect(identity.executionScope).toContainEqual({
       projectId: second.id,
-      name: "local",
+      name: "default",
     });
 
     const stranger = await core.memberships.identityForUser({

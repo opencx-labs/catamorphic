@@ -82,7 +82,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0067](0067-long-lived-agent-runtimes-and-capability-gateway.md) | Long-lived agent runtimes and a unified capability gateway | Accepted |
 | [0068](0068-personal-artifacts-and-workflow-enablement.md) | Local personal artifacts and explicit workflow enablement | Accepted |
 | [0069](0069-host-owned-processes-watches-and-schedules.md) | Host-owned processes, watches, wakeups, and schedules | Accepted |
-| [0070](0070-default-local-environment-policy.md) | Default local Environment policy | Accepted |
+| [0070](0070-default-local-environment-policy.md) | Default local Environment policy | Accepted (the default is named `default` and selects no pool, 0167) |
 | [0071](0071-stock-auth-and-agent-driven-setup.md) | Stock auth and agent-driven setup | Accepted |
 | [0072](0072-remote-oauth-admission-and-project-administration.md) | Remote OAuth, admission, and project administration | Accepted; paths superseded by 0142; permission names superseded by 0158 |
 | [0073](0073-recoverable-project-remotes-and-builder-checkout.md) | Recoverable project remotes and builder checkout | Accepted; paths superseded by 0142 |
@@ -110,7 +110,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0095](0095-authoritative-agent-execution.md) | Authoritative agent execution and independent connections | Accepted |
 | [0096](0096-desktop-resource-link-routing.md) | Desktop resource links use workspace targets | Accepted |
 | [0097](0097-host-owned-workflow-inspectors.md) | Host-owned workflow inspectors | Accepted (layout and packaged toolbar amended by 0157) |
-| [0098](0098-project-authorized-local-and-remote-agents.md) | Project-authorized local and remote agent execution | Accepted |
+| [0098](0098-project-authorized-local-and-remote-agents.md) | Project-authorized local and remote agent execution | Accepted (`this-machine` binding is `device: "member"`, 0167) |
 | [0099](0099-shared-postgres-server-environments.md) | Shared-Postgres server instances as managed Environments | Accepted (execution machines superseded by 0164) |
 | [0100](0100-workspace-resource-admission.md) | Workspace reservations and provider-enforced resource limits | Accepted |
 | [0101](0101-harness-capabilities-and-session-monitors.md) | Harness capabilities and session monitors | Accepted |
@@ -178,5 +178,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0161](0161-company-identity-and-deprovisioning.md) | Company identity: Google Workspace sign-in and deprovisioning | Accepted |
 | [0162](0162-connection-gateway-guards-and-sealed-secrets.md) | The connection gateway: guards, sealed secrets, separate vault keys | Accepted |
 | [0163](0163-database-gateway-and-reviewed-queries.md) | Production databases through the gateway, with reviewed queries | Accepted |
-| [0164](0164-control-plane-and-enrolled-workers.md) | A control plane and enrolled workers without credentials | Accepted |
+| [0164](0164-control-plane-and-enrolled-workers.md) | A control plane and enrolled workers without credentials | Accepted (placement refined by 0167) |
 | [0165](0165-guests-and-shares.md) | Guests and shares for people outside the company | Accepted |
+| [0166](0166-members-work-from-their-own-agents.md) | Members work from their own agents over the project MCP | Accepted |
+| [0167](0167-machine-pools-access-and-owner-placement.md) | Machine pools, node access, and placement by owner | Accepted |

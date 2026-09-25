@@ -1,11 +1,13 @@
-import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { projectAssistantId } from "./agents.js";
 import { createWorkServer, type WorkServer } from "./server.js";
-import { testServerOptions } from "./test-support.js";
+import {
+  oauthAccessToken as oauthAccessTokenFor,
+  testServerOptions,
+} from "./test-support.js";
 
 /**
  * The Work server end to end, on a temp data dir with the fake echo
@@ -18,72 +20,10 @@ let server: WorkServer;
 
 let pwaDist: string;
 
-async function oauthAccessToken(options: {
+const oauthAccessToken = (credentials: {
   username: string;
   password: string;
-}): Promise<string> {
-  const login = await server.app.inject({
-    method: "POST",
-    url: "/api/auth/sign-in/username",
-    payload: options,
-  });
-  expect(login.statusCode).toBe(200);
-  const cookie = login.headers["set-cookie"];
-  expect(cookie).toBeTruthy();
-
-  const redirectUri = "http://127.0.0.1:49152/callback";
-  const registered = await server.app.inject({
-    method: "POST",
-    url: "/api/auth/mcp/register",
-    payload: {
-      redirect_uris: [redirectUri],
-      token_endpoint_auth_method: "none",
-      grant_types: ["authorization_code", "refresh_token"],
-      response_types: ["code"],
-      client_name: "Work server test",
-    },
-  });
-  expect(registered.statusCode).toBe(201);
-  const clientId = registered.json().client_id as string;
-  const verifier = randomBytes(32).toString("base64url");
-  const challenge = createHash("sha256").update(verifier).digest("base64url");
-  const authorize = new URL(
-    "/api/auth/mcp/authorize",
-    "http://work.local:4700",
-  );
-  authorize.searchParams.set("client_id", clientId);
-  authorize.searchParams.set("redirect_uri", redirectUri);
-  authorize.searchParams.set("response_type", "code");
-  authorize.searchParams.set("scope", "openid profile email offline_access");
-  authorize.searchParams.set("state", "work-server-state");
-  authorize.searchParams.set("code_challenge", challenge);
-  authorize.searchParams.set("code_challenge_method", "S256");
-  const authorized = await server.app.inject({
-    method: "GET",
-    url: `${authorize.pathname}${authorize.search}`,
-    headers: { cookie: Array.isArray(cookie) ? cookie[0] : cookie },
-  });
-  expect(authorized.statusCode).toBe(302);
-  const code = new URL(authorized.headers.location ?? "").searchParams.get(
-    "code",
-  );
-  expect(code).toBeTruthy();
-
-  const token = await server.app.inject({
-    method: "POST",
-    url: "/api/auth/mcp/token",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    payload: new URLSearchParams({
-      grant_type: "authorization_code",
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      code: code ?? "",
-      code_verifier: verifier,
-    }).toString(),
-  });
-  expect(token.statusCode).toBe(200);
-  return token.json().access_token as string;
-}
+}) => oauthAccessTokenFor({ app: server.app, ...credentials });
 
 beforeAll(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "work-server-"));
@@ -178,7 +118,7 @@ const MEMBER_ROLE = {
   version: 1,
   name: "Member",
   agents: ["assistant"],
-  environments: ["local"],
+  environments: ["default"],
   documents: [{ path: "store/users/{user}/**", access: "write" }],
 };
 
@@ -189,11 +129,34 @@ const MANAGER_ROLE = {
   agents: ["*"],
   workflows: ["*"],
   apps: ["*"],
-  environments: ["local"],
+  environments: ["default"],
   documents: [{ path: "store/**", access: "write" }],
 };
 
 describe("Work server", () => {
+  it("refuses token requests with repeated or unsupported parameters", async () => {
+    const token = (body: string) =>
+      server.app.inject({
+        method: "POST",
+        url: "/api/auth/mcp/token",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        payload: body,
+      });
+    const repeated = await token(
+      "grant_type=authorization_code&grant_type=refresh_token&refresh_token=x",
+    );
+    expect(repeated.statusCode).toBe(400);
+    expect(repeated.json().error).toBe("invalid_request");
+    const empty = await token(
+      "grant_type=refresh_token&refresh_token=&refresh_token=x",
+    );
+    expect(empty.json().error).toBe("invalid_request");
+    const missing = await token("grant_type=refresh_token");
+    expect(missing.json().error).toBe("invalid_request");
+    const other = await token("grant_type=client_credentials");
+    expect(other.json().error).toBe("unsupported_grant_type");
+  });
+
   it("publishes OAuth authorization and protected-resource discovery", async () => {
     const authorization = await server.app.inject({
       method: "GET",

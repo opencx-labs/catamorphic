@@ -75,6 +75,9 @@
                           "projectId": {
                             "type": "string"
                           },
+                          "name": {
+                            "type": "string"
+                          },
                           "source": {
                             "nullable": true,
                             "type": "object",
@@ -150,6 +153,7 @@
                         },
                         "required": [
                           "projectId",
+                          "name",
                           "source",
                           "permissions",
                           "agents",
@@ -31814,6 +31818,40 @@
       }
     },
     "/api/projects/{projectId}/mcp": {
+      "get": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      },
+      "delete": {
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      },
       "post": {
         "parameters": [
           {

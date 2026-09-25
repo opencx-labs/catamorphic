@@ -91,8 +91,8 @@ describeIf("ask_user across ClaudeCodeAgent + AgentSessionsService", () => {
       list: () => [registered],
     };
     const environmentProvider = {
-      get: ({ bindingId }: { bindingId: string }) =>
-        bindingId === "local"
+      get: ({ pool }: { pool: Readonly<Record<string, string>> }) =>
+        Object.keys(pool).length === 0
           ? {
               descriptor: {
                 id: "local",

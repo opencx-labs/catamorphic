@@ -32,7 +32,7 @@ const memberA: Identity = {
   tenantId,
   externalUserId: "member-a",
   scope: [{ kind: "workflow", projectId, name: "watchInbox" }],
-  executionScope: [{ projectId, name: "local" }],
+  executionScope: [{ projectId, name: "default" }],
 };
 const memberB: Identity = {
   ...memberA,
@@ -66,7 +66,7 @@ beforeAll(async () => {
   await insertArtifact(artifact);
   service = new WorkflowEnablementsService(db, {
     executionEnvironments: {
-      admit: vi.fn(async () => ({ environmentName: "local" })),
+      admit: vi.fn(async () => ({ environmentName: "default" })),
     } as unknown as ExecutionEnvironmentsService,
     resolveTarget: vi.fn(async () => ({
       artifact,
@@ -262,7 +262,7 @@ describe("WorkflowEnablementsService", () => {
       tenantId,
       externalUserId: "builder",
       ...projectAdmin(projectId),
-      executionScope: [{ projectId, name: "local" }],
+      executionScope: [{ projectId, name: "default" }],
     };
     const forProject = { type: "project" as const };
     expect(
@@ -319,7 +319,7 @@ describe("WorkflowEnablementsService", () => {
         { kind: "workflow", projectId, name: "watchInbox" },
         { kind: "agent", projectId, name: EVERY_ARTIFACT },
       ],
-      executionScope: [{ projectId, name: "local" }],
+      executionScope: [{ projectId, name: "default" }],
       projectPermissions: [],
       connectionScope: [],
     });
@@ -362,7 +362,7 @@ describe("WorkflowEnablementsService", () => {
       let current: Identity = holder;
       const resolving = new WorkflowEnablementsService(db, {
         executionEnvironments: {
-          admit: vi.fn(async () => ({ environmentName: "local" })),
+          admit: vi.fn(async () => ({ environmentName: "default" })),
         } as unknown as ExecutionEnvironmentsService,
         resolveTarget: vi.fn(async () => ({
           artifact,
@@ -394,21 +394,21 @@ describe("WorkflowEnablementsService", () => {
         tenantId,
         externalUserId: "admin",
         ...projectAdmin(projectId),
-        executionScope: [{ projectId, name: "local" }],
+        executionScope: [{ projectId, name: "default" }],
       };
       const projectPreview = await service.preview({
         identity: admin,
         projectId,
         workflowName: "triageRequests",
         owner: { type: "project" },
-        environment: "local",
+        environment: "default",
       });
       const project = await service.create({
         identity: admin,
         projectId,
         workflowName: "triageRequests",
         owner: { type: "project" },
-        environment: "local",
+        environment: "default",
         consentDigest: projectPreview.consentDigest,
       });
       const run = await service.revalidate({

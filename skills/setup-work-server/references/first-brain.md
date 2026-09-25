@@ -1,7 +1,7 @@
 # A first brain on one machine
 
 The shortest path from nothing to a Work brain an MCP client can connect
-to, last verified end to end on 2026-09-20. Use it when the person wants
+to and run work on, last verified end to end on 2026-09-25. Use it when the person wants
 "a brain on this machine" and nothing exists yet. Adapt to what is present
 (read [Work server](stock-server.md) first). Never print the operator
 secret or a password.
@@ -43,7 +43,7 @@ Project with two roles and invitation-only admission. `admin` is for the
 owner: every agent, workflow, and app plus every project permission (`"*"`).
 `member` is the admission default: it chats with the project's agents and
 nothing more, so a later invitation never hands out administration.
-`environments: ["local"]` is what lets a role run agents on the server
+`environments: ["default"]` is what lets a role run agents on the server
 itself; permissions alone grant no execution.
 
 ```bash
@@ -55,8 +55,8 @@ const r = await fetch("http://127.0.0.1:4701/_work/operator/projects", {
   body: JSON.stringify({
     name: "Company brain",
     roles: [
-      { slug: "admin", definition: { version: 1, name: "Admin", agents: ["*"], workflows: ["*"], apps: ["*"], permissions: ["*"], environments: ["local"] } },
-      { slug: "member", definition: { version: 1, name: "Member", agents: ["*"], environments: ["local"] } },
+      { slug: "admin", definition: { version: 1, name: "Admin", agents: ["*"], workflows: ["*"], apps: ["*"], permissions: ["*"], environments: ["default"] } },
+      { slug: "member", definition: { version: 1, name: "Member", agents: ["*"], environments: ["default"] } },
     ],
     admission: { mode: "invitation_only", defaultRole: "member" },
   }),
@@ -99,12 +99,29 @@ and pass them without writing them into shell history or a file.
 - Claude Code: `claude mcp add --transport http work-brain http://127.0.0.1:4700/api/projects/PROJECT_ID/mcp`,
   then `/mcp` to sign in. Other MCP clients: add the same URL as a remote
   (HTTP) server.
-- `tools/list` after sign-in returns the project's document, skill,
-  publication, proposal, agent (`ask_agent`, `send_agent_message`) and
-  watcher tools the caller's role allows, plus one tool per AI-callable
-  workflow.
+- `initialize` returns instructions naming the tools this person has, and
+  `project_overview` shows their roles, agents, Environments, workflows, and
+  apps. An admin sees the whole builder's loop: `program_write`,
+  `program_check`, `program_deploy`, `workflow_run`, and `run_details`, plus
+  documents, skills, `ask_agent`, shares, and one tool per deployed
+  `ai.tool-call` workflow.
 
-## 4. Hand over
+## 4. Run a first workload
+
+Prove the brain works before handing it over. From the connected client, as
+the admin:
+
+1. `ask_agent` with `agent: "assistant"` and a short message; the reply
+   proves agents run (on a worker when the server runs agents only there).
+2. Ask the client to add a small workflow with an `ai.tool-call` trigger,
+   following the project's `catamorphic-projects` and `writing-workflows`
+   skills, then `program_check`, `program_deploy`, and `workflow_run` it.
+   The workflow then appears as its own tool.
+
+[Working from your own agent](members-over-mcp.md) covers the loop and each
+role's tools.
+
+## 5. Hand over
 
 Report the project id, the sign-in address, and the MCP URL. Invitations for
 more people are created by a signed-in member holding `memberships:write`

@@ -87,7 +87,7 @@ describe.skipIf(!chromeBinary())("pwa against the stock server", () => {
                     version: 1,
                     name: "Member",
                     agents: ["assistant"],
-                    environments: ["local"],
+                    environments: ["default"],
                     documents: [
                       { path: "store/users/{user}/**", access: "write" },
                     ],

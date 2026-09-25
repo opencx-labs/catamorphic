@@ -33,7 +33,10 @@ await server.app.listen({ port: 4700, host: "0.0.0.0" });
 | --- | --- |
 | `agentCapabilities` | Host capabilities, profiles, and approvals for agents |
 | `connectionProviders` | Connection providers beside the configured MCP endpoints |
+| `connectionGuards` | Guards that review each gateway action, such as a query classifier (ADR 0162) |
+| `vaultKeys` | Credential vault keys from a key service instead of `WORK_VAULT_KEY` |
 | `directories` | Upstream directories (beyond Google Workspace) that keep accounts active or disable them (ADR 0161) |
+| `machineProvisioner` | Creates and destroys worker machines on a platform, so machine rules give people and teams their own machines (ADR 0167) |
 | `projectSeeds` | Changes to the files seeded into new projects |
 | `routes` | Extra routes on the public application |
 

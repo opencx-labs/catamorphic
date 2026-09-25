@@ -63,12 +63,9 @@ describe("project Environment policy persistence", () => {
     ).list({ identity, projectId: project.id });
 
     expect(policy).toMatchObject({
-      defaultEnvironment: "local",
+      defaultEnvironment: "default",
       environments: {
-        local: {
-          binding: "local",
-          workloads: ["agent", "workflow"],
-        },
+        default: { workloads: ["agent", "workflow"] },
       },
     });
     expect(policy.invalid).toBeUndefined();
@@ -104,7 +101,7 @@ describe("project Environment policy persistence", () => {
     };
     const manifest = (name: string) =>
       JSON.stringify({
-        environments: { [name]: { binding: "local", workloads: ["agent"] } },
+        environments: { [name]: { workloads: ["agent"] } },
         defaultEnvironment: name,
       });
     try {
@@ -116,7 +113,7 @@ describe("project Environment policy persistence", () => {
       expect(
         (await service.list({ identity: scoped, projectId: project.id }))
           .defaultEnvironment,
-      ).toBe("local");
+      ).toBe("default");
       expect(await fs.readdir(root)).toEqual([".catamorphic"]);
       const sha = await repo.commit("Publish policy", {
         name: "Test",

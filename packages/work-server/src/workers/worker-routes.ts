@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
   WorkerConnectConflictError,
+  WorkerIsolationError,
   WorkerOfferSchema,
   type WorkWorkerRegistry,
 } from "./worker-registry.js";
@@ -71,6 +72,9 @@ export function registerWorkerRoutes(
       if (error instanceof WorkerConnectConflictError) {
         return reply.status(409).send({ error: error.message });
       }
+      if (error instanceof WorkerIsolationError) {
+        return reply.status(403).send({ error: error.message });
+      }
       throw error;
     }
   });
@@ -131,7 +135,9 @@ export function registerWorkerRoutes(
           ...(body.data.response !== undefined
             ? { response: body.data.response }
             : {}),
-          ...(body.data.error ? { error: body.data.error } : {}),
+          ...(body.data.error !== undefined
+            ? { error: body.data.error || "Remote operation failed" }
+            : {}),
         });
         return { ok: true };
       } catch (error) {

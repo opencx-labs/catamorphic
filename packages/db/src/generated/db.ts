@@ -1145,6 +1145,20 @@ export interface WorkflowStepAttempts {
   updated_at: Generated<Timestamp>;
 }
 
+export interface WorkMachineReconciler {
+  expires_at: Timestamp;
+  holder: string;
+  tenant_id: string;
+}
+
+export interface WorkMachineRules {
+  created_at: Generated<Timestamp>;
+  definition: Json;
+  name: string;
+  tenant_id: string;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface WorkProjectAccessRequests {
   decided_at: Timestamp | null;
   decided_by_external_user_id: string | null;
@@ -1224,22 +1238,32 @@ export interface WorkTokenFamilies {
 }
 
 export interface WorkWorkerEnrollments {
+  access: Generated<Json>;
   code_hash: string;
   created_at: Generated<Timestamp>;
   expires_at: Timestamp;
+  labels: Generated<Json>;
+  machine_ref: string | null;
+  machine_rule: string | null;
   name: string;
   tenant_id: string;
+  trusted: Generated<boolean>;
   used_at: Timestamp | null;
 }
 
 export interface WorkWorkers {
+  access: Generated<Json>;
   credential_hash: string;
   enrolled_at: Generated<Timestamp>;
+  labels: Generated<Json>;
   last_seen_at: Timestamp | null;
+  machine_ref: string | null;
+  machine_rule: string | null;
   name: string;
   node_id: string;
   revoked_at: Timestamp | null;
   tenant_id: string;
+  trusted: Generated<boolean>;
 }
 
 export interface DB {
@@ -1307,6 +1331,8 @@ export interface DB {
   webhook_endpoints: WebhookEndpoints;
   work_accounts: WorkAccounts;
   work_directory_grants: WorkDirectoryGrants;
+  work_machine_reconciler: WorkMachineReconciler;
+  work_machine_rules: WorkMachineRules;
   work_project_access_requests: WorkProjectAccessRequests;
   work_project_admission_policies: WorkProjectAdmissionPolicies;
   work_project_invitations: WorkProjectInvitations;

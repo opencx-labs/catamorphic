@@ -142,8 +142,8 @@ Rules that hold across harnesses:
   owner. Recording an Environment without routing execution is not placement.
 - Managed machines are server instances sharing network Postgres and one
   authority (ADR 0099). Nodes hold renewable leases; session branches persist
-  before a turn completes. A member's **This machine** (`binding:
-  "this-machine"`) runs sandbox operations on the member device through the
+  before a turn completes. A member's **This machine** (`device:
+  "member"`) runs sandbox operations on the member device through the
   SDK client runner while the model loop and credential broker stay on the
   server, with no Postgres credentials (ADR 0098). Do not advertise native CLI
   execution over that transport.

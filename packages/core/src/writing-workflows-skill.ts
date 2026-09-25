@@ -80,7 +80,8 @@ Labels describe real behavior: a formatting example must not claim to send mail.
 ## Triggers and connections
 
 Declare \`triggers: [trigger("literal-kind", { constant: "config" })]\` alongside
-\`steps\`. Kind names and config/payload shapes come from the host-generated
+\`steps\`, with \`trigger\` imported from \`@catamorphic/workflow\` (it is not a
+builder argument). Kind names and config/payload shapes come from the host-generated
 \`.catamorphic/workflows/src/catamorphic-triggers.d.ts\`. Config is inline constant data, not an
 expression evaluated at runtime. Conditions belong in ordinary workflow code.
 
@@ -106,7 +107,10 @@ Schedules use either \`{ at: "an absolute ISO timestamp with offset" }\` or
 \`{ cron: "0 8 * * 1-5", timezone: "Asia/Amman" }\`. Their payload is
 \`{ activationId: string; scheduledFor: string; firedAt: string }\`. Use
 \`session-workflows\` for complete executable timer and notification recipes.
-Triggers are inert until enabled and enablements pin a revision.
+Event triggers (schedules, webhooks, session and GitHub events) are inert
+until enabled, and enablements pin a revision. An \`ai.tool-call\` trigger
+needs no enablement: once deployed, the workflow is a tool on the project MCP
+for every caller whose role grants it, and it runs as that caller.
 
 Declare required provider aliases, principal policy, and actions in an inline
 \`connections\` array. Roles and the host's enablement flow resolve access and

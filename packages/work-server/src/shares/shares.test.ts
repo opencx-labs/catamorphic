@@ -239,7 +239,7 @@ beforeAll(async () => {
           name: "Manager",
           permissions: ["program:read", "publications:write"],
           agents: ["*"],
-          environments: ["local"],
+          environments: ["default"],
         },
       },
     ],

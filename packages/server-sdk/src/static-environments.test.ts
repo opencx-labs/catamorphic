@@ -15,13 +15,36 @@ const binding = {
 };
 
 describe("defineStaticEnvironments", () => {
-  it("validates ids and resolves bindings", async () => {
+  it("validates ids and places by pool labels", async () => {
     expect(() => defineStaticEnvironments([binding, binding])).toThrow(
       "Duplicate",
     );
-    const provider = defineStaticEnvironments([binding]);
+    const gpu = {
+      descriptor: {
+        ...binding.descriptor,
+        id: "gpu",
+        labels: { class: "gpu" },
+      },
+    };
+    const provider = defineStaticEnvironments([binding, gpu]);
     expect(
-      await provider.get({ tenantId: "a", bindingId: "local" }),
-    ).toBeDefined();
+      (await provider.get({ tenantId: "a", pool: {} }))?.descriptor.id,
+    ).toBe("local");
+    expect(
+      (await provider.get({ tenantId: "a", pool: { class: "gpu" } }))
+        ?.descriptor.id,
+    ).toBe("gpu");
+    expect(
+      await provider.get({ tenantId: "a", pool: { class: "tpu" } }),
+    ).toBeUndefined();
+    expect(
+      (
+        await provider.get({
+          tenantId: "a",
+          pool: {},
+          allocationBindingId: "gpu",
+        })
+      )?.descriptor.id,
+    ).toBe("gpu");
   });
 });

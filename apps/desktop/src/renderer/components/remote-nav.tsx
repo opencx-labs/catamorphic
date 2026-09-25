@@ -258,8 +258,10 @@ export function RemoteNav({
         {status.local.programEdits.length > 0 && (
           <div className="flex items-center gap-2">
             <p className="min-w-0 flex-1 text-xs text-warning">
-              {status.local.programEdits.length} project files need review
-              before sharing
+              {status.local.programEdits.length === 1
+                ? "1 project file needs"
+                : `${status.local.programEdits.length} project files need`}{" "}
+              review before sharing
               {canPropose ? "." : ". This server takes no proposals."}
             </p>
             {canPropose && (

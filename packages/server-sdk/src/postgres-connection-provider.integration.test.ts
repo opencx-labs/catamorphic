@@ -8,6 +8,7 @@ const suffix = randomBytes(4).toString("hex");
 const schema = `gateway_${suffix}`;
 const reader = `gateway_reader_${suffix}`;
 const writer = `gateway_writer_${suffix}`;
+const signaller = `gateway_signaller_${suffix}`;
 const password = randomBytes(12).toString("hex");
 
 function urlFor(role: string): string {
@@ -43,7 +44,7 @@ describe.skipIf(!databaseUrl)("database gateway connections (ADR 0163)", () => {
            FROM generate_series(1, 5000) AS n`,
     );
     await admin.query(`ANALYZE ${schema}.orders`);
-    for (const role of [reader, writer]) {
+    for (const role of [reader, writer, signaller]) {
       await admin.query(`CREATE ROLE ${role} LOGIN PASSWORD '${password}'`);
       await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`);
       await admin.query(`GRANT SELECT ON ${schema}.orders TO ${role}`);
@@ -55,6 +56,7 @@ describe.skipIf(!databaseUrl)("database gateway connections (ADR 0163)", () => {
     await admin.query(`DROP SCHEMA ${schema} CASCADE`);
     await admin.query(`DROP ROLE ${reader}`);
     await admin.query(`DROP ROLE ${writer}`);
+    await admin.query(`DROP ROLE ${signaller}`);
     await admin.end();
   });
 
@@ -67,7 +69,12 @@ describe.skipIf(!databaseUrl)("database gateway connections (ADR 0163)", () => {
       "dedicated read-only role",
     );
     await expect(authorize(provider, urlFor(writer))).rejects.toThrow(
-      "write privileges",
+      "can write tables",
+    );
+    // A role that could act outside the transaction is refused too.
+    await admin.query(`GRANT pg_signal_backend TO ${signaller}`);
+    await expect(authorize(provider, urlFor(signaller))).rejects.toThrow(
+      "outside a transaction",
     );
     await expect(authorize(provider, urlFor(reader))).resolves.toBeInstanceOf(
       Uint8Array,
@@ -135,6 +142,21 @@ describe.skipIf(!databaseUrl)("database gateway connections (ADR 0163)", () => {
     await expect(query("SELECT pg_sleep(2)")).rejects.toThrow(
       /statement timeout|canceling/,
     );
+    // A row larger than the whole result budget never reaches memory.
+    const small = definePostgresConnectionProvider({
+      kind: "prod-db",
+      displayName: "Production",
+      maxResultBytes: 1_000,
+    });
+    const smallMaterial = await authorize(small, urlFor(reader));
+    await expect(
+      small.invoke({
+        material: smallMaterial,
+        action: "query",
+        input: { sql: "SELECT repeat('x', 5000) AS big", purpose: "test" },
+        capabilities: ["query"],
+      }),
+    ).rejects.toThrow("single row exceeds");
     const count = await admin.query(
       `SELECT count(*)::int AS n FROM ${schema}.orders`,
     );

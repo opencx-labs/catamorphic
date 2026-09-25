@@ -47,14 +47,14 @@ const MEMBER_ROLE = {
   version: 1,
   name: "Member",
   agents: ["assistant"],
-  environments: ["local"],
+  environments: ["default"],
 };
 const ENGINEER_ROLE = {
   version: 1,
   name: "Engineer",
   permissions: ["program:read"],
   agents: ["*"],
-  environments: ["local"],
+  environments: ["default"],
 };
 
 let dataDir: string;

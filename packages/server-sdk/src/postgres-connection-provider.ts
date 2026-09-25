@@ -2,6 +2,7 @@ import type {
   ConnectionActionDefinition,
   ConnectionProvider,
 } from "@catamorphic/core";
+import { ConnectionActionRefusedError } from "@catamorphic/core";
 import type { Json } from "@catamorphic/db";
 import pg from "pg";
 
@@ -159,12 +160,12 @@ export function definePostgresConnectionProvider(
         const plan = await explain(client, sql, request.params);
         if (action === "explain") return plan;
         if (plan.totalCost > limits.maxCost) {
-          throw new Error(
+          throw new ConnectionActionRefusedError(
             `Refused: estimated cost ${Math.round(plan.totalCost)} exceeds ${limits.maxCost}. Filter on indexed columns or aggregate.`,
           );
         }
         if (plan.planRows > limits.maxPlanRows) {
-          throw new Error(
+          throw new ConnectionActionRefusedError(
             `Refused: the plan estimates ${plan.planRows} rows, above ${limits.maxPlanRows}. Add filters or a LIMIT.`,
           );
         }
@@ -231,7 +232,7 @@ function requireReadStatement(sql: string): string {
     .replace(/^(\s|--[^\n]*\n|\/\*[\s\S]*?\*\/|\()+/, "")
     .replace(/;\s*$/, "");
   if (!READ_STATEMENT.test(trimmed)) {
-    throw new Error(
+    throw new ConnectionActionRefusedError(
       "Refused: only one SELECT, WITH, VALUES, or TABLE statement per call",
     );
   }
@@ -277,31 +278,55 @@ async function runCursor(
 ) {
   const started = Date.now();
   // DECLARE accepts only a query, so writes cannot hide in the cursor, and
-  // the extended protocol rejects a second statement.
+  // the extended protocol rejects a second statement. A row larger than the
+  // whole result budget fails in the database, before it reaches memory.
   await extendedQuery(
     client,
-    `DECLARE work_gateway_cursor NO SCROLL CURSOR FOR ${sql}`,
+    `DECLARE work_gateway_cursor NO SCROLL CURSOR FOR
+       SELECT work_gateway_row.* FROM (${sql}) AS work_gateway_row
+        WHERE 1 / (CASE WHEN octet_length(work_gateway_row::text) > ${limits.maxResultBytes} THEN 0 ELSE 1 END) = 1`,
     params,
-  );
-  const fetched = await client.query(
-    `FETCH FORWARD ${limits.maxRows + 1} FROM work_gateway_cursor`,
-  );
+  ).catch((error: unknown) => {
+    throw rowTooLarge(error) ?? error;
+  });
   const rows: Json[] = [];
   let bytes = 0;
-  let truncated = fetched.rows.length > limits.maxRows;
-  for (const row of fetched.rows.slice(0, limits.maxRows)) {
-    const value: Json = JSON.parse(
-      JSON.stringify(row, (_key, entry: unknown) =>
-        typeof entry === "bigint" ? entry.toString() : entry,
-      ),
-    );
-    bytes += JSON.stringify(value).length;
-    if (bytes > limits.maxResultBytes) {
-      truncated = true;
-      break;
+  let truncated = false;
+  let fields: pg.FieldDef[] = [];
+  // Small batches: stop reading as soon as the byte or row budget is spent.
+  while (rows.length < limits.maxRows && !truncated) {
+    const batch = await client
+      .query(
+        `FETCH FORWARD ${Math.min(50, limits.maxRows + 1 - rows.length)} FROM work_gateway_cursor`,
+      )
+      .catch((error: unknown) => {
+        throw rowTooLarge(error) ?? error;
+      });
+    fields = batch.fields;
+    if (batch.rows.length === 0) break;
+    for (const row of batch.rows) {
+      if (rows.length >= limits.maxRows) {
+        truncated = true;
+        break;
+      }
+      const value: Json = JSON.parse(
+        JSON.stringify(row, (_key, entry: unknown) =>
+          typeof entry === "bigint" ? entry.toString() : entry,
+        ),
+      );
+      bytes += JSON.stringify(value).length;
+      if (bytes > limits.maxResultBytes) {
+        truncated = true;
+        break;
+      }
+      rows.push(value);
     }
-    rows.push(value);
   }
+  if (rows.length >= limits.maxRows && !truncated) {
+    const more = await client.query("FETCH FORWARD 1 FROM work_gateway_cursor");
+    truncated = more.rows.length > 0;
+  }
+  const fetched = { fields };
   return {
     columns: fetched.fields.map((field) => field.name),
     rows,
@@ -359,19 +384,43 @@ async function assertReadOnlyRole(client: pg.Client): Promise<void> {
       "Use a dedicated read-only role: this one is a superuser or can create roles, databases, or bypass row security",
     );
   }
+  // Effective privileges, inherited ones included: ownership through any
+  // role this one belongs to, any write privilege on any table, and the
+  // predefined roles that act outside a transaction.
   const writes = await client.query(
     `SELECT
-       (SELECT count(*) FROM pg_tables WHERE tableowner = current_user)::int AS owned,
-       (SELECT count(*) FROM information_schema.role_table_grants
-         WHERE grantee = current_user
-           AND privilege_type IN ('INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'))::int AS granted`,
+       (SELECT count(*) FROM pg_class c
+         WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+           AND c.relnamespace NOT IN (
+             SELECT oid FROM pg_namespace
+              WHERE nspname IN ('pg_catalog', 'information_schema')
+                 OR nspname LIKE 'pg_toast%')
+           AND (pg_has_role(current_user, c.relowner, 'USAGE')
+             OR has_table_privilege(c.oid, 'INSERT, UPDATE, DELETE, TRUNCATE')))::int AS writable,
+       (SELECT count(*) FROM pg_roles r
+         WHERE r.rolname IN ('pg_write_all_data', 'pg_signal_backend',
+                             'pg_read_server_files', 'pg_write_server_files',
+                             'pg_execute_server_program')
+           AND pg_has_role(current_user, r.oid, 'USAGE'))::int AS dangerous`,
   );
   const counts = writes.rows[0];
-  if ((counts?.owned ?? 0) > 0 || (counts?.granted ?? 0) > 0) {
+  if ((counts?.writable ?? 0) > 0 || (counts?.dangerous ?? 0) > 0) {
     throw new Error(
-      "Use a dedicated read-only role: this one owns tables or holds write privileges",
+      "Use a dedicated read-only role: this one owns or can write tables, or belongs to a role that acts outside a transaction",
     );
   }
+}
+
+/** The database's refusal of a row larger than the result budget. */
+function rowTooLarge(error: unknown): Error | undefined {
+  return typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "22012"
+    ? new ConnectionActionRefusedError(
+        "Refused: a single row exceeds the result budget. Select fewer or smaller columns.",
+      )
+    : undefined;
 }
 
 /**

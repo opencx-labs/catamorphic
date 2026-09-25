@@ -38,7 +38,9 @@ Start small and add only what the situation needs:
   production ([secrets and the gateway](references/secrets-and-gateway.md));
   agent sandboxes on enrolled workers with `WORK_CONTROL_PLANE_WORKLOADS=workflow`
   on the control plane ([machines](references/cluster-deployment.md)); and
-  shares for customer material ([sharing](references/sharing.md)).
+  shares for customer material ([sharing](references/sharing.md)). Members
+  then work from the Work app or from their own agents over the project MCP
+  ([working from your own agent](references/members-over-mcp.md)).
 - **High availability:** control-plane replicas on shared Postgres, only on
   machines trusted with every secret.
 
@@ -52,7 +54,8 @@ Start small and add only what the situation needs:
 | Credentials, API keys, a production database, query review, vault keys | [Secrets and the gateway](references/secrets-and-gateway.md) |
 | More execution capacity, workers, replicas for availability | [Machines: control plane, replicas, and workers](references/cluster-deployment.md) |
 | Sharing documents, folders, or apps with customers behind a sign-in | [Sharing outside the company](references/sharing.md) |
-| Work server plus company code (a custom sign-in, classifier, connection provider, or route) | [`@catamorphic/work-server`](../../packages/work-server/README.md): extend the published image with hooks; never fork the server |
+| Members working from Claude Code, Codex, or another MCP client | [Working from your own agent](references/members-over-mcp.md) |
+| Work server plus company code (a guard or classifier, a directory, a connection provider, seeds, or a route) | [`@catamorphic/work-server`](../../packages/work-server/README.md): extend the published image with hooks; never fork the server |
 | Existing or custom application | [Custom host](references/custom-host.md) |
 | Sign-in, OIDC, invitations, roles, permissions | [Auth and identity](references/auth-and-identity.md) |
 | PGlite, Postgres, migrations, backup | [Database and migrations](references/database-and-migrations.md) |

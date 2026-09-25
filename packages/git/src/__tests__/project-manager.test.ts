@@ -40,11 +40,10 @@ describe("ProjectManager", () => {
       await repo.readFile(".catamorphic/project.json"),
     );
     expect(manifest.name).toBe("test-project");
-    expect(manifest.defaultEnvironment).toBe("local");
+    expect(manifest.defaultEnvironment).toBe("default");
     expect(manifest.environments).toEqual({
-      local: {
-        binding: "local",
-        description: "Run on this machine",
+      default: {
+        description: "Run where this host places work",
         workloads: ["agent", "workflow"],
       },
     });

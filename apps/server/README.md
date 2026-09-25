@@ -38,6 +38,9 @@ and every credential stay on the control plane. For availability, run
 control-plane replicas on shared Postgres with the same `WORK_SECRET`,
 `WORK_VAULT_KEY`, public origin, and sign-in and gateway configuration.
 `WORK_CONTROL_PLANE_WORKLOADS=workflow` keeps agent code off the control plane.
+Each worker takes work for everyone or for named people and directory groups,
+so a person's agents run on their own machine first; machine rules and a
+provisioner hook give every member of a group a machine of their own (ADR 0167).
 See [ADR 0164](../../docs/decisions/0164-control-plane-and-enrolled-workers.md)
 and the [machines reference](../../skills/setup-work-server/references/cluster-deployment.md).
 

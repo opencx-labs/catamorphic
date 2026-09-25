@@ -1,6 +1,6 @@
 # 0098: Project-authorized local and remote agent execution
 
-- **Status:** Accepted
+- **Status:** Accepted; refined by 0167: `binding: "this-machine"` is now `device: "member"`
 - **Date:** 2026-09-07
 - **Refines:** 0055, 0062, 0064, 0067, 0073, 0077, 0095
 - **Managed server provisioning refined by:** 0099

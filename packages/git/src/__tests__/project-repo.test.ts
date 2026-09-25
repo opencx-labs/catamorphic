@@ -31,7 +31,17 @@ describe("ProjectRepo", () => {
   describe("file operations", () => {
     it("selects sources before opening large files and skips nested repositories", async () => {
       await repo.writeFile("workflows/main.ts", "export const value = 1");
-      await repo.writeFile("nested/.git/HEAD", "ref: refs/heads/main");
+      // A nested repository on disk; the file APIs refuse any .git segment.
+      await expect(
+        repo.writeFile("nested/.git/HEAD", "ref: refs/heads/main"),
+      ).rejects.toThrow(".git");
+      await fs.mkdir(path.join(repo.repoPath, "nested/.git"), {
+        recursive: true,
+      });
+      await fs.writeFile(
+        path.join(repo.repoPath, "nested/.git/HEAD"),
+        "ref: refs/heads/main",
+      );
       await repo.writeFile("nested/workflows/other.ts", "other repository");
       const large = await fs.open(path.join(repo.repoPath, "archive.bin"), "w");
       await large.truncate(256 * 1024 * 1024);
@@ -42,6 +52,17 @@ describe("ProjectRepo", () => {
       });
       expect(files).toEqual({ "workflows/main.ts": "export const value = 1" });
       await expect(repo.readAllFiles()).rejects.toThrow("snapshot limit");
+    });
+
+    it("refuses paths through symbolic links and any-case .git segments", async () => {
+      await fs.symlink("/etc", path.join(repo.repoPath, "outside"));
+      await expect(repo.readFile("outside/hosts")).rejects.toThrow(
+        "Symbolic links",
+      );
+      await expect(repo.writeFile("outside/x", "y")).rejects.toThrow(
+        "Symbolic links",
+      );
+      await expect(repo.writeFile(".GIT/config", "x")).rejects.toThrow(".git");
     });
 
     it("honors hierarchical ignore rules without hiding already tracked files", async () => {

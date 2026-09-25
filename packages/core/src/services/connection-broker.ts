@@ -32,6 +32,19 @@ export class ConnectionActionDeniedError extends Error {
   }
 }
 
+/**
+ * A provider refused a request as asked (too costly, too broad, not a single
+ * query). The message tells the caller how to narrow it (ADR 0163).
+ */
+export class ConnectionActionRefusedError extends Error {
+  readonly code = "connection_action_refused";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ConnectionActionRefusedError";
+  }
+}
+
 /** Review policy for every brokered action (ADR 0162). */
 export interface ConnectionGateway {
   guards: readonly ConnectionActionGuard[];

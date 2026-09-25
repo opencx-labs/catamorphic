@@ -48,8 +48,29 @@ export function assertSafePath(filePath: string): void {
       "Personal files are local-only and cannot be accessed through project APIs",
     );
   }
-  if (normalized.startsWith(".git/") || normalized === ".git") {
+  // Any `.git` segment, in any case: case-insensitive filesystems alias it.
+  if (
+    normalized
+      .split(/[\\/]/)
+      .some((segment) => segment.toLowerCase() === ".git")
+  ) {
     throw new Error("Cannot access .git directory");
+  }
+}
+
+/**
+ * Refuse a path that passes through a symbolic link: a committed link must
+ * never let file APIs read or write outside the working copy.
+ */
+async function assertNoSymlinks(root: string, filePath: string) {
+  let current = root;
+  for (const segment of path.normalize(filePath).split(path.sep)) {
+    if (!segment || segment === ".") continue;
+    current = path.join(current, segment);
+    const stat = await fs.lstat(current).catch(() => undefined);
+    if (!stat) return;
+    if (stat.isSymbolicLink())
+      throw new Error("Symbolic links cannot be read or written here");
   }
 }
 
@@ -129,6 +150,12 @@ export async function walkDirectory(
 }
 
 export class ProjectRepoImpl implements ProjectRepo {
+  /**
+   * Managed working copies (servers) never follow symbolic links; a
+   * person's own folder on their computer may hold theirs.
+   */
+  protected readonly followsSymlinks: boolean = false;
+
   private credentials: GitCredentials | undefined;
 
   constructor(
@@ -139,11 +166,13 @@ export class ProjectRepoImpl implements ProjectRepo {
 
   async readFile(filePath: string): Promise<string> {
     assertSafePath(filePath);
+    if (!this.followsSymlinks) await assertNoSymlinks(this.repoPath, filePath);
     return fs.readFile(path.join(this.repoPath, filePath), "utf-8");
   }
 
   async writeFile(filePath: string, content: string): Promise<void> {
     assertSafePath(filePath);
+    if (!this.followsSymlinks) await assertNoSymlinks(this.repoPath, filePath);
     const fullPath = path.join(this.repoPath, filePath);
     await fs.mkdir(path.dirname(fullPath), { recursive: true });
     await fs.writeFile(fullPath, content);
@@ -151,6 +180,7 @@ export class ProjectRepoImpl implements ProjectRepo {
 
   async deleteFile(filePath: string): Promise<void> {
     assertSafePath(filePath);
+    if (!this.followsSymlinks) await assertNoSymlinks(this.repoPath, filePath);
     await fs.unlink(path.join(this.repoPath, filePath));
   }
 
@@ -280,6 +310,7 @@ export class ProjectRepoImpl implements ProjectRepo {
 
   async readFileBytes(filePath: string): Promise<Uint8Array | null> {
     assertSafePath(filePath);
+    if (!this.followsSymlinks) await assertNoSymlinks(this.repoPath, filePath);
     try {
       return new Uint8Array(
         await fs.readFile(path.join(this.repoPath, filePath)),
@@ -348,7 +379,7 @@ export class ProjectRepoImpl implements ProjectRepo {
   async commit(
     message: string,
     author: { name: string; email: string },
-    opts?: { paths?: readonly string[] },
+    opts?: { paths?: readonly string[]; allowEmpty?: boolean },
   ): Promise<string> {
     for (const file of opts?.paths ?? []) assertSafePath(file);
     // Keep index/object caches local to this operation, never to the repo's

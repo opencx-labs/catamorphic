@@ -101,13 +101,23 @@ export class SecretsService {
     }
     const value = row.value ?? "";
     if (this.vault) {
-      await this.store({
+      // Seal in place only if the row still holds this plain value: a newer
+      // write that landed meanwhile wins, and our sealed copy is dropped.
+      const sealed = await this.vault.put({
         tenantId: args.tenantId,
-        projectId: args.projectId,
-        name: row.name,
-        value,
-        updatedAt: undefined,
+        material: new TextEncoder().encode(value),
       });
+      const updated = await this.db
+        .updateTable("project_secrets")
+        .set({ value: null, credential_ref: sealed.id })
+        .where("project_id", "=", args.projectId)
+        .where("name", "=", row.name)
+        .where("credential_ref", "is", null)
+        .where("value", "=", value)
+        .returning("name")
+        .executeTakeFirst();
+      if (!updated)
+        await this.vault.delete({ tenantId: args.tenantId, ref: sealed });
     }
     return value;
   }

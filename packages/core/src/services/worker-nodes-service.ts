@@ -36,6 +36,7 @@ const descriptorSchema = z.object({
     timeoutSeconds: z.number().optional(),
     maxConcurrency: z.number().optional(),
   }),
+  labels: z.record(z.string(), z.string()).optional(),
 });
 
 export interface WorkerNodeLease {

@@ -292,7 +292,7 @@ describeIf("AppsService integration", () => {
     ]);
     // The narrowed identity runs where its viewer may: the unbounded desktop
     // identity reaches every Environment the project declares.
-    expect(narrowed.executionScope).toEqual([{ projectId, name: "local" }]);
+    expect(narrowed.executionScope).toEqual([{ projectId, name: "default" }]);
     // The published channel has no active version yet: nothing to widen.
     const published = await apps.identityForApp({
       identity,

@@ -81,9 +81,30 @@ export function registerWorkAuthRoutes(
     const gate = options.tokenGate;
     if (!gate) return forward(request, reply);
     const form = tokenRequestFields(request);
+    // OAuth parameters must not repeat (RFC 6749 3.1). Better Auth reads the
+    // body again and would take a different occurrence than this gate.
+    const keys = [...form.keys()];
+    if (new Set(keys).size !== keys.length) {
+      return sendTokenError(reply, {
+        error: "invalid_request",
+        description: "Repeated request parameters are not allowed",
+      });
+    }
     const grantType = form.get("grant_type");
+    if (grantType !== "authorization_code" && grantType !== "refresh_token") {
+      return sendTokenError(reply, {
+        error: "unsupported_grant_type",
+        description: "Use authorization_code or refresh_token",
+      });
+    }
     const refreshToken = form.get("refresh_token") ?? undefined;
-    if (grantType === "refresh_token" && refreshToken) {
+    if (grantType === "refresh_token") {
+      if (!refreshToken) {
+        return sendTokenError(reply, {
+          error: "invalid_request",
+          description: "refresh_token is required",
+        });
+      }
       const decision = await gate.beforeRefresh({
         refreshToken,
         clientId: form.get("client_id") ?? undefined,
@@ -91,12 +112,7 @@ export function registerWorkAuthRoutes(
       if (!decision.allow) return sendTokenError(reply, decision);
     }
     const response = await callBetterAuth(options, request, {});
-    if (
-      !response.ok ||
-      (grantType !== "authorization_code" && grantType !== "refresh_token")
-    ) {
-      return sendResponse(response, reply);
-    }
+    if (!response.ok) return sendResponse(response, reply);
     const body: unknown = await response
       .clone()
       .json()

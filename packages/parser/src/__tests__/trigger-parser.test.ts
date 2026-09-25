@@ -189,3 +189,22 @@ describe("trigger layout", () => {
     expect(height("escalateTicket")).toBe(86);
   });
 });
+
+describe("trigger imports", () => {
+  it("rejects a trigger taken from the builder instead of imported", () => {
+    const result = parseProject({
+      "src/builder.ts": `
+import { defineWorkflow, type BoundaryContext } from "@catamorphic/workflow";
+export const pilot = defineWorkflow(({ defineBoundary, trigger }) => ({
+  triggers: [trigger("ai.tool-call", { description: "Status" })],
+  steps: [
+    defineBoundary({
+      run: async ({ input }: BoundaryContext<{ id: string }>) => ({ ok: true }),
+    }),
+  ],
+}));
+`,
+    });
+    expect(result.errors[0]?.message).toContain("not imported");
+  });
+});

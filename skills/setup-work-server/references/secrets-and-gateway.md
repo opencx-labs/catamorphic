@@ -31,6 +31,8 @@ reviewed and audited, and the key never enters a sandbox.
 - Rotation: set the new key as `WORK_VAULT_KEY` and the old one in
   `WORK_VAULT_PREVIOUS_KEYS` (comma-separated). New records use the new key;
   keep the old key until every credential has been re-entered or rotated.
+  Roll the change to every instance: an instance must hold at least one key
+  the deployment already uses, or it refuses to start.
 - A custom server can fetch keys from a key management service at boot with
   the `vaultKeys` hook of `@catamorphic/work-server`.
 
@@ -62,7 +64,7 @@ print them, or pass them to agents.
 ```
 
 Connection kinds become connection providers. Commit the project's aliases,
-Environment bindings, and role capability grants through ordinary reviewed
+Environment connection bindings, and role capability grants through ordinary reviewed
 project files; the file above is host policy, not project logic. The first
 person to authorize a connection enters its credential through the
 connection's form (an API key or a read-only connection string); it goes
@@ -74,7 +76,7 @@ chat to approve; a workflow's escalation is refused because nobody is there to
 answer. A model guard's key comes from the provider's usual variable
 (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`) or the variable
 named in `apiKeyEnv`. Use `"provider": "openai-compatible"` with `baseUrl` for
-a self-hosted classifier. Every decision is in the connection audit.
+a self-hosted classifier; its `apiKeyEnv` is optional. Every decision is in the connection audit.
 
 ## A production database, safely
 

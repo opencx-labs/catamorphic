@@ -1,8 +1,9 @@
 # Machines: control plane, replicas, and workers
 
-Use this for adding execution capacity or availability to a Work server (ADR
-0164). Custom embedders keep their own identity, database, runtime bindings,
-storage, and deployment.
+Use this for adding execution capacity or availability to a Work server
+(ADRs 0164, 0167), including a machine for every employee. Custom embedders
+keep their own identity, database, Environment provider, storage, and
+deployment.
 
 ## Choose the smallest topology that fits
 
@@ -10,6 +11,7 @@ storage, and deployment.
 | --- | --- |
 | A person or a small trusted team | One Work server, PGlite, default execution. Nothing below applies. |
 | More agent capacity, or agents that must not run beside the server's secrets | One server (the control plane) plus enrolled **workers** |
+| Each person or team gets their own machine | Workers with **access** lists, created by hand or by **machine rules** |
 | The brain must survive a machine failure | Control-plane **replicas** on shared Postgres, plus workers |
 
 A worker holds only its own machine credential: no `DATABASE_URL`,
@@ -23,6 +25,10 @@ brain become replicas. Never add a replica just for capacity.
    operator listener (port 4701) with the operator bearer:
    `POST /_work/operator/workers` with `{ "name": "build-1" }`. Names are
    lowercase letters, digits, and dashes. The code expires in 30 minutes.
+   Add placement in the same request (see [placement](#placement-labels-and-access)):
+   `labels` (`{ "class": "gpu" }`), `access` (`{ "everyone": true }`, the
+   default, or `{ "people": ["dana@example.com"], "groups": ["eng@example.com"] }`),
+   and `trusted`.
 2. On the worker machine, run the same image version with the worker command
    and its own empty data volume:
 
@@ -41,11 +47,13 @@ brain become replicas. Never add a replica just for capacity.
    no inbound port.
 3. Check `GET /_work/operator/machines` for `worker.build-1` with
    `available: true`, and `GET /_work/operator/workers` for its last contact.
-4. Bind an Environment to it in `.catamorphic/project.json`:
-   `{ "binding": "workers", "workloads": ["agent"] }` for any worker, or
-   `"binding": "worker.build-1"` for that machine. Grant the Environment in
-   roles and prefer it in agent definitions through ordinary review.
-5. Verify as a member: an agent command on that Environment runs on the worker.
+4. Nothing in projects changes: the `default` Environment already runs agents
+   on any machine open to their owner. To reserve machines for some work, give
+   them a label and select it in `.catamorphic/project.json`
+   (`{ "pool": { "class": "gpu" }, "workloads": ["agent"] }`); `node` and
+   `plane` (`control` or `worker`) are always set.
+5. Verify as a member: `project_overview` shows the Environment runs agents,
+   and an agent command runs on the worker.
 
 Revoke a worker with `DELETE /_work/operator/workers/:name`; its credential and
 node stop working at once. Re-enroll the same name with a new code.
@@ -61,6 +69,62 @@ plane's secrets. Set `WORK_CONTROL_PLANE_WORKLOADS=workflow` on the control
 plane (or empty to run nothing locally). A Postgres control plane refuses to
 start agents as plain subprocesses unless `WORK_SANDBOX=microsandbox` or the
 operator sets `WORK_TRUST_CONTROL_PLANE_AGENTS=1` for a fully trusted team.
+
+The `default` Environment then puts workflows on the control plane (the only
+machines offering workflows) and agents on workers, with no project change.
+Label the control plane with `WORK_MACHINE_LABELS=pool=agents,class=large`
+when an Environment should select it.
+
+## Placement: labels and access
+
+Every machine carries labels: the server's own `node` and `plane`, plus the
+operator's. An Environment's `pool` selects machines whose labels all match.
+Each worker also has **access**, which only the operator sets: everyone, or
+named people and directory groups by email. The server places a piece of
+work for its owner (the session's member; project chats and workflow runs
+have none and use machines open to everyone):
+
+1. the owner's own machine (access naming only them),
+2. then a machine shared with named people or their groups,
+3. then machines open to everyone.
+
+When the narrowest tier is full, work falls back to the next unless the
+Environment sets `"strict": true`. A worker serving more than one person must
+run `WORK_SANDBOX=microsandbox`; the control plane refuses to connect a
+process-isolated shared worker unless the operator vouches for the people it
+serves with `"trusted": true`. Change placement with
+`PATCH /_work/operator/workers/:name` (`labels`, `access`, `trusted`); it
+applies to the next placement, and an existing session re-checks it on its
+next turn.
+
+Groups come from the Google Workspace directory (see [company
+identity](company-identity.md)): the server checks the groups that access
+lists, machine rules, and project role mappings name.
+
+## A machine for every person or team
+
+Machine rules create and destroy workers to match the directory. They need a
+platform: extend the Work server with a `machineProvisioner` hook
+(`create({ name, class, labels, enrollment })` returns a platform reference;
+`destroy({ name, ref })` deletes the machine). A created machine starts the
+worker command with `WORK_CONTROL_PLANE_URL` and the one-time
+`WORK_WORKER_ENROLLMENT` code it received, for example through cloud-init.
+
+- `PUT /_work/operator/machine-rules/desks` with
+  `{ "group": "eng@example.com", "machines": "each-member", "class": "standard-4" }`
+  gives every active member of the group their own machine.
+- `PUT /_work/operator/machine-rules/support` with
+  `{ "group": "support@example.com", "machines": { "shared": 3 }, "class": "small" }`
+  gives the group three shared machines (add `"trusted": true` only for
+  process-isolated machines among people who trust each other).
+- `GET /_work/operator/machine-rules` lists rules; `DELETE` removes one and its
+  machines; `POST /_work/operator/machine-rules/reconcile` runs a pass now.
+
+The server reconciles every minute and when an account is disabled: members
+who left the group or were suspended lose their machine (revoked, then
+destroyed), and a machine that never enrolls within an hour is destroyed and
+replaced. A person gets a machine after their first sign-in, once the
+directory has placed them in the group.
 
 ## Add a control-plane replica
 
@@ -102,7 +166,7 @@ remains uncertain and is never automatically replayed.
 
 ## A member's This machine
 
-Declare a project Environment with `binding: "this-machine"`, workload `agent`,
+Declare a project Environment with `device: "member"`, workload `agent`,
 and appropriate role grants. The desktop's **Connect This machine** action starts
 an authenticated SDK runner using its local sandbox provider. It receives no
 Postgres credentials. Discovery and every operation retain the member's current

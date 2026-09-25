@@ -142,12 +142,14 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
   }
 
   async destroySandbox(sandboxId: string): Promise<void> {
-    if (fs.existsSync(path.join(this.root, sandboxId)))
+    const directory = path.join(this.root, sandboxId);
+    if (fs.existsSync(directory)) {
       await this.stopSandbox(sandboxId);
-    fs.rmSync(path.join(this.root, sandboxId), {
-      recursive: true,
-      force: true,
-    });
+      // Deployments are made read-only inside the sandbox; the owner takes
+      // write access back so removal cannot leave the directory behind.
+      restoreOwnerWrite(directory);
+    }
+    fs.rmSync(directory, { recursive: true, force: true });
     this.sandboxes.delete(sandboxId);
     this.stopped.delete(sandboxId);
     this.processes.delete(sandboxId);
@@ -410,4 +412,14 @@ function withCredentials(url: string, opts?: GitCloneOpts): string {
   if (opts.username) parsed.username = opts.username;
   if (opts.password) parsed.password = opts.password;
   return parsed.toString();
+}
+
+function restoreOwnerWrite(directory: string): void {
+  const stat = fs.lstatSync(directory, { throwIfNoEntry: false });
+  if (!stat?.isDirectory()) return;
+  if (!(stat.mode & 0o200)) fs.chmodSync(directory, stat.mode | 0o700);
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (entry.isDirectory())
+      restoreOwnerWrite(path.join(directory, entry.name));
+  }
 }

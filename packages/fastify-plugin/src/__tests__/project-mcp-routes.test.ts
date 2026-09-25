@@ -13,6 +13,18 @@ const HEADERS = {
 
 const apps: ReturnType<typeof createTestApp>[] = [];
 
+/** The member's working loop (ADR 0166), served to every project member. */
+const PROGRAM_TOOLS = [
+  "project_overview",
+  "program_files",
+  "program_write",
+  "program_check",
+  "program_deploy",
+  "workflow_run",
+  "workflow_runs",
+  "run_details",
+];
+
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
 });
@@ -169,12 +181,13 @@ describe("project workflow-tools MCP endpoint", () => {
 
   it("serves without tool kinds: no workflow tools, no poll tool, the surface only", async () => {
     // A host with no tool kinds still has a project surface (ADR 0055);
-    // this stub has none of documents/skills/agents either, so: nothing.
+    // this stub has none of documents/skills/agents, so: the working loop.
     const core = { ...fakeCore(), mcpToolKinds: [] };
     const app = createTestApp({ core: core as never });
     apps.push(app);
     const { result } = await rpc(app, "tools/list");
-    expect(result?.tools).toEqual([]);
+    const tools = (result?.tools ?? []) as Array<{ name: string }>;
+    expect(tools.map((tool) => tool.name)).toEqual(PROGRAM_TOOLS);
   });
 
   it("serves one tool per binding plus the poll tool", async () => {
@@ -187,6 +200,7 @@ describe("project workflow-tools MCP endpoint", () => {
       "lookupWeather",
       "daily_digest",
       "catamorphic_poll_run",
+      ...PROGRAM_TOOLS,
     ]);
 
     const weather = tools.find(
@@ -459,6 +473,7 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
       "list_publications",
       "ask_agent",
       "send_agent_message",
+      ...PROGRAM_TOOLS,
     ]);
     expect(tools.find((t) => t.name === "documents_read")?.annotations).toEqual(
       { readOnlyHint: true },

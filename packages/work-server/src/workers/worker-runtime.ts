@@ -80,13 +80,28 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     }
     if (response.status === 409) throw new SessionEndedError();
     if (!response.ok) {
-      throw new Error(`Control plane answered ${response.status} on ${route}`);
+      const body: unknown = await response.json().catch(() => undefined);
+      const reason =
+        typeof body === "object" &&
+        body !== null &&
+        "error" in body &&
+        typeof body.error === "string"
+          ? `: ${body.error}`
+          : "";
+      if (response.status === 403) {
+        throw new WorkerRefusedError(reason.slice(2) || "Refused");
+      }
+      throw new Error(
+        `Control plane answered ${response.status} on ${route}${reason}`,
+      );
     }
     return response.json();
   };
 
   // Sandboxes belong to this worker process, across control-plane sessions.
-  const sandboxes = new Set<string>();
+  const sandboxes = new PersistedSandboxes(
+    path.join(options.dataDir, "sandboxes.json"),
+  );
   let stopped = false;
   let runners: Array<{ stop(): Promise<void> }> = [];
   let wake: (() => void) | undefined;
@@ -162,7 +177,11 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
         await session();
         backoffMs = 1_000;
       } catch (error) {
-        if (!(error instanceof SessionEndedError)) {
+        if (error instanceof WorkerRefusedError) {
+          // Reachable, but the operator's placement forbids this worker as it
+          // runs; it connects once that changes.
+          log(`The control plane refused this worker: ${error.message}`);
+        } else if (!(error instanceof SessionEndedError)) {
           log(
             `Worker cannot reach the control plane: ${
               error instanceof Error ? error.message : String(error)
@@ -237,4 +256,48 @@ async function loadOrEnroll(args: {
   }
   fs.writeFileSync(file, `${credential}\n`, { mode: 0o600, flag: "wx" });
   return credential;
+}
+
+class WorkerRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkerRefusedError";
+  }
+}
+
+/**
+ * The sandboxes this worker owns, kept across restarts and upgrades so live
+ * sessions keep their workspaces and ended ones can still be cleaned up.
+ */
+class PersistedSandboxes extends Set<string> {
+  private ready = false;
+
+  constructor(private readonly file: string) {
+    super();
+    try {
+      const stored: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (Array.isArray(stored))
+        for (const id of stored) if (typeof id === "string") super.add(id);
+    } catch {
+      /* No record yet. */
+    }
+    this.ready = true;
+  }
+
+  override add(id: string): this {
+    super.add(id);
+    this.save();
+    return this;
+  }
+
+  override delete(id: string): boolean {
+    const removed = super.delete(id);
+    if (removed) this.save();
+    return removed;
+  }
+
+  private save() {
+    if (!this.ready) return;
+    fs.writeFileSync(this.file, JSON.stringify([...this]), { mode: 0o600 });
+  }
 }

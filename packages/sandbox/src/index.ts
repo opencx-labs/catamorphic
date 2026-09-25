@@ -116,6 +116,7 @@ export {
 export { CommandDeploymentRuntimeProvider } from "./command-deployment-runtime.js";
 export {
   type AgentExecutionTopology,
+  accessTier,
   type EnvironmentBinding,
   type EnvironmentCompatibility,
   type EnvironmentIsolation,
@@ -125,6 +126,9 @@ export {
   type EnvironmentRuntimeBinding,
   type EnvironmentTrust,
   environmentSatisfies,
+  type NodeAccess,
+  placementOrder,
+  poolMatches,
   type WorkloadKind,
 } from "./execution-environment.js";
 export { instrumentSandboxProvider } from "./instrumented-provider.js";

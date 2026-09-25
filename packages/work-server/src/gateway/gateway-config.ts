@@ -101,7 +101,7 @@ export type GatewayGuardConfig =
         provider: z.infer<typeof ModelGuardEntry>["model"]["provider"];
         id: string;
         baseUrl?: string;
-        apiKey: string;
+        apiKey?: string;
       };
     })
   | z.infer<typeof ApprovalGuardEntry>;
@@ -152,7 +152,8 @@ export function gatewayConfigFromFile(args: {
           ? undefined
           : DEFAULT_KEY_ENV[guard.model.provider]);
       const apiKey = keyEnv ? args.env[keyEnv] : undefined;
-      if (!apiKey) {
+      // A self-hosted classifier may need no key at all.
+      if (!apiKey && guard.model.provider !== "openai-compatible") {
         throw new Error(
           `Guard '${guard.name}' needs its model key in ${keyEnv ?? "the variable named by apiKeyEnv"}`,
         );
@@ -164,7 +165,10 @@ export function gatewayConfigFromFile(args: {
         throw new Error(`Guard '${guard.name}' needs model.baseUrl`);
       }
       const { apiKeyEnv: _keyEnv, ...model } = guard.model;
-      return { ...guard, model: { ...model, apiKey } };
+      return {
+        ...guard,
+        model: { ...model, ...(apiKey ? { apiKey } : {}) },
+      };
     }),
   };
 }
@@ -235,7 +239,7 @@ function guardModel(model: {
   provider: "anthropic" | "openai" | "openrouter" | "openai-compatible";
   id: string;
   baseUrl?: string;
-  apiKey: string;
+  apiKey?: string;
 }): LanguageModel {
   if (model.provider === "anthropic") {
     return createAnthropic({ apiKey: model.apiKey })(model.id);
@@ -245,7 +249,7 @@ function guardModel(model: {
   }
   // OpenRouter and self-hosted classifiers speak Chat Completions.
   return createOpenAI({
-    apiKey: model.apiKey,
+    apiKey: model.apiKey ?? "none",
     baseURL: model.baseUrl ?? "https://openrouter.ai/api/v1",
   }).chat(model.id);
 }

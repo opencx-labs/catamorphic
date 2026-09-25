@@ -70,7 +70,8 @@ export interface WorkAuth {
   /** Delete every token pair and browser session of one user. */
   signOutEverywhere(args: { userId: string }): Promise<void>;
   /** Users holding at least one unexpired refresh token. */
-  usersWithLiveGrants(): Promise<string[]>;
+  /** Users holding a live OAuth grant or browser session. */
+  usersSignedIn(): Promise<string[]>;
   handler(request: Request): Promise<Response>;
   close(): Promise<void>;
 }
@@ -157,7 +158,15 @@ export function createWorkAuth(options: {
           username: args.username,
         },
       });
-      return workAuthUser(result.user);
+      if (!args.email) return workAuthUser(result.user);
+      // The operator creating a local account vouches for its email, so it
+      // counts for memberships and shares addressed to it.
+      const context = await auth.$context;
+      const verified = await context.internalAdapter.updateUser(
+        result.user.id,
+        { emailVerified: true },
+      );
+      return workAuthUser(verified ?? result.user);
     },
     signInUsername: async (args) => {
       const result = await auth.api.signInUsername({ body: args });
@@ -247,21 +256,36 @@ export function createWorkAuth(options: {
       });
       await context.internalAdapter.deleteUserSessions(userId);
     },
-    usersWithLiveGrants: async () => {
+    usersSignedIn: async () => {
       const context = await auth.$context;
-      const rows = await context.adapter.findMany({
-        model: "oauthAccessToken",
-        where: [
-          { field: "refreshTokenExpiresAt", operator: "gt", value: new Date() },
-        ],
-      });
+      const now = new Date();
+      const [grants, sessions] = await Promise.all([
+        context.adapter.findMany({
+          model: "oauthAccessToken",
+          where: [
+            { field: "refreshTokenExpiresAt", operator: "gt", value: now },
+          ],
+        }),
+        context.adapter.findMany({
+          model: "session",
+          where: [{ field: "expiresAt", operator: "gt", value: now }],
+        }),
+      ]);
       return [
-        ...new Set(
-          rows.flatMap((row) => {
+        ...new Set([
+          ...grants.flatMap((row) => {
             const grant = toGrant(row);
             return grant ? [grant.userId] : [];
           }),
-        ),
+          ...sessions.flatMap((row) =>
+            typeof row === "object" &&
+            row !== null &&
+            "userId" in row &&
+            typeof row.userId === "string"
+              ? [row.userId]
+              : [],
+          ),
+        ]),
       ];
     },
     handler: (request) => {

@@ -50,12 +50,12 @@ it("a full managed machine preserves existing work and restores an archived sess
     if (!sessions) throw Error("Missing sessions");
     const first = await sessions.create(identity, project.id, {
       agentId: "assistant",
-      environment: "local",
+      environment: "default",
     });
     await expect(
       sessions.create(identity, project.id, {
         agentId: "assistant",
-        environment: "local",
+        environment: "default",
       }),
     ).rejects.toThrow("no workspace capacity");
     await expect(

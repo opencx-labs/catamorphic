@@ -128,3 +128,34 @@ it("deduplicates plain-folder aliases without conflating different unversioned f
     await fs.rm(temporary, { recursive: true, force: true });
   }
 });
+
+it("takes back a failed new project's folder so the same place can be retried", async () => {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "project-roots-"));
+  const database = new PGlite();
+  try {
+    const store = new ProjectRootsStore(database);
+    await store.init();
+    const fresh = path.join(temporary, "fresh");
+    const chosen = path.join(temporary, "chosen");
+    await fs.mkdir(chosen);
+    for (const root of [fresh, chosen]) {
+      await expect(
+        store.register({
+          rootPath: root,
+          existing: false,
+          create: async (_id, canonical) => {
+            await fs.mkdir(path.join(canonical, ".git"), { recursive: true });
+            throw new Error("sign-in failed");
+          },
+          reopen: async (id) => id,
+        }),
+      ).rejects.toThrow("sign-in failed");
+    }
+    // A folder the attempt made is gone; a folder the person chose is empty.
+    await expect(fs.access(fresh)).rejects.toThrow();
+    expect(await fs.readdir(chosen)).toEqual([]);
+  } finally {
+    await database.close();
+    await fs.rm(temporary, { recursive: true, force: true });
+  }
+});

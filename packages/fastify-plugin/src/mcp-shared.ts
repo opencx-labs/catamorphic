@@ -109,14 +109,14 @@ export function rpcError(
 
 /**
  * Tool result: JSON text for model readability plus `structuredContent`
- * for structured consumers. Structured content stays object/array-shaped
- * for 2025-era clients (SEP-2106's any-JSON loosening is newer);
- * primitives ride the text channel alone.
+ * for structured consumers. MCP defines structured content as a JSON
+ * object, and clients such as Claude Code reject anything else, so arrays
+ * and primitives ride the text channel alone.
  */
 export function toolValue(value: unknown): Record<string, unknown> {
   return {
     content: [{ type: "text", text: JSON.stringify(value) ?? "null" }],
-    ...(typeof value === "object" && value !== null
+    ...(typeof value === "object" && value !== null && !Array.isArray(value)
       ? { structuredContent: value }
       : {}),
   };

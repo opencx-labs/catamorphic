@@ -10,6 +10,12 @@ import type { DB } from "@catamorphic/db";
 import type { EnvironmentBinding, SandboxProvider } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
+import {
+  servesOnePerson,
+  storedPlacement,
+  type WorkerPlacement,
+  WorkerPlacementSchema,
+} from "./placement.js";
 
 export const WORKER_NODE_PREFIX = "worker.";
 
@@ -42,6 +48,15 @@ export type WorkerOffer = z.infer<typeof WorkerOfferSchema>;
 interface HeldWorker {
   lease: WorkerNodeLease;
   provider: SandboxProvider;
+}
+
+export class WorkerIsolationError extends Error {
+  constructor(name: string) {
+    super(
+      `Worker '${name}' serves more than one person, so it must isolate agents with microsandbox (WORK_SANDBOX=microsandbox), or be marked trusted by the operator`,
+    );
+    this.name = "WorkerIsolationError";
+  }
 }
 
 export class WorkerConnectConflictError extends Error {
@@ -86,8 +101,12 @@ export class WorkWorkerRegistry {
   async createEnrollment(args: {
     name: string;
     ttlMinutes?: number;
+    placement?: z.input<typeof WorkerPlacementSchema>;
+    /** Set by the machine reconciler for machines it provisions. */
+    machine?: { rule: string; ref?: string };
   }): Promise<{ code: string; nodeId: string; expiresAt: Date }> {
     const name = WorkerName.parse(args.name);
+    const placement = WorkerPlacementSchema.parse(args.placement ?? {});
     const existing = await this.deps.db
       .selectFrom("work_workers")
       .select("node_id")
@@ -108,6 +127,11 @@ export class WorkWorkerRegistry {
         code_hash: hash(code),
         tenant_id: this.deps.tenantId,
         name,
+        labels: JSON.stringify(placement.labels),
+        access: JSON.stringify(placement.access),
+        trusted: placement.trusted,
+        machine_rule: args.machine?.rule ?? null,
+        machine_ref: args.machine?.ref ?? null,
         expires_at: expiresAt,
       })
       .execute();
@@ -126,7 +150,14 @@ export class WorkWorkerRegistry {
         .where("tenant_id", "=", this.deps.tenantId)
         .where("used_at", "is", null)
         .where("expires_at", ">", sql<Date>`now()`)
-        .returning("name")
+        .returning([
+          "name",
+          "labels",
+          "access",
+          "trusted",
+          "machine_rule",
+          "machine_ref",
+        ])
         .executeTakeFirst();
       if (!enrollment) {
         throw new Error("The enrollment code is invalid, used, or expired");
@@ -152,6 +183,11 @@ export class WorkWorkerRegistry {
           tenant_id: this.deps.tenantId,
           name: enrollment.name,
           credential_hash: hash(secret),
+          labels: JSON.stringify(enrollment.labels),
+          access: JSON.stringify(enrollment.access),
+          trusted: enrollment.trusted,
+          machine_rule: enrollment.machine_rule,
+          machine_ref: enrollment.machine_ref,
         })
         .execute();
       return {
@@ -189,6 +225,14 @@ export class WorkWorkerRegistry {
     name: string;
     offer: WorkerOffer;
   }): Promise<string> {
+    const policy = await this.placement(args.nodeId);
+    if (
+      args.offer.isolation === "process" &&
+      !servesOnePerson(policy.access) &&
+      !policy.trusted
+    ) {
+      throw new WorkerIsolationError(args.name);
+    }
     const previous = this.held.get(args.nodeId);
     if (previous) {
       this.held.delete(args.nodeId);
@@ -213,6 +257,7 @@ export class WorkWorkerRegistry {
           : {}),
       },
       resourceLimits: args.offer.resourceLimits,
+      labels: { ...policy.labels, node: args.nodeId, plane: "worker" },
     };
     let lease: WorkerNodeLease;
     try {
@@ -230,15 +275,83 @@ export class WorkWorkerRegistry {
     }
     this.held.set(args.nodeId, {
       lease,
-      provider: this.jobs.sandboxProvider({
-        nodeId: args.nodeId,
-        leaseToken: lease.token,
-        workspaceRoot: args.offer.workspaceRoot,
-      }),
+      provider: this.providerFor(args.nodeId, args.offer.workspaceRoot),
     });
     await this.touch(args.nodeId);
     this.deps.log?.(`Worker ${args.name} connected`);
     return lease.token;
+  }
+
+  private readonly providers = new Map<string, SandboxProvider>();
+
+  /**
+   * One provider per worker node for this instance's lifetime: it fences
+   * each operation with whatever lease this instance holds at that moment,
+   * so sessions survive the worker reconnecting.
+   */
+  private providerFor(nodeId: string, workspaceRoot: string): SandboxProvider {
+    const existing = this.providers.get(nodeId);
+    if (existing) return existing;
+    const provider = this.jobs.sandboxProvider({
+      nodeId,
+      leaseToken: () => this.held.get(nodeId)?.lease.token,
+      workspaceRoot,
+    });
+    this.providers.set(nodeId, provider);
+    return provider;
+  }
+
+  /** One enrolled worker's placement policy. */
+  async placement(nodeId: string): Promise<WorkerPlacement> {
+    const row = await this.deps.db
+      .selectFrom("work_workers")
+      .select(["labels", "access", "trusted"])
+      .where("node_id", "=", nodeId)
+      .where("tenant_id", "=", this.deps.tenantId)
+      .executeTakeFirstOrThrow();
+    return storedPlacement(row);
+  }
+
+  /** Placement policy of every enrolled worker, for the scheduler. */
+  async placements(): Promise<Map<string, WorkerPlacement>> {
+    const rows = await this.deps.db
+      .selectFrom("work_workers")
+      .select(["node_id", "labels", "access", "trusted"])
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("revoked_at", "is", null)
+      .execute();
+    return new Map(rows.map((row) => [row.node_id, storedPlacement(row)]));
+  }
+
+  /** Operator: change whose work a worker takes and how it is labeled. */
+  async setPlacement(args: {
+    name: string;
+    placement: Partial<z.input<typeof WorkerPlacementSchema>>;
+  }): Promise<WorkerPlacement> {
+    const nodeId = `${WORKER_NODE_PREFIX}${WorkerName.parse(args.name)}`;
+    const current = await this.placement(nodeId);
+    const next = WorkerPlacementSchema.parse({ ...current, ...args.placement });
+    await this.deps.db
+      .updateTable("work_workers")
+      .set({
+        labels: JSON.stringify(next.labels),
+        access: JSON.stringify(next.access),
+        trusted: next.trusted,
+      })
+      .where("node_id", "=", nodeId)
+      .where("tenant_id", "=", this.deps.tenantId)
+      .execute();
+    return next;
+  }
+
+  /** Directory groups worker access names, for the directory mirror. */
+  async accessGroups(): Promise<string[]> {
+    const groups = new Set<string>();
+    for (const placement of (await this.placements()).values()) {
+      if (!("everyone" in placement.access))
+        for (const group of placement.access.groups) groups.add(group);
+    }
+    return [...groups];
   }
 
   async touch(nodeId: string): Promise<void> {
@@ -262,8 +375,11 @@ export class WorkWorkerRegistry {
   }
 
   /**
-   * Renew leases of workers seen recently; release the rest. Retire
-   * workspaces of their ended allocations through the worker.
+   * Renew leases of workers seen recently and release the rest, then
+   * retire workspaces of their ended allocations through the worker. The
+   * cleanup waits on the worker, so it runs on its own and never holds up
+   * the next renewal: a slow workspace removal must not cost a live
+   * session its worker.
    */
   async maintain(): Promise<void> {
     const livenessMs = this.deps.livenessMs ?? 30_000;
@@ -278,11 +394,22 @@ export class WorkWorkerRegistry {
         worker?.last_seen_at &&
         Date.now() - worker.last_seen_at.getTime() < livenessMs;
       if (!alive || !(await this.deps.nodes.renew({ lease: held.lease }))) {
-        this.held.delete(nodeId);
+        // A reconnect during this pass holds a new lease; keep that one.
+        if (this.held.get(nodeId) === held) this.held.delete(nodeId);
         await this.deps.nodes.release({ lease: held.lease });
         this.deps.log?.(`Worker ${nodeId} disconnected`);
-        continue;
       }
+    }
+    await this.jobs.sweep();
+    this.cleaning ??= this.cleanup().finally(() => {
+      this.cleaning = undefined;
+    });
+  }
+
+  private cleaning: Promise<void> | undefined;
+
+  private async cleanup(): Promise<void> {
+    for (const [nodeId, held] of [...this.held]) {
       await cleanupWorkerAllocations({
         db: this.deps.db,
         workerNode: held.lease,
@@ -295,6 +422,11 @@ export class WorkWorkerRegistry {
         ),
       );
     }
+  }
+
+  /** Waits for a cleanup pass in progress (shutdown). */
+  async settle(): Promise<void> {
+    await this.cleaning;
   }
 
   /** Operator: end a worker's authority now. Its credential stops working. */
@@ -322,6 +454,120 @@ export class WorkWorkerRegistry {
     return true;
   }
 
+  /** The platform's id for the machine created with this enrollment code. */
+  async recordMachineRef(args: { code: string; ref: string }): Promise<void> {
+    const enrollment = await this.deps.db
+      .updateTable("work_worker_enrollments")
+      .set({ machine_ref: args.ref })
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("code_hash", "=", hash(args.code))
+      .returning(["name", "used_at"])
+      .executeTakeFirst();
+    // The machine may have enrolled before the platform answered.
+    if (enrollment?.used_at)
+      await this.deps.db
+        .updateTable("work_workers")
+        .set({ machine_ref: args.ref })
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("name", "=", enrollment.name)
+        .where("revoked_at", "is", null)
+        .where("machine_ref", "is", null)
+        .execute();
+  }
+
+  /**
+   * Machines a reconciler provisioned, by state: enrolled, still pending
+   * enrollment, expired before enrolling, or revoked but not yet destroyed.
+   */
+  async machines(): Promise<
+    Array<{
+      name: string;
+      ref: string | null;
+      rule: string;
+      state: "enrolled" | "pending" | "expired" | "revoked";
+      placement: WorkerPlacement;
+    }>
+  > {
+    const [workers, enrollments] = await Promise.all([
+      this.deps.db
+        .selectFrom("work_workers")
+        .select([
+          "name",
+          "machine_ref",
+          "machine_rule",
+          "revoked_at",
+          "labels",
+          "access",
+          "trusted",
+        ])
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("machine_rule", "is not", null)
+        .where((eb) =>
+          eb.or([
+            eb("revoked_at", "is", null),
+            eb("machine_ref", "is not", null),
+          ]),
+        )
+        .execute(),
+      this.deps.db
+        .selectFrom("work_worker_enrollments")
+        .select([
+          "name",
+          "machine_ref",
+          "machine_rule",
+          "labels",
+          "access",
+          "trusted",
+          sql<boolean>`expires_at <= now()`.as("expired"),
+        ])
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("machine_rule", "is not", null)
+        .where("used_at", "is", null)
+        .execute(),
+    ]);
+    return [
+      ...workers.map((row) => ({
+        name: row.name,
+        ref: row.machine_ref,
+        rule: row.machine_rule ?? "",
+        state: row.revoked_at ? ("revoked" as const) : ("enrolled" as const),
+        placement: storedPlacement(row),
+      })),
+      ...enrollments.map((row) => ({
+        name: row.name,
+        ref: row.machine_ref,
+        rule: row.machine_rule ?? "",
+        state: row.expired ? ("expired" as const) : ("pending" as const),
+        placement: storedPlacement(row),
+      })),
+    ];
+  }
+
+  /** A provisioned machine was destroyed: stop tracking it. */
+  async forgetMachine(args: {
+    name: string;
+    ref: string | null;
+  }): Promise<void> {
+    await this.deps.db
+      .updateTable("work_workers")
+      .set({ machine_ref: null })
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("name", "=", args.name)
+      .where("revoked_at", "is not", null)
+      .execute();
+    await this.cancelEnrollments({ name: args.name });
+  }
+
+  /** Invalidate every unused enrollment code for a name. */
+  async cancelEnrollments(args: { name: string }): Promise<void> {
+    await this.deps.db
+      .deleteFrom("work_worker_enrollments")
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("name", "=", args.name)
+      .where("used_at", "is", null)
+      .execute();
+  }
+
   async list(): Promise<
     Array<{
       name: string;
@@ -329,6 +575,8 @@ export class WorkWorkerRegistry {
       enrolledAt: string;
       lastSeenAt: string | null;
       revoked: boolean;
+      placement: WorkerPlacement;
+      machine: { rule: string; ref: string | null } | null;
     }>
   > {
     const rows = await this.deps.db
@@ -343,6 +591,10 @@ export class WorkWorkerRegistry {
       enrolledAt: row.enrolled_at.toISOString(),
       lastSeenAt: row.last_seen_at?.toISOString() ?? null,
       revoked: row.revoked_at !== null,
+      placement: storedPlacement(row),
+      machine: row.machine_rule
+        ? { rule: row.machine_rule, ref: row.machine_ref }
+        : null,
     }));
   }
 

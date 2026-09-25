@@ -76,7 +76,10 @@ import { DbSandboxStore } from "./db-sandbox-store.js";
 import { DevSandboxService } from "./dev-sandbox-service.js";
 import type { DocumentsService } from "./documents-service.js";
 import type { ExecutionAllocationsService } from "./execution-allocations-service.js";
-import type { ExecutionEnvironmentsService } from "./execution-environments-service.js";
+import {
+  type ExecutionEnvironmentsService,
+  placementOwner,
+} from "./execution-environments-service.js";
 import type { PluginsService } from "./plugins-service.js";
 import {
   PROGRAM_READER,
@@ -2208,6 +2211,7 @@ export class AgentSessionsService {
       const admission = await this.executionEnvironments.admit({
         identity,
         projectId,
+        owner: placementOwner(session.external_user_id),
         environment: patch.environment ?? session.environment_name ?? undefined,
         allowed: nextAgent.environment?.allowed,
         preferred: nextAgent.environment?.preferred,
@@ -5480,6 +5484,8 @@ export class AgentSessionsService {
     const admitted = await this.executionEnvironments.admit({
       identity,
       projectId,
+      // The session owner's work, whoever sends this turn (ADR 0167).
+      owner: placementOwner(session.external_user_id),
       environment: allocation.environmentName,
       workerNodeId: allocation.workerNodeId ?? undefined,
       allocationBindingId: allocation.bindingId,
@@ -5519,7 +5525,12 @@ export class AgentSessionsService {
             db: this.db,
             allocation,
             provider: selectedProvider,
-            workerLeaseToken: admitted.runtime.workerLeaseToken,
+            // The node's lease as this instance holds it at each call, so a
+            // worker that reconnected keeps serving its live sessions.
+            workerLeaseToken: () =>
+              this.heldWorkerNodes().find(
+                (node) => node.id === allocation.workerNodeId,
+              )?.token ?? admitted.runtime.workerLeaseToken,
           })
         : selectedProvider;
     if (!provider)

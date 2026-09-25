@@ -1,6 +1,8 @@
 import type { WorkerNodesService } from "@catamorphic/core";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
+import type { MachineReconciler } from "../workers/machine-rules.js";
+import { WorkerPlacementSchema } from "../workers/placement.js";
 import type { WorkWorkerRegistry } from "../workers/worker-registry.js";
 import { verifyWorkOperatorSecret } from "./operator-access.js";
 
@@ -17,6 +19,8 @@ export function registerMachineSetup(args: {
   tenantId: string;
   authorityId: string;
   operatorSecret: string;
+  /** Machine rules, when a provisioner is configured (ADR 0167). */
+  machines?: MachineReconciler;
 }) {
   args.app.register(async (app) => {
     app.addHook("onRequest", async (request, reply) => {
@@ -37,12 +41,26 @@ export function registerMachineSetup(args: {
         .strictObject({
           name: z.string().min(1),
           ttlMinutes: z.number().int().positive().max(1440).optional(),
+          labels: z.unknown().optional(),
+          access: z.unknown().optional(),
+          trusted: z.boolean().optional(),
         })
         .safeParse(request.body);
       if (!body.success)
-        return reply.status(400).send({ error: "Provide a worker name" });
+        return reply.status(400).send({ error: firstIssue(body.error) });
+      const { labels, access, trusted, ...rest } = body.data;
+      const placement = WorkerPlacementSchema.safeParse({
+        ...(labels === undefined ? {} : { labels }),
+        ...(access === undefined ? {} : { access }),
+        ...(trusted === undefined ? {} : { trusted }),
+      });
+      if (!placement.success)
+        return reply.status(400).send({ error: firstIssue(placement.error) });
       try {
-        const enrollment = await args.workers.createEnrollment(body.data);
+        const enrollment = await args.workers.createEnrollment({
+          ...rest,
+          placement: placement.data,
+        });
         return reply.status(201).send({
           ...enrollment,
           controlPlaneUrl: args.publicBase,
@@ -60,6 +78,42 @@ export function registerMachineSetup(args: {
     app.get("/_work/operator/workers", async () => ({
       workers: await args.workers.list(),
     }));
+    // Whose work a worker takes and its labels (ADR 0167).
+    app.patch("/_work/operator/workers/:name", async (request, reply) => {
+      const params = z
+        .object({ name: z.string().min(1) })
+        .safeParse(request.params);
+      const body = z
+        .strictObject({
+          labels: z.unknown().optional(),
+          access: z.unknown().optional(),
+          trusted: z.boolean().optional(),
+        })
+        .safeParse(request.body);
+      if (!params.success || !body.success)
+        return reply
+          .status(400)
+          .send({ error: "Provide labels, access, or trusted" });
+      try {
+        return {
+          placement: await args.workers.setPlacement({
+            name: params.data.name,
+            placement: Object.fromEntries(
+              Object.entries(body.data).filter(([, v]) => v !== undefined),
+            ),
+          }),
+        };
+      } catch (error) {
+        return reply.status(400).send({
+          error:
+            error instanceof z.ZodError
+              ? firstIssue(error)
+              : error instanceof Error
+                ? error.message
+                : "Update failed",
+        });
+      }
+    });
     app.delete("/_work/operator/workers/:name", async (request, reply) => {
       const params = z
         .object({ name: z.string().min(1) })
@@ -70,6 +124,50 @@ export function registerMachineSetup(args: {
         ? { ok: true }
         : reply.status(404).send({ error: "Worker not found" });
     });
+    // Machine rules: dedicated or shared machines per directory group.
+    const withRules = async (
+      reply: FastifyReply,
+      run: (machines: MachineReconciler) => Promise<unknown>,
+    ) => {
+      if (!args.machines)
+        return reply.status(409).send({
+          error:
+            "Machine rules need a machine provisioner; extend the Work server with the machineProvisioner hook",
+        });
+      try {
+        return await run(args.machines);
+      } catch (error) {
+        return reply.status(400).send({
+          error:
+            error instanceof z.ZodError
+              ? firstIssue(error)
+              : error instanceof Error
+                ? error.message
+                : "Machine rules failed",
+        });
+      }
+    };
+    app.get("/_work/operator/machine-rules", (_request, reply) =>
+      withRules(reply, async (machines) => ({ rules: await machines.rules() })),
+    );
+    app.put("/_work/operator/machine-rules/:name", (request, reply) =>
+      withRules(reply, async (machines) => {
+        const { name } = z.object({ name: z.string() }).parse(request.params);
+        const rule = await machines.setRule({ name, rule: request.body });
+        return { rule, reconcile: await machines.reconcile() };
+      }),
+    );
+    app.delete("/_work/operator/machine-rules/:name", (request, reply) =>
+      withRules(reply, async (machines) => {
+        const { name } = z.object({ name: z.string() }).parse(request.params);
+        if (!(await machines.deleteRule(name)))
+          return reply.status(404).send({ error: "Rule not found" });
+        return { reconcile: await machines.reconcile() };
+      }),
+    );
+    app.post("/_work/operator/machine-rules/reconcile", (_request, reply) =>
+      withRules(reply, (machines) => machines.reconcile()),
+    );
     app.get("/_work/operator/machines", async () => ({
       authorityId: args.authorityId,
       machines: await args.nodes.list(args),
@@ -134,4 +232,11 @@ export function registerMachineSetup(args: {
       return { ok: true };
     });
   });
+}
+
+function firstIssue(error: z.ZodError): string {
+  const issue = error.issues[0];
+  return issue
+    ? `${issue.path.join(".") || "request"}: ${issue.message}`
+    : "Invalid request";
 }

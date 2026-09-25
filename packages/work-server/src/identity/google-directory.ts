@@ -11,7 +11,7 @@ import {
 const SCOPES = [
   "https://www.googleapis.com/auth/admin.directory.user.readonly",
   "https://www.googleapis.com/auth/admin.directory.group.member.readonly",
-].join(" ");
+];
 const DIRECTORY = "https://admin.googleapis.com/admin/directory/v1";
 const METADATA_TOKEN =
   "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
@@ -81,8 +81,15 @@ export class GoogleWorkspaceDirectory implements DirectoryProvider {
       const response = await this.get(
         `${DIRECTORY}/groups/${encodeURIComponent(group)}/hasMember/${encodeURIComponent(args.accountId)}`,
       );
-      // An unknown group has no members; misconfiguration shows as absence.
-      if (response.status === 404) continue;
+      if (response.status === 404) {
+        // A required group that does not exist is a configuration fault, not
+        // a verdict on this person: never disable everyone over a typo.
+        if (this.requiredGroups.includes(group))
+          throw new DirectoryUnavailableError(
+            `Required group ${group} does not exist in Google Workspace`,
+          );
+        continue;
+      }
       const body = await this.json(response, "group membership");
       if (body.isMember === true) groups.push(group);
     }
@@ -128,7 +135,7 @@ export class GoogleWorkspaceDirectory implements DirectoryProvider {
     const credentials = this.options.credentials;
     const response =
       "metadataServer" in credentials
-        ? await this.fetch(`${METADATA_TOKEN}?scopes=${SCOPES}`, {
+        ? await this.fetch(`${METADATA_TOKEN}?scopes=${SCOPES.join(",")}`, {
             headers: { "metadata-flavor": "Google" },
           })
         : await this.exchangeServiceAccountKey(credentials.keyFile, now);
@@ -159,7 +166,7 @@ export class GoogleWorkspaceDirectory implements DirectoryProvider {
       Buffer.from(JSON.stringify(value)).toString("base64url");
     const unsigned = `${encode({ alg: "RS256", typ: "JWT" })}.${encode({
       iss: key.client_email,
-      scope: SCOPES,
+      scope: SCOPES.join(" "),
       aud: tokenUri,
       iat: issuedAt,
       exp: issuedAt + 3600,

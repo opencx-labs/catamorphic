@@ -839,12 +839,15 @@ retry, rate limit, batch, or child call settles inline) and `.start(input)`
 ## Execution Environments and credential connections
 
 Hosts own physical execution and provider credentials. Projects name logical
-Environments in `.catamorphic/project.json`; the host maps each binding id to
-an actual provider with `defineStaticEnvironments`. An Environment is
-project-visible policy, a binding is its host-owned realization, and an
-Allocation is the immutable decision for one root session or workflow run.
-WorkerNode selection is a later placement concern and is never a project
-choice.
+Environments in `.catamorphic/project.json` by what the work needs: workloads,
+requirements, and an optional `pool` of machine labels (ADR 0167). The host's
+`EnvironmentProvider` places work: `defineStaticEnvironments` picks the first
+binding whose `labels` match the pool, and a scheduler receives the work's
+owner (`ownerUserId`, absent for project work) to prefer machines reserved for
+that person or their groups, using `accessTier` and `placementOrder` from
+`@catamorphic/sandbox`. An Environment is project-visible policy, a binding is
+its host-owned realization, and an Allocation is the immutable decision for
+one root session or workflow run. Machine selection is never a project choice.
 
 The managed multi-machine target is multiple Catamorphic server instances of
 one logical authority, sharing network Postgres and accessible authoritative

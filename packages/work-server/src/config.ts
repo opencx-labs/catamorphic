@@ -6,6 +6,7 @@ import {
   type GatewayConfig,
   gatewayConfigFromFile,
 } from "./gateway/gateway-config.js";
+import { NodeLabelsSchema } from "./workers/placement.js";
 
 export type WorkAgentEffort = "low" | "medium" | "high";
 
@@ -49,6 +50,11 @@ export interface WorkServerConfig {
   authConfigPath?: string;
   /** Label of this machine in inventory and Environment pickers. */
   machineName: string;
+  /**
+   * Labels Environments select this control-plane machine by (ADR 0167),
+   * from `WORK_MACHINE_LABELS=pool=agents,class=large`.
+   */
+  machineLabels: Record<string, string>;
   execution: WorkExecutionSettings;
   agent: WorkAgentSettings;
   /** Service account for GitHub-backed projects and proposals. */
@@ -104,6 +110,7 @@ export function workServerConfigFromEnv(
     ...(env.DATABASE_URL ? { databaseUrl: env.DATABASE_URL } : {}),
     ...(env.WORK_AUTH_CONFIG ? { authConfigPath: env.WORK_AUTH_CONFIG } : {}),
     machineName: env.WORK_MACHINE_NAME ?? "Work server",
+    machineLabels: parseMachineLabels(env.WORK_MACHINE_LABELS),
     execution: executionSettingsFromEnv(env),
     agent: agentSettingsFromEnv(env),
     ...(env.WORK_GITHUB_TOKEN && env.WORK_GITHUB_CLIENT_ID
@@ -173,4 +180,21 @@ export function isSecurePublicUrl(raw: string): boolean {
         url.hostname === "[::1]" ||
         /^127(?:\.\d{1,3}){3}$/.test(url.hostname)))
   );
+}
+
+function parseMachineLabels(value: string | undefined): Record<string, string> {
+  const labels: Record<string, string> = {};
+  for (const pair of (value ?? "").split(",")) {
+    const trimmed = pair.trim();
+    if (!trimmed) continue;
+    const [key, ...rest] = trimmed.split("=");
+    const label = rest.join("=").trim();
+    if (!key || !label) {
+      throw new Error(
+        `WORK_MACHINE_LABELS entries look like name=value, got '${trimmed}'`,
+      );
+    }
+    labels[key.trim()] = label;
+  }
+  return NodeLabelsSchema.parse(labels);
 }

@@ -222,6 +222,12 @@ export class ProjectManager {
        */
       importExisting?: boolean;
       /**
+       * Start with no files at all: another authority fills the copy (a
+       * member's local copy of a server project), so no local manifest or
+       * seed may compete with the server's own on the first sync.
+       */
+      empty?: boolean;
+      /**
        * Populate the working copy by cloning a network git remote (e.g. a
        * GitHub repo) instead of scaffolding. Mutually exclusive with
        * `importExisting`; `initialFiles` are skipped so the imported history
@@ -284,7 +290,7 @@ export class ProjectManager {
       () => true,
       () => false,
     );
-    if (!manifestExists) {
+    if (!manifestExists && !opts?.empty) {
       await fs.mkdir(path.dirname(manifestPath), { recursive: true });
       await fs.writeFile(
         manifestPath,
@@ -292,13 +298,12 @@ export class ProjectManager {
           {
             name: projectName,
             environments: {
-              local: {
-                binding: "local",
-                description: "Run on this machine",
+              default: {
+                description: "Run where this host places work",
                 workloads: ["agent", "workflow"],
               },
             },
-            defaultEnvironment: "local",
+            defaultEnvironment: "default",
           },
           null,
           2,
@@ -314,11 +319,11 @@ export class ProjectManager {
       () => true,
       () => false,
     );
-    if (!gitignoreExists) {
+    if (!gitignoreExists && !opts?.empty) {
       await fs.writeFile(gitignorePath, PROJECT_GITIGNORE);
     }
 
-    if (opts?.initialFiles) {
+    if (opts?.initialFiles && !opts.empty) {
       for (const [filePath, content] of Object.entries(opts.initialFiles)) {
         const fullPath = path.join(repoPath, filePath);
         await fs.mkdir(path.dirname(fullPath), { recursive: true });
@@ -337,7 +342,8 @@ export class ProjectManager {
       () => false,
     );
     if (!hasHead) {
-      await repo.commit("Initial commit", SYSTEM_AUTHOR);
+      // An empty copy (another authority fills it) still starts a history.
+      await repo.commit("Initial commit", SYSTEM_AUTHOR, { allowEmpty: true });
     }
 
     if (this.remote) {

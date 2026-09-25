@@ -12,8 +12,18 @@ import type {
   EnvironmentProvider,
   SandboxProvider,
 } from "@catamorphic/sandbox";
-import { environmentSatisfies } from "@catamorphic/sandbox";
+import {
+  accessTier,
+  environmentSatisfies,
+  placementOrder,
+  poolMatches,
+} from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
+import {
+  nodeAccess,
+  servesOnePerson,
+  type WorkerPlacement,
+} from "./workers/placement.js";
 import { isWorkerNode } from "./workers/worker-registry.js";
 
 /** Work server deployment policy. Core only sees leased nodes and runtime bindings. */
@@ -29,6 +39,18 @@ export async function registerWorkMachine(args: {
   isolation?: "process" | "sandbox";
   /** Workloads this control-plane machine accepts (ADR 0164). */
   workloads?: ("agent" | "workflow")[];
+  /** Operator labels for this control-plane machine (ADR 0167). */
+  labels?: Readonly<Record<string, string>>;
+  /**
+   * Whose work each worker takes, and who owns a piece of work: an email
+   * and directory groups matched against worker access (ADR 0167).
+   */
+  placement?: {
+    workers(): Promise<Map<string, WorkerPlacement>>;
+    owner(
+      userId: string,
+    ): Promise<{ userId: string; groups: readonly string[] } | undefined>;
+  };
   /** Remote workers whose leases this instance holds. */
   workers?: {
     heldProvider(
@@ -53,6 +75,7 @@ export async function registerWorkMachine(args: {
       memoryMb: args.capacity?.memoryMb,
     },
     resourceLimits: args.sandboxProvider.resourceLimits,
+    labels: { ...args.labels, node: args.nodeId, plane: "control" },
   };
   const lease = await nodes.register({
     tenantId: args.tenantId,
@@ -64,7 +87,9 @@ export async function registerWorkMachine(args: {
   const environmentProvider: EnvironmentProvider = {
     get: async ({
       tenantId,
-      bindingId,
+      ownerUserId,
+      pool,
+      strict,
       workerNodeId,
       allocationBindingId,
       requirements,
@@ -73,39 +98,75 @@ export async function registerWorkMachine(args: {
         tenantId,
         authorityId: args.authorityId,
       });
-      // `local` is the control plane's own machines, `workers` any enrolled
-      // remote worker, and a node id exactly that machine (ADR 0164).
-      const bound = (nodeId: string) =>
-        bindingId === nodeId ||
-        (bindingId === "local" && !isWorkerNode(nodeId)) ||
-        (bindingId === "workers" && isWorkerNode(nodeId));
-      const selected = candidates.find(
-        (node) =>
+      const workerPlacements =
+        (await args.placement?.workers()) ?? new Map<string, WorkerPlacement>();
+      const owner = ownerUserId
+        ? ((await args.placement?.owner(ownerUserId)) ?? {
+            userId: ownerUserId,
+            groups: [],
+          })
+        : undefined;
+      // Labels are live: the server's own plus the operator's current ones.
+      const described = candidates.map((node) => {
+        const worker = isWorkerNode(node.id);
+        const policy = worker ? workerPlacements.get(node.id) : undefined;
+        return {
+          node,
+          policy,
+          worker,
+          // A worker's labels are only the operator's current ones, so a
+          // removed label stops matching at once.
+          labels: {
+            ...(worker ? policy?.labels : node.descriptor.labels),
+            node: node.id,
+            plane: worker ? "worker" : "control",
+          },
+        };
+      });
+      const eligible = described.filter(
+        ({ node, policy, worker, labels }) =>
           node.available &&
+          (!worker || policy) &&
+          (!allocationBindingId || allocationBindingId === node.id) &&
+          (!workerNodeId || workerNodeId === node.id) &&
+          poolMatches(labels, pool) &&
           (!requirements ||
             environmentSatisfies(node.descriptor, requirements).compatible) &&
-          (allocationBindingId ||
-            !node.capacity ||
-            capacityFits({
-              capacity: node.capacity,
-              usage: node.usage,
-              resources: { ...node.defaults, ...requirements?.resources },
-            })) &&
-          bound(node.id) &&
-          (!workerNodeId || workerNodeId === node.id),
+          // A worker serving several people runs agents in a microVM unless
+          // the operator marked those people as trusting each other.
+          (!policy ||
+            policy.trusted ||
+            servesOnePerson(policy.access) ||
+            node.descriptor.isolation !== "process"),
       );
-      if (!selected) {
-        const full = candidates.find(
-          (node) =>
-            node.available &&
-            bound(node.id) &&
-            (!workerNodeId || workerNodeId === node.id) &&
-            (!requirements ||
-              environmentSatisfies(node.descriptor, requirements).compatible),
-        );
-        if (full) throw new EnvironmentCapacityError(full.id);
+      const ordered = placementOrder(
+        eligible,
+        ({ policy }) =>
+          accessTier(
+            policy ? nodeAccess(policy.access) : { everyone: true },
+            owner,
+          ),
+        { strict },
+      );
+      const chosen = ordered.find(
+        ({ node }) =>
+          allocationBindingId ||
+          !node.capacity ||
+          capacityFits({
+            capacity: node.capacity,
+            usage: node.usage,
+            resources: { ...node.defaults, ...requirements?.resources },
+          }),
+      );
+      if (!chosen) {
+        const full = ordered[0];
+        if (full) throw new EnvironmentCapacityError(full.node.id);
         return undefined;
       }
+      const selected = {
+        ...chosen.node,
+        descriptor: { ...chosen.node.descriptor, labels: chosen.labels },
+      };
       const remote = args.workers?.heldProvider(selected.id);
       return {
         descriptor: selected.descriptor,

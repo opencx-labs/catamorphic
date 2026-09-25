@@ -34,6 +34,8 @@ export function registerShareRoutes(
     publicBase: string;
     /** The member identity a bearer request carries, or null. */
     caller(request: FastifyRequest): Promise<Identity | null>;
+    /** A disabled account's browser session opens nothing. */
+    isActive(userId: string): Promise<boolean>;
   },
 ): void {
   const { core, shares } = options;
@@ -83,7 +85,10 @@ export function registerShareRoutes(
     request: FastifyRequest,
   ): Promise<WorkAuthUser | null> => {
     const cookie = request.headers.cookie;
-    return cookie ? options.auth.sessionFromCookies({ cookie }) : null;
+    const person = cookie
+      ? await options.auth.sessionFromCookies({ cookie })
+      : null;
+    return person && (await options.isActive(person.id)) ? person : null;
   };
   const opened = async (request: FastifyRequest, reply: FastifyReply) => {
     const { shareId } = request.params as { shareId: string };

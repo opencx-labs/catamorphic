@@ -29,6 +29,7 @@ function setup() {
   const join = vi.fn(redeemInvitation);
   registerWorkAdmissionRoutes(app, {
     publicBases: ["https://brain.acme.dev"],
+    mayAct: async () => true,
     auth: {
       findUserById: async ({ userId }) => ({
         id: userId,

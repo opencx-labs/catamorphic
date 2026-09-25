@@ -482,7 +482,7 @@ describeIf("TriggersService end to end", () => {
     const viewer = {
       ...identity,
       externalUserId: "viewer",
-      executionScope: [{ projectId, name: "local" }],
+      executionScope: [{ projectId, name: "default" }],
       scope: [{ kind: "workflow" as const, projectId, name: "escalateTicket" }],
     };
     const outcome = await core.runs.call({

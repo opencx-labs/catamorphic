@@ -82,6 +82,7 @@ it("an embedded host executes each session on its Allocation and rejects revoked
         agentTopologies: ["controller"],
         capabilities: [],
         resources: {},
+        labels: { machine: index === 0 ? "a" : "b" },
       },
       sandboxProvider,
     }),
@@ -117,8 +118,8 @@ it("an embedded host executes each session on its Allocation and rejects revoked
       ".catamorphic/project.json",
       JSON.stringify({
         environments: {
-          a: { binding: "a", workloads: ["agent"] },
-          b: { binding: "b", workloads: ["agent"] },
+          a: { pool: { machine: "a" }, workloads: ["agent"] },
+          b: { pool: { machine: "b" }, workloads: ["agent"] },
         },
         defaultEnvironment: "a",
       }),
@@ -170,7 +171,7 @@ it("an embedded host executes each session on its Allocation and rejects revoked
     );
     expect(denied.metadata?.status).toBe("failed");
     expect(denied.content).toContain("may not use Environment");
-    // Rebinding policy cannot move an existing session implicitly.
+    // Changing the Environment's pool cannot move an existing session.
     const changed = await cat.core.projectManager.open(
       identity.tenantId,
       project.id,
@@ -178,7 +179,9 @@ it("an embedded host executes each session on its Allocation and rejects revoked
     await changed.writeFile(
       ".catamorphic/project.json",
       JSON.stringify({
-        environments: { b: { binding: "a", workloads: ["agent"] } },
+        environments: {
+          b: { pool: { machine: "a" }, workloads: ["agent"] },
+        },
       }),
     );
     await changed.dispose();
@@ -189,7 +192,7 @@ it("an embedded host executes each session on its Allocation and rejects revoked
       "Do not move",
     );
     expect(rebound.metadata?.status).toBe("failed");
-    expect(rebound.content).toContain("binding changed");
+    expect(rebound.content).toContain("No machine for Environment 'b'");
   } finally {
     await cat.close();
     await db.destroy();
@@ -244,7 +247,7 @@ it("an authenticated member executes on this machine and loses execution immedia
       ".catamorphic/project.json",
       JSON.stringify({
         environments: {
-          personal: { binding: "this-machine", workloads: ["agent"] },
+          personal: { device: "member", workloads: ["agent"] },
         },
         defaultEnvironment: "personal",
       }),
@@ -328,7 +331,7 @@ it("an authenticated member executes on this machine and loses execution immedia
     expect(
       await service.binding({
         tenantId: identity.tenantId,
-        externalUserId: identity.externalUserId,
+        ownerUserId: identity.externalUserId,
         projectId: project.id,
         allocationBindingId: oldBinding,
       }),

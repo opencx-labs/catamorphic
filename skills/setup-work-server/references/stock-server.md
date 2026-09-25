@@ -37,6 +37,7 @@ Environment variables parsed by `workServerConfigFromEnv` in
 | `WORK_GITHUB_CLIENT_ID`, `WORK_GITHUB_TOKEN` | Service account for GitHub-backed projects. |
 | `WORK_GATEWAY_CONFIG` | Connections (MCP, HTTP APIs, databases) and the guards that review them; see [secrets and the gateway](secrets-and-gateway.md). |
 | `WORK_SANDBOX` and budget variables | `local-process` (default) or `microsandbox`; see the machines reference. |
+| `WORK_MACHINE_NAME`, `WORK_MACHINE_LABELS` | This machine's name and labels (`pool=agents,class=large`) that Environment pools select; see the machines reference. |
 | `WORK_CONTROL_PLANE_WORKLOADS` | What the server runs itself: `agent,workflow` (default), `workflow`, or empty. Agents then run on enrolled workers. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Telemetry export (`OBSERVABILITY.md`). |
 
@@ -96,9 +97,10 @@ from inside it (`docker exec ... bun -e` with `fetch`; the image has no curl).
 Never echo credentials into history, open PGlite from a second process, hash
 a password, or write Better Auth rows.
 
-Grant execution as well as agents: a role needs `environments: ["local"]` to
-run agents on the server itself. Permissions alone grant no execution. A
-member-device target needs an Environment with `binding: "this-machine"`, a
+Grant execution as well as agents: a role needs `environments: ["default"]`
+(the Environment every project has) to run agents and workflows. Permissions
+alone grant no execution. A member-device target needs an Environment with
+`device: "member"`, a
 role grant for it, and a connected desktop. Never describe server-side output
 as a file saved on the member's device.
 
@@ -109,7 +111,9 @@ A credential-free invitation is the onboarding object. Members with
 `POST /api/projects/:projectId/admission/invitations`. Desktop and PWA
 clients discover OAuth, sign in with PKCE, and redeem it. MCP clients use the
 same protected-resource discovery against
-`/api/projects/:projectId/mcp`. Do not mint separate tokens.
+`/api/projects/:projectId/mcp` and get the member's whole working loop there
+([working from your own agent](members-over-mcp.md)). Do not mint separate
+tokens.
 
 ## GitHub-backed projects
 

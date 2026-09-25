@@ -77,9 +77,11 @@ registry entries with `topology: "native"` also require
 agents, per-session selection, delegation routes, and provider replacement use
 one orchestration path.
 
-`environmentProvider` is always explicit. The `local` binding above matches
-the default project environment; hosts with schedulers or multiple execution
-pools can provide a dynamic `EnvironmentProvider` instead.
+`environmentProvider` is always explicit. The project's `default` Environment
+selects no pool, so the static binding above takes it; label bindings
+(`descriptor.labels`) for Environments that select a `pool`. Hosts with
+schedulers or several people's machines provide a dynamic
+`EnvironmentProvider` that places work by its owner (ADR 0167).
 
 The static binding is not machine enrollment. Managed multi-instance deployments
 must implement shared authority, storage access, and fenced execution placement

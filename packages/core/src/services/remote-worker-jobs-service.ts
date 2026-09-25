@@ -7,7 +7,7 @@ import {
   ClientRunnerOperationSchema,
   forwardingSandboxProvider,
 } from "./client-runners-service.js";
-import { toJson } from "./run-coordinator.js";
+import { jsonColumn, toJson } from "./run-coordinator.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -33,7 +33,11 @@ export class RemoteWorkerJobsService {
   /** Control-plane side: forward sandbox operations to the node's worker. */
   sandboxProvider(args: {
     nodeId: string;
-    leaseToken: string;
+    /**
+     * The lease to fence operations with, read at each call: the worker may
+     * reconnect under a new lease while sessions keep this provider.
+     */
+    leaseToken: string | (() => string | undefined);
     workspaceRoot: string;
     timeoutMs?: number;
   }): SandboxProvider {
@@ -49,7 +53,17 @@ export class RemoteWorkerJobsService {
               "catamorphic.worker.operation": operation.kind,
             },
           },
-          () => this.dispatch({ ...args, operation }),
+          () => {
+            const leaseToken =
+              typeof args.leaseToken === "function"
+                ? args.leaseToken()
+                : args.leaseToken;
+            if (!leaseToken)
+              throw new Error(
+                "The worker is not connected to this control plane right now",
+              );
+            return this.dispatch({ ...args, leaseToken, operation });
+          },
         ),
     });
   }
@@ -60,7 +74,13 @@ export class RemoteWorkerJobsService {
     operation: ClientRunnerOperation;
     timeoutMs?: number;
   }): Promise<unknown> {
-    const timeoutMs = args.timeoutMs ?? 300_000;
+    // A command's own timeout plus a margin, never less than five minutes.
+    const commandSeconds =
+      args.operation.kind === "execute"
+        ? (args.operation.options?.timeout ?? 0)
+        : 0;
+    const timeoutMs =
+      args.timeoutMs ?? Math.max(300_000, (commandSeconds + 60) * 1000);
     const row = await this.db
       .insertInto("worker_node_jobs")
       .values({
@@ -150,7 +170,8 @@ export class RemoteWorkerJobsService {
       .updateTable("worker_node_jobs")
       .set({
         status: args.error ? "failed" : "completed",
-        response: toJson(args.response ?? null),
+        // A bare string result must reach jsonb as JSON, not raw text.
+        response: jsonColumn(toJson(args.response ?? null)),
         error: args.error ?? null,
       })
       .where("id", "=", args.jobId)
@@ -173,6 +194,26 @@ export class RemoteWorkerJobsService {
         "Execution receipt is no longer accepted; inspect the session before retrying",
       );
     }
+  }
+
+  /**
+   * Drop settled operations and abandoned ones: their payloads are project
+   * content and belong in Postgres only while someone may still read them.
+   */
+  async sweep(): Promise<number> {
+    const result = await this.db
+      .deleteFrom("worker_node_jobs")
+      .where((eb) =>
+        eb.or([
+          eb.and([
+            eb("status", "in", ["completed", "failed"]),
+            eb("created_at", "<", sql<Date>`now() - interval '10 minutes'`),
+          ]),
+          eb("expires_at", "<", sql<Date>`now() - interval '10 minutes'`),
+        ]),
+      )
+      .executeTakeFirst();
+    return Number(result.numDeletedRows);
   }
 
   /** Whether this lease token still owns the node (a worker keepalive). */

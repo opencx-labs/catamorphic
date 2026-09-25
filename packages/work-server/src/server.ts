@@ -23,6 +23,8 @@ import {
   serveSpaDist,
 } from "@catamorphic/fastify-plugin";
 import {
+  aiToolCall,
+  aiToolKind,
   type Catamorphic,
   connectionAuthorizationPage,
   createCatamorphic,
@@ -42,6 +44,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import Fastify, { type FastifyInstance } from "fastify";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
+import { z } from "zod";
 import { WorkAdmissionService } from "./admission/admission-service.js";
 import { registerWorkAdmissionRoutes } from "./admission/routes.js";
 import { workAgentCapabilities } from "./agent-capabilities.js";
@@ -84,7 +87,12 @@ import {
   provisionWorkProject,
 } from "./setup/provision-project.js";
 import { registerShareRoutes } from "./shares/share-routes.js";
+import { shareTools } from "./shares/share-tools.js";
 import { WorkSharesService } from "./shares/shares-service.js";
+import {
+  type MachineProvisioner,
+  MachineReconciler,
+} from "./workers/machine-rules.js";
 import { WorkWorkerRegistry } from "./workers/worker-registry.js";
 import { registerWorkerRoutes } from "./workers/worker-routes.js";
 
@@ -128,6 +136,11 @@ export interface WorkServerHooks {
    * governing the accounts of one sign-in provider (ADR 0161).
    */
   directories?: readonly DirectoryProvider[];
+  /**
+   * Creates and destroys worker machines on a platform, so machine rules
+   * can give directory groups dedicated or shared machines (ADR 0167).
+   */
+  machineProvisioner?: MachineProvisioner;
   /** Mount additional host routes on the public application. */
   routes?: (args: {
     app: FastifyInstance;
@@ -294,7 +307,6 @@ async function createWorkServerInner(
       .update("\0")
       .update(authSecret)
       .update("\0")
-      .update(credentialVault.currentKeyId)
       .update(
         JSON.stringify({
           local: workAuthConfig.local,
@@ -315,7 +327,37 @@ async function createWorkServerInner(
           );
         }
       });
+    // Vault keys rotate (ADR 0162): an instance must open at least one key
+    // the deployment already knows; its current key then joins the set.
+    const keysRecord = "work/vault-key-ids";
+    const known = await objectStore
+      .get(keysRecord)
+      .then((record) =>
+        record
+          ? z
+              .array(z.string())
+              .parse(JSON.parse(Buffer.from(record.data).toString()))
+          : [],
+      );
+    const ids = credentialVault.keyIds;
+    if (known.length > 0 && !ids.some((id) => known.includes(id))) {
+      throw new Error(
+        "WORK_VAULT_KEY and WORK_VAULT_PREVIOUS_KEYS share no key with this Postgres deployment",
+      );
+    }
+    if (!known.includes(credentialVault.currentKeyId)) {
+      await objectStore.put(
+        keysRecord,
+        Buffer.from(JSON.stringify([...new Set([...known, ...ids])])),
+      );
+    }
   }
+  // Who owns a piece of work, for worker access (ADR 0167): their email and
+  // directory groups. Sign-in is set up below; placement runs only later.
+  let placementOwner: (
+    userId: string,
+  ) => Promise<{ userId: string; groups: string[] } | undefined> = async () =>
+    undefined;
   // Enrolled remote workers (ADR 0164): this instance holds the leases of
   // the workers connected to it and forwards their sandbox operations.
   const workers = new WorkWorkerRegistry({
@@ -332,12 +374,17 @@ async function createWorkServerInner(
     authorityId: hostId,
     nodeId,
     label: config.machineName,
+    labels: config.machineLabels,
     capacity: execution.capacity,
     defaults: execution.defaults,
     isolation: execution.isolation,
     workloads: config.execution.workloads,
     sandboxProvider,
     workers,
+    placement: {
+      workers: () => workers.placements(),
+      owner: (userId) => placementOwner(userId),
+    },
   });
   disposers.push(() => machine.stop());
   let maintaining: Promise<void> | undefined;
@@ -359,6 +406,7 @@ async function createWorkServerInner(
   disposers.push(async () => {
     clearInterval(workerTimer);
     await maintaining;
+    await workers.settle();
   });
   const environmentProvider = machine.environmentProvider;
   const toolPermissions = new DurableToolPermissionBroker(ownDb);
@@ -426,11 +474,15 @@ async function createWorkServerInner(
       objectStore ?? new FsBundleStore(path.join(data, "document-blobs")),
     toolPermissions,
     triggerKinds: [
+      aiToolCall,
       schedule,
       webhook,
       ...SESSION_TRIGGER_KINDS,
       ...GITHUB_PROJECT_EVENT_TRIGGER_KINDS,
     ],
+    // Workflows bound to `ai.tool-call` are tools on the project MCP, for
+    // project agents and members' own MCP clients alike.
+    mcpToolKinds: [aiToolKind],
     projectSeeds: (defaults) => {
       const seeds = {
         ...defaults,
@@ -571,16 +623,76 @@ async function createWorkServerInner(
     tenantId: SERVER_TENANT_ID,
     publicBase,
   });
+  placementOwner = async (userId) => {
+    const [user, account] = await Promise.all([
+      workAuth.findUserById({ userId }),
+      core.db
+        .selectFrom("work_accounts")
+        .select("directory_groups")
+        .where("user_id", "=", userId)
+        .executeTakeFirst(),
+    ]);
+    const groups = Array.isArray(account?.directory_groups)
+      ? account.directory_groups.filter(
+          (group): group is string => typeof group === "string",
+        )
+      : [];
+    return {
+      userId: user?.email?.toLowerCase() ?? userId,
+      groups: groups.map((group) => group.toLowerCase()),
+    };
+  };
+  const machineReconciler = hooks.machineProvisioner
+    ? new MachineReconciler({
+        db: core.db,
+        tenantId: SERVER_TENANT_ID,
+        workers,
+        provisioner: hooks.machineProvisioner,
+        controlPlaneUrl: publicBase,
+        emailOf: async (userId) =>
+          (await workAuth.findUserById({ userId }))?.email?.toLowerCase(),
+        log,
+      })
+    : undefined;
+  const reconcileMachines = () => {
+    void machineReconciler
+      ?.reconcile()
+      .catch((error) =>
+        log(
+          `Machine reconciliation failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        ),
+      );
+  };
+  if (machineReconciler) {
+    const machineTimer = setInterval(reconcileMachines, 60_000);
+    machineTimer.unref();
+    disposers.push(async () => {
+      clearInterval(machineTimer);
+      await machineReconciler.reconcile().catch(() => undefined);
+    });
+  }
   const accountLifecycle = new AccountLifecycle({
     db: core.db,
     auth: workAuth,
     directories,
     sessions: workAuthConfig.sessions,
     directory: workAuthConfig.directory,
-    mappedGroups: () => admission.mappedDirectoryGroups(),
+    // Groups that decide roles or whose work a worker takes (ADR 0167).
+    mappedGroups: async () => [
+      ...new Set([
+        ...(await admission.mappedDirectoryGroups()),
+        ...(await workers.accessGroups()),
+        ...((await machineReconciler?.groups()) ?? []),
+      ]),
+    ],
     reconcileRoles: (args) => admission.reconcileDirectoryRoles(args),
-    onDisabled: ({ userId }) =>
-      stopMemberWork({ core, identity: rootIdentity, userId, log }),
+    onDisabled: async ({ userId }) => {
+      await stopMemberWork({ core, identity: rootIdentity, userId, log });
+      // A disabled member's dedicated machine goes on the next pass.
+      reconcileMachines();
+    },
     // Guests view shares in the browser; they never hold API tokens.
     refuseTokens: async (userId) =>
       (await shares.isGuest(userId))
@@ -697,6 +809,12 @@ async function createWorkServerInner(
       });
     }),
     features: { publications: "members" },
+    projectMcp: {
+      serverInfo: { name: "work", title: "Work" },
+      instructions:
+        "- Share with people outside the company: share_create gives a document, folder, or app its own sign-in link; shares_list and share_revoke manage them.",
+      tools: (scope) => shareTools(shares, scope),
+    },
     // Webhook URLs name the public origin when one is configured; without
     // one they follow the address the builder reached the server on.
     ...(isLoopbackBase(publicBase)
@@ -757,6 +875,7 @@ async function createWorkServerInner(
     auth: workAuth,
     shares,
     publicBase,
+    isActive: (userId) => accountLifecycle.isActive(userId),
     caller: async (request) => {
       const header = request.headers.authorization;
       const authorization = Array.isArray(header) ? header[0] : header;
@@ -784,6 +903,9 @@ async function createWorkServerInner(
         tenantId: SERVER_TENANT_ID,
         externalUserId,
       }),
+    mayAct: async (userId) =>
+      (await accountLifecycle.isActive(userId)) &&
+      !(await shares.isGuest(userId)),
     admission,
   });
 
@@ -816,6 +938,7 @@ async function createWorkServerInner(
     authorityId: hostId,
     operatorSecret,
     publicBase,
+    ...(machineReconciler ? { machines: machineReconciler } : {}),
   });
   operatorApp.post("/_work/operator/projects", async (request, reply) => {
     const authorization = Array.isArray(request.headers.authorization)

@@ -1,4 +1,7 @@
-import { ConnectionActionDeniedError } from "@catamorphic/core";
+import {
+  ConnectionActionDeniedError,
+  ConnectionActionRefusedError,
+} from "@catamorphic/core";
 import type { Json } from "@catamorphic/db";
 import type { FastifyInstance } from "fastify";
 import type { RouteContext } from "../app.js";
@@ -104,7 +107,10 @@ export function registerConnectionMcpRoutes(
         } catch (error) {
           // A policy refusal is information the agent can act on (narrow
           // the query, ask differently); other failures stay opaque.
-          if (error instanceof ConnectionActionDeniedError) {
+          if (
+            error instanceof ConnectionActionDeniedError ||
+            error instanceof ConnectionActionRefusedError
+          ) {
             return reply.send(
               respond({
                 content: [{ type: "text", text: error.message }],

@@ -14,7 +14,7 @@ import {
 } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import type { ProjectEnvironmentsService } from "./project-environments-service.js";
-import { toJson } from "./run-coordinator.js";
+import { jsonColumn, toJson } from "./run-coordinator.js";
 
 const tracer = getTracer("@catamorphic/core");
 const resourceLimitsSchema = z.array(
@@ -286,7 +286,7 @@ export class ClientRunnersService {
       .updateTable("client_runner_jobs")
       .set({
         status: args.error ? "failed" : "completed",
-        response: toJson(args.response ?? null),
+        response: jsonColumn(toJson(args.response ?? null)),
         error: args.error ?? null,
       })
       .where("id", "=", args.jobId)
@@ -347,7 +347,7 @@ export class ClientRunnersService {
 
   async binding(args: {
     tenantId: string;
-    externalUserId?: string;
+    ownerUserId?: string;
     projectId?: string;
     clientRunnerId?: string;
     allocationBindingId?: string;
@@ -357,14 +357,14 @@ export class ClientRunnersService {
       ? args.allocationBindingId.split(":")
       : undefined;
     const id = allocationParts?.[1] ?? args.clientRunnerId;
-    if (!id || !args.externalUserId || !args.projectId) return undefined;
+    if (!id || !args.ownerUserId || !args.projectId) return undefined;
     const runner = await this.db
       .selectFrom("client_runners")
       .selectAll()
       .where("id", "=", id)
       .where("tenant_id", "=", args.tenantId)
       .where("project_id", "=", args.projectId)
-      .where("external_user_id", "=", args.externalUserId)
+      .where("external_user_id", "=", args.ownerUserId)
       .where("lease_expires_at", ">", sql<Date>`now()`)
       .executeTakeFirst();
     if (
@@ -483,7 +483,7 @@ export class ClientRunnersService {
     )
       throw new AccessDeniedError();
     const policy = await this.environments.list(args);
-    if (policy.environments[args.environment]?.binding !== "this-machine")
+    if (policy.environments[args.environment]?.device !== "member")
       throw new AccessDeniedError();
   }
 }

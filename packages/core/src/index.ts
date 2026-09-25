@@ -215,6 +215,7 @@ export {
 export { ConnectionAdmissionService } from "./services/connection-admission.js";
 export {
   ConnectionActionDeniedError,
+  ConnectionActionRefusedError,
   ConnectionBroker,
   type ConnectionGateway,
 } from "./services/connection-broker.js";
@@ -367,6 +368,7 @@ export {
 } from "./services/plugins-service.js";
 export { forgetProgramFetch } from "./services/program-reader.js";
 export {
+  DEFAULT_ENVIRONMENT,
   type ProjectEnvironmentDefinition,
   type ProjectEnvironmentEntry,
   type ProjectEnvironmentPolicy,

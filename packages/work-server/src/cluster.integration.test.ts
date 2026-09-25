@@ -84,9 +84,12 @@ it.skipIf(!process.env.DATABASE_URL)(
           files: {
             ".catamorphic/project.json": JSON.stringify({
               environments: {
-                primary: { binding: aHealth.machine.id, workloads: ["agent"] },
+                primary: {
+                  pool: { node: aHealth.machine.id },
+                  workloads: ["agent"],
+                },
                 secondary: {
-                  binding: bHealth.machine.id,
+                  pool: { node: bHealth.machine.id },
                   workloads: ["agent"],
                 },
               },

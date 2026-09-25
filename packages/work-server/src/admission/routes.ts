@@ -38,6 +38,8 @@ interface AdmissionRoutesOptions {
   publicBases: readonly string[];
   auth: Pick<WorkAuth, "findUserById" | "resolveAccessToken">;
   identityForUser(input: { externalUserId: string }): Promise<Identity>;
+  /** Disabled accounts and guests never act on admission (ADRs 0161, 0165). */
+  mayAct(userId: string): Promise<boolean>;
   admission: Pick<
     WorkAdmissionService,
     | "setPolicy"
@@ -235,7 +237,8 @@ async function resolveCaller(
   const authenticated = await options.auth.resolveAccessToken({
     authorization,
   });
-  if (!authenticated) return null;
+  if (!authenticated || !(await options.mayAct(authenticated.userId)))
+    return null;
   return {
     identity: await options.identityForUser({
       externalUserId: authenticated.userId,

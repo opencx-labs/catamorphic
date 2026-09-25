@@ -1,6 +1,6 @@
 # 0164 — A control plane and enrolled workers without credentials
 
-- **Status:** Accepted
+- **Status:** Accepted; placement refined by 0167
 - **Date:** 2026-09-25
 - **Supersedes:** 0099's use of full server instances as execution machines
 - **Refines:** 0064, 0098, 0100

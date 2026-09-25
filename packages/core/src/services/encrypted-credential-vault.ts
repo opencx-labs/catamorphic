@@ -49,6 +49,11 @@ export class EncryptedCredentialVault implements CredentialVault {
     return this.current.id;
   }
 
+  /** Identifiers of every key this vault can open, current first. */
+  get keyIds(): string[] {
+    return this.keys.map((key) => key.id);
+  }
+
   private get current(): VaultKey {
     const [current] = this.keys;
     if (!current) throw new Error("Vault needs at least one key");
@@ -108,13 +113,16 @@ export class EncryptedCredentialVault implements CredentialVault {
     }
     for (const candidate of candidates) {
       try {
+        const tag = Buffer.from(envelope.tag, "base64");
+        if (tag.byteLength !== 16) throw new Error("Malformed credential tag");
         const decipher = createDecipheriv(
           "aes-256-gcm",
           candidate.key,
           Buffer.from(envelope.nonce, "base64"),
+          { authTagLength: 16 },
         );
         decipher.setAAD(Buffer.from(recordKey));
-        decipher.setAuthTag(Buffer.from(envelope.tag, "base64"));
+        decipher.setAuthTag(tag);
         return Buffer.concat([
           decipher.update(Buffer.from(envelope.ciphertext, "base64")),
           decipher.final(),

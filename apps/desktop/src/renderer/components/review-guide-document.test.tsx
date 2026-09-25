@@ -39,7 +39,7 @@ vi.mock("@catamorphic/react", () => ({
           id: "configured",
           name: "Configured agent",
           available: true,
-          environments: { items: [], defaultEnvironment: "local" },
+          environments: { items: [], defaultEnvironment: "default" },
         },
       ],
     },

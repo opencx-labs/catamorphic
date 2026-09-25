@@ -83,6 +83,9 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
       });
     await expect(call({ path: "/customers" })).rejects.toThrow("allowed paths");
     await expect(call({ path: "/invoices/../admin" })).rejects.toThrow("..");
+    await expect(
+      call({ path: "/invoices/%2e%2e/%2E%2e/admin" }),
+    ).rejects.toThrow("encoded");
     await expect(call({ path: "//evil.test/invoices" })).rejects.toThrow();
     await expect(
       call({ path: "/invoices", headers: { Authorization: "Bearer x" } }),

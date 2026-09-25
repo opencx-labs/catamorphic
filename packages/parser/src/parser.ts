@@ -1769,6 +1769,20 @@ function parseTriggerBindings(opts: {
       }
       config = result.value;
     }
+    // `trigger` is a package import, not a builder argument: a local or
+    // destructured binding parses here and is undefined when the run starts.
+    const callee = call.getExpression();
+    const declarations = Node.isIdentifier(callee)
+      ? (callee.getSymbol()?.getDeclarations() ?? [])
+      : [];
+    if (
+      declarations.length > 0 &&
+      !declarations.some((declaration) => Node.isImportSpecifier(declaration))
+    ) {
+      throw new Error(
+        `Workflow '${opts.workflowName}' uses a trigger(...) that is not imported: add \`import { trigger } from "@catamorphic/workflow"\``,
+      );
+    }
     bindings.push({ kind, config, sourceRange: getSourceRange(call) });
   }
   return bindings;

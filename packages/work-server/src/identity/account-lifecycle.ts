@@ -103,10 +103,15 @@ export class AccountLifecycle {
     }
   }
 
-  /** Ask every directory governing the user; disable on a definitive no. */
+  /**
+   * Ask every directory governing the user; disable on a definitive no.
+   * `force` asks now regardless of the check interval; `signIn` marks a
+   * fresh sign-in, the only path that re-enables a disabled account.
+   */
   async refreshStanding(args: {
     userId: string;
     force?: boolean;
+    signIn?: boolean;
   }): Promise<AccountStanding> {
     return withSpan(
       {
@@ -121,6 +126,7 @@ export class AccountLifecycle {
   private async refreshStandingUninstrumented(args: {
     userId: string;
     force?: boolean;
+    signIn?: boolean;
   }): Promise<AccountStanding> {
     const now = this.now();
     const row = await this.deps.db
@@ -184,13 +190,14 @@ export class AccountLifecycle {
         conflict.column("user_id").doUpdateSet({
           directory_checked_at: now,
           directory_groups: JSON.stringify([...groups]),
-          // An account the directory reports active again may sign in anew.
-          disabled_at: null,
-          disabled_reason: null,
+          // Only a fresh sign-in the directory approves re-enables an
+          // account; a background check racing a disable never undoes it.
+          ...(args.signIn ? { disabled_at: null, disabled_reason: null } : {}),
           updated_at: now,
         }),
       )
       .execute();
+    if (!args.signIn && row?.disabled_at) return "disabled";
     await this.deps.reconcileRoles({
       userId: args.userId,
       groups: [...groups],
@@ -285,6 +292,19 @@ export class AccountLifecycle {
     const standing = await this.refreshStanding({ userId: token.user_id });
     if (standing === "disabled") return deny("account disabled");
     if (standing === "unknown") return deny("directory unavailable");
+    // Claim the token in one statement: of two concurrent refreshes, one
+    // wins and the other is reuse.
+    const claimed = await this.deps.db
+      .updateTable("work_refresh_tokens")
+      .set({ rotated_at: this.now() })
+      .where("token_hash", "=", hashToken(args.refreshToken))
+      .where("rotated_at", "is", null)
+      .returning("token_hash")
+      .executeTakeFirst();
+    if (!claimed) {
+      await this.revokeFamily({ familyId: token.family_id, reason: "reuse" });
+      return deny("refresh token reuse detected");
+    }
     return { allow: true };
   }
 
@@ -318,6 +338,7 @@ export class AccountLifecycle {
       const standing = await this.refreshStanding({
         userId: grant.userId,
         force: true,
+        signIn: true,
       });
       if (standing !== "active") {
         await this.deps.auth.deleteGrants({ ids: [grant.id] });
@@ -352,23 +373,23 @@ export class AccountLifecycle {
     }
     if (!args.previousRefreshToken || !refreshToken) return { allow: true };
     const previous = await this.deps.db
-      .selectFrom("work_refresh_tokens")
-      .select(["family_id", "grant_id"])
-      .where("token_hash", "=", hashToken(args.previousRefreshToken))
+      .selectFrom("work_refresh_tokens as token")
+      .innerJoin(
+        "work_token_families as family",
+        "family.id",
+        "token.family_id",
+      )
+      .select(["token.family_id", "token.grant_id", "family.revoked_at"])
+      .where("token.token_hash", "=", hashToken(args.previousRefreshToken))
       .executeTakeFirst();
-    if (!previous) {
+    if (!previous || previous.revoked_at) {
       await this.deps.auth.deleteGrants({ ids: [grant.id] });
       return {
         allow: false,
         error: "invalid_grant",
-        description: "unknown refresh token",
+        description: previous ? "session revoked" : "unknown refresh token",
       };
     }
-    await this.deps.db
-      .updateTable("work_refresh_tokens")
-      .set({ rotated_at: now })
-      .where("token_hash", "=", hashToken(args.previousRefreshToken))
-      .execute();
     // The superseded pair stops working at once, not at its expiry.
     await this.deps.auth.deleteGrants({ ids: [previous.grant_id] });
     await this.recordToken({
@@ -386,7 +407,7 @@ export class AccountLifecycle {
   async sweep(): Promise<{ checked: number; disabled: number }> {
     let checked = 0;
     let disabled = 0;
-    for (const userId of await this.deps.auth.usersWithLiveGrants()) {
+    for (const userId of await this.deps.auth.usersSignedIn()) {
       try {
         const standing = await this.refreshStanding({ userId, force: true });
         checked += 1;

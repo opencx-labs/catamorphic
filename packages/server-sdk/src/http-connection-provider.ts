@@ -170,23 +170,35 @@ function resolveTarget(args: {
   allowed?: readonly string[];
 }): string {
   const path = args.path.startsWith("/") ? args.path : `/${args.path}`;
-  if (path.includes("..") || path.includes("\\") || /[?#]/.test(path)) {
-    throw new Error("Paths may not contain '..', '?', '#', or backslashes");
-  }
   if (
-    args.allowed &&
-    !args.allowed.some(
-      (prefix) =>
-        path === prefix || path.startsWith(prefix.replace(/\/?$/, "/")),
-    )
+    path.includes("..") ||
+    path.includes("\\") ||
+    /[?#]/.test(path) ||
+    /%(2e|2f|5c)/i.test(path)
   ) {
     throw new Error(
-      `Path '${path}' is outside this connection's allowed paths`,
+      "Paths may not contain '..', '?', '#', backslashes, or encoded dots and slashes",
     );
   }
   const target = new URL(`${args.basePath}${path}`, args.base.origin);
   if (target.origin !== args.base.origin) {
     throw new Error("Requests must stay on the connection's origin");
+  }
+  // URL parsing resolves encoded dot segments (`%2e%2e`); check the path it
+  // actually produced against the base path and the allowlist.
+  const resolved = target.pathname;
+  const within = (prefix: string) =>
+    resolved === prefix || resolved.startsWith(prefix.replace(/\/?$/, "/"));
+  if (args.basePath && !within(args.basePath)) {
+    throw new Error("Requests must stay under the connection's base path");
+  }
+  if (
+    args.allowed &&
+    !args.allowed.some((prefix) => within(`${args.basePath}${prefix}`))
+  ) {
+    throw new Error(
+      `Path '${path}' is outside this connection's allowed paths`,
+    );
   }
   for (const [key, value] of Object.entries(args.query)) {
     target.searchParams.set(key, value);
