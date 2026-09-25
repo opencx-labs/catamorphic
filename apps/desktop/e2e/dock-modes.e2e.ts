@@ -316,6 +316,10 @@ describe("dock modes", () => {
     await dockRun(
       `window.__dockPointerDowns = 0;
        document.addEventListener('pointerdown', () => { window.__dockPointerDowns += 1; }, true);
+       window.__dockLastMove = null;
+       document.addEventListener('mousemove', (event) => {
+         window.__dockLastMove = { x: event.clientX, y: event.clientY };
+       }, true);
        return true;`,
     );
     // The margin beside the chat is empty space in the dock window: the
@@ -386,6 +390,23 @@ describe("dock modes", () => {
     await dockWait(
       `return dockH() > 400 && !frontDock().hasAttribute('data-lurking');`,
       { label: "expanded while the dock window is focused" },
+    );
+    // A person's pointer crosses the dock's empty space on its way to the
+    // workspace, and that move tells the dock the pointer left the chat.
+    // A native pointer that jumps from the composer straight to the
+    // workspace exits the dock window without moving inside it, and the
+    // dock deliberately keeps its hover for a leave without a recent move
+    // (the layout moving under a parked pointer), so the chat never lurks.
+    await dockRun(`window.__dockLastMove = null; return true;`);
+    await app.movePointer(margin);
+    await dockWait(
+      `const move = window.__dockLastMove;
+       if (!move) return false;
+       const box = frontDock().getBoundingClientRect();
+       return (move.x < box.left || move.x > box.right ||
+         move.y < box.top || move.y > box.bottom) &&
+         !frontDock().matches(':hover');`,
+      { label: "the dock saw the pointer leave the chat" },
     );
     // A click on the workspace takes the focus with it: the chat lurks.
     const outside = { x: 40, y: 400 };

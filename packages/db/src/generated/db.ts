@@ -647,7 +647,6 @@ export interface ProjectSecrets {
   created_at: Generated<Timestamp>;
   name: string;
   project_id: string;
-  stage: Generated<string>;
   updated_at: Generated<Timestamp>;
   value: string;
 }

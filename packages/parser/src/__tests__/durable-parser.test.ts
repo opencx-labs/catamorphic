@@ -577,3 +577,36 @@ export const route = defineWorkflow(({ defineBoundary }) => ({
     ]);
   });
 });
+
+describe("transitions read from the boundary context", () => {
+  it("draws context.pause and context.callWorkflow like their destructured forms", () => {
+    const graph = parseWorkflow(`
+export const approve = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: (context: BoundaryContext<{ id: string }>) =>
+        context.pause({ signal: "approval", timeout: "1 day" }),
+    }),
+    defineBoundary({
+      run: (context: BoundaryContext<{ approved: boolean }>) =>
+        context.callWorkflow(finish, { input: context.input }),
+    }),
+  ],
+}));
+
+export const finish = defineWorkflow(({ defineBoundary }) => ({
+  steps: [defineBoundary({ run: () => ({ done: true }) })],
+}));
+`);
+    expect(graph.nodes.find((node) => node.type === "pause")?.label).toBe(
+      "Wait for 'approval'",
+    );
+    expect(graph.nodes.some((node) => node.type === "call-workflow")).toBe(
+      true,
+    );
+    // A pause on some other object is an ordinary call, never a transition.
+    expect(graph.nodes.some((node) => node.label === "context.pause")).toBe(
+      false,
+    );
+  });
+});

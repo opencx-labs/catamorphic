@@ -3,23 +3,21 @@ import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import type { RouteContext } from "../app.js";
 import {
-  PlaygroundParseRequestSchema,
-  PlaygroundParseResponseSchema,
+  ParseWorkflowRequestSchema,
+  ParseWorkflowResponseSchema,
 } from "../schemas.js";
 import { attachTriggerKindDisplays } from "./triggers.js";
 
-export function registerPlaygroundRoutes(
-  app: FastifyInstance,
-  ctx: RouteContext,
-) {
+/** Parse in-flight draft files into a graph (the browser cannot run the parser). */
+export function registerParseRoutes(app: FastifyInstance, ctx: RouteContext) {
   const typed = app.withTypeProvider<ZodTypeProvider>();
 
   typed.route({
     method: "POST",
-    url: "/playground/parse",
+    url: "/workflows/parse",
     schema: {
-      body: PlaygroundParseRequestSchema,
-      response: { 200: PlaygroundParseResponseSchema },
+      body: ParseWorkflowRequestSchema,
+      response: { 200: ParseWorkflowResponseSchema },
     },
     handler: async (request, reply) => {
       const { files, workflowName, preferredFilePath } = request.body;

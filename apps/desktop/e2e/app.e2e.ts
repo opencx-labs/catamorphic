@@ -197,6 +197,20 @@ describe("browser tabs", () => {
   });
 
   it("navigates browser history with Cmd+Left and Cmd+Right", async () => {
+    // The ACTIVE tab's exact title: "E2E Page" is a substring of "Second E2E
+    // Page", so a substring check passed before the back navigation
+    // committed, and the next forward press landed with no forward entry.
+    const showsTab = (title: string, label: string) =>
+      runWait(
+        // Active tab in either strip: a horizontal tab's button carries
+        // aria-current; a vertical tab's tree row carries aria-selected.
+        // The title is the button's last child; the glyph before it adds text.
+        `return $$('[data-point-key] button').some((button) =>
+           (button.hasAttribute('aria-current') ||
+             !!button.closest('[aria-selected="true"]')) &&
+           button.lastElementChild?.textContent.trim() === ${JSON.stringify(title)});`,
+        { timeoutMs: 30_000, label },
+      );
     await run(`
       const input = $('input[aria-label="Address and search bar"]');
       input.focus();
@@ -205,21 +219,12 @@ describe("browser tabs", () => {
         { key: 'Enter', bubbles: true, cancelable: true }));
       return true;
     `);
-    await runWait(`return !!byText('button', 'Second E2E Page');`, {
-      timeoutMs: 30_000,
-      label: "second browser history entry",
-    });
+    await showsTab("Second E2E Page", "second browser history entry");
 
     await run(`pressKey('ArrowLeft', { metaKey: true }); return true;`);
-    await runWait(`return !!byText('button', 'E2E Page');`, {
-      timeoutMs: 30_000,
-      label: "browser history moved back",
-    });
+    await showsTab("E2E Page", "browser history moved back");
     await run(`pressKey('ArrowRight', { metaKey: true }); return true;`);
-    await runWait(`return !!byText('button', 'Second E2E Page');`, {
-      timeoutMs: 30_000,
-      label: "browser history moved forward",
-    });
+    await showsTab("Second E2E Page", "browser history moved forward");
 
     const isMac = await run<boolean>(
       `return navigator.platform.toLowerCase().startsWith('mac');`,
@@ -231,20 +236,14 @@ describe("browser tabs", () => {
         );
         return true;
       `);
-      await runWait(`return !!byText('button', 'E2E Page');`, {
-        timeoutMs: 30_000,
-        label: "browser mouse button moved back",
-      });
+      await showsTab("E2E Page", "browser mouse button moved back");
       await run(`
         void $('webview').executeJavaScript(
           "window.dispatchEvent(new MouseEvent('mouseup', { button: 4, bubbles: true, cancelable: true }))",
         );
         return true;
       `);
-      await runWait(`return !!byText('button', 'Second E2E Page');`, {
-        timeoutMs: 30_000,
-        label: "browser mouse button moved forward",
-      });
+      await showsTab("Second E2E Page", "browser mouse button moved forward");
     }
   });
 

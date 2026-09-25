@@ -96,10 +96,29 @@ export type StorageConfig =
   /** Custom `ProjectManager` wiring (e.g. Artifacts remote backend). */
   | { projectManager: ProjectManager };
 
-export interface CreateCatamorphicConfig {
+/**
+ * Everything `createCatamorphic` takes. A coding agent needs a stable host
+ * identity for the sessions it runs, so `hostId` is required with
+ * `codingAgent`.
+ */
+export type CreateCatamorphicConfig = CatamorphicHostConfig &
+  (
+    | {
+        /**
+         * Pluggable coding agent(s) for AI-assisted editing: a single provider
+         * (e.g. `AiSdkCodingAgent` from `@catamorphic/ai-sdk`) or a
+         * `CodingAgentRegistry` when the host offers several agents. Requires
+         * `sandboxProvider`; enables the agent-session APIs.
+         */
+        codingAgent: CodingAgentProvider | CodingAgentRegistry;
+        /** Stable host identity the agent sessions belong to. */
+        hostId: string;
+      }
+    | { codingAgent?: undefined; hostId?: string }
+  );
+
+export interface CatamorphicHostConfig {
   agentCapabilities?: AgentCapabilityOptions;
-  /** Stable host identity. Required when `codingAgent` enables sessions. */
-  hostId?: string;
   /** Optional leased execution instance. The host owns registration/heartbeat. */
   workerNode?: CatamorphicCoreConfig["workerNode"];
   database: DatabaseConfig;
@@ -125,13 +144,6 @@ export interface CreateCatamorphicConfig {
   }) => string | undefined;
   /** Required once the host uses plugins + secrets. */
   pluginResolver?: PluginResolver;
-  /**
-   * Pluggable coding agent(s) for AI-assisted editing: a single provider
-   * (e.g. `AiSdkCodingAgent` from `@catamorphic/ai-sdk`) or a
-   * `CodingAgentRegistry` when the host offers several agents. Requires
-   * `sandboxProvider`; enables the agent-session APIs.
-   */
-  codingAgent?: CodingAgentProvider | CodingAgentRegistry;
   /**
    * Resolve a project's directory on the host filesystem, required for
    * registry agents with `topology: "native"` (Claude Code, Codex).

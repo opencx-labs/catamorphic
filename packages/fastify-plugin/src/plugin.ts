@@ -1,6 +1,7 @@
 import type { CatamorphicCore } from "@catamorphic/core";
 import {
   AccessDeniedError,
+  DeploymentBlockedError,
   ProjectNotFoundError,
   SessionArtifactConflictError,
   SessionArtifactNotFoundError,
@@ -29,7 +30,7 @@ import { registerGithubRoutes } from "./routes/github.js";
 import { registerMeRoutes } from "./routes/me.js";
 import { registerMembershipRoutes } from "./routes/memberships.js";
 import { registerNotificationRoutes } from "./routes/notifications.js";
-import { registerPlaygroundRoutes } from "./routes/playground.js";
+import { registerParseRoutes } from "./routes/parse.js";
 import { registerPluginRoutes } from "./routes/plugins.js";
 import { registerProjectMcpRoutes } from "./routes/project-mcp.js";
 import { registerProjectRoutes } from "./routes/projects.js";
@@ -152,6 +153,10 @@ export const catamorphicPlugin: FastifyPluginAsync<
     if (err instanceof ProjectNotFoundError) {
       return reply.status(404).send({ error: "Project not found" });
     }
+    // A normal state the person resolves (record changes first), not a fault.
+    if (err instanceof DeploymentBlockedError) {
+      return reply.status(409).send({ error: err.message });
+    }
     app.log.error(err);
     return reply.send(err);
   });
@@ -226,5 +231,5 @@ export const catamorphicPlugin: FastifyPluginAsync<
   registerAgentCapabilityRoutes(app, ctx);
   registerGithubRoutes(app, ctx);
   registerPluginRoutes(app, ctx);
-  registerPlaygroundRoutes(app, ctx);
+  registerParseRoutes(app, ctx);
 };

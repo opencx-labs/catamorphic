@@ -313,21 +313,18 @@ export const WorkflowNodeTypeSchema = z.enum([
   "branch",
   "if-block",
   "loop-block",
-  "parallel",
   "parallel-block",
   "scope-block",
   "durable-boundary",
   "batch",
   "pause",
   "call-workflow",
-  "delay",
   "return",
 ]);
 
 export const WorkflowEdgeTypeSchema = z.enum([
   "branch-false",
   "branch-true",
-  "parallel",
   "sequential",
 ]);
 
@@ -1810,16 +1807,16 @@ export const MeSchema = z.object({
   }),
 });
 
-// --- Playground Parse ---
+// --- Workflow parse ---
 // Pure AST parse of in-flight draft files → WorkflowGraph. Browser clients
 // can't run `@catamorphic/parser` (ts-morph → node:fs) so the server does it.
-export const PlaygroundParseRequestSchema = z.object({
+export const ParseWorkflowRequestSchema = z.object({
   files: z.record(z.string(), z.string()),
   workflowName: z.string().min(1),
   preferredFilePath: z.string().optional(),
 });
 
-export const PlaygroundParseResponseSchema = WorkflowGraphSchema.nullable();
+export const ParseWorkflowResponseSchema = WorkflowGraphSchema.nullable();
 
 // --- Plugins ---
 export const PluginSecretSchema = z.object({
@@ -1885,10 +1882,6 @@ export const UpsertSecretSchema = z.object({
 
 export const SecretNameParamsSchema = ProjectIdParamsSchema.extend({
   name: z.string().min(1),
-});
-
-export const RunStageQuerySchema = z.object({
-  stage: z.enum(["test", "production"]).default("production"),
 });
 
 // --- GitHub ---

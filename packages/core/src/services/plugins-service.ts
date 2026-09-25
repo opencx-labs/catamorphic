@@ -249,7 +249,6 @@ export class PluginsService {
     const rows = await this.db
       .selectFrom("project_secrets")
       .where("project_id", "=", projectId)
-      .where("stage", "=", "production")
       .where("name", "in", names)
       .select(["name"])
       .execute();

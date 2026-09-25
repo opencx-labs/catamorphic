@@ -17,7 +17,6 @@ import {
   ErrorSchema,
   PluginPackageParamsSchema,
   ProjectIdParamsSchema,
-  RunStageQuerySchema,
   SecretNameParamsSchema,
   SecretStatusSchema,
   UpsertSecretSchema,
@@ -145,7 +144,6 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
     url: "/projects/:projectId/secrets",
     schema: {
       params: ProjectIdParamsSchema,
-      querystring: RunStageQuerySchema,
       response: {
         200: z.array(SecretStatusSchema),
         503: ErrorSchema,
@@ -157,7 +155,6 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
       const list = await ctx.core.secrets.list({
         identity: resolveIdentity(request),
         projectId: request.params.projectId,
-        stage: request.query.stage,
       });
       return reply.send(list);
     },
@@ -168,7 +165,6 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
     url: "/projects/:projectId/secrets/:name",
     schema: {
       params: SecretNameParamsSchema,
-      querystring: RunStageQuerySchema,
       body: UpsertSecretSchema,
       response: {
         200: SecretStatusSchema,
@@ -183,7 +179,6 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
         const status = await ctx.core.secrets.upsert({
           identity: resolveIdentity(request),
           projectId: request.params.projectId,
-          stage: request.query.stage,
           name: request.params.name,
           value: request.body.value,
         });
@@ -225,7 +220,6 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
     url: "/projects/:projectId/secrets/:name",
     schema: {
       params: SecretNameParamsSchema,
-      querystring: RunStageQuerySchema,
       response: {
         200: z.object({ deleted: z.boolean() }),
         503: ErrorSchema,
@@ -237,7 +231,6 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
       const ok = await ctx.core.secrets.delete({
         identity: resolveIdentity(request),
         projectId: request.params.projectId,
-        stage: request.query.stage,
         name: request.params.name,
       });
       return reply.send({ deleted: ok });

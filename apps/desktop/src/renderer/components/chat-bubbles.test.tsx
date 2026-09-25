@@ -2,6 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChatSessionMenuEntry } from "../lib/chat-session-actions.js";
 import { ChatBubbles } from "./chat-bubbles.js";
 
 Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
@@ -16,7 +17,11 @@ afterEach(() => {
   for (const container of containers.splice(0)) container.remove();
 });
 
-function mount() {
+function mount({
+  menus = {},
+}: {
+  menus?: Record<string, ChatSessionMenuEntry[]>;
+} = {}) {
   const onToggle = vi.fn();
   const onOpenAs = vi.fn();
   const container = document.createElement("div");
@@ -34,7 +39,7 @@ function mount() {
         signals={{}}
         unread={{}}
         attention={{}}
-        menus={{}}
+        menus={menus}
         autoCollapse={false}
         onToggle={onToggle}
         onOpenAs={onOpenAs}
@@ -48,7 +53,7 @@ function mount() {
     '[data-chat-bubble="a"] button[aria-label^="Open"]',
   );
   if (!bubble) throw new Error("bubble not rendered");
-  return { bubble, onToggle, onOpenAs };
+  return { bubble, container, onToggle, onOpenAs };
 }
 
 function click(target: HTMLElement, init: MouseEventInit) {
@@ -76,5 +81,44 @@ describe("ChatBubbles open modifiers", () => {
     click(bubble, { metaKey: true, shiftKey: true });
     expect(onOpenAs).toHaveBeenLastCalledWith("a", "side");
     expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ChatBubbles context menu", () => {
+  const archiveMenu = () =>
+    [...document.querySelectorAll("[role=menuitem]")].find(
+      (item) => item.textContent?.trim() === "Archive",
+    );
+
+  it("stays open while another surface scrolls and closes when the page scrolls", () => {
+    const { bubble, container } = mount({
+      menus: { a: [{ label: "Archive", action: "archive" }] },
+    });
+    act(() => {
+      bubble.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 40,
+          clientY: 40,
+        }),
+      );
+    });
+    expect(archiveMenu()?.closest(".animate-pop-in")).toBeTruthy();
+
+    // A streaming chat timeline following its output is not the bubble's
+    // scroller; its scroll events must leave the menu open.
+    const timeline = document.createElement("div");
+    document.body.append(timeline);
+    containers.push(timeline);
+    act(() => {
+      timeline.dispatchEvent(new Event("scroll"));
+    });
+    expect(archiveMenu()?.closest(".animate-pop-in")).toBeTruthy();
+
+    act(() => {
+      container.dispatchEvent(new Event("scroll"));
+    });
+    expect(archiveMenu()?.closest(".animate-pop-out")).toBeTruthy();
   });
 });

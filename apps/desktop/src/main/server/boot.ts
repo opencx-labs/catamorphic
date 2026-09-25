@@ -564,17 +564,8 @@ export async function startEmbeddedServer(
       tenantId: DESKTOP_TENANT_ID,
       externalUserId: DESKTOP_USER_ID,
     };
-    for (const stage of ["production", "test"] as const) {
-      const { values } = await secrets.loadForRun({
-        identity,
-        projectId,
-        stage,
-      });
-      if (values[name] !== undefined && values[name] !== "") {
-        return values[name];
-      }
-    }
-    return undefined;
+    const { values } = await secrets.loadForRun({ identity, projectId });
+    return values[name] || undefined;
   };
 
   const { applied } = await catamorphic.migrate();

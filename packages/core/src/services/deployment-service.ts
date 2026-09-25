@@ -21,6 +21,17 @@ const REMOTE_BRANCH = "main";
  * push, and AI-assisted pull/merge. Stateless: every call opens its own
  * per-user dev repo.
  */
+/**
+ * The project's state blocks the request (unrecorded local changes, a local
+ * checkout that syncs through its own remote): the person must act first.
+ */
+export class DeploymentBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DeploymentBlockedError";
+  }
+}
+
 export interface DeployOptions {
   message?: string;
   files?: Record<string, string>;
@@ -251,7 +262,7 @@ export class DeploymentService {
         opts?.files &&
         (await this.projectManager.localPath({ tenantId, projectId }))
       ) {
-        throw new Error(
+        throw new DeploymentBlockedError(
           "Save and record these changes in Git before publishing this local project.",
         );
       }
@@ -265,7 +276,7 @@ export class DeploymentService {
 
       if (await this.projectManager.localPath({ tenantId, projectId })) {
         if (status.dirty)
-          throw new Error(
+          throw new DeploymentBlockedError(
             "Record the changes you want to publish in Git first. Publishing keeps your branch and pending work unchanged.",
           );
         if (!status.baseCommit)
@@ -428,7 +439,7 @@ export class DeploymentService {
           externalUserId,
           async (repo) => {
             if (await this.projectManager.localPath({ tenantId, projectId })) {
-              throw new Error(
+              throw new DeploymentBlockedError(
                 "This project uses its existing Git remote. Use Git sync to download changes; its published snapshot is already available locally.",
               );
             }

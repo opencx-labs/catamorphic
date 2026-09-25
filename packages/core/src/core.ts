@@ -620,7 +620,6 @@ export class CatamorphicCore {
             .selectFrom("project_secrets")
             .select("value")
             .where("project_id", "=", projectId)
-            .where("stage", "=", "production")
             .where("name", "=", name)
             .executeTakeFirst()
         )?.value,

@@ -2,7 +2,7 @@
 Only segments explicitly marked speed>1 accelerate the agent build wait.
 """
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 import json,bisect,subprocess,sys
 P=Path(__file__).parent
 edit=json.loads((P/'edit.json').read_text())
@@ -14,8 +14,6 @@ def source(name):
   sources[name]=(m,[f['t'] for f in m])
  return sources[name]
 segments=edit['segments']; duration=sum((s['out']-s['in'])/s.get('speed',1) for s in segments)
-font=ImageFont.truetype(str(P.parent/'Inter.ttf'),30)
-small=ImageFont.truetype(str(P.parent/'Inter.ttf'),22)
 cache={}
 def frame(t):
  for s in segments:
