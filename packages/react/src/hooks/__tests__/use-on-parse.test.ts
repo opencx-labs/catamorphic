@@ -76,7 +76,7 @@ describe("useOnParse", () => {
   it("merges live source into files and returns a layouted graph", async () => {
     let captured: unknown = null;
     server.use(
-      http.post(apiUrl("/api/playground/parse"), async ({ request }) => {
+      http.post(apiUrl("/api/workflows/parse"), async ({ request }) => {
         captured = await request.json();
         return HttpResponse.json(SAMPLE_GRAPH);
       }),
@@ -128,7 +128,7 @@ describe("useOnParse", () => {
 
   it("returns null when the server reports no parse (null body)", async () => {
     server.use(
-      http.post(apiUrl("/api/playground/parse"), () => HttpResponse.json(null)),
+      http.post(apiUrl("/api/workflows/parse"), () => HttpResponse.json(null)),
     );
 
     const { result } = renderHookWithProviders(() =>
@@ -144,7 +144,7 @@ describe("useOnParse", () => {
 
   it("surfaces parse errors so the host can explain a stale preview", async () => {
     server.use(
-      http.post(apiUrl("/api/playground/parse"), () =>
+      http.post(apiUrl("/api/workflows/parse"), () =>
         HttpResponse.json({ error: "boom" }, { status: 500 }),
       ),
     );
@@ -161,7 +161,7 @@ describe("useOnParse", () => {
 
   it("returns a stable callback across renders when inputs are unchanged", async () => {
     server.use(
-      http.post(apiUrl("/api/playground/parse"), () =>
+      http.post(apiUrl("/api/workflows/parse"), () =>
         HttpResponse.json(SAMPLE_GRAPH),
       ),
     );
@@ -185,7 +185,7 @@ describe("useOnParse", () => {
   it("picks up the latest `files` ref when invoked after a rerender", async () => {
     let lastRequest: { files: Record<string, string> } | null = null;
     server.use(
-      http.post(apiUrl("/api/playground/parse"), async ({ request }) => {
+      http.post(apiUrl("/api/workflows/parse"), async ({ request }) => {
         lastRequest = (await request.json()) as {
           files: Record<string, string>;
         };

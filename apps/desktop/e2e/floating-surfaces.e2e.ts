@@ -267,13 +267,35 @@ describe("floating surfaces", () => {
     await click("Open as full tab");
     await app.waitFor(`!${floating}`);
     expect(await run("return !!$('select[name=linkOpenMode]')")).toBe(true);
+    // The expanded page is the whole view once its pane settles: a full
+    // slot, no frame animation left from the floating panel.
+    await app.waitFor(
+      "(()=>{const body=document.querySelector('[data-settings-scroll]');const pane=body?.closest('[data-workspace-slot]');return pane?.dataset.workspaceSlot==='full'&&!pane.getAnimations({subtree:true}).some(a=>a.playState==='running'&&a.effect?.getTiming().iterations!==Infinity)})()",
+      { label: "settings expanded into a full tab" },
+    );
     await run(
       "const body=$('[data-settings-scroll]');body.scrollTop=0;body.tabIndex=-1;body.focus()",
     );
-    await app.press("PageDown");
+    // PageDown scrolls whatever holds focus. Press only once the page still
+    // holds it after the expansion's effects, and is taller than its pane.
     await app.waitFor(
-      "document.querySelector('[data-settings-scroll]').scrollTop>0",
+      "(()=>{const body=document.querySelector('[data-settings-scroll]');return document.activeElement===body&&body.scrollTop===0&&body.scrollHeight>body.clientHeight})()",
+      { label: "settings page focused at its top and scrollable" },
     );
+    await app.press("PageDown");
+    await app
+      .waitFor("document.querySelector('[data-settings-scroll]').scrollTop>0", {
+        label: "PageDown scrolled the settings page",
+      })
+      .catch(async (error: unknown) => {
+        const state = await run(`const body=$('[data-settings-scroll]');return {
+          active: document.activeElement?.outerHTML.slice(0, 200),
+          windowFocused: document.hasFocus(),
+          scrollers: document.querySelectorAll('[data-settings-scroll]').length,
+          scrollTop: body?.scrollTop, scrollHeight: body?.scrollHeight, clientHeight: body?.clientHeight,
+        };`);
+        throw new Error(`${String(error)}; state: ${JSON.stringify(state)}`);
+      });
 
     guest.close();
   });

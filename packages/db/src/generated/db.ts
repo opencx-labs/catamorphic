@@ -648,7 +648,6 @@ export interface ProjectSecrets {
   credential_ref: string | null;
   name: string;
   project_id: string;
-  stage: Generated<string>;
   updated_at: Generated<Timestamp>;
   value: string | null;
 }

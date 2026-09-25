@@ -171,9 +171,16 @@ it("lists a seven-day reminder before archive, preserves it on cancel, and cance
   await wait(
     "return !!button('sessionlongreminder') && button('sessionlongreminder').parentElement.textContent.includes('Next:');",
   );
+  // The live bubble of this session's chat, never an exiting snapshot.
+  const bubble = `[...document.querySelectorAll('[data-chat-bubble][data-session-id]')].find(el => !el.className.includes('animate-bubble-out'))?.querySelector('button')`;
   const archive = async () => {
+    // Open the menu once the turn has settled: its closing answer is what
+    // the timeline scrolls to follow, and the bubble's menu must be there.
+    await wait(
+      `return [...document.querySelectorAll('.cat-markdown a[href^="artifact:"]')].some(a => a.textContent.includes('longreminder workflow')) && !$('[data-chat-local-id] [aria-label="Stop response"]') && !!${bubble};`,
+    );
     await run(
-      `const bubble = document.querySelector('[data-chat-bubble][data-session-id] button'); if (!bubble) throw new Error('Missing chat bubble'); bubble.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 420, clientY: 500 }));`,
+      `${bubble}.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 420, clientY: 500 }));`,
     );
     await wait(
       `return [...document.querySelectorAll('[role=menuitem]')].some(item => item.textContent.trim() === 'Archive');`,

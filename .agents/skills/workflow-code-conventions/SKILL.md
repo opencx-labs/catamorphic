@@ -62,8 +62,8 @@ other than `"use step"`.
   (AGENTS.md). Workflows and boundaries get one when they appear in the UI.
   `@description` and `@icon` are optional. Labels must describe what the code
   actually does.
-- Annotate boundary callbacks with `BoundaryContext<Input>`. Destructure
-  `pause` and `callWorkflow`; the parser recognizes only those bare names.
+- Annotate boundary callbacks with `BoundaryContext<Input>`. Destructuring
+  (`({ input, pause })`) and a named context (`context.pause(...)`) both work.
 - Write IO as a statement (`await f()`, `const x = await f()`) or a returned
   call. A call nested in an object literal or argument runs but is not drawn.
 

@@ -140,6 +140,7 @@ function Bubble({
   const [asking, setAsking] = useState(false);
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
   const prevAwaitingRef = useRef(signals.awaitingInput ?? false);
   if (prevAwaitingRef.current !== (signals.awaitingInput ?? false)) {
     prevAwaitingRef.current = signals.awaitingInput ?? false;
@@ -151,6 +152,19 @@ function Bubble({
       if (
         event.target instanceof Element &&
         event.target.closest("[data-sidebar-menu]")
+      ) {
+        return;
+      }
+      // Only a scroll that carries the bubble detaches the menu from it. A
+      // streaming chat keeps its timeline following new output, and those
+      // scrolls must not close a menu the person just opened.
+      if (
+        event.type === "scroll" &&
+        !(
+          event.target instanceof Node &&
+          rootRef.current &&
+          event.target.contains(rootRef.current)
+        )
       ) {
         return;
       }
@@ -173,6 +187,7 @@ function Bubble({
   }, [menuOpen]);
   return (
     <div
+      ref={rootRef}
       data-chat-bubble={entry.localId}
       data-session-id={entry.sessionId}
       style={theme}

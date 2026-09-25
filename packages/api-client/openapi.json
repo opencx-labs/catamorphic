@@ -4967,14 +4967,12 @@
                               "branch",
                               "if-block",
                               "loop-block",
-                              "parallel",
                               "parallel-block",
                               "scope-block",
                               "durable-boundary",
                               "batch",
                               "pause",
                               "call-workflow",
-                              "delay",
                               "return"
                             ]
                           },
@@ -5184,7 +5182,6 @@
                             "enum": [
                               "branch-false",
                               "branch-true",
-                              "parallel",
                               "sequential"
                             ]
                           }
@@ -33171,16 +33168,6 @@
         "parameters": [
           {
             "schema": {
-              "default": "production",
-              "type": "string",
-              "enum": ["test", "production"]
-            },
-            "in": "query",
-            "name": "stage",
-            "required": false
-          },
-          {
-            "schema": {
               "type": "string",
               "format": "uuid",
               "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
@@ -33278,16 +33265,6 @@
           }
         },
         "parameters": [
-          {
-            "schema": {
-              "default": "production",
-              "type": "string",
-              "enum": ["test", "production"]
-            },
-            "in": "query",
-            "name": "stage",
-            "required": false
-          },
           {
             "schema": {
               "type": "string",
@@ -33392,16 +33369,6 @@
       },
       "delete": {
         "parameters": [
-          {
-            "schema": {
-              "default": "production",
-              "type": "string",
-              "enum": ["test", "production"]
-            },
-            "in": "query",
-            "name": "stage",
-            "required": false
-          },
           {
             "schema": {
               "type": "string",
@@ -33512,7 +33479,7 @@
         }
       }
     },
-    "/api/playground/parse": {
+    "/api/workflows/parse": {
       "post": {
         "requestBody": {
           "required": true,
@@ -33724,14 +33691,12 @@
                               "branch",
                               "if-block",
                               "loop-block",
-                              "parallel",
                               "parallel-block",
                               "scope-block",
                               "durable-boundary",
                               "batch",
                               "pause",
                               "call-workflow",
-                              "delay",
                               "return"
                             ]
                           },
@@ -33941,7 +33906,6 @@
                             "enum": [
                               "branch-false",
                               "branch-true",
-                              "parallel",
                               "sequential"
                             ]
                           }

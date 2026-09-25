@@ -740,15 +740,31 @@ describe("context pills", () => {
     await run(
       `setReactValue(composer(), 'What does this say?'); composerKey('Enter'); return true;`,
     );
-    // The reply streams in; wait for the whole sentence, not its prefix.
-    // It is rendered as markdown in the timeline, so the pill's **bold**
-    // shows as bold text; assert the visible sentence.
-    await runWait(
-      `return timelineText().includes('[text-pill selection sel.md:5-5] Second paragraph with bold words.');`,
+    // The message carries both selection pills (line 5 from Cmd+N, line 3
+    // from the paste), and the fake echoes each as its own text. Every echo
+    // but the last settles as a note folded into the turn's steps, whose row
+    // shows the raw markdown; only the answer renders it. Which pill lands
+    // where depends on their order, and the rendered note is visible only
+    // for a moment mid-turn, so open the steps like a reader would and
+    // compare the settled turn with the markdown emphasis set aside.
+    const echoed = await runWait<string>(
+      `const log = frontDock()?.querySelector('[role="log"]');
+       const toggle = log?.querySelector('[data-testid="chat-turn-steps-toggle"]');
+       if (!toggle) return false;
+       if (toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+       const text = log.textContent.replaceAll('**', '');
+       return text.includes('[text-pill selection sel.md:5-5]') &&
+         text.includes('[text-pill selection sel.md:3-3]') ? text : false;`,
       {
         timeoutMs: 30_000,
-        label: "agent echoed selection pill",
+        label: "agent echoed both selection pills",
       },
+    );
+    expect(echoed).toContain(
+      "[text-pill selection sel.md:5-5] Second paragraph with bold words.",
+    );
+    expect(echoed).toContain(
+      "[text-pill selection sel.md:3-3] First paragraph here.",
     );
   }, 60_000);
 

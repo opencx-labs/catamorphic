@@ -288,6 +288,19 @@ export function SidebarItemRow<
       ) {
         return;
       }
+      // Only a scroll that moves the row detaches the fixed-position menu
+      // from it. A chat following its own output elsewhere must not close
+      // a menu the person just opened.
+      if (
+        event.type === "scroll" &&
+        !(
+          event.target instanceof Node &&
+          buttonRef.current &&
+          event.target.contains(buttonRef.current)
+        )
+      ) {
+        return;
+      }
       setOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
@@ -298,7 +311,6 @@ export function SidebarItemRow<
     };
     window.addEventListener("pointerdown", dismiss);
     window.addEventListener("keydown", onKeyDown);
-    // Any scroll would detach the fixed-position menu from its row.
     window.addEventListener("scroll", dismiss, true);
     return () => {
       window.removeEventListener("pointerdown", dismiss);

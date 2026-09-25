@@ -56,7 +56,6 @@ describe("sealed project secrets (ADR 0162)", () => {
     await secrets.upsert({
       identity: owner,
       projectId,
-      stage: "production",
       name: "API_KEY",
       value: "sk-live-123",
     });
@@ -68,7 +67,6 @@ describe("sealed project secrets (ADR 0162)", () => {
     const loaded = await secrets.loadForRun({
       identity: owner,
       projectId,
-      stage: "production",
     });
     expect(loaded).toEqual({
       values: { API_KEY: "sk-live-123" },
@@ -81,7 +79,6 @@ describe("sealed project secrets (ADR 0162)", () => {
     await secrets.upsert({
       identity: owner,
       projectId,
-      stage: "production",
       name: "API_KEY",
       value: "sk-live-456",
     });
@@ -93,7 +90,6 @@ describe("sealed project secrets (ADR 0162)", () => {
       await secrets.value({
         tenantId,
         projectId,
-        stage: "production",
         name: "API_KEY",
       }),
     ).toBe("sk-live-456");
@@ -102,7 +98,6 @@ describe("sealed project secrets (ADR 0162)", () => {
       await secrets.delete({
         identity: owner,
         projectId,
-        stage: "production",
         name: "API_KEY",
       }),
     ).toBe(true);
@@ -116,7 +111,6 @@ describe("sealed project secrets (ADR 0162)", () => {
       .insertInto("project_secrets")
       .values({
         project_id: projectId,
-        stage: "production",
         name: "WEBHOOK_SECRET",
         value: "legacy-plaintext",
       })
@@ -125,7 +119,6 @@ describe("sealed project secrets (ADR 0162)", () => {
       await secrets.value({
         tenantId,
         projectId,
-        stage: "production",
         name: "WEBHOOK_SECRET",
       }),
     ).toBe("legacy-plaintext");

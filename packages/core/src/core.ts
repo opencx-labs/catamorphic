@@ -636,7 +636,6 @@ export class CatamorphicCore {
           ? this.secrets.value({
               tenantId: project.tenant_id,
               projectId,
-              stage: "production",
               name,
             })
           : undefined;

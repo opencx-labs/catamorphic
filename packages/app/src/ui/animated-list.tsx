@@ -4,6 +4,8 @@ import { cx } from "./cx.js";
 
 /** How long the exit animation runs; the clock fallback for removal. */
 const EXIT_MS = 180;
+/** When a departing row leaves the DOM if its animationend never arrives. */
+const EXIT_FALLBACK_MS = EXIT_MS + 70;
 
 type Entry<T> = {
   key: string;
@@ -12,6 +14,8 @@ type Entry<T> = {
   entering: boolean;
   /** Gone from `items` — plays the exit animation, then leaves the DOM. */
   exiting: boolean;
+  /** When the row started exiting; later updates never postpone its removal. */
+  exitingSince?: number;
 };
 
 /**
@@ -32,7 +36,11 @@ function reconcile<T>(
   });
   prev.forEach((entry, index) => {
     if (live.has(entry.key)) return;
-    next.splice(Math.min(index, next.length), 0, { ...entry, exiting: true });
+    next.splice(Math.min(index, next.length), 0, {
+      ...entry,
+      exiting: true,
+      exitingSince: entry.exitingSince ?? Date.now(),
+    });
   });
   return next;
 }
@@ -134,13 +142,26 @@ export function useAnimatedItems<T>({
     setEntries((prev) => reconcile(prev, items, keyOf));
   }
 
-  // Clock fallback: drop every exiting row if animationend never arrives
-  // (occluded windows throttle animation events).
+  // Clock fallback: drop exiting rows if animationend never arrives
+  // (occluded windows throttle animation events). Each row keeps its own
+  // deadline, so a list that updates faster than the exit still sheds them.
   useEffect(() => {
-    if (!entries.some((entry) => entry.exiting)) return;
+    const deadlines = entries.flatMap((entry) =>
+      entry.exiting ? [(entry.exitingSince ?? 0) + EXIT_FALLBACK_MS] : [],
+    );
+    if (deadlines.length === 0) return;
     const timer = setTimeout(
-      () => setEntries((prev) => prev.filter((entry) => !entry.exiting)),
-      EXIT_MS + 70,
+      () => {
+        const now = Date.now();
+        setEntries((prev) =>
+          prev.filter(
+            (entry) =>
+              !entry.exiting ||
+              (entry.exitingSince ?? 0) + EXIT_FALLBACK_MS > now,
+          ),
+        );
+      },
+      Math.max(0, Math.min(...deadlines) - Date.now()),
     );
     return () => clearTimeout(timer);
   }, [entries]);

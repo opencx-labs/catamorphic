@@ -20,8 +20,6 @@ export interface SecretStatus {
   source: "project" | "plugin";
 }
 
-export type RunStage = "test" | "production";
-
 interface DeclaredSecretEntry {
   label?: string;
   description?: string;
@@ -76,13 +74,11 @@ export class SecretsService {
   async value(opts: {
     tenantId: string;
     projectId: string;
-    stage: RunStage;
     name: string;
   }): Promise<string | undefined> {
     const row = await this.db
       .selectFrom("project_secrets")
       .where("project_id", "=", opts.projectId)
-      .where("stage", "=", opts.stage)
       .where("name", "=", opts.name)
       .select(["name", "value", "credential_ref"])
       .executeTakeFirst();
@@ -92,7 +88,6 @@ export class SecretsService {
   private async unseal(args: {
     tenantId: string;
     projectId: string;
-    stage: RunStage;
     row: { name: string; value: string | null; credential_ref: string | null };
   }): Promise<string> {
     const { row } = args;
@@ -109,7 +104,6 @@ export class SecretsService {
       await this.store({
         tenantId: args.tenantId,
         projectId: args.projectId,
-        stage: args.stage,
         name: row.name,
         value,
         updatedAt: undefined,
@@ -122,7 +116,6 @@ export class SecretsService {
   private async store(args: {
     tenantId: string;
     projectId: string;
-    stage: RunStage;
     name: string;
     value: string;
     updatedAt: Date | undefined;
@@ -139,7 +132,6 @@ export class SecretsService {
     const previous = await this.db
       .selectFrom("project_secrets")
       .where("project_id", "=", args.projectId)
-      .where("stage", "=", args.stage)
       .where("name", "=", args.name)
       .select("credential_ref")
       .executeTakeFirst();
@@ -147,13 +139,12 @@ export class SecretsService {
       .insertInto("project_secrets")
       .values({
         project_id: args.projectId,
-        stage: args.stage,
         name: args.name,
         ...columns,
         ...(args.updatedAt ? { updated_at: args.updatedAt } : {}),
       })
       .onConflict((oc) =>
-        oc.columns(["project_id", "stage", "name"]).doUpdateSet({
+        oc.columns(["project_id", "name"]).doUpdateSet({
           ...columns,
           ...(args.updatedAt ? { updated_at: args.updatedAt } : {}),
         }),
@@ -207,10 +198,9 @@ export class SecretsService {
   async list(opts: {
     identity: Identity;
     projectId: string;
-    stage: RunStage;
   }): Promise<SecretStatus[]> {
     assertProjectPermission(opts.identity, opts.projectId, "secrets:read");
-    const { identity, projectId, stage } = opts;
+    const { identity, projectId } = opts;
     await requireTenantProject(this.db, identity.tenantId, projectId);
     const declared = await this.declaredSecrets({ identity, projectId });
     if (declared.size === 0) return [];
@@ -219,7 +209,6 @@ export class SecretsService {
     const rows = await this.db
       .selectFrom("project_secrets")
       .where("project_id", "=", projectId)
-      .where("stage", "=", stage)
       .where("name", "in", names)
       .select(["name", "updated_at"])
       .execute();
@@ -242,12 +231,11 @@ export class SecretsService {
   async upsert(opts: {
     identity: Identity;
     projectId: string;
-    stage: RunStage;
     name: string;
     value: string;
   }): Promise<SecretStatus> {
     assertProjectPermission(opts.identity, opts.projectId, "secrets:write");
-    const { identity, projectId, stage, name, value } = opts;
+    const { identity, projectId, name, value } = opts;
     await requireTenantProject(this.db, identity.tenantId, projectId);
     const declared = await this.declaredSecrets({ identity, projectId });
     const entry = declared.get(name);
@@ -259,7 +247,6 @@ export class SecretsService {
     await this.store({
       tenantId: identity.tenantId,
       projectId,
-      stage,
       name,
       value,
       updatedAt: now,
@@ -279,16 +266,14 @@ export class SecretsService {
   async delete(opts: {
     identity: Identity;
     projectId: string;
-    stage: RunStage;
     name: string;
   }): Promise<boolean> {
     assertProjectPermission(opts.identity, opts.projectId, "secrets:write");
-    const { identity, projectId, stage, name } = opts;
+    const { identity, projectId, name } = opts;
     await requireTenantProject(this.db, identity.tenantId, projectId);
     const removed = await this.db
       .deleteFrom("project_secrets")
       .where("project_id", "=", projectId)
-      .where("stage", "=", stage)
       .where("name", "=", name)
       .returning("credential_ref")
       .executeTakeFirst();
@@ -307,15 +292,11 @@ export class SecretsService {
    * secrets with no value + no default are returned as missing so the caller
    * can surface a clear error.
    */
-  async loadForRun(opts: {
-    identity: Identity;
-    projectId: string;
-    stage: RunStage;
-  }): Promise<{
+  async loadForRun(opts: { identity: Identity; projectId: string }): Promise<{
     values: Record<string, string>;
     missingRequired: string[];
   }> {
-    const { identity, projectId, stage } = opts;
+    const { identity, projectId } = opts;
     const declared = await this.declaredSecrets({
       identity,
       projectId,
@@ -328,7 +309,6 @@ export class SecretsService {
     const rows = await this.db
       .selectFrom("project_secrets")
       .where("project_id", "=", projectId)
-      .where("stage", "=", stage)
       .where("name", "in", [...declared.keys()])
       .select(["name", "value", "credential_ref"])
       .execute();
@@ -340,7 +320,6 @@ export class SecretsService {
         await this.unseal({
           tenantId: identity.tenantId,
           projectId,
-          stage,
           row,
         }),
       );

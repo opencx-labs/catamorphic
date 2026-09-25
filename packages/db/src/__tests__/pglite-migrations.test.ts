@@ -57,11 +57,12 @@ describe("PGlite migrations", () => {
       "017_session_workflow_events.sql",
       "018_session_actions.sql",
       "019_project_automations.sql",
-      "020_work_host_tables.sql",
-      "021_work_company_identity.sql",
-      "022_sealed_project_secrets.sql",
-      "023_remote_workers.sql",
-      "024_work_shares.sql",
+      "020_single_secret_stage.sql",
+      "021_work_host_tables.sql",
+      "022_work_company_identity.sql",
+      "023_sealed_project_secrets.sql",
+      "024_remote_workers.sql",
+      "025_work_shares.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

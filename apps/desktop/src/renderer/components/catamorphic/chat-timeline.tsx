@@ -1323,12 +1323,21 @@ function backgroundLabel(
 }
 
 /** A note the agent wrote mid-turn, as a row of the turn's steps. */
+/** A note's first line reads as plain text in its row: no `**`, backticks or link syntax. */
+export function plainLine(line: string): string {
+  return line
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/(\*\*|__|`)/g, "")
+    .replace(/(^|[^\w*])[*_]([^*_\n]+)[*_](?=[^\w*]|$)/g, "$1$2")
+    .trim();
+}
+
 function noteStep(message: ChatTimelineMessage): TurnStep {
   const text = message.content.trim();
   const firstLine =
     text
       .split("\n")
-      .map((line) => line.replace(/^[#>*\-\s]+/, "").trim())
+      .map((line) => plainLine(line.replace(/^[#>*\-\s]+/, "")))
       .find(Boolean) ?? "Note";
   return {
     kind: "note",

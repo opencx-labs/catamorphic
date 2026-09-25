@@ -3,7 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChatTimeline } from "./chat-timeline.js";
+import { ChatTimeline, plainLine } from "./chat-timeline.js";
 
 describe("ChatTimeline queue editing", () => {
   let container: HTMLDivElement;
@@ -214,5 +214,23 @@ describe("ChatTimeline queue editing", () => {
     expect(document.activeElement).toBe(link);
     await act(async () => link.click());
     expect(opens).toHaveBeenCalledWith(2, "file:source.ts");
+  });
+});
+
+describe("note step labels", () => {
+  it("read as plain text, without markdown syntax", () => {
+    expect(
+      plainLine(
+        "[text-pill selection sel.md:5-5] Second paragraph with **bold** words.",
+      ),
+    ).toBe(
+      "[text-pill selection sel.md:5-5] Second paragraph with bold words.",
+    );
+    expect(plainLine("Ran `bun test` and read [the log](https://x.test)")).toBe(
+      "Ran bun test and read the log",
+    );
+    expect(plainLine("An _emphasised_ word and snake_case_name stay")).toBe(
+      "An emphasised word and snake_case_name stay",
+    );
   });
 });

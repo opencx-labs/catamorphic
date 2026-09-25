@@ -395,7 +395,9 @@ export class PluginSecretsMissingError extends Error {
 
 export class SandboxProviderNotConfiguredError extends Error {
   constructor() {
-    super("Sandbox provider not configured");
+    super(
+      "This host has no execution environment for workflows. The host passes a sandbox or local-process provider when it creates Catamorphic.",
+    );
     this.name = "SandboxProviderNotConfiguredError";
   }
 }
@@ -2226,7 +2228,6 @@ export class RunsService {
     const plugins = await this.deps.runPluginsLoader.load({
       identity,
       projectId,
-      stage: "production",
       workflowName,
     });
     if (plugins.missingRequiredSecrets.length > 0) {

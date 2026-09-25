@@ -252,12 +252,11 @@ CREATE INDEX idx_project_plugins_project ON project_plugins(project_id);
 
 CREATE TABLE project_secrets (
   project_id    uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  stage         varchar(20) NOT NULL DEFAULT 'production',
   name          varchar(255) NOT NULL,
   value         text NOT NULL,
   created_at    timestamptz NOT NULL DEFAULT now(),
   updated_at    timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (project_id, stage, name)
+  PRIMARY KEY (project_id, name)
 );
 CREATE INDEX idx_project_secrets_project ON project_secrets(project_id);
 ```
@@ -301,14 +300,13 @@ table.
 
 Owns `project_secrets`.
 
-- `list({ identity, projectId, stage })`: returns `SecretStatus[]`:
+- `list({ identity, projectId })`: returns `SecretStatus[]`:
   `{ name, source, label, description, required, hasValue, updatedAt }`.
   Never returns the plaintext value.
-- `upsert({ identity, projectId, stage, name, value })`: validates builder
-  authority and that `name` is declared by project code or an attached plugin,
-  then upserts that stage's value.
-- `delete({ identity, projectId, stage, name })`: drops one stage's row.
-- `loadForRun({ identity, projectId, stage })`: resolves every declared secret, applying
+- `upsert({ identity, projectId, name, value })`: needs `secrets:write` and a
+  `name` declared by project code or an attached plugin, then stores the value.
+- `delete({ identity, projectId, name })`: needs `secrets:write`.
+- `loadForRun({ identity, projectId })`: resolves every declared secret, applying
   `default` when the row is missing. Returns
   `{ values: Record<string, string>, missingRequired: string[] }`. Run
   enrollment rejects missing required values before execution.
@@ -322,7 +320,6 @@ class RunPluginsLoader {
   async load(args: {
     identity: Identity;
     projectId: string;
-    stage: "test" | "production";
     workflowName?: string;
   }): Promise<{
     plugins: RunPluginPayload[];       // packageName + files map
@@ -435,9 +432,8 @@ const env = {
 };
 ```
 
-Secret declarations may not use the reserved `CATAMORPHIC_` prefix. The API
-still keeps stage-specific records, but immutable deployed Runs consume only
-the production stage.
+Secret declarations may not use the reserved `CATAMORPHIC_` prefix. A project
+has one value per secret, and every run reads it.
 
 ### Execution flow
 
