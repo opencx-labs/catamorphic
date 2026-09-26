@@ -92,6 +92,10 @@ beforeAll(async () => {
   await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Preview project')`);
   await app.eval(`window.catamorphicDesktop.devWindow('setSize',1100,800)`);
+  // Keys pressed before the workspace is restored are lost or open a tab.
+  await app.waitFor("!!document.querySelector('[data-workspace-ready]')", {
+    label: "workspace ready for shortcuts",
+  });
   await app.eval(
     `window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))`,
   );

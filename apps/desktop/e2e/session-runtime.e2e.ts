@@ -286,6 +286,7 @@ it("uses themed harness marks in new-chat status", async () => {
 });
 
 it("centers expanded chats on request and drags the collapsed bubble between bottom corners", async () => {
+  await wait(`return !!$('[data-workspace-ready]');`);
   await run(`const { agents } = await window.catamorphicDesktop.agentsList();
     await window.catamorphicDesktop.agentsSetDefault(agents.find(agent => agent.name === 'Fake Agent').id);
     await window.catamorphicDesktop.setPrefs({dockSide:'right',dockPlacement:'center'});
