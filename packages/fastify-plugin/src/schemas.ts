@@ -263,6 +263,12 @@ export const ProjectSchema = z.object({
   name: z.string(),
   storageType: z.enum(["managed", "remote"]),
   remoteUrl: z.string().nullable(),
+  /**
+   * Who created the linked remote (ADR 0170). `attached`: Work only pushes
+   * `work/*` branches there and shares changes as pull requests. `owned`:
+   * Work created it and sync keeps it converged. `null` when unlinked.
+   */
+  remoteOwnership: z.enum(["owned", "attached"]).nullable(),
   defaultBranch: z.string(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
@@ -1913,6 +1919,22 @@ export const GithubRepoSchema = z.object({
 export const GithubImportSchema = z.object({
   fullName: z.string().regex(/^[\w.-]+\/[\w.-]+$/, "Expected owner/repo"),
   name: z.string().min(1).optional(),
+});
+
+/** Publish an unlinked project to a new repository Work creates (ADR 0170). */
+export const GithubPublishSchema = z.object({
+  name: z.string().regex(/^[\w.-]+$/, "Expected a repository name"),
+  /** Organization login; the connected account when omitted. */
+  organization: z
+    .string()
+    .regex(/^[\w.-]+$/, "Expected an organization login")
+    .optional(),
+  visibility: z.enum(["private", "public"]).optional(),
+});
+
+export const GithubPublishResultSchema = z.object({
+  fullName: z.string(),
+  remoteUrl: z.string(),
 });
 
 // --- Generic ---

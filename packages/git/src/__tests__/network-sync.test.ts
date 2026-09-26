@@ -44,11 +44,12 @@ describe("syncWithNetworkRemote", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  const sync = () =>
+  const sync = (ownership: "owned" | "attached" = "owned") =>
     syncWithNetworkRemote({
       dev: repo,
       url: "https://example.com/owner/repo.git",
       remoteBranch: "main",
+      ownership,
       author: AUTHOR,
       now: new Date(Date.UTC(2026, 7, 13, 12, 30)),
     });
@@ -144,5 +145,43 @@ describe("syncWithNetworkRemote", () => {
     const result = await sync();
     expect(result.status).toBe("no-op");
     expect(remote.pushes).toEqual([]);
+  });
+
+  describe("attached remotes (ADR 0170)", () => {
+    it("reports a missing remote branch as ahead without creating it", async () => {
+      const result = await sync("attached");
+      expect(result.status).toBe("ahead");
+      expect(remote.pushes).toEqual([]);
+    });
+
+    it("reports local commits as ahead instead of pushing them", async () => {
+      remote.sha = await repo.resolveRef("refs/heads/main");
+      const local = await commitLocal("local.txt", "local");
+      const result = await sync("attached");
+      expect(result).toMatchObject({ status: "ahead", localSha: local });
+      expect(remote.pushes).toEqual([]);
+    });
+
+    it("still fast-forwards a clean tree", async () => {
+      const sha = await commitRemoteOnly("remote.txt", "remote");
+      const result = await sync("attached");
+      expect(result.status).toBe("pulled");
+      expect(await repo.resolveRef("refs/heads/main")).toBe(sha);
+      expect(remote.pushes).toEqual([]);
+    });
+
+    it("reports divergence without merging or pushing a rescue branch", async () => {
+      await commitRemoteOnly("remote.txt", "remote");
+      const local = await commitLocal("local.txt", "local");
+      const result = await sync("attached");
+      expect(result).toEqual({
+        status: "diverged",
+        localSha: local,
+        remoteSha: remote.sha,
+      });
+      expect(await repo.resolveRef("refs/heads/main")).toBe(local);
+      await expect(repo.readFile("remote.txt")).rejects.toThrow();
+      expect(remote.pushes).toEqual([]);
+    });
   });
 });

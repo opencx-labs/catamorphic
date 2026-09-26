@@ -1,7 +1,8 @@
 import {
   GithubNotConnectedError,
   GithubTokenExpiredError,
-  ProjectNotLinkedToGithubError,
+  ProjectAlreadyLinkedError,
+  ProjectNotFoundError,
 } from "@catamorphic/core";
 import { GithubApiError, GithubAuthError } from "@catamorphic/github";
 import type { FastifyInstance } from "fastify";
@@ -13,6 +14,8 @@ import {
   ErrorSchema,
   GithubConnectSchema,
   GithubImportSchema,
+  GithubPublishResultSchema,
+  GithubPublishSchema,
   GithubRepoSchema,
   GithubStatusSchema,
   ProjectIdParamsSchema,
@@ -141,6 +144,7 @@ export function registerGithubRoutes(app: FastifyInstance, ctx: RouteContext) {
           name: project.name,
           storageType: project.storageType,
           remoteUrl: project.remoteUrl,
+          remoteOwnership: project.remoteOwnership,
           defaultBranch: project.defaultBranch,
           createdAt: project.createdAt,
           updatedAt: project.updatedAt,
@@ -156,32 +160,36 @@ export function registerGithubRoutes(app: FastifyInstance, ctx: RouteContext) {
 
   typed.route({
     method: "POST",
-    url: "/projects/:projectId/github/push",
+    url: "/projects/:projectId/github/publish",
     schema: {
       params: ProjectIdParamsSchema,
+      body: GithubPublishSchema,
       response: {
-        204: z.null(),
-        400: ErrorSchema,
+        201: GithubPublishResultSchema,
         401: ErrorSchema,
+        404: ErrorSchema,
+        409: ErrorSchema,
         503: ErrorSchema,
       },
     },
     handler: async (request, reply) => {
       if (!ctx.core?.github) return reply.status(503).send(unavailable);
       try {
-        await ctx.core.github.pushProject(
+        const published = await ctx.core.github.publishProject(
           resolveIdentity(request),
           request.params.projectId,
+          request.body,
         );
-        return reply.status(204).send(null);
+        return reply.status(201).send(published);
       } catch (err) {
-        if (err instanceof ProjectNotLinkedToGithubError) {
-          return reply.status(400).send({ error: err.message });
+        if (err instanceof ProjectAlreadyLinkedError) {
+          return reply.status(409).send({ error: err.message });
+        }
+        if (err instanceof ProjectNotFoundError) {
+          return reply.status(404).send({ error: err.message });
         }
         const mapped = mapGithubError(err);
-        return reply
-          .status(mapped.status === 404 ? 401 : mapped.status)
-          .send({ error: mapped.error });
+        return reply.status(mapped.status).send({ error: mapped.error });
       }
     },
   });

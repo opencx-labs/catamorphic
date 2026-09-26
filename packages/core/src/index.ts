@@ -349,7 +349,9 @@ export {
   GithubTokenExpiredError,
   githubEventKind,
   type ImportGithubRepoInput,
+  ProjectAlreadyLinkedError,
   ProjectNotLinkedToGithubError,
+  type PublishGithubProjectInput,
 } from "./services/github-service.js";
 export { executeHostCall, type HostCallInput } from "./services/host-calls.js";
 export {
@@ -410,6 +412,7 @@ export {
 } from "./services/projects-service.js";
 export {
   mayPropose,
+  PROPOSAL_BRANCH_PREFIX,
   type ProposalResult,
   ProposalsService,
   ProposalsUnsupportedError,

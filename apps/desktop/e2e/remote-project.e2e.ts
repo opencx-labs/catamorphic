@@ -208,7 +208,7 @@ function startFakeServer(): Promise<void> {
       void readJson().then((body) => {
         proposals.push(body);
         send(201, {
-          branch: "proposals/member/x-1",
+          branch: "work/proposals/member/x-1",
           pullRequest: {
             url: "https://github.com/acme/brain/pull/7",
             number: 7,

@@ -1,4 +1,5 @@
 import nodeFs from "node:fs";
+import { MANAGED_BRANCH_PREFIX } from "@catamorphic/workflow/project-layout";
 import git from "isomorphic-git";
 import http from "isomorphic-git/http/node";
 import { nativeGit } from "./native-git.js";
@@ -116,22 +117,86 @@ export async function cloneFromRemote(
 }
 
 /**
+ * Who created a linked network remote (ADR 0170). `owned`: Work created the
+ * repository, so ADR 0044 sync may update its tracked branch. `attached`: the
+ * repository existed before Work (an opened folder with an origin, a clone,
+ * an imported company repository). Work never updates its default branch or
+ * any branch it did not create there.
+ */
+export type RemoteOwnership = "owned" | "attached";
+
+export class RemotePushRefusedError extends Error {
+  constructor(
+    readonly remoteBranch: string,
+    reason: string,
+  ) {
+    super(`Work will not push '${remoteBranch}': ${reason}`);
+    this.name = "RemotePushRefusedError";
+  }
+}
+
+/** Whether `branch` is one Work creates: `work/<something>`. */
+export function isManagedBranch(branch: string): boolean {
+  return (
+    branch.startsWith(MANAGED_BRANCH_PREFIX) &&
+    branch.length > MANAGED_BRANCH_PREFIX.length
+  );
+}
+
+/**
+ * The one push rule (ADR 0170). On an attached remote Work may only create or
+ * fast-forward branches under `work/`; the default branch and every other
+ * branch belong to the people who share the repository, and history there is
+ * never rewritten. Owned remotes are unrestricted.
+ */
+export function assertPushAllowed(input: {
+  ownership: RemoteOwnership;
+  remoteBranch: string;
+  force?: boolean;
+}): void {
+  if (input.ownership === "owned") return;
+  if (!isManagedBranch(input.remoteBranch)) {
+    throw new RemotePushRefusedError(
+      input.remoteBranch,
+      `this repository is attached, so Work only pushes branches it creates under '${MANAGED_BRANCH_PREFIX}'. Open a pull request instead.`,
+    );
+  }
+  if (input.force) {
+    throw new RemotePushRefusedError(
+      input.remoteBranch,
+      "Work never rewrites history in an attached repository.",
+    );
+  }
+}
+
+/**
  * Push a local ref to a network git remote, bypassing the repo's configured
- * `origin` (which catamorphic points at its internal remote backend). Used to
- * push project history back to a linked external repo such as GitHub.
+ * `origin` (which catamorphic points at its internal remote backend). Every
+ * network push goes through here, so {@link assertPushAllowed} decides what
+ * may reach a remote before anything is sent.
  */
 export async function pushToRemote(opts: {
   repoPath: string;
   native?: boolean;
   url: string;
   credentials?: GitCredentials;
-  /** Local ref to push. Defaults to `main`. */
-  ref?: string;
-  /** Branch name on the remote. Defaults to `ref`. */
-  remoteBranch?: string;
+  /** Who created the remote: attached remotes only accept Work's branches. */
+  ownership: RemoteOwnership;
+  /** Local ref to push. */
+  ref: string;
+  /** Branch name on the remote (a plain name, not `refs/heads/...`). */
+  remoteBranch: string;
   force?: boolean;
 }): Promise<void> {
-  const ref = opts.ref ?? "main";
+  const { ref, remoteBranch } = opts;
+  // Plain names only: a `+`, `:` or leading `-` would smuggle a forced or
+  // retargeted refspec past the rule below.
+  for (const name of [ref, remoteBranch]) {
+    if (!name || /[:\s+]|^-|^refs\/heads\//.test(name)) {
+      throw new RemotePushRefusedError(name, "not a plain branch or ref name.");
+    }
+  }
+  assertPushAllowed(opts);
   if (opts.native) {
     await nativeGit(
       opts.repoPath,
@@ -139,7 +204,7 @@ export async function pushToRemote(opts: {
         "push",
         ...(opts.force ? ["--force-with-lease"] : []),
         opts.url,
-        `${ref}:refs/heads/${opts.remoteBranch ?? ref}`,
+        `${ref}:refs/heads/${remoteBranch}`,
       ],
       opts.credentials ? { ...opts.credentials, url: opts.url } : undefined,
     );
@@ -151,7 +216,7 @@ export async function pushToRemote(opts: {
     dir: opts.repoPath,
     url: opts.url,
     ref,
-    remoteRef: `refs/heads/${opts.remoteBranch ?? ref}`,
+    remoteRef: `refs/heads/${remoteBranch}`,
     force: opts.force ?? false,
     onAuth: onAuthFor(opts.credentials),
   });

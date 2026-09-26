@@ -23,7 +23,10 @@ import type { Identity } from "../identity.js";
 import { assertProjectPermission } from "./artifact-scope.js";
 import type { CodeHost } from "./code-host.js";
 import type { ProjectEventsService } from "./project-events-service.js";
-import type { ProjectsService } from "./projects-service.js";
+import {
+  ProjectNotFoundError,
+  type ProjectsService,
+} from "./projects-service.js";
 
 export interface GithubServiceConfig {
   app: GithubAppConfig;
@@ -70,6 +73,24 @@ export class ProjectNotLinkedToGithubError extends Error {
     super(`Project '${projectId}' is not linked to a GitHub repository`);
     this.name = "ProjectNotLinkedToGithubError";
   }
+}
+
+export class ProjectAlreadyLinkedError extends Error {
+  constructor(readonly projectId: string) {
+    super(
+      `Project '${projectId}' is already linked to a repository. Share its changes with a pull request.`,
+    );
+    this.name = "ProjectAlreadyLinkedError";
+  }
+}
+
+export interface PublishGithubProjectInput {
+  /** Name of the new repository. */
+  name: string;
+  /** Organization login; the connected user's account when omitted. */
+  organization?: string;
+  /** Defaults to private. */
+  visibility?: "private" | "public";
 }
 
 /**
@@ -366,7 +387,8 @@ export class GithubService {
   /**
    * Clone a GitHub repo into a new catamorphic project. The repo's history
    * lands on the project's `main`; the GitHub remote + branch are recorded on
-   * the project row so {@link pushProject} can push back later.
+   * the project row as an attached remote (ADR 0170): sync fetches from it,
+   * and Work's changes reach it only as `work/*` branches and pull requests.
    */
   async importRepo(identity: Identity, input: ImportGithubRepoInput) {
     const token = await this.freshToken(identity);
@@ -390,29 +412,64 @@ export class GithubService {
         remote_url: repo.cloneUrl,
         remote_branch: repo.defaultBranch,
         default_branch: repo.defaultBranch,
+        remote_ownership: "attached",
         updated_at: new Date(),
       })
       .where("id", "=", project.id)
       .execute();
 
-    return { ...project, remoteUrl: repo.cloneUrl };
+    return {
+      ...project,
+      remoteUrl: repo.cloneUrl,
+      remoteOwnership: "attached" as const,
+      defaultBranch: repo.defaultBranch,
+    };
   }
 
   /**
-   * Push the project's canonical `main` (the internal origin, not the
-   * caller's possibly-stale working copy) to the linked GitHub repository.
+   * Publish a project that has no remote to a new GitHub repository: create
+   * it, link it as owned (ADR 0170), and push the project's canonical `main`
+   * (the internal origin, not the caller's possibly-stale working copy).
+   * From then on remote sync keeps the owned repository converged (ADR 0044).
+   * A project already linked to a repository is refused; its changes reach
+   * that repository through pull requests.
    */
-  async pushProject(identity: Identity, projectId: string): Promise<void> {
+  async publishProject(
+    identity: Identity,
+    projectId: string,
+    input: PublishGithubProjectInput,
+  ): Promise<{ fullName: string; remoteUrl: string }> {
     assertProjectPermission(identity, projectId, "program:publish");
     const row = await this.db
       .selectFrom("projects")
       .where("id", "=", projectId)
       .where("tenant_id", "=", identity.tenantId)
-      .select(["remote_url", "remote_branch"])
+      .select(["remote_url"])
       .executeTakeFirst();
-    if (!row?.remote_url) throw new ProjectNotLinkedToGithubError(projectId);
+    if (!row) throw new ProjectNotFoundError(projectId);
+    if (row.remote_url) throw new ProjectAlreadyLinkedError(projectId);
 
     const token = await this.freshToken(identity);
+    const repo = await new GithubApi(token, { fetch: this.fetch }).createRepo({
+      name: input.name,
+      organization: input.organization,
+      private: (input.visibility ?? "private") === "private",
+    });
+    // Link before pushing: Work created this repository, so a failed first
+    // push is completed by the next sync instead of stranding an empty repo.
+    await this.db
+      .updateTable("projects")
+      .set({
+        remote_url: repo.cloneUrl,
+        remote_branch: repo.defaultBranch,
+        default_branch: repo.defaultBranch,
+        remote_ownership: "owned",
+        updated_at: new Date(),
+      })
+      .where("id", "=", projectId)
+      .where("tenant_id", "=", identity.tenantId)
+      .execute();
+
     const dev = await this.projectManager.openDev(
       identity.tenantId,
       projectId,
@@ -426,28 +483,31 @@ export class GithubService {
           projectId,
         }),
       );
-      let ref = local ? "HEAD" : "main";
-      if (remote && !local) {
-        const fetched = await fetchRemote({
-          dev,
-          remote,
-          tenantId: identity.tenantId,
-          projectId,
-          remoteBranch: "main",
-        });
-        if (fetched.sha) ref = publishedRef();
-      }
+      const published =
+        remote && !local
+          ? (
+              await fetchRemote({
+                dev,
+                remote,
+                tenantId: identity.tenantId,
+                projectId,
+                remoteBranch: "main",
+              })
+            ).sha
+          : null;
       await pushToRemote({
         repoPath: dev.repoPath,
         native: local,
-        url: row.remote_url,
+        url: repo.cloneUrl,
         credentials: gitCredentialsFor(token),
-        ref,
-        remoteBranch: row.remote_branch ?? "main",
+        ownership: "owned",
+        ref: local ? "HEAD" : published ? publishedRef() : "main",
+        remoteBranch: repo.defaultBranch,
       });
     } finally {
       await dev.dispose();
     }
+    return { fullName: repo.fullName, remoteUrl: repo.cloneUrl };
   }
 
   /** Access token from the store, refreshed and re-persisted when stale. */

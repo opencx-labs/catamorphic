@@ -1,6 +1,9 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { DB } from "@catamorphic/db";
 import { DEFAULT_SCHEMA, migrateToLatest } from "@catamorphic/db";
-import type { ProjectManager } from "@catamorphic/git";
+import { FsBackend, nativeGit, ProjectManager } from "@catamorphic/git";
 import type {
   GithubTokenStore,
   StoredGithubConnection,
@@ -14,6 +17,7 @@ import type { Identity } from "../identity.js";
 import {
   GithubNotConnectedError,
   GithubService,
+  ProjectAlreadyLinkedError,
 } from "../services/github-service.js";
 import type { ProjectsService } from "../services/projects-service.js";
 
@@ -109,6 +113,7 @@ function fakeProject(over?: { id?: string; name?: string }) {
     name: over?.name ?? "hello",
     storageType: "managed" as const,
     remoteUrl: null,
+    remoteOwnership: null,
     defaultBranch: "main",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -119,12 +124,13 @@ function service(over?: {
   fetch?: typeof fetch;
   store?: GithubTokenStore;
   projects?: Partial<ProjectsService>;
+  projectManager?: ProjectManager;
 }) {
   const projects = {
     create: vi.fn(async () => fakeProject()),
     ...over?.projects,
   } as unknown as ProjectsService;
-  const projectManager = {} as ProjectManager;
+  const projectManager = over?.projectManager ?? ({} as ProjectManager);
   return new GithubService(db, projectManager, projects, {
     app: APP,
     tokenStore: over?.store ?? new MemoryTokenStore(),
@@ -263,6 +269,115 @@ describe("GithubService", () => {
       .executeTakeFirstOrThrow();
     expect(row.remote_url).toBe("https://github.com/octo/hello.git");
     expect(row.remote_branch).toBe("master");
+    // An imported repository existed before Work: attached (ADR 0170).
+    expect(row.remote_ownership).toBe("attached");
+    expect(project.remoteOwnership).toBe("attached");
+  });
+
+  it("publishProject refuses a project already linked to a repository", async () => {
+    const id = crypto.randomUUID();
+    await db
+      .insertInto("projects")
+      .values({
+        id,
+        tenant_id: identity.tenantId,
+        name: "linked",
+        remote_url: "https://github.com/octo/hello.git",
+        remote_ownership: "attached",
+      })
+      .execute();
+    const svc = service();
+    await svc.connect(identity, FRESH_TOKENS);
+    await expect(
+      svc.publishProject(identity, id, { name: "hello-again" }),
+    ).rejects.toThrow(ProjectAlreadyLinkedError);
+  });
+
+  it("publishProject creates a repository, links it as owned, and pushes the project", async () => {
+    const temp = await fs.mkdtemp(path.join(os.tmpdir(), "gh-publish-"));
+    try {
+      const root = path.join(temp, "root");
+      const bare = path.join(temp, "published.git");
+      await fs.mkdir(root);
+      await fs.mkdir(bare);
+      await nativeGit(bare, ["init", "--bare", "-b", "main"]);
+      await nativeGit(root, ["init", "-b", "main"]);
+      await fs.writeFile(path.join(root, "notes.md"), "# Notes\n");
+      await nativeGit(root, ["add", "."]);
+      await nativeGit(root, [
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-m",
+        "notes",
+      ]);
+      const id = crypto.randomUUID();
+      await db
+        .insertInto("projects")
+        .values({ id, tenant_id: identity.tenantId, name: "notes" })
+        .execute();
+      const created: Array<{ path: string; body: unknown }> = [];
+      const github = fakeGithub();
+      const svc = service({
+        projectManager: new ProjectManager(
+          new FsBackend(path.join(temp, "internal"), async () => root),
+          undefined,
+          async () => root,
+        ),
+        fetch: (async (url: unknown, init?: RequestInit) => {
+          const u = new URL(String(url));
+          if (init?.method === "POST" && u.pathname === "/orgs/acme/repos") {
+            created.push({
+              path: u.pathname,
+              body: JSON.parse(String(init.body)),
+            });
+            return Response.json({
+              id: 43,
+              full_name: "acme/notes",
+              name: "notes",
+              owner: { login: "acme" },
+              private: true,
+              default_branch: "main",
+              clone_url: bare,
+              description: null,
+              pushed_at: null,
+            });
+          }
+          return github(String(url), init);
+        }) as typeof fetch,
+      });
+      await svc.connect(identity, FRESH_TOKENS);
+
+      const published = await svc.publishProject(identity, id, {
+        name: "notes",
+        organization: "acme",
+      });
+
+      expect(published).toEqual({ fullName: "acme/notes", remoteUrl: bare });
+      expect(created).toEqual([
+        {
+          path: "/orgs/acme/repos",
+          body: { name: "notes", private: true, auto_init: false },
+        },
+      ]);
+      const row = await db
+        .selectFrom("projects")
+        .where("id", "=", id)
+        .selectAll()
+        .executeTakeFirstOrThrow();
+      expect(row).toMatchObject({
+        remote_url: bare,
+        remote_branch: "main",
+        remote_ownership: "owned",
+      });
+      expect(await nativeGit(bare, ["show", "main:notes.md"])).toBe(
+        "# Notes\n",
+      );
+    } finally {
+      await fs.rm(temp, { recursive: true, force: true });
+    }
   });
 
   it("disconnect removes the connection from the store", async () => {

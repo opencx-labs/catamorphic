@@ -4,6 +4,7 @@ import {
   type Membership,
   type ProjectPermissionName,
   type ProjectRoleEntry,
+  type RoleDefinition,
 } from "@catamorphic/core";
 import type { DB } from "@catamorphic/db";
 import type { Kysely } from "kysely";
@@ -107,6 +108,12 @@ export class WorkAdmissionService {
     defaultRole: string;
     approvedDomains: readonly string[];
     directoryRoles?: readonly DirectoryRoleMapping[];
+    /**
+     * Roles proposed to an attached repository and not merged yet (ADR 0170).
+     * The policy may name them now; nobody is admitted with them until the
+     * default branch commits them, because admission reads committed roles.
+     */
+    pendingRoles?: Readonly<Record<string, RoleDefinition>>;
   }): Promise<void> {
     assertPermission(input.identity, input.projectId, "memberships:write");
     const directoryRoles = (input.directoryRoles ?? []).map((mapping) => ({
@@ -120,6 +127,7 @@ export class WorkAdmissionService {
         input.defaultRole,
         ...directoryRoles.flatMap((mapping) => mapping.roles),
       ],
+      pending: input.pendingRoles,
     });
     const domains = normalizeDomains(input.approvedDomains);
     await this.services.db
@@ -554,19 +562,22 @@ export class WorkAdmissionService {
     identity: Identity;
     projectId: string;
     roles: readonly string[];
+    pending?: Readonly<Record<string, RoleDefinition>>;
   }): Promise<void> {
     const entries = await this.services.roles.list(
       this.services.membershipWriterIdentity,
       input.projectId,
     );
     for (const role of input.roles) {
-      const entry = entries.find((candidate) => candidate.slug === role);
-      if (!entry?.definition) {
+      const definition =
+        entries.find((candidate) => candidate.slug === role)?.definition ??
+        input.pending?.[role];
+      if (!definition) {
         throw new Error(
           `Project ${input.projectId} has no valid committed role "${role}"`,
         );
       }
-      if ((entry.definition.permissions?.length ?? 0) > 0) {
+      if ((definition.permissions?.length ?? 0) > 0) {
         assertPermission(input.identity, input.projectId, "roles:write");
       }
     }

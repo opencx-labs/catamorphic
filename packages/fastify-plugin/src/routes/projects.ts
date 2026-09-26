@@ -52,6 +52,7 @@ function toDto(project: Project) {
     name: project.name,
     storageType: project.storageType,
     remoteUrl: project.remoteUrl,
+    remoteOwnership: project.remoteOwnership,
     defaultBranch: project.defaultBranch,
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,

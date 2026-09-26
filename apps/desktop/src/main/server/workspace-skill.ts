@@ -132,8 +132,10 @@ host preview. Publishing requires publish: true and is separate from preview.
 Attached checkouts follow the user's/project's commit instructions. Managed
 projects may checkpoint and sync automatically. Do not commit just to save work.
 Discover sync_project and create_pull_request for managed linked-remote operations;
-they preserve the host's sync, checkout and conflict policies. Do not substitute
-raw push/pull for managed sync. Unrelated repository tasks may use ordinary git.
+they preserve the host's sync, checkout and conflict policies. Work never pushes
+to a repository it did not create: sync only pulls there, and local commits are
+shared as a work/ branch with create_pull_request. Do not substitute raw push/pull
+for managed sync. Unrelated repository tasks may use ordinary git.
 
 Discover the required connection by service name, then its tools. Authentication
 stays in the host UI. Discover request_connection for a missing service; never ask

@@ -5,6 +5,7 @@ import type {
   GitCredentials,
   ProjectManager,
   ProjectRepo,
+  RemoteOwnership,
 } from "@catamorphic/git";
 import { discoverLocalFolder } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
@@ -36,6 +37,11 @@ export interface Project {
   name: string;
   storageType: "managed" | "remote";
   remoteUrl: string | null;
+  /**
+   * Who created the linked remote (ADR 0170): an `attached` repository only
+   * receives `work/*` branches and pull requests. `null` when unlinked.
+   */
+  remoteOwnership: RemoteOwnership | null;
   defaultBranch: string;
   createdAt: string;
   updatedAt: string;
@@ -269,6 +275,8 @@ export class ProjectsService {
         ...(checkout
           ? {
               remote_url: checkout.remoteUrl,
+              // An opened folder's origin existed before Work did.
+              remote_ownership: checkout.remoteUrl ? "attached" : null,
               remote_branch: checkout.remoteBranch ?? checkout.branch ?? "main",
               default_branch:
                 checkout.defaultBranch ?? checkout.branch ?? "main",
@@ -764,8 +772,18 @@ function mapProject(row: ProjectRow): Project {
     name: row.name,
     storageType: row.storage_type as "managed" | "remote",
     remoteUrl: row.remote_url,
+    remoteOwnership: remoteOwnership(row.remote_ownership),
     defaultBranch: row.default_branch,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+/**
+ * A stored ownership as the type sync decides by. Anything but `owned` reads
+ * as `attached`, so an unexpected value can only make Work push less.
+ */
+export function remoteOwnership(value: string | null): RemoteOwnership | null {
+  if (value === null) return null;
+  return value === "owned" ? "owned" : "attached";
 }

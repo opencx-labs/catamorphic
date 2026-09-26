@@ -962,6 +962,7 @@ async function createWorkServerInner(
           projects: core.projects,
           deployment: core.deployment,
           roles: core.roles,
+          proposals: core.proposals,
           admission,
         },
         operatorIdentity: rootIdentity,
