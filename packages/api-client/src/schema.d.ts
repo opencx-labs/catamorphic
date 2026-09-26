@@ -108,6 +108,8 @@ export interface paths {
                                 /** @enum {string} */
                                 storageType: "managed" | "remote";
                                 remoteUrl: string | null;
+                                /** @enum {string|null} */
+                                remoteOwnership: "owned" | "attached" | null;
                                 defaultBranch: string;
                                 /** Format: date-time */
                                 createdAt: string;
@@ -149,6 +151,8 @@ export interface paths {
                             /** @enum {string} */
                             storageType: "managed" | "remote";
                             remoteUrl: string | null;
+                            /** @enum {string|null} */
+                            remoteOwnership: "owned" | "attached" | null;
                             defaultBranch: string;
                             /** Format: date-time */
                             createdAt: string;
@@ -218,6 +222,8 @@ export interface paths {
                             /** @enum {string} */
                             storageType: "managed" | "remote";
                             remoteUrl: string | null;
+                            /** @enum {string|null} */
+                            remoteOwnership: "owned" | "attached" | null;
                             defaultBranch: string;
                             /** Format: date-time */
                             createdAt: string;
@@ -356,6 +362,8 @@ export interface paths {
                             /** @enum {string} */
                             storageType: "managed" | "remote";
                             remoteUrl: string | null;
+                            /** @enum {string|null} */
+                            remoteOwnership: "owned" | "attached" | null;
                             defaultBranch: string;
                             /** Format: date-time */
                             createdAt: string;
@@ -15373,6 +15381,8 @@ export interface paths {
                             /** @enum {string} */
                             storageType: "managed" | "remote";
                             remoteUrl: string | null;
+                            /** @enum {string|null} */
+                            remoteOwnership: "owned" | "attached" | null;
                             defaultBranch: string;
                             /** Format: date-time */
                             createdAt: string;
@@ -15422,7 +15432,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/projects/{projectId}/github/push": {
+    "/api/projects/{projectId}/github/publish": {
         parameters: {
             query?: never;
             header?: never;
@@ -15440,19 +15450,31 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody: {
+                content: {
+                    "application/json": {
+                        name: string;
+                        organization?: string;
+                        /** @enum {string} */
+                        visibility?: "private" | "public";
+                    };
+                };
+            };
             responses: {
                 /** @description Default Response */
-                204: {
+                201: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": null;
+                        "application/json": {
+                            fullName: string;
+                            remoteUrl: string;
+                        };
                     };
                 };
                 /** @description Default Response */
-                400: {
+                401: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -15463,7 +15485,18 @@ export interface paths {
                     };
                 };
                 /** @description Default Response */
-                401: {
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
                     headers: {
                         [name: string]: unknown;
                     };

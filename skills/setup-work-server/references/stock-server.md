@@ -83,6 +83,10 @@ not a human CLI.
    (`[{ slug, definition }]`), `admission` (`mode`: `invitation_only`,
    `approved_domain`, `request`, or `open`; `defaultRole`;
    `approvedDomains`), and optionally `githubRepository: "owner/repo"`.
+   `roles` is required unless the repository already defines them. The
+   response carries `project` and `roles.source`: `committed` (a project the
+   server created), `repository` (the repository's own roles, used as they
+   are), or `proposed` (with `branch` and `pullRequest.url`, see below).
 4. For local sign-in, `POST /_work/operator/users` with `username`,
    `name`, `password`, optional `email`, and `memberships`
    (`[{ projectId, roles, grants? }]`).
@@ -118,10 +122,22 @@ tokens.
 ## GitHub-backed projects
 
 Use a service account distinct from human reviewers and never give its token
-to members. Provisioning with `githubRepository` imports the source and
-pushes the role files. The server syncs the linked repository every minute,
-so merged PRs reach members through their normal download. If sync fails,
-preserve both histories and resolve; never force-push one over the other.
+to members. An imported repository is attached (ADR 0170): Work never
+commits or pushes to its default branch or to any branch it did not create.
+Everything Work originates there arrives as a `work/` branch and a pull
+request, reviewed like any other change.
+
+Provisioning with `githubRepository` imports the source. When the default
+branch already has `.work/roles/*.json`, those roles are used as they are and
+the supplied `roles` are not written. Otherwise the supplied roles are
+proposed as a pull request; give the person `roles.pullRequest.url` to
+review and merge. The admission policy is recorded immediately and may name
+the proposed roles, but nobody can join with a role until the pull request
+merges, because admission reads committed roles. The server syncs the
+linked repository every minute, so the merged roles, and every later merged
+pull request, reach the server and its members without further steps. If
+sync reports divergence, preserve both histories and resolve through review;
+never force-push one over the other.
 
 ## Webhooks and project automations
 

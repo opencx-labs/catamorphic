@@ -28,13 +28,15 @@
   ("project config (broken)" case is already reported by the resolver).
 - **Collaboration on the git backend (next slice after ADR 0044).**
   Invite flow (= repo access on the code host), PR review rendered
-  natively in the app, and PR-first "review mode" sync: when a project
-  declares review mode (likely in `.work/project.json`), auto-sync
-  stops pushing `main` and work flows through branches + PRs instead —
-  resolves the direct-push vs open-PR race deliberately deferred in
-  ADR 0044. Also: a calm sync-status pill in the UI (up to date /
-  syncing / diverged→rescue branch), and surfacing checkpoint history
-  per chat reply via `agent_messages.commit_sha`.
+  natively in the app. (PR-first sync is settled by ADR 0170: attached
+  repositories are never pushed to outside `work/` branches, with no
+  per-project mode.) Also: a calm sync-status pill in the UI (up to date /
+  syncing / ahead: open a pull request / diverged), and surfacing
+  checkpoint history per chat reply via `agent_messages.commit_sha`.
+  The publishing-to-github skill still publishes through `gh repo create`,
+  which leaves the project unlinked in core; route it through
+  `GithubService.publishProject` (an owned link) when the desktop gains a
+  publish surface.
 - **Registry git-panel: drafts are now commits-ahead.** ADR 0044 made
   "draft" mean local-commits-not-yet-pushed instead of a dirty tree;
   `git-panel`/`useCommitChanges` in packages/registry still assume the

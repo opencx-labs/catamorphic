@@ -7,14 +7,12 @@ import {
 } from "@catamorphic/workflow/project-layout";
 import ignore, { type Ignore } from "ignore";
 import git from "isomorphic-git";
-import http from "isomorphic-git/http/node";
 import { type FileReadOptions, readFileSnapshot } from "./file-reads.js";
 import { isPersonalFile } from "./personal-files.js";
 import type {
   BranchInfo,
   CommitInfo,
   DiffEntry,
-  GitCredentials,
   ProjectRepo,
   RepoStatus,
 } from "./types.js";
@@ -159,8 +157,6 @@ export class ProjectRepoImpl implements ProjectRepo {
    * person's own folder on their computer may hold theirs.
    */
   protected readonly followsSymlinks: boolean = false;
-
-  private credentials: GitCredentials | undefined;
 
   constructor(
     readonly projectId: string,
@@ -464,63 +460,6 @@ export class ProjectRepoImpl implements ProjectRepo {
       fs: nodeFs,
       dir: this.repoPath,
       ref,
-    });
-  }
-
-  async setRemote(url: string, credentials?: GitCredentials): Promise<void> {
-    const remotes = await git.listRemotes({
-      fs: nodeFs,
-      dir: this.repoPath,
-    });
-    const hasOrigin = remotes.some((r) => r.remote === "origin");
-
-    if (hasOrigin) {
-      await git.deleteRemote({
-        fs: nodeFs,
-        dir: this.repoPath,
-        remote: "origin",
-      });
-    }
-
-    await git.addRemote({
-      fs: nodeFs,
-      dir: this.repoPath,
-      remote: "origin",
-      url,
-    });
-
-    if (credentials) {
-      this.credentials = credentials;
-    }
-  }
-
-  async fetch(): Promise<void> {
-    await git.fetch({
-      fs: nodeFs,
-      http,
-      dir: this.repoPath,
-      remote: "origin",
-      onAuth: this.credentials
-        ? () => ({
-            username: this.credentials!.username,
-            password: this.credentials!.password,
-          })
-        : undefined,
-    });
-  }
-
-  async push(): Promise<void> {
-    await git.push({
-      fs: nodeFs,
-      http,
-      dir: this.repoPath,
-      remote: "origin",
-      onAuth: this.credentials
-        ? () => ({
-            username: this.credentials!.username,
-            password: this.credentials!.password,
-          })
-        : undefined,
     });
   }
 

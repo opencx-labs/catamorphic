@@ -50,6 +50,7 @@ beforeAll(async () => {
       tenant_id: identity.tenantId,
       name: "test",
       remote_url: remote,
+      remote_ownership: "attached",
       remote_branch: "feature",
       default_branch: "trunk",
     })

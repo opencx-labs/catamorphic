@@ -142,10 +142,6 @@ export interface ProjectRepo {
   log(options?: { maxCount?: number; ref?: string }): Promise<CommitInfo[]>;
   resolveRef(ref?: string): Promise<string>;
 
-  setRemote(url: string, credentials?: GitCredentials): Promise<void>;
-  fetch(): Promise<void>;
-  push(): Promise<void>;
-
   checkout(ref?: string): Promise<void>;
 
   status(): Promise<RepoStatus>;

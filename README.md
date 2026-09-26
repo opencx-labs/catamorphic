@@ -155,14 +155,18 @@ overwritten. (ADRs [0032](docs/decisions/0032-projects-are-bun-workspaces.md),
 
 Work is tracked without anyone performing git. Every agent turn that
 changed files ends in a **checkpoint commit**, its sha stamped on the chat
-message, so every reply's diff is addressable forever. Linked projects
-sync with their remote automatically (fetch, fast-forward, merge, push);
-a conflicting divergence lands on a **rescue branch** instead of a stuck
-state, so no work is ever stranded. Everything provider-specific sits
-behind one `CodeHost` interface; GitHub is the first implementation
-(connect, repo import, pull requests). Agents get explicit git verbs
-(`sync_project`, `create_pull_request`) rather than raw git.
-(ADR [0044](docs/decisions/0044-checkpoint-commits-and-remote-sync.md))
+message, so every reply's diff is addressable forever. Work never updates
+the default branch of a repository it did not create, or any branch there
+it did not make: sync fetches and fast-forwards, and local work reaches a
+shared repository as a `work/` branch plus a **pull request**. A repository
+Work created itself syncs automatically (fetch, fast-forward, merge, push),
+and a conflicting divergence lands on a **rescue branch** instead of a stuck
+state. Everything provider-specific sits behind one `CodeHost` interface;
+GitHub is the first implementation (connect, repo import, publish, pull
+requests). Agents get explicit git verbs (`sync_project`,
+`create_pull_request`) rather than raw git.
+(ADRs [0044](docs/decisions/0044-checkpoint-commits-and-remote-sync.md),
+[0170](docs/decisions/0170-attached-repositories-receive-pull-requests.md))
 
 ## Coding agents, multi-harness
 
@@ -342,7 +346,7 @@ Supporting packages (consumed through the surface above, importable directly for
 | --- | --- |
 | `@catamorphic/core` | Framework-agnostic service layer: projects, workflows, runs, deployments, triggers, apps, app storage, plugins, secrets, agent sessions, agent definitions, remote sync, and the CodeHost seam. The kernel behind `server-sdk` and `fastify-plugin`. |
 | `@catamorphic/db` | Kysely + Postgres. Schema-scoped (default schema `catamorphic`), raw SQL migrations, programmatic `migrateToLatest`. |
-| `@catamorphic/git` | Git-backed project storage (`isomorphic-git`): per-user working copies, pluggable origin remotes (`RemoteBackend`), and the remote sync engine (`syncWithNetworkRemote`: fetch, fast-forward, merge, push, rescue branches). |
+| `@catamorphic/git` | Git-backed project storage (`isomorphic-git`): per-user working copies, pluggable origin remotes (`RemoteBackend`), and the remote sync engine (`syncWithNetworkRemote`: fetch and fast-forward; merge, push, and rescue branches only for repositories Work created), with the one push guard every network push passes (`work/` branches only on attached repositories). |
 | `@catamorphic/github` | GitHub as a code host: OAuth + device-flow auth helpers, the REST API client, token stores. Feeds core's `GithubService` and its `CodeHost` implementation. |
 | `@catamorphic/parser` | ts-morph AST → `WorkflowGraph` parser + dagre layout; also powers the seeded project `check` script. |
 | `@catamorphic/sandbox` | Vendor-neutral sandbox + coding-agent contracts (`SandboxProvider`, `SandboxManager`, `RunExecutor`, `CodingAgentProvider`), the stdio supervisor transport, OTel instrumentation. |

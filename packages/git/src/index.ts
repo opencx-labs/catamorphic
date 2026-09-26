@@ -18,10 +18,14 @@ export {
 } from "./native-git.js";
 export { NativeProjectRepo } from "./native-project-repo.js";
 export {
+  assertPushAllowed,
   type CloneFromRemoteOptions,
   cloneFromRemote,
   fetchFromRemote,
+  isManagedBranch,
   pushToRemote,
+  type RemoteOwnership,
+  RemotePushRefusedError,
 } from "./network.js";
 export {
   type NetworkSyncResult,

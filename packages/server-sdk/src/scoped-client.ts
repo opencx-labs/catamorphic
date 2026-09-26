@@ -23,6 +23,7 @@ import type {
   Project,
   ProjectFileEntry,
   ProjectPermissionRef,
+  PublishGithubProjectInput,
   ResumeRunInput,
   ResumeRunPauseInput,
   Run,
@@ -78,7 +79,10 @@ export interface GithubResource {
   disconnect(): Promise<void>;
   listRepos(): Promise<GithubRepo[]>;
   importRepo(args: ImportGithubRepoInput): Promise<Project>;
-  pushProject(args: { projectId: string }): Promise<void>;
+  /** Publish an unlinked project to a new repository Work owns (ADR 0170). */
+  publishProject(
+    args: { projectId: string } & PublishGithubProjectInput,
+  ): Promise<{ fullName: string; remoteUrl: string }>;
 }
 
 export interface WorkflowsResource {
@@ -372,8 +376,10 @@ function buildGithub(
     listRepos: () => withIdentity(identity, () => github().listRepos(identity)),
     importRepo: (args) =>
       withIdentity(identity, () => github().importRepo(identity, args)),
-    pushProject: ({ projectId }) =>
-      withIdentity(identity, () => github().pushProject(identity, projectId)),
+    publishProject: ({ projectId, ...input }) =>
+      withIdentity(identity, () =>
+        github().publishProject(identity, projectId, input),
+      ),
   };
 }
 

@@ -61,6 +61,7 @@ import {
 import type { DataPaths } from "./paths.js";
 import { ProjectRootsStore } from "./project-roots.js";
 import { SessionCheckouts } from "./session-checkouts.js";
+import { syncReport } from "./sync-report.js";
 import {
   DESKTOP_MCP_TOOL_KINDS,
   DESKTOP_TRIGGER_KINDS,
@@ -955,16 +956,14 @@ export async function startEmbeddedServer(
           note: "This session is isolated, so main was not synced. Use create_pull_request to share this worktree's changes.",
         };
       }
-      const outcome = await catamorphic.core.remoteSync.sync(
-        { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
-        projectId,
+      // Core decides by the project's remote ownership (ADR 0170): an
+      // attached repository is only fetched and fast-forwarded.
+      return syncReport(
+        await catamorphic.core.remoteSync.sync(
+          { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+          projectId,
+        ),
       );
-      return {
-        status: outcome.status,
-        ...("rescueBranch" in outcome && outcome.rescueBranch
-          ? { rescueBranch: outcome.rescueBranch }
-          : {}),
-      };
     },
     createPullRequest: async (projectId, sessionId, input) => {
       const checkout = await sessionCheckouts.describe({

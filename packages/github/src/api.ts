@@ -210,6 +210,46 @@ export class GithubApi {
   }
 
   /**
+   * Create an empty repository for the authenticated user, or in
+   * `organization` when given. Nothing is initialized, so the first push
+   * defines its history.
+   */
+  async createRepo(input: {
+    name: string;
+    organization?: string;
+    private: boolean;
+    description?: string;
+  }): Promise<GithubRepo> {
+    if (!/^[\w.-]+$/.test(input.name)) {
+      throw new GithubApiError(400, `Invalid repository name: ${input.name}`);
+    }
+    if (input.organization && !/^[\w.-]+$/.test(input.organization)) {
+      throw new GithubApiError(
+        400,
+        `Invalid organization: ${input.organization}`,
+      );
+    }
+    return mapRepo(
+      await this.request<RawRepo>(
+        input.organization
+          ? `/orgs/${input.organization}/repos`
+          : "/user/repos",
+        {
+          method: "POST",
+          body: {
+            name: input.name,
+            private: input.private,
+            auto_init: false,
+            ...(input.description !== undefined
+              ? { description: input.description }
+              : {}),
+          },
+        },
+      ),
+    );
+  }
+
+  /**
    * Open a pull request. `head` and `base` are branch names in the same
    * repository (cross-fork PRs are out of scope for now).
    */

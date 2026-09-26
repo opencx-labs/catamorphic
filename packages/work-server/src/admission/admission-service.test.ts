@@ -73,6 +73,35 @@ function service() {
 }
 
 describe("WorkAdmissionService", () => {
+  it("accepts a policy naming proposed roles, but admits only with committed ones", async () => {
+    const { admission } = service();
+    await expect(
+      admission.setPolicy({
+        identity: operatorIdentity,
+        projectId: PROJECT_ID,
+        mode: "invitation_only",
+        defaultRole: "reviewer",
+        approvedDomains: [],
+      }),
+    ).rejects.toThrow('no valid committed role "reviewer"');
+    await admission.setPolicy({
+      identity: operatorIdentity,
+      projectId: PROJECT_ID,
+      mode: "invitation_only",
+      defaultRole: "reviewer",
+      approvedDomains: [],
+      pendingRoles: { reviewer: { version: 1, name: "Reviewer" } },
+    });
+    // Until the pull request that commits the role merges, nobody joins with it.
+    await expect(
+      admission.createInvitation({
+        identity: operatorIdentity,
+        projectId: PROJECT_ID,
+        email: "ada@acme.dev",
+      }),
+    ).rejects.toThrow('no valid committed role "reviewer"');
+  });
+
   it("lists members for an ordinary membership manager", async () => {
     const { admission, list } = service();
     await admission.listMembers({

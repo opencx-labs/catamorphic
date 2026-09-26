@@ -1195,9 +1195,11 @@ Goal: the project folder pushed to a GitHub repository the user owns, with
 \`origin\` configured so later pushes work.
 
 This flow is for projects with NO GitHub remote yet. If \`git remote -v\`
-already shows an origin, or the project was imported from GitHub, use the
-sync_project / create_pull_request tools instead — and never replace an
-existing remote without asking.
+already shows an origin, or the project was imported from GitHub, the
+repository is shared with other people: Work never pushes to its default
+branch or to branches it did not create. Share changes with
+create_pull_request (a \`work/\` branch plus a pull request), pull with
+sync_project, and never replace an existing remote without asking.
 
 Run everything below with your shell at the project root.
 
@@ -1241,8 +1243,9 @@ visibility — default to private unless they say otherwise.
 
 ## 5. Wrap up
 
-Report the repository URL. Imported repositories use explicit commits and
-pushes. Run those actions when the user asks; saving a file locally does
-not authorize sharing it.
+Report the repository URL. Imported repositories use explicit commits, and
+changes reach them as pull requests. Push to one of their existing branches
+only when the user asks for that exact push; saving a file locally does not
+authorize sharing it.
 `,
 };

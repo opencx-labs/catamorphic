@@ -39,7 +39,7 @@ describe("proposal branch names (pure)", () => {
         "alice@acme",
         new Date(Date.UTC(2026, 7, 18, 9, 5, 7)),
       ),
-    ).toBe("proposals/alice-acme/fix-refund-policy-20260818-090507");
+    ).toBe("work/proposals/alice-acme/fix-refund-policy-20260818-090507");
   });
 });
 
@@ -110,7 +110,7 @@ describeIf("ProposalsService (ADR 0055)", () => {
       ],
     });
     expect(result.branch).toMatch(
-      /^proposals\/alice\/refunds-now-take-3-days-/,
+      /^work\/proposals\/alice\/refunds-now-take-3-days-/,
     );
     expect(result.pullRequest).toBeUndefined();
 

@@ -8,7 +8,10 @@ import {
   pushToRemote,
 } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import { publishedRef } from "@catamorphic/workflow/project-layout";
+import {
+  MANAGED_BRANCH_PREFIX,
+  publishedRef,
+} from "@catamorphic/workflow/project-layout";
 import type { Kysely } from "kysely";
 import { authorFor, type Identity, mayUseProject } from "../identity.js";
 import { AccessDeniedError } from "./artifact-scope.js";
@@ -24,7 +27,7 @@ import {
   normalizeDocumentPath,
 } from "./documents-service.js";
 import { isProjectDataPath } from "./project-workspace.js";
-import { ProjectNotFoundError } from "./projects-service.js";
+import { ProjectNotFoundError, remoteOwnership } from "./projects-service.js";
 
 /**
  * Propose a change to the program (ADR 0055): a member who cannot commit
@@ -98,7 +101,7 @@ export class ProposalsService {
       (await source.host.listPullRequests?.(source.identity, {
         remoteUrl: source.remoteUrl,
       })) ?? []
-    ).filter((item) => item.head.startsWith("proposals/"));
+    ).filter((item) => item.head.startsWith(PROPOSAL_BRANCH_PREFIX));
     const visible: PullRequestSummary[] = [];
     for (const proposal of proposals) {
       const files = await source.host.pullRequestFiles?.(source.identity, {
@@ -134,7 +137,8 @@ export class ProposalsService {
             })
           )?.find((item) => item.number === input.number);
     const proposal = await readSummary();
-    if (!proposal?.head.startsWith("proposals/")) throw new AccessDeniedError();
+    if (!proposal?.head.startsWith(PROPOSAL_BRANCH_PREFIX))
+      throw new AccessDeniedError();
     const files = await source.host.pullRequestFiles?.(source.identity, {
       remoteUrl: source.remoteUrl,
       number: input.number,
@@ -250,7 +254,7 @@ export class ProposalsService {
       .selectFrom("projects")
       .where("id", "=", projectId)
       .where("tenant_id", "=", identity.tenantId)
-      .select(["id", "remote_url", "remote_branch"])
+      .select(["id", "remote_url", "remote_branch", "remote_ownership"])
       .executeTakeFirst();
     if (!project) throw new ProjectNotFoundError(projectId);
     const title = input.title.trim();
@@ -306,7 +310,11 @@ export class ProposalsService {
     title: string;
     body?: string;
     changes: ProposedChange[];
-    project: { remote_url: string | null; remote_branch: string | null };
+    project: {
+      remote_url: string | null;
+      remote_branch: string | null;
+      remote_ownership: string | null;
+    };
   }): Promise<ProposalResult> {
     const { identity, projectId, title } = args;
     const remote = this.projectManager.remoteBackend;
@@ -364,6 +372,8 @@ export class ProposalsService {
           repoPath: dev.repoPath,
           url: remoteUrl,
           credentials,
+          ownership:
+            remoteOwnership(args.project.remote_ownership) ?? "attached",
           ref: branch,
           remoteBranch: branch,
         });
@@ -404,7 +414,10 @@ export class ProposalsService {
 /** Anyone who uses the project may propose, whatever they hold. */
 export const mayPropose = mayUseProject;
 
-/** `proposals/<user>/<title-slug>-<yyyymmdd-hhmmss>` */
+/** Proposals are branches Work creates, so attached repositories accept them. */
+export const PROPOSAL_BRANCH_PREFIX = `${MANAGED_BRANCH_PREFIX}proposals/`;
+
+/** `work/proposals/<user>/<title-slug>-<yyyymmdd-hhmmss>` */
 export function proposalBranch(
   title: string,
   externalUserId: string,
@@ -420,7 +433,7 @@ export function proposalBranch(
   const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(
     now.getUTCDate(),
   )}-${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;
-  return `proposals/${slug(externalUserId, 24) || "member"}/${
+  return `${PROPOSAL_BRANCH_PREFIX}${slug(externalUserId, 24) || "member"}/${
     slug(title, 40) || "change"
   }-${stamp}`;
 }

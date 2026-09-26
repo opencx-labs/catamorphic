@@ -185,7 +185,7 @@ describe("git-sync over ObjectRemoteBackend", () => {
       const log = await origin.log("refs/heads/main");
       expect(log).toHaveLength(1);
       expect(log[0]?.message.trim()).toBe("Initial commit");
-      expect(log[0]?.author.name).toBe("Catamorphic");
+      expect(log[0]?.author.name).toBe("Work");
     });
   });
 

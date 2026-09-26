@@ -1001,7 +1001,7 @@ export function buildWorkspaceToolkit(
     {
       name: "sync_project",
       description:
-        "Sync this project with its linked remote repository now. On the primary checkout this applies the safe pull/push policy. An isolated worktree never pushes main implicitly; use create_pull_request to share that branch. Call this when the user asks to sync, push, pull, or share changes. Never run raw git push or pull in a terminal for a linked project.",
+        "Sync this project with its linked remote repository now. On the primary checkout this fetches and fast-forwards over a clean tree. Work pushes only to a repository it created; in a repository that existed before Work, local commits are never pushed, the result reports `ahead` or `diverged`, and you share them with create_pull_request. An isolated worktree is never synced; use create_pull_request to share that branch. Call this when the user asks to sync, pull, or share changes. Never run raw git push or pull in a terminal for a linked project.",
       parameters: {},
       execute: async (_input, ctx) => {
         if (!ctx.sessionId) throw new Error("This turn has no chat session.");
@@ -1012,7 +1012,7 @@ export function buildWorkspaceToolkit(
     {
       name: "create_pull_request",
       description:
-        "Propose the project's current changes for review: commits any pending edits, pushes them to a new branch on the linked remote (e.g. GitHub), and opens a pull request. Use this instead of syncing straight to the main branch when the change is risky, collaborators are active on this project, or the user asks for review. Returns the PR URL — share it with the user (open_surface can open it).",
+        "Propose the project's current changes for review: pushes the recorded commits to a new work/ branch on the linked remote (e.g. GitHub) and opens a pull request. This is how local work reaches a repository that existed before Work, and the right choice whenever sync_project reports `ahead` or `diverged`, the change is risky, collaborators are active, or the user asks for review. Returns the PR URL; share it with the user (open_surface can open it).",
       parameters: {
         title: z
           .string()

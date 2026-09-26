@@ -18,6 +18,7 @@ import type {
   PullRequestFile,
   PullRequestSummary,
 } from "./code-host.js";
+import { remoteOwnership } from "./projects-service.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -41,8 +42,10 @@ export class PullRequestsUnsupportedError extends Error {
 
 /**
  * Keeps a project's local `main` converged with its linked network remote
- * (ADR 0044). Provider-agnostic: hosts contribute credentials and optional
- * capabilities through the {@link CodeHost} seam. Calls are coalesced per
+ * (ADR 0044). An attached remote (one that existed before Work, ADR 0170) is
+ * only fetched and fast-forwarded; local commits reach it as a `work/*`
+ * branch plus a pull request. Provider-agnostic: hosts contribute credentials
+ * and optional capabilities through the {@link CodeHost} seam. Calls are coalesced per
  * project — sync fires from turn-settled hooks, boot, and timers, and must
  * never run concurrently against one repo nor break its caller.
  */
@@ -176,6 +179,7 @@ export class RemoteSyncService {
             url: row.remote_url,
             credentials,
             remoteBranch: row.remote_branch ?? "main",
+            ownership: remoteOwnership(row.remote_ownership) ?? "attached",
             author: SYNC_AUTHOR,
           });
         } finally {
@@ -272,6 +276,7 @@ export class RemoteSyncService {
             ),
             url: remoteUrl,
             credentials,
+            ownership: remoteOwnership(row.remote_ownership) ?? "attached",
             ref: input.localRef ?? "HEAD",
             remoteBranch: branch,
           });
@@ -368,7 +373,12 @@ export class RemoteSyncService {
       .selectFrom("projects")
       .where("id", "=", projectId)
       .where("tenant_id", "=", identity.tenantId)
-      .select(["remote_url", "remote_branch", "default_branch"])
+      .select([
+        "remote_url",
+        "remote_branch",
+        "remote_ownership",
+        "default_branch",
+      ])
       .executeTakeFirst();
   }
 }
