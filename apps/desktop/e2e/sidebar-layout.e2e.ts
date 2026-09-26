@@ -140,8 +140,10 @@ describe("configurable browser workspace", () => {
   });
 
   it("draws one keyboard-led ring: none after right-click and Escape, the accent at once on Tab", async () => {
-    const point = await run<{ x: number; y: number }>(
-      "const r = $('[data-point-key=\"sidebar:Reference\"] [data-tree-primary]').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }",
+    // The row may still be sliding into its expanded folder.
+    const point = await app.waitFor<{ x: number; y: number }>(
+      "(() => { const el = document.querySelector('[data-point-key=\"sidebar:Reference\"] [data-tree-primary]'); const r = el.getBoundingClientRect(); const x = r.x + r.width / 2, y = r.y + r.height / 2; return el.contains(document.elementFromPoint(x, y)) ? { x, y } : false })()",
+      { label: "Reference row reachable" },
     );
     for (const type of ["mousePressed", "mouseReleased"])
       await app.cdp("Input.dispatchMouseEvent", {
