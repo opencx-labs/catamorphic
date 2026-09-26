@@ -1,7 +1,7 @@
 {
   "name": "catamorphic-desktop",
   "productName": "Work",
-  "version": "0.1.0-alpha.10",
+  "version": "0.1.0-alpha.11",
   "description": "A local-first workspace for projects, agents, workflows, and apps",
   "author": "The Catamorphic Authors",
   "license": "Apache-2.0",
