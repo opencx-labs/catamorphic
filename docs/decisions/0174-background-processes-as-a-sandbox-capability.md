@@ -35,9 +35,10 @@ in a directory inside the VM and starts each process in its own session. A
 worker's offer and a member runner's registration say whether their provider
 runs processes (`client_runners.processes`, migration 030), and the
 control-plane forwarder offers them only then. Allocation guards, fencing and
-OpenTelemetry spans (`sandbox.process.*`) wrap it like every other operation. Cloudflare and
-Daytona do not advertise it until someone checks that detached processes
-survive their exec APIs. The shell implementation makes adding them cheap.
+OpenTelemetry spans (`sandbox.process.*`) wrap it like every other operation.
+Cloudflare and Daytona do not advertise it until someone checks that detached
+processes survive their exec APIs. The shell implementation makes adding them
+cheap.
 
 **One agent vocabulary.** The built-in harness offers the ADR 0155 tools
 wherever its sandbox has `processes`: `run_background_command`,
