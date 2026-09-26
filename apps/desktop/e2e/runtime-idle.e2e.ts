@@ -58,6 +58,10 @@ const waitForFixture = () =>
   );
 
 it("leaves settled chat icons without hidden animation loops or backdrop filters", async () => {
+  // Keys pressed before the workspace is restored are lost or open a tab.
+  await app.waitFor("!!document.querySelector('[data-workspace-ready]')", {
+    label: "workspace ready for shortcuts",
+  });
   await app.eval(
     `window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))`,
   );

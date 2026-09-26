@@ -60,6 +60,10 @@ beforeAll(async () => {
   await app.waitFor(
     "!!document.querySelector('textarea[placeholder*=\"Search or ask\"]')",
   );
+  // Keys pressed before the workspace is restored are lost or open a tab.
+  await app.waitFor("!!document.querySelector('[data-workspace-ready]')", {
+    label: "workspace ready for shortcuts",
+  });
   await app.eval(
     "window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))",
   );

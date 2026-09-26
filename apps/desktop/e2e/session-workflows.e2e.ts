@@ -26,6 +26,8 @@ beforeAll(async () => {
   await wait("return !$('[data-testid=project-submit]').disabled;");
   await run("$('[data-testid=project-submit]').click();");
   await wait("return !!$('[aria-label=\"New chat\"]');");
+  // Keys pressed before the workspace is restored are lost or open a tab.
+  await wait("return !!$('[data-workspace-ready]');");
   await run(
     "window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}));",
   );

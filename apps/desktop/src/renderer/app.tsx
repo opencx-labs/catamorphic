@@ -5488,6 +5488,11 @@ export function App({
   return (
     <div
       data-sidebar-dividers={prefs?.sidebarDividers ? "on" : "off"}
+      // The project's workspace is restored, revealed, and taking
+      // shortcuts: what automation waits for before pressing keys.
+      data-workspace-ready={
+        workspaceReady && bootRevealed && runtime.visible ? "" : undefined
+      }
       className="relative flex h-full bg-sidebar"
     >
       {/* Agent pointers: glow + scroll on data-point-key elements. The
