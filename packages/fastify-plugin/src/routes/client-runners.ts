@@ -30,6 +30,8 @@ export function registerClientRunnerRoutes(
             .array(z.enum(["cpuMillis", "memoryMb", "storageMb", "gpu"]))
             .optional(),
           isolation: z.enum(["none", "process", "sandbox"]).optional(),
+          /** The runner's provider runs background processes (ADR 0174). */
+          processes: z.boolean().optional(),
         }),
         response: {
           200: Lease,

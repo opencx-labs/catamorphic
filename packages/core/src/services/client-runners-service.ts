@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import type {
-  EnvironmentRuntimeBinding,
-  SandboxProvider,
+import {
+  type EnvironmentRuntimeBinding,
+  PROCESS_SIGNALS,
+  type SandboxProcessProvider,
+  type SandboxProvider,
 } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
@@ -88,6 +90,34 @@ export const ClientRunnerOperationSchema = z.discriminatedUnion("kind", [
     path: z.string(),
     ref: z.string(),
   }),
+  // Background processes (ADR 0174): short request/response operations; a
+  // follower reads again from the cursor the last read returned.
+  z.object({
+    kind: z.literal("process.start"),
+    sandboxId: z.string(),
+    command: z.string(),
+    cwd: z.string().optional(),
+    env: stringMap.optional(),
+    name: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("process.read"),
+    sandboxId: z.string(),
+    processId: z.string(),
+    cursor: z.number().int().nonnegative().optional(),
+    maxBytes: z.number().int().positive().optional(),
+    waitMs: z.number().int().nonnegative().optional(),
+  }),
+  z.object({
+    kind: z.literal("process.signal"),
+    sandboxId: z.string(),
+    processId: z.string(),
+    signal: z.enum(PROCESS_SIGNALS),
+  }),
+  z.object({
+    kind: z.literal("process.list"),
+    sandboxId: z.string(),
+  }),
 ]);
 export type ClientRunnerOperation = z.infer<typeof ClientRunnerOperationSchema>;
 const statusSchema = z.enum([
@@ -104,25 +134,70 @@ const handleSchema = z.object({
   status: statusSchema,
 });
 
+const processSchema = z.object({
+  processId: z.string(),
+  sandboxId: z.string(),
+  command: z.string(),
+  name: z.string().optional(),
+  cwd: z.string(),
+  status: z.enum(["running", "exited"]),
+  exitCode: z.number().nullable(),
+  signal: z.enum(PROCESS_SIGNALS).nullable(),
+  startedAt: z.string(),
+  endedAt: z.string().nullable(),
+  outputBytes: z.number(),
+});
+const processOutputSchema = z.object({
+  processId: z.string(),
+  chunk: z.string(),
+  cursor: z.number(),
+  nextCursor: z.number(),
+  more: z.boolean(),
+  outputBytes: z.number(),
+  status: z.enum(["running", "exited"]),
+  exitCode: z.number().nullable(),
+  signal: z.enum(PROCESS_SIGNALS).nullable(),
+});
+
 export const ClientRunnerResultSchema = z.union([
   z.null(),
   z.string(),
   handleSchema,
   z.object({ exitCode: z.number(), result: z.string() }),
+  processSchema,
+  processOutputSchema,
+  z.array(processSchema),
 ]);
 
 /**
  * A sandbox provider whose every operation is executed elsewhere: by a
  * member's desktop runner or by a remote worker (ADR 0164). `call` delivers
- * one operation and resolves with the runner's response.
+ * one operation and resolves with the runner's response. `processes` says
+ * whether the remote provider runs background processes (ADR 0174).
  */
 export function forwardingSandboxProvider(args: {
   workspaceRoot: string;
+  processes: boolean;
   call: (operation: ClientRunnerOperation) => Promise<unknown>;
 }): SandboxProvider {
   const { call } = args;
+  const processes: SandboxProcessProvider = {
+    startProcess: async (options) =>
+      processSchema.parse(await call({ kind: "process.start", ...options })),
+    readProcessOutput: async (options) =>
+      processOutputSchema.parse(
+        await call({ kind: "process.read", ...options }),
+      ),
+    signalProcess: async (options) =>
+      processSchema.parse(await call({ kind: "process.signal", ...options })),
+    listProcesses: async (options) =>
+      z
+        .array(processSchema)
+        .parse(await call({ kind: "process.list", ...options })),
+  };
   return {
     workspaceRoot: args.workspaceRoot,
+    ...(args.processes ? { processes } : {}),
     createSandbox: async (options) =>
       handleSchema.parse(await call({ kind: "create", options })),
     startSandbox: async (sandboxId) => {
@@ -170,6 +245,8 @@ export class ClientRunnersService {
     workspaceRoot: string;
     resourceLimits?: ("cpuMillis" | "memoryMb" | "storageMb" | "gpu")[];
     isolation?: "none" | "process" | "sandbox";
+    /** The runner's provider runs background processes (ADR 0174). */
+    processes?: boolean;
   }) {
     if (
       !args.workspaceRoot.startsWith("/") ||
@@ -194,6 +271,7 @@ export class ClientRunnersService {
           resourceLimitsSchema.parse(args.resourceLimits ?? []),
         ),
         isolation: isolationSchema.parse(args.isolation ?? "none"),
+        processes: args.processes ?? false,
         lease_token: token,
         lease_expires_at: sql`now() + interval '45 seconds'`,
       })
@@ -210,6 +288,7 @@ export class ClientRunnersService {
               resourceLimitsSchema.parse(args.resourceLimits ?? []),
             ),
             isolation: isolationSchema.parse(args.isolation ?? "none"),
+            processes: args.processes ?? false,
             environment_name: args.environment,
           })
           .where("client_runners.tenant_id", "=", args.identity.tenantId)
@@ -432,6 +511,7 @@ export class ClientRunnersService {
       );
     const provider = forwardingSandboxProvider({
       workspaceRoot: runner.workspace_root,
+      processes: runner.processes,
       call,
     });
     return {

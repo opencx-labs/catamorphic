@@ -8,13 +8,24 @@ import type {
   ExecOpts,
   ExecResult,
   GitCloneOpts,
+  ProcessOutput,
+  ReadProcessOutputArgs,
   SandboxHandle,
+  SandboxProcess,
+  SandboxProcessProvider,
   SandboxProvider,
   SandboxStatus,
+  SignalProcessArgs,
+  StartProcessArgs,
   SupervisorProcessHandle,
 } from "@catamorphic/sandbox";
 import {
+  assertProcessId,
   assertSandboxResources,
+  decodeUtf8Prefix,
+  newProcessId,
+  PROCESS_SIGNALS,
+  processReadBounds,
   StdioDeploymentRuntimeProvider,
 } from "@catamorphic/sandbox";
 import { APP_DATA_ENV } from "@catamorphic/workflow/project-layout";
@@ -64,9 +75,27 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
   readonly isolation = "process";
   readonly workspaceRoot = "/workspace";
   readonly deploymentRuntime: DeploymentRuntimeProvider;
+  /**
+   * Background processes (ADR 0174): each writes its output to a log in
+   * its sandbox directory, outside the workspace, and is stopped with the
+   * sandbox like every other command.
+   */
+  readonly processes: SandboxProcessProvider = {
+    startProcess: (args) => this.startProcess(args),
+    readProcessOutput: (args) => this.readProcessOutput(args),
+    signalProcess: (args) => this.signalProcess(args),
+    listProcesses: async ({ sandboxId }) =>
+      [...(this.background.get(sandboxId)?.values() ?? [])].map((entry) =>
+        this.snapshot(entry),
+      ),
+  };
+  private readonly background = new Map<
+    string,
+    Map<string, { process: SandboxProcess; child: ChildProcess; log: string }>
+  >();
   private readonly root: string;
   private readonly projectDataDirectory: LocalProcessProviderConfig["projectDataDirectory"];
-  private readonly processes = new Map<string, Set<ChildProcess>>();
+  private readonly children = new Map<string, Set<ChildProcess>>();
   private readonly stopped = new Set<string>();
   private readonly baseEnv: Record<string, string>;
   private readonly sandboxes = new Map<
@@ -125,7 +154,7 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
   async stopSandbox(sandboxId: string): Promise<void> {
     this.requireSandboxDir(sandboxId);
     this.stopped.add(sandboxId);
-    const children = [...(this.processes.get(sandboxId) ?? [])];
+    const children = [...(this.children.get(sandboxId) ?? [])];
     await Promise.all(
       children.map(
         (child) =>
@@ -153,7 +182,8 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     fs.rmSync(directory, { recursive: true, force: true });
     this.sandboxes.delete(sandboxId);
     this.stopped.delete(sandboxId);
-    this.processes.delete(sandboxId);
+    this.children.delete(sandboxId);
+    this.background.delete(sandboxId);
     await this.deploymentRuntime.releaseSandbox?.({ sandboxId });
   }
 
@@ -233,6 +263,144 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     }
   }
 
+  private async startProcess(args: StartProcessArgs): Promise<SandboxProcess> {
+    this.requireRunning(args.sandboxId);
+    const virtualCwd = args.cwd ?? this.workspaceRoot;
+    const cwd = this.resolvePath(args.sandboxId, virtualCwd);
+    fs.mkdirSync(cwd, { recursive: true });
+    const processId = newProcessId();
+    const logs = path.join(this.root, args.sandboxId, "processes");
+    fs.mkdirSync(logs, { recursive: true });
+    const log = path.join(logs, `${processId}.log`);
+    // The child writes straight to the log, so output never passes
+    // through (or depends on) this process.
+    const fd = fs.openSync(log, "a");
+    let child: ChildProcess;
+    try {
+      child = spawn("/bin/bash", ["-c", args.command], {
+        detached: process.platform !== "win32",
+        cwd,
+        env: this.envFor(args.sandboxId, args.env),
+        stdio: ["ignore", fd, fd],
+      });
+    } finally {
+      fs.closeSync(fd);
+    }
+    const record: SandboxProcess = {
+      processId,
+      sandboxId: args.sandboxId,
+      command: args.command,
+      ...(args.name ? { name: args.name } : {}),
+      cwd: virtualCwd,
+      status: "running",
+      exitCode: null,
+      signal: null,
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+      outputBytes: 0,
+    };
+    const entry = { process: record, child, log };
+    const ended = (exitCode: number | null, signal?: NodeJS.Signals | null) => {
+      if (entry.process.status === "exited") return;
+      entry.process.status = "exited";
+      entry.process.exitCode = exitCode;
+      entry.process.signal ??=
+        PROCESS_SIGNALS.find((known) => known === signal) ?? null;
+      entry.process.endedAt = new Date().toISOString();
+    };
+    child.once("exit", (code, signal) => ended(code, signal));
+    child.once("error", (error) => {
+      fs.appendFileSync(log, `${error.message}\n`);
+      ended(127);
+    });
+    this.track(args.sandboxId, child);
+    const processes = this.background.get(args.sandboxId) ?? new Map();
+    this.background.set(args.sandboxId, processes);
+    processes.set(processId, entry);
+    return this.snapshot(entry);
+  }
+
+  private async readProcessOutput(
+    args: ReadProcessOutputArgs,
+  ): Promise<ProcessOutput> {
+    const entry = this.backgroundProcess(args);
+    const bounds = processReadBounds(args);
+    const deadline = Date.now() + bounds.waitMs;
+    while (
+      entry.process.status === "running" &&
+      logSize(entry.log) <= bounds.cursor &&
+      Date.now() < deadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    // Status before bytes: an exited process's log is already complete.
+    const status = entry.process.status;
+    const size = logSize(entry.log);
+    const cursor = Math.min(bounds.cursor, size);
+    const length = Math.min(size - cursor, bounds.maxBytes);
+    const bytes = new Uint8Array(length);
+    if (length > 0) {
+      const fd = fs.openSync(entry.log, "r");
+      try {
+        fs.readSync(fd, bytes, 0, length, cursor);
+      } finally {
+        fs.closeSync(fd);
+      }
+    }
+    const more = size - cursor > length;
+    const decoded = decodeUtf8Prefix(bytes, status === "exited" && !more);
+    return {
+      processId: entry.process.processId,
+      chunk: decoded.text,
+      cursor,
+      nextCursor: cursor + decoded.bytes,
+      more,
+      outputBytes: size,
+      status,
+      exitCode: status === "exited" ? entry.process.exitCode : null,
+      signal: entry.process.signal,
+    };
+  }
+
+  private async signalProcess(
+    args: SignalProcessArgs,
+  ): Promise<SandboxProcess> {
+    if (!PROCESS_SIGNALS.includes(args.signal))
+      throw new Error(`Unsupported signal '${args.signal}'`);
+    const entry = this.backgroundProcess(args);
+    if (entry.process.status === "running" && entry.child.pid) {
+      entry.process.signal = args.signal;
+      try {
+        if (process.platform === "win32") entry.child.kill(args.signal);
+        else process.kill(-entry.child.pid, args.signal);
+      } catch (error) {
+        if (
+          !(
+            error instanceof Error &&
+            "code" in error &&
+            (error.code === "ESRCH" || error.code === "EPERM")
+          )
+        )
+          throw error;
+      }
+    }
+    return this.snapshot(entry);
+  }
+
+  private backgroundProcess(args: { sandboxId: string; processId: string }) {
+    assertProcessId(args.processId);
+    const entry = this.background.get(args.sandboxId)?.get(args.processId);
+    if (!entry) throw new Error(`Unknown process '${args.processId}'`);
+    return entry;
+  }
+
+  private snapshot(entry: {
+    process: SandboxProcess;
+    log: string;
+  }): SandboxProcess {
+    return { ...entry.process, outputBytes: logSize(entry.log) };
+  }
+
   /**
    * Map a virtual `/workspace/...` path onto this sandbox's directory. Paths
    * outside the virtual root (after normalization, e.g. the runtime dir
@@ -281,15 +449,15 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
   }
 
   private track(sandboxId: string, child: ChildProcess): void {
-    const children = this.processes.get(sandboxId) ?? new Set<ChildProcess>();
-    this.processes.set(sandboxId, children);
+    const children = this.children.get(sandboxId) ?? new Set<ChildProcess>();
+    this.children.set(sandboxId, children);
     children.add(child);
     // Commands own their process group. Detached grandchildren must not outlive
     // completion and consume untracked resources in this trusted backend.
     child.once("exit", () => this.killProcessTree(child));
     child.once("close", () => {
       children.delete(child);
-      if (children.size === 0) this.processes.delete(sandboxId);
+      if (children.size === 0) this.children.delete(sandboxId);
     });
   }
 
@@ -298,8 +466,14 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
       try {
         process.kill(-child.pid, "SIGKILL");
       } catch (error) {
+        // ESRCH: the group is gone. EPERM: macOS answers so for a group
+        // whose members are all exited, waiting to be reaped.
         if (
-          !(error instanceof Error && "code" in error && error.code === "ESRCH")
+          !(
+            error instanceof Error &&
+            "code" in error &&
+            (error.code === "ESRCH" || error.code === "EPERM")
+          )
         )
           throw error;
       }
@@ -405,6 +579,10 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
       stdout: child.stdout,
     };
   }
+}
+
+function logSize(file: string): number {
+  return fs.statSync(file, { throwIfNoEntry: false })?.size ?? 0;
 }
 
 function withCredentials(url: string, opts?: GitCloneOpts): string {

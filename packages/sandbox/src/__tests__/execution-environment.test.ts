@@ -21,7 +21,7 @@ const binding: EnvironmentBinding = {
     memoryMb: 8192,
     storageMb: 20_000,
     gpu: false,
-    timeoutSeconds: 3600,
+    commandTimeoutSeconds: 3600,
     maxConcurrency: 8,
   },
 };

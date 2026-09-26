@@ -113,6 +113,8 @@ interface AgentExecutionRuntime {
   environmentName: string;
   provider?: SandboxProvider;
   devSandboxes?: DevSandboxService;
+  /** The Allocation's budget for one foreground command (ADR 0174). */
+  commandTimeoutSeconds?: number;
 }
 
 type SessionRow = Selectable<DB["agent_sessions"]>;
@@ -5532,10 +5534,13 @@ export class AgentSessionsService {
         : selectedProvider;
     if (!provider)
       throw new Error("The selected Environment has no execution provider");
+    const commandTimeoutSeconds =
+      allocation.policy.requirements.resources?.commandTimeoutSeconds;
     return {
       provider,
       bindingId: allocation.bindingId,
       environmentName: allocation.environmentName,
+      ...(commandTimeoutSeconds ? { commandTimeoutSeconds } : {}),
       devSandboxes: new DevSandboxService({
         projectManager: this.projectManager,
         provider,
@@ -5658,6 +5663,9 @@ export class AgentSessionsService {
       userId: identity.externalUserId,
       sandboxId: handle.providerId,
       workingDirectory: this.projectDir(runtime.provider),
+      ...(runtime.commandTimeoutSeconds
+        ? { commandTimeoutSeconds: runtime.commandTimeoutSeconds }
+        : {}),
       sessionId: session.id,
       systemPrompt: buildAgentSystemPrompt({
         systemPrompt:

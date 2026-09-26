@@ -9951,6 +9951,7 @@ export interface paths {
                         resourceLimits?: ("cpuMillis" | "memoryMb" | "storageMb" | "gpu")[];
                         /** @enum {string} */
                         isolation?: "none" | "process" | "sandbox";
+                        processes?: boolean;
                     };
                 };
             };
@@ -10113,6 +10114,35 @@ export interface paths {
                                 sandboxId: string;
                                 path: string;
                                 ref: string;
+                            } | {
+                                /** @enum {string} */
+                                kind: "process.start";
+                                sandboxId: string;
+                                command: string;
+                                cwd?: string;
+                                env?: {
+                                    [key: string]: string;
+                                };
+                                name?: string;
+                            } | {
+                                /** @enum {string} */
+                                kind: "process.read";
+                                sandboxId: string;
+                                processId: string;
+                                cursor?: number;
+                                maxBytes?: number;
+                                waitMs?: number;
+                            } | {
+                                /** @enum {string} */
+                                kind: "process.signal";
+                                sandboxId: string;
+                                processId: string;
+                                /** @enum {string} */
+                                signal: "SIGINT" | "SIGTERM" | "SIGKILL" | "SIGHUP";
+                            } | {
+                                /** @enum {string} */
+                                kind: "process.list";
+                                sandboxId: string;
                             };
                         } | null;
                     };
@@ -10250,7 +10280,47 @@ export interface paths {
                         } | {
                             exitCode: number;
                             result: string;
-                        }) | null;
+                        } | {
+                            processId: string;
+                            sandboxId: string;
+                            command: string;
+                            name?: string;
+                            cwd: string;
+                            /** @enum {string} */
+                            status: "running" | "exited";
+                            exitCode: number | null;
+                            /** @enum {string|null} */
+                            signal: "SIGINT" | "SIGTERM" | "SIGKILL" | "SIGHUP" | null;
+                            startedAt: string;
+                            endedAt: string | null;
+                            outputBytes: number;
+                        } | {
+                            processId: string;
+                            chunk: string;
+                            cursor: number;
+                            nextCursor: number;
+                            more: boolean;
+                            outputBytes: number;
+                            /** @enum {string} */
+                            status: "running" | "exited";
+                            exitCode: number | null;
+                            /** @enum {string|null} */
+                            signal: "SIGINT" | "SIGTERM" | "SIGKILL" | "SIGHUP" | null;
+                        } | {
+                            processId: string;
+                            sandboxId: string;
+                            command: string;
+                            name?: string;
+                            cwd: string;
+                            /** @enum {string} */
+                            status: "running" | "exited";
+                            exitCode: number | null;
+                            /** @enum {string|null} */
+                            signal: "SIGINT" | "SIGTERM" | "SIGKILL" | "SIGHUP" | null;
+                            startedAt: string;
+                            endedAt: string | null;
+                            outputBytes: number;
+                        }[]) | null;
                         error?: string;
                     };
                 };

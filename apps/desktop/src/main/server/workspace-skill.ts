@@ -70,8 +70,9 @@ wait on. Each runs in its own terminal, shown as a chip on your chat that the pe
 can open to watch. It survives the turn, and this chat receives a message when it
 finishes. Add wake_on_output (a regular expression) to also hear about a line, such
 as a server's "ready" or an "error". Keep working meanwhile. Never loop on sleep.
-read_background_output returns new output since your last read, and wait_seconds
-blocks for news when you have nothing else to do. stop_background_command ends it.
+read_background_output returns new output since your last read; wait_seconds
+blocks for news when you have nothing else to do, and wait_for waits for a
+matching line, such as a server's "ready". stop_background_command ends it.
 Stop what you no longer need, and leave a dev server running when the person will
 use it. Open its terminal with open_surface and its key when output is worth their
 attention.

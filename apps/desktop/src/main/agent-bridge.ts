@@ -99,10 +99,12 @@ export interface WorkspaceBridge {
     sessionId: string;
     id: string;
     waitMs?: number;
+    waitFor?: string;
   }): Promise<{
     status: BackgroundCommandView["status"];
     exitCode: number | null;
     output: string;
+    matched?: string;
   }>;
   stopBackgroundCommand(input: { sessionId: string; id: string }): Promise<{
     status: BackgroundCommandView["status"];

@@ -31,6 +31,11 @@ import {
   tool,
 } from "ai";
 import { z } from "zod";
+import {
+  type ShellState,
+  shellTools,
+  stopBackgroundCommands,
+} from "./shell.js";
 import { agentTelemetry } from "./telemetry.js";
 import { turnContextMessages } from "./turn-context.js";
 
@@ -103,6 +108,8 @@ interface AiSdkRuntimeSessionState {
   instructions: string;
   transcript: ModelMessage[];
   tools: ReturnType<typeof createTools>;
+  /** The shell the tools share; its background commands end with the session. */
+  shell: ShellState;
   events: AgentEventBuffer;
   requests: Map<string, PendingRequest>;
   sequence: number;
@@ -151,6 +158,22 @@ export class AiSdkAgentRuntime implements AgentRuntimeProvider {
         { id: "write", displayName: "Write" },
         { id: "edit", displayName: "Edit" },
         { id: "bash", displayName: "Bash" },
+        ...(this.opts.sandboxProvider.processes
+          ? [
+              {
+                id: "run_background_command",
+                displayName: "Run in Background",
+              },
+              {
+                id: "read_background_output",
+                displayName: "Read Background Output",
+              },
+              {
+                id: "stop_background_command",
+                displayName: "Stop Background Command",
+              },
+            ]
+          : []),
         { id: "ask_user", displayName: "Ask User" },
       ],
       mcpGenerations: [],
@@ -178,6 +201,7 @@ export class AiSdkAgentRuntime implements AgentRuntimeProvider {
       sessionId: args.sessionId,
       workingDirectory: args.workingDirectory,
     };
+    const shell: ShellState = {};
     const state: AiSdkRuntimeSessionState = {
       session,
       instructions: [
@@ -191,9 +215,11 @@ export class AiSdkAgentRuntime implements AgentRuntimeProvider {
         role: message.role,
         content: message.content,
       })),
+      shell,
       tools: createTools({
         provider: this.opts.sandboxProvider,
         session,
+        shell,
         extraTools: this.opts.extraTools ?? [],
         toolContext,
       }),
@@ -249,6 +275,12 @@ export class AiSdkAgentRuntime implements AgentRuntimeProvider {
     state.transcript.length = 0;
     state.events.close();
     this.sessions.delete(args.sessionId);
+    // A stopped session leaves nothing running (ADR 0174).
+    await stopBackgroundCommands({
+      provider: this.opts.sandboxProvider,
+      sandboxId: state.session.allocationId,
+      state: state.shell,
+    });
     this.stoppedEvents.set(args.sessionId, state.events);
     while (this.stoppedEvents.size > 16) {
       const oldest = this.stoppedEvents.keys().next().value;
@@ -861,6 +893,7 @@ export class AiSdkAgentRuntime implements AgentRuntimeProvider {
 function createTools(args: {
   provider: SandboxProvider;
   session: AgentRuntimeSession;
+  shell: ShellState;
   extraTools: readonly ExtraTool[];
   toolContext: ExtraToolContext;
 }) {
@@ -946,17 +979,11 @@ function createTools(args: {
         return `Edited ${relativePath}`;
       },
     }),
-    bash: tool({
-      description: "Run a command in the project working directory.",
-      inputSchema: z.object({
-        command: z.string(),
-        timeoutMs: z.number().int().positive().optional(),
-      }),
-      execute: ({ command, timeoutMs }) =>
-        args.provider.executeCommand(args.session.allocationId, command, {
-          cwd: workingDirectory,
-          ...(timeoutMs ? { timeout: Math.ceil(timeoutMs / 1000) } : {}),
-        }),
+    ...shellTools({
+      provider: args.provider,
+      sandboxId: args.session.allocationId,
+      root: () => workingDirectory,
+      state: args.shell,
     }),
     ask_user: tool({
       description: "Ask the user a blocking question and wait for the answer.",

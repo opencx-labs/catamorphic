@@ -14,7 +14,12 @@ export interface EnvironmentResourcePolicy {
   memoryMb?: number;
   storageMb?: number;
   gpu?: boolean;
-  timeoutSeconds?: number;
+  /**
+   * The longest one foreground command may run (ADR 0174): an agent's
+   * shell command, a workflow step's sandbox command. Background processes
+   * are bounded by their sandbox's lifetime instead.
+   */
+  commandTimeoutSeconds?: number;
   maxConcurrency?: number;
 }
 
@@ -223,9 +228,9 @@ export function environmentSatisfies(
     reasons,
   });
   compareResource({
-    requested: requirements.resources?.timeoutSeconds,
-    ceiling: binding.resources.timeoutSeconds,
-    label: "Timeout requirement",
+    requested: requirements.resources?.commandTimeoutSeconds,
+    ceiling: binding.resources.commandTimeoutSeconds,
+    label: "Command time requirement",
     unit: " seconds",
     reasons,
   });

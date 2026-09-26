@@ -43,8 +43,21 @@ function operator(
   });
 }
 
-async function waitFor(check: () => Promise<boolean>, what: string) {
-  const deadline = Date.now() + 20_000;
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitFor(
+  check: () => Promise<boolean>,
+  what: string,
+  timeoutMs = 20_000,
+) {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await check()) return;
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -193,6 +206,38 @@ describe("remote workers (ADR 0164)", () => {
       fs.statSync(path.join(workerDir, "worker-credential")).mode & 0o777,
     ).toBe(0o600);
   }, 60_000);
+
+  it("runs background processes on the worker and ends them with the chat (ADR 0174)", async () => {
+    const sessions = server.catamorphic.core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    const session = await sessions.create(identity, projectId, {
+      environment: "build",
+    });
+    const say = async (message: string) =>
+      (await sessions.sendMessage(identity, projectId, session.id, message))
+        .content;
+    const [server1, pid1] = (await say("background-start")).split(" ");
+    const [server2, pid2] = (await say("background-start")).split(" ");
+    expect(server1).toMatch(/^proc-/);
+    expect(alive(Number(pid1))).toBe(true);
+    expect(alive(Number(pid2))).toBe(true);
+    expect(JSON.parse(await say("background-list"))).toEqual(
+      expect.arrayContaining([
+        { processId: server1, status: "running" },
+        { processId: server2, status: "running" },
+      ]),
+    );
+    expect(await say(`background-stop ${server2}`)).toBe("exited SIGTERM");
+    await waitFor(async () => !alive(Number(pid2)), "the stopped process");
+    // Closing the chat releases its workspace; the worker destroys the
+    // sandbox and everything still running in it.
+    await sessions.close(identity, projectId, session.id);
+    await waitFor(
+      async () => !alive(Number(pid1)),
+      "the chat's background process to end",
+      60_000,
+    );
+  }, 90_000);
 
   it("keeps agent code off a control plane that runs only workflows", async () => {
     const sessions = server.catamorphic.core.agentSessions;

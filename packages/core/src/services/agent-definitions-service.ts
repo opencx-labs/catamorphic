@@ -161,7 +161,7 @@ const AgentEnvironmentPolicySchema = z
             memoryMb: z.number().int().positive().optional(),
             storageMb: z.number().int().positive().optional(),
             gpu: z.boolean().optional(),
-            timeoutSeconds: z.number().int().positive().optional(),
+            commandTimeoutSeconds: z.number().int().positive().optional(),
             maxConcurrency: z.number().int().positive().optional(),
           })
           .optional(),

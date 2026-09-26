@@ -22510,6 +22510,9 @@
                   "isolation": {
                     "type": "string",
                     "enum": ["none", "process", "sandbox"]
+                  },
+                  "processes": {
+                    "type": "boolean"
                   }
                 },
                 "required": ["id", "environment", "label", "workspaceRoot"]
@@ -22865,6 +22868,108 @@
                           },
                           "required": ["kind", "sandboxId", "path", "ref"],
                           "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["process.start"]
+                            },
+                            "sandboxId": {
+                              "type": "string"
+                            },
+                            "command": {
+                              "type": "string"
+                            },
+                            "cwd": {
+                              "type": "string"
+                            },
+                            "env": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "string"
+                              }
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["kind", "sandboxId", "command"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["process.read"]
+                            },
+                            "sandboxId": {
+                              "type": "string"
+                            },
+                            "processId": {
+                              "type": "string"
+                            },
+                            "cursor": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "maxBytes": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "exclusiveMinimum": true,
+                              "maximum": 9007199254740991
+                            },
+                            "waitMs": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": ["kind", "sandboxId", "processId"],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["process.signal"]
+                            },
+                            "sandboxId": {
+                              "type": "string"
+                            },
+                            "processId": {
+                              "type": "string"
+                            },
+                            "signal": {
+                              "type": "string",
+                              "enum": ["SIGINT", "SIGTERM", "SIGKILL", "SIGHUP"]
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "sandboxId",
+                            "processId",
+                            "signal"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["process.list"]
+                            },
+                            "sandboxId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["kind", "sandboxId"],
+                          "additionalProperties": false
                         }
                       ]
                     }
@@ -23063,6 +23168,166 @@
                           }
                         },
                         "required": ["exitCode", "result"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "processId": {
+                            "type": "string"
+                          },
+                          "sandboxId": {
+                            "type": "string"
+                          },
+                          "command": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "cwd": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": ["running", "exited"]
+                          },
+                          "exitCode": {
+                            "nullable": true,
+                            "type": "number"
+                          },
+                          "signal": {
+                            "nullable": true,
+                            "type": "string",
+                            "enum": ["SIGINT", "SIGTERM", "SIGKILL", "SIGHUP"]
+                          },
+                          "startedAt": {
+                            "type": "string"
+                          },
+                          "endedAt": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "outputBytes": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "processId",
+                          "sandboxId",
+                          "command",
+                          "cwd",
+                          "status",
+                          "exitCode",
+                          "signal",
+                          "startedAt",
+                          "endedAt",
+                          "outputBytes"
+                        ]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "processId": {
+                            "type": "string"
+                          },
+                          "chunk": {
+                            "type": "string"
+                          },
+                          "cursor": {
+                            "type": "number"
+                          },
+                          "nextCursor": {
+                            "type": "number"
+                          },
+                          "more": {
+                            "type": "boolean"
+                          },
+                          "outputBytes": {
+                            "type": "number"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": ["running", "exited"]
+                          },
+                          "exitCode": {
+                            "nullable": true,
+                            "type": "number"
+                          },
+                          "signal": {
+                            "nullable": true,
+                            "type": "string",
+                            "enum": ["SIGINT", "SIGTERM", "SIGKILL", "SIGHUP"]
+                          }
+                        },
+                        "required": [
+                          "processId",
+                          "chunk",
+                          "cursor",
+                          "nextCursor",
+                          "more",
+                          "outputBytes",
+                          "status",
+                          "exitCode",
+                          "signal"
+                        ]
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "processId": {
+                              "type": "string"
+                            },
+                            "sandboxId": {
+                              "type": "string"
+                            },
+                            "command": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "cwd": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": ["running", "exited"]
+                            },
+                            "exitCode": {
+                              "nullable": true,
+                              "type": "number"
+                            },
+                            "signal": {
+                              "nullable": true,
+                              "type": "string",
+                              "enum": ["SIGINT", "SIGTERM", "SIGKILL", "SIGHUP"]
+                            },
+                            "startedAt": {
+                              "type": "string"
+                            },
+                            "endedAt": {
+                              "nullable": true,
+                              "type": "string"
+                            },
+                            "outputBytes": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "processId",
+                            "sandboxId",
+                            "command",
+                            "cwd",
+                            "status",
+                            "exitCode",
+                            "signal",
+                            "startedAt",
+                            "endedAt",
+                            "outputBytes"
+                          ]
+                        }
                       }
                     ],
                     "nullable": true

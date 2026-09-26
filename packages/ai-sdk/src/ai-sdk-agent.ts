@@ -50,10 +50,10 @@ import {
 } from "ai";
 import { z } from "zod";
 import {
-  runShell,
-  SHELL_DEFAULT_TIMEOUT_MS,
-  SHELL_MAX_TIMEOUT_MS,
+  type ShellProvider,
   type ShellState,
+  shellTools,
+  stopBackgroundCommands,
 } from "./shell.js";
 import { agentTelemetry } from "./telemetry.js";
 import { turnContextMessages } from "./turn-context.js";
@@ -71,11 +71,13 @@ const WEBFETCH_TIMEOUT_MS = 30_000;
 export interface AiSdkCodingAgentOpts {
   /** AI SDK model supplied and configured by the host application. */
   model: LanguageModel;
-  /** Provider for the remote development sandbox that contains the project. */
-  sandboxProvider: Pick<
-    SandboxProvider,
-    "executeCommand" | "uploadFiles" | "downloadFile"
-  >;
+  /**
+   * Provider for the remote development sandbox that contains the project.
+   * With `processes`, the agent gets background commands and foreground
+   * commands bounded by the Environment's budget (ADR 0174).
+   */
+  sandboxProvider: ShellProvider &
+    Pick<SandboxProvider, "uploadFiles" | "downloadFile">;
   /** Optional host-owned staging directory for plugin docs, outside a native checkout. */
   pluginDirectory?: string;
   /** Host-level instructions prepended to every session. */
@@ -159,6 +161,8 @@ interface AiSdkSessionState {
   projectId: string;
   instructions: string;
   tools: ReturnType<typeof createTools>;
+  /** The shell the tools share; its background commands end with the chat. */
+  toolContext: ToolContext;
   messages: ModelMessage[];
   sandboxId: string;
   workingDirectory: string;
@@ -329,18 +333,23 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
       );
     }
 
+    const toolContext: ToolContext = {
+      provider: sandboxProvider,
+      sandboxId: opts.sandboxId,
+      workingDirectory: opts.workingDirectory,
+      shell: {},
+      ...(opts.commandTimeoutSeconds
+        ? { budgetSeconds: opts.commandTimeoutSeconds }
+        : {}),
+    };
     this.sessions.set(providerSessionId, {
       sessionId: opts.sessionId,
       userId: opts.userId,
       projectId: opts.projectId,
       instructions,
+      toolContext,
       tools: createTools(
-        {
-          provider: sandboxProvider,
-          sandboxId: opts.sandboxId,
-          workingDirectory: opts.workingDirectory,
-          shell: {},
-        },
+        toolContext,
         this.opts.extraTools ?? [],
         {
           projectId: opts.projectId,
@@ -701,9 +710,15 @@ export class AiSdkCodingAgent implements CodingAgentProvider {
     this.sessions.delete(session.providerSessionId);
     if (state) {
       state.abort?.abort();
-      await Promise.all(
-        state.scopedMcp.map((server) => server.close().catch(() => {})),
-      );
+      await Promise.all([
+        ...state.scopedMcp.map((server) => server.close().catch(() => {})),
+        // A closed chat leaves nothing running (ADR 0174).
+        stopBackgroundCommands({
+          provider: state.toolContext.provider,
+          sandboxId: state.toolContext.sandboxId,
+          state: state.toolContext.shell,
+        }),
+      ]);
       state.scopedMcp = [];
     }
   }
@@ -794,14 +809,14 @@ function effortProviderOptions(effort: AgentEffort) {
 }
 
 interface ToolContext {
-  provider: Pick<
-    SandboxProvider,
-    "executeCommand" | "uploadFiles" | "downloadFile"
-  >;
+  provider: ShellProvider &
+    Pick<SandboxProvider, "uploadFiles" | "downloadFile">;
   sandboxId: string;
   workingDirectory: string;
-  /** Where the next shell command starts; `cd` persists between calls. */
+  /** Where the next shell command starts and this chat's background commands. */
   shell: ShellState;
+  /** The Environment's budget for one foreground command (ADR 0174). */
+  budgetSeconds?: number;
 }
 
 /**
@@ -1241,34 +1256,14 @@ function createTools(
         blocking: z.literal(true).default(true),
       }),
     }),
-    bash: tool({
-      description: `Run a shell command and wait for it to finish. The working directory persists between calls (a \`cd\` carries over); it starts in the project folder. Output combines stdout and stderr; long output keeps its start and end. Default timeout ${SHELL_DEFAULT_TIMEOUT_MS / 1000}s, at most ${SHELL_MAX_TIMEOUT_MS / 1000}s. For servers, watchers and anything long-lived, use run_background_command instead when it is available. Quote paths with spaces. Prefer read/edit/write for files.`,
-      inputSchema: z.object({
-        command: z.string().describe("The command to run"),
-        description: z
-          .string()
-          .optional()
-          .describe(
-            "What this command does in 5-10 plain words, e.g. 'Run the test suite'. Shown to the person as what you're doing.",
-          ),
-        timeout: z
-          .number()
-          .int()
-          .positive()
-          .max(SHELL_MAX_TIMEOUT_MS)
-          .optional()
-          .describe(`Milliseconds (max ${SHELL_MAX_TIMEOUT_MS})`),
-      }),
-      execute: async ({ command, timeout }, { abortSignal }) =>
-        runShell({
-          provider: context.provider,
-          sandboxId: context.sandboxId,
-          root: context.workingDirectory,
-          state: context.shell,
-          command,
-          ...(timeout !== undefined ? { timeoutMs: timeout } : {}),
-          ...(abortSignal ? { signal: abortSignal } : {}),
-        }),
+    ...shellTools({
+      provider: context.provider,
+      sandboxId: context.sandboxId,
+      root: () => context.workingDirectory,
+      state: context.shell,
+      ...(context.budgetSeconds
+        ? { budgetSeconds: context.budgetSeconds }
+        : {}),
     }),
   };
 }

@@ -175,5 +175,29 @@ async function executeClientOperation({
         operation.path,
         operation.ref,
       );
+    case "process.start": {
+      const { kind: _, ...args } = operation;
+      return processesOf(provider).startProcess(args);
+    }
+    case "process.read": {
+      const { kind: _, ...args } = operation;
+      return processesOf(provider).readProcessOutput(args);
+    }
+    case "process.signal": {
+      const { kind: _, ...args } = operation;
+      return processesOf(provider).signalProcess(args);
+    }
+    case "process.list":
+      return processesOf(provider).listProcesses({
+        sandboxId: operation.sandboxId,
+      });
   }
+}
+
+function processesOf(provider: SandboxProvider) {
+  if (!provider.processes)
+    throw new Error(
+      "This machine's sandbox provider cannot run background processes",
+    );
+  return provider.processes;
 }

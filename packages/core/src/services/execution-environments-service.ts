@@ -492,8 +492,8 @@ function mergeResources(
       ? { storageMb: numeric("storageMb") }
       : {}),
     ...(left?.gpu || right?.gpu ? { gpu: true } : {}),
-    ...(numeric("timeoutSeconds") !== undefined
-      ? { timeoutSeconds: numeric("timeoutSeconds") }
+    ...(numeric("commandTimeoutSeconds") !== undefined
+      ? { commandTimeoutSeconds: numeric("commandTimeoutSeconds") }
       : {}),
     ...(numeric("maxConcurrency") !== undefined
       ? { maxConcurrency: numeric("maxConcurrency") }

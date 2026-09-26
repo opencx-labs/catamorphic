@@ -5,12 +5,13 @@ import path from "node:path";
 import type { Identity } from "@catamorphic/core";
 import { type DB, DEFAULT_SCHEMA } from "@catamorphic/db";
 import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
-import type {
-  AgentEvent,
-  CodingAgentProvider,
-  EnvironmentRuntimeBinding,
-  ProviderSession,
-  StartSessionOpts,
+import {
+  type AgentEvent,
+  type CodingAgentProvider,
+  type EnvironmentRuntimeBinding,
+  followProcess,
+  type ProviderSession,
+  type StartSessionOpts,
 } from "@catamorphic/sandbox";
 import {
   createCatamorphic,
@@ -268,6 +269,7 @@ it("an authenticated member executes on this machine and loses execution immedia
       environment: "personal",
       label: "Laptop",
       workspaceRoot: provider.workspaceRoot,
+      processes: true,
     });
     await expect(
       service.poll({
@@ -296,6 +298,34 @@ it("an authenticated member executes on this machine and loses execution immedia
       "Where am I?",
     );
     expect(result.content).toContain(path.join(directory, "employee-machine"));
+    // Background processes run on the member's machine, followed through
+    // short queued operations (ADR 0174).
+    const member = await service.binding({
+      tenantId: identity.tenantId,
+      ownerUserId: identity.externalUserId,
+      projectId: project.id,
+      clientRunnerId: identity.clientRunnerId,
+    });
+    const processes = member?.sandboxProvider?.processes;
+    const sandboxId = agent.sessions.get(session.id)?.sandboxId;
+    if (!processes || !sandboxId) throw new Error("Member processes missing");
+    const started = await processes.startProcess({
+      sandboxId,
+      command: "echo from-member; sleep 0.2; exit 4",
+    });
+    await expect(
+      followProcess({
+        processes,
+        sandboxId,
+        processId: started.processId,
+        cursor: 0,
+        timeoutMs: 20_000,
+      }),
+    ).resolves.toMatchObject({
+      output: "from-member\n",
+      status: "exited",
+      exitCode: 4,
+    });
     const oldBinding = (
       await cat.core.executionAllocations.get({
         identity,
@@ -328,6 +358,17 @@ it("an authenticated member executes on this machine and loses execution immedia
       label: "Laptop",
       workspaceRoot: provider.workspaceRoot,
     });
+    // A runner that does not say it runs processes is not offered them.
+    expect(
+      (
+        await service.binding({
+          tenantId: identity.tenantId,
+          ownerUserId: identity.externalUserId,
+          projectId: project.id,
+          clientRunnerId: identity.clientRunnerId,
+        })
+      )?.sandboxProvider?.processes,
+    ).toBeUndefined();
     expect(
       await service.binding({
         tenantId: identity.tenantId,

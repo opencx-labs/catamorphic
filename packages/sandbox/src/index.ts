@@ -136,6 +136,28 @@ export {
   type PluginPayload,
   uploadPluginPayloads,
 } from "./plugin-upload.js";
+export {
+  assertProcessId,
+  decodeUtf8Prefix,
+  type FollowProcessResult,
+  followProcess,
+  newProcessId,
+  OutputWindow,
+  PROCESS_READ_DEFAULT_BYTES,
+  PROCESS_READ_MAX_BYTES,
+  PROCESS_READ_MAX_WAIT_MS,
+  PROCESS_SIGNALS,
+  type ProcessOutput,
+  type ProcessSignal,
+  processReadBounds,
+  type ReadProcessOutputArgs,
+  type SandboxProcess,
+  type SandboxProcessProvider,
+  type SandboxProcessStatus,
+  type SignalProcessArgs,
+  type StartProcessArgs,
+  shellSandboxProcesses,
+} from "./processes.js";
 export type { SandboxStore } from "./sandbox-manager.js";
 export { SandboxManagerImpl } from "./sandbox-manager.js";
 export type {
