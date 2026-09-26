@@ -25,18 +25,29 @@ export function Collapsible({
   const inner = useRef<HTMLDivElement>(null);
   const lastChange = useRef(0);
   const settled = useRef(false);
+  // Hidden with an ancestor (an inactive sidebar tab, a background
+  // workspace) the content measures 0. Keep the last height instead, and
+  // take the real one without a tween once it is shown again.
+  const wasHidden = useRef(false);
 
   useLayoutEffect(() => {
     const box = outer.current;
     const content = inner.current;
     if (!box || !content) return;
     const apply = () => {
+      if (content.getClientRects().length === 0) {
+        wasHidden.current = true;
+        return;
+      }
       const target = open ? content.offsetHeight : 0;
       const current = box.style.height;
+      const reappeared = wasHidden.current;
+      wasHidden.current = false;
       if (current === `${target}px`) return;
       const now = performance.now();
       const follow =
         !settled.current ||
+        reappeared ||
         now - lastChange.current < CONTINUOUS_MS ||
         animatingHeight(content);
       lastChange.current = now;

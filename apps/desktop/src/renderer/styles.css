@@ -241,8 +241,9 @@ kbd {
 }
 
 /* The inset placement, for controls whose ring a neighbour or a scrolling
-   ancestor would otherwise cover. */
-.focus-ring-inset:focus-visible {
+   ancestor would otherwise cover. The doubled class matches the global
+   rule's (0,3,0), which its :not() list carries, and wins by order. */
+.focus-ring-inset.focus-ring-inset:focus-visible {
   outline-offset: var(--focus-ring-inset);
 }
 
@@ -1433,8 +1434,8 @@ kbd {
 .sidebar-tab:active {
   transform: scale(0.92);
 }
-.sidebar-tab:focus-visible,
-.sidebar-resizer:focus-visible {
+.sidebar-tab.sidebar-tab:focus-visible,
+.sidebar-resizer.sidebar-resizer:focus-visible {
   outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
   outline-offset: var(--focus-ring-inset);
   border-radius: 4px;

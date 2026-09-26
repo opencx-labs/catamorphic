@@ -201,6 +201,14 @@ export function Tree<T extends TreeItem>({
     for (const id of placements.current.keys())
       if (!motion.has(id)) placements.current.delete(id);
   }, [motion]);
+  // Only a row on screen in the last commit fades where it stood; one that
+  // was scrolled away or folded into a collapsed parent simply leaves, since
+  // its remembered place may now belong to another row.
+  const onScreen = useRef<ReadonlySet<string>>(new Set());
+  const renderedNow = new Set<string>();
+  useLayoutEffect(() => {
+    onScreen.current = renderedNow;
+  });
   const viewport = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [overrides, setOverrides] = useState<ReadonlyMap<string, boolean>>(
@@ -676,6 +684,7 @@ export function Tree<T extends TreeItem>({
               const hasChildren = Boolean(
                 item.hasChildren || tree.children.get(row.id)?.length,
               );
+              renderedNow.add(row.id);
               placements.current.set(row.id, {
                 top: index * rowHeight,
                 depth: row.depth,
@@ -741,7 +750,8 @@ export function Tree<T extends TreeItem>({
             })}
           {exiting.map(({ key, item }) => {
             const placed = placements.current.get(key);
-            if (!placed) return null;
+            if (!placed || !onScreen.current.has(key)) return null;
+            renderedNow.add(key);
             return (
               <div
                 key={`exiting:${key}`}

@@ -272,12 +272,38 @@ function SidebarWorkspaceTabs({
                 }),
                 // Tabs reorder among themselves; other sections pin or
                 // bookmark them through the same payload.
-                accept: (types, target) =>
-                  dragged !== undefined &&
-                  types.includes(TAB_DRAG_TYPE) &&
-                  target.item !== null &&
-                  target.item.id !== dragged &&
-                  target.position !== "inside",
+                // A chat's members always follow it, so no slot between an
+                // open chat and its first member exists for another tab.
+                accept: (types, target) => {
+                  const item = target.item;
+                  if (
+                    dragged === undefined ||
+                    !types.includes(TAB_DRAG_TYPE) ||
+                    item === null ||
+                    item.id === dragged ||
+                    target.position === "inside"
+                  )
+                    return false;
+                  const draggedParent = items.find(
+                    (tab) => tab.id === dragged,
+                  )?.parentId;
+                  if (
+                    target.position === "after" &&
+                    item.hasChildren &&
+                    !item.collapsed &&
+                    draggedParent !== item.id
+                  )
+                    return false;
+                  const firstMember =
+                    item.parentId &&
+                    items.find((tab) => tab.parentId === item.parentId)?.id ===
+                      item.id;
+                  return !(
+                    target.position === "before" &&
+                    firstMember &&
+                    draggedParent !== item.parentId
+                  );
+                },
                 onDrop: (_transfer, target) => {
                   if (!dragged || !target.item) return;
                   const order = items.map((item) => item.id);

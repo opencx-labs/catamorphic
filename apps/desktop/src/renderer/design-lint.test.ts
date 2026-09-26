@@ -96,7 +96,7 @@ describe("design lint", () => {
       [...text.matchAll(/<input\b(?:(?!<input\b)[\s\S])*?\/>/g)]
         .filter(([element]) => element.includes('type="checkbox"'))
         .filter(([element]) =>
-          /className=["{`][^"}`]*\b(?:size-|w-|h-|accent-|border|bg-|rounded)/.test(
+          /className=(?:"|\{[`"]?)[^"}`]*\b(?:size-|w-|h-|accent-|border|bg-|rounded)/.test(
             element,
           ),
         )

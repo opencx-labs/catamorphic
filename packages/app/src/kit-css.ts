@@ -152,13 +152,14 @@ export const APP_KIT_CSS = `
 .cat-checkbox{
   appearance:none;display:inline-grid;place-content:center;flex:none;width:16px;height:16px;margin:0;
   cursor:pointer;border:0;border-radius:var(--radius-sm);vertical-align:-3px;
-  background:color-mix(in srgb,var(--color-fg) 14%,transparent);
+  background:color-mix(in srgb,var(--color-fg) 8%,transparent);
+  box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--color-fg) 45%,transparent);
   transition:background-color var(--cat-motion-fast) var(--ease-standard),
-    scale 100ms var(--ease-standard);
+    box-shadow var(--cat-motion-fast) var(--ease-standard),scale 100ms var(--ease-standard);
 }
-.cat-checkbox:hover:not(:disabled,:checked){background:color-mix(in srgb,var(--color-fg) 22%,transparent)}
+.cat-checkbox:hover:not(:disabled,:checked){background:color-mix(in srgb,var(--color-fg) 14%,transparent);box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--color-fg) 52%,transparent)}
 .cat-checkbox:active:not(:disabled){scale:.88}
-.cat-checkbox:checked{background:var(--color-accent)}
+.cat-checkbox:checked{background:var(--color-accent);box-shadow:inset 0 0 0 1.5px transparent}
 .cat-checkbox::before{
   content:"";width:10px;height:10px;background:var(--color-accent-fg);
   mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.75 5.25 4 7.5l4.25-5'/%3E%3C/svg%3E") center/10px 10px no-repeat;

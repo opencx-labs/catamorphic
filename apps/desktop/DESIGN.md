@@ -186,8 +186,9 @@ Do not add a JavaScript select replacement or per-screen checkbox styling.
 Match project/profile menus: overlay surface, hairline border, 10px outer radius,
 6px rows, 13px type, selected accent checkmark and 32px minimum choice rows.
 Open and close use paired 150ms opacity/translation on the standard easing.
-A checkbox is a borderless 16px square: a neutral fill (`--color-fg` at 14%)
-when off, the accent when on. Its 10px mark sits on whole pixels, draws left
+A checkbox is a 16px square: a faint fill with a neutral 1.5px inset edge
+when off (`--color-fg` at 40% dark, 50% light: never white, and at least 3:1
+against the surface), a solid accent with no edge when on. Its 10px mark sits on whole pixels, draws left
 to right over 150ms and fades out when unchecked; pressing the box sinks it
 to 88%. Screens never size or color a checkbox themselves (design lint).
 Respect reduced motion. Disabled
@@ -493,9 +494,9 @@ color. Rings now follow the keyboard (Tab and arrows turn them on, a click
 turns them off) and appear at once, and every ring comes from one set of
 tokens instead of a dozen utilities (ADR 0168).
 
-Checkboxes lost their light border and the mark that drifted as it scaled:
-a quiet fill when off, the accent when on, a mark that draws itself and a
-small press.
+Checkboxes lost their white border and the mark that drifted as it scaled:
+a neutral edge when off, a solid accent with no edge when on, a mark that
+draws itself and a small press.
 
 The sidebar framework stopped snapping. Unpinning the last item used to
 drop the pinned area in one frame and every drag in the window popped it

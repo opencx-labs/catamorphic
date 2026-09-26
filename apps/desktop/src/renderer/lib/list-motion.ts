@@ -47,6 +47,9 @@ export function useListMotion(
       "(prefers-reduced-motion: reduce)",
     ).matches;
     const previousTops = rowTopsRef.current;
+    // Offsets relative to the list itself, so a section above changing
+    // height moves nothing here.
+    const origin = sizer.getBoundingClientRect();
     const firstPass = previousTops.size === 0;
     const nextTops = new Map<string, { top: number; left: number }>();
     const rows: {
@@ -59,8 +62,10 @@ export function useListMotion(
       const row = node as HTMLElement;
       const id = row.dataset.itemId;
       if (!id) continue;
-      const top = row.offsetTop;
-      const left = row.offsetLeft;
+      const matrix = new DOMMatrixReadOnly(getComputedStyle(row).transform);
+      const rect = row.getBoundingClientRect();
+      const top = rect.top - origin.top + sizer.scrollTop - matrix.m42;
+      const left = rect.left - origin.left + sizer.scrollLeft - matrix.m41;
       nextTops.set(id, { top, left });
       const before = previousTops.get(id);
       if (before === undefined) {
@@ -72,7 +77,6 @@ export function useListMotion(
         });
         continue;
       }
-      const matrix = new DOMMatrixReadOnly(getComputedStyle(row).transform);
       rows.push({
         row,
         dx: Math.round(before.left + matrix.m41 - left),
@@ -120,5 +124,30 @@ export function useListMotion(
     });
     return () => cancelAnimationFrame(frame);
   }, [key]);
+  // A resized list (a wider sidebar reflowing a tile grid) re-takes its
+  // positions without animating, so the next change starts from the truth.
+  useLayoutEffect(() => {
+    const sizer = sizerRef.current;
+    if (!sizer || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (rowTopsRef.current.size === 0) return;
+      const origin = sizer.getBoundingClientRect();
+      const tops = new Map<string, { top: number; left: number }>();
+      for (const node of sizer.children) {
+        const row = node as HTMLElement;
+        const id = row.dataset.itemId;
+        if (!id) continue;
+        const rect = row.getBoundingClientRect();
+        const matrix = new DOMMatrixReadOnly(getComputedStyle(row).transform);
+        tops.set(id, {
+          top: rect.top - origin.top + sizer.scrollTop - matrix.m42,
+          left: rect.left - origin.left + sizer.scrollLeft - matrix.m41,
+        });
+      }
+      rowTopsRef.current = tops;
+    });
+    observer.observe(sizer);
+    return () => observer.disconnect();
+  }, [sizerRef]);
   return { reset: () => rowTopsRef.current.clear() };
 }
